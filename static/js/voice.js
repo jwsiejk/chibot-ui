@@ -44,12 +44,18 @@ const REC_MIME = (typeof MediaRecorder !== 'undefined'
 
 const DEFAULT_MAX_TURN_MS = 90_000; // 90s guardrail
 const MIN_VALID_BLOB_BYTES = 1;     // drop only truly empty blobs (preserve headers)
-const PRE_ROLL_MS = 250;            // ~0.25s of pre-roll audio
+const PRE_ROLL_MS = 550;            // maintain ~0.5s pre-roll (shadow buffer)
 const SAFETY_CLOSE_DELAY_MS = 2200; // ~2.2s grace after last chunk
 const POST_TTS_HOLDOFF_MS = 600;    // grace window after Chip begins speaking
 const MANUAL_DEBOUNCE_MS = 300;     // debounce between manual presses
 const MANUAL_NO_AUDIO_CANCEL_MS = 500; // auto-cancel window if no audio captured
 const MANUAL_VAD_IGNORE_MS = 600;   // guard period after manual end before VAD restarts
+const EVIDENCE_MIN_SPEECH_MS = 480; // shadow gate must accumulate >= ~0.5s
+const EVIDENCE_MIN_BYTES = 8 * 1024; // minimum payload before commit (~8 KiB)
+const EVIDENCE_MIN_SNR_DB = 3.5;    // require SNR comfortably above noise floor
+const PARTIAL_CONF_THRESHOLD = 0.55; // DG partial high-confidence gate
+const PARTIAL_CONF_RISE_DELTA = 0.05; // rising confidence delta before trust
+const TTS_DECAY_MS = 750;           // 0.75s decay after TTS stops
 const GREET_BARGE_MIN_SNR_DB = 8;
 const GREET_CALIBRATE_DEFAULT_MS = 500;
 const GREET_CALIBRATE_MIN_MS = 400;
@@ -115,8 +121,31 @@ const state = {
   greetGateLastReason: null,
   postTtsHoldUntil: 0,
   postTtsHoldTimer: null,
+  ttsDecayUntil: 0,
+  ttsDecaySnrBoostDb: 0,
   eligibility: 'blocked_pregreet',
   refractoryUntil: 0,
+  sessionNoiseFloorDb: null,
+  sessionSnrMean: 0,
+  sessionSnrM2: 0,
+  sessionSnrStd: 0,
+  sessionSnrSamples: 0,
+  evidenceGate: {
+    active: false,
+    satisfied: false,
+    aborted: false,
+    startedAt: 0,
+    lastDetail: null,
+    bufferedMs: 0,
+    bufferedBytes: 0,
+    minMassOk: false,
+    snrOk: false,
+    partialConfidence: null,
+    partialRising: false,
+    partialGateOk: false,
+    commitPromise: null,
+    reason: null,
+  },
   manual: {
     enabled: true,
     modeManualOnly: false,
@@ -161,6 +190,11 @@ try {
       state.assistantPhase = 'speaking';
       const holdUntil = _now() + POST_TTS_HOLDOFF_MS;
       state.postTtsHoldUntil = holdUntil;
+      state.ttsDecayUntil = 0;
+      state.ttsDecaySnrBoostDb = 0;
+      if (state.evidenceGate.active && !state.evidenceGate.satisfied) {
+        _abortEvidenceGate('tts_playback_start');
+      }
 
       const isPrime = detail && detail.prime === true;
       const playbackConfirmed = detail && (detail.confirmed === true || detail.playbackConfirmed === true);
@@ -184,6 +218,10 @@ try {
     state.ttsPlaying = false;
     state.postTtsHoldUntil = 0;
     _clearPostTtsHoldTimer();
+    const decayBase = _now();
+    state.ttsDecayUntil = decayBase + TTS_DECAY_MS;
+    const sigma = Number.isFinite(state.sessionSnrStd) ? state.sessionSnrStd : 0;
+    state.ttsDecaySnrBoostDb = Math.max(3, sigma * 1.5);
     state.assistantReady = true;
     state.assistantPhase = 'ready';
     state.lastAssistantReadyAt = _now();
@@ -520,6 +558,212 @@ function _logLifecycle(event, detail = {}, level = 'debug') {
   } catch {}
 }
 
+function _updateSessionNoise(detail = null) {
+  if (!detail || typeof detail !== 'object') {
+    return;
+  }
+  const noise = Number.isFinite(detail.noiseFloorDb) ? detail.noiseFloorDb : null;
+  if (Number.isFinite(noise)) {
+    if (!Number.isFinite(state.sessionNoiseFloorDb)) {
+      state.sessionNoiseFloorDb = noise;
+    } else {
+      const alpha = 0.2;
+      state.sessionNoiseFloorDb = (1 - alpha) * state.sessionNoiseFloorDb + alpha * noise;
+    }
+  }
+
+  const snr = Number.isFinite(detail.snrDb) ? detail.snrDb : null;
+  if (Number.isFinite(snr)) {
+    const count = (state.sessionSnrSamples || 0) + 1;
+    const prevMean = state.sessionSnrMean || 0;
+    const delta = snr - prevMean;
+    const mean = prevMean + delta / count;
+    const m2 = (state.sessionSnrM2 || 0) + delta * (snr - mean);
+    state.sessionSnrSamples = count;
+    state.sessionSnrMean = mean;
+    state.sessionSnrM2 = m2;
+    state.sessionSnrStd = count > 1 ? Math.sqrt(Math.max(0, m2 / (count - 1))) : state.sessionSnrStd;
+  }
+}
+
+function _sumPreRollBytes() {
+  const blobs = state.preRollBlobs || [];
+  return blobs.reduce((sum, chunk) => sum + (chunk?.blob?.size || 0), 0);
+}
+
+function _resetEvidenceGate(reason = null) {
+  const gate = state.evidenceGate;
+  gate.active = false;
+  gate.satisfied = false;
+  gate.aborted = false;
+  gate.startedAt = 0;
+  gate.lastDetail = null;
+  gate.bufferedMs = 0;
+  gate.bufferedBytes = 0;
+  gate.minMassOk = false;
+  gate.snrOk = false;
+  gate.partialConfidence = null;
+  gate.partialRising = false;
+  gate.partialGateOk = false;
+  gate.reason = reason || null;
+  gate.commitPromise = null;
+}
+
+function _abortEvidenceGate(reason, detail = null) {
+  const gate = state.evidenceGate;
+  if (!gate.active || gate.satisfied) {
+    return;
+  }
+  const bufferedMs = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
+  const bufferedBytes = _sumPreRollBytes();
+  gate.aborted = true;
+  gate.active = false;
+  gate.reason = reason || 'aborted';
+  gate.lastDetail = detail || gate.lastDetail;
+  gate.bufferedMs = bufferedMs;
+  gate.bufferedBytes = bufferedBytes;
+  _voiceLog('info', 'evidence gate aborted', {
+    reason: gate.reason,
+    bufferedMs,
+    bufferedBytes,
+  });
+  _resetPreRollBuffer();
+  _resetEvidenceGate(gate.reason);
+  _emitVoiceState('armed');
+}
+
+function _getEvidenceSnrRequirement() {
+  let base = EVIDENCE_MIN_SNR_DB;
+  if (state.ttsPlaying) {
+    base += 3;
+  } else if (state.ttsDecayUntil) {
+    const now = _now();
+    if (now < state.ttsDecayUntil) {
+      base += Math.max(0, state.ttsDecaySnrBoostDb || 0);
+    }
+  }
+  return base;
+}
+
+function _evaluateEvidenceGate(trigger = 'poll') {
+  const gate = state.evidenceGate;
+  if (!gate.active || gate.satisfied || gate.aborted) {
+    return false;
+  }
+
+  const bufferedMs = Number.isFinite(state.preRollDurationMs) ? state.preRollDurationMs : 0;
+  const bufferedBytes = _sumPreRollBytes();
+  const snrDb = Number.isFinite(gate.lastDetail?.snrDb) ? gate.lastDetail.snrDb : null;
+  const requiredSnr = _getEvidenceSnrRequirement();
+  const minMs = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
+  const minBytes = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
+
+  gate.bufferedMs = bufferedMs;
+  gate.bufferedBytes = bufferedBytes;
+  gate.minMassOk = Number.isFinite(minMs) ? bufferedMs >= Math.max(0, minMs) : bufferedMs >= EVIDENCE_MIN_SPEECH_MS;
+  gate.snrOk = Number.isFinite(snrDb) ? snrDb >= requiredSnr : false;
+
+  const massOk = gate.minMassOk && bufferedBytes >= Math.max(0, minBytes);
+  const partialOk = !!gate.partialGateOk;
+
+  if (gate.snrOk && (massOk || partialOk)) {
+    if (!gate.commitPromise) {
+      gate.commitPromise = _commitEvidenceGate(trigger).catch((err) => {
+        _voiceLog('warn', 'evidence gate commit failed', { error: err?.message || err });
+        throw err;
+      });
+    }
+    return true;
+  }
+  return false;
+}
+
+async function _commitEvidenceGate(trigger = 'unknown') {
+  const gate = state.evidenceGate;
+  if (gate.satisfied) {
+    return true;
+  }
+  gate.satisfied = true;
+  gate.active = false;
+  gate.reason = trigger;
+  _voiceLog('info', 'evidence gate satisfied', {
+    trigger,
+    bufferedMs: gate.bufferedMs,
+    bufferedBytes: gate.bufferedBytes,
+    snrOk: gate.snrOk,
+    minMassOk: gate.minMassOk,
+    partialGateOk: gate.partialGateOk,
+  });
+
+  let ok = await _startRecorder();
+  if (!ok) {
+    try {
+      await _primeRecorderForPreRoll({ resetBuffer: false });
+    } catch {}
+    ok = await _startRecorder();
+  }
+
+  if (ok) {
+    gate.commitPromise = null;
+    _resetEvidenceGate('committed');
+    _emitVoiceState('recording');
+    return true;
+  }
+
+  _voiceLog('warn', 'recorder unavailable after evidence gate');
+  _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+  gate.commitPromise = null;
+  _resetEvidenceGate('recorder_unavailable');
+  return false;
+}
+
+function _updateEvidenceGateWithChunk(durationMs, bytes) {
+  const gate = state.evidenceGate;
+  if (!gate.active || gate.satisfied || gate.aborted) {
+    return;
+  }
+  if (Number.isFinite(durationMs) && durationMs > 0) {
+    gate.bufferedMs = Math.max(gate.bufferedMs, state.preRollDurationMs || durationMs);
+  }
+  if (Number.isFinite(bytes) && bytes > 0) {
+    gate.bufferedBytes = Math.max(gate.bufferedBytes, _sumPreRollBytes());
+  }
+  _evaluateEvidenceGate('chunk');
+}
+
+function _updateEvidenceGateWithPartial(confidence = null, transcript = '') {
+  const gate = state.evidenceGate;
+  if (!gate.active || gate.satisfied || gate.aborted) {
+    return;
+  }
+  if (typeof confidence === 'number' && Number.isFinite(confidence)) {
+    if (gate.partialConfidence === null || !Number.isFinite(gate.partialConfidence)) {
+      gate.partialConfidence = confidence;
+    } else if (confidence > gate.partialConfidence + PARTIAL_CONF_RISE_DELTA) {
+      gate.partialRising = true;
+      gate.partialConfidence = confidence;
+    } else {
+      gate.partialConfidence = Math.max(gate.partialConfidence, confidence);
+    }
+    if (confidence >= PARTIAL_CONF_THRESHOLD) {
+      if (gate.partialConfidence === null) {
+        gate.partialConfidence = confidence;
+      }
+      gate.partialGateOk = true;
+    } else if (gate.partialRising && confidence >= PARTIAL_CONF_THRESHOLD - 0.05) {
+      gate.partialGateOk = true;
+    }
+  }
+
+  if (typeof transcript === 'string' && transcript.trim().length > 2) {
+    gate.partialGateOk = gate.partialGateOk || gate.partialRising;
+  }
+
+  if (gate.partialGateOk) {
+    _evaluateEvidenceGate('partial');
+  }
+}
+
 function _maybeSendAudioStop(detail = {}) {
   if (state.audioStopSent) {
     return false;
@@ -774,6 +1018,18 @@ function _ensureWSListener() {
       const channelFinal = detail?.channel?.is_final === true;
       const payloadFinal = detail?.is_final === true;
       isFinal = channelFinal || payloadFinal;
+      if (!isFinal) {
+        const firstAlt = Array.isArray(detail?.channel?.alternatives)
+          ? detail.channel.alternatives[0]
+          : null;
+        const confidence = Number.isFinite(firstAlt?.confidence)
+          ? firstAlt.confidence
+          : (Number.isFinite(detail?.confidence) ? detail.confidence : null);
+        const transcriptText = typeof firstAlt?.transcript === 'string'
+          ? firstAlt.transcript
+          : (typeof detail?.transcript === 'string' ? detail.transcript : '');
+        _updateEvidenceGateWithPartial(confidence, transcriptText);
+      }
     }
 
     if (!isFinal || state.finalized) {
@@ -1076,6 +1332,7 @@ function _bufferPreRollChunk(entry) {
   if (state.preRollDurationMs < 0) {
     state.preRollDurationMs = 0;
   }
+  _updateEvidenceGateWithChunk(chunk.durationMs, chunk.blob?.size || 0);
 }
 
 function _enqueuePreRollBlobs() {
@@ -1262,6 +1519,7 @@ async function _primeRecorderForPreRoll(options = {}) {
   if (state.rec && state.rec.state === 'recording') {
     if (resetBuffer) {
       _resetPreRollBuffer();
+      _resetEvidenceGate();
     }
     return true;
   }
@@ -1289,6 +1547,7 @@ async function _primeRecorderForPreRoll(options = {}) {
   state.turnHintAwaitingWS = false;
   if (resetBuffer) {
     _resetPreRollBuffer();
+    _resetEvidenceGate();
   }
 
   const timeslice = state.preRollTimeslice || 150;
@@ -1476,6 +1735,7 @@ function _stopRecorder(detail = null) {
   state.recStreaming = false;
   if (!shouldSendFinal) {
     _resetPreRollBuffer();
+    _resetEvidenceGate('recorder_stop');
   }
 
   try {
@@ -1539,6 +1799,7 @@ function _disarm() {
   state.refractoryUntil = Date.now();
   state.vadMetrics = null;
   _cancelGreetGate('disarm');
+  _resetEvidenceGate('disarm');
   _removeWSListener();
   _clearTurnTrace();
   state.manual.buttonDown = false;
@@ -1775,6 +2036,8 @@ async function _onSpeechStartCommitted(detail = {}) {
 
   const now = _now();
 
+  _updateSessionNoise(metrics);
+
   const manualOnlyMode = !!state.manual.modeManualOnly;
   const allowAutoCommit = manualOnlyMode && !!state.manual.autoCommitWhenReady;
   if (manualOnlyMode && state.ttsPlaying) {
@@ -1930,44 +2193,55 @@ async function _onSpeechStartCommitted(detail = {}) {
     }
   }
 
-  if (state.ttsPlaying && !state.bargeConfirmActive) {
-    state.bargeConfirmActive = true;
-    try { pausePlayback(); } catch {}
-      state.bargeConfirmTimer = setTimeout(async () => {
-        state.bargeConfirmTimer = null;
-        if (!state.bargeConfirmActive) return;
-        if (state.vad && typeof state.vad.isRecording === 'function' && !state.vad.isRecording()) {
-          state.bargeConfirmActive = false;
-          try { resumePlayback(); } catch {}
-          return;
-        }
-        state.bargeConfirmActive = false;
-        _bargeIn();
-        const started = await _startRecorder();
-        if (started) {
-          _emitVoiceState('recording');
-          return;
-        }
-      _voiceLog('warn', 'recorder unavailable — reverting to typing');
-      _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
-    }, bargeConfirmMs);
+  const manualPressing = !!(state.manual && state.manual.buttonDown);
+  if (state.ttsPlaying && !manualPressing) {
+    _logLifecycle('vad_speech_start_suppressed', { reason: 'tts_playback_active' });
+    _voiceLog('debug', 'speech start ignored while TTS playback active');
     return;
   }
 
-  if (state.bargeConfirmActive) {
-    return;
+  if (state.ttsDecayUntil) {
+    if (now >= state.ttsDecayUntil) {
+      state.ttsDecayUntil = 0;
+      state.ttsDecaySnrBoostDb = 0;
+    } else {
+      const requiredSnr = _getEvidenceSnrRequirement();
+      const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
+      if (!Number.isFinite(snrDb) || snrDb < requiredSnr) {
+        _logLifecycle('vad_speech_start_suppressed', {
+          reason: 'tts_decay_guard',
+          snrDb: roundTenths(snrDb),
+          requiredSnrDb: roundTenths(requiredSnr),
+          decayUntil: state.ttsDecayUntil,
+        });
+        return;
+      }
+    }
   }
 
   _bargeIn();
 
-  const started = await _startRecorder();
-  if (started) {
-    _emitVoiceState('recording');
-    return;
+  if (!state.evidenceGate.active) {
+    _resetEvidenceGate();
+    const gate = state.evidenceGate;
+    gate.active = true;
+    gate.startedAt = now;
+    gate.lastDetail = metrics || null;
+    gate.bufferedMs = bufferedMsRaw;
+    gate.bufferedBytes = totalBytes;
+    const minMs = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
+    gate.minMassOk = Number.isFinite(minMs)
+      ? bufferedMsRaw >= Math.max(0, minMs)
+      : bufferedMsRaw >= EVIDENCE_MIN_SPEECH_MS;
+    gate.snrOk = Number.isFinite(metrics?.snrDb)
+      ? metrics.snrDb >= _getEvidenceSnrRequirement()
+      : false;
+    _emitVoiceState('recording', { gated: true });
+  } else {
+    state.evidenceGate.lastDetail = metrics || state.evidenceGate.lastDetail;
   }
 
-  _voiceLog('warn', 'recorder unavailable — reverting to typing');
-  _emitVoiceState('armed', { statusText: 'Listening… (mic unavailable — please type)' });
+  _evaluateEvidenceGate('vad_start');
 }
 
 function _onSpeechEndCommitted(detail = null) {
@@ -1991,12 +2265,19 @@ function _onSpeechEndCommitted(detail = null) {
     return Math.round(v * 10) / 10;
   };
 
+  _updateSessionNoise(metrics);
+
   _voiceLog('info', 'speech ended', {
     source: 'vad',
     reason,
     snrDb: roundTenths(metrics?.snrDb),
     durationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
   });
+
+  if (!state.recStreaming && state.evidenceGate.active && !state.evidenceGate.satisfied) {
+    _abortEvidenceGate(reason || 'evidence_not_met', metrics);
+    return;
+  }
 
   if (state.bargeConfirmActive) {
     _clearBargeConfirm(true);
