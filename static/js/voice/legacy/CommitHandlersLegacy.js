@@ -26,10 +26,30 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
     beginTurnTrace,
     completeGreetGate,
     getActiveTurnTraceId,
+    ttsMask,
+    autoVadMasked,
   } = ctx || {};
 
   if (typeof onFrameSpeech !== 'function') {
     throw new Error('CommitHandlersLegacy.onSpeechStartCommitted requires onFrameSpeech');
+  }
+
+  const manualPressDuringTts = !!(state?.manual?.buttonDown) && state?.ttsPlaying;
+  if (manualPressDuringTts) {
+    try { bargeIn?.(); } catch {}
+    if (!ctx.ttsMask && state?.ttsMask) {
+      ctx.ttsMask = state.ttsMask;
+    }
+    ctx.skipEvidenceGate = true;
+  } else {
+    ctx.skipEvidenceGate = false;
+  }
+
+  if (!ctx.ttsMask && ttsMask) {
+    ctx.ttsMask = ttsMask;
+  }
+  if (typeof autoVadMasked === 'boolean' && typeof ctx.autoVadMasked === 'undefined') {
+    ctx.autoVadMasked = autoVadMasked;
   }
 
   const nextHandler =
@@ -64,6 +84,10 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
       beginTurnTrace,
       completeGreetGate,
       getActiveTurnTraceId,
+      ttsMask: ctx.ttsMask || state?.ttsMask || null,
+      skipEvidenceGate: manualPressDuringTts,
+      manualPressingDuringTts: manualPressDuringTts,
+      autoVadMasked: ctx.autoVadMasked === true,
     },
     detail,
   );

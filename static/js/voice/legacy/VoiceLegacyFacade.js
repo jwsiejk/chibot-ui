@@ -2,7 +2,15 @@ import { emitVoiceEvent } from '../ui/Events.js';
 export { onFrameSilence, onFrameSpeech } from './VadProcessLegacy.js';
 export { onSpeechStartCommitted, onSpeechEndCommitted } from './CommitHandlersLegacy.js';
 import { bootstrapLegacyFacade as baseBootstrapLegacyFacade } from './FacadeBootstrapLegacy.js';
-import { EvidenceGate, ShadowBuffer, bufferPreRollFrame, flushShadowBuffer, resetShadowBufferState } from '../core/index.js';
+import {
+  EvidenceGate,
+  ShadowBuffer,
+  TtsMask,
+  getConfig,
+  bufferPreRollFrame,
+  flushShadowBuffer,
+  resetShadowBufferState,
+} from '../core/index.js';
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from '../../ws_module.js';
 import {
   DEFAULT_MAX_TURN_MS,
@@ -123,7 +131,23 @@ function ensureBootstrapCtxArtifacts(ctx = {}, { preRollMs } = {}) {
     ctx.shadowBuffer = shadowBuffer;
   }
 
-  return { evidenceGate, shadowBuffer };
+  const ctxState = ctx.state && typeof ctx.state === 'object' ? ctx.state : null;
+  let { ttsMask } = ctx;
+  if (!(ttsMask instanceof TtsMask)) {
+    if (ctxState?.ttsMask instanceof TtsMask) {
+      ttsMask = ctxState.ttsMask;
+    } else {
+      ttsMask = new TtsMask();
+      if (ctxState) {
+        ctxState.ttsMask = ttsMask;
+      }
+    }
+    ctx.ttsMask = ttsMask;
+  } else if (ctxState && ctxState.ttsMask !== ttsMask) {
+    ctxState.ttsMask = ttsMask;
+  }
+
+  return { evidenceGate, shadowBuffer, ttsMask };
 }
 
 export function bootstrapLegacyFacade(deps = {}) {
@@ -148,7 +172,6 @@ export function bootstrapLegacyFacade(deps = {}) {
 }
 
 const POST_TTS_HOLDOFF_MS = 600;
-const TTS_DECAY_MS = 750;
 const ENDED_STATES = new Set(['ended', 'stopped', 'idle', 'paused', '']);
 
 function normalizeStateValue(value) {
@@ -181,6 +204,17 @@ export function onTtsStart(ctx = {}) {
     return false;
   }
 
+  let mask = ctx.ttsMask instanceof TtsMask ? ctx.ttsMask : null;
+  if (!mask && ctxState.ttsMask instanceof TtsMask) {
+    mask = ctxState.ttsMask;
+    ctx.ttsMask = mask;
+  }
+  if (!mask) {
+    mask = new TtsMask();
+    ctx.ttsMask = mask;
+    ctxState.ttsMask = mask;
+  }
+
   const nowFn = resolveNowFn(ctx.now);
   ctxState.ttsPlaying = true;
   ctxState.assistantReady = false;
@@ -188,9 +222,11 @@ export function onTtsStart(ctx = {}) {
     ? TurnState.Speaking.toLowerCase()
     : 'speaking';
   ctxState.postTtsHoldUntil = nowFn() + POST_TTS_HOLDOFF_MS;
-  if (ctxState.ttsMask && typeof ctxState.ttsMask.start === 'function') {
-    ctxState.ttsMask.start();
+  if (typeof mask.start === 'function') {
+    mask.start();
   }
+  ctx.autoVadMasked = true;
+  ctxState.autoVadMasked = true;
   if (ctxState.evidenceGate?.isOpen?.() && typeof abortEvidenceGate === 'function') {
     abortEvidenceGate('tts_playback_start');
   }
@@ -238,13 +274,31 @@ export function onTtsEnd(ctx = {}) {
     clearPostTtsHoldTimer();
   }
 
-  const sigma = Number.isFinite(ctxState.sessionSnrStd) ? ctxState.sessionSnrStd : 0;
-  if (ctxState.ttsMask && typeof ctxState.ttsMask.end === 'function') {
-    ctxState.ttsMask.end({
-      decayMs: TTS_DECAY_MS,
-      snrBoost: Math.max(3, sigma * 1.5),
-    });
+  let mask = ctx.ttsMask instanceof TtsMask ? ctx.ttsMask : null;
+  if (!mask && ctxState.ttsMask instanceof TtsMask) {
+    mask = ctxState.ttsMask;
+    ctx.ttsMask = mask;
   }
+  if (!mask) {
+    mask = new TtsMask();
+    ctx.ttsMask = mask;
+    ctxState.ttsMask = mask;
+  }
+
+  const cfg = typeof getConfig === 'function' ? getConfig() : null;
+  const decayMsRaw = cfg?.tts?.decay_ms;
+  const sigma = Number.isFinite(ctxState.sessionSnrStd) ? ctxState.sessionSnrStd : 0;
+  const maskOptions = {
+    decayMs: Number.isFinite(decayMsRaw) ? decayMsRaw : undefined,
+  };
+  if (Number.isFinite(sigma) && sigma > 0) {
+    maskOptions.snrBoost = Math.max(3, sigma * 1.5);
+  }
+  if (typeof mask.end === 'function') {
+    mask.end(maskOptions);
+  }
+  ctx.autoVadMasked = false;
+  ctxState.autoVadMasked = false;
 
   ctxState.assistantReady = true;
   ctxState.assistantPhase = typeof TurnState?.Ready === 'string'

@@ -131,6 +131,12 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
   const wasStreaming = isStreaming(ctx);
   const wasOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
 
+  const manualOverride = !!(ctx?.state?.manual?.buttonDown);
+  const mask = ctx && typeof ctx === 'object' ? ctx.ttsMask : null;
+  const maskActive = !manualOverride && typeof mask?.isMasked === 'function' ? mask.isMasked() : false;
+  const snrBoost = typeof mask?.snrBoost === 'function' ? mask.snrBoost() : 0;
+  const skipGate = ctx?.skipEvidenceGate === true;
+
   const { chunk, durationMs, timecode } = extractChunkMeta(frame);
   if (!wasStreaming && chunk) {
     try {
@@ -153,9 +159,37 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
     bufferedBytes: stats.totalBytes,
   };
 
+  if (snrBoost > 0) {
+    updatePayload.snrBoost = snrBoost;
+  }
+
+  if (skipGate) {
+    if (!wasStreaming) {
+      flushContextShadowBuffer(ctx, buffer);
+      setStreaming(ctx, true);
+    }
+    if (chunk) {
+      sendChunkViaTransport(ctx, chunk, { durationMs, timecode, preRoll: false, vadState });
+    }
+    return {
+      gateOpened: !wasStreaming,
+      streamingNow: true,
+      wasStreaming,
+    };
+  }
+
   try {
     gate.update(updatePayload);
   } catch {}
+
+  if (maskActive) {
+    setStreaming(ctx, false);
+    return {
+      gateOpened: false,
+      streamingNow: false,
+      wasStreaming,
+    };
+  }
 
   const nowOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
 
@@ -432,7 +466,10 @@ export async function onFrameSpeech(ctx = {}, frame = {}) {
     return;
   }
 
-  if (state.ttsMask?.isMasked?.(nowValue)) {
+  const ttsMaskActive = typeof state.ttsMask?.isMasked === 'function'
+    ? state.ttsMask.isMasked(nowValue)
+    : false;
+  if (ttsMaskActive && !manualPressing) {
     const requiredSnr = getEvidenceSnrRequirementFn(state, nowFn, evidenceSnrFallback);
     const snrDb = Number.isFinite(metrics?.snrDb) ? metrics.snrDb : null;
     if (!Number.isFinite(snrDb) || snrDb < requiredSnr) {
@@ -444,6 +481,8 @@ export async function onFrameSpeech(ctx = {}, frame = {}) {
       });
       return;
     }
+  } else if (ttsMaskActive && manualPressing) {
+    voiceLogFn('debug', 'manual barge-in bypassed TTS decay guard');
   }
 
   bargeInFn?.();
