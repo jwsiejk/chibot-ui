@@ -1,9 +1,190 @@
+import { EvidenceGate, ShadowBuffer, flushShadowBuffer } from '../core/index.js';
+
+const EMPTY_STATS = Object.freeze({ count: 0, durationMs: 0, totalBytes: 0 });
+
+const isStreaming = (ctx = {}) => !!ctx.__adaptiveStreaming;
+
+function setStreaming(ctx = {}, value = false) {
+  if (ctx && typeof ctx === 'object') {
+    ctx.__adaptiveStreaming = !!value;
+  }
+}
+
+function ensureAdaptiveArtifacts(ctx = {}) {
+  if (!ctx || typeof ctx !== 'object') {
+    return { gate: null, buffer: null };
+  }
+  let gate = ctx.evidenceGate instanceof EvidenceGate ? ctx.evidenceGate : null;
+  if (!gate) {
+    gate = new EvidenceGate();
+    ctx.evidenceGate = gate;
+  }
+  const maxMs = Number.isFinite(ctx?.PRE_ROLL_MS) ? ctx.PRE_ROLL_MS : undefined;
+  let buffer = ctx.shadowBuffer instanceof ShadowBuffer ? ctx.shadowBuffer : null;
+  if (!buffer) {
+    buffer = new ShadowBuffer({ maxMs });
+    ctx.shadowBuffer = buffer;
+  }
+  return { gate, buffer };
+}
+
+function firstFinite(...values) {
+  for (const value of values) {
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function extractChunkMeta(frame = {}) {
+  if (!frame || typeof frame !== 'object') {
+    return { chunk: null, durationMs: null, timecode: null };
+  }
+  const meta = (frame.meta && typeof frame.meta === 'object') ? frame.meta : {};
+  let chunk = frame.chunk ?? frame.audio ?? frame.buffer ?? frame.blob ?? meta.blob ?? null;
+  if (chunk && typeof chunk === 'object' && chunk.blob) {
+    chunk = chunk.blob;
+  }
+  return {
+    chunk,
+    durationMs: firstFinite(frame.durationMs, frame.chunkDurationMs, meta.durationMs),
+    timecode: firstFinite(frame.timecode, frame.chunkTimecode, meta.timecode),
+  };
+}
+
+function resolveSnr(ctx = {}, frame = {}) {
+  const direct = [frame?.snrDb, frame?.snr, frame?.detail?.snrDb, frame?.metrics?.snrDb];
+  for (const value of direct) {
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+  const noiseModel = ctx?.state?.noiseModel;
+  if (!noiseModel || typeof noiseModel.snr !== 'function') {
+    return null;
+  }
+  for (const sample of [frame?.energy, frame?.samples, frame?.pcm, frame?.rms, frame?.audioSamples]) {
+    if (!sample) {
+      continue;
+    }
+    try {
+      const snr = noiseModel.snr(sample);
+      if (Number.isFinite(snr)) {
+        return snr;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+function sendChunkViaTransport(ctx = {}, chunk = null, meta = {}) {
+  if (!ctx || !chunk) {
+    return false;
+  }
+  const transport = ctx.transport && typeof ctx.transport === 'object' ? ctx.transport : null;
+  const candidates = [
+    transport && typeof transport.sendChunk === 'function' ? transport.sendChunk.bind(transport) : null,
+    transport && typeof transport.sendAudioChunk === 'function' ? transport.sendAudioChunk.bind(transport) : null,
+    transport && typeof transport.enqueue === 'function' ? transport.enqueue.bind(transport) : null,
+    typeof ctx.sendChunk === 'function' ? ctx.sendChunk.bind(ctx) : null,
+    typeof ctx.sendAudioChunk === 'function' ? ctx.sendAudioChunk.bind(ctx) : null,
+  ];
+  for (const fn of candidates) {
+    if (!fn) {
+      continue;
+    }
+    try {
+      const result = fn(chunk, meta);
+      if (result && typeof result.then === 'function') {
+        result.catch(() => {});
+      }
+      return true;
+    } catch {}
+  }
+  return false;
+}
+
+function flushContextShadowBuffer(ctx = {}, buffer = null) {
+  if (!buffer) {
+    return EMPTY_STATS;
+  }
+  let stats = EMPTY_STATS;
+  try {
+    stats = flushShadowBuffer(buffer, (chunk, meta) => {
+      sendChunkViaTransport(ctx, chunk, { ...meta, preRoll: true });
+    }) || EMPTY_STATS;
+  } catch {}
+  return {
+    count: Number.isFinite(stats.count) ? stats.count : 0,
+    durationMs: Number.isFinite(stats.durationMs) ? stats.durationMs : 0,
+    totalBytes: Number.isFinite(stats.totalBytes) ? stats.totalBytes : 0,
+  };
+}
+
+function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
+  const { gate, buffer } = ensureAdaptiveArtifacts(ctx);
+  if (!gate || !buffer) {
+    return { gateOpened: false };
+  }
+
+  const wasStreaming = isStreaming(ctx);
+  const wasOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
+
+  const { chunk, durationMs, timecode } = extractChunkMeta(frame);
+  if (!wasStreaming && chunk) {
+    try {
+      buffer.push(chunk, { durationMs, timecode });
+    } catch {}
+  }
+
+  let stats = EMPTY_STATS;
+  try {
+    stats = buffer.stats() || EMPTY_STATS;
+  } catch {
+    stats = EMPTY_STATS;
+  }
+
+  const updatePayload = {
+    vadState,
+    snr: resolveSnr(ctx, frame),
+    asrCue: frame?.asrCue ?? frame?.cue ?? null,
+    bufferedMs: stats.durationMs,
+    bufferedBytes: stats.totalBytes,
+  };
+
+  try {
+    gate.update(updatePayload);
+  } catch {}
+
+  const nowOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
+
+  if (!wasStreaming && !wasOpen && nowOpen) {
+    flushContextShadowBuffer(ctx, buffer);
+    setStreaming(ctx, true);
+  } else if (!nowOpen) {
+    setStreaming(ctx, false);
+  }
+
+  const streamingNow = isStreaming(ctx);
+  if (streamingNow && wasStreaming && chunk) {
+    sendChunkViaTransport(ctx, chunk, { durationMs, timecode, preRoll: false, vadState });
+  }
+
+  return {
+    gateOpened: !wasOpen && nowOpen,
+    streamingNow,
+    wasStreaming,
+  };
+}
+
 export function onFrameSilence(ctx, frame) {
-  void ctx;
-  void frame;
+  processAdaptiveFrame(ctx, frame, 'silence');
 }
 
 export async function onFrameSpeech(ctx = {}, frame = {}) {
+  processAdaptiveFrame(ctx, frame, 'speech');
+
   const metrics = (frame && typeof frame === 'object') ? frame : {};
   const {
     state,

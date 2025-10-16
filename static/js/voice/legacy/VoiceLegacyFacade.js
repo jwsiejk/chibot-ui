@@ -1,8 +1,8 @@
 import { emitVoiceEvent } from '../ui/Events.js';
 export { onFrameSilence, onFrameSpeech } from './VadProcessLegacy.js';
 export { onSpeechStartCommitted, onSpeechEndCommitted } from './CommitHandlersLegacy.js';
-export { bootstrapLegacyFacade } from './FacadeBootstrapLegacy.js';
-import { bufferPreRollFrame, flushShadowBuffer, resetShadowBufferState } from '../core/index.js';
+import { bootstrapLegacyFacade as baseBootstrapLegacyFacade } from './FacadeBootstrapLegacy.js';
+import { EvidenceGate, ShadowBuffer, bufferPreRollFrame, flushShadowBuffer, resetShadowBufferState } from '../core/index.js';
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from '../../ws_module.js';
 import {
   DEFAULT_MAX_TURN_MS,
@@ -103,6 +103,48 @@ export function registerVoiceLegacyFacade(overrides = {}) {
     }
   }
   return { ...IMPLEMENTATION };
+}
+
+function ensureBootstrapCtxArtifacts(ctx = {}, { preRollMs } = {}) {
+  if (!ctx || typeof ctx !== 'object') {
+    return { evidenceGate: null, shadowBuffer: null };
+  }
+
+  let { evidenceGate } = ctx;
+  if (!(evidenceGate instanceof EvidenceGate)) {
+    evidenceGate = new EvidenceGate();
+    ctx.evidenceGate = evidenceGate;
+  }
+
+  const maxMs = Number.isFinite(preRollMs) ? preRollMs : undefined;
+  let { shadowBuffer } = ctx;
+  if (!(shadowBuffer instanceof ShadowBuffer)) {
+    shadowBuffer = new ShadowBuffer({ maxMs });
+    ctx.shadowBuffer = shadowBuffer;
+  }
+
+  return { evidenceGate, shadowBuffer };
+}
+
+export function bootstrapLegacyFacade(deps = {}) {
+  const source = deps && typeof deps === 'object' ? deps : {};
+  const ctx = (source.ctx && typeof source.ctx === 'object') ? source.ctx : {};
+  const preRollMs = Number.isFinite(source?.PRE_ROLL_MS)
+    ? source.PRE_ROLL_MS
+    : Number.isFinite(source?.state?.preRollTimeslice)
+      ? source.state.preRollTimeslice
+      : undefined;
+  ensureBootstrapCtxArtifacts(ctx, { preRollMs });
+
+  const nextDeps = { ...source, ctx };
+  const result = baseBootstrapLegacyFacade(nextDeps);
+  if (result && typeof result === 'object') {
+    if (result.ctx === ctx) {
+      return result;
+    }
+    return { ...result, ctx };
+  }
+  return result;
 }
 
 const POST_TTS_HOLDOFF_MS = 600;

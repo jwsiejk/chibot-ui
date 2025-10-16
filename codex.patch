@@ -1,75 +1,234 @@
-diff --git a/static/js/voice/legacy/FacadeBootstrapLegacy.js b/static/js/voice/legacy/FacadeBootstrapLegacy.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..505a95140f49d61f65e7cee8439df749d050bcf5
---- /dev/null
-+++ b/static/js/voice/legacy/FacadeBootstrapLegacy.js
-@@ -0,0 +1,56 @@
-+export function bootstrapLegacyFacade(deps = {}) {
-+  const {
-+    registerVoiceLegacyFacade,
-+    VadFrameUtils,
-+    state,
-+    arm,
-+    bargeIn,
-+    setGreetGateActive,
-+    forceBargeInStart,
-+    forceBargeInEnd,
-+    legacyOnWsOpenImpl,
-+    legacyOnWsMessageImpl,
-+    legacyOnWsCloseImpl,
-+    legacyOnMicAvailable,
-+    legacyOnMicStop,
-+    legacyOnRecorderData,
-+    legacyOnRecorderError,
-+    legacyResetEvidenceGate,
-+    legacyClearSafetyCloseTimer,
-+    legacyCloseTurnIfOpen,
-+    legacySendRecorderChunk,
-+    legacyStopRecorder,
-+  } = deps;
+diff --git a/static/js/voice/legacy/VadProcessLegacy.js b/static/js/voice/legacy/VadProcessLegacy.js
+index c442e37c2fefe8104ad1e1ff58a133fda0eb6362..7b9920630b567551536f8136cb10aa727950865d 100644
+--- a/static/js/voice/legacy/VadProcessLegacy.js
++++ b/static/js/voice/legacy/VadProcessLegacy.js
+@@ -1,31 +1,212 @@
++import { EvidenceGate, ShadowBuffer, flushShadowBuffer } from '../core/index.js';
 +
-+  if (!registerVoiceLegacyFacade || !VadFrameUtils) {
-+    throw new Error('bootstrapLegacyFacade missing required dependencies');
++const EMPTY_STATS = Object.freeze({ count: 0, durationMs: 0, totalBytes: 0 });
++
++const isStreaming = (ctx = {}) => !!ctx.__adaptiveStreaming;
++
++function setStreaming(ctx = {}, value = false) {
++  if (ctx && typeof ctx === 'object') {
++    ctx.__adaptiveStreaming = !!value;
 +  }
++}
 +
-+  registerVoiceLegacyFacade({
-+    initMic: (stream = null) => VadFrameUtils.ensureMic(stream),
-+    armVAD: (stream = null, opts = {}) => arm?.(stream, opts),
-+    disarmVAD: () => { VadFrameUtils.disarm(); },
-+    isRecording: () => !!(state?.rec && state.rec.state === 'recording'),
-+    bargeIn: () => { bargeIn?.(); },
-+    setVadBoost: (_value) => {},
-+    setGreetGateActive: (active = true) => { setGreetGateActive?.(!!active); },
-+    forceBargeInStart: (meta = {}) => forceBargeInStart?.(meta),
-+    forceBargeInEnd: (opts = {}) => forceBargeInEnd?.(opts),
-+    onWsOpen: (detail = null) => { legacyOnWsOpenImpl?.(detail); },
-+    onWsMessage: (detail = {}, helpers = {}) => legacyOnWsMessageImpl?.(detail, helpers),
-+    onWsClose: (detail = null) => { legacyOnWsCloseImpl?.(detail); },
-+    onMicAvailable: (detail = {}) => { legacyOnMicAvailable?.(detail); },
-+    onMicStop: (detail = {}) => legacyOnMicStop?.(detail),
-+    onRecorderData: (event, helpers = {}) => legacyOnRecorderData?.(event, helpers),
-+    onRecorderError: (event = null, helpers = {}) => legacyOnRecorderError?.(event, helpers),
-+  });
++function ensureAdaptiveArtifacts(ctx = {}) {
++  if (!ctx || typeof ctx !== 'object') {
++    return { gate: null, buffer: null };
++  }
++  let gate = ctx.evidenceGate instanceof EvidenceGate ? ctx.evidenceGate : null;
++  if (!gate) {
++    gate = new EvidenceGate();
++    ctx.evidenceGate = gate;
++  }
++  const maxMs = Number.isFinite(ctx?.PRE_ROLL_MS) ? ctx.PRE_ROLL_MS : undefined;
++  let buffer = ctx.shadowBuffer instanceof ShadowBuffer ? ctx.shadowBuffer : null;
++  if (!buffer) {
++    buffer = new ShadowBuffer({ maxMs });
++    ctx.shadowBuffer = buffer;
++  }
++  return { gate, buffer };
++}
 +
++function firstFinite(...values) {
++  for (const value of values) {
++    if (Number.isFinite(value)) {
++      return value;
++    }
++  }
++  return null;
++}
++
++function extractChunkMeta(frame = {}) {
++  if (!frame || typeof frame !== 'object') {
++    return { chunk: null, durationMs: null, timecode: null };
++  }
++  const meta = (frame.meta && typeof frame.meta === 'object') ? frame.meta : {};
++  let chunk = frame.chunk ?? frame.audio ?? frame.buffer ?? frame.blob ?? meta.blob ?? null;
++  if (chunk && typeof chunk === 'object' && chunk.blob) {
++    chunk = chunk.blob;
++  }
 +  return {
-+    resetEvidenceGate: legacyResetEvidenceGate,
-+    clearSafetyCloseTimer: legacyClearSafetyCloseTimer,
-+    closeTurnIfOpen: legacyCloseTurnIfOpen,
-+    sendRecorderChunk: legacySendRecorderChunk,
-+    stopRecorder: legacyStopRecorder,
++    chunk,
++    durationMs: firstFinite(frame.durationMs, frame.chunkDurationMs, meta.durationMs),
++    timecode: firstFinite(frame.timecode, frame.chunkTimecode, meta.timecode),
 +  };
 +}
 +
++function resolveSnr(ctx = {}, frame = {}) {
++  const direct = [frame?.snrDb, frame?.snr, frame?.detail?.snrDb, frame?.metrics?.snrDb];
++  for (const value of direct) {
++    if (Number.isFinite(value)) {
++      return value;
++    }
++  }
++  const noiseModel = ctx?.state?.noiseModel;
++  if (!noiseModel || typeof noiseModel.snr !== 'function') {
++    return null;
++  }
++  for (const sample of [frame?.energy, frame?.samples, frame?.pcm, frame?.rms, frame?.audioSamples]) {
++    if (!sample) {
++      continue;
++    }
++    try {
++      const snr = noiseModel.snr(sample);
++      if (Number.isFinite(snr)) {
++        return snr;
++      }
++    } catch {}
++  }
++  return null;
++}
++
++function sendChunkViaTransport(ctx = {}, chunk = null, meta = {}) {
++  if (!ctx || !chunk) {
++    return false;
++  }
++  const transport = ctx.transport && typeof ctx.transport === 'object' ? ctx.transport : null;
++  const candidates = [
++    transport && typeof transport.sendChunk === 'function' ? transport.sendChunk.bind(transport) : null,
++    transport && typeof transport.sendAudioChunk === 'function' ? transport.sendAudioChunk.bind(transport) : null,
++    transport && typeof transport.enqueue === 'function' ? transport.enqueue.bind(transport) : null,
++    typeof ctx.sendChunk === 'function' ? ctx.sendChunk.bind(ctx) : null,
++    typeof ctx.sendAudioChunk === 'function' ? ctx.sendAudioChunk.bind(ctx) : null,
++  ];
++  for (const fn of candidates) {
++    if (!fn) {
++      continue;
++    }
++    try {
++      const result = fn(chunk, meta);
++      if (result && typeof result.then === 'function') {
++        result.catch(() => {});
++      }
++      return true;
++    } catch {}
++  }
++  return false;
++}
++
++function flushContextShadowBuffer(ctx = {}, buffer = null) {
++  if (!buffer) {
++    return EMPTY_STATS;
++  }
++  let stats = EMPTY_STATS;
++  try {
++    stats = flushShadowBuffer(buffer, (chunk, meta) => {
++      sendChunkViaTransport(ctx, chunk, { ...meta, preRoll: true });
++    }) || EMPTY_STATS;
++  } catch {}
++  return {
++    count: Number.isFinite(stats.count) ? stats.count : 0,
++    durationMs: Number.isFinite(stats.durationMs) ? stats.durationMs : 0,
++    totalBytes: Number.isFinite(stats.totalBytes) ? stats.totalBytes : 0,
++  };
++}
++
++function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
++  const { gate, buffer } = ensureAdaptiveArtifacts(ctx);
++  if (!gate || !buffer) {
++    return { gateOpened: false };
++  }
++
++  const wasStreaming = isStreaming(ctx);
++  const wasOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
++
++  const { chunk, durationMs, timecode } = extractChunkMeta(frame);
++  if (!wasStreaming && chunk) {
++    try {
++      buffer.push(chunk, { durationMs, timecode });
++    } catch {}
++  }
++
++  let stats = EMPTY_STATS;
++  try {
++    stats = buffer.stats() || EMPTY_STATS;
++  } catch {
++    stats = EMPTY_STATS;
++  }
++
++  const updatePayload = {
++    vadState,
++    snr: resolveSnr(ctx, frame),
++    asrCue: frame?.asrCue ?? frame?.cue ?? null,
++    bufferedMs: stats.durationMs,
++    bufferedBytes: stats.totalBytes,
++  };
++
++  try {
++    gate.update(updatePayload);
++  } catch {}
++
++  const nowOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
++
++  if (!wasStreaming && !wasOpen && nowOpen) {
++    flushContextShadowBuffer(ctx, buffer);
++    setStreaming(ctx, true);
++  } else if (!nowOpen) {
++    setStreaming(ctx, false);
++  }
++
++  const streamingNow = isStreaming(ctx);
++  if (streamingNow && wasStreaming && chunk) {
++    sendChunkViaTransport(ctx, chunk, { durationMs, timecode, preRoll: false, vadState });
++  }
++
++  return {
++    gateOpened: !wasOpen && nowOpen,
++    streamingNow,
++    wasStreaming,
++  };
++}
++
+ export function onFrameSilence(ctx, frame) {
+-  void ctx;
+-  void frame;
++  processAdaptiveFrame(ctx, frame, 'silence');
+ }
+ 
+ export async function onFrameSpeech(ctx = {}, frame = {}) {
++  processAdaptiveFrame(ctx, frame, 'speech');
++
+   const metrics = (frame && typeof frame === 'object') ? frame : {};
+   const {
+     state,
+     VadFrameUtils = {},
+     updateSessionNoise,
+     getShadowStats,
+     getEvidenceSnrRequirement,
+     PRE_ROLL_MS,
+     EVIDENCE_MIN_SNR_DB,
+     EVIDENCE_MIN_SPEECH_MS,
+     EVIDENCE_MIN_BYTES,
+     GREET_BARGE_MIN_SNR_DB,
+     REC_MIME,
+     optsFromGlobal,
+     emitVoiceEvent,
+     startRecorder,
+     primeRecorderForPreRoll,
+     bargeIn,
+     resetEvidenceGate,
+     evaluateEvidenceGate,
+     onSpeechStartCommitted,
+     now,
+     logLifecycle,
+     voiceLog,
+     beginTurnTrace,
 diff --git a/static/js/voice/legacy/VoiceLegacyFacade.js b/static/js/voice/legacy/VoiceLegacyFacade.js
-index 514becdcdc7aa3ea829a77c1699e531998b2fabe..d8dc7d19da14175cc8cc7349c31cf2f1add38bc1 100644
+index d8dc7d19da14175cc8cc7349c31cf2f1add38bc1..eef26c630ba66285d46d76aa4075550d36b5e1ec 100644
 --- a/static/js/voice/legacy/VoiceLegacyFacade.js
 +++ b/static/js/voice/legacy/VoiceLegacyFacade.js
-@@ -1,28 +1,29 @@
+@@ -1,30 +1,30 @@
  import { emitVoiceEvent } from '../ui/Events.js';
  export { onFrameSilence, onFrameSpeech } from './VadProcessLegacy.js';
  export { onSpeechStartCommitted, onSpeechEndCommitted } from './CommitHandlersLegacy.js';
-+export { bootstrapLegacyFacade } from './FacadeBootstrapLegacy.js';
- import { bufferPreRollFrame, flushShadowBuffer, resetShadowBufferState } from '../core/index.js';
+-export { bootstrapLegacyFacade } from './FacadeBootstrapLegacy.js';
+-import { bufferPreRollFrame, flushShadowBuffer, resetShadowBufferState } from '../core/index.js';
++import { bootstrapLegacyFacade as baseBootstrapLegacyFacade } from './FacadeBootstrapLegacy.js';
++import { EvidenceGate, ShadowBuffer, bufferPreRollFrame, flushShadowBuffer, resetShadowBufferState } from '../core/index.js';
  import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from '../../ws_module.js';
  import {
    DEFAULT_MAX_TURN_MS,
@@ -94,398 +253,97 @@ index 514becdcdc7aa3ea829a77c1699e531998b2fabe..d8dc7d19da14175cc8cc7349c31cf2f1
    _now,
    _waitForGreetGate,
    state,
-diff --git a/static/js/voice/legacy/VoiceRuntimeLegacy.js b/static/js/voice/legacy/VoiceRuntimeLegacy.js
-index 6b0eb9d1010b829586c3b46eef996624c1237d0d..a4f901e26a6d4496c0de198d3a66e719289ea593 100644
---- a/static/js/voice/legacy/VoiceRuntimeLegacy.js
-+++ b/static/js/voice/legacy/VoiceRuntimeLegacy.js
-@@ -1,109 +1,79 @@
- import { emitVoiceEvent } from '../ui/Events.js';
- import { TurnState } from '../core/index.js';
- import { sendJSON } from '../../ws_module.js';
- import { stopPlayback, isPlaying as ttsIsPlaying } from '../../audio.js';
- import { registerTtsEventListener } from '../tts/TtsHandlers.js';
- import { updateSessionNoise, getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
- import {
-   armVAD as facadeArmVAD, bargeIn as facadeBargeIn, disarmVAD as facadeDisarmVAD,
-   forceBargeInEnd as facadeForceBargeInEnd, forceBargeInStart as facadeForceBargeInStart,
-   initMic as facadeInitMic, isRecording as facadeIsRecording, onWsClose as facadeOnWsClose,
-   onWsMessage as facadeOnWsMessage, onWsOpen as facadeOnWsOpen, registerVoiceLegacyFacade,
-   setGreetGateActive as facadeSetGreetGateActive, setVadBoost as facadeSetVadBoost,
-   legacyClearManualTimers, legacyClearSafetyCloseTimer, legacyCloseTurnIfOpen,
-   legacySetGreetGateActive, legacyOnWsCloseImpl, legacyOnWsMessageImpl, legacyOnWsOpenImpl,
-   legacyOnMicAvailable, legacyOnMicStop, legacyOnRecorderData, legacyOnRecorderError,
-   legacyResetEvidenceGate, legacySendRecorderChunk, legacyPrimeRecorderForPreRoll,
-   legacyStartRecorder, legacyStopRecorder, legacyAbortEvidenceGate, legacyEvaluateEvidenceGate,
-   legacyCommitEvidenceGate, legacyUpdateEvidenceGateWithChunk, legacyUpdateEvidenceGateWithPartial,
-   createVadSchedulerLegacy, onFrameSpeech as facadeOnFrameSpeech, startVadLoop as facadeStartVadLoop,
-   onTtsStart, onTtsEnd, VadFrameUtils, onSpeechStartCommitted as facadeOnSpeechStartCommitted,
--  onSpeechEndCommitted as facadeOnSpeechEndCommitted,
-+  onSpeechEndCommitted as facadeOnSpeechEndCommitted, bootstrapLegacyFacade,
- } from './VoiceLegacyFacade.js';
- import {
-   DEFAULT_MAX_TURN_MS, EVIDENCE_MIN_BYTES, EVIDENCE_MIN_SNR_DB, EVIDENCE_MIN_SPEECH_MS,
-   GREET_BARGE_MIN_SNR_DB, MANUAL_DEBOUNCE_MS, MANUAL_NO_AUDIO_CANCEL_MS, MANUAL_VAD_IGNORE_MS,
-   PARTIAL_CONF_RISE_DELTA, PARTIAL_CONF_THRESHOLD, PRE_ROLL_MS, REC_MIME, SAFETY_CLOSE_DELAY_MS,
-   WEBM_MIME, _beginTurnTrace, _cancelGreetGate, _clearTurnTrace, _completeGreetGate,
-   _handleGreetGateStateFrame, _handleGreetGateUtteranceEnd, _logLifecycle, _now,
-   _updateAssistantPhaseFromDetail, _voiceLog, _waitForGreetGate, _getActiveTurnTraceId,
-   optsFromGlobal, state,
  } from './VoiceLegacyTopLevel.js';
+@@ -83,50 +83,92 @@ export const stopVoice = delegate('stopVoice');
+ export const onWsOpen = delegate('onWsOpen');
+ export const onWsMessage = delegate('onWsMessage');
+ export const onWsClose = delegate('onWsClose');
+ export const onMicAvailable = delegate('onMicAvailable');
+ export const onMicStop = delegate('onMicStop');
+ export const onRecorderData = delegate('onRecorderData');
+ export const onRecorderError = delegate('onRecorderError');
  
--const _resetEvidenceGate = legacyResetEvidenceGate,
--  _clearSafetyCloseTimer = legacyClearSafetyCloseTimer,
--  _closeTurnIfOpen = legacyCloseTurnIfOpen,
--  _sendRecorderChunk = legacySendRecorderChunk,
--  _stopRecorder = legacyStopRecorder;
-+let _resetEvidenceGate;
-+let _clearSafetyCloseTimer;
-+let _closeTurnIfOpen;
-+let _sendRecorderChunk;
-+let _stopRecorder;
+ export { startVadLoop, stopVadLoop, createVadSchedulerLegacy } from './VadSchedulerLegacy.js';
  
- let _setGreetGateActive;
- let _abortEvidenceGate;
- let _evaluateEvidenceGate;
- let _commitEvidenceGate;
- let _updateEvidenceGateWithChunk;
- let _updateEvidenceGateWithPartial;
- let _manualAutoCancel;
- let _forceBargeInStart;
- let _forceBargeInEnd;
- let _ensureWSListener;
- let _primeRecorderForPreRoll;
- let _startRecorder;
- let _bargeIn;
- let _arm;
+ export function registerVoiceLegacyFacade(overrides = {}) {
+   if (!overrides || typeof overrides !== 'object') {
+     return { ...IMPLEMENTATION };
+   }
+   for (const name of KNOWN_METHODS) {
+     if (Object.prototype.hasOwnProperty.call(overrides, name)) {
+       const candidate = overrides[name];
+       if (typeof candidate === 'function') {
+         IMPLEMENTATION[name] = candidate;
+       }
+     }
+   }
+   return { ...IMPLEMENTATION };
+ }
  
--const commitCtx = {
--  onFrameSpeech: facadeOnFrameSpeech,
--  state,
--  VadFrameUtils,
--  updateSessionNoise,
--  getShadowStats,
--  getEvidenceSnrRequirement,
--  PRE_ROLL_MS,
--  EVIDENCE_MIN_SNR_DB,
--  EVIDENCE_MIN_SPEECH_MS,
--  EVIDENCE_MIN_BYTES,
--  GREET_BARGE_MIN_SNR_DB,
--  REC_MIME,
--  optsFromGlobal,
--  emitVoiceEvent,
--  startRecorder: (...args) => _startRecorder?.(...args),
--  primeRecorderForPreRoll: (...args) => _primeRecorderForPreRoll?.(...args),
--  bargeIn: (...args) => _bargeIn?.(...args),
--  resetEvidenceGate: _resetEvidenceGate,
--  evaluateEvidenceGate: (...args) => _evaluateEvidenceGate?.(...args),
--  now: _now,
--  logLifecycle: _logLifecycle,
--  voiceLog: _voiceLog,
--  beginTurnTrace: _beginTurnTrace,
--  completeGreetGate: _completeGreetGate,
--  getActiveTurnTraceId: _getActiveTurnTraceId,
--  abortEvidenceGate: (...args) => _abortEvidenceGate?.(...args),
--  clearSafetyCloseTimer: _clearSafetyCloseTimer,
--  stopRecorder: _stopRecorder,
--  performance: typeof performance !== 'undefined' ? performance : undefined,
--};
-+const commitCtx = { onFrameSpeech: facadeOnFrameSpeech };
- const handleSpeechStartCommitted = (detail = {}) => facadeOnSpeechStartCommitted(commitCtx, detail);
- const handleSpeechEndCommitted = (detail = null) => facadeOnSpeechEndCommitted(commitCtx, detail);
- commitCtx.onSpeechStartCommitted = handleSpeechStartCommitted;
- commitCtx.onSpeechEndCommitted = handleSpeechEndCommitted;
++function ensureBootstrapCtxArtifacts(ctx = {}, { preRollMs } = {}) {
++  if (!ctx || typeof ctx !== 'object') {
++    return { evidenceGate: null, shadowBuffer: null };
++  }
++
++  let { evidenceGate } = ctx;
++  if (!(evidenceGate instanceof EvidenceGate)) {
++    evidenceGate = new EvidenceGate();
++    ctx.evidenceGate = evidenceGate;
++  }
++
++  const maxMs = Number.isFinite(preRollMs) ? preRollMs : undefined;
++  let { shadowBuffer } = ctx;
++  if (!(shadowBuffer instanceof ShadowBuffer)) {
++    shadowBuffer = new ShadowBuffer({ maxMs });
++    ctx.shadowBuffer = shadowBuffer;
++  }
++
++  return { evidenceGate, shadowBuffer };
++}
++
++export function bootstrapLegacyFacade(deps = {}) {
++  const source = deps && typeof deps === 'object' ? deps : {};
++  const ctx = (source.ctx && typeof source.ctx === 'object') ? source.ctx : {};
++  const preRollMs = Number.isFinite(source?.PRE_ROLL_MS)
++    ? source.PRE_ROLL_MS
++    : Number.isFinite(source?.state?.preRollTimeslice)
++      ? source.state.preRollTimeslice
++      : undefined;
++  ensureBootstrapCtxArtifacts(ctx, { preRollMs });
++
++  const nextDeps = { ...source, ctx };
++  const result = baseBootstrapLegacyFacade(nextDeps);
++  if (result && typeof result === 'object') {
++    if (result.ctx === ctx) {
++      return result;
++    }
++    return { ...result, ctx };
++  }
++  return result;
++}
++
+ const POST_TTS_HOLDOFF_MS = 600;
+ const TTS_DECAY_MS = 750;
+ const ENDED_STATES = new Set(['ended', 'stopped', 'idle', 'paused', '']);
  
- ({
-   setGreetGateActive: _setGreetGateActive,
-   abortEvidenceGate: _abortEvidenceGate,
-   evaluateEvidenceGate: _evaluateEvidenceGate,
-   commitEvidenceGate: _commitEvidenceGate,
-   updateEvidenceGateWithChunk: _updateEvidenceGateWithChunk,
-   updateEvidenceGateWithPartial: _updateEvidenceGateWithPartial,
-   manualAutoCancel: _manualAutoCancel,
-   forceBargeInStart: _forceBargeInStart,
-   forceBargeInEnd: _forceBargeInEnd,
-   ensureWSListener: _ensureWSListener,
-   primeRecorderForPreRoll: _primeRecorderForPreRoll,
-   startRecorder: _startRecorder,
-   bargeIn: _bargeIn,
-   arm: _arm,
- } = createVadSchedulerLegacy({
-   state,
-   emitVoiceEvent,
-   sendJSON,
-   stopPlayback,
-@@ -111,76 +81,117 @@ commitCtx.onSpeechEndCommitted = handleSpeechEndCommitted;
-   startVadLoop: facadeStartVadLoop,
-   forceBargeInEnd: facadeForceBargeInEnd,
-   facadeOnWsMessage,
-   legacySetGreetGateActive,
-   legacyAbortEvidenceGate,
-   legacyEvaluateEvidenceGate,
-   legacyCommitEvidenceGate,
-   legacyUpdateEvidenceGateWithChunk,
-   legacyUpdateEvidenceGateWithPartial,
-   legacyPrimeRecorderForPreRoll,
-   legacyStartRecorder,
-   legacyStopRecorder,
-   legacyClearManualTimers,
-   legacyCloseTurnIfOpen,
-   VadFrameUtils,
-   now: _now,
-   logLifecycle: _logLifecycle,
-   voiceLog: _voiceLog,
-   MANUAL_DEBOUNCE_MS,
-   MANUAL_NO_AUDIO_CANCEL_MS,
-   MANUAL_VAD_IGNORE_MS,
-   onSpeechEndCommitted: handleSpeechEndCommitted,
-   onSpeechStartCommitted: handleSpeechStartCommitted,
- }));
+ function normalizeStateValue(value) {
+   return typeof value === 'string' ? value.trim().toLowerCase() : '';
+ }
  
-+({
-+  resetEvidenceGate: _resetEvidenceGate,
-+  clearSafetyCloseTimer: _clearSafetyCloseTimer,
-+  closeTurnIfOpen: _closeTurnIfOpen,
-+  sendRecorderChunk: _sendRecorderChunk,
-+  stopRecorder: _stopRecorder,
-+} = bootstrapLegacyFacade({
-+  registerVoiceLegacyFacade,
-+  VadFrameUtils,
-+  state,
-+  arm: _arm,
-+  bargeIn: _bargeIn,
-+  setGreetGateActive: _setGreetGateActive,
-+  forceBargeInStart: _forceBargeInStart,
-+  forceBargeInEnd: _forceBargeInEnd,
-+  legacyOnWsOpenImpl,
-+  legacyOnWsMessageImpl,
-+  legacyOnWsCloseImpl,
-+  legacyOnMicAvailable,
-+  legacyOnMicStop,
-+  legacyOnRecorderData,
-+  legacyOnRecorderError,
-+  legacyResetEvidenceGate,
-+  legacyClearSafetyCloseTimer,
-+  legacyCloseTurnIfOpen,
-+  legacySendRecorderChunk,
-+  legacyStopRecorder,
-+}));
-+
-+Object.assign(commitCtx, {
-+  state,
-+  VadFrameUtils,
-+  updateSessionNoise,
-+  getShadowStats,
-+  getEvidenceSnrRequirement,
-+  PRE_ROLL_MS,
-+  EVIDENCE_MIN_SNR_DB,
-+  EVIDENCE_MIN_SPEECH_MS,
-+  EVIDENCE_MIN_BYTES,
-+  GREET_BARGE_MIN_SNR_DB,
-+  REC_MIME,
-+  optsFromGlobal,
-+  emitVoiceEvent,
-+  startRecorder: (...args) => _startRecorder?.(...args),
-+  primeRecorderForPreRoll: (...args) => _primeRecorderForPreRoll?.(...args),
-+  bargeIn: (...args) => _bargeIn?.(...args),
-+  resetEvidenceGate: _resetEvidenceGate,
-+  evaluateEvidenceGate: (...args) => _evaluateEvidenceGate?.(...args),
-+  now: _now,
-+  logLifecycle: _logLifecycle,
-+  voiceLog: _voiceLog,
-+  beginTurnTrace: _beginTurnTrace,
-+  completeGreetGate: _completeGreetGate,
-+  getActiveTurnTraceId: _getActiveTurnTraceId,
-+  abortEvidenceGate: (...args) => _abortEvidenceGate?.(...args),
-+  clearSafetyCloseTimer: _clearSafetyCloseTimer,
-+  stopRecorder: _stopRecorder,
-+  performance: typeof performance !== 'undefined' ? performance : undefined,
-+});
-+
- Object.assign(commitCtx, {
-   startRecorder: _startRecorder,
-   primeRecorderForPreRoll: _primeRecorderForPreRoll,
-   bargeIn: _bargeIn,
-   evaluateEvidenceGate: _evaluateEvidenceGate,
-   abortEvidenceGate: _abortEvidenceGate,
- });
+ function extractDetailAndState(ctx = {}) {
+   const detail = ctx.detail ?? ctx.event?.detail ?? {};
+   const stateValue = normalizeStateValue(detail?.state);
+   ctx.detail = detail;
+   ctx.stateValue = stateValue;
+   return { detail, stateValue };
+ }
  
- export async function initMic(stream = null) { return await facadeInitMic(stream); }
- export async function armVAD(stream = null, opts = {}) { return await facadeArmVAD(stream, opts); }
- export function disarmVAD() { facadeDisarmVAD(); }
- export function isRecording() { return !!facadeIsRecording(); }
- export function bargeIn() { facadeBargeIn(); }
- export function setVadBoost(value) { facadeSetVadBoost(value); }
- export function setGreetGateActive(active = true) { facadeSetGreetGateActive(!!active); }
- export function forceBargeInStart(meta = {}) { return facadeForceBargeInStart(meta); }
- export function forceBargeInEnd(opts = {}) { return facadeForceBargeInEnd(opts); }
+ function resolveNowFn(now) {
+   if (typeof now === 'function') {
+     return now;
+   }
+   return () => Date.now();
+ }
  
- VadFrameUtils.refreshManualConfig();
- registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: VadFrameUtils.clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
- 
--registerVoiceLegacyFacade({
--  initMic: (stream = null) => VadFrameUtils.ensureMic(stream),
--  armVAD: (stream = null, opts = {}) => _arm(stream, opts),
--  disarmVAD: () => { VadFrameUtils.disarm(); },
--  isRecording: () => !!(state.rec && state.rec.state === 'recording'),
--  bargeIn: () => { _bargeIn(); },
--  setVadBoost: (_value) => {},
--  setGreetGateActive: (active = true) => { _setGreetGateActive(!!active); },
--  forceBargeInStart: (meta = {}) => _forceBargeInStart(meta),
--  forceBargeInEnd: (opts = {}) => _forceBargeInEnd(opts),
--  onWsOpen: (detail = null) => { legacyOnWsOpenImpl(detail); },
--  onWsMessage: (detail = {}, helpers = {}) => legacyOnWsMessageImpl(detail, helpers),
--  onWsClose: (detail = null) => { legacyOnWsCloseImpl(detail); },
--  onMicAvailable: (detail = {}) => { legacyOnMicAvailable(detail); },
--  onMicStop: (detail = {}) => legacyOnMicStop(detail),
--  onRecorderData: (event, helpers = {}) => legacyOnRecorderData(event, helpers),
--  onRecorderError: (event = null, helpers = {}) => legacyOnRecorderError(event, helpers),
--});
--
- export const __TEST_ONLY__ = {
-   state,
-   startRecorder: _startRecorder,
-   stopRecorder: _stopRecorder,
-   ensureWSListener: _ensureWSListener,
-   closeTurnIfOpen: _closeTurnIfOpen,
-   sendRecorderChunk: _sendRecorderChunk,
-   clearSafetyCloseTimer: _clearSafetyCloseTimer,
-   onSpeechStartCommitted: handleSpeechStartCommitted,
-   onSpeechEndCommitted: handleSpeechEndCommitted,
- };
-diff --git a/tests/js/voice-legacy-facade-bootstrap.test.mjs b/tests/js/voice-legacy-facade-bootstrap.test.mjs
-new file mode 100644
-index 0000000000000000000000000000000000000000..cc3978e3b8263786ad5997b41127fef7fb1d8962
---- /dev/null
-+++ b/tests/js/voice-legacy-facade-bootstrap.test.mjs
-@@ -0,0 +1,131 @@
-+import { test } from 'node:test';
-+import assert from 'node:assert/strict';
-+
-+import { bootstrapLegacyFacade } from '../../static/js/voice/legacy/FacadeBootstrapLegacy.js';
-+
-+test('bootstrapLegacyFacade wires overrides and aliases', () => {
-+  const recorded = {};
-+  const registerVoiceLegacyFacade = (overrides) => {
-+    recorded.overrides = overrides;
-+  };
-+  const state = { rec: { state: 'recording' } };
-+  const vadCalls = [];
-+  const VadFrameUtils = {
-+    ensureMic: (stream) => {
-+      vadCalls.push(['ensureMic', stream]);
-+      return 'mic';
-+    },
-+    disarm: () => {
-+      vadCalls.push(['disarm']);
-+    },
-+  };
-+  const armArgs = [];
-+  const arm = (...args) => {
-+    armArgs.push(args);
-+  };
-+  const bargeIn = () => {
-+    recorded.barged = true;
-+  };
-+  const setGreetGateActive = (active) => {
-+    recorded.gate = active;
-+  };
-+  const forceBargeInStart = (meta) => {
-+    recorded.startMeta = meta;
-+  };
-+  const forceBargeInEnd = (opts) => {
-+    recorded.endOpts = opts;
-+  };
-+  const legacyOnWsOpenImpl = (detail) => {
-+    recorded.wsOpen = detail;
-+  };
-+  const legacyOnWsMessageImpl = (detail, helpers) => {
-+    recorded.wsMessage = [detail, helpers];
-+  };
-+  const legacyOnWsCloseImpl = (detail) => {
-+    recorded.wsClose = detail;
-+  };
-+  const legacyOnMicAvailable = (detail) => {
-+    recorded.micAvailable = detail;
-+  };
-+  const legacyOnMicStop = (detail) => {
-+    recorded.micStop = detail;
-+  };
-+  const legacyOnRecorderData = (event, helpers) => {
-+    recorded.recorderData = [event, helpers];
-+  };
-+  const legacyOnRecorderError = (event, helpers) => {
-+    recorded.recorderError = [event, helpers];
-+  };
-+  const legacyResetEvidenceGate = () => 'reset';
-+  const legacyClearSafetyCloseTimer = () => 'clear';
-+  const legacyCloseTurnIfOpen = () => 'close';
-+  const legacySendRecorderChunk = () => 'send';
-+  const legacyStopRecorder = () => 'stop';
-+
-+  const aliases = bootstrapLegacyFacade({
-+    registerVoiceLegacyFacade,
-+    VadFrameUtils,
-+    state,
-+    arm,
-+    bargeIn,
-+    setGreetGateActive,
-+    forceBargeInStart,
-+    forceBargeInEnd,
-+    legacyOnWsOpenImpl,
-+    legacyOnWsMessageImpl,
-+    legacyOnWsCloseImpl,
-+    legacyOnMicAvailable,
-+    legacyOnMicStop,
-+    legacyOnRecorderData,
-+    legacyOnRecorderError,
-+    legacyResetEvidenceGate,
-+    legacyClearSafetyCloseTimer,
-+    legacyCloseTurnIfOpen,
-+    legacySendRecorderChunk,
-+    legacyStopRecorder,
-+  });
-+
-+  assert.equal(typeof recorded.overrides, 'object');
-+
-+  recorded.overrides.initMic('stream-1');
-+  recorded.overrides.disarmVAD();
-+  recorded.overrides.armVAD('stream-2', { foo: true });
-+  recorded.overrides.bargeIn();
-+  recorded.overrides.setGreetGateActive(false);
-+  recorded.overrides.forceBargeInStart({ reason: 'test' });
-+  recorded.overrides.forceBargeInEnd({ done: true });
-+  recorded.overrides.onWsOpen('open');
-+  recorded.overrides.onWsMessage({ foo: 'bar' }, { helper: true });
-+  recorded.overrides.onWsClose('close');
-+  recorded.overrides.onMicAvailable({ mic: true });
-+  recorded.overrides.onMicStop({ mic: false });
-+  recorded.overrides.onRecorderData('event', { chunk: 1 });
-+  recorded.overrides.onRecorderError('err', { cause: 'oops' });
-+
-+  assert.equal(recorded.overrides.isRecording(), true);
-+  recorded.overrides.setVadBoost?.(123);
-+
-+  assert.deepEqual(vadCalls, [
-+    ['ensureMic', 'stream-1'],
-+    ['disarm'],
-+  ]);
-+  assert.deepEqual(armArgs, [['stream-2', { foo: true }]]);
-+  assert.equal(recorded.barged, true);
-+  assert.equal(recorded.gate, false);
-+  assert.deepEqual(recorded.startMeta, { reason: 'test' });
-+  assert.deepEqual(recorded.endOpts, { done: true });
-+  assert.equal(recorded.wsOpen, 'open');
-+  assert.deepEqual(recorded.wsMessage, [{ foo: 'bar' }, { helper: true }]);
-+  assert.equal(recorded.wsClose, 'close');
-+  assert.deepEqual(recorded.micAvailable, { mic: true });
-+  assert.deepEqual(recorded.micStop, { mic: false });
-+  assert.deepEqual(recorded.recorderData, ['event', { chunk: 1 }]);
-+  assert.deepEqual(recorded.recorderError, ['err', { cause: 'oops' }]);
-+
-+  assert.equal(aliases.resetEvidenceGate, legacyResetEvidenceGate);
-+  assert.equal(aliases.clearSafetyCloseTimer, legacyClearSafetyCloseTimer);
-+  assert.equal(aliases.closeTurnIfOpen, legacyCloseTurnIfOpen);
-+  assert.equal(aliases.sendRecorderChunk, legacySendRecorderChunk);
-+  assert.equal(aliases.stopRecorder, legacyStopRecorder);
-+});
-+
+ export function onTtsStart(ctx = {}) {
+   const { state: ctxState, abortEvidenceGate, ttsIsPlaying, TurnState } = ctx;
