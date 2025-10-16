@@ -10,7 +10,7 @@ import websockets  # Deepgram realtime client
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
-# Admin SSE emitter (safe no-op if Admin log pipe not present)
+# Admin log emitter (safe no-op if Admin log pipe not present)
 
 EmitFn = Callable[[str, str], None]
 
@@ -125,7 +125,7 @@ class DeepgramStreamManager:
       • Drops the tiny first chunk (<64 B) before sending (common capture preamble).
       • Sends {"type":"CloseStream"} before closing.
       • Lingers briefly after last chunk (~600 ms) and waits up to 8 s for a final.
-      • Emits precise labels for Admin SSE and cleans up per-session.
+      • Emits precise labels for the Admin log feed and cleans up per-session.
     """
 
     DG_URL = (
@@ -223,7 +223,7 @@ class DeepgramStreamManager:
     async def send_chunk(self, data: bytes, seq: Optional[int] = None):
         """
         Forward one mic frame to Deepgram. Drops a tiny preamble first chunk.
-        Emits voice:chunk for Admin SSE.
+        Emits voice:chunk for the Admin log feed.
         """
         if not data:
             return
@@ -282,7 +282,7 @@ class DeepgramStreamManager:
             raise
 
     async def _recv_loop(self):
-        """Read Deepgram frames; detect partial/final and notify Admin SSE."""
+        """Read Deepgram frames; detect partial/final and notify the Admin log feed."""
         try:
             self._any_result = False
             while self.ws and not self._closing:

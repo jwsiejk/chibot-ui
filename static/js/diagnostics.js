@@ -21,22 +21,50 @@ function setKPI(id, val, cls=''){
 }
 
 async function watchAdminSSE(onEvent){
-  try{
-    const sse = new EventSource('/api/v1/admin/logs', { withCredentials:true });
-    sse.onmessage = (e)=>{
-      try{
-        const j = JSON.parse(e.data);
-        if (j && j.kind){
-          log(e.data);
-          onEvent?.(j);
-        }
-      }catch(_){}
-    };
-    return { close: ()=>{ try{sse.close();}catch(_){}} };
-  }catch(e){
-    log('SSE open failed: '+e.message);
-    return { close: ()=>{} };
-  }
+  let active = true;
+  let lastStep = 0;
+  let failureCount = 0;
+
+  const poll = async () => {
+    const params = new URLSearchParams();
+    if (lastStep) params.set('after', String(lastStep));
+    const url = params.toString() ? `/api/v1/admin/logs?${params.toString()}` : '/api/v1/admin/logs';
+
+    try {
+      const resp = await fetch(url, { credentials: 'include' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const payload = await resp.json();
+      const events = Array.isArray(payload?.events) ? payload.events : [];
+
+      if (!events.length && !lastStep) {
+        lastStep = Number(payload?.latest_step || 0) || 0;
+      }
+
+      for (const evt of events) {
+        const step = Number(evt?.step || 0);
+        if (step > lastStep) lastStep = step;
+        try { log(JSON.stringify(evt)); } catch {}
+        try { onEvent?.(evt); } catch {}
+      }
+
+      failureCount = 0;
+      return events.length ? 250 : 1200;
+    } catch (err) {
+      failureCount += 1;
+      log('Admin log poll failed: ' + (err?.message || err));
+      return Math.min(4000, 600 * failureCount);
+    }
+  };
+
+  (async function loop(){
+    while(active){
+      const delayMs = await poll();
+      if (!active) break;
+      await new Promise(r => setTimeout(r, delayMs || 900));
+    }
+  })();
+
+  return { close: ()=>{ active = false; } };
 }
 
 async function recordUntilSilence(){

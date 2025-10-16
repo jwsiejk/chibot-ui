@@ -1,5 +1,5 @@
 
-# app/obs.py — unified structured logging + Admin SSE mirror
+# app/obs.py — unified structured logging + Admin log mirror
 from __future__ import annotations
 import json, logging, os, time, traceback
 from contextlib import contextmanager
@@ -61,7 +61,7 @@ def _broadcast_ws(kind: str, payload: Dict[str, Any]) -> None:
 
 
 def jlog(kind: str, **fields):
-    """Emit one structured JSON log line and mirror to Admin SSE (best-effort)."""
+    """Emit one structured JSON log line and mirror to the Admin log feed."""
     base = {
         "ts": _ts(),
         "kind": kind,
@@ -92,7 +92,7 @@ def jlog(kind: str, **fields):
     except Exception:
         _log.info(f'{{"ts":{_ts()},"kind":"{kind}","error":"json_dump_failed"}}')
 
-    # SSE mirror
+    # Admin log mirror
     try:
         _admin_emit(kind, **base)
     except Exception:

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import os
+import platform
+import secrets
 import sys
 import time
-import platform
-from collections import deque
-from flask import Blueprint, request, session, abort, Response, jsonify, stream_with_context
+from flask import Blueprint, request, session, abort, jsonify
 from werkzeug.exceptions import HTTPException
 
 from ..utils.admin import is_admin_email
@@ -14,6 +13,10 @@ from ..security_state import get_user
 from ..services.config_store import get_config
 from ..services import admin_settings as cfg
 from ..services import test_runner as testr
+from ..admin_log import (
+    admin_log_emit as _admin_log_emit_core,
+    get_admin_log_history,
+)
 
 # add the prefix here so route is /api/v1/admin/logs
 bp = Blueprint("admin", __name__, url_prefix="/api/v1/admin")
@@ -24,159 +27,23 @@ def _require_admin() -> None:
     if not is_admin_email((email or "").strip().lower()):
         abort(403)
 
-# ----------------- Admin event log (SSE) ----------------
-
-_LOG_Q = deque(maxlen=1000)
-_STEP = 0
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
-def _clip_preview(val: object, *, limit: int = 120) -> object:
-    if not isinstance(val, str):
-        return val
-    if len(val) <= limit:
-        return val
-    if limit <= 1:
-        return val[:limit]
-    return val[: limit - 1] + "…"
-
-
-def _normalize_sid(value: object) -> str | None:
-    if value is None:
-        return None
-    try:
-        txt = str(value)
-    except Exception:
-        return None
-    txt = txt.strip()
-    return txt or None
-
-
-def _normalize_turn_id(value: object) -> str | None:
-    if value is None:
-        return None
-    try:
-        txt = str(value)
-    except Exception:
-        return None
-    txt = txt.strip()
-    return txt or None
+# ----------------- Admin event log helpers -----------------
 
 
 def admin_log_emit(evt: dict | None) -> dict | None:
-    """Append an admin telemetry event to the SSE queue and WS bus."""
-
     if not isinstance(evt, dict):
         return None
-
-    payload = dict(evt)
-
-    event_name = payload.get("event") or payload.get("kind") or payload.get("label")
-    if not isinstance(event_name, str) or not event_name.strip():
-        event_name = "log"
-    event_name = event_name.strip()
-    payload["event"] = event_name
-    payload.setdefault("kind", event_name)
-
-    version = payload.get("v")
-    try:
-        version_int = int(version)
-    except Exception:
-        version_int = 1
-    payload["v"] = version_int
-
-    ts_ms = payload.get("ts_ms") or payload.get("sent_at") or payload.get("ts")
-    try:
-        ts_ms_int = int(ts_ms)
-    except Exception:
-        ts_ms_int = _now_ms()
-    payload["ts_ms"] = ts_ms_int
-    payload["ts"] = payload.get("ts") or (ts_ms_int / 1000.0)
-
-    raw_session = payload.pop("session_id", None)
-    sid = _normalize_sid(raw_session or payload.get("sid"))
-    payload["sid"] = sid
-    if sid is not None:
-        payload["session_id"] = sid
-
-    turn_val = payload.pop("turnId", None) or payload.pop("turn", None) or payload.get("turn_id")
-    payload["turn_id"] = _normalize_turn_id(turn_val)
-
-    for preview_field in ("text_preview", "textPreview"):
-        if preview_field in payload:
-            payload["text_preview"] = _clip_preview(payload.pop(preview_field))
-
-    if "text_preview" in payload:
-        payload["text_preview"] = _clip_preview(payload["text_preview"])
-
-    if "text" in payload:
-        payload["text"] = payload["text"] if not isinstance(payload["text"], str) else payload["text"][:4096]
-
-    global _STEP
-    _STEP += 1
-    payload["step"] = _STEP
-
-    if "type" not in payload:
-        payload["type"] = payload["event"]
-
-    try:
-        _mirror_ws_event(payload["event"], event=payload)
-    except Exception:
-        pass
-
-    _LOG_Q.append(dict(payload))
-    return payload
-
-
-def admin_log_iter(*, live: bool = False, heartbeat_interval: float = 15.0, poll_interval: float = 0.5):
-    """Yield log events for the admin SSE endpoint.
-
-    When ``live`` is ``False`` the iterator drains the current queue contents
-    and returns immediately.  When ``live`` is ``True`` it will continue to
-    yield heartbeats at ``heartbeat_interval`` seconds while waiting for new
-    events to arrive.  The polling strategy is intentionally simple so it can
-    run inside the WSGI thread used by ``stream_with_context``.
-    """
-
-    last_heartbeat = 0.0
-
-    while True:
+    recorded = _admin_log_emit_core(evt)
+    if recorded:
         try:
-            evt = _LOG_Q.popleft()
-        except IndexError:
-            evt = None
-
-        if evt is not None:
-            # Yield a shallow copy so downstream consumers cannot mutate the
-            # stored object that might still be referenced elsewhere.
-            yield dict(evt)
-            continue
-
-        if not live:
-            break
-
-        now = time.time()
-        if now - last_heartbeat >= heartbeat_interval:
-            last_heartbeat = now
-            yield {"event": "heartbeat", "ts": now, "step": _STEP}
-            continue
-
-        time.sleep(poll_interval)
-
-
-def _admin_sse_enabled() -> bool:
-    flag = os.environ.get("ENABLE_ADMIN_SSE")
-    if isinstance(flag, str):
-        return flag.strip().lower() in {"1", "true", "yes", "on"}
-
-    return bool(flag)
+            _mirror_ws_event(recorded.get("event", "log"), event=recorded)
+        except Exception:
+            pass
+    return recorded
 
 
 def _extract_admin_token(payload: dict | None = None) -> str | None:
-    """Return a token supplied via query/header/payload for SSE admin access."""
+    """Return a token supplied via query/header/payload for admin log access."""
 
     candidates: list[str] = []
 
@@ -206,15 +73,18 @@ def _extract_admin_token(payload: dict | None = None) -> str | None:
 
 
 def _has_valid_admin_token(payload: dict | None = None) -> bool:
-    if not _admin_sse_enabled():
-        return False
-
     expected = (os.environ.get("ADMIN_SSE_E2E_KEY") or "").strip()
     if not expected:
         return False
 
     provided = _extract_admin_token(payload)
-    return bool(provided) and provided == expected
+    if not provided:
+        return False
+
+    try:
+        return secrets.compare_digest(provided, expected)
+    except Exception:
+        return provided == expected
 
 def _mirror_ws_event(kind: str, *, event: dict) -> None:
     """Mirror admin diagnostics to the WS session stream when possible."""
@@ -264,50 +134,48 @@ def _emit(kind: str, *, label: str | None = None, route: str | None = None, **fi
         return False
 
 @bp.get("/logs")
-def logs_sse():
-    """
-    Live admin logs stream.
-    - /api/v1/admin/logs         → short drain (ends when queue drains)
-    - /api/v1/admin/logs?live=1  → live tail; heartbeats + continuous events
-    """
-
-    if not _admin_sse_enabled():
-        abort(404)
+def logs_snapshot():
+    """Return the current admin log history as JSON."""
 
     try:
         _require_admin()
     except HTTPException as exc:
-        if getattr(exc, "code", None) != 403:
-            raise
-        if not _has_valid_admin_token():
+        if getattr(exc, "code", None) != 403 or not _has_valid_admin_token():
             raise
 
-    live = str(request.args.get("live") or "").lower() in ("1", "true", "yes")
+    limit_value = request.args.get("limit")
+    after_value = request.args.get("after") or request.args.get("after_step")
 
-    @stream_with_context
-    def event_stream():
-        # immediate heartbeat so the runner sees the pipe
-        heartbeat = {
-            "event": "heartbeat",
-            "kind": "heartbeat",
-            "v": 1,
-            "ts_ms": _now_ms(),
-            "sid": None,
-            "turn_id": None,
-        }
-        yield f'event: message\ndata: {json.dumps(heartbeat)}\n\n'
+    try:
+        limit = int(limit_value) if limit_value is not None else None
+    except (TypeError, ValueError):
+        limit = None
 
-        # ⬇️ keep your existing streaming logic here
-        # Example: replace `admin_log_iter(live=live)` with your real iterator
-        for evt in admin_log_iter(live=live):
-            yield f'event: message\ndata: {json.dumps(evt)}\n\n'
+    try:
+        after_step = int(after_value) if after_value is not None else None
+    except (TypeError, ValueError):
+        after_step = None
 
-    headers = {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache, no-transform",
-        "Connection": "keep-alive",
-    }
-    return Response(event_stream(), headers=headers)
+    all_events = get_admin_log_history()
+    total = len(all_events)
+    latest_step = int(all_events[-1]["step"]) if all_events and "step" in all_events[-1] else 0
+
+    events = all_events
+    if after_step is not None:
+        events = [evt for evt in events if int(evt.get("step", 0)) > after_step]
+
+    if limit is not None and limit >= 0:
+        events = events[-limit:]
+
+    return (
+        jsonify({
+            "ok": True,
+            "events": events,
+            "total": total,
+            "latest_step": latest_step,
+        }),
+        200,
+    )
 
 @bp.post("/log")
 def logs_append():

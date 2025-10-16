@@ -26,7 +26,7 @@ const STEP_DEFS = [
     id: 'asr',
     title: 'Speech-to-text + Admin log trace',
     role: 'system',
-    description: 'Verify Admin SSE reports partial/final ASR events and that the WebSocket delivers the same transcript frames.',
+    description: 'Verify the Admin log feed reports partial/final ASR events and that the WebSocket delivers the same transcript frames.',
   },
   {
     id: 'assistant',
@@ -68,7 +68,7 @@ function renderUI(container) {
     <div class="diag-head">
       <p>
         This diagnostic mirrors the production conversational pipeline end-to-end: WebSocket auth, Configure greet,
-        voice capture with VAD, Admin SSE monitoring, and Chip’s TTS reply. Follow the steps below — we will log
+        voice capture with VAD, Admin log monitoring, and Chip’s TTS reply. Follow the steps below — we will log
         every transition to the Admin log so you can trace failures down to the frame.
       </p>
       <div class="actions">
@@ -529,7 +529,7 @@ function handleWSFrame(state, frame) {
     }
 
     if (final) {
-      // Resolve the ASR wait even if SSE didn’t fire an asr_final.
+      // Resolve the ASR wait even if the log feed didn’t deliver an asr_final.
       satisfyASRWait(state, { label: 'asr_final', transcript: transcript || '' });
     }
     return;
@@ -605,26 +605,55 @@ function maybeHandlePolicyEvent(state, evt, kindTag, labelTag) {
 }
 
 function startAdminSSE(state, onMatch) {
-  try {
-    const es = new EventSource('/api/v1/admin/logs?live=1', { withCredentials: true });
-    es.onmessage = (ev) => {
-      if (!ev.data) return;
-      appendLog(state.adminLogEl, `${timestamp()} ${ev.data}`);
-      try {
-        const parsed = JSON.parse(ev.data);
-        const evSid = String(parsed?.session_id || parsed?.sid || '');
-        if (state.sid && evSid && evSid !== state.sid) return;
-        onMatch?.(parsed);
-      } catch {}
-    };
-    es.onerror = () => {
-      appendLog(state.adminLogEl, `${timestamp()} [error] SSE connection problem (check network/auth).`);
-    };
-    return es;
-  } catch (err) {
-    appendLog(state.adminLogEl, `${timestamp()} [error] Failed to open SSE: ${err?.message || err}`);
-    return null;
-  }
+  let active = true;
+  let lastStep = 0;
+  let failureCount = 0;
+
+  const poll = async () => {
+    const params = new URLSearchParams();
+    if (lastStep) params.set('after', String(lastStep));
+    const url = params.toString() ? `/api/v1/admin/logs?${params.toString()}` : '/api/v1/admin/logs';
+
+    try {
+      const resp = await fetch(url, { credentials: 'include' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const events = Array.isArray(data?.events) ? data.events : [];
+
+      if (!events.length && !lastStep) {
+        lastStep = Number(data?.latest_step || 0) || 0;
+      }
+
+      for (const evt of events) {
+        const step = Number(evt?.step || 0);
+        if (step > lastStep) lastStep = step;
+        appendLog(state.adminLogEl, `${timestamp()} ${JSON.stringify(evt)}`);
+        const evSid = String(evt?.session_id || evt?.sid || '');
+        if (state.sid && evSid && evSid !== state.sid) continue;
+        try { onMatch?.(evt); } catch {}
+      }
+
+      failureCount = 0;
+      return events.length ? 300 : 900;
+    } catch (err) {
+      failureCount += 1;
+      appendLog(state.adminLogEl, `${timestamp()} [error] Admin log poll failed: ${err?.message || err}`);
+      return Math.min(4000, 500 * failureCount);
+    }
+  };
+
+  (async function loop() {
+    let delayMs = 0;
+    while (active) {
+      delayMs = await poll();
+      if (!active) break;
+      await delay(delayMs || 800);
+    }
+  })();
+
+  return {
+    close() { active = false; },
+  };
 }
 
 function updateASRStatus(state, { status, partialsDelta = 0, final = false, transcript, message, error = false } = {}) {

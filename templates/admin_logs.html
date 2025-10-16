@@ -16,13 +16,42 @@
   </section>
   <script type="module">
     const log = document.getElementById('log');
-    try{
-      const sse = new EventSource('/api/v1/admin/logs', { withCredentials:true });
-      sse.onmessage = (e)=>{ log.textContent += e.data + "\n"; log.scrollTop = log.scrollHeight; };
-      sse.onerror = ()=>{ log.textContent += "SSE error (maybe 403 — admin only).\n"; };
-    }catch(e){
-      log.textContent = 'Unable to open SSE: ' + e.message;
+    let lastStep = 0;
+    async function poll(){
+      const params = new URLSearchParams();
+      if (lastStep) params.set('after', String(lastStep));
+      const url = params.toString() ? `/api/v1/admin/logs?${params.toString()}` : '/api/v1/admin/logs';
+      try {
+        const resp = await fetch(url, { credentials:'include' });
+        if (resp.status === 403) {
+          log.textContent += 'Access denied (admin only).\n';
+          return 5000;
+        }
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const payload = await resp.json();
+        const events = Array.isArray(payload?.events) ? payload.events : [];
+        if (!events.length && !lastStep) {
+          lastStep = Number(payload?.latest_step || 0) || 0;
+        }
+        for (const evt of events) {
+          const step = Number(evt?.step || 0);
+          if (step > lastStep) lastStep = step;
+          log.textContent += JSON.stringify(evt) + "\n";
+        }
+        if (events.length) log.scrollTop = log.scrollHeight;
+        return events.length ? 250 : 1200;
+      } catch (err) {
+        log.textContent += `poll error: ${err?.message || err}\n`;
+        return 2000;
+      }
     }
+
+    (async function loop(){
+      while(true){
+        const delayMs = await poll();
+        await new Promise(r => setTimeout(r, delayMs || 900));
+      }
+    })();
   </script>
 </body>
 </html>

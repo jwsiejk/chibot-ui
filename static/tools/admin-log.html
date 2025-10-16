@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Admin Log (SSE)</title>
+  <title>Admin Log (JSON feed)</title>
   <style>
     body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#0f1115;color:#e6e9ef}
     header{padding:10px 14px;border-bottom:1px solid #222531} h1{margin:0;font-size:16px}
@@ -15,7 +15,7 @@
   </style>
 </head>
 <body>
-  <header><h1>Admin Log — SSE Stream</h1></header>
+  <header><h1>Admin Log — Live Feed</h1></header>
   <main>
     <div class="row">
       <input id="f" placeholder="filter…"><button id="clear">Clear</button><span id="status"></span>
@@ -24,23 +24,44 @@
   </main>
   <script>
     const out=document.getElementById('out'), f=document.getElementById('f'), st=document.getElementById('status');
-    document.getElementById('clear').addEventListener('click',()=>{ out.textContent=''; });
-    try{
-      const es = new EventSource('/api/v1/admin/logs');
-      es.onopen = ()=>{ st.textContent='connected'; };
-      es.onmessage = (ev)=>{
-        const line = ev.data||'';
+    document.getElementById('clear').addEventListener('click',()=>{ out.textContent=''; lastStep = 0; });
+    f.addEventListener('input', ()=>{ lastStep = 0; out.textContent=''; });
+    let lastStep = 0;
+    async function poll(){
+      const params = new URLSearchParams();
+      if (lastStep) params.set('after', String(lastStep));
+      const url = params.toString() ? `/api/v1/admin/logs?${params.toString()}` : '/api/v1/admin/logs';
+      try {
+        const resp = await fetch(url, { credentials:'include' });
+        if (resp.status === 403) { st.textContent = 'forbidden'; return 5000; }
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const payload = await resp.json();
+        const events = Array.isArray(payload?.events) ? payload.events : [];
+        if (!events.length && !lastStep) lastStep = Number(payload?.latest_step || 0) || 0;
         const filter = (f.value||'').toLowerCase();
-        if (!filter || line.toLowerCase().includes(filter)){
-          out.textContent += line + '\n';
-          out.scrollTop = out.scrollHeight;
+        for (const evt of events){
+          const step = Number(evt?.step || 0);
+          if (step > lastStep) lastStep = step;
+          const line = JSON.stringify(evt);
+          if (!filter || line.toLowerCase().includes(filter)){
+            out.textContent += line + '\n';
+          }
         }
-      };
-      es.addEventListener('ping', ()=>{ st.textContent='ok'; });
-      es.onerror = ()=>{ st.textContent='disconnected'; };
-    }catch(e){
-      st.textContent = String(e.message||e);
+        if (events.length){ st.textContent='connected'; out.scrollTop = out.scrollHeight; }
+        return events.length ? 250 : 1200;
+      } catch(err){
+        st.textContent = 'error';
+        out.textContent += `poll error: ${err?.message || err}\n`;
+        return 2000;
+      }
     }
+
+    (async function loop(){
+      while(true){
+        const delayMs = await poll();
+        await new Promise(r => setTimeout(r, delayMs || 900));
+      }
+    })();
   </script>
 </body>
 </html>

@@ -33,29 +33,84 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
   }));
 })();
 
-/* Live Logs (SSE) with filter + clear */
-(function sseLogs(){
-  const url = window.ASKCHIP.api.logs;
+/* Live Logs (polling JSON) with filter + clear */
+(function logFeed(){
+  const baseUrl = window.ASKCHIP.api.logs;
   const el = $("#adminLog");
-  try {
-    const es = new EventSource(url);
-    let opened = false;
-    const to = setTimeout(()=>{ if(!opened){ el.textContent = '(log stream unavailable — SSE timeout)'; try{es.close();}catch{} } }, 6000);
-    es.onopen = () => { opened = true; clearTimeout(to); el.textContent = ""; };
-    es.addEventListener("ping", () => {/* keepalive */});
-    es.onmessage = (ev) => {
-      const line = ev.data || "";
-      const f = ($("#logFilter").value || "").toLowerCase();
-      if (!f || line.toLowerCase().includes(f)) {
-        el.textContent += (line + "\n");
+  if (!el) return;
+
+  let lastStep = 0;
+  let active = true;
+  let timer = null;
+  let failureCount = 0;
+
+  const schedule = (ms) => {
+    if (!active) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(run, Math.max(200, ms));
+  };
+
+  const drain = async () => {
+    const params = new URLSearchParams();
+    if (lastStep) params.set('after', String(lastStep));
+    const url = params.toString() ? `${baseUrl}?${params.toString()}` : baseUrl;
+
+    try {
+      const resp = await fetch(url, { credentials: 'include' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const events = Array.isArray(data?.events) ? data.events : [];
+
+      if (!events.length && !lastStep) {
+        lastStep = Number(data?.latest_step || 0) || 0;
+      }
+
+      const filter = ($("#logFilter").value || "").toLowerCase();
+      for (const evt of events) {
+        const step = Number(evt?.step || 0);
+        if (step > lastStep) lastStep = step;
+        const line = JSON.stringify(evt);
+        if (!filter || line.toLowerCase().includes(filter)) {
+          el.textContent += `${line}\n`;
+        }
+      }
+      if (events.length) {
         el.scrollTop = el.scrollHeight;
       }
-    };
-    es.onerror = () => { el.textContent += "\n[disconnected]\n"; };
-    $("#logClear").addEventListener("click", () => { el.textContent = ""; });
-  } catch (e) {
-    el.textContent = String(e);
+
+      failureCount = 0;
+      return events.length ? 300 : 1200;
+    } catch (err) {
+      failureCount += 1;
+      const message = err?.message || err || 'unknown error';
+      el.textContent += `[poll-error] ${message}\n`;
+      el.scrollTop = el.scrollHeight;
+      return Math.min(5000, 600 * failureCount);
+    }
+  };
+
+  async function run() {
+    if (!active) return;
+    const delayMs = await drain();
+    schedule(delayMs || 1200);
   }
+
+  $("#logClear").addEventListener("click", () => {
+    el.textContent = "";
+    lastStep = 0;
+  });
+
+  $("#logFilter").addEventListener("input", () => {
+    lastStep = 0;  // reload to honour new filter
+    el.textContent = '';
+  });
+
+  window.addEventListener('beforeunload', () => {
+    active = false;
+    if (timer) clearTimeout(timer);
+  });
+
+  run();
 })();
 
 /* Config (dynamic form) */

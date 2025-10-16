@@ -262,7 +262,7 @@ from ..dialog.policy import pick as pick_dialog_policy
 from ..config import load_settings
 
 try:
-    from ..admin_log import emit as _admin_emit  # SSE/Admin relay
+    from ..admin_log import emit as _admin_emit  # Admin log relay
 except Exception:
     def _admin_emit(*a, **k):  # no-op if admin channel absent
         pass

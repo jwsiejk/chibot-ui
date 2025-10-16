@@ -52,13 +52,15 @@ def test_nudge_suggestions_email_and_admin_sse(monkeypatch):
     c.post('/api/v1/auth/login', json={'email':'jwsiejk@purestorage.com'}, headers={'X-CSRF-Token': tok})
     end=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'end_session'}, headers={'X-CSRF-Token': tok}).get_json()
     assert end['emailed'] is True and any(e['to']=='jwsiejk@purestorage.com' for e in db.list_emails())
-    # Admin SSE + actions
-    logs_stream=c.get('/api/v1/admin/logs')
+    # Admin log feed + actions
+    logs_before=c.get('/api/v1/admin/logs').get_json()
     c.post('/api/v1/admin/config', json={'suggestions_max_items':3}, headers={'X-CSRF-Token': tok})
     c.post('/api/v1/admin/layouts', json={'breakpoint':'desktop','json':{'grid':'v1'}})
     c.post('/api/v1/admin/layouts/rollback', json={'breakpoint':'desktop','version':1})
-    sse = logs_stream.data.decode('utf-8','ignore')
-    assert 'config_updated' in sse or 'layout_updated' in sse or 'audit' in sse
+    logs_after = c.get('/api/v1/admin/logs').get_json()
+    new_events = logs_after['events'][len(logs_before['events']):]
+    kinds = {evt.get('kind') for evt in new_events}
+    assert kinds & {'config_update', 'layout_publish', 'layout_rollback', 'audit'}
     # Users & Memory
     ls=c.get('/api/v1/admin/sessions').get_json()['sessions']
     assert any(s['id']==sid for s in ls)

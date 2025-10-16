@@ -1,163 +1,93 @@
 from app.asgi_gateway import app as flask_app
-from app.api_v1 import admin as admin_mod
+from app.admin_log import clear_admin_log_history_for_tests
 
 
-def _decode(resp):
-    return resp.data.decode("utf-8", errors="ignore")
+def _with_admin_session(client, email: str = "admin@example.com"):
+    with client.session_transaction() as sess:
+        sess["user"] = {"email": email}
 
 
-def _install_log_iter(monkeypatch):
-    def _iter(live: bool = False):  # pragma: no cover - simple drain helper
-        while admin_mod._LOG_Q:
-            yield admin_mod._LOG_Q.popleft()
+def _csrf(client):
+    resp = client.get("/api/v1/csrf")
+    return resp.get_json()["csrf"]
 
-    monkeypatch.setattr(admin_mod, "admin_log_iter", _iter, raising=False)
+
+def setup_function():
+    clear_admin_log_history_for_tests()
 
 
 def test_admin_log_post_appends_event(monkeypatch):
     monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
-    monkeypatch.setenv("ENABLE_ADMIN_SSE", "1")
-
-    admin_mod._LOG_Q.clear()
-    admin_mod._STEP = 0
-    _install_log_iter(monkeypatch)
 
     client = flask_app.test_client()
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": "admin@example.com"}
+    _with_admin_session(client)
 
-    csrf_resp = client.get("/api/v1/csrf")
-    token = csrf_resp.get_json()["csrf"]
-
+    token = _csrf(client)
     payload = {"kind": "admin_diag", "label": "diagnostic_start", "session_id": "sid-123"}
-    rv = client.post(
-        "/api/v1/admin/log",
-        json=payload,
-        headers={"X-CSRF-Token": token},
-    )
-    assert rv.status_code == 200
-    data = rv.get_json()
-    assert data["ok"] is True
-    assert data["kind"] == "admin_diag"
-    assert data["label"] == "diagnostic_start"
 
-    stream = client.get("/api/v1/admin/logs")
-    text = _decode(stream)
-    assert "\"kind\": \"admin_diag\"" in text
-    assert "\"session_id\": \"sid-123\"" in text
-
-
-def test_admin_logs_sse_default_heartbeat(monkeypatch):
-    monkeypatch.setenv("ENABLE_ADMIN_SSE", "1")
-    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
-    monkeypatch.delenv("ADMIN_SSE_E2E_KEY", raising=False)
-
-    admin_mod._LOG_Q.clear()
-    admin_mod._STEP = 0
-
-    def _iter(live: bool = False):
-        while admin_mod._LOG_Q:
-            yield admin_mod._LOG_Q.popleft()
-
-    monkeypatch.setattr(admin_mod, "admin_log_iter", _iter, raising=False)
-
-    client = flask_app.test_client()
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": "admin@example.com"}
-    resp = client.get("/api/v1/admin/logs", buffered=True)
-
+    resp = client.post("/api/v1/admin/log", json=payload, headers={"X-CSRF-Token": token})
     assert resp.status_code == 200
-    text = _decode(resp)
-    assert "\"event\": \"heartbeat\"" in text
+    assert resp.get_json()["ok"] is True
+
+    logs = client.get("/api/v1/admin/logs").get_json()
+    assert logs["ok"] is True
+    assert logs["latest_step"] == 1
+    assert logs["events"][0]["session_id"] == "sid-123"
 
 
-def test_admin_logs_sse_disabled(monkeypatch):
-    monkeypatch.delenv("ENABLE_ADMIN_SSE", raising=False)
-    monkeypatch.delenv("ADMIN_SSE_E2E_KEY", raising=False)
-
-    admin_mod._LOG_Q.clear()
-    admin_mod._STEP = 0
+def test_admin_logs_support_limit_and_after(monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
 
     client = flask_app.test_client()
-    resp = client.get("/api/v1/admin/logs", buffered=True)
+    _with_admin_session(client)
+    token = _csrf(client)
 
-    assert resp.status_code == 404
+    for idx in range(5):
+        resp = client.post(
+            "/api/v1/admin/log",
+            json={"kind": f"diag-{idx}", "label": "step", "session_id": "sid"},
+            headers={"X-CSRF-Token": token},
+        )
+        assert resp.status_code == 200
+
+    all_logs = client.get("/api/v1/admin/logs").get_json()
+    assert len(all_logs["events"]) == 5
+
+    last_step = all_logs["events"][-1]["step"]
+    recent = client.get(f"/api/v1/admin/logs?limit=2&after={last_step-3}").get_json()
+    assert len(recent["events"]) == 2
+    assert recent["events"][0]["kind"] == "diag-3"
+    assert recent["events"][1]["kind"] == "diag-4"
 
 
-def test_admin_log_post_accepts_sse_token(monkeypatch):
-    monkeypatch.setenv("ENABLE_ADMIN_SSE", "1")
+def test_admin_logs_allow_e2e_token(monkeypatch):
     monkeypatch.setenv("ADMIN_SSE_E2E_KEY", "secret-token")
 
-    admin_mod._LOG_Q.clear()
-    admin_mod._STEP = 0
-    _install_log_iter(monkeypatch)
-
     client = flask_app.test_client()
+    token = _csrf(client)
 
-    csrf_resp = client.get("/api/v1/csrf")
-    token = csrf_resp.get_json()["csrf"]
-
-    payload = {
-        "token": "secret-token",
-        "kind": "media",
-        "label": "mic_start",
-        "details": {"source": "mic"},
-    }
-
-    rv = client.post(
+    resp = client.post(
         "/api/v1/admin/log",
-        json=payload,
+        json={"token": "secret-token", "kind": "media", "label": "mic_start"},
         headers={"X-CSRF-Token": token},
     )
-    assert rv.status_code == 200
-    data = rv.get_json()
-    assert data["ok"] is True
-    assert data["kind"] == "media"
+    assert resp.status_code == 200
 
-    payload_asr = {
-        "token": "secret-token",
-        "kind": "asr:start",
-        "label": "asr_start",
-        "session_id": "sid-42",
-    }
-
-    rv2 = client.post(
-        "/api/v1/admin/log",
-        json=payload_asr,
-        headers={"X-CSRF-Token": token},
-    )
-    assert rv2.status_code == 200
-    data2 = rv2.get_json()
-    assert data2["ok"] is True
-    assert data2["kind"] == "asr:start"
-
-    stream = client.get("/api/v1/admin/logs?k=secret-token", buffered=True)
-    text = _decode(stream)
-
-    assert "\"kind\": \"media\"" in text
-    assert "\"kind\": \"asr:start\"" in text
-    assert "\"source\": \"mic\"" in text
-    assert "\"token\"" not in text
+    logs = client.get("/api/v1/admin/logs?k=secret-token").get_json()
+    assert logs["events"][0]["kind"] == "media"
 
 
-def test_admin_log_helper_mirrors_to_admin_sse(monkeypatch):
-    monkeypatch.setenv("ENABLE_ADMIN_SSE", "1")
+def test_admin_log_helper_records_event(monkeypatch):
     monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
 
-    admin_mod._LOG_Q.clear()
-    admin_mod._STEP = 0
-
     client = flask_app.test_client()
-    with client.session_transaction() as sess:
-        sess["user"] = {"email": "admin@example.com"}
+    _with_admin_session(client)
 
     from app.logging import admin_log as admin_log_helper
 
     admin_log_helper("Hello world", email="prod@example.com", role="system")
 
-    stream = client.get("/api/v1/admin/logs", buffered=True)
-    text = _decode(stream)
-
-    assert "\"kind\": \"admin_log\"" in text
-    assert "\"message\": \"Hello world\"" in text
-    assert "\"email\": \"prod@example.com\"" in text
+    logs = client.get("/api/v1/admin/logs").get_json()
+    assert logs["events"][0]["kind"] == "admin_log"
+    assert logs["events"][0]["message"] == "Hello world"
+    assert logs["events"][0]["email"] == "prod@example.com"

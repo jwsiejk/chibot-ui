@@ -1,2 +1,1 @@
-// UI layer exports will be populated as modules migrate into this folder.
-export {};
+export { emitVoiceEvent } from './Events.js';

@@ -1,53 +1,49 @@
-import json, time
+import time
 from app.asgi_gateway import app as flask_app
 
-def _read_sse(resp_bytes: bytes):
-    text = resp_bytes.decode('utf-8', errors='ignore')
-    events = []
-    for block in [b for b in text.split('\n\n') if b.strip()]:
-        lines = block.split('\n')
-        ev = None
-        payload = None
-        for ln in lines:
-            if ln.startswith('event: '):
-                ev = ln[len('event: '):].strip()
-            if ln.startswith('data: '):
-                payload = ln[len('data: '):]
-        if ev and payload:
-            try:
-                events.append((ev, json.loads(payload)))
-            except Exception:
-                events.append((ev, payload))
-    return events
 
-def test_admin_config_and_broadcast():
+def _with_admin_session(client):
+    with client.session_transaction() as sess:
+        sess["user"] = {"email": "admin@example.com"}
+
+
+def test_admin_config_and_broadcast(monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
     c = flask_app.test_client()
-    stream = c.get('/api/v1/admin/logs')
+    _with_admin_session(c)
+
+    before = c.get('/api/v1/admin/logs').get_json()
     rv = c.post('/api/v1/admin/config', json={"suggestions_max_items": 3, "confirm_ms": 500})
     assert rv.status_code == 200
     cfg = rv.get_json()['config']
     assert cfg['suggestions_max_items'] == 3
     assert cfg['confirm_ms'] == 500
-    # SSE should include config_updated
-    events = _read_sse(stream.data)
-    kinds = [e[0] for e in events]
-    assert 'config_updated' in kinds or 'audit' in kinds
 
-def test_layout_publish_and_rollback_broadcast():
+    after = c.get('/api/v1/admin/logs').get_json()
+    new_events = after['events'][len(before['events']):]
+    kinds = {evt.get('kind') for evt in new_events}
+    assert 'config_update' in kinds or 'audit' in kinds
+
+
+def test_layout_publish_and_rollback_broadcast(monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
     c = flask_app.test_client()
-    stream = c.get('/api/v1/admin/logs')
+    _with_admin_session(c)
+
+    before = c.get('/api/v1/admin/logs').get_json()
     rv = c.post('/api/v1/admin/layouts', json={"breakpoint":"desktop","json":{"grid":"v1"}})
     assert rv.status_code == 200
     state = rv.get_json()['state']
     assert state['published']['version'] == 1
     rv2 = c.post('/api/v1/admin/layouts', json={"breakpoint":"desktop","json":{"grid":"v2"}})
     assert rv2.get_json()['state']['published']['version'] == 2
-    # Roll back to v1
     rb = c.post('/api/v1/admin/layouts/rollback', json={"breakpoint":"desktop","version":1})
     assert rb.get_json()['state']['published']['version'] == 1
-    events = _read_sse(stream.data)
-    kinds = [e[0] for e in events]
-    assert 'layout_updated' in kinds
+
+    after = c.get('/api/v1/admin/logs').get_json()
+    new_events = after['events'][len(before['events']):]
+    kinds = {evt.get('kind') for evt in new_events}
+    assert 'layout_publish' in kinds or 'layout_rollback' in kinds
 
 def test_users_memory_list_export_email_anonymize():
     c = flask_app.test_client()

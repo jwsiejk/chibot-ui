@@ -1,314 +1,68 @@
-diff --git a/static/js/voice/core/Config.js b/static/js/voice/core/Config.js
-index a9e4f116aeafb6b6024d4cc054f5d88794938653..e752e35b3c4913d65e1fd56e3b2261076e72ea16 100644
---- a/static/js/voice/core/Config.js
-+++ b/static/js/voice/core/Config.js
-@@ -1,69 +1,86 @@
- const DEFAULT_CONFIG = {
-   barge_in: {
-     mode: 'manual_only',
-   },
-+  admin: {
-+    voice_metrics_panel: true,
-+  },
-+  metrics: {
-+    client_enabled: true,
-+    server_enabled: true,
-+  },
-   vad: {
-     enabled: true,
-     hysteresis: {
-       enter: 3,
-       exit: 4,
-     },
-   },
-   tts: {
-     mask_auto_vad: true,
-     decay_ms: 700,
-   },
-   evidence: {
-     snr_sigma: 2.5,
-     asr_conf: 0.65,
-     w1: 0.5,
-     w2: 0.3,
-     w3: 0.2,
-     threshold: 1.0,
-     asrInstantOpen: 0.7,
-   },
-   shadow: {
-     ms: 450,
-   },
-   commit: {
-     min_ms: 500,
-     drop_if_no_partial: true,
-     no_partial_timeout_ms: 1200,
-   },
-   transport: {
-     close_on_turn_end: false,
-   },
- };
+diff --git a/tests/test_phase9_acceptance.py b/tests/test_phase9_acceptance.py
+index af469716e3bf9e516d2f0002e6f481992519505c..b752eaf1f779b569c0c88445344ad80ea31a9c93 100644
+--- a/tests/test_phase9_acceptance.py
++++ b/tests/test_phase9_acceptance.py
+@@ -30,57 +30,59 @@ def test_voice_turn_and_barge_in_interrupt():
+     rv=c.post('/api/v1/chat', json={'session_id':sid,'text':'long'}); tid=rv.get_json()['turn_id']
+     c.post('/api/v1/chat', json={'session_id':sid,'cmd':'interrupt','turn_id':tid})
+     frames=_drain(q2,1200)
+     assert not [f for f in frames if f.get('type')=='end' and f.get('turn_id')==tid]
+     assert any(f.get('type')=='state' and f.get('phase')=='ready' for f in frames)
  
- export function getConfig() {
-   const source = (typeof window !== 'undefined' && window.__askchip_config) || {};
+ def test_nudge_suggestions_email_and_admin_sse(monkeypatch):
+     # Admin gating
+     monkeypatch.setenv("ADMIN_EMAILS","jwsiejk@purestorage.com")
+     c = flask_app.test_client()
+     # greet to get suggestions & nudge path
+     sid="p9nudge"; q=bus.subscribe(sid); c.get(f'/api/v1/greet?session_id={sid}')
+     frames=_drain(q,1000); sug=[f for f in frames if f.get('type')=='suggestions'][-1]
+     label=sug['items'][0]['label']
+     c.post('/api/v1/chat', json={'session_id':sid,'text':label})
+     # nudge backoff
+     r1=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'nudge'}).get_json()
+     r2=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'nudge'}).get_json()
+     r3=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'nudge'}).get_json()
+     assert r1['nudged'] and r2['nudged'] and (not r3['nudged'])
+     # End emails transcript to user
+     tok=c.get('/api/v1/auth/csrf').get_json()['csrf']
+     c.post('/api/v1/auth/login', json={'email':'jwsiejk@purestorage.com'}, headers={'X-CSRF-Token': tok})
+     end=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'end_session'}, headers={'X-CSRF-Token': tok}).get_json()
+     assert end['emailed'] is True and any(e['to']=='jwsiejk@purestorage.com' for e in db.list_emails())
+-    # Admin SSE + actions
+-    logs_stream=c.get('/api/v1/admin/logs')
++    # Admin log feed + actions
++    logs_before=c.get('/api/v1/admin/logs').get_json()
+     c.post('/api/v1/admin/config', json={'suggestions_max_items':3}, headers={'X-CSRF-Token': tok})
+     c.post('/api/v1/admin/layouts', json={'breakpoint':'desktop','json':{'grid':'v1'}})
+     c.post('/api/v1/admin/layouts/rollback', json={'breakpoint':'desktop','version':1})
+-    sse = logs_stream.data.decode('utf-8','ignore')
+-    assert 'config_updated' in sse or 'layout_updated' in sse or 'audit' in sse
++    logs_after = c.get('/api/v1/admin/logs').get_json()
++    new_events = logs_after['events'][len(logs_before['events']):]
++    kinds = {evt.get('kind') for evt in new_events}
++    assert kinds & {'config_update', 'layout_publish', 'layout_rollback', 'audit'}
+     # Users & Memory
+     ls=c.get('/api/v1/admin/sessions').get_json()['sessions']
+     assert any(s['id']==sid for s in ls)
  
-   return {
-     barge_in: {
-       mode: source.barge_in?.mode ?? DEFAULT_CONFIG.barge_in.mode,
-     },
-+    admin: {
-+      voice_metrics_panel:
-+        source.admin?.voice_metrics_panel ?? DEFAULT_CONFIG.admin.voice_metrics_panel,
-+    },
-+    metrics: {
-+      client_enabled:
-+        source.metrics?.client_enabled ?? DEFAULT_CONFIG.metrics.client_enabled,
-+      server_enabled:
-+        source.metrics?.server_enabled ?? DEFAULT_CONFIG.metrics.server_enabled,
-+    },
-     vad: {
-       enabled: source.vad?.enabled ?? DEFAULT_CONFIG.vad.enabled,
-       hysteresis: {
-         enter: source.vad?.hysteresis?.enter ?? DEFAULT_CONFIG.vad.hysteresis.enter,
-         exit: source.vad?.hysteresis?.exit ?? DEFAULT_CONFIG.vad.hysteresis.exit,
-       },
-     },
-     tts: {
-       mask_auto_vad: source.tts?.mask_auto_vad ?? DEFAULT_CONFIG.tts.mask_auto_vad,
-       decay_ms: source.tts?.decay_ms ?? DEFAULT_CONFIG.tts.decay_ms,
-     },
-     evidence: {
-       snr_sigma: source.evidence?.snr_sigma ?? DEFAULT_CONFIG.evidence.snr_sigma,
-       asr_conf: source.evidence?.asr_conf ?? DEFAULT_CONFIG.evidence.asr_conf,
-       w1: source.evidence?.w1 ?? DEFAULT_CONFIG.evidence.w1,
-       w2: source.evidence?.w2 ?? DEFAULT_CONFIG.evidence.w2,
-       w3: source.evidence?.w3 ?? DEFAULT_CONFIG.evidence.w3,
-       threshold: source.evidence?.threshold ?? DEFAULT_CONFIG.evidence.threshold,
-       asrInstantOpen:
-         source.evidence?.asrInstantOpen ?? DEFAULT_CONFIG.evidence.asrInstantOpen,
-     },
-     shadow: {
-       ms: source.shadow?.ms ?? DEFAULT_CONFIG.shadow.ms,
-     },
-     commit: {
-diff --git a/static/js/voice/index.js b/static/js/voice/index.js
-index 55d54b8deb04be6404ebb742378ed80f2e840562..ee5ef03fbb16415029dbd4fa23ad3c4ee04ad4c4 100644
---- a/static/js/voice/index.js
-+++ b/static/js/voice/index.js
-@@ -1,4 +1,118 @@
-+import { DEFAULT_CONFIG } from './core/index.js';
-+
-+let hasWarned = false;
-+
-+const warnOnce = (message) => {
-+  if (hasWarned) {
-+    return;
-+  }
-+  hasWarned = true;
-+  console.warn(`[voice][config] ${message}`);
-+};
-+
-+const clampNumber = (target, key, { min = 0, fallback, label }) => {
-+  if (!target) {
-+    return;
-+  }
-+
-+  const raw = target[key];
-+  const next = Number(raw);
-+
-+  if (!Number.isFinite(next) || next < min) {
-+    target[key] = Math.max(min, fallback);
-+    warnOnce(`Adjusted ${label} from ${raw} to ${target[key]}`);
-+  } else {
-+    target[key] = next;
-+  }
-+};
-+
-+const ensureBoolean = (target, key, { fallback, label }) => {
-+  if (!target) {
-+    return;
-+  }
-+
-+  if (typeof target[key] !== 'boolean') {
-+    target[key] = fallback;
-+    warnOnce(`Adjusted ${label} to default (${fallback})`);
-+  }
-+};
-+
-+export function validateConfig(config) {
-+  if (!config || typeof config !== 'object') {
-+    warnOnce('Received invalid config, using defaults');
-+    return DEFAULT_CONFIG;
-+  }
-+
-+  const result = {
-+    ...config,
-+    commit: { ...DEFAULT_CONFIG.commit, ...config.commit },
-+    tts: { ...DEFAULT_CONFIG.tts, ...config.tts },
-+    shadow: { ...DEFAULT_CONFIG.shadow, ...config.shadow },
-+    evidence: { ...DEFAULT_CONFIG.evidence, ...config.evidence },
-+    metrics: { ...DEFAULT_CONFIG.metrics, ...config.metrics },
-+  };
-+
-+  clampNumber(result.commit, 'min_ms', {
-+    min: 0,
-+    fallback: DEFAULT_CONFIG.commit.min_ms,
-+    label: 'commit.min_ms',
-+  });
-+
-+  clampNumber(result.commit, 'no_partial_timeout_ms', {
-+    min: result.commit.min_ms,
-+    fallback: DEFAULT_CONFIG.commit.no_partial_timeout_ms,
-+    label: 'commit.no_partial_timeout_ms',
-+  });
-+
-+  ensureBoolean(result.commit, 'drop_if_no_partial', {
-+    fallback: DEFAULT_CONFIG.commit.drop_if_no_partial,
-+    label: 'commit.drop_if_no_partial',
-+  });
-+
-+  clampNumber(result.tts, 'decay_ms', {
-+    min: 0,
-+    fallback: DEFAULT_CONFIG.tts.decay_ms,
-+    label: 'tts.decay_ms',
-+  });
-+
-+  clampNumber(result.shadow, 'ms', {
-+    min: 0,
-+    fallback: DEFAULT_CONFIG.shadow.ms,
-+    label: 'shadow.ms',
-+  });
-+
-+  clampNumber(result.evidence, 'snr_sigma', {
-+    min: 0,
-+    fallback: DEFAULT_CONFIG.evidence.snr_sigma,
-+    label: 'evidence.snr_sigma',
-+  });
-+
-+  clampNumber(result.evidence, 'asr_conf', {
-+    min: 0,
-+    fallback: DEFAULT_CONFIG.evidence.asr_conf,
-+    label: 'evidence.asr_conf',
-+  });
-+
-+  clampNumber(result.evidence, 'threshold', {
-+    min: 0,
-+    fallback: DEFAULT_CONFIG.evidence.threshold,
-+    label: 'evidence.threshold',
-+  });
-+
-+  ensureBoolean(result.metrics, 'client_enabled', {
-+    fallback: DEFAULT_CONFIG.metrics.client_enabled,
-+    label: 'metrics.client_enabled',
-+  });
-+
-+  ensureBoolean(result.metrics, 'server_enabled', {
-+    fallback: DEFAULT_CONFIG.metrics.server_enabled,
-+    label: 'metrics.server_enabled',
-+  });
-+
-+  return result;
-+}
-+
- export * from './core/index.js';
- export * from './io/index.js';
- export * from './policy/index.js';
- export * from './ui/index.js';
-diff --git a/templates/index.html b/templates/index.html
-index 24eb51fabdd70990febb4c98827c64e35fc370e3..3f09420db70155c9dabacf7b3d2a35692fa5e7cb 100644
---- a/templates/index.html
-+++ b/templates/index.html
-@@ -90,82 +90,95 @@
  
-   <div id="profileModal" class="modal hidden">
-     <div class="sheet">
-       <h3>Profile</h3>
-       <div class="grid">
-         <label>Name<input id="prof_name"/></label>
-         <label>Email<input id="prof_email" disabled/></label>
-         <label>Role<input id="prof_role"/></label>
-         <label>Region<input id="prof_region"/></label>
-         <label>Company<input id="prof_company"/></label>
-       </div>
-       <div class="actions">
-         <button id="profileSave" class="primary">Save</button>
-         <button id="profileCancel" type="button">Cancel</button>
-       </div>
-       <div id="profileMsg" class="msgline"></div>
-     </div>
-   </div>
+ def test_confirm_window_gap_abort_path():
+     from app.ws.confirm_window import ConfirmWindow
+     import struct
  
-   <!-- Scripts -->
-   <script>
-     (function () {
-       const root = (window.__askchip_config = window.__askchip_config || {});
-       Object.assign(root, {
-         barge_in: root.barge_in || {},
-+        admin: root.admin || {},
-+        metrics: root.metrics || {},
-         vad: root.vad || {},
-         tts: root.tts || {},
-         evidence: root.evidence || {},
-         shadow: root.shadow || {},
-         commit: root.commit || {},
-         transport: root.transport || {},
-       });
+     win = ConfirmWindow(min_duration_ms=400, max_duration_ms=900, max_gap_ms=150, snr_threshold_db=4.0)
+     start = 0.0
+     win.start(start)
+     chunk = struct.pack("<80h", *([1000] * 80))
+     win.observe_chunk(chunk, start + 0.05)
+     decision = win.observe_chunk(chunk, start + 0.26)
+     assert decision.action == "abort"
+     metrics = decision.metrics or {}
+     assert metrics.get("reason") == "gap"
  
-       if (typeof root.barge_in.mode === 'undefined') {
-         root.barge_in.mode = 'manual_only';
-       }
  
-       if (typeof root.vad.enabled === 'undefined') {
-         root.vad.enabled = true;
-       }
-       Object.assign(root.vad, {
-         hysteresis: root.vad.hysteresis || {},
-       });
-       if (typeof root.vad.hysteresis.enter === 'undefined') {
-         root.vad.hysteresis.enter = 3;
-       }
-       if (typeof root.vad.hysteresis.exit === 'undefined') {
-         root.vad.hysteresis.exit = 4;
-       }
+ def test_confirm_window_timeout_abort_path():
+     from app.ws.confirm_window import ConfirmWindow
+     import struct
  
-       if (typeof root.tts.mask_auto_vad === 'undefined') {
-         root.tts.mask_auto_vad = true;
-       }
-       if (typeof root.tts.decay_ms === 'undefined') {
-         root.tts.decay_ms = 700;
-       }
- 
-+      if (typeof root.admin.voice_metrics_panel === 'undefined') {
-+        root.admin.voice_metrics_panel = true;
-+      }
-+
-+      if (typeof root.metrics.client_enabled === 'undefined') {
-+        root.metrics.client_enabled = true;
-+      }
-+      if (typeof root.metrics.server_enabled === 'undefined') {
-+        root.metrics.server_enabled = true;
-+      }
-+
-       if (typeof root.evidence.snr_sigma === 'undefined') {
-         root.evidence.snr_sigma = 2.5;
-       }
-       if (typeof root.evidence.asr_conf === 'undefined') {
-         root.evidence.asr_conf = 0.65;
-       }
- 
-       if (typeof root.shadow.ms === 'undefined') {
-         root.shadow.ms = 450;
-       }
- 
-       if (typeof root.commit.min_ms === 'undefined') {
-         root.commit.min_ms = 500;
-       }
-       if (typeof root.commit.drop_if_no_partial === 'undefined') {
-         root.commit.drop_if_no_partial = true;
-       }
- 
-       if (typeof root.transport.close_on_turn_end === 'undefined') {
-         root.transport.close_on_turn_end = false;
-       }
-     })();
-   </script>
-   <script>
-     (function () {
+     win = ConfirmWindow(min_duration_ms=300, max_duration_ms=320, snr_threshold_db=4.0)

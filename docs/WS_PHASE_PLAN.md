@@ -8,7 +8,7 @@ One socket per tab: /ws/v1/chat carries mic audio (binary), control (JSON), assi
 
 Delete HTTP mic routes: /api/v1/voice/chunk, /api/v1/voice/end. No fallbacks, no hybrids, no mocks.
 
-Keep existing v1 HTTP routes: /api/v1/greet, /api/v1/chat, /api/v1/voice/tts-with-visemes, /api/v1/admin/logs (SSE).
+Keep existing v1 HTTP routes: /api/v1/greet, /api/v1/chat, /api/v1/voice/tts-with-visemes, /api/v1/admin/logs (JSON feed).
 
 Provider semantics: Follow Deepgram WS shapes: binary audio frames, {"type":"CloseStream"}, pass-through Results (channel.alternatives[].transcript, is_final), optional UtteranceEnd, keep-alive.
 
@@ -145,7 +145,7 @@ On the first audio frame (or on Configure if you prefer), open provider WS once:
 
 Gate with an asyncio.Lock or per-session open event to avoid “send before open”.
 
-Emit asr_open and mirror to Admin SSE.
+Emit asr_open and mirror to the Admin log feed.
 
 On each binary frame: send_chunk.
 
@@ -156,7 +156,7 @@ Ping/Pong
 WebSocket server ping every ~25–30 s; drop stale connections on missed pings (client also sends KeepAlive). 
 developers.deepgram.com
 
-Admin SSE
+Admin log feed
 
 Echo asr_partial, asr_final, asr_error, and UtteranceEnd to /api/v1/admin/logs for observability.
 
@@ -251,7 +251,7 @@ Goal: test WS path only; observe the same events the server sees.
 
 Tasks
 
-Diagnostics page: watch Admin SSE (or the chat WS) for asr_partial, asr_final, asr_error tied to the current session_id; remove HTTP chunk tests.
+Diagnostics page: watch the Admin log feed (or the chat WS) for asr_partial, asr_final, asr_error tied to the current session_id; remove HTTP chunk tests.
 
 Add “Record 5 s” prompt that clearly shows Recording… → Audio captured (sending)… and reports partial/final counts.
 

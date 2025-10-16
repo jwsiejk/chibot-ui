@@ -289,38 +289,49 @@ function parseCLI(){
   return { specPath, base, useChrome, dumpUI, startOverride, startEval, autoLoginEmail };
 }
 
-// ---- IN-PAGE SSE collector (uses cookies/session) ----
+// ---- In-page admin log collector (polls JSON endpoint) ----
 async function collectAdminSSEInPage(page, { url, ms }) {
-  const liveUrl = ensureAdminLiveUrl(url);  
-  return await page.evaluate(({ url, ms }) => {
-    return new Promise(resolve => {
-      const logs = [];
-      let es;
+  const pollUrl = ensureAdminLiveUrl(url);
+  return await page.evaluate(async ({ url, ms }) => {
+    const logs = [];
+    let lastStep = 0;
+    const endAt = Date.now() + ms;
+
+    const poll = async () => {
+      const params = new URLSearchParams();
+      if (lastStep) params.set('after', String(lastStep));
+      const target = params.toString() ? `${url}?${params.toString()}` : url;
+
       try {
-        es = new EventSource(url, { withCredentials: true });
-        es.onmessage = (e) => { try { logs.push(JSON.parse(e.data)); } catch {} };
-        es.onerror = () => { /* ignore; resolve on timeout */ };
-      } catch { resolve(logs); return; }
-      setTimeout(() => { try { es && es.close(); } catch {} resolve(logs); }, ms);
-      window.addEventListener('beforeunload', () => { try { es && es.close(); } catch {} });
-    });
-  }, { url: liveUrl, ms });
+        const resp = await fetch(target, { credentials: 'include' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const payload = await resp.json();
+        const events = Array.isArray(payload?.events) ? payload.events : [];
+        if (!events.length && !lastStep) {
+          lastStep = Number(payload?.latest_step || 0) || 0;
+        }
+        for (const evt of events) {
+          const step = Number(evt?.step || 0);
+          if (step > lastStep) lastStep = step;
+          logs.push(evt);
+        }
+        return events.length ? 250 : 1000;
+      } catch {
+        return 2000;
+      }
+    };
+
+    while (Date.now() < endAt) {
+      const delayMs = await poll();
+      await new Promise(r => setTimeout(r, delayMs || 800));
+    }
+
+    return logs;
+  }, { url: pollUrl, ms });
 }
 
-// The admin SSE endpoint drains the backlog and closes unless `live=1` is
-// provided (see `admin_log_iter` in app/api_v1/admin.py).  Production UI code
-// always opts into live mode, so mirror that behaviour here to keep the stream
-// open long enough for probe activity to arrive.
 function ensureAdminLiveUrl(url) {
-  if (!url) return url;
-  try {
-    const parsed = new URL(url);
-    if (!parsed.searchParams.has('live')) parsed.searchParams.set('live', '1');
-    return parsed.toString();
-  } catch {
-    if (/[?&]live=/.test(url)) return url;
-    return url.includes('?') ? `${url}&live=1` : `${url}?live=1`;
-  }
+  return url || '/api/v1/admin/logs';
 }
 
 async function startAdminCollector(page, url) {
@@ -336,50 +347,72 @@ async function startAdminCollector(page, url) {
       logs,
       lastError: null,
       captureState: 'active',
-      manualClose: false
+      manualClose: false,
+      active: true,
+      lastStep: 0
     };
 
     window.__adminLogs = logs;
     window.__adminCollector = collector;
 
-    try {
-      const es = new EventSource(adminUrl, { withCredentials: true });
-      collector.source = es;
-      es.onmessage = (event) => {
-        if (!window.__adminLogs) window.__adminLogs = logs;
-        try {
-          logs.push(JSON.parse(event.data));
-        } catch {
-          logs.push({ raw: event.data });
-        }
-      };
-      es.onerror = (event) => {
-        if (collector.manualClose) return;
-        const target = event?.currentTarget || event?.target || es;
-        const readyState = target?.readyState;
-        const closedState = window.EventSource && window.EventSource.CLOSED;
-        if (readyState != null && closedState != null && readyState === closedState) {
-          collector.captureState = collector.captureState || 'closed';
-          return;
-        }
-        collector.lastError = 'eventsource_error';
-        const status = event?.status ?? target?.status ?? null;
-        const message = event?.message || '';
-        if (status === 403 || /403/.test(String(message))) {
+    const poll = async () => {
+      const params = new URLSearchParams();
+      if (collector.lastStep) params.set('after', String(collector.lastStep));
+      const target = params.toString() ? `${adminUrl}?${params.toString()}` : adminUrl;
+
+      try {
+        const resp = await fetch(target, { credentials: 'include' });
+        if (resp.status === 403) {
           collector.lastError = 'forbidden';
           collector.captureState = 'disabled';
+          collector.active = false;
+          return null;
         }
-      };
-      window.addEventListener('beforeunload', () => {
-        collector.manualClose = true;
-        try { es.close(); } catch {};
-      });
-    } catch (err) {
-      collector.lastError = err?.message || String(err);
-      if (/403/.test(String(collector.lastError))) {
-        collector.captureState = 'disabled';
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        const payload = await resp.json();
+        const events = Array.isArray(payload?.events) ? payload.events : [];
+        if (!events.length && !collector.lastStep) {
+          collector.lastStep = Number(payload?.latest_step || 0) || 0;
+        }
+
+        for (const evt of events) {
+          const step = Number(evt?.step || 0);
+          if (step > collector.lastStep) collector.lastStep = step;
+          logs.push(evt);
+        }
+
+        return events.length ? 250 : 1100;
+      } catch (err) {
+        collector.lastError = err?.message || String(err);
+        collector.captureState = collector.captureState || 'error';
+        return 2000;
       }
-    }
+    };
+
+    collector.source = {
+      close() {
+        collector.manualClose = true;
+        collector.active = false;
+      }
+    };
+
+    (async function loop(){
+      while (collector.active) {
+        const delayMs = await poll();
+        if (!collector.active) break;
+        if (delayMs == null) break;
+        await new Promise(r => setTimeout(r, delayMs || 900));
+      }
+      if (!collector.captureState || collector.captureState === 'active') {
+        collector.captureState = collector.active ? 'active' : 'stopped';
+      }
+    })();
+
+    window.addEventListener('beforeunload', () => {
+      collector.manualClose = true;
+      collector.active = false;
+    });
   }, url);
 }
 
@@ -426,11 +459,15 @@ async function stopAdminCollector(page) {
     const collector = window.__adminCollector;
     if (!collector) return;
     collector.manualClose = true;
+    collector.active = false;
     if (collector.source) {
       try { collector.source.close(); } catch {}
     }
     collector.stoppedAt = Date.now();
     collector.source = null;
+    if (!collector.captureState || collector.captureState === 'active') {
+      collector.captureState = 'stopped';
+    }
   });
 }
 

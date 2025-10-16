@@ -20,24 +20,26 @@ def read(path):
 def glob(pattern):
     return [str(p) for p in REPO.rglob(pattern)]
 
-def test_admin_log_sse_and_emitters():
+def test_admin_log_feed_and_emitters(monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
     app = import_app()
     c = app.test_client()
-    # Open SSE endpoint as a streaming response
-    rv = c.get("/api/v1/admin/logs", buffered=True)
-    assert rv.status_code == 200
-    body = rv.data.decode("utf-8", errors="ignore")
-    # We expect at least a 'hello' banner line and then more when we do actions
-    assert "kind" in body and "admin_log" in body
+    with c.session_transaction() as sess:
+        sess["user"] = {"email": "admin@example.com"}
 
-    # Trigger a few events
+    rv = c.get("/api/v1/admin/logs")
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body["ok"] is True
+    baseline = len(body["events"])
+
     c.post("/api/v1/admin/config/update", json={"updates":{"theme":"dark"}})
     c.post("/api/v1/admin/layouts/publish", json={"breakpoint":"desktop","state":{"x":1}})
-    # re-open to read new buffer easily
-    rv2 = c.get("/api/v1/admin/logs", buffered=True)
-    body2 = rv2.data.decode("utf-8", errors="ignore")
-    assert '"kind":"config_update"' in body2
-    assert '"kind":"layout_publish"' in body2
+    rv2 = c.get("/api/v1/admin/logs")
+    events = rv2.get_json()["events"]
+    kinds = [evt.get("kind") for evt in events[baseline:]]
+    assert "config_update" in kinds
+    assert "layout_publish" in kinds
 
 def test_vendor_lanes_guarded():
     # STT provider should exist and respect language lock + normalization (mocked path)

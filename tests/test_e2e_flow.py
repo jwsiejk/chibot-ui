@@ -52,14 +52,15 @@ def test_greet_ws_chat_flow():
                     break
             assert got_chunk, "Expected assistant frames over WS"
 
-def test_admin_logs_ui_and_sse_auth():
+def test_admin_logs_ui_and_auth():
     from starlette.testclient import TestClient
     app = asgi_app()
     with TestClient(app) as client:
         # logs-ui requires admin; use header fallback
         ui = client.get("/api/v1/admin/logs-ui", headers={"X-User-Email":"jwsiejk@purestorage.com"})
         assert ui.status_code == 200
-        # SSE also requires admin; under CI_FAST it should return quickly after 1 heartbeat
-        sse = client.get("/api/v1/admin/logs", headers={"X-User-Email":"jwsiejk@purestorage.com"})
-        assert sse.status_code == 200
-        assert "heartbeat" in sse.text
+        # Log snapshot requires the same admin guard
+        snap = client.get("/api/v1/admin/logs", headers={"X-User-Email":"jwsiejk@purestorage.com"})
+        assert snap.status_code == 200
+        body = snap.json()
+        assert body["ok"] is True
