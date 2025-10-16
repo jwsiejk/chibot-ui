@@ -1,3 +1,4 @@
+console.log("[ws] build=2025-10-16T23:15Z");
 // static/js/ws.js — Phase 4/5 hardened: single socket + reconnection + helpers
 
 // === E2E/Prod Observability: WS lifecycle hooks (safe) ===
