@@ -7,6 +7,7 @@
 //   • audioTeardown() — hard reset pipeline (optional)
 
 import { ChunkedAudioPlayer } from './audio_player.js';
+import { logIfEnabled } from './util/logging.js';
 
 const DEFAULT_SIGNATURE = Object.freeze({ rms: 0, rmsDb: -Infinity, mfcc: [], timestamp: 0 });
 
@@ -33,6 +34,22 @@ const DEFAULT_MIME = 'audio/webm; codecs="opus"';
 function _emitTtsState(state) {
   if (!state || state === _lastTtsState) return;
   _lastTtsState = state;
+  logIfEnabled(() => {
+    try {
+      const tsMs = Date.now();
+      const sessionId = (() => {
+        try { return window?.__askchip_voice_session_id || null; } catch { return null; }
+      })();
+      const turnId = (() => {
+        try { return window?.__askchip_turn_trace_id || null; } catch { return null; }
+      })();
+      if (state === 'playing') {
+        console.info('[tts] playing: true', { ts_ms: tsMs, session_id: sessionId, turn_id: turnId });
+      } else if (state === 'ended' || state === 'stopped') {
+        console.info('[tts] playing: false', { ts_ms: tsMs, session_id: sessionId, turn_id: turnId });
+      }
+    } catch {}
+  });
   try {
     window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state } }));
   } catch {}

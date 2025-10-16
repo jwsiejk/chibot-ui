@@ -303,6 +303,15 @@ function wireVoiceEventsOnce(){
 
   window.addEventListener('askchip-voice', (ev) => {
     const detail = ev?.detail || {};
+    const name = detail.name || detail.event;
+    if (name === 'turn_open' || name === 'turn_close') {
+      _console('info', `askchip-voice ${name}`, {
+        ts_ms: detail.ts_ms ?? detail.ts ?? Date.now(),
+        session_id: detail.sessionId || detail.session_id || null,
+        turn_id: detail.turnId ?? detail.turn_id ?? null,
+        reason: detail.reason || undefined,
+      });
+    }
     const state = detail.state;
     const label = detail.statusText ?? detail.label ?? detail.message;
 
@@ -392,16 +401,15 @@ async function startOnce(){
     //    audio hardware comes online.
     const sid = getSID();
     try {
-      const manualMode = !!_cfgValue('barge_in_mode_manual', true);
+      const manualMode = !!_cfgValue('barge_in_mode_manual', false);
       const autoCommit = !!_cfgValue('auto_commit_when_ready', true);
       _console('log', '[bootstrap] startOnce sending greet configure');
       configure({
         greet: true,
         reset: 1,
         session_id: sid,
-        // Keep VAD enabled for the session; manual barge-in is now gated client-side
-        // off the TTS state so we always advertise "false" here.
-        feature_manual_barge_in: false,
+        // Surface the runtime toggles so diagnostics can confirm policy.
+        feature_manual_barge_in: manualFeatureEnabled,
         barge_in_mode_manual: manualMode,
         auto_commit_when_ready: autoCommit,
       });

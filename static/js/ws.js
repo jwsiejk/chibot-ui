@@ -656,7 +656,16 @@ export async function sendAudioChunk(blob){
   try{
     const buf = await blob.arrayBuffer();
     try {
-      _console('debug', '[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
+      const tsMs = Date.now();
+      const payload = {
+        bytes: buf.byteLength,
+        mime: blob.type,
+        ts_ms: tsMs,
+        session_id: getSID?.() ?? null,
+      };
+      const turnId = _getActiveTurnTraceId();
+      if (turnId) payload.turn_id = turnId;
+      _console('debug', '[ws] sending audio chunk', payload);
     } catch {}
     _ws.send(buf);
     _lastUserSendTs = Date.now();
@@ -703,6 +712,14 @@ export function configure(opts = {}){
       window.__askchip_last_greet_seq = _greetSeqCounter;
     } catch {}
   }
+  logIfEnabled(() => {
+    try {
+      const tsMs = Date.now();
+      const json = JSON.stringify(payload);
+      const prefix = _getActiveTurnTraceId() ? `[ws][trace:${_getActiveTurnTraceId()}]` : '[ws]';
+      console.info(`${prefix} [Configure OUT] ${json}`, { ts_ms: tsMs });
+    } catch {}
+  });
   sendJSON(payload);
 }
 

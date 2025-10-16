@@ -1056,6 +1056,7 @@ async def _emit_user_final_payload(
                     is_final=is_final,
                     chars=len(text),
                     preview=preview_text,
+                    ts_ms=int(time.time() * 1000),
                 )
                 if not is_final:
                     with contextlib.suppress(Exception):
@@ -1935,6 +1936,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             mode=mode,
             manual=(mode == "manual"),
             auto_commit=(mode == "auto_commit"),
+            turn_id=turn_id_ref[0],
+            ts_ms=int(time.time() * 1000),
             admin_event="turn_committed",
             admin_label="turn_committed",
         )
@@ -2376,11 +2379,27 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     frames_in=ws_frames_in,
                                     bytes_total=ws_bytes_in,
                                 )
+                    raw_chunk = chunk
+
+                    new_turn = buf.is_empty()
+                    turn_hint = turn_id_ref[0] or (buf.turn_seq + (1 if new_turn else 0))
                     if chunk:
-                        _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
+                        _jlog(
+                            "ws_audio_chunk",
+                            sid=sid,
+                            bytes=len(chunk),
+                            turn_id=turn_hint,
+                            ts_ms=int(now * 1000),
+                        )
                         if not audio_sig_logged:
                             with contextlib.suppress(Exception):
-                                _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
+                                _jlog(
+                                    "audio_sig",
+                                    sid=sid,
+                                    first8_hex=chunk[:8].hex(),
+                                    turn_id=turn_hint,
+                                    ts_ms=int(now * 1000),
+                                )
                             audio_sig_logged = True
                     else:
                         with contextlib.suppress(Exception):
@@ -2388,13 +2407,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 "ws_audio_chunk_empty",
                                 sid=sid,
                                 bytes=len(frame_bytes or b""),
-                                turn_id=turn_id_ref[0],
-                                buf_empty=buf.is_empty(),
+                                turn_id=turn_hint,
+                                buf_empty=new_turn,
+                                ts_ms=int(now * 1000),
                             )
-
-                    raw_chunk = chunk
-
-                    new_turn = buf.is_empty()
                     if new_turn:
                         try:
                             current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
@@ -2485,6 +2501,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 first_bytes=len(raw_chunk),
                                 commit_mode=commit_mode,
                                 auto_commit=(commit_mode == "auto_commit"),
+                                ts_ms=int(time.time() * 1000),
                             )
                         if commit_mode == "auto_commit":
                             try:
@@ -2555,6 +2572,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         turn_id=turn_id_ref[0],
                         chunks=len(mic_chunks),
                         last_bytes=len(chunk),
+                        ts_ms=int(time.time() * 1000),
                     )
 
                     _handle_confirm_chunk(raw_chunk, now)
@@ -2748,6 +2766,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             )
                             auto_commit_when_ready = bool(
                                 cfg.get("auto_commit_when_ready", auto_commit_when_ready)
+                            )
+                            _jlog(
+                                "ws_configure",
+                                sid=sid,
+                                ts_ms=int(time.time() * 1000),
+                                barge_in_mode_manual=manual_mode_manual_only,
+                                feature_manual_barge_in=manual_feature_enabled,
+                                auto_commit_when_ready=auto_commit_when_ready,
                             )
                             if not manual_feature_enabled:
                                 manual_button_down[0] = False

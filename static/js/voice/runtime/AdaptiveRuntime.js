@@ -18,6 +18,8 @@ import {
 } from '../../ws_module.js';
 import { VAD } from '../vad.js';
 import { stopPlayback } from '../../audio.js';
+import { logIfEnabled } from '../../util/logging.js';
+import { getSID } from '../../util/sid.js';
 
 const PRE_ROLL_MS = 550,
   RECORD_TIMESLICE_MS = 150,
@@ -37,6 +39,73 @@ const nowMs = () => {
   return Date.now();
 };
 
+const voiceLog = (level, ...args) => {
+  logIfEnabled(() => {
+    try {
+      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+      method?.apply(console, args);
+    } catch {}
+  });
+};
+
+const MASK_LOG_INTERVAL_MS = 180;
+
+const logReadyState = (ctx) => {
+  if (!ctx || !ctx.state) return;
+  const tsLocal = nowMs();
+  const last = Number.isFinite(ctx.state.lastReadyLogAt) ? ctx.state.lastReadyLogAt : 0;
+  if (tsLocal - last < 25) {
+    return;
+  }
+  ctx.state.lastReadyLogAt = tsLocal;
+  const ts = Date.now();
+  voiceLog('info', "state { phase:'ready' }", {
+    ts_ms: ts,
+    session_id: ctx.sessionId || null,
+    turn_id: ctx.state.activeTurnId || null,
+  });
+};
+
+const stopMaskLogging = (ctx) => {
+  if (!ctx) return;
+  if (ctx.maskLogTimer) {
+    try { clearInterval(ctx.maskLogTimer); } catch {}
+  }
+  ctx.maskLogTimer = null;
+};
+
+const logMaskTick = (ctx) => {
+  if (!ctx) return;
+  const tsLocal = nowMs();
+  if (!ctx.ttsMask?.isMasked(tsLocal)) {
+    stopMaskLogging(ctx);
+    return;
+  }
+  const boost = ctx.ttsMask.snrBoost(tsLocal);
+  const decayUntil = ctx.ttsMask.decayUntil();
+  const remaining = Number.isFinite(decayUntil)
+    ? Math.max(0, Math.round(decayUntil - tsLocal))
+    : null;
+  const ts = Date.now();
+  voiceLog('info', '[mask] active', {
+    ts_ms: ts,
+    session_id: ctx.sessionId || null,
+    turn_id: ctx.state?.activeTurnId || null,
+    boost_db: Number.isFinite(boost) ? Number.parseFloat(boost.toFixed(2)) : null,
+    decay_remaining_ms: remaining,
+  });
+};
+
+const startMaskLogging = (ctx) => {
+  if (!ctx) return;
+  if (!ctx.maskLogTimer) {
+    ctx.maskLogTimer = setInterval(() => {
+      logMaskTick(ctx);
+    }, MASK_LOG_INTERVAL_MS);
+  }
+  logMaskTick(ctx);
+};
+
 const resolveSnrBoost = (ctx, baseSnrDb = 3.5) => {
   try {
     const requirement = getEvidenceSnrRequirement(ctx.state, nowMs, baseSnrDb);
@@ -47,7 +116,17 @@ const resolveSnrBoost = (ctx, baseSnrDb = 3.5) => {
 };
 const setState = (ctx, stateName, detail) => {
   ctx.state.turnState = stateName;
-  emitVoiceEvent('state', detail ? { state: stateName, ...detail } : { state: stateName });
+  const ts = Date.now();
+  const baseDetail = detail && typeof detail === 'object' ? { ...detail } : {};
+  emitVoiceEvent('state', {
+    state: stateName,
+    ts_ms: ts,
+    sessionId: ctx.sessionId || null,
+    ...baseDetail,
+  });
+  if (stateName === TurnState.Ready) {
+    logReadyState(ctx);
+  }
 };
 
 const isTtsMaskActive = (ctx) => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
@@ -57,6 +136,10 @@ const ensureCtx = () => {
     return ctxRef.current;
   }
   const config = getConfig();
+  let sessionId = null;
+  try {
+    sessionId = getSID();
+  } catch {}
   const evidenceGate = new EvidenceGate({
     snrSigma: config.evidence?.snr_sigma,
     asrConf: config.evidence?.asr_conf,
@@ -65,9 +148,15 @@ const ensureCtx = () => {
   });
   const shadowBuffer = new ShadowBuffer({ maxMs: config.shadow?.ms ?? PRE_ROLL_MS });
   const ttsMask = new TtsMask();
+  try {
+    if (typeof window !== 'undefined') {
+      window.__askchip_voice_session_id = sessionId;
+    }
+  } catch {}
 
   const ctx = {
     config,
+    sessionId,
     state: {
       turnState: TurnState.Ready, recording: false, vadArmed: false,
       vadBoostDb: 0, greetGateActive: false, greetGatePhase: 'idle',
@@ -75,7 +164,9 @@ const ensureCtx = () => {
       bargeConfirmActive: false, bargeConfirmUntil: 0,
       wsReady: false, turnOpen: false, hasOpenedTurn: false,
       manualPttActive: false,
+      turnSeq: 0, activeTurnId: null,
       ttsPlaying: false, lastChunkAt: 0,
+      lastReadyLogAt: 0,
       evidenceGate, shadowBuffer, ttsMask,
     },
     audio: {
@@ -87,6 +178,7 @@ const ensureCtx = () => {
     evidenceGate,
     shadowBuffer,
     ttsMask,
+    maskLogTimer: null,
   };
 
   registerTtsListener(ctx);
@@ -104,12 +196,16 @@ const registerTtsListener = (ctx) => {
     if (state === 'playing') {
       ctx.state.ttsPlaying = true;
       ctx.ttsMask.start();
+      startMaskLogging(ctx);
     } else if (state === 'ended' || state === 'stopped') {
       ctx.state.ttsPlaying = false;
       ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms ?? 700, snrBoost: detail.snrBoost });
+      startMaskLogging(ctx);
     } else if (state === 'ready') {
       ctx.state.ttsPlaying = false;
       ctx.ttsMask.clear();
+      stopMaskLogging(ctx);
+      logReadyState(ctx);
     }
   };
   try { win?.addEventListener?.('chip-tts', listener); } catch {}
@@ -184,6 +280,12 @@ const startRecorder = (ctx, stream) => {
     stopRecorder(ctx);
   });
   recorder.start(audio.recTimeslice);
+  voiceLog('info', '[recorder] started', {
+    ts_ms: Date.now(),
+    session_id: ctx.sessionId || null,
+    mime_type: mimeType,
+    timeslice_ms: audio.recTimeslice,
+  });
   audio.recorder = recorder;
   ctx.state.recording = true;
 };
@@ -244,7 +346,27 @@ const openTurn = async (ctx, reason = 'speech_commit') => {
   await ensureTransport(ctx);
   ctx.state.turnOpen = true;
   ctx.state.hasOpenedTurn = true;
-  emitVoiceEvent('turn_open', { reason });
+  ctx.state.turnSeq = (ctx.state.turnSeq || 0) + 1;
+  const turnId = ctx.state.turnSeq;
+  ctx.state.activeTurnId = turnId;
+  const ts = Date.now();
+  emitVoiceEvent('turn_open', {
+    reason,
+    turnId,
+    sessionId: ctx.sessionId || null,
+    ts_ms: ts,
+  });
+  voiceLog('info', '[turn] open', {
+    ts_ms: ts,
+    session_id: ctx.sessionId || null,
+    turn_id: turnId,
+    reason,
+  });
+  try {
+    if (typeof window !== 'undefined') {
+      window.__askchip_turn_trace_id = String(turnId);
+    }
+  } catch {}
   const stats = flushShadowBuffer(ctx.shadowBuffer, (entry) => {
     if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs: entry.durationMs });
   });
@@ -252,10 +374,39 @@ const openTurn = async (ctx, reason = 'speech_commit') => {
 };
 
 const closeTurn = (ctx, reason = 'vad_end') => {
-  if (!ctx.state.turnOpen) return;
+  if (!ctx.state.turnOpen) {
+    if (!ctx.state.hasOpenedTurn) {
+      voiceLog('info', '[ws] CloseStream suppressed: no user turn yet', {
+        ts_ms: Date.now(),
+        session_id: ctx.sessionId || null,
+      });
+    }
+    return;
+  }
+  const turnId = ctx.state.activeTurnId || ctx.state.turnSeq || null;
   sendCloseStream({ reason });
   ctx.state.turnOpen = false;
-  emitVoiceEvent('turn_close', { reason, stats: getShadowStats(ctx.state) });
+  const ts = Date.now();
+  const stats = getShadowStats(ctx.state);
+  emitVoiceEvent('turn_close', {
+    reason,
+    stats,
+    turnId,
+    sessionId: ctx.sessionId || null,
+    ts_ms: ts,
+  });
+  voiceLog('info', '[turn] close', {
+    ts_ms: ts,
+    session_id: ctx.sessionId || null,
+    turn_id: turnId,
+    reason,
+  });
+  ctx.state.activeTurnId = null;
+  try {
+    if (typeof window !== 'undefined') {
+      window.__askchip_turn_trace_id = null;
+    }
+  } catch {}
   scheduleSafetyClose(ctx);
 };
 
@@ -370,6 +521,13 @@ export async function armVAD(stream = null, opts = {}) {
       await ctx.audio.context.resume();
     }
   } catch {}
+  if (ctx.audio?.context) {
+    const contextState = ctx.audio.context.state || 'unknown';
+    voiceLog('info', `[audio] context state: ${contextState}`, {
+      ts_ms: Date.now(),
+      session_id: ctx.sessionId || null,
+    });
+  }
   ensureVad(ctx, opts);
   startRecorder(ctx, mic);
   await ensureTransport(ctx).catch(() => {});
@@ -383,6 +541,7 @@ export function disarmVAD() {
   closeTurn(ctx, 'manual_disarm');
   teardownTransport(ctx);
   ctx.state.hasOpenedTurn = false;
+  stopMaskLogging(ctx);
   setState(ctx, TurnState.Ready);
 }
 

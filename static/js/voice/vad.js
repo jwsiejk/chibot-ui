@@ -6,6 +6,35 @@
 //  • Emits onSpeechStart / onSpeechEnd callbacks with metrics
 //  • Safe timers; idempotent start/stop
 
+import { logIfEnabled } from '../util/logging.js';
+
+const voiceLog = (level, ...args) => {
+  logIfEnabled(() => {
+    try {
+      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+      method?.apply(console, args);
+    } catch {}
+  });
+};
+
+const getSessionId = () => {
+  try {
+    if (typeof window !== 'undefined' && window.__askchip_voice_session_id) {
+      return window.__askchip_voice_session_id;
+    }
+  } catch {}
+  return null;
+};
+
+const getTurnId = () => {
+  try {
+    if (typeof window !== 'undefined' && window.__askchip_turn_trace_id != null) {
+      return window.__askchip_turn_trace_id;
+    }
+  } catch {}
+  return null;
+};
+
 const EPSILON = 1e-8;
 const CLAMP_MIN_DB = -120;
 const CLAMP_MAX_DB = -10;
@@ -103,6 +132,7 @@ export class VAD {
     this._legacyStartDb = Number.isFinite(this.opts.startRms) ? rmsToDb(this.opts.startRms) : null;
     this._legacyStopDb = Number.isFinite(this.opts.stopRms) ? rmsToDb(this.opts.stopRms) : null;
     this._suppressingEcho = false;
+    this._lastGateLogTs = 0;
   }
 
   _rms() {
@@ -281,6 +311,15 @@ export class VAD {
     }
 
     if (!gateAllowed) {
+      if (!Number.isFinite(this._lastGateLogTs) || now - this._lastGateLogTs >= 75) {
+        voiceLog('info', '[vad] gate blocked this tick', {
+          ts_ms: Date.now(),
+          session_id: getSessionId(),
+          turn_id: getTurnId(),
+          reason: 'tts_mask',
+        });
+        this._lastGateLogTs = now;
+      }
       if (this._recording) {
         this._recording = false;
         this._speechStartedAt = 0;
@@ -293,6 +332,8 @@ export class VAD {
       this._suppressingEcho = false;
       return;
     }
+
+    this._lastGateLogTs = 0;
 
     if (!this._recording) {
       if (inCooldown) {
