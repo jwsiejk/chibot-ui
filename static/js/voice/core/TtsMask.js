@@ -1,7 +1,29 @@
-const nowMs = () => {
+let cachedTimeOrigin = null;
+
+const resolveTimeOrigin = (perfNow) => {
+  if (cachedTimeOrigin !== null) {
+    return cachedTimeOrigin;
+  }
   try {
     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-      return performance.now();
+      if (typeof performance.timeOrigin === 'number') {
+        cachedTimeOrigin = performance.timeOrigin;
+      } else {
+        const referenceNow = Number.isFinite(perfNow) ? perfNow : performance.now();
+        cachedTimeOrigin = Date.now() - referenceNow;
+      }
+      return cachedTimeOrigin;
+    }
+  } catch {}
+  cachedTimeOrigin = 0;
+  return cachedTimeOrigin;
+};
+
+export const nowMs = () => {
+  try {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+      const perfNow = performance.now();
+      return resolveTimeOrigin(perfNow) + perfNow;
     }
   } catch {}
   return Date.now();

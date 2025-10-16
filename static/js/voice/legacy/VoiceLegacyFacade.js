@@ -1230,9 +1230,7 @@ export async function legacyStartRecorder(helpers = {}) {
   state.lastChunkAt = 0;
   state.audioStopSent = false;
   helpers.clearPendingEndTimer?.();
-  state.recStartedAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-    ? performance.now()
-    : Date.now();
+  state.recStartedAt = _now();
   state.finalized = false;
   state.postFinalHoldUntil = 0;
   state.recStreaming = true;
@@ -1243,9 +1241,7 @@ export async function legacyStartRecorder(helpers = {}) {
   if (Number.isFinite(state.recStartedAt)) {
     state.turnMetricsStartAt = state.recStartedAt;
   } else {
-    state.turnMetricsStartAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-      ? performance.now()
-      : Date.now();
+    state.turnMetricsStartAt = _now();
   }
   state.turnMetricsTimeToFirstPartialMs = null;
   state.turnMetricsHadPartial = false;
@@ -1311,9 +1307,7 @@ export function legacySendRecorderChunk(blob, meta = {}) {
       try {
         await sendAudioChunk(blob);
         state.chunkBytesSent += blob.size;
-        const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-          ? performance.now()
-          : Date.now();
+        const now = _now();
         state.lastChunkAt = now;
         state.audioStopSent = false;
         legacyArmSafetyCloseTimer();
@@ -1415,9 +1409,7 @@ export function legacyStopRecorder(detail = null) {
 export function legacyApplyPostFinalHold(source = 'unknown') {
   const rawHold = Number(optsFromGlobal('post_final_hold_ms', 600));
   const holdMs = Number.isFinite(rawHold) ? Math.max(0, rawHold) : 0;
-  const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-    ? performance.now()
-    : Date.now();
+  const now = _now();
   const targetUntil = now + holdMs;
   const previousUntil = state.postFinalHoldUntil || 0;
   const nextUntil = Math.max(targetUntil, previousUntil);

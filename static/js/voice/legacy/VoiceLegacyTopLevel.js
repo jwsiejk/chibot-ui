@@ -6,6 +6,7 @@ import {
   ShadowBuffer,
   TtsMask,
   TurnState,
+  nowMs,
 } from '../core/index.js';
 
 const WEBM_MIME = 'audio/webm; codecs=opus';
@@ -93,12 +94,7 @@ try {
 } catch {}
 bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
 function _now() {
-  try {
-    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-      return performance.now();
-    }
-  } catch {}
-  return Date.now();
+  return nowMs();
 }
 function optsFromGlobal(key, fallback) {
   try {
@@ -307,9 +303,7 @@ function _startGreetGateCalibrate(source = 'unknown') {
     return;
   }
   const durationMs = _resolveGreetGateCalibrateMs();
-  const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-    ? performance.now()
-    : Date.now();
+  const now = nowMs();
   _clearGreetGateCalibrateTimer();
   state.greetGatePhase = 'calibrating';
   state.greetGateLastSignal = source;

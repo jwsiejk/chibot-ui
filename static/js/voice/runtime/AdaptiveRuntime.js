@@ -6,6 +6,7 @@ import {
   bufferPreRollFrame,
   flushShadowBuffer,
   getConfig,
+  nowMs,
 } from '../core/index.js';
 import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
 import { emitVoiceEvent } from '../ui/Events.js';
@@ -42,14 +43,6 @@ const PRE_ROLL_MS = 550,
   BARGE_CONFIRM_MS = 420;
 
 const ctxRef = { current: null };
-const nowMs = () => {
-  try {
-    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-      return performance.now();
-    }
-  } catch {}
-  return Date.now();
-};
 
 const voiceLog = (level, ...args) => {
   logIfEnabled(() => {

@@ -7,6 +7,7 @@
 //  • Safe timers; idempotent start/stop
 
 import { logIfEnabled } from '../util/logging.js';
+import { nowMs } from './core/index.js';
 
 const voiceLog = (level, ...args) => {
   logIfEnabled(() => {
@@ -294,9 +295,7 @@ export class VAD {
   _pollFrame() {
     const rms = this._rms();
     const rmsDb = rmsToDb(rms);
-    const now = (typeof performance !== 'undefined' && performance?.now)
-      ? performance.now()
-      : Date.now();
+    const now = nowMs();
     const inCooldown = now < this._cooldownUntil;
     const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
     const gateAllowed = this.opts.gateFn ? !!this.opts.gateFn() : true;
