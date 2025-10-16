@@ -259,6 +259,14 @@ const registerTtsListener = (ctx) => {
       ctx.state.ttsPlaying = false;
       ctx.ttsEndedAtMs = nowMs();
       ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
+      try {
+        ctx.state.vadBoostDb = Math.max(0, (ctx.state.vadBoostDb ?? 0) - 3);
+        setTimeout(() => {
+          try {
+            ctx.state.vadBoostDb = 0;
+          } catch {}
+        }, 250);
+      } catch {}
       startMaskLogging(ctx);
     } else if (normalizedState === 'ready') {
       ctx.state.ttsPlaying = false;
@@ -542,10 +550,10 @@ const ensureVad = (ctx, opts = {}) => {
   if (audio.vad) return;
   const echoStateFn = () => isTtsMaskActive(ctx);
   audio.vad = new VAD(audio.analyser, {
-    startDbOffset: 10 + ctx.state.vadBoostDb,
+    startDbOffset: 6 + ctx.state.vadBoostDb,
     stopDbOffset: 6 + ctx.state.vadBoostDb,
     echoStateFn,
-    minSpeechMs: Math.max(180, opts.minSpeechMs ?? 280),
+    minSpeechMs: Math.max(160, opts.minSpeechMs ?? 200),
     minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
     gateFn: () => !isTtsMaskActive(ctx),
   }, {

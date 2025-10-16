@@ -1,57 +1,168 @@
-diff --git a/static/js/voice/core/TtsMask.js b/static/js/voice/core/TtsMask.js
-index de6a82eb0f3bc1acd63d52eb8b3deaec038b4404..ad07db801acba43a293c03b30e5537152df4f01a 100644
---- a/static/js/voice/core/TtsMask.js
-+++ b/static/js/voice/core/TtsMask.js
-@@ -1,51 +1,29 @@
--let cachedTimeOrigin = null;
--
--const resolveTimeOrigin = (perfNow) => {
--  if (cachedTimeOrigin !== null) {
--    return cachedTimeOrigin;
--  }
--  try {
--    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
--      if (typeof performance.timeOrigin === 'number') {
--        cachedTimeOrigin = performance.timeOrigin;
--      } else {
--        const referenceNow = Number.isFinite(perfNow) ? perfNow : performance.now();
--        cachedTimeOrigin = Date.now() - referenceNow;
--      }
--      return cachedTimeOrigin;
--    }
--  } catch {}
--  cachedTimeOrigin = 0;
--  return cachedTimeOrigin;
--};
--
- export const nowMs = () => {
-   try {
-     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
--      const perfNow = performance.now();
--      return resolveTimeOrigin(perfNow) + perfNow;
-+      return performance.now();
+diff --git a/static/js/voice/core/Config.js b/static/js/voice/core/Config.js
+index e752e35b3c4913d65e1fd56e3b2261076e72ea16..9ba37ca41a61ffc7c2da43d126701069128caee5 100644
+--- a/static/js/voice/core/Config.js
++++ b/static/js/voice/core/Config.js
+@@ -59,42 +59,42 @@ export function getConfig() {
+       server_enabled:
+         source.metrics?.server_enabled ?? DEFAULT_CONFIG.metrics.server_enabled,
+     },
+     vad: {
+       enabled: source.vad?.enabled ?? DEFAULT_CONFIG.vad.enabled,
+       hysteresis: {
+         enter: source.vad?.hysteresis?.enter ?? DEFAULT_CONFIG.vad.hysteresis.enter,
+         exit: source.vad?.hysteresis?.exit ?? DEFAULT_CONFIG.vad.hysteresis.exit,
+       },
+     },
+     tts: {
+       mask_auto_vad: source.tts?.mask_auto_vad ?? DEFAULT_CONFIG.tts.mask_auto_vad,
+       decay_ms: source.tts?.decay_ms ?? DEFAULT_CONFIG.tts.decay_ms,
+     },
+     evidence: {
+       snr_sigma: source.evidence?.snr_sigma ?? DEFAULT_CONFIG.evidence.snr_sigma,
+       asr_conf: source.evidence?.asr_conf ?? DEFAULT_CONFIG.evidence.asr_conf,
+       w1: source.evidence?.w1 ?? DEFAULT_CONFIG.evidence.w1,
+       w2: source.evidence?.w2 ?? DEFAULT_CONFIG.evidence.w2,
+       w3: source.evidence?.w3 ?? DEFAULT_CONFIG.evidence.w3,
+       threshold: source.evidence?.threshold ?? DEFAULT_CONFIG.evidence.threshold,
+       asrInstantOpen:
+         source.evidence?.asrInstantOpen ?? DEFAULT_CONFIG.evidence.asrInstantOpen,
+     },
+     shadow: {
+-      ms: source.shadow?.ms ?? DEFAULT_CONFIG.shadow.ms,
++      ms: source.shadow?.ms ?? 450,
+     },
+     commit: {
+       min_ms: source.commit?.min_ms ?? DEFAULT_CONFIG.commit.min_ms,
+       drop_if_no_partial:
+         source.commit?.drop_if_no_partial ?? DEFAULT_CONFIG.commit.drop_if_no_partial,
+       no_partial_timeout_ms:
+         source.commit?.no_partial_timeout_ms ?? DEFAULT_CONFIG.commit.no_partial_timeout_ms,
+     },
+     transport: {
+       close_on_turn_end:
+         source.transport?.close_on_turn_end ?? DEFAULT_CONFIG.transport.close_on_turn_end,
+     },
+   };
+ }
+ 
+ export { DEFAULT_CONFIG };
+diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
+index ac56c59fdfde63df8e42ace284a7422950141eec..03a458ecb49e15668adcfc722d78509bbacacc74 100644
+--- a/static/js/voice/runtime/AdaptiveRuntime.js
++++ b/static/js/voice/runtime/AdaptiveRuntime.js
+@@ -237,50 +237,58 @@ const ensureCtx = () => {
+   ctxRef.current = ctx;
+   return ctx;
+ };
+ 
+ const registerTtsListener = (ctx) => {
+   if (ctx.ttsListenerRegistered) return;
+   ctx.ttsListenerRegistered = true;
+   const win = typeof window !== 'undefined' ? window : null;
+   const listener = (ev) => {
+     const { detail } = ev || {};
+     const { state } = detail || {};
+     const normalizedState = String(state || '').toLowerCase();
+     if (normalizedState === 'playing') {
+       ctx.state.ttsPlaying = true;
+       ctx.ttsEndedAtMs = undefined;
+       ctx.ttsMask.start();
+       startMaskLogging(ctx);
+     } else if (
+       normalizedState === 'ended' ||
+       normalizedState === 'stopped' ||
+       normalizedState === 'done'
+     ) {
+       ctx.state.ttsPlaying = false;
+       ctx.ttsEndedAtMs = nowMs();
+       ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
++      try {
++        ctx.state.vadBoostDb = Math.max(0, (ctx.state.vadBoostDb ?? 0) - 3);
++        setTimeout(() => {
++          try {
++            ctx.state.vadBoostDb = 0;
++          } catch {}
++        }, 250);
++      } catch {}
+       startMaskLogging(ctx);
+     } else if (normalizedState === 'ready') {
+       ctx.state.ttsPlaying = false;
+       ctx.ttsEndedAtMs = nowMs();
+       ctx.ttsMask.clear();
+       stopMaskLogging(ctx);
+       logReadyState(ctx);
      }
-   } catch {}
-   return Date.now();
+   };
+   try { win?.addEventListener?.('chip-tts', listener, { passive: true }); } catch {}
  };
  
- const clampMs = (value) => {
-   if (!Number.isFinite(value) || value <= 0) return 0;
-   return value;
+ const ensureTransport = async (ctx) => {
+   if (ctx.transport.connected) {
+     return ctx.transport.wsPromise;
+   }
+   if (!ctx.transport.wsPromise) {
+     ctx.transport.wsPromise = openWS();
+   }
+   try {
+     const wsHandle = await waitWSOpen();
+     ctx.transport.connected = true;
+     ctx.state.wsReady = true;
+     return wsHandle;
+   } catch (err) {
+@@ -520,54 +528,54 @@ const handleSpeechStart = async (ctx, detail) => {
+   ctx.evidenceGate.start({ startedAt: nowMs(), detail, bufferedMs: stats.durationMs, bufferedBytes: stats.totalBytes });
+   emitVoiceEvent('speech_start', detail);
+   await evaluateEvidenceGate(ctx, { detail, vadState: 'speech' });
  };
  
- export class TtsMask {
-   constructor() {
-     this._active = false;
-     this._decayUntil = 0;
-     this._boostDb = 0;
+ const handleSpeechEnd = async (ctx, detail) => {
+   if (ctx.state.manualGate) {
+     return;
    }
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
+   emitVoiceEvent('speech_end', detail);
+   await evaluateEvidenceGate(ctx, { detail, vadState: 'silence', asrCue: { type: 'vad_end' } });
+   closeTurn(ctx, 'speech_end');
+   ctx.evidenceGate.reset('vad_end');
+   ctx.shadowBuffer.clear();
+   ctx.audio.lastTimecode = null;
+   setState(ctx, TurnState.Listening);
+ };
  
-   start() {
-     this._active = true;
-     this._decayUntil = 0;
-     this._boostDb = 0;
-   }
+ const ensureVad = (ctx, opts = {}) => {
+   const { audio } = ctx;
+   if (audio.vad) return;
+   const echoStateFn = () => isTtsMaskActive(ctx);
+   audio.vad = new VAD(audio.analyser, {
+-    startDbOffset: 10 + ctx.state.vadBoostDb,
++    startDbOffset: 6 + ctx.state.vadBoostDb,
+     stopDbOffset: 6 + ctx.state.vadBoostDb,
+     echoStateFn,
+-    minSpeechMs: Math.max(180, opts.minSpeechMs ?? 280),
++    minSpeechMs: Math.max(160, opts.minSpeechMs ?? 200),
+     minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
+     gateFn: () => !isTtsMaskActive(ctx),
+   }, {
+     onSpeechStart: (detail) => { handleSpeechStart(ctx, detail); },
+     onSpeechEnd: (detail) => { handleSpeechEnd(ctx, detail); },
+   });
+   audio.vad.start();
+   ctx.state.vadArmed = true;
+   setState(ctx, TurnState.Listening);
+ };
  
-   end({ decayMs, snrBoost = 0 } = {}) {
-     this._active = false;
+ const teardownVad = (ctx) => {
+   const { audio } = ctx;
+   if (audio.vad) { try { audio.vad.stop(); } catch {} }
+   audio.vad = null;
+   ctx.state.vadArmed = false;
+ };
+ 
+ const ensureGreetGate = (ctx, active) => {
+   ctx.state.greetGateActive = !!active;
+   if (!active) { ctx.state.greetGatePhase = 'idle'; ctx.state.greetGateWaiters = []; }
+   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
+ };
+ 
+ const manualBargeAllowed = (ctx) => isTtsMaskActive(ctx);

@@ -81,7 +81,7 @@ export function getConfig() {
         source.evidence?.asrInstantOpen ?? DEFAULT_CONFIG.evidence.asrInstantOpen,
     },
     shadow: {
-      ms: source.shadow?.ms ?? DEFAULT_CONFIG.shadow.ms,
+      ms: source.shadow?.ms ?? 450,
     },
     commit: {
       min_ms: source.commit?.min_ms ?? DEFAULT_CONFIG.commit.min_ms,
