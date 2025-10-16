@@ -178,6 +178,10 @@ def _safe_float(val):
         return None
 
 
+_flag_raw = os.getenv("DG_CONTAINERIZED_INCLUDE_ENCODING", "")
+_CONTAINER_ENCODING_FLAG = _flag_raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _dg_url(overrides: Optional[dict] = None) -> str:
     """Return the Deepgram listen URL with safe defaults.
 
@@ -319,9 +323,16 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
 
         # Provide a sensible default for utterance_end_ms unless explicitly overridden
-        qd.setdefault(
-            "utterance_end_ms", os.getenv("DEEPGRAM_UTTERANCE_END_MS", "3000")
-        )
+        default_utterance = os.getenv("DEEPGRAM_UTTERANCE_END_MS", "3000")
+        if containerized:
+            default_utterance = "1200"
+        qd.setdefault("utterance_end_ms", default_utterance)
+
+        if containerized:
+            if not _CONTAINER_ENCODING_FLAG:
+                qd.pop("encoding", None)
+            else:
+                qd.setdefault("encoding", "opus")
 
         interim_val = qd.get("interim_results")
         interim_false = False
@@ -627,6 +638,7 @@ class DeepgramClient:
 
         # First-chunk guard & timing
         self._first_real_sent: bool = False
+        self._bytes_forwarded: int = 0
         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
         self._last_chunk_ts: float = 0.0
         self._last_transcript: str = ""
@@ -640,6 +652,8 @@ class DeepgramClient:
         # Open gate
         self._open_evt: asyncio.Event = asyncio.Event()
         self._asr_open_emitted: bool = False
+        self._asr_start_emitted: bool = False
+        self._ready_observed: bool = False
         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
         self._open_gate_warned: bool = False
 
@@ -747,17 +761,35 @@ class DeepgramClient:
     # -- helpers ---------------------------------------------------------------
 
     async def _signal_ready(self) -> None:
+        self._ready_observed = True
         if not self._open_evt.is_set():
             self._open_evt.set()
         if not self._asr_open_emitted:
             self._asr_open_emitted = True
-            self._emit_diag("asr_open", active=True)
             try:
                 await self._ev_queue.put({"type": "asr_open"})
             except Exception:
                 pass
+        await self._maybe_emit_asr_start()
         # schedule a flush shortly after ASR open (lets DG finish configure)
         self._schedule_flush(delay=0.0)
+
+    async def _maybe_emit_asr_start(self) -> None:
+        if self._asr_start_emitted:
+            return
+        if not self._ready_observed or not self._first_real_sent:
+            return
+        self._asr_start_emitted = True
+        self._emit_diag("asr_open", active=True)
+
+    async def _publish_provider_event(self, event: str, payload: Any) -> None:
+        data: dict[str, Any] = {"type": "provider_event", "event": event or "unknown"}
+        if payload is not None:
+            data["payload"] = payload
+        try:
+            await self._ev_queue.put(data)
+        except Exception:
+            pass
 
     def _sid_for_log(self) -> str:
         try:
@@ -959,6 +991,7 @@ class DeepgramClient:
                 async with self._send_lock:
                     await ws.send(data)
                 self._first_real_sent = True
+                self._bytes_forwarded += len(data)
                 self._last_chunk_ts = time.time()
                 self._tx_queue.popleft()
                 total_sent += len(data)
@@ -984,6 +1017,7 @@ class DeepgramClient:
                         )
                     except Exception:
                         pass
+                await self._maybe_emit_asr_start()
             except Exception as e:
                 # Transient send issue; stop and retry on next trigger
                 self._logger.debug(
@@ -1051,6 +1085,20 @@ class DeepgramClient:
         if self._ws:
             self._logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
             return
+
+        self._asr_open_emitted = False
+        self._asr_start_emitted = False
+        self._ready_observed = False
+        self._first_real_sent = False
+        self._bytes_forwarded = 0
+        try:
+            self._open_evt.clear()
+        except Exception:
+            self._open_evt = asyncio.Event()
+        try:
+            self._final_event.clear()
+        except Exception:
+            self._final_event = asyncio.Event()
 
         url = _dg_url(self._cfg)
         self._emit_diag("provider_open", active=True, url=url)
@@ -1689,6 +1737,8 @@ class DeepgramClient:
                         linger_ms=linger_ms,
                         had_result=self._had_result(),
                         drain_failed=drain_failed,
+                        bytes_forwarded=self._bytes_forwarded,
+                        no_audio=self._bytes_forwarded == 0,
                     )
                 except Exception:
                     pass
@@ -1703,6 +1753,8 @@ class DeepgramClient:
                 "queued_chunks": dropped_chunks,
                 "queued_bytes": dropped_bytes,
                 "drain_wait_timeout": drain_wait_timeout,
+                "bytes_forwarded": self._bytes_forwarded,
+                "no_audio": self._bytes_forwarded == 0,
             }
             self._emit_diag("CloseStream ack", **ack_payload)
 
@@ -1829,10 +1881,26 @@ class DeepgramClient:
                 except Exception:
                     continue
 
-                evt_type = (msg.get("type") or "").lower()
+                if not isinstance(msg, dict):
+                    await self._publish_provider_event("invalid_payload", msg)
+                    continue
+
+                raw_type = msg.get("type")
+                evt_type = ""
+                evt_name = "unknown"
+                if isinstance(raw_type, str):
+                    evt_name = raw_type
+                    evt_type = raw_type.lower()
+                elif raw_type is not None:
+                    try:
+                        evt_name = str(raw_type)
+                        evt_type = evt_name.lower()
+                    except Exception:
+                        evt_type = ""
 
                 if evt_type in ("metadata", "listening", "connected", "ready"):
                     await self._signal_ready()
+                    await self._publish_provider_event(evt_type or evt_name, msg)
                     continue
 
                 if evt_type in (
@@ -1841,6 +1909,8 @@ class DeepgramClient:
                     "partialtranscript",
                     "speech.update",
                 ):
+                    await self._signal_ready()
+                    await self._publish_provider_event(evt_type or evt_name, msg)
                     text = ""
                     is_final = False
 
@@ -1937,9 +2007,6 @@ class DeepgramClient:
                     else:
                         continue
 
-                    # Seeing a result also implies the upstream is functioning
-                    await self._signal_ready()
-
                     self._logger.debug(
                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
                         sid,
@@ -1978,6 +2045,7 @@ class DeepgramClient:
                         continue
 
                 elif evt_type in ("error", "close"):
+                    await self._publish_provider_event(evt_type or evt_name, msg)
                     self._logger.warning(
                         "Deepgram error event sid=%s evt_type=%s detail=%s",
                         sid,
@@ -1998,6 +2066,7 @@ class DeepgramClient:
                         pass
 
                 else:
+                    await self._publish_provider_event(evt_type or evt_name, msg)
                     self._logger.debug(
                         "Deepgram unhandled event sid=%s evt_type=%s",
                         sid,
@@ -2008,21 +2077,52 @@ class DeepgramClient:
         except asyncio.CancelledError:
             return
         except websockets.ConnectionClosed as e:
-            self._logger.warning(
-                "Deepgram websocket closed sid=%s code=%s reason=%s had_result=%s",
-                sid,
-                getattr(e, "code", None),
-                getattr(e, "reason", ""),
-                self._had_result(),
+            code = getattr(e, "code", None)
+            reason_raw = getattr(e, "reason", "")
+            try:
+                reason_txt = str(reason_raw or "")
+            except Exception:
+                reason_txt = ""
+            timeout_flag = False
+            try:
+                timeout_flag = bool(reason_txt) and "timeout" in reason_txt.lower()
+            except Exception:
+                timeout_flag = False
+            log_kwargs = {
+                "sid": sid,
+                "code": code,
+                "reason": reason_txt,
+                "had_result": self._had_result(),
+            }
+            log_fn = self._logger.warning
+            if timeout_flag or code == 1011:
+                log_fn = self._logger.info
+            log_fn(
+                "Deepgram websocket closed sid=%(sid)s code=%(code)s reason=%(reason)s had_result=%(had_result)s",
+                log_kwargs,
             )
+            await self._publish_provider_event(
+                "connection_closed",
+                {"code": code, "reason": reason_txt, "timeout": timeout_flag},
+            )
+            if timeout_flag or code == 1011:
+                self._emit_diag(
+                    "asr_timeout",
+                    provider_error=False,
+                    code=code,
+                    reason=reason_txt,
+                    active=False,
+                )
+                self._final_event.set()
+                return
             if not self._had_result():
-                err_txt = f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}"
+                err_txt = f"recv_closed:{code}:{reason_txt}"
                 self._emit_diag(
                     "asr_error",
                     error=err_txt,
                     provider_error=True,
-                    code=getattr(e, "code", None),
-                    reason=getattr(e, "reason", ""),
+                    code=code,
+                    reason=reason_txt,
                 )
                 try:
                     await self._ev_queue.put(

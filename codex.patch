@@ -1,412 +1,745 @@
-diff --git a/static/js/voice/core/Config.js b/static/js/voice/core/Config.js
-index cda13224f1bdf28857e8d7914601b5ef03c320d7..a9e4f116aeafb6b6024d4cc054f5d88794938653 100644
---- a/static/js/voice/core/Config.js
-+++ b/static/js/voice/core/Config.js
-@@ -6,75 +6,78 @@ const DEFAULT_CONFIG = {
-     enabled: true,
-     hysteresis: {
-       enter: 3,
-       exit: 4,
-     },
-   },
-   tts: {
-     mask_auto_vad: true,
-     decay_ms: 700,
-   },
-   evidence: {
-     snr_sigma: 2.5,
-     asr_conf: 0.65,
-     w1: 0.5,
-     w2: 0.3,
-     w3: 0.2,
-     threshold: 1.0,
-     asrInstantOpen: 0.7,
-   },
-   shadow: {
-     ms: 450,
-   },
-   commit: {
-     min_ms: 500,
-     drop_if_no_partial: true,
-+    no_partial_timeout_ms: 1200,
-   },
-   transport: {
-     close_on_turn_end: false,
-   },
- };
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 210006b04d25cdfc2425ad8eccc6676bbc0c747f..4c7aacb5bea845ffda32253e90689517595620a9 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -156,50 +156,54 @@ class _FakeWSForTests:
+         return _gen()
  
- export function getConfig() {
-   const source = (typeof window !== 'undefined' && window.__askchip_config) || {};
  
-   return {
-     barge_in: {
-       mode: source.barge_in?.mode ?? DEFAULT_CONFIG.barge_in.mode,
-     },
-     vad: {
-       enabled: source.vad?.enabled ?? DEFAULT_CONFIG.vad.enabled,
-       hysteresis: {
-         enter: source.vad?.hysteresis?.enter ?? DEFAULT_CONFIG.vad.hysteresis.enter,
-         exit: source.vad?.hysteresis?.exit ?? DEFAULT_CONFIG.vad.hysteresis.exit,
-       },
-     },
-     tts: {
-       mask_auto_vad: source.tts?.mask_auto_vad ?? DEFAULT_CONFIG.tts.mask_auto_vad,
-       decay_ms: source.tts?.decay_ms ?? DEFAULT_CONFIG.tts.decay_ms,
-     },
-     evidence: {
-       snr_sigma: source.evidence?.snr_sigma ?? DEFAULT_CONFIG.evidence.snr_sigma,
-       asr_conf: source.evidence?.asr_conf ?? DEFAULT_CONFIG.evidence.asr_conf,
-       w1: source.evidence?.w1 ?? DEFAULT_CONFIG.evidence.w1,
-       w2: source.evidence?.w2 ?? DEFAULT_CONFIG.evidence.w2,
-       w3: source.evidence?.w3 ?? DEFAULT_CONFIG.evidence.w3,
-       threshold: source.evidence?.threshold ?? DEFAULT_CONFIG.evidence.threshold,
-       asrInstantOpen:
-         source.evidence?.asrInstantOpen ?? DEFAULT_CONFIG.evidence.asrInstantOpen,
-     },
-     shadow: {
-       ms: source.shadow?.ms ?? DEFAULT_CONFIG.shadow.ms,
-     },
-     commit: {
-       min_ms: source.commit?.min_ms ?? DEFAULT_CONFIG.commit.min_ms,
-       drop_if_no_partial:
-         source.commit?.drop_if_no_partial ?? DEFAULT_CONFIG.commit.drop_if_no_partial,
-+      no_partial_timeout_ms:
-+        source.commit?.no_partial_timeout_ms ?? DEFAULT_CONFIG.commit.no_partial_timeout_ms,
-     },
-     transport: {
-       close_on_turn_end:
-         source.transport?.close_on_turn_end ?? DEFAULT_CONFIG.transport.close_on_turn_end,
-     },
-   };
- }
+ # ------------------------- URL & Config Helpers -------------------------------
  
- export { DEFAULT_CONFIG };
-diff --git a/static/js/voice/legacy/CommitHandlersLegacy.js b/static/js/voice/legacy/CommitHandlersLegacy.js
-index b247a2094c8a301059e239a08a7d1cee739ead3c..44bce3925c83fff700bd6f9137223aa0e7d821d8 100644
---- a/static/js/voice/legacy/CommitHandlersLegacy.js
-+++ b/static/js/voice/legacy/CommitHandlersLegacy.js
-@@ -14,52 +14,215 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
-     EVIDENCE_MIN_BYTES,
-     GREET_BARGE_MIN_SNR_DB,
-     REC_MIME,
-     optsFromGlobal,
-     emitVoiceEvent,
-     startRecorder,
-     primeRecorderForPreRoll,
-     bargeIn,
-     resetEvidenceGate,
-     evaluateEvidenceGate,
-     onSpeechStartCommitted: nestedOnSpeechStartCommitted,
-     now,
-     logLifecycle,
-     voiceLog,
-     beginTurnTrace,
-     completeGreetGate,
-     getActiveTurnTraceId,
-     ttsMask,
-     autoVadMasked,
-   } = ctx || {};
  
-   if (typeof onFrameSpeech !== 'function') {
-     throw new Error('CommitHandlersLegacy.onSpeechStartCommitted requires onFrameSpeech');
-   }
+ def _clip_text(txt: str, limit: int = 120) -> str:
+     try:
+         txt = txt or ""
+         if len(txt) <= limit:
+             return txt
+         return txt[:limit] + "…"
+     except Exception:
+         return ""
  
-+  const config = getConfig();
-+  const commitConfig = (config && typeof config === 'object' ? config.commit : null) || {};
-+  const timeoutMsRaw = Number(commitConfig.no_partial_timeout_ms);
-+  const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(0, timeoutMsRaw) : 1200;
-+  const SMALL_MASS_BYTES = 12 * 1024;
-+
-+  const clearNoPartialTimer = () => {
-+    if (ctx.__softNoPartialTimer) {
-+      try { clearTimeout(ctx.__softNoPartialTimer); } catch {}
-+      ctx.__softNoPartialTimer = null;
-+    }
-+  };
-+
-+  const resetSoftNoPartialState = () => {
-+    ctx.__softNoPartialHandleOpen = null;
-+    clearNoPartialTimer();
-+  };
-+
-+  ctx.__softNoPartialClear = resetSoftNoPartialState;
-+
-+  const handleSoftNoPartialTimeout = () => {
-+    ctx.__softNoPartialTimer = null;
-+    if (ctx.hadPartial) {
-+      voiceLog?.('debug', 'soft no-partial timer ignored — partial received');
-+      return;
-+    }
-+
-+    const gateInstance = state?.evidenceGate || ctx.evidenceGate || null;
-+    const threshold = Number(gateInstance?.evidence?.threshold);
-+    const score = Number(gateInstance?.evidenceScore);
-+    const evidenceBelowThreshold = Number.isFinite(threshold)
-+      && Number.isFinite(score)
-+      && score < threshold;
-+
-+    if (!evidenceBelowThreshold) {
-+      voiceLog?.('debug', 'soft no-partial timer skipped — evidence still sufficient', {
-+        threshold: Number.isFinite(threshold) ? threshold : null,
-+        score: Number.isFinite(score) ? score : null,
-+      });
-+      resetSoftNoPartialState();
-+      return;
-+    }
-+
-+    const bytesSent = Number.isFinite(state?.chunkBytesSent) ? state.chunkBytesSent : 0;
-+    if (bytesSent >= SMALL_MASS_BYTES) {
-+      voiceLog?.('debug', 'soft no-partial timer skipped — audio mass already sent', {
-+        bytesSent,
-+        limit: SMALL_MASS_BYTES,
-+      });
-+      resetSoftNoPartialState();
-+      return;
-+    }
-+
-+    if (gateInstance && typeof gateInstance.isOpen === 'function' && !gateInstance.isOpen()) {
-+      voiceLog?.('debug', 'soft no-partial timer skipped — gate already closed');
-+      resetSoftNoPartialState();
-+      return;
-+    }
-+
-+    const dropReason = 'soft_no_partial_timeout';
-+    voiceLog?.('info', 'soft no-partial timeout firing', {
-+      bytesSent,
-+      evidenceScore: Number.isFinite(score) ? score : null,
-+      threshold: Number.isFinite(threshold) ? threshold : null,
-+    });
-+
-+    try { VadFrameUtils?.clearPendingEndTimer?.(); } catch {}
-+    try { VadFrameUtils?.safeClearTurnTimer?.(); } catch {}
-+    try { clearSafetyCloseTimer?.(); } catch {}
-+
-+    if (state) {
-+      state.recStreaming = false;
-+      state.recStopShouldSend = false;
-+    }
-+
-+    try {
-+      stopRecorder?.({ reason: dropReason });
-+    } catch {}
-+
-+    if (state) {
-+      state.recStopping = false;
-+      state.turnOpen = false;
-+    }
-+
-+    if (ctx?.shadowBuffer && typeof ctx.shadowBuffer.clear === 'function') {
-+      try { ctx.shadowBuffer.clear(); } catch {}
-+    }
-+    if (state?.shadowBuffer && typeof state.shadowBuffer.clear === 'function' && state.shadowBuffer !== ctx?.shadowBuffer) {
-+      try { state.shadowBuffer.clear(); } catch {}
-+    }
-+
-+    if (ctx?.evidenceGate && typeof ctx.evidenceGate.reset === 'function') {
-+      try { ctx.evidenceGate.reset(dropReason); } catch {}
-+    } else if (typeof resetEvidenceGate === 'function') {
-+      try { resetEvidenceGate(dropReason); } catch {}
-+    }
-+    if (state?.evidenceGate && state.evidenceGate !== ctx?.evidenceGate && typeof state.evidenceGate.reset === 'function') {
-+      try { state.evidenceGate.reset(dropReason); } catch {}
-+    }
-+
-+    emitVoiceEvent?.('state', { state: 'armed' });
-+    if (state) {
-+      state.currentCommitMode = 'idle';
-+    }
-+
-+    resetSoftNoPartialState();
-+  };
-+
-+  const startNoPartialTimer = () => {
-+    if (timeoutMs <= 0) {
-+      return;
-+    }
-+    clearNoPartialTimer();
-+    try {
-+      ctx.__softNoPartialTimer = setTimeout(handleSoftNoPartialTimeout, timeoutMs);
-+    } catch (err) {
-+      voiceLog?.('debug', 'failed to arm soft no-partial timer', { error: err?.message || err });
-+      ctx.__softNoPartialTimer = null;
-+      return;
-+    }
-+    voiceLog?.('debug', 'soft no-partial timer armed', { timeoutMs });
-+  };
-+
-+  ctx.__softNoPartialHandleOpen = startNoPartialTimer;
-+
-+  const descriptor = Object.getOwnPropertyDescriptor(ctx, 'hadPartial');
-+  let hadPartialValue = false;
-+  if (!descriptor || descriptor.configurable) {
-+    Object.defineProperty(ctx, 'hadPartial', {
-+      configurable: true,
-+      enumerable: true,
-+      get() {
-+        return hadPartialValue;
-+      },
-+      set(value) {
-+        hadPartialValue = !!value;
-+        if (hadPartialValue) {
-+          resetSoftNoPartialState();
-+        }
-+      },
-+    });
-+  } else {
-+    hadPartialValue = !!ctx.hadPartial;
-+  }
-   ctx.hadPartial = false;
  
-+  const evidenceGate = state?.evidenceGate;
-+  if (evidenceGate && typeof evidenceGate.update === 'function' && !evidenceGate.__softNoPartialWrapped) {
-+    const originalUpdate = evidenceGate.update;
-+    evidenceGate.update = function softNoPartialWrappedUpdate(...updateArgs) {
-+      const wasOpen = typeof evidenceGate.isOpen === 'function' ? evidenceGate.isOpen() : false;
-+      const result = originalUpdate.apply(this, updateArgs);
-+      const nowOpen = typeof evidenceGate.isOpen === 'function' ? evidenceGate.isOpen() : false;
-+      if (!wasOpen && nowOpen) {
-+        try { ctx.__softNoPartialHandleOpen?.(); } catch {}
-+      }
-+      return result;
-+    };
-+    evidenceGate.__softNoPartialWrapped = true;
-+  }
+ def _safe_float(val):
+     try:
+         if val is None:
+             return None
+         return float(val)
+     except (TypeError, ValueError):
+         return None
+ 
+ 
++_flag_raw = os.getenv("DG_CONTAINERIZED_INCLUDE_ENCODING", "")
++_CONTAINER_ENCODING_FLAG = _flag_raw.strip().lower() in {"1", "true", "yes", "on"}
 +
-+  if (typeof evidenceGate?.isOpen === 'function' && evidenceGate.isOpen()) {
-+    try { startNoPartialTimer(); } catch {}
-+  }
 +
-   const manualPressDuringTts = !!(state?.manual?.buttonDown) && state?.ttsPlaying;
-   if (manualPressDuringTts) {
-     try { bargeIn?.(); } catch {}
-     if (!ctx.ttsMask && state?.ttsMask) {
-       ctx.ttsMask = state.ttsMask;
-     }
-     ctx.skipEvidenceGate = true;
-   } else {
-     ctx.skipEvidenceGate = false;
-   }
+ def _dg_url(overrides: Optional[dict] = None) -> str:
+     """Return the Deepgram listen URL with safe defaults.
  
-   if (!ctx.ttsMask && ttsMask) {
-     ctx.ttsMask = ttsMask;
-   }
-   if (typeof autoVadMasked === 'boolean' && typeof ctx.autoVadMasked === 'undefined') {
-     ctx.autoVadMasked = autoVadMasked;
-   }
+     Audio transport parameters must be in the URL query for Deepgram's v1/listen.
+     For **containerized Opus** (OGG/WebM), we must NOT send encoding, sample_rate, or channels.
+     """
+     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
  
-   const nextHandler =
-     typeof nestedOnSpeechStartCommitted === 'function'
-       ? nestedOnSpeechStartCommitted
-       : (nextDetail = {}) => onSpeechStartCommitted(ctx, nextDetail);
+     # Detect containerized Opus from overrides (nested under _transport)
+     containerized = False
+     try:
+         if overrides and isinstance(overrides.get("_transport"), dict):
+             containerized = bool(overrides["_transport"].get("containerized_opus"))
+     except Exception:
+         containerized = False
  
-   return await onFrameSpeech(
-     {
-@@ -91,50 +254,54 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
-       ttsMask: ctx.ttsMask || state?.ttsMask || null,
-       skipEvidenceGate: manualPressDuringTts,
-       manualPressingDuringTts: manualPressDuringTts,
-       autoVadMasked: ctx.autoVadMasked === true,
-     },
-     detail,
-   );
- }
+     if isinstance(overrides, dict):
+         try:
+             transport_cfg = overrides.setdefault("_transport", {})
+             if not isinstance(transport_cfg, dict):
+                 transport_cfg = {}
+                 overrides["_transport"] = transport_cfg
+         except Exception:
+             transport_cfg = {}
  
- export function onSpeechEndCommitted(ctx = {}, detail = null) {
-   const {
-     state,
-     voiceLog,
-     updateSessionNoise,
-     abortEvidenceGate,
-     VadFrameUtils,
-     optsFromGlobal,
-     clearSafetyCloseTimer,
-     stopRecorder,
-     onSpeechEndCommitted: nestedOnSpeechEndCommitted,
-     logLifecycle,
-     resetEvidenceGate,
-     emitVoiceEvent,
-     closeTurnIfOpen,
-   } = ctx || {};
-+  if (typeof ctx?.__softNoPartialClear === 'function') {
-+    try { ctx.__softNoPartialClear(); } catch {}
-+  }
-+  ctx.__softNoPartialHandleOpen = null;
-   const perf = ctx?.performance ?? (typeof performance !== 'undefined' ? performance : null);
-   const metrics = detail && typeof detail === 'object' ? detail : {};
-   const reason =
-     detail && typeof detail === 'object' && detail.reason
-       ? detail.reason
-       : typeof detail === 'string'
-       ? detail
-       : 'vad_silence';
-   const now = typeof perf?.now === 'function' ? perf.now() : Date.now();
-   const minTurnMs = Number(optsFromGlobal?.('min_turn_ms', 1200));
+@@ -297,53 +301,60 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
+                 qd["sample_rate"] = sr
+             if ch:
+                 qd["channels"] = ch
  
-   if (state?.manual?.ignoreVadUntil && now < state.manual.ignoreVadUntil) {
-     const remaining = Math.max(0, Math.round(state.manual.ignoreVadUntil - now));
-     voiceLog?.('debug', 'speech end suppressed during manual cooldown', { remainingMs: remaining });
-     return;
-   }
+         # Ensure default feature flags are present without overwriting explicit overrides
+         qd.setdefault("interim_results", "true")
+         qd.setdefault("vad_events", "true")
+         qd.setdefault("smart_format", "true")
+         qd.setdefault("punctuate", "true")
  
-   if (state) {
-     state.vadMetrics = { ...metrics, phase: 'end' };
-   }
+         # If DG_MODEL env is set and no model present yet, add it (back-compat)
+         _env_model = os.getenv("DG_MODEL")
+         if _env_model and "model" not in qd:
+             qd["model"] = _env_model
  
-   const roundTenths = (v) => {
-     if (!Number.isFinite(v)) return null;
-     return Math.round(v * 10) / 10;
-   };
-@@ -177,50 +344,53 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
-     {
-       reason,
-       snrDb: roundTenths(metrics?.snrDb),
-       noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
-       speechDurationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
-       thresholdStopDb: roundTenths(metrics?.thresholds?.stopDb),
-     },
-     'info',
-   );
+         # If a language env is provided (optional), prefer it if not set
+         _env_lang = os.getenv("DEEPGRAM_LANG")
+         if _env_lang and "language" not in qd:
+             qd["language"] = _env_lang
  
-   const config = getConfig();
-   const rawMinMs = Number(config?.commit?.min_ms);
-   const commitMinMs = Number.isFinite(rawMinMs) ? Math.max(0, rawMinMs) : 0;
-   let totalSpeechMs = null;
-   if (detail && typeof detail === 'object' && Number.isFinite(detail.totalSpeechMs)) {
-     totalSpeechMs = detail.totalSpeechMs;
-   } else if (Number.isFinite(metrics?.speechDurationMs)) {
-     totalSpeechMs = metrics.speechDurationMs;
-   }
-   const dropForMinSpeech =
-     !ctx?.hadPartial && Number.isFinite(totalSpeechMs) && totalSpeechMs < commitMinMs;
+         # Ensure some model is present; default to nova-2 if none provided
+         if "model" not in qd:
+             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
  
-   const dropReason = 'commit_min_duration';
+         # Provide a sensible default for utterance_end_ms unless explicitly overridden
+-        qd.setdefault(
+-            "utterance_end_ms", os.getenv("DEEPGRAM_UTTERANCE_END_MS", "3000")
+-        )
++        default_utterance = os.getenv("DEEPGRAM_UTTERANCE_END_MS", "3000")
++        if containerized:
++            default_utterance = "1200"
++        qd.setdefault("utterance_end_ms", default_utterance)
++
++        if containerized:
++            if not _CONTAINER_ENCODING_FLAG:
++                qd.pop("encoding", None)
++            else:
++                qd.setdefault("encoding", "opus")
  
-   if (dropForMinSpeech) {
-+    if (typeof ctx?.__softNoPartialClear === 'function') {
-+      try { ctx.__softNoPartialClear(); } catch {}
-+    }
-     VadFrameUtils?.maybeSendAudioStop?.({ reason: dropReason });
-     VadFrameUtils?.safeClearTurnTimer?.();
-     VadFrameUtils?.clearPendingEndTimer?.();
-     clearSafetyCloseTimer?.();
-     stopRecorder?.({ reason: dropReason });
-     if (ctx?.shadowBuffer && typeof ctx.shadowBuffer.clear === 'function') {
-       try { ctx.shadowBuffer.clear(); } catch {}
-     }
-     if (state?.shadowBuffer && typeof state.shadowBuffer.clear === 'function' && state.shadowBuffer !== ctx?.shadowBuffer) {
-       try { state.shadowBuffer.clear(); } catch {}
-     }
-     if (ctx?.evidenceGate && typeof ctx.evidenceGate.reset === 'function') {
-       try { ctx.evidenceGate.reset(dropReason); } catch {}
-     } else if (typeof resetEvidenceGate === 'function') {
-       try { resetEvidenceGate(dropReason); } catch {}
-     }
-     if (state?.evidenceGate && typeof state.evidenceGate.reset === 'function' && state.evidenceGate !== ctx?.evidenceGate) {
-       try { state.evidenceGate.reset(dropReason); } catch {}
-     }
-     if (state) {
-       state.currentCommitMode = 'idle';
-     }
-     ctx.hadPartial = false;
-     emitVoiceEvent?.('state', { state: 'armed' });
-     emitVoiceEvent?.('debug', {
+         interim_val = qd.get("interim_results")
+         interim_false = False
+         try:
+             if isinstance(interim_val, bool):
+                 interim_false = not interim_val
+             elif interim_val is None:
+                 interim_false = False
+             else:
+                 interim_false = str(interim_val).strip().lower() in {"false", "0"}
+         except Exception:
+             interim_false = False
+         if interim_false:
+             qd.pop("utterance_end_ms", None)
+             effective_utterance_end_ms = 0
+         else:
+             try:
+                 val = qd.get("utterance_end_ms")
+                 if val is not None:
+                     effective_utterance_end_ms = int(str(val))
+             except Exception:
+                 effective_utterance_end_ms = 0
+ 
+         query = _p.urlencode(qd)
+         base = _p.urlunsplit(
+@@ -605,63 +616,66 @@ class DeepgramClient:
+             raw_logging_enabled = None
+         if raw_logging_enabled is None:
+             raw_logging_enabled = True
+         self._advanced_logging_enabled: bool = bool(raw_logging_enabled)
+         self._logger: logging.Logger | _NullLogger = (
+             logger if self._advanced_logging_enabled else _NullLogger()
+         )
+ 
+         # TX queue + flushing
+         self._tx_queue: Deque[bytes] = deque()
+         self._flush_task: Optional[asyncio.Task] = None
+         self._auto_close_task: Optional[asyncio.Task] = None
+         self._auto_close_requested: bool = False
+ 
+         # Graceful shutdown coordination
+         self._final_event: asyncio.Event = asyncio.Event()
+         self._any_result: bool = False
+         self._drain_event: asyncio.Event = asyncio.Event()
+         self._drain_event.set()
+         self._drain_timeout_s: float = float(
+             os.getenv("DG_CLOSE_DRAIN_TIMEOUT_S", "1.5")
+         )
+ 
+         # First-chunk guard & timing
+         self._first_real_sent: bool = False
++        self._bytes_forwarded: int = 0
+         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
+         self._last_chunk_ts: float = 0.0
+         self._last_transcript: str = ""
+ 
+         # Tunables
+         self._linger_ms: int = int(
+             os.getenv("DG_LINGER_MS", "800")
+         )  # slightly longer default
+         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
+ 
+         # Open gate
+         self._open_evt: asyncio.Event = asyncio.Event()
+         self._asr_open_emitted: bool = False
++        self._asr_start_emitted: bool = False
++        self._ready_observed: bool = False
+         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
+         self._open_gate_warned: bool = False
+ 
+         # Keepalive
+         self._keepalive_task: Optional[asyncio.Task] = None
+         self._keepalive_interval: float = float(
+             os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0")
+         )
+ 
+         # Optional JSON logger injected by WS layer (ws_asgi)
+         self._jlog = self._cfg.get("_jlog")
+ 
+         # Serialize outbound websocket sends to avoid concurrent writer errors
+         self._send_lock = asyncio.Lock()
+ 
+     def _diag_payload(self, **extra: Any) -> dict:
+         payload: dict[str, Any] = {"provider": "deepgram"}
+         if self._diag_session_id:
+             payload["session_id"] = self._diag_session_id
+         tag = self._url_tag or self._diag_tag_hint
+         if tag:
+             payload["tag"] = tag
+         payload.update(extra)
+         return payload
+ 
+@@ -725,62 +739,80 @@ class DeepgramClient:
+                     return not closed_attr
+             except Exception:
+                 pass
+ 
+         return False
+ 
+     def is_open(self) -> bool:
+         """Return True if the underlying websocket appears open."""
+         try:
+             return self._ws_is_open()
+         except Exception:
+             return False
+ 
+     def _had_result(self) -> bool:
+         """True if any final result has been observed (event-aware)."""
+         if self._any_result:
+             return True
+         if self._final_event.is_set():
+             self._any_result = True
+             return True
+         return False
+ 
+     # -- helpers ---------------------------------------------------------------
+ 
+     async def _signal_ready(self) -> None:
++        self._ready_observed = True
+         if not self._open_evt.is_set():
+             self._open_evt.set()
+         if not self._asr_open_emitted:
+             self._asr_open_emitted = True
+-            self._emit_diag("asr_open", active=True)
+             try:
+                 await self._ev_queue.put({"type": "asr_open"})
+             except Exception:
+                 pass
++        await self._maybe_emit_asr_start()
+         # schedule a flush shortly after ASR open (lets DG finish configure)
+         self._schedule_flush(delay=0.0)
+ 
++    async def _maybe_emit_asr_start(self) -> None:
++        if self._asr_start_emitted:
++            return
++        if not self._ready_observed or not self._first_real_sent:
++            return
++        self._asr_start_emitted = True
++        self._emit_diag("asr_open", active=True)
++
++    async def _publish_provider_event(self, event: str, payload: Any) -> None:
++        data: dict[str, Any] = {"type": "provider_event", "event": event or "unknown"}
++        if payload is not None:
++            data["payload"] = payload
++        try:
++            await self._ev_queue.put(data)
++        except Exception:
++            pass
++
+     def _sid_for_log(self) -> str:
+         try:
+             for key in ("session_id", "sid"):
+                 if key in self._cfg and self._cfg[key]:
+                     return str(self._cfg[key])
+         except Exception:
+             pass
+         return "?"
+ 
+     async def wait_socket_open(self, timeout: float = 1.5) -> bool:
+         """Micro-wait until the underlying websocket's .open flag is True."""
+         if self._ws_is_open():
+             return True
+         end = time.time() + timeout
+         while time.time() < end:
+             if self._ws_is_open():
+                 return True
+             await asyncio.sleep(0.01)
+         return False
+ 
+     def _schedule_flush(self, delay: float = 0.0) -> None:
+         if self._flush_task and not self._flush_task.done():
+             return
+ 
+         async def _runner():
+@@ -937,75 +969,77 @@ class DeepgramClient:
+         sent_chunks = 0
+         first_chunk: Optional[bytes] = None
+         while self._tx_queue and self._ws_is_open():
+             ws = self._ws
+             if ws is None:
+                 break
+             data = self._tx_queue[0]
+             # Drop tiny preamble once (RAW only)
+             if (
+                 not containerized
+                 and (not self._first_real_sent)
+                 and len(data) < self._min_valid_bytes
+             ):
+                 self._logger.debug(
+                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
+                     sid,
+                     len(data),
+                     self._min_valid_bytes,
+                 )
+                 self._tx_queue.popleft()
+                 continue
+             try:
+                 async with self._send_lock:
+                     await ws.send(data)
+                 self._first_real_sent = True
++                self._bytes_forwarded += len(data)
+                 self._last_chunk_ts = time.time()
+                 self._tx_queue.popleft()
+                 total_sent += len(data)
+                 sent_chunks += 1
+                 if first_chunk is None:
+                     first_chunk = data
+                 self._logger.debug(
+                     "Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
+                     sid,
+                     len(data),
+                     len(self._tx_queue),
+                 )
+                 if callable(self._jlog):
+                     try:
+                         self._jlog(
+                             "dg_forward",
+                             sid=sid,
+                             dg_id=self._dg_id,
+                             tag=self._url_tag,
+                             bytes=len(data),
+                             queued=len(self._tx_queue),
+                             total_sent=total_sent,
+                         )
+                     except Exception:
+                         pass
++                await self._maybe_emit_asr_start()
+             except Exception as e:
+                 # Transient send issue; stop and retry on next trigger
+                 self._logger.debug(
+                     "Deepgram deferred send sid=%s err=%s queued=%s",
+                     sid,
+                     type(e).__name__,
+                     len(self._tx_queue),
+                 )
+                 break
+         if not self._tx_queue and not self._drain_event.is_set():
+             self._drain_event.set()
+         first8_hex: Optional[str] = None
+         if first_chunk:
+             try:
+                 first8_hex = first_chunk[:8].hex()
+             except Exception:
+                 first8_hex = None
+         ws_open_after = self._ws_is_open()
+         open_evt_after = self._open_evt.is_set()
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "dg_flush_exit",
+                     sid=sid,
+                     dg_id=self._dg_id,
+@@ -1030,50 +1064,64 @@ class DeepgramClient:
+         )
+         return total_sent, first8_hex
+ 
+     # -- lifecycle -------------------------------------------------------------
+ 
+     async def connect(self) -> None:
+         global DG_LAST_URL, DG_LAST_CONFIG
+         sid = self._sid_for_log()
+         if callable(self._jlog):
+             try:
+                 self._jlog(
+                     "dg_connect_begin",
+                     sid=sid,
+                     dg_id=self._dg_id,
+                     tag=self._url_tag,
+                     already_open=bool(self._ws),
+                     closing=self._closing,
+                     closed=self._closed,
+                 )
+             except Exception:
+                 pass
+         if self._ws:
+             self._logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
+             return
+ 
++        self._asr_open_emitted = False
++        self._asr_start_emitted = False
++        self._ready_observed = False
++        self._first_real_sent = False
++        self._bytes_forwarded = 0
++        try:
++            self._open_evt.clear()
++        except Exception:
++            self._open_evt = asyncio.Event()
++        try:
++            self._final_event.clear()
++        except Exception:
++            self._final_event = asyncio.Event()
++
+         url = _dg_url(self._cfg)
+         self._emit_diag("provider_open", active=True, url=url)
+ 
+         containerized = False
+         safe_url = url
+         url_meta: dict[str, Any] = {}
+ 
+         try:
+             # Diagnostic: parse params and emit compact JSON log that shows
+             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
+             import urllib.parse as _p
+ 
+             parts = _p.urlsplit(url)
+             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
+             self._url_tag = q.get("tag") or None
+             transport = (self._cfg or {}).get("_transport", {}) or {}
+             containerized = bool(transport.get("containerized_opus"))
+             url_meta = {
+                 "container": transport.get("container"),
+                 "codec": transport.get("codec"),
+                 "containerized_opus": containerized,
+                 "normalized_pcm": bool(transport.get("normalized_pcm")),
+                 "omitted_params": None,
+                 "raw_params": None,
+             }
+@@ -1667,64 +1715,68 @@ class DeepgramClient:
+             try:
+                 task = self._rx_task
+                 self._rx_task = None
+                 if task:
+                     try:
+                         task.cancel()
+                     except Exception:
+                         pass
+             finally:
+                 self._closed = True
+                 self._closing = False
+                 await self._stop_keepalive()
+ 
+             self._logger.info("Deepgram close complete sid=%s", sid)
+             if callable(self._jlog):
+                 try:
+                     self._jlog(
+                         "dg_close",
+                         sid=sid,
+                         dg_id=self._dg_id,
+                         tag=self._url_tag,
+                         wait_for_final=wait_for_final,
+                         linger_ms=linger_ms,
+                         had_result=self._had_result(),
+                         drain_failed=drain_failed,
++                        bytes_forwarded=self._bytes_forwarded,
++                        no_audio=self._bytes_forwarded == 0,
+                     )
+                 except Exception:
+                     pass
+ 
+             ack_payload = {
+                 "status": "ok" if not drain_failed else "drain_timeout",
+                 "dg_id": self._dg_id,
+                 "wait_for_final": wait_for_final,
+                 "linger_ms": linger_ms,
+                 "had_result": self._had_result(),
+                 "drain_failed": drain_failed,
+                 "queued_chunks": dropped_chunks,
+                 "queued_bytes": dropped_bytes,
+                 "drain_wait_timeout": drain_wait_timeout,
++                "bytes_forwarded": self._bytes_forwarded,
++                "no_audio": self._bytes_forwarded == 0,
+             }
+             self._emit_diag("CloseStream ack", **ack_payload)
+ 
+             if drain_failed:
+                 drain_exc = DeepgramDrainTimeoutError(
+                     sid,
+                     queued_chunks=dropped_chunks,
+                     queued_bytes=dropped_bytes,
+                     wait_timeout=drain_wait_timeout,
+                 )
+         finally:
+             if not self._diag_end_emitted:
+                 self._emit_diag(
+                     "end",
+                     active=False,
+                     had_result=self._had_result(),
+                     drain_failed=drain_failed,
+                     queued_chunks=dropped_chunks,
+                     queued_bytes=dropped_bytes,
+                     wait_timeout=drain_wait_timeout,
+                 )
+                 self._diag_end_emitted = True
+ 
+         if drain_exc:
+             self._emit_diag(
+@@ -1807,62 +1859,80 @@ class DeepgramClient:
+         # Opportunistic flush now (won't raise if socket not open yet)
+         self._schedule_flush()
+ 
+     # -- events API ------------------------------------------------------------
+ 
+     async def events(self) -> AsyncGenerator[dict, None]:
+         while True:
+             ev = await self._ev_queue.get()
+             yield ev
+ 
+     # -- receiver --------------------------------------------------------------
+ 
+     async def _rx_loop(self) -> None:
+         sid = self._sid_for_log()
+         try:
+             async for raw in self._ws:  # type: ignore
+                 try:
+                     msg = (
+                         json.loads(raw)
+                         if isinstance(raw, (str, bytes, bytearray))
+                         else raw
+                     )
+                 except Exception:
+                     continue
+ 
+-                evt_type = (msg.get("type") or "").lower()
++                if not isinstance(msg, dict):
++                    await self._publish_provider_event("invalid_payload", msg)
++                    continue
++
++                raw_type = msg.get("type")
++                evt_type = ""
++                evt_name = "unknown"
++                if isinstance(raw_type, str):
++                    evt_name = raw_type
++                    evt_type = raw_type.lower()
++                elif raw_type is not None:
++                    try:
++                        evt_name = str(raw_type)
++                        evt_type = evt_name.lower()
++                    except Exception:
++                        evt_type = ""
+ 
+                 if evt_type in ("metadata", "listening", "connected", "ready"):
+                     await self._signal_ready()
++                    await self._publish_provider_event(evt_type or evt_name, msg)
+                     continue
+ 
+                 if evt_type in (
+                     "results",
+                     "transcript",
+                     "partialtranscript",
+                     "speech.update",
+                 ):
++                    await self._signal_ready()
++                    await self._publish_provider_event(evt_type or evt_name, msg)
+                     text = ""
+                     is_final = False
+ 
+                     # Prefer channel.* first (typical DG shape)
+                     channel = msg.get("channel") or {}
+                     alts = channel.get("alternatives")
+                     confidence = None
+                     token_count = 0
+                     if isinstance(alts, list) and alts:
+                         first_alt = alts[0]
+                         text = (first_alt.get("transcript") or "").strip()
+                         confidence = _safe_float(first_alt.get("confidence"))
+                         words = first_alt.get("words")
+                         if isinstance(words, list):
+                             token_count = len(
+                                 [
+                                     w
+                                     for w in words
+                                     if isinstance(w, dict)
+                                     and (w.get("word") or "").strip()
+                                 ]
+                             )
+ 
+                     # Fallback: top-level alternatives (some messages)
+                     if not text:
+@@ -1915,136 +1985,166 @@ class DeepgramClient:
+                             final_reason_detail = endpointing.get("type")
+                         for key in ("reason", "end_reason", "speech_final_reason"):
+                             val = msg.get(key)
+                             if isinstance(val, str) and val:
+                                 final_reason_detail = val
+                                 break
+                         if evt_type == "utteranceend" or msg.get("utterance_end"):
+                             final_reason = "utterance_end"
+                         if not final_reason and isinstance(final_reason_detail, str):
+                             lowered = final_reason_detail.strip().lower()
+                             if "utterance" in lowered or "endpoint" in lowered:
+                                 final_reason = "utterance_end"
+                         if self._closing and not final_reason:
+                             final_reason = "close_stream"
+                         if not final_reason:
+                             final_reason = "provider_final"
+ 
+                     # No usable text in this message; keep listening
+                     if text:
+                         self._last_transcript = text
+                     elif is_final:
+                         text = self._last_transcript or ""
+                     else:
+                         continue
+ 
+-                    # Seeing a result also implies the upstream is functioning
+-                    await self._signal_ready()
+-
+                     self._logger.debug(
+                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
+                         sid,
+                         is_final,
+                         len(text),
+                         _clip_text(text),
+                     )
+                     self._emit_diag(
+                         "asr_final" if is_final else "asr_partial",
+                         text=text,
+                         chars=len(text),
+                         active=True,
+                     )
+                     try:
+                         payload = {
+                             "type": "user_final" if is_final else "user_partial",
+                             "text": text,
+                         }
+                         if is_final:
+                             payload["final_reason"] = final_reason
+                             if final_reason_detail:
+                                 payload["final_reason_detail"] = final_reason_detail
+                         if confidence is not None:
+                             payload["confidence"] = confidence
+                         if token_count:
+                             payload["token_count"] = token_count
+                         await self._ev_queue.put(payload)
+                     except Exception:
+                         pass
+ 
+                     if is_final:
+                         self._schedule_auto_close(final_reason or "provider_final")
+                         self._any_result = True
+                         self._final_event.set()
+                         self._last_transcript = ""
+                         continue
+ 
+                 elif evt_type in ("error", "close"):
++                    await self._publish_provider_event(evt_type or evt_name, msg)
+                     self._logger.warning(
+                         "Deepgram error event sid=%s evt_type=%s detail=%s",
+                         sid,
+                         evt_type,
+                         _clip_text(str(msg), 200),
+                     )
+                     self._emit_diag(
+                         "asr_error",
+                         error=msg.get("error") or evt_type,
+                         provider_error=True,
+                         detail=_clip_text(str(msg), 200),
+                     )
+                     try:
+                         await self._ev_queue.put(
+                             {"type": "asr_error", "error": msg.get("error") or evt_type}
+                         )
+                     except Exception:
+                         pass
+ 
+                 else:
++                    await self._publish_provider_event(evt_type or evt_name, msg)
+                     self._logger.debug(
+                         "Deepgram unhandled event sid=%s evt_type=%s",
+                         sid,
+                         evt_type or "unknown",
+                     )
+                     continue
+ 
+         except asyncio.CancelledError:
+             return
+         except websockets.ConnectionClosed as e:
+-            self._logger.warning(
+-                "Deepgram websocket closed sid=%s code=%s reason=%s had_result=%s",
+-                sid,
+-                getattr(e, "code", None),
+-                getattr(e, "reason", ""),
+-                self._had_result(),
++            code = getattr(e, "code", None)
++            reason_raw = getattr(e, "reason", "")
++            try:
++                reason_txt = str(reason_raw or "")
++            except Exception:
++                reason_txt = ""
++            timeout_flag = False
++            try:
++                timeout_flag = bool(reason_txt) and "timeout" in reason_txt.lower()
++            except Exception:
++                timeout_flag = False
++            log_kwargs = {
++                "sid": sid,
++                "code": code,
++                "reason": reason_txt,
++                "had_result": self._had_result(),
++            }
++            log_fn = self._logger.warning
++            if timeout_flag or code == 1011:
++                log_fn = self._logger.info
++            log_fn(
++                "Deepgram websocket closed sid=%(sid)s code=%(code)s reason=%(reason)s had_result=%(had_result)s",
++                log_kwargs,
++            )
++            await self._publish_provider_event(
++                "connection_closed",
++                {"code": code, "reason": reason_txt, "timeout": timeout_flag},
+             )
++            if timeout_flag or code == 1011:
++                self._emit_diag(
++                    "asr_timeout",
++                    provider_error=False,
++                    code=code,
++                    reason=reason_txt,
++                    active=False,
++                )
++                self._final_event.set()
++                return
+             if not self._had_result():
+-                err_txt = f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}"
++                err_txt = f"recv_closed:{code}:{reason_txt}"
+                 self._emit_diag(
+                     "asr_error",
+                     error=err_txt,
+                     provider_error=True,
+-                    code=getattr(e, "code", None),
+-                    reason=getattr(e, "reason", ""),
++                    code=code,
++                    reason=reason_txt,
+                 )
+                 try:
+                     await self._ev_queue.put(
+                         {
+                             "type": "asr_error",
+                             "error": err_txt,
+                         }
+                     )
+                 except Exception:
+                     pass
+         except Exception as e:
+             self._logger.exception("Deepgram rx loop error sid=%s", sid)
+             self._emit_diag(
+                 "asr_error",
+                 error=f"rx:{e.__class__.__name__}",
+                 provider_error=True,
+             )
+             try:
+                 await self._ev_queue.put(
+                     {"type": "asr_error", "error": f"rx:{e.__class__.__name__}"}
+                 )
+             except Exception:
+                 pass
+ 
+     # -- keepalive -------------------------------------------------------------
