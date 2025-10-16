@@ -1,43 +1,8 @@
 diff --git a/static/js/askchip_client_hooks.js b/static/js/askchip_client_hooks.js
-index fb94305437d660a66ee4f61d59e820b50ad8c2bc..a653484b95942837d2402e7f2f0149983be58180 100644
+index a653484b95942837d2402e7f2f0149983be58180..516ff338471bd5ca55559e7fcfd397c19df56150 100644
 --- a/static/js/askchip_client_hooks.js
 +++ b/static/js/askchip_client_hooks.js
-@@ -1,28 +1,29 @@
- // static/js/askchip_client_hooks.js — control frame handler + minimal mic arming
- (function () {
-   const ADMIN_POST = "/api/v1/admin/log";
-+  const ADMIN_LOG_STREAM = "/api/v1/admin/logs?live=1&bridge=ui";
- 
-   function currentSessionId() {
-     try {
-       const key = "chip.sid";
-       let sid = localStorage.getItem(key);
-       if (!sid) {
-         if (typeof crypto?.randomUUID === "function") {
-           sid = crypto.randomUUID();
-         } else {
-           sid = `${Date.now()}-${Math.random()}`;
-         }
-         localStorage.setItem(key, sid);
-       }
-       return sid || undefined;
-     } catch (err) {
-       try { console.warn("[askchip] sid lookup failed", err); } catch {}
-       return undefined;
-     }
-   }
- 
-   function normalizePayload(evt) {
-     const payload = Object.assign({}, evt || {});
-     const event = typeof payload.event === "string" ? payload.event : null;
-     if (!payload.kind && event) payload.kind = event;
-     if (!payload.event && payload.kind) payload.event = payload.kind;
-@@ -53,50 +54,112 @@
-       }
-       if (payload && typeof payload === "object") {
-         if (payload.containerized) {
-           try { console.info("containerized=true"); } catch {}
-         }
+@@ -59,99 +59,55 @@
          if (payload.container) {
            try { console.info(`container=${payload.container}`); } catch {}
          }
@@ -58,68 +23,69 @@ index fb94305437d660a66ee4f61d59e820b50ad8c2bc..a653484b95942837d2402e7f2f014998
      } catch {}
    }
  
-+  async function openEventSource(url, options = {}) {
-+    if (typeof window === "undefined" || typeof window.EventSource !== "function") {
-+      return null;
-+    }
-+
-+    if (typeof fetch === "function") {
-+      let controller = null;
-+      let response = null;
-+      try {
-+        if (typeof AbortController === "function") {
-+          controller = new AbortController();
-+        }
-+        const fetchOptions = {
-+          method: "GET",
-+          credentials: options.withCredentials ? "include" : "same-origin",
-+          headers: { Accept: "text/event-stream" },
-+        };
-+        if (controller) fetchOptions.signal = controller.signal;
-+        response = await fetch(url, fetchOptions);
-+        const contentType = String(response?.headers?.get?.("content-type") || "");
-+        const isEventStream = /^text\/event-stream/i.test(contentType);
-+        if (!isEventStream) {
-+          try { controller?.abort(); } catch {}
-+          try { response?.body?.cancel?.(); } catch {}
-+          try {
-+            console.warn("[askchip] admin console bridge disabled — unexpected response", {
-+              url,
-+              status: response?.status,
-+              contentType,
-+            });
-+          } catch {}
-+          return null;
-+        }
-+      } catch (err) {
-+        try { controller?.abort(); } catch {}
-+        try { response?.body?.cancel?.(); } catch {}
-+        try {
-+          console.warn("[askchip] admin console bridge unavailable", {
-+            url,
-+            error: err?.message || err,
-+          });
-+        } catch {}
-+        return null;
-+      } finally {
-+        try { controller?.abort(); } catch {}
-+        try { response?.body?.cancel?.(); } catch {}
-+      }
-+    }
-+
-+    try {
-+      return new EventSource(url, options);
-+    } catch (err) {
-+      try {
-+        console.warn("[askchip] failed to create EventSource", {
-+          url,
-+          error: err?.message || err,
-+        });
-+      } catch {}
-+      return null;
-+    }
-+  }
-+
+   async function openEventSource(url, options = {}) {
+     if (typeof window === "undefined" || typeof window.EventSource !== "function") {
+       return null;
+     }
+ 
+-    if (typeof fetch === "function") {
+-      let controller = null;
+-      let response = null;
+-      try {
+-        if (typeof AbortController === "function") {
+-          controller = new AbortController();
+-        }
+-        const fetchOptions = {
+-          method: "GET",
+-          credentials: options.withCredentials ? "include" : "same-origin",
+-          headers: { Accept: "text/event-stream" },
+-        };
+-        if (controller) fetchOptions.signal = controller.signal;
+-        response = await fetch(url, fetchOptions);
+-        const contentType = String(response?.headers?.get?.("content-type") || "");
+-        const isEventStream = /^text\/event-stream/i.test(contentType);
+-        if (!isEventStream) {
+-          try { controller?.abort(); } catch {}
+-          try { response?.body?.cancel?.(); } catch {}
+-          try {
+-            console.warn("[askchip] admin console bridge disabled — unexpected response", {
+-              url,
+-              status: response?.status,
+-              contentType,
+-            });
+-          } catch {}
+-          return null;
+-        }
+-      } catch (err) {
+-        try { controller?.abort(); } catch {}
+-        try { response?.body?.cancel?.(); } catch {}
+-        try {
+-          console.warn("[askchip] admin console bridge unavailable", {
+-            url,
+-            error: err?.message || err,
+-          });
+-        } catch {}
+-        return null;
+-      } finally {
+-        try { controller?.abort(); } catch {}
+-        try { response?.body?.cancel?.(); } catch {}
+-      }
+-    }
+-
+     try {
+       return new EventSource(url, options);
+     } catch (err) {
+       try {
+-        console.warn("[askchip] failed to create EventSource", {
++        console.info("[askchip] admin console bridge unavailable", {
+           url,
+           error: err?.message || err,
+         });
+       } catch {}
+       return null;
+     }
+   }
+ 
    // Minimal upstream hook; wire this to your WS uplink if not present.
    if (!window.askchip) window.askchip = {};
    if (typeof window.askchip.audioUp !== "function") {
@@ -137,25 +103,7 @@ index fb94305437d660a66ee4f61d59e820b50ad8c2bc..a653484b95942837d2402e7f2f014998
      window.startCall.__askchipPlaceholder = true;
    }
  
-   window.askchip.armMic = async function armMic() {
-     try {
-       const stream = await navigator.mediaDevices.getUserMedia({
-         audio: { echoCancellation: true, noiseSuppression: true },
-       });
- 
-       const mr = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
- 
-@@ -108,56 +171,59 @@
-         if (!e.data || !e.data.size) return;
-         if (!started) {
-           started = true;
-           postAdmin({ event: "asr:start" }); // P2
-         }
-         try { window.askchip.audioUp(e.data); } catch {}
-       };
- 
-       mr.start(150); // 150ms
-       console.log("[askchip] mic armed");
+@@ -181,50 +137,61 @@
      } catch (err) {
        console.error("armMic failed", err);
        postAdmin({ event: "asr:error", msg: String(err && err.message || err) });
@@ -171,18 +119,27 @@ index fb94305437d660a66ee4f61d59e820b50ad8c2bc..a653484b95942837d2402e7f2f014998
      }
    };
  
--  function installAdminConsoleBridge() {
-+  async function installAdminConsoleBridge() {
+   async function installAdminConsoleBridge() {
      try {
        if (window.__askchip_admin_console_bridge) {
          return;
        }
--      const es = new EventSource("/api/v1/admin/logs?live=1&bridge=ui", { withCredentials: true });
-+      const es = await openEventSource(ADMIN_LOG_STREAM, { withCredentials: true });
-+      if (!es) {
-+        return;
-+      }
+       const es = await openEventSource(ADMIN_LOG_STREAM, { withCredentials: true });
+       if (!es) {
+         return;
+       }
        window.__askchip_admin_console_bridge = es;
++      let bridgeErrorLogged = false;
++      const logBridgeIssue = (detail) => {
++        if (bridgeErrorLogged) return;
++        bridgeErrorLogged = true;
++        try {
++          console.info("[askchip] admin console bridge unavailable", detail);
++        } catch {}
++      };
++      es.addEventListener("error", (event) => {
++        logBridgeIssue({ url: ADMIN_LOG_STREAM, event: event?.type || "error" });
++      }, { once: true });
        es.addEventListener("message", (ev) => {
          try {
            const data = JSON.parse(ev.data || "{}");
@@ -207,3 +164,110 @@ index fb94305437d660a66ee4f61d59e820b50ad8c2bc..a653484b95942837d2402e7f2f014998
                break;
              }
              case "nlu": {
+               try { console.info("nlu", info); } catch {}
+diff --git a/static/js/voice/legacy/VoiceLegacyTopLevel.js b/static/js/voice/legacy/VoiceLegacyTopLevel.js
+index 14e9d6dbb14034a76f89a1c36e4856f377daeb50..fc5a510516d263d5cb50f3bcb01bfd9f103a00d0 100644
+--- a/static/js/voice/legacy/VoiceLegacyTopLevel.js
++++ b/static/js/voice/legacy/VoiceLegacyTopLevel.js
+@@ -192,50 +192,60 @@ function _completeGreetGate(reason = 'open') {
+   state.greetGatePhase = 'open';
+   state.greetGateLastReason = reason;
+   if (state.eligibility === 'blocked_pregreet') {
+     state.eligibility = 'eligible';
+   }
+   _clearGreetGateCalibrateTimer();
+   _clearGreetGateWaiters(true);
+   _resetGreetGateState();
+ }
+ function _cancelGreetGate(reason = 'cancelled') {
+   if (!state.greetGateActive) {
+     _resetGreetGateState();
+     return;
+   }
+   _voiceLog('info', 'greet gate cancelled', { reason });
+   state.greetGateActive = false;
+   state.greetGatePhase = 'cancelled';
+   state.greetGateLastReason = reason;
+   if (state.eligibility === 'blocked_pregreet') {
+     state.eligibility = 'eligible';
+   }
+   _clearGreetGateCalibrateTimer();
+   _clearGreetGateWaiters(false);
+   _resetGreetGateState();
+ }
++function _resetEvidenceGate(reason = null) {
++  try {
++    if (state?.evidenceGate && typeof state.evidenceGate.reset === 'function') {
++      state.evidenceGate.reset(reason);
++    }
++  } catch {}
++  try {
++    state.evidenceGateCommitPromise = null;
++  } catch {}
++}
+ function _startGreetGateCalibrate(source = 'unknown') {
+   if (!state.greetGateActive) return;
+   if (state.greetGatePhase === 'calibrating' && state.greetGateCalibrateTimer) {
+     state.greetGateLastSignal = source;
+     return;
+   }
+   const durationMs = _resolveGreetGateCalibrateMs();
+   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+     ? performance.now()
+     : Date.now();
+   _clearGreetGateCalibrateTimer();
+   state.greetGatePhase = 'calibrating';
+   state.greetGateLastSignal = source;
+   state.greetGateCalibrateLastMs = durationMs;
+   state.greetGateCalibrateUntil = now + durationMs;
+   _voiceLog('info', 'greet gate calibrating', {
+     source,
+     calibrateMs: durationMs,
+     ttsPlaying: !!state.ttsPlaying,
+   });
+   try {
+     state.greetGateCalibrateTimer = setTimeout(() => {
+       state.greetGateCalibrateTimer = null;
+       state.greetGateCalibrateUntil = 0;
+       _completeGreetGate('calibrated');
+@@ -349,39 +359,40 @@ export {
+   MANUAL_NO_AUDIO_CANCEL_MS,
+   MANUAL_VAD_IGNORE_MS,
+   EVIDENCE_MIN_SPEECH_MS,
+   EVIDENCE_MIN_BYTES,
+   EVIDENCE_MIN_SNR_DB,
+   PARTIAL_CONF_THRESHOLD,
+   PARTIAL_CONF_RISE_DELTA,
+   GREET_BARGE_MIN_SNR_DB,
+   GREET_CALIBRATE_DEFAULT_MS,
+   GREET_CALIBRATE_MIN_MS,
+   GREET_CALIBRATE_MAX_MS,
+   BARGE_CONFIRM_DEFAULT_MS,
+   bargeConfirmMs,
+   state,
+   _now,
+   optsFromGlobal,
+   _normalizePhase,
+   _valueIsReadyFlag,
+   _updateAssistantPhaseFromDetail,
+   _clearGreetGateWaiters,
+   _clearGreetGateCalibrateTimer,
+   _resetGreetGateState,
+   _resolveGreetGateCalibrateMs,
+   _completeGreetGate,
+   _cancelGreetGate,
++  _resetEvidenceGate,
+   _startGreetGateCalibrate,
+   _waitForGreetGate,
+   _handleGreetGateUtteranceEnd,
+   _handleGreetGateStateFrame,
+   _setActiveTurnTraceId,
+   _getActiveTurnTraceId,
+   _ensureTurnTraceBase,
+   _beginTurnTrace,
+   _clearTurnTrace,
+   _withTrace,
+   _formatVoiceMessage,
+   _voiceLog,
+   _logLifecycle,
+ };

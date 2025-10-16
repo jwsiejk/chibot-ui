@@ -214,6 +214,16 @@ function _cancelGreetGate(reason = 'cancelled') {
   _clearGreetGateWaiters(false);
   _resetGreetGateState();
 }
+function _resetEvidenceGate(reason = null) {
+  try {
+    if (state?.evidenceGate && typeof state.evidenceGate.reset === 'function') {
+      state.evidenceGate.reset(reason);
+    }
+  } catch {}
+  try {
+    state.evidenceGateCommitPromise = null;
+  } catch {}
+}
 function _startGreetGateCalibrate(source = 'unknown') {
   if (!state.greetGateActive) return;
   if (state.greetGatePhase === 'calibrating' && state.greetGateCalibrateTimer) {
@@ -371,6 +381,7 @@ export {
   _resolveGreetGateCalibrateMs,
   _completeGreetGate,
   _cancelGreetGate,
+  _resetEvidenceGate,
   _startGreetGateCalibrate,
   _waitForGreetGate,
   _handleGreetGateUtteranceEnd,

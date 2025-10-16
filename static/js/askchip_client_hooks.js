@@ -81,55 +81,11 @@
       return null;
     }
 
-    if (typeof fetch === "function") {
-      let controller = null;
-      let response = null;
-      try {
-        if (typeof AbortController === "function") {
-          controller = new AbortController();
-        }
-        const fetchOptions = {
-          method: "GET",
-          credentials: options.withCredentials ? "include" : "same-origin",
-          headers: { Accept: "text/event-stream" },
-        };
-        if (controller) fetchOptions.signal = controller.signal;
-        response = await fetch(url, fetchOptions);
-        const contentType = String(response?.headers?.get?.("content-type") || "");
-        const isEventStream = /^text\/event-stream/i.test(contentType);
-        if (!isEventStream) {
-          try { controller?.abort(); } catch {}
-          try { response?.body?.cancel?.(); } catch {}
-          try {
-            console.warn("[askchip] admin console bridge disabled — unexpected response", {
-              url,
-              status: response?.status,
-              contentType,
-            });
-          } catch {}
-          return null;
-        }
-      } catch (err) {
-        try { controller?.abort(); } catch {}
-        try { response?.body?.cancel?.(); } catch {}
-        try {
-          console.warn("[askchip] admin console bridge unavailable", {
-            url,
-            error: err?.message || err,
-          });
-        } catch {}
-        return null;
-      } finally {
-        try { controller?.abort(); } catch {}
-        try { response?.body?.cancel?.(); } catch {}
-      }
-    }
-
     try {
       return new EventSource(url, options);
     } catch (err) {
       try {
-        console.warn("[askchip] failed to create EventSource", {
+        console.info("[askchip] admin console bridge unavailable", {
           url,
           error: err?.message || err,
         });
@@ -203,6 +159,17 @@
         return;
       }
       window.__askchip_admin_console_bridge = es;
+      let bridgeErrorLogged = false;
+      const logBridgeIssue = (detail) => {
+        if (bridgeErrorLogged) return;
+        bridgeErrorLogged = true;
+        try {
+          console.info("[askchip] admin console bridge unavailable", detail);
+        } catch {}
+      };
+      es.addEventListener("error", (event) => {
+        logBridgeIssue({ url: ADMIN_LOG_STREAM, event: event?.type || "error" });
+      }, { once: true });
       es.addEventListener("message", (ev) => {
         try {
           const data = JSON.parse(ev.data || "{}");
