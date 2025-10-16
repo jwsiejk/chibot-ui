@@ -1,68 +1,209 @@
-diff --git a/tests/test_phase9_acceptance.py b/tests/test_phase9_acceptance.py
-index af469716e3bf9e516d2f0002e6f481992519505c..b752eaf1f779b569c0c88445344ad80ea31a9c93 100644
---- a/tests/test_phase9_acceptance.py
-+++ b/tests/test_phase9_acceptance.py
-@@ -30,57 +30,59 @@ def test_voice_turn_and_barge_in_interrupt():
-     rv=c.post('/api/v1/chat', json={'session_id':sid,'text':'long'}); tid=rv.get_json()['turn_id']
-     c.post('/api/v1/chat', json={'session_id':sid,'cmd':'interrupt','turn_id':tid})
-     frames=_drain(q2,1200)
-     assert not [f for f in frames if f.get('type')=='end' and f.get('turn_id')==tid]
-     assert any(f.get('type')=='state' and f.get('phase')=='ready' for f in frames)
+diff --git a/static/js/askchip_client_hooks.js b/static/js/askchip_client_hooks.js
+index fb94305437d660a66ee4f61d59e820b50ad8c2bc..a653484b95942837d2402e7f2f0149983be58180 100644
+--- a/static/js/askchip_client_hooks.js
++++ b/static/js/askchip_client_hooks.js
+@@ -1,28 +1,29 @@
+ // static/js/askchip_client_hooks.js — control frame handler + minimal mic arming
+ (function () {
+   const ADMIN_POST = "/api/v1/admin/log";
++  const ADMIN_LOG_STREAM = "/api/v1/admin/logs?live=1&bridge=ui";
  
- def test_nudge_suggestions_email_and_admin_sse(monkeypatch):
-     # Admin gating
-     monkeypatch.setenv("ADMIN_EMAILS","jwsiejk@purestorage.com")
-     c = flask_app.test_client()
-     # greet to get suggestions & nudge path
-     sid="p9nudge"; q=bus.subscribe(sid); c.get(f'/api/v1/greet?session_id={sid}')
-     frames=_drain(q,1000); sug=[f for f in frames if f.get('type')=='suggestions'][-1]
-     label=sug['items'][0]['label']
-     c.post('/api/v1/chat', json={'session_id':sid,'text':label})
-     # nudge backoff
-     r1=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'nudge'}).get_json()
-     r2=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'nudge'}).get_json()
-     r3=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'nudge'}).get_json()
-     assert r1['nudged'] and r2['nudged'] and (not r3['nudged'])
-     # End emails transcript to user
-     tok=c.get('/api/v1/auth/csrf').get_json()['csrf']
-     c.post('/api/v1/auth/login', json={'email':'jwsiejk@purestorage.com'}, headers={'X-CSRF-Token': tok})
-     end=c.post('/api/v1/chat', json={'session_id':sid,'cmd':'end_session'}, headers={'X-CSRF-Token': tok}).get_json()
-     assert end['emailed'] is True and any(e['to']=='jwsiejk@purestorage.com' for e in db.list_emails())
--    # Admin SSE + actions
--    logs_stream=c.get('/api/v1/admin/logs')
-+    # Admin log feed + actions
-+    logs_before=c.get('/api/v1/admin/logs').get_json()
-     c.post('/api/v1/admin/config', json={'suggestions_max_items':3}, headers={'X-CSRF-Token': tok})
-     c.post('/api/v1/admin/layouts', json={'breakpoint':'desktop','json':{'grid':'v1'}})
-     c.post('/api/v1/admin/layouts/rollback', json={'breakpoint':'desktop','version':1})
--    sse = logs_stream.data.decode('utf-8','ignore')
--    assert 'config_updated' in sse or 'layout_updated' in sse or 'audit' in sse
-+    logs_after = c.get('/api/v1/admin/logs').get_json()
-+    new_events = logs_after['events'][len(logs_before['events']):]
-+    kinds = {evt.get('kind') for evt in new_events}
-+    assert kinds & {'config_update', 'layout_publish', 'layout_rollback', 'audit'}
-     # Users & Memory
-     ls=c.get('/api/v1/admin/sessions').get_json()['sessions']
-     assert any(s['id']==sid for s in ls)
+   function currentSessionId() {
+     try {
+       const key = "chip.sid";
+       let sid = localStorage.getItem(key);
+       if (!sid) {
+         if (typeof crypto?.randomUUID === "function") {
+           sid = crypto.randomUUID();
+         } else {
+           sid = `${Date.now()}-${Math.random()}`;
+         }
+         localStorage.setItem(key, sid);
+       }
+       return sid || undefined;
+     } catch (err) {
+       try { console.warn("[askchip] sid lookup failed", err); } catch {}
+       return undefined;
+     }
+   }
  
+   function normalizePayload(evt) {
+     const payload = Object.assign({}, evt || {});
+     const event = typeof payload.event === "string" ? payload.event : null;
+     if (!payload.kind && event) payload.kind = event;
+     if (!payload.event && payload.kind) payload.event = payload.kind;
+@@ -53,50 +54,112 @@
+       }
+       if (payload && typeof payload === "object") {
+         if (payload.containerized) {
+           try { console.info("containerized=true"); } catch {}
+         }
+         if (payload.container) {
+           try { console.info(`container=${payload.container}`); } catch {}
+         }
+       }
+     } catch {}
+   }
  
- def test_confirm_window_gap_abort_path():
-     from app.ws.confirm_window import ConfirmWindow
-     import struct
+   async function postAdmin(evt) {
+     try {
+       const payload = normalizePayload(evt);
+       logAdminBreadcrumb(payload);
+       await fetch(ADMIN_POST, {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         credentials: "include",
+         body: JSON.stringify(payload),
+       });
+     } catch {}
+   }
  
-     win = ConfirmWindow(min_duration_ms=400, max_duration_ms=900, max_gap_ms=150, snr_threshold_db=4.0)
-     start = 0.0
-     win.start(start)
-     chunk = struct.pack("<80h", *([1000] * 80))
-     win.observe_chunk(chunk, start + 0.05)
-     decision = win.observe_chunk(chunk, start + 0.26)
-     assert decision.action == "abort"
-     metrics = decision.metrics or {}
-     assert metrics.get("reason") == "gap"
++  async function openEventSource(url, options = {}) {
++    if (typeof window === "undefined" || typeof window.EventSource !== "function") {
++      return null;
++    }
++
++    if (typeof fetch === "function") {
++      let controller = null;
++      let response = null;
++      try {
++        if (typeof AbortController === "function") {
++          controller = new AbortController();
++        }
++        const fetchOptions = {
++          method: "GET",
++          credentials: options.withCredentials ? "include" : "same-origin",
++          headers: { Accept: "text/event-stream" },
++        };
++        if (controller) fetchOptions.signal = controller.signal;
++        response = await fetch(url, fetchOptions);
++        const contentType = String(response?.headers?.get?.("content-type") || "");
++        const isEventStream = /^text\/event-stream/i.test(contentType);
++        if (!isEventStream) {
++          try { controller?.abort(); } catch {}
++          try { response?.body?.cancel?.(); } catch {}
++          try {
++            console.warn("[askchip] admin console bridge disabled — unexpected response", {
++              url,
++              status: response?.status,
++              contentType,
++            });
++          } catch {}
++          return null;
++        }
++      } catch (err) {
++        try { controller?.abort(); } catch {}
++        try { response?.body?.cancel?.(); } catch {}
++        try {
++          console.warn("[askchip] admin console bridge unavailable", {
++            url,
++            error: err?.message || err,
++          });
++        } catch {}
++        return null;
++      } finally {
++        try { controller?.abort(); } catch {}
++        try { response?.body?.cancel?.(); } catch {}
++      }
++    }
++
++    try {
++      return new EventSource(url, options);
++    } catch (err) {
++      try {
++        console.warn("[askchip] failed to create EventSource", {
++          url,
++          error: err?.message || err,
++        });
++      } catch {}
++      return null;
++    }
++  }
++
+   // Minimal upstream hook; wire this to your WS uplink if not present.
+   if (!window.askchip) window.askchip = {};
+   if (typeof window.askchip.audioUp !== "function") {
+     window.askchip.audioUp = function noop(_) {};
+   }
  
+   // Expose a start hook so tests can trigger the same flow your Start button uses.
+   if (typeof window.startCall !== "function") {
+     window.startCall = function () {
+       // no-op placeholder; your UI can replace this to match the real Start.
+       // The E2E runner can still click your Start button; this is a fallback.
+       console.log("[askchip] startCall() placeholder");
+       return true;
+     };
+     window.startCall.__askchipPlaceholder = true;
+   }
  
- def test_confirm_window_timeout_abort_path():
-     from app.ws.confirm_window import ConfirmWindow
-     import struct
+   window.askchip.armMic = async function armMic() {
+     try {
+       const stream = await navigator.mediaDevices.getUserMedia({
+         audio: { echoCancellation: true, noiseSuppression: true },
+       });
  
-     win = ConfirmWindow(min_duration_ms=300, max_duration_ms=320, snr_threshold_db=4.0)
+       const mr = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+ 
+@@ -108,56 +171,59 @@
+         if (!e.data || !e.data.size) return;
+         if (!started) {
+           started = true;
+           postAdmin({ event: "asr:start" }); // P2
+         }
+         try { window.askchip.audioUp(e.data); } catch {}
+       };
+ 
+       mr.start(150); // 150ms
+       console.log("[askchip] mic armed");
+     } catch (err) {
+       console.error("armMic failed", err);
+       postAdmin({ event: "asr:error", msg: String(err && err.message || err) });
+     }
+   };
+ 
+   // Handle control frames from the server bus
+   window.askchip_onControl = function (msg) {
+     if (msg && msg.type === "control" && msg.op === "arm_mic") {
+       const delay = Number(msg.delay_ms || 0);
+       setTimeout(() => window.askchip.armMic(), delay);
+       postAdmin({ event: "mic:auto_arm_suggested", delay_ms: delay });
+     }
+   };
+ 
+-  function installAdminConsoleBridge() {
++  async function installAdminConsoleBridge() {
+     try {
+       if (window.__askchip_admin_console_bridge) {
+         return;
+       }
+-      const es = new EventSource("/api/v1/admin/logs?live=1&bridge=ui", { withCredentials: true });
++      const es = await openEventSource(ADMIN_LOG_STREAM, { withCredentials: true });
++      if (!es) {
++        return;
++      }
+       window.__askchip_admin_console_bridge = es;
+       es.addEventListener("message", (ev) => {
+         try {
+           const data = JSON.parse(ev.data || "{}");
+           const kind = data?.kind || data?.event || data?.label;
+           if (!kind) return;
+           const payload = data?.payload && typeof data.payload === "object" ? data.payload : undefined;
+           const info = payload || data;
+           switch (String(kind)) {
+             case "latency_breakdown": {
+               try { console.info("latency_breakdown", info); } catch {}
+               const metrics = info?.metrics || data?.metrics;
+               if (metrics && typeof metrics === "object") {
+                 Object.entries(metrics).forEach(([name, value]) => {
+                   try { console.info(`${name}=${value}`); } catch {}
+                 });
+               }
+               break;
+             }
+             case "policy_decision": {
+               const detail = info?.decision || info?.detail || info?.label || data?.decision || data?.detail;
+               try { console.info(`policy_decision: ${detail ?? "unknown"}`); } catch {}
+               break;
+             }
+             case "nlu": {

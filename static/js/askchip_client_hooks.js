@@ -1,6 +1,7 @@
 // static/js/askchip_client_hooks.js — control frame handler + minimal mic arming
 (function () {
   const ADMIN_POST = "/api/v1/admin/log";
+  const ADMIN_LOG_STREAM = "/api/v1/admin/logs?live=1&bridge=ui";
 
   function currentSessionId() {
     try {
@@ -75,6 +76,68 @@
     } catch {}
   }
 
+  async function openEventSource(url, options = {}) {
+    if (typeof window === "undefined" || typeof window.EventSource !== "function") {
+      return null;
+    }
+
+    if (typeof fetch === "function") {
+      let controller = null;
+      let response = null;
+      try {
+        if (typeof AbortController === "function") {
+          controller = new AbortController();
+        }
+        const fetchOptions = {
+          method: "GET",
+          credentials: options.withCredentials ? "include" : "same-origin",
+          headers: { Accept: "text/event-stream" },
+        };
+        if (controller) fetchOptions.signal = controller.signal;
+        response = await fetch(url, fetchOptions);
+        const contentType = String(response?.headers?.get?.("content-type") || "");
+        const isEventStream = /^text\/event-stream/i.test(contentType);
+        if (!isEventStream) {
+          try { controller?.abort(); } catch {}
+          try { response?.body?.cancel?.(); } catch {}
+          try {
+            console.warn("[askchip] admin console bridge disabled — unexpected response", {
+              url,
+              status: response?.status,
+              contentType,
+            });
+          } catch {}
+          return null;
+        }
+      } catch (err) {
+        try { controller?.abort(); } catch {}
+        try { response?.body?.cancel?.(); } catch {}
+        try {
+          console.warn("[askchip] admin console bridge unavailable", {
+            url,
+            error: err?.message || err,
+          });
+        } catch {}
+        return null;
+      } finally {
+        try { controller?.abort(); } catch {}
+        try { response?.body?.cancel?.(); } catch {}
+      }
+    }
+
+    try {
+      return new EventSource(url, options);
+    } catch (err) {
+      try {
+        console.warn("[askchip] failed to create EventSource", {
+          url,
+          error: err?.message || err,
+        });
+      } catch {}
+      return null;
+    }
+  }
+
   // Minimal upstream hook; wire this to your WS uplink if not present.
   if (!window.askchip) window.askchip = {};
   if (typeof window.askchip.audioUp !== "function") {
@@ -130,12 +193,15 @@
     }
   };
 
-  function installAdminConsoleBridge() {
+  async function installAdminConsoleBridge() {
     try {
       if (window.__askchip_admin_console_bridge) {
         return;
       }
-      const es = new EventSource("/api/v1/admin/logs?live=1&bridge=ui", { withCredentials: true });
+      const es = await openEventSource(ADMIN_LOG_STREAM, { withCredentials: true });
+      if (!es) {
+        return;
+      }
       window.__askchip_admin_console_bridge = es;
       es.addEventListener("message", (ev) => {
         try {
