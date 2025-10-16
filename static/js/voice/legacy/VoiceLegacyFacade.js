@@ -767,7 +767,7 @@ export async function legacySetupPreRollTap(ctx, source) {
   }
 
   try {
-    const moduleUrl = new URL('./voice/pre_roll_processor.js', import.meta.url);
+    const moduleUrl = new URL('../pre_roll_processor.js', import.meta.url);
     await worklet.addModule(moduleUrl);
   } catch (err) {
     _voiceLog('warn', 'failed to load pre-roll worklet', { error: err?.message || err });
