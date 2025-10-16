@@ -1,3 +1,4 @@
+console.log("[AdaptiveRuntime] build=2025-10-16T23:15Z");
 import {
   EvidenceGate,
   ShadowBuffer,
