@@ -151,10 +151,16 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
     stats = EMPTY_STATS;
   }
 
+  const frameVadState = typeof frame?.vadState === 'string'
+    ? frame.vadState
+    : (typeof frame?.vad?.state === 'string' ? frame.vad.state : null);
+  const effectiveVadState = frameVadState || vadState;
+  const asrCue = frame?.asrCue ?? frame?.cue ?? frame?.detail?.asrCue ?? null;
+
   const updatePayload = {
-    vadState,
+    vadState: effectiveVadState,
     snr: resolveSnr(ctx, frame),
-    asrCue: frame?.asrCue ?? frame?.cue ?? null,
+    asrCue,
     bufferedMs: stats.durationMs,
     bufferedBytes: stats.totalBytes,
   };
