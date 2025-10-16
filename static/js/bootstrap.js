@@ -363,7 +363,8 @@ async function startOnce(){
   const endBtn   = $('#endButton');
 
   try{
-    manualState.featureEnabled = !!_cfgValue('feature_manual_barge_in', true);
+    const manualFeatureEnabled = !!_cfgValue('feature_manual_barge_in', true);
+    manualState.featureEnabled = manualFeatureEnabled;
     _updateManualButtonAvailability();
     if (startBtn) startBtn.disabled = true;
 
@@ -398,7 +399,9 @@ async function startOnce(){
         greet: true,
         reset: 1,
         session_id: sid,
-        feature_manual_barge_in: manualState.featureEnabled,
+        // Keep VAD enabled for the session; manual barge-in is now gated client-side
+        // off the TTS state so we always advertise "false" here.
+        feature_manual_barge_in: false,
         barge_in_mode_manual: manualMode,
         auto_commit_when_ready: autoCommit,
       });

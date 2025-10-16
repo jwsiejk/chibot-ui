@@ -50,6 +50,8 @@ const setState = (ctx, stateName, detail) => {
   emitVoiceEvent('state', detail ? { state: stateName, ...detail } : { state: stateName });
 };
 
+const isTtsMaskActive = (ctx) => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
+
 const ensureCtx = () => {
   if (ctxRef.current) {
     return ctxRef.current;
@@ -258,6 +260,10 @@ const closeTurn = (ctx, reason = 'vad_end') => {
 };
 
 const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', asrCue = null } = {}) => {
+  if (!ctx.state.manualPttActive && isTtsMaskActive(ctx)) {
+    ctx.evidenceGate.reset('tts_mask');
+    return;
+  }
   const snr = Number.isFinite(detail?.snrDb) ? detail.snrDb : null;
   const snrBoost = resolveSnrBoost(ctx, ctx.evidenceGate?.config?.baseSnrDb ?? 3.5);
   const stats = getShadowStats(ctx.state);
@@ -282,7 +288,7 @@ const handleSpeechStart = async (ctx, detail) => {
   if (ctx.state.manualPttActive) {
     return;
   }
-  if (manualBargeAllowed(ctx)) {
+  if (isTtsMaskActive(ctx)) {
     return;
   }
   ctx.state.bargeConfirmActive = true;
@@ -312,13 +318,14 @@ const handleSpeechEnd = async (ctx, detail) => {
 const ensureVad = (ctx, opts = {}) => {
   const { audio } = ctx;
   if (audio.vad) return;
-  const echoStateFn = () => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
+  const echoStateFn = () => isTtsMaskActive(ctx);
   audio.vad = new VAD(audio.analyser, {
     startDbOffset: 10 + ctx.state.vadBoostDb,
     stopDbOffset: 6 + ctx.state.vadBoostDb,
     echoStateFn,
     minSpeechMs: Math.max(180, opts.minSpeechMs ?? 280),
     minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
+    gateFn: () => !isTtsMaskActive(ctx),
   }, {
     onSpeechStart: (detail) => { handleSpeechStart(ctx, detail); },
     onSpeechEnd: (detail) => { handleSpeechEnd(ctx, detail); },
@@ -341,7 +348,7 @@ const ensureGreetGate = (ctx, active) => {
   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
 };
 
-const manualBargeAllowed = (ctx) => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
+const manualBargeAllowed = (ctx) => isTtsMaskActive(ctx);
 
 export async function initMic(stream = null) {
   const ctx = ensureCtx();

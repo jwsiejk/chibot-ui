@@ -1,12 +1,131 @@
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index b56e406eb11f27c3a1d7f518a9f7230ae1e449fa..670c30ec2af682068bf27c9f85895be3b267d569 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -341,86 +341,89 @@ async function ensureWsOpenOrFail(timeoutMs = 5000){
+   } catch {
+     return false;
+   }
+   return isOpen();
+ }
+ 
+ async function startOnce(){
+   if (started || startInFlight) {
+     try {
+       _console('warn', '[bootstrap] startOnce duplicate guard hit', { started, startInFlight });
+     } catch {}
+     return;
+   }
+ 
+   const attempt = ++startOnceCallCount;
+   try {
+     _console('info', `[bootstrap] startOnce called N=${attempt}`);
+   } catch {}
+   startInFlight = true;
+   setDot('thinking');
+ 
+   const startBtn = $('#startButton');
+   const endBtn   = $('#endButton');
+ 
+   try{
+-    manualState.featureEnabled = !!_cfgValue('feature_manual_barge_in', true);
++    const manualFeatureEnabled = !!_cfgValue('feature_manual_barge_in', true);
++    manualState.featureEnabled = manualFeatureEnabled;
+     _updateManualButtonAvailability();
+     if (startBtn) startBtn.disabled = true;
+ 
+     // 0) Audio unlock so TTS is permitted by browser autoplay policies
+     try { await unlockAudio(); } catch {}
+ 
+     // 1) Network/CSRF prep (kept for compatibility; harmless in WS-only mode)
+     try { installFetchInterceptor(); } catch {}
+     try { await ensureCSRF(); } catch {}
+ 
+     // 2) WS first — verify actually OPEN or abort
+     const ok = await ensureWsOpenOrFail(5000);
+     if (!ok){
+       showBanner('WebSocket did not open — greet aborted.');
+       setDot('ready');
+       if (startBtn) startBtn.disabled = false;
+       startInFlight = false;
+       return;
+     }
+ 
+     // 3) Wire WS → UI events exactly once
+     wireWSEventsOnce();
+ 
+     // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
+     //    audio hardware comes online.
+     const sid = getSID();
+     try {
+       const manualMode = !!_cfgValue('barge_in_mode_manual', true);
+       const autoCommit = !!_cfgValue('auto_commit_when_ready', true);
+       _console('log', '[bootstrap] startOnce sending greet configure');
+       configure({
+         greet: true,
+         reset: 1,
+         session_id: sid,
+-        feature_manual_barge_in: manualState.featureEnabled,
++        // Keep VAD enabled for the session; manual barge-in is now gated client-side
++        // off the TTS state so we always advertise "false" here.
++        feature_manual_barge_in: false,
+         barge_in_mode_manual: manualMode,
+         auto_commit_when_ready: autoCommit,
+       });
+       _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
+       try {
+         window.dispatchEvent(new CustomEvent('chip-tts', {
+           detail: { state: 'playing', prime: true }
+         }));
+       } catch {}
+       // ^^ This “primes” holdoff if your server’s first audio event is delayed;
+       // when real assistant_audio arrives, your existing listener will extend the hold.
+     } catch (e) {
+       _console('warn', '[bootstrap] WS configure failed, cannot greet', e);
+       showBanner('Greet failed to send — check WS configure()');
+       throw e;
+     }
+ 
+     // 5) Mic permission + arm echo-aware VAD (voice-first path)
+     let visualizerStream = null;
+     try {
+       visualizerStream = await Visualizer.start();
+     } catch (e) {
+       _console('warn', '[bootstrap] visualizer init failed', e);
+     }
+ 
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index aa864b8bfa42e529ac89820afa7f636f5326f8b2..7096f112f5c8a896bc625c3d45fa4e06b144cfb4 100644
+index c168ef2552677d4b8bf70e4270d85a39e0309398..ec301bf9c32cc1f5bb23650eab3c0e5b35261a77 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -49,51 +49,51 @@ const setState = (ctx, stateName, detail) => {
+@@ -28,50 +28,52 @@ const PRE_ROLL_MS = 550,
+   BARGE_CONFIRM_MS = 420;
+ 
+ const ctxRef = { current: null };
+ const nowMs = () => {
+   try {
+     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+       return performance.now();
+     }
+   } catch {}
+   return Date.now();
+ };
+ 
+ const resolveSnrBoost = (ctx, baseSnrDb = 3.5) => {
+   try {
+     const requirement = getEvidenceSnrRequirement(ctx.state, nowMs, baseSnrDb);
+     return Math.max(0, requirement - baseSnrDb);
+   } catch {
+     return 0;
+   }
+ };
+ const setState = (ctx, stateName, detail) => {
    ctx.state.turnState = stateName;
    emitVoiceEvent('state', detail ? { state: stateName, ...detail } : { state: stateName });
  };
  
++const isTtsMaskActive = (ctx) => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
++
  const ensureCtx = () => {
    if (ctxRef.current) {
      return ctxRef.current;
@@ -28,123 +147,11 @@ index aa864b8bfa42e529ac89820afa7f636f5326f8b2..7096f112f5c8a896bc625c3d45fa4e06
        vadBoostDb: 0, greetGateActive: false, greetGatePhase: 'idle',
        greetGateWaiters: [], manualBargeInUsed: false,
        bargeConfirmActive: false, bargeConfirmUntil: 0,
--      wsReady: false, turnOpen: false,
-+      wsReady: false, turnOpen: false, hasOpenedTurn: false,
+       wsReady: false, turnOpen: false, hasOpenedTurn: false,
        manualPttActive: false,
        ttsPlaying: false, lastChunkAt: 0,
        evidenceGate, shadowBuffer, ttsMask,
-     },
-     audio: {
-       stream: null, context: null, source: null, analyser: null,
-       vad: null, recorder: null, recTimeslice: RECORD_TIMESLICE_MS,
-       lastTimecode: null,
-     },
-     transport: { wsPromise: null, connected: false, safetyTimer: null },
-     evidenceGate,
-     shadowBuffer,
-     ttsMask,
-   };
- 
-   registerTtsListener(ctx);
-   ctxRef.current = ctx;
-   return ctx;
- };
- 
- const registerTtsListener = (ctx) => {
-   if (ctx.ttsListenerRegistered) return;
-   ctx.ttsListenerRegistered = true;
-   const win = typeof window !== 'undefined' ? window : null;
-   const listener = (event) => {
-@@ -131,50 +131,55 @@ const ensureTransport = async (ctx) => {
-     ctx.state.wsReady = false;
-     throw err;
-   }
- };
- 
- const teardownTransport = (ctx) => {
-   ctx.transport.connected = false;
-   ctx.state.wsReady = false;
-   ctx.transport.wsPromise = null;
-   if (ctx.transport.safetyTimer) {
-     try { clearTimeout(ctx.transport.safetyTimer); } catch {}
-     ctx.transport.safetyTimer = null;
-   }
- };
- const ensureAudioGraph = (ctx, stream) => {
-   const audio = ctx.audio;
-   if (audio.context && audio.analyser && audio.source) return;
-   const AudioCtx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
-   if (!AudioCtx) throw new Error('AudioContext not supported');
-   audio.context = audio.context || new AudioCtx();
-   try {
-     if (typeof audio.context?.resume === 'function') {
-       audio.context.resume().catch(() => {});
-     }
-   } catch {}
-+  try {
-+    if (audio.context?.state === 'suspended' && typeof audio.context.resume === 'function') {
-+      audio.context.resume().catch(() => {});
-+    }
-+  } catch {}
-   audio.analyser = audio.context.createAnalyser();
-   audio.analyser.fftSize = 2048;
-   audio.analyser.smoothingTimeConstant = 0.4;
-   audio.source = audio.context.createMediaStreamSource(stream);
-   audio.source.connect(audio.analyser);
- };
- 
- const startRecorder = (ctx, stream) => {
-   const { audio } = ctx;
-   if (audio.recorder) return;
-   let mimeType = 'audio/webm; codecs=opus';
-   try {
-     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
-       && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
-       mimeType = 'audio/ogg; codecs=opus';
-     }
-   } catch {}
-   const recorder = new MediaRecorder(stream, { mimeType });
-   recorder.addEventListener('dataavailable', (event) => handleRecorderData(ctx, event));
-   recorder.addEventListener('error', (event) => {
-     emitVoiceEvent('recorder_error', { message: event?.error?.message || 'unknown' });
-     stopRecorder(ctx);
-   });
-   recorder.start(audio.recTimeslice);
-   audio.recorder = recorder;
-@@ -198,109 +203,123 @@ const handleRecorderData = (ctx, event) => {
-     blob,
-     timecode,
-     timeslice: ctx.audio.recTimeslice,
-     fallbackMs: PRE_ROLL_MS,
-     lastTimecode: ctx.audio.lastTimecode,
-     onBuffered: ({ durationMs: dur, byteLength }) => {
-       ctx.evidenceGate.extendBuffer({ durationMs: dur, bytes: byteLength });
-     },
-   });
-   ctx.audio.lastTimecode = nextTimecode;
-   if (ctx.state.turnOpen) sendChunk(ctx, blob, { durationMs });
- };
- 
- const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
-   if (!blob) {
-     return;
-   }
-   sendAudioChunk(blob);
-   ctx.state.lastChunkAt = nowMs();
-   ctx.evidenceGate.extendBuffer({ durationMs });
-   scheduleSafetyClose(ctx);
- };
- 
- const scheduleSafetyClose = (ctx) => {
-   if (ctx.transport.safetyTimer) { try { clearTimeout(ctx.transport.safetyTimer); } catch {} }
-+  ctx.transport.safetyTimer = null;
-+  if (!ctx.state.hasOpenedTurn || ctx.state.manualPttActive) {
-+    return;
-+  }
-   ctx.transport.safetyTimer = setTimeout(() => {
-     if (!ctx.state.turnOpen) return;
-     sendCloseStream({ reason: 'safety_close' });
-     ctx.state.turnOpen = false;
+@@ -236,134 +238,139 @@ const scheduleSafetyClose = (ctx) => {
      teardownTransport(ctx);
    }, SAFETY_CLOSE_DELAY_MS);
  };
@@ -153,7 +160,7 @@ index aa864b8bfa42e529ac89820afa7f636f5326f8b2..7096f112f5c8a896bc625c3d45fa4e06
    if (ctx.state.turnOpen) return;
    await ensureTransport(ctx);
    ctx.state.turnOpen = true;
-+  ctx.state.hasOpenedTurn = true;
+   ctx.state.hasOpenedTurn = true;
    emitVoiceEvent('turn_open', { reason });
    const stats = flushShadowBuffer(ctx.shadowBuffer, (entry) => {
      if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs: entry.durationMs });
@@ -170,6 +177,10 @@ index aa864b8bfa42e529ac89820afa7f636f5326f8b2..7096f112f5c8a896bc625c3d45fa4e06
  };
  
  const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', asrCue = null } = {}) => {
++  if (!ctx.state.manualPttActive && isTtsMaskActive(ctx)) {
++    ctx.evidenceGate.reset('tts_mask');
++    return;
++  }
    const snr = Number.isFinite(detail?.snrDb) ? detail.snrDb : null;
    const snrBoost = resolveSnrBoost(ctx, ctx.evidenceGate?.config?.baseSnrDb ?? 3.5);
    const stats = getShadowStats(ctx.state);
@@ -191,12 +202,13 @@ index aa864b8bfa42e529ac89820afa7f636f5326f8b2..7096f112f5c8a896bc625c3d45fa4e06
  };
  
  const handleSpeechStart = async (ctx, detail) => {
-+  if (ctx.state.manualPttActive) {
-+    return;
-+  }
-+  if (ctx.state.ttsPlaying) {
-+    return;
-+  }
+   if (ctx.state.manualPttActive) {
+     return;
+   }
+-  if (manualBargeAllowed(ctx)) {
++  if (isTtsMaskActive(ctx)) {
+     return;
+   }
    ctx.state.bargeConfirmActive = true;
    ctx.state.bargeConfirmUntil = nowMs() + BARGE_CONFIRM_MS;
    setState(ctx, TurnState.Recording, { detail });
@@ -207,9 +219,9 @@ index aa864b8bfa42e529ac89820afa7f636f5326f8b2..7096f112f5c8a896bc625c3d45fa4e06
  };
  
  const handleSpeechEnd = async (ctx, detail) => {
-+  if (ctx.state.manualPttActive) {
-+    return;
-+  }
+   if (ctx.state.manualPttActive) {
+     return;
+   }
    ctx.state.bargeConfirmActive = false;
    ctx.state.bargeConfirmUntil = 0;
    emitVoiceEvent('speech_end', detail);
@@ -224,18 +236,47 @@ index aa864b8bfa42e529ac89820afa7f636f5326f8b2..7096f112f5c8a896bc625c3d45fa4e06
  const ensureVad = (ctx, opts = {}) => {
    const { audio } = ctx;
    if (audio.vad) return;
-   const echoStateFn = () => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
+-  const echoStateFn = () => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
++  const echoStateFn = () => isTtsMaskActive(ctx);
    audio.vad = new VAD(audio.analyser, {
      startDbOffset: 10 + ctx.state.vadBoostDb,
      stopDbOffset: 6 + ctx.state.vadBoostDb,
      echoStateFn,
      minSpeechMs: Math.max(180, opts.minSpeechMs ?? 280),
      minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
++    gateFn: () => !isTtsMaskActive(ctx),
    }, {
      onSpeechStart: (detail) => { handleSpeechStart(ctx, detail); },
      onSpeechEnd: (detail) => { handleSpeechEnd(ctx, detail); },
    });
-@@ -334,73 +353,77 @@ export async function initMic(stream = null) {
+   audio.vad.start();
+   ctx.state.vadArmed = true;
+   setState(ctx, TurnState.Listening);
+ };
+ 
+ const teardownVad = (ctx) => {
+   const { audio } = ctx;
+   if (audio.vad) { try { audio.vad.stop(); } catch {} }
+   audio.vad = null;
+   ctx.state.vadArmed = false;
+ };
+ 
+ const ensureGreetGate = (ctx, active) => {
+   ctx.state.greetGateActive = !!active;
+   if (!active) { ctx.state.greetGatePhase = 'idle'; ctx.state.greetGateWaiters = []; }
+   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
+ };
+ 
+-const manualBargeAllowed = (ctx) => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
++const manualBargeAllowed = (ctx) => isTtsMaskActive(ctx);
+ 
+ export async function initMic(stream = null) {
+   const ctx = ensureCtx();
+   if (stream) ctx.audio.stream = stream;
+   if (!ctx.audio.stream) {
+     const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
+     ctx.audio.stream = await navigator.mediaDevices.getUserMedia(constraints);
+   }
    ensureAudioGraph(ctx, ctx.audio.stream);
    return ctx.audio.stream;
  }
@@ -253,102 +294,182 @@ index aa864b8bfa42e529ac89820afa7f636f5326f8b2..7096f112f5c8a896bc625c3d45fa4e06
    startRecorder(ctx, mic);
    await ensureTransport(ctx).catch(() => {});
    emitVoiceEvent('armed', { mode: 'adaptive' });
-   return mic;
- }
+diff --git a/static/js/voice/vad.js b/static/js/voice/vad.js
+index da93374c9c2a0b144520ff75f49a71716b2c2374..861fee08a8706c8fd0dd75671d7e35cab3cb34d0 100644
+--- a/static/js/voice/vad.js
++++ b/static/js/voice/vad.js
+@@ -13,96 +13,98 @@ const CLAMP_MAX_DB = -10;
+ const rmsToDb = (rms) => 20 * Math.log10(Math.max(EPSILON, rms));
+ const dbToRms = (db) => Math.pow(10, db / 20);
+ const clampDb = (db) => Math.min(CLAMP_MAX_DB, Math.max(CLAMP_MIN_DB, db));
+ const DEFAULT_SUPPRESS_DB = 15;
+ const DEFAULT_SIGNATURE_MAX_AGE_MS = 350;
  
- export function disarmVAD() {
-   const ctx = ensureCtx();
-   teardownVad(ctx); stopRecorder(ctx);
-   closeTurn(ctx, 'manual_disarm');
-   teardownTransport(ctx);
-+  ctx.state.hasOpenedTurn = false;
-   setState(ctx, TurnState.Ready);
- }
+ /** @typedef {{
+  *   minSpeechMs?: number,
+  *   minSilenceMs?: number,
+  *   pollMs?: number,
+  *   cooldownMs?: number,
+  *   startDbOffset?: number,
+  *   stopDbOffset?: number,
+  *   minStartDb?: number,
+  *   minStopDb?: number,
+  *   echoBoostStartDb?: number,
+  *   echoBoostStopDb?: number,
+  *   noiseFloorAlpha?: number,
+  *   noiseFloorRiseAlpha?: number,
+  *   noiseFloorGuardDb?: number,
+  *   noiseFloorHangMs?: number,
+  *   initialNoiseFloorDb?: number,
+  *   startRms?: number,          // legacy absolute fallback
+  *   stopRms?: number,           // legacy absolute fallback
+  *   echoStateFn?: ()=>boolean,
++ *   gateFn?: ()=>boolean,
+  * }} VADOptions
+  */
  
- export function isRecording() {
-   const ctx = ensureCtx();
-   return !!ctx.state.recording;
- }
+ /** @typedef {{
+  *   rms?: number,
+  *   rmsDb?: number,
+  *   noiseFloorDb?: number,
+  *   snrDb?: number,
+  *   peakDb?: number,
+  *   speechDurationMs?: number,
+  *   thresholds?: { startDb?: number, stopDb?: number },
+  *   reason?: string,
+  * }} VADDetail
+  */
  
- export function bargeIn() {
-   const ctx = ensureCtx();
-   const shouldNotify = manualBargeAllowed(ctx);
-   ctx.state.manualBargeInUsed = true;
-   ctx.state.bargeConfirmActive = false;
-   ctx.state.bargeConfirmUntil = 0;
-   try { stopPlayback(); } catch {}
-   if (ctx.state.turnOpen) {
-     closeTurn(ctx, 'manual_barge_preempt');
+ /** @typedef {{
+  *   onSpeechStart?: (detail: VADDetail) => void,
+  *   onSpeechEnd?: (detail: VADDetail) => void,
+  * }} VADCallbacks
+  */
+ 
+ export class VAD {
+   /**
+    * @param {AnalyserNode} analyser
+    * @param {VADOptions} opts
+    * @param {VADCallbacks} cbs
+    */
+   constructor(analyser, opts, cbs) {
+     this.analyser = analyser;
+     this.opts = Object.assign({
+       minSpeechMs: 280,
+       minSilenceMs: 300,
+       pollMs: 33,
+       cooldownMs: 380,
+       startDbOffset: 10,
+       stopDbOffset: 6,
+       minStartDb: -65,
+       minStopDb: -70,
+       echoBoostStartDb: 8,
+       echoBoostStopDb: 6,
+       noiseFloorAlpha: 0.05,
+       noiseFloorRiseAlpha: 0.01,
+       noiseFloorGuardDb: 3,
+       noiseFloorHangMs: 600,
+       initialNoiseFloorDb: -72,
+       echoStateFn: null,
++      gateFn: null,
+     }, opts || {});
+     this.cbs = cbs || {};
+     this._buf = new Float32Array(this.analyser.fftSize || 2048);
+     this._timer = null;
+     this._recording = false;
+     this._aboveSince = 0;
+     this._belowSince = 0;
+     this._cooldownUntil = 0;
+     this._speechStartedAt = 0;
+     this._activeDetail = null;
+     this._activeNoiseFloorDb = null;
+     this._noiseFloorDb = clampDb(
+       Number.isFinite(this.opts.initialNoiseFloorDb)
+         ? this.opts.initialNoiseFloorDb
+         : -72
+     );
+     this._lastNoiseUpdate = 0;
+     this._legacyStartDb = Number.isFinite(this.opts.startRms) ? rmsToDb(this.opts.startRms) : null;
+     this._legacyStopDb = Number.isFinite(this.opts.stopRms) ? rmsToDb(this.opts.stopRms) : null;
+     this._suppressingEcho = false;
    }
-   ctx.state.ttsPlaying = false;
-   ctx.ttsMask.clear();
-   if (shouldNotify) {
-     sendJSON({ type: 'manual_barge_in' });
-   }
-+  ctx.evidenceGate.reset('manual_barge_in');
-+  ctx.shadowBuffer.clear();
-+  ctx.audio.lastTimecode = null;
-   emitVoiceEvent('barge_in', { reason: 'manual' });
-   return true;
- }
  
- export function setVadBoost(value) {
-   const ctx = ensureCtx();
-   const numeric = Number.isFinite(value) ? value : 0;
-   ctx.state.vadBoostDb = Math.max(0, numeric);
-   if (ctx.audio.vad) {
-     teardownVad(ctx); ensureVad(ctx, {});
-   }
- }
- 
- export function setGreetGateActive(active = true) {
-   const ctx = ensureCtx();
-   ensureGreetGate(ctx, active);
-   emitVoiceEvent('greet_gate', { active: ctx.state.greetGateActive });
- }
- 
- export function forceBargeInStart(meta = {}) {
-   const ctx = ensureCtx();
-   if (ctx.state.manualPttActive) {
+   _rms() {
+     this.analyser.getFloatTimeDomainData(this._buf);
+     let sum = 0;
+@@ -245,60 +247,75 @@ export class VAD {
+         try {
+           this.cbs.onSuppressed && this.cbs.onSuppressed({
+             micRmsDb: rmsDb,
+             echoRmsDb: signature.rmsDb,
+             gapDb: gap,
+             requiredGapDb: requiredGap,
+             signatureTimestamp: signature.timestamp ?? null,
+             mfcc: Array.isArray(signature.mfcc) ? signature.mfcc.slice() : undefined,
+           });
+         } catch {}
+       }
+       return true;
+     }
+     this._suppressingEcho = false;
      return false;
    }
  
-@@ -433,35 +456,38 @@ export function forceBargeInStart(meta = {}) {
- export function forceBargeInEnd(opts = {}) {
-   const ctx = ensureCtx();
-   const wasActive = ctx.state.manualPttActive;
-   ctx.state.manualPttActive = false;
-   ctx.state.ttsPlaying = false;
-   ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms, snrBoost: opts.snrBoost });
+   _pollFrame() {
+     const rms = this._rms();
+     const rmsDb = rmsToDb(rms);
+     const now = (typeof performance !== 'undefined' && performance?.now)
+       ? performance.now()
+       : Date.now();
+     const inCooldown = now < this._cooldownUntil;
+     const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
++    const gateAllowed = this.opts.gateFn ? !!this.opts.gateFn() : true;
  
-   const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
-   if (wasActive) {
-     const controlFrame = { type: 'Control', action: 'barge_in_end' };
-     const sent = sendJSON(controlFrame);
-     if (!sent) {
-       ensureTransport(ctx).then(() => {
-         try { sendJSON(controlFrame); } catch {}
-       }).catch(() => {});
+     const noiseFloorDb = Number.isFinite(this._noiseFloorDb) ? this._noiseFloorDb : rmsDb;
+     const { startDb, stopDb, baseStartDb } = this._computeThresholds(noiseFloorDb, echo);
+     const startR = dbToRms(startDb);
+     const stopR = dbToRms(stopDb);
+ 
+     if (!this._recording) {
+       this._updateNoiseFloor(rmsDb, now, baseStartDb);
      }
  
-     if (ctx.state.turnOpen) {
-       closeTurn(ctx, reason);
-     }
-     setState(ctx, TurnState.Listening, { reason });
-   }
- 
-   ctx.state.bargeConfirmActive = false;
-   ctx.state.bargeConfirmUntil = 0;
-+  ctx.evidenceGate.reset('manual_release');
-+  ctx.shadowBuffer.clear();
-+  ctx.audio.lastTimecode = null;
-   emitVoiceEvent('barge_in_end', opts);
-   return wasActive;
- }
- 
- const getCtx = () => ctxRef.current;
- 
- export const __TEST_ONLY__ = Object.freeze({
-   getCtx: () => (globalThis.ADVANCED_LOGGING_ENABLED ? getCtx() : null),
-   nowMs,
- });
++    if (!gateAllowed) {
++      if (this._recording) {
++        this._recording = false;
++        this._speechStartedAt = 0;
++        this._activeDetail = null;
++        this._activeNoiseFloorDb = null;
++      }
++      this._aboveSince = 0;
++      this._belowSince = 0;
++      this._cooldownUntil = 0;
++      this._suppressingEcho = false;
++      return;
++    }
++
+     if (!this._recording) {
+       if (inCooldown) {
+         this._aboveSince = 0;
+         this._suppressingEcho = false;
+         return;
+       }
+       if (rms >= startR) {
+         if (this._shouldSuppressEcho(rmsDb, now)) {
+           this._aboveSince = 0;
+           return;
+         }
+         this._suppressingEcho = false;
+         if (!this._aboveSince) this._aboveSince = now;
+         if (now - this._aboveSince >= (this.opts.minSpeechMs ?? 0)) {
+           this._recording = true;
+           this._belowSince = 0;
+           this._speechStartedAt = now;
+           this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
+           this._activeNoiseFloorDb = noiseFloorDb;
+           try {
+             this.cbs.onSpeechStart && this.cbs.onSpeechStart({
+               ...this._activeDetail,
+               peakDb: this._activeDetail?.rmsDb,
+               speechDurationMs: 0,
+             });

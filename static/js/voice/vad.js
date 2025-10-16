@@ -35,6 +35,7 @@ const DEFAULT_SIGNATURE_MAX_AGE_MS = 350;
  *   startRms?: number,          // legacy absolute fallback
  *   stopRms?: number,           // legacy absolute fallback
  *   echoStateFn?: ()=>boolean,
+ *   gateFn?: ()=>boolean,
  * }} VADOptions
  */
 
@@ -81,6 +82,7 @@ export class VAD {
       noiseFloorHangMs: 600,
       initialNoiseFloorDb: -72,
       echoStateFn: null,
+      gateFn: null,
     }, opts || {});
     this.cbs = cbs || {};
     this._buf = new Float32Array(this.analyser.fftSize || 2048);
@@ -267,6 +269,7 @@ export class VAD {
       : Date.now();
     const inCooldown = now < this._cooldownUntil;
     const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
+    const gateAllowed = this.opts.gateFn ? !!this.opts.gateFn() : true;
 
     const noiseFloorDb = Number.isFinite(this._noiseFloorDb) ? this._noiseFloorDb : rmsDb;
     const { startDb, stopDb, baseStartDb } = this._computeThresholds(noiseFloorDb, echo);
@@ -275,6 +278,20 @@ export class VAD {
 
     if (!this._recording) {
       this._updateNoiseFloor(rmsDb, now, baseStartDb);
+    }
+
+    if (!gateAllowed) {
+      if (this._recording) {
+        this._recording = false;
+        this._speechStartedAt = 0;
+        this._activeDetail = null;
+        this._activeNoiseFloorDb = null;
+      }
+      this._aboveSince = 0;
+      this._belowSince = 0;
+      this._cooldownUntil = 0;
+      this._suppressingEcho = false;
+      return;
     }
 
     if (!this._recording) {
