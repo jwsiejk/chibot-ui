@@ -1,57 +1,1010 @@
-diff --git a/static/js/voice/legacy/VoiceLegacyFacade.js b/static/js/voice/legacy/VoiceLegacyFacade.js
-index a37aa37d0c83c4ed9763d13a4a1e9ea48f082a77..d54c7f37d145b32296362bb8de0492af573daae3 100644
---- a/static/js/voice/legacy/VoiceLegacyFacade.js
-+++ b/static/js/voice/legacy/VoiceLegacyFacade.js
-@@ -745,51 +745,51 @@ export async function legacyEnsureAudioStartSent() {
-       state.turnHintAwaitingWS = false;
-       if (!state.turnHintSent) {
-         state.turnHintMime = null;
-       }
-     });
+diff --git a/static/js/voice/legacy/CommitHandlersLegacy.js b/static/js/voice/legacy/CommitHandlersLegacy.js
+index 8e114bedabe7376639aa48d82b3b507c827b5d3a..5d1a019b59e86ae531a9ddfcfac2dd9c19c91aa8 100644
+--- a/static/js/voice/legacy/CommitHandlersLegacy.js
++++ b/static/js/voice/legacy/CommitHandlersLegacy.js
+@@ -20,63 +20,91 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
+     primeRecorderForPreRoll,
+     bargeIn,
+     resetEvidenceGate,
+     evaluateEvidenceGate,
+     onSpeechStartCommitted: nestedOnSpeechStartCommitted,
+     now,
+     logLifecycle,
+     voiceLog,
+     beginTurnTrace,
+     completeGreetGate,
+     getActiveTurnTraceId,
+     ttsMask,
+     autoVadMasked,
+   } = ctx || {};
  
-   return state.turnHintPromise;
+   if (typeof onFrameSpeech !== 'function') {
+     throw new Error('CommitHandlersLegacy.onSpeechStartCommitted requires onFrameSpeech');
+   }
+ 
+   const config = getConfig();
+   const commitConfig = (config && typeof config === 'object' ? config.commit : null) || {};
+   const timeoutMsRaw = Number(commitConfig.no_partial_timeout_ms);
+   const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(0, timeoutMsRaw) : 1200;
+   const SMALL_MASS_BYTES = 12 * 1024;
+ 
++  if (typeof ctx.resetAsrReady === 'function') {
++    try { ctx.resetAsrReady('speech_start'); } catch {}
++  } else if (state) {
++    try {
++      state.asrReady = false;
++      state.asrReadyAt = 0;
++      if (Array.isArray(state.asrReadyListeners)) {
++        state.asrReadyListeners = [];
++      }
++    } catch {}
++  }
++
++  const registerAsrReadyListener =
++    typeof ctx.registerAsrReadyListener === 'function'
++      ? ctx.registerAsrReadyListener.bind(ctx)
++      : null;
++
+   const clearNoPartialTimer = () => {
+     if (ctx.__softNoPartialTimer) {
+       try { clearTimeout(ctx.__softNoPartialTimer); } catch {}
+       ctx.__softNoPartialTimer = null;
+     }
+   };
+ 
++  const clearAsrReadyListener = () => {
++    if (ctx.__softNoPartialAsrCancel) {
++      try { ctx.__softNoPartialAsrCancel(); } catch {}
++      ctx.__softNoPartialAsrCancel = null;
++    }
++    ctx.__softNoPartialAwaitingAsr = false;
++  };
++
+   const resetSoftNoPartialState = () => {
+     ctx.__softNoPartialHandleOpen = null;
++    clearAsrReadyListener();
+     clearNoPartialTimer();
+   };
+ 
+   ctx.__softNoPartialClear = resetSoftNoPartialState;
++  ctx.__softNoPartialAwaitingAsr = false;
++  ctx.__softNoPartialAsrCancel = null;
+ 
+   const handleSoftNoPartialTimeout = () => {
+     ctx.__softNoPartialTimer = null;
+     if (ctx.hadPartial) {
+       voiceLog?.('debug', 'soft no-partial timer ignored — partial received');
+       return;
+     }
+ 
+     const gateInstance = state?.evidenceGate || ctx.evidenceGate || null;
+     const threshold = Number(gateInstance?.evidence?.threshold);
+     const score = Number(gateInstance?.evidenceScore);
+     const evidenceBelowThreshold = Number.isFinite(threshold)
+       && Number.isFinite(score)
+       && score < threshold;
+ 
+     if (!evidenceBelowThreshold) {
+       voiceLog?.('debug', 'soft no-partial timer skipped — evidence still sufficient', {
+         threshold: Number.isFinite(threshold) ? threshold : null,
+         score: Number.isFinite(score) ? score : null,
+       });
+       resetSoftNoPartialState();
+       return;
+     }
+ 
+     const bytesSent = Number.isFinite(state?.chunkBytesSent) ? state.chunkBytesSent : 0;
+@@ -126,62 +154,96 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
+     if (state?.shadowBuffer && typeof state.shadowBuffer.clear === 'function' && state.shadowBuffer !== ctx?.shadowBuffer) {
+       try { state.shadowBuffer.clear(); } catch {}
+     }
+ 
+     if (ctx?.evidenceGate && typeof ctx.evidenceGate.reset === 'function') {
+       try { ctx.evidenceGate.reset(dropReason); } catch {}
+     } else if (typeof resetEvidenceGate === 'function') {
+       try { resetEvidenceGate(dropReason); } catch {}
+     }
+     if (state?.evidenceGate && state.evidenceGate !== ctx?.evidenceGate && typeof state.evidenceGate.reset === 'function') {
+       try { state.evidenceGate.reset(dropReason); } catch {}
+     }
+ 
+     emitVoiceEvent?.('state', { state: 'armed' });
+     if (state) {
+       state.currentCommitMode = 'idle';
+     }
+ 
+     resetSoftNoPartialState();
+   };
+ 
+   const startNoPartialTimer = () => {
+     if (timeoutMs <= 0) {
+       return;
+     }
++    clearAsrReadyListener();
+     clearNoPartialTimer();
+     try {
+       ctx.__softNoPartialTimer = setTimeout(handleSoftNoPartialTimeout, timeoutMs);
+     } catch (err) {
+       voiceLog?.('debug', 'failed to arm soft no-partial timer', { error: err?.message || err });
+       ctx.__softNoPartialTimer = null;
+       return;
+     }
+     voiceLog?.('debug', 'soft no-partial timer armed', { timeoutMs });
+   };
+ 
+-  ctx.__softNoPartialHandleOpen = startNoPartialTimer;
++  const armSoftNoPartialTimer = () => {
++    if (timeoutMs <= 0 || ctx.hadPartial) {
++      return;
++    }
++
++    if (!registerAsrReadyListener || state?.asrReady) {
++      startNoPartialTimer();
++      return;
++    }
++
++    if (ctx.__softNoPartialAwaitingAsr) {
++      return;
++    }
++
++    ctx.__softNoPartialAwaitingAsr = true;
++    voiceLog?.('debug', 'soft no-partial timer pending until ASR ready', { timeoutMs });
++    const cleanup = registerAsrReadyListener(() => {
++      ctx.__softNoPartialAsrCancel = null;
++      ctx.__softNoPartialAwaitingAsr = false;
++      if (ctx.hadPartial) {
++        return;
++      }
++      startNoPartialTimer();
++    });
++    if (typeof cleanup === 'function') {
++      if (ctx.__softNoPartialAwaitingAsr) {
++        ctx.__softNoPartialAsrCancel = cleanup;
++      } else {
++        try { cleanup(); } catch {}
++      }
++    }
++  };
++
++  ctx.__softNoPartialHandleOpen = armSoftNoPartialTimer;
+ 
+   const descriptor = Object.getOwnPropertyDescriptor(ctx, 'hadPartial');
+   let hadPartialValue = false;
+   if (!descriptor || descriptor.configurable) {
+     Object.defineProperty(ctx, 'hadPartial', {
+       configurable: true,
+       enumerable: true,
+       get() {
+         return hadPartialValue;
+       },
+       set(value) {
+         hadPartialValue = !!value;
+         if (hadPartialValue) {
+           resetSoftNoPartialState();
+           if (state) {
+             state.turnMetricsHadPartial = true;
+           }
+         }
+       },
+     });
+   } else {
+     hadPartialValue = !!ctx.hadPartial;
+   }
+   ctx.hadPartial = false;
+ 
+@@ -202,51 +264,51 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
+         state.turnMetricsGateReason = null;
+       }
+     }
+     state.turnMetricsBytesBufferedAtCommit = null;
+     state.turnMetricsEmitted = false;
+     state.turnManualBargeInUsed = state.currentCommitMode === 'manual'
+       || !!state.manual?.buttonDown;
+   }
+ 
+   const evidenceGate = state?.evidenceGate;
+   if (evidenceGate && typeof evidenceGate.update === 'function' && !evidenceGate.__softNoPartialWrapped) {
+     const originalUpdate = evidenceGate.update;
+     evidenceGate.update = function softNoPartialWrappedUpdate(...updateArgs) {
+       const wasOpen = typeof evidenceGate.isOpen === 'function' ? evidenceGate.isOpen() : false;
+       const result = originalUpdate.apply(this, updateArgs);
+       const nowOpen = typeof evidenceGate.isOpen === 'function' ? evidenceGate.isOpen() : false;
+       if (!wasOpen && nowOpen) {
+         try { ctx.__softNoPartialHandleOpen?.(); } catch {}
+       }
+       return result;
+     };
+     evidenceGate.__softNoPartialWrapped = true;
+   }
+ 
+   if (typeof evidenceGate?.isOpen === 'function' && evidenceGate.isOpen()) {
+-    try { startNoPartialTimer(); } catch {}
++    try { armSoftNoPartialTimer(); } catch {}
+   }
+ 
+   const manualPressDuringTts = !!(state?.manual?.buttonDown) && state?.ttsPlaying;
+   if (manualPressDuringTts) {
+     try { bargeIn?.(); } catch {}
+     if (!ctx.ttsMask && state?.ttsMask) {
+       ctx.ttsMask = state.ttsMask;
+     }
+     ctx.skipEvidenceGate = true;
+   } else {
+     ctx.skipEvidenceGate = false;
+   }
+ 
+   if (!ctx.ttsMask && ttsMask) {
+     ctx.ttsMask = ttsMask;
+   }
+   if (typeof autoVadMasked === 'boolean' && typeof ctx.autoVadMasked === 'undefined') {
+     ctx.autoVadMasked = autoVadMasked;
+   }
+ 
+   const nextHandler =
+     typeof nestedOnSpeechStartCommitted === 'function'
+       ? nestedOnSpeechStartCommitted
+       : (nextDetail = {}) => onSpeechStartCommitted(ctx, nextDetail);
+ 
+diff --git a/static/js/voice/legacy/VadProcessLegacy.js b/static/js/voice/legacy/VadProcessLegacy.js
+index d8cba6463b0f2ce3c18ef80f2d4996cb962bcedc..d4f8ae852565a1fcade0b03b997e136ec39fb8b2 100644
+--- a/static/js/voice/legacy/VadProcessLegacy.js
++++ b/static/js/voice/legacy/VadProcessLegacy.js
+@@ -109,134 +109,207 @@ function flushContextShadowBuffer(ctx = {}, buffer = null) {
+   if (!buffer) {
+     return EMPTY_STATS;
+   }
+   let stats = EMPTY_STATS;
+   try {
+     stats = flushShadowBuffer(buffer, (chunk, meta) => {
+       sendChunkViaTransport(ctx, chunk, { ...meta, preRoll: true });
+     }) || EMPTY_STATS;
+   } catch {}
+   return {
+     count: Number.isFinite(stats.count) ? stats.count : 0,
+     durationMs: Number.isFinite(stats.durationMs) ? stats.durationMs : 0,
+     totalBytes: Number.isFinite(stats.totalBytes) ? stats.totalBytes : 0,
+   };
  }
  
- export async function legacySetupPreRollTap(ctx, source) {
-   legacyTeardownPreRollTap();
+ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
+   const { gate, buffer } = ensureAdaptiveArtifacts(ctx);
+   if (!gate || !buffer) {
+     return { gateOpened: false };
+   }
  
-   if (!ctx || !source) {
-     resetShadowBufferState(state);
+   const wasStreaming = isStreaming(ctx);
+   const wasOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
+ 
++  const registerAsrReadyListener =
++    typeof ctx?.registerAsrReadyListener === 'function'
++      ? ctx.registerAsrReadyListener.bind(ctx)
++      : null;
++  const voiceLogFn = typeof ctx?.voiceLog === 'function' ? ctx.voiceLog : null;
++
++  if (typeof ctx.__pendingFlushOnAsr !== 'boolean') {
++    ctx.__pendingFlushOnAsr = false;
++  }
++
++  const cancelFlushOnAsr = () => {
++    if (ctx.__asrReadyFlushCancel) {
++      try { ctx.__asrReadyFlushCancel(); } catch {}
++      ctx.__asrReadyFlushCancel = null;
++    }
++    ctx.__pendingFlushOnAsr = false;
++  };
++
++  const scheduleFlushOnAsr = () => {
++    if (ctx.__asrReadyFlushCancel || typeof registerAsrReadyListener !== 'function') {
++      return;
++    }
++    const cleanup = registerAsrReadyListener(() => {
++      ctx.__pendingFlushOnAsr = false;
++      ctx.__asrReadyFlushCancel = null;
++      let pendingStats = EMPTY_STATS;
++      try {
++        pendingStats = buffer.stats() || EMPTY_STATS;
++      } catch {}
++      const flushedStats = flushContextShadowBuffer(ctx, buffer);
++      voiceLogFn?.('debug', 'shadow buffer flushed after ASR ready', {
++        pendingChunks: pendingStats.count,
++        pendingMs: pendingStats.durationMs,
++        pendingBytes: pendingStats.totalBytes,
++        flushedChunks: flushedStats.count,
++        flushedBytes: flushedStats.totalBytes,
++      });
++      setStreaming(ctx, true);
++    });
++    if (typeof cleanup === 'function') {
++      if (ctx.__pendingFlushOnAsr) {
++        ctx.__asrReadyFlushCancel = cleanup;
++      } else {
++        try { cleanup(); } catch {}
++      }
++    }
++  };
++
+   const manualOverride = !!(ctx?.state?.manual?.buttonDown);
+   const mask = ctx && typeof ctx === 'object' ? ctx.ttsMask : null;
+   const maskActive = !manualOverride && typeof mask?.isMasked === 'function' ? mask.isMasked() : false;
+   const snrBoost = typeof mask?.snrBoost === 'function' ? mask.snrBoost() : 0;
+   const skipGate = ctx?.skipEvidenceGate === true;
+ 
+   const { chunk, durationMs, timecode } = extractChunkMeta(frame);
+   if (!wasStreaming && chunk) {
+     try {
+       buffer.push(chunk, { durationMs, timecode });
+     } catch {}
+   }
+ 
+   let stats = EMPTY_STATS;
+   try {
+     stats = buffer.stats() || EMPTY_STATS;
+   } catch {
+     stats = EMPTY_STATS;
+   }
+ 
+   const frameVadState = typeof frame?.vadState === 'string'
+     ? frame.vadState
+     : (typeof frame?.vad?.state === 'string' ? frame.vad.state : null);
+   const effectiveVadState = frameVadState || vadState;
+   const asrCue = frame?.asrCue ?? frame?.cue ?? frame?.detail?.asrCue ?? null;
+ 
+   const updatePayload = {
+     vadState: effectiveVadState,
+     snr: resolveSnr(ctx, frame),
+     asrCue,
+     bufferedMs: stats.durationMs,
+     bufferedBytes: stats.totalBytes,
+   };
+ 
+   if (updatePayload.asrCue && updatePayload.asrCue.type === 'partial') {
+     ctx.hadPartial = true;
+     if (ctx?.state) {
+       ctx.state.turnMetricsHadPartial = true;
+     }
+   }
+ 
+   if (snrBoost > 0) {
+     updatePayload.snrBoost = snrBoost;
+   }
+ 
+   if (skipGate) {
+     if (!wasStreaming) {
+       flushContextShadowBuffer(ctx, buffer);
+       setStreaming(ctx, true);
+     }
++    cancelFlushOnAsr();
+     if (chunk) {
+       sendChunkViaTransport(ctx, chunk, { durationMs, timecode, preRoll: false, vadState });
+     }
+     return {
+       gateOpened: !wasStreaming,
+       streamingNow: true,
+       wasStreaming,
+     };
+   }
+ 
+   try {
+     gate.update(updatePayload);
+   } catch {}
+ 
+   if (maskActive) {
++    cancelFlushOnAsr();
+     setStreaming(ctx, false);
+     return {
+       gateOpened: false,
+       streamingNow: false,
+       wasStreaming,
+     };
+   }
+ 
+   const nowOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
+ 
+   if (!wasStreaming && !wasOpen && nowOpen) {
+-    flushContextShadowBuffer(ctx, buffer);
+-    setStreaming(ctx, true);
++    if (ctx?.state?.asrReady) {
++      const flushedStats = flushContextShadowBuffer(ctx, buffer);
++      voiceLogFn?.('debug', 'shadow buffer flushed immediately on gate open', {
++        bufferedMs: stats.durationMs,
++        bufferedBytes: stats.totalBytes,
++        flushedChunks: flushedStats.count,
++        flushedBytes: flushedStats.totalBytes,
++      });
++      setStreaming(ctx, true);
++      cancelFlushOnAsr();
++    } else {
++      if (!ctx.__pendingFlushOnAsr) {
++        ctx.__pendingFlushOnAsr = true;
++        voiceLogFn?.('debug', 'shadow buffer flush deferred until ASR ready', {
++          bufferedMs: stats.durationMs,
++          bufferedBytes: stats.totalBytes,
++        });
++      }
++      scheduleFlushOnAsr();
++    }
+   } else if (!nowOpen) {
++    if (ctx.__pendingFlushOnAsr) {
++      voiceLogFn?.('debug', 'shadow buffer flush cancelled before ASR ready');
++    }
++    cancelFlushOnAsr();
+     setStreaming(ctx, false);
+   }
+ 
+   const streamingNow = isStreaming(ctx);
+   if (streamingNow && wasStreaming && chunk) {
++    cancelFlushOnAsr();
+     sendChunkViaTransport(ctx, chunk, { durationMs, timecode, preRoll: false, vadState });
+   }
+ 
+   return {
+     gateOpened: !wasOpen && nowOpen,
+     streamingNow,
+     wasStreaming,
+   };
+ }
+ 
+ export function onFrameSilence(ctx, frame) {
+   processAdaptiveFrame(ctx, frame, 'silence');
+ }
+ 
+ export async function onFrameSpeech(ctx = {}, frame = {}) {
+   processAdaptiveFrame(ctx, frame, 'speech');
+ 
+   const metrics = (frame && typeof frame === 'object') ? frame : {};
+   const {
+     state,
+     VadFrameUtils = {},
+     updateSessionNoise,
+     getShadowStats,
+     getEvidenceSnrRequirement,
+     PRE_ROLL_MS,
+diff --git a/static/js/voice/legacy/VoiceLegacyFacade.js b/static/js/voice/legacy/VoiceLegacyFacade.js
+index a37aa37d0c83c4ed9763d13a4a1e9ea48f082a77..13dba96bc8b1fecd12bae5485b282ba8980c3fca 100644
+--- a/static/js/voice/legacy/VoiceLegacyFacade.js
++++ b/static/js/voice/legacy/VoiceLegacyFacade.js
+@@ -8,51 +8,53 @@ import {
+   TtsMask,
+   dbToRms,
+   getConfig,
+   bufferPreRollFrame,
+   flushShadowBuffer,
+   resetShadowBufferState,
+ } from '../core/index.js';
+ import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from '../../ws_module.js';
+ import {
+   DEFAULT_MAX_TURN_MS,
+   EVIDENCE_MIN_BYTES,
+   EVIDENCE_MIN_SNR_DB,
+   EVIDENCE_MIN_SPEECH_MS,
+   MIN_VALID_BLOB_BYTES,
+   PARTIAL_CONF_RISE_DELTA,
+   PARTIAL_CONF_THRESHOLD,
+   REC_MIME,
+   SAFETY_CLOSE_DELAY_MS,
+   PRE_ROLL_MS,
+   optsFromGlobal,
+   _clearGreetGateWaiters,
+   _completeGreetGate,
+   _handleGreetGateStateFrame,
+   _handleGreetGateUtteranceEnd,
+   _logLifecycle,
++  _notifyAsrReady,
+   _resetGreetGateState,
++  _resetAsrReady,
+   _updateAssistantPhaseFromDetail,
+   _voiceLog,
+   _now,
+   _waitForGreetGate,
+   state,
+ } from './VoiceLegacyTopLevel.js';
+ import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
+ 
+ const IMPLEMENTATION = Object.create(null);
+ 
+ const KNOWN_METHODS = [
+   'initMic',
+   'armVAD',
+   'disarmVAD',
+   'isRecording',
+   'bargeIn',
+   'setVadBoost',
+   'setGreetGateActive',
+   'forceBargeInStart',
+   'forceBargeInEnd',
+   'initVoice',
+   'startVoice',
+   'stopVoice',
+   'onWsOpen',
+   'onWsMessage',
+@@ -1419,134 +1421,153 @@ export function legacyApplyPostFinalHold(source = 'unknown') {
+   const targetUntil = now + holdMs;
+   const previousUntil = state.postFinalHoldUntil || 0;
+   const nextUntil = Math.max(targetUntil, previousUntil);
+   const wasFinalized = !!state.finalized;
+ 
+   state.finalized = true;
+   state.postFinalHoldUntil = nextUntil;
+ 
+   if (!wasFinalized || nextUntil !== previousUntil) {
+     _logLifecycle('post_final_hold_applied', {
+       holdMs,
+       holdUntil: nextUntil,
+       source,
+     });
+   }
+ 
+   return nextUntil;
+ }
+ 
+ export async function legacyOnWsMessageImpl(detail = {}, helpers = {}) {
+   const type = detail?.type;
+   const typeNorm = typeof type === 'string' ? type.toLowerCase() : '';
+ 
+   _updateAssistantPhaseFromDetail(detail);
+ 
++  const eventRaw = typeof detail?.event === 'string' ? detail.event : '';
++  const kindRaw = typeof detail?.kind === 'string' ? detail.kind : '';
++  const labelRaw = typeof detail?.label === 'string' ? detail.label : '';
++  const diagMatch = [typeNorm, eventRaw, kindRaw].some((value) =>
++    typeof value === 'string' && value.toLowerCase() === 'asr:diag',
++  );
++
++  if (!state.asrReady && diagMatch) {
++    const labelNorm = labelRaw.trim().toLowerCase();
++    if (labelNorm === 'asr_open') {
++      _notifyAsrReady('diag_asr_open', detail);
++    }
++  }
++
+   if (typeNorm === 'utteranceend') {
+     _handleGreetGateUtteranceEnd(detail);
+   }
+   _handleGreetGateStateFrame(detail);
+ 
+   let isFinal = false;
+   if (typeNorm === 'utteranceend') {
+     isFinal = true;
+   } else if (typeNorm === 'results' || typeNorm === 'result') {
+     const channelFinal = detail?.channel?.is_final === true;
+     const payloadFinal = detail?.is_final === true;
+     isFinal = channelFinal || payloadFinal;
+     if (!isFinal && typeof helpers.updateEvidenceGateWithPartial === 'function') {
+       const firstAlt = Array.isArray(detail?.channel?.alternatives)
+         ? detail.channel.alternatives[0]
+         : null;
+       const confidence = Number.isFinite(firstAlt?.confidence)
+         ? firstAlt.confidence
+         : (Number.isFinite(detail?.confidence) ? detail.confidence : null);
+       const transcriptText = typeof firstAlt?.transcript === 'string'
+         ? firstAlt.transcript
+         : (typeof detail?.transcript === 'string' ? detail.transcript : '');
+       helpers.updateEvidenceGateWithPartial(confidence, transcriptText);
+       state.turnMetricsHadPartial = true;
+       if (!Number.isFinite(state.turnMetricsTimeToFirstPartialMs)) {
+         const startAt = Number.isFinite(state.turnMetricsStartAt)
+           ? state.turnMetricsStartAt
+           : (Number.isFinite(state.recStartedAt) ? state.recStartedAt : null);
+         const nowTs = _now();
+         if (Number.isFinite(startAt) && Number.isFinite(nowTs)) {
+           state.turnMetricsTimeToFirstPartialMs = Math.max(0, nowTs - startAt);
+         }
+       }
+     }
++    if (!isFinal) {
++      _notifyAsrReady('partial', detail);
++    }
+   }
+ 
+   if (isFinal) {
+     const firstAlt = Array.isArray(detail?.channel?.alternatives)
+       ? detail.channel.alternatives[0]
+       : null;
+     const confidence = Number.isFinite(firstAlt?.confidence)
+       ? firstAlt.confidence
+       : (Number.isFinite(detail?.confidence) ? detail.confidence : null);
+     if (Number.isFinite(confidence)) {
+       state.turnMetricsFinalConfidence = confidence;
+     }
+   }
+ 
+   if (!isFinal || state.finalized) {
      return;
+   }
+ 
+   legacyApplyPostFinalHold('ws_final');
+ 
+   const recorder = state.rec;
+   const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
+   if (!isRecording) {
+     return;
+   }
+ 
+   try {
+     legacyStopRecorder({ reason: 'server_final' });
+   } catch (err) {
+     _voiceLog('warn', 'failed to stop recorder on server final', { error: err?.message || err });
+   }
+ 
+   try {
+     await Promise.resolve(state.chunkSendPromise).catch(() => {});
+   } catch (err) {
+     _voiceLog('warn', 'chunk send did not settle after server final', { error: err?.message || err });
+   }
+ }
+ 
+ export function legacyOnWsOpenImpl(detail = null) {
+   const payload = (detail && typeof detail === 'object') ? detail : {};
+   _voiceLog('debug', 'ws open observed', payload);
++  _resetAsrReady('ws_open');
+   state.assistantReady = false;
+   state.turnClosePromise = null;
+ }
+ 
+ export function legacyOnWsCloseImpl(detail = null) {
+   const payload = (detail && typeof detail === 'object') ? detail : {};
+   _voiceLog('warn', 'ws close observed', payload);
+ 
++  _resetAsrReady('ws_close');
+   legacyClearSafetyCloseTimer();
+ 
+   const recorder = state.rec;
+   const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
+   if (isRecording) {
+     try {
+       legacyStopRecorder({ reason: 'ws_close' });
+     } catch (err) {
+       _voiceLog('warn', 'failed to stop recorder on ws close', { error: err?.message || err });
+     }
    }
  
    resetShadowBufferState(state);
+   legacyResetEvidenceGate('ws_close');
  
-   const worklet = ctx.audioWorklet;
-   if (!worklet || typeof worklet.addModule !== 'function') {
-     return;
+   state.turnOpen = false;
+   state.turnClosePromise = null;
+   state.turnHintSent = false;
+   state.turnHintMime = null;
+   state.turnHintPromise = null;
+   state.turnHintAwaitingWS = false;
+   state.chunkSendPromise = Promise.resolve();
+   state.chunkSendError = null;
+   state.chunkBytesSent = 0;
+   state.audioStopSent = false;
+diff --git a/static/js/voice/legacy/VoiceLegacyTopLevel.js b/static/js/voice/legacy/VoiceLegacyTopLevel.js
+index fc5a510516d263d5cb50f3bcb01bfd9f103a00d0..6e489b1aedc11340ea5a49fe21e5cbb533e6f59c 100644
+--- a/static/js/voice/legacy/VoiceLegacyTopLevel.js
++++ b/static/js/voice/legacy/VoiceLegacyTopLevel.js
+@@ -48,50 +48,53 @@ const state = {
+   turnTraceBase: null, turnTraceSeq: 0, turnTraceId: null,
+   audioStopSent: false, vadMetrics: null,
+   greetGateActive: false, greetGatePhase: 'idle', greetGateWaiters: [],
+   greetGateCalibrateTimer: null, greetGateCalibrateUntil: 0, greetGateCalibrateLastMs: null,
+   greetGateCalibrateMs: GREET_CALIBRATE_DEFAULT_MS,
+   greetGateCalibrateMinMs: GREET_CALIBRATE_MIN_MS,
+   greetGateCalibrateMaxMs: GREET_CALIBRATE_MAX_MS,
+   greetGateLastSignal: null, greetGateLastReason: null,
+   postTtsHoldUntil: 0, postTtsHoldTimer: null,
+   ttsMask: new TtsMask(),
+   eligibility: 'blocked_pregreet', refractoryUntil: 0,
+   noiseModel: new NoiseModel({ alpha: 0.2 }), vadHysteresis: new HysteresisVAD(),
+   sessionNoiseFloorDb: null,
+   sessionSnrMean: 0, sessionSnrM2: 0, sessionSnrStd: 0, sessionSnrSamples: 0,
+   evidenceGate: new EvidenceGate(), evidenceGateCommitPromise: null,
+   turnMetricsStartAt: null,
+   turnMetricsTimeToFirstPartialMs: null,
+   turnMetricsHadPartial: false,
+   turnMetricsFinalConfidence: null,
+   turnMetricsTotalSpeechMs: null,
+   turnMetricsFalseStart: false,
+   turnMetricsGateReason: null,
+   turnMetricsBytesBufferedAtCommit: null,
+   turnMetricsEmitted: false,
+   turnManualBargeInUsed: false,
++  asrReady: false,
++  asrReadyAt: 0,
++  asrReadyListeners: [],
+   manual: {
+     enabled: true, modeManualOnly: false, autoCommitWhenReady: true,
+     buttonDown: false, active: false, debounceUntil: 0, ignoreVadUntil: 0,
+     deferCloseStream: false, sentStartFrame: false, noAudioTimer: null,
+     startAt: 0, firstChunkAt: 0,
+   },
+   assistantPhase: 'init', assistantReady: false, lastAssistantReadyAt: 0,
+   currentCommitMode: 'idle',
+ };
+ 
+ const BARGE_CONFIRM_DEFAULT_MS = 420;
+ let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
+ try {
+   const cfg = window.__askchip_config || {};
+   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
+     bargeConfirmMs = cfg.barge_confirm_ms;
    }
- 
+ } catch {}
+ bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
+ function _now() {
    try {
--    const moduleUrl = new URL('./voice/pre_roll_processor.js', import.meta.url);
-+    const moduleUrl = new URL('../pre_roll_processor.js', import.meta.url);
-     await worklet.addModule(moduleUrl);
-   } catch (err) {
-     _voiceLog('warn', 'failed to load pre-roll worklet', { error: err?.message || err });
-     return;
-   }
- 
-   try {
-     const node = new AudioWorkletNode(ctx, 'pre-roll-processor', {
-       numberOfInputs: 1,
-       numberOfOutputs: 1,
-       channelCount: 1,
-       outputChannelCount: [1],
-     });
-     node.port.onmessage = null;
-     const silentGain = ctx.createGain();
-     silentGain.gain.value = 0;
-     source.connect(node);
-     node.connect(silentGain);
-     if (ctx.destination) {
-       silentGain.connect(ctx.destination);
+     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+       return performance.now();
      }
-     state.preRollNode = node;
-     state.preRollGain = silentGain;
-   } catch (err) {
-     _voiceLog('warn', 'pre-roll worklet unavailable', { error: err?.message || err });
+   } catch {}
+@@ -202,50 +205,123 @@ function _cancelGreetGate(reason = 'cancelled') {
+   if (!state.greetGateActive) {
+     _resetGreetGateState();
+     return;
+   }
+   _voiceLog('info', 'greet gate cancelled', { reason });
+   state.greetGateActive = false;
+   state.greetGatePhase = 'cancelled';
+   state.greetGateLastReason = reason;
+   if (state.eligibility === 'blocked_pregreet') {
+     state.eligibility = 'eligible';
+   }
+   _clearGreetGateCalibrateTimer();
+   _clearGreetGateWaiters(false);
+   _resetGreetGateState();
+ }
+ function _resetEvidenceGate(reason = null) {
+   try {
+     if (state?.evidenceGate && typeof state.evidenceGate.reset === 'function') {
+       state.evidenceGate.reset(reason);
+     }
+   } catch {}
+   try {
+     state.evidenceGateCommitPromise = null;
+   } catch {}
+ }
++
++function _registerAsrReadyListener(handler, options = {}) {
++  if (typeof handler !== 'function') {
++    return () => {};
++  }
++
++  const immediate = options && options.immediate === false ? false : true;
++
++  if (!Array.isArray(state.asrReadyListeners)) {
++    state.asrReadyListeners = [];
++  }
++
++  if (state.asrReady && immediate) {
++    try { handler({ immediate: true, reason: 'already_ready' }); } catch {}
++    return () => {};
++  }
++
++  state.asrReadyListeners.push(handler);
++
++  return () => {
++    if (!Array.isArray(state.asrReadyListeners) || !state.asrReadyListeners.length) {
++      state.asrReadyListeners = [];
++      return;
++    }
++    const index = state.asrReadyListeners.indexOf(handler);
++    if (index >= 0) {
++      state.asrReadyListeners.splice(index, 1);
++    }
++  };
++}
++
++function _notifyAsrReady(reason = 'unknown', detail = null) {
++  if (state.asrReady) {
++    return;
++  }
++
++  state.asrReady = true;
++  try {
++    state.asrReadyAt = _now();
++  } catch {
++    state.asrReadyAt = Date.now();
++  }
++
++  const logPayload = { reason };
++  if (detail && typeof detail === 'object') {
++    const typeField = typeof detail.type === 'string' ? detail.type : undefined;
++    const eventField = typeof detail.event === 'string' ? detail.event : undefined;
++    const labelField = typeof detail.label === 'string' ? detail.label : undefined;
++    if (typeField) logPayload.type = typeField;
++    if (eventField) logPayload.event = eventField;
++    if (labelField) logPayload.label = labelField;
++  }
++  _voiceLog('debug', 'asr ready observed', logPayload);
++
++  const listeners = Array.isArray(state.asrReadyListeners)
++    ? state.asrReadyListeners.splice(0)
++    : [];
++
++  for (const listener of listeners) {
++    try { listener({ reason, detail }); } catch {}
++  }
++}
++
++function _resetAsrReady(reason = 'reset') {
++  state.asrReady = false;
++  state.asrReadyAt = 0;
++  if (!Array.isArray(state.asrReadyListeners) || state.asrReadyListeners.length === 0) {
++    state.asrReadyListeners = [];
++  } else {
++    state.asrReadyListeners.splice(0, state.asrReadyListeners.length);
++  }
++  _voiceLog('debug', 'asr ready state reset', { reason });
++}
+ function _startGreetGateCalibrate(source = 'unknown') {
+   if (!state.greetGateActive) return;
+   if (state.greetGatePhase === 'calibrating' && state.greetGateCalibrateTimer) {
+     state.greetGateLastSignal = source;
+     return;
+   }
+   const durationMs = _resolveGreetGateCalibrateMs();
+   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+     ? performance.now()
+     : Date.now();
+   _clearGreetGateCalibrateTimer();
+   state.greetGatePhase = 'calibrating';
+   state.greetGateLastSignal = source;
+   state.greetGateCalibrateLastMs = durationMs;
+   state.greetGateCalibrateUntil = now + durationMs;
+   _voiceLog('info', 'greet gate calibrating', {
+     source,
+     calibrateMs: durationMs,
+     ttsPlaying: !!state.ttsPlaying,
+   });
+   try {
+     state.greetGateCalibrateTimer = setTimeout(() => {
+       state.greetGateCalibrateTimer = null;
+       state.greetGateCalibrateUntil = 0;
+       _completeGreetGate('calibrated');
+@@ -360,39 +436,42 @@ export {
+   MANUAL_VAD_IGNORE_MS,
+   EVIDENCE_MIN_SPEECH_MS,
+   EVIDENCE_MIN_BYTES,
+   EVIDENCE_MIN_SNR_DB,
+   PARTIAL_CONF_THRESHOLD,
+   PARTIAL_CONF_RISE_DELTA,
+   GREET_BARGE_MIN_SNR_DB,
+   GREET_CALIBRATE_DEFAULT_MS,
+   GREET_CALIBRATE_MIN_MS,
+   GREET_CALIBRATE_MAX_MS,
+   BARGE_CONFIRM_DEFAULT_MS,
+   bargeConfirmMs,
+   state,
+   _now,
+   optsFromGlobal,
+   _normalizePhase,
+   _valueIsReadyFlag,
+   _updateAssistantPhaseFromDetail,
+   _clearGreetGateWaiters,
+   _clearGreetGateCalibrateTimer,
+   _resetGreetGateState,
+   _resolveGreetGateCalibrateMs,
+   _completeGreetGate,
+   _cancelGreetGate,
+   _resetEvidenceGate,
++  _registerAsrReadyListener,
++  _notifyAsrReady,
++  _resetAsrReady,
+   _startGreetGateCalibrate,
+   _waitForGreetGate,
+   _handleGreetGateUtteranceEnd,
+   _handleGreetGateStateFrame,
+   _setActiveTurnTraceId,
+   _getActiveTurnTraceId,
+   _ensureTurnTraceBase,
+   _beginTurnTrace,
+   _clearTurnTrace,
+   _withTrace,
+   _formatVoiceMessage,
+   _voiceLog,
+   _logLifecycle,
+ };
+diff --git a/static/js/voice/legacy/VoiceRuntimeLegacy.js b/static/js/voice/legacy/VoiceRuntimeLegacy.js
+index 78a3857712f43d2317c41d91a7deef7a2f3e04eb..fe5a01ebce8e35c5562fefcecf237fdd6397a9ee 100644
+--- a/static/js/voice/legacy/VoiceRuntimeLegacy.js
++++ b/static/js/voice/legacy/VoiceRuntimeLegacy.js
+@@ -4,52 +4,52 @@ import { sendJSON } from '../../ws_module.js';
+ import { stopPlayback, isPlaying as ttsIsPlaying } from '../../audio.js';
+ import { registerTtsEventListener } from '../tts/TtsHandlers.js';
+ import { updateSessionNoise, getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
+ import {
+   armVAD as facadeArmVAD, bargeIn as facadeBargeIn, disarmVAD as facadeDisarmVAD,
+   forceBargeInEnd as facadeForceBargeInEnd, forceBargeInStart as facadeForceBargeInStart,
+   initMic as facadeInitMic, isRecording as facadeIsRecording, onWsClose as facadeOnWsClose,
+   onWsMessage as facadeOnWsMessage, onWsOpen as facadeOnWsOpen, registerVoiceLegacyFacade,
+   setGreetGateActive as facadeSetGreetGateActive, setVadBoost as facadeSetVadBoost,
+   legacyClearManualTimers, legacyClearSafetyCloseTimer, legacyCloseTurnIfOpen,
+   legacySetGreetGateActive, legacyOnWsCloseImpl, legacyOnWsMessageImpl, legacyOnWsOpenImpl,
+   legacyOnMicAvailable, legacyOnMicStop, legacyOnRecorderData, legacyOnRecorderError,
+   legacyResetEvidenceGate, legacySendRecorderChunk, legacyPrimeRecorderForPreRoll,
+   legacyStartRecorder, legacyStopRecorder, legacyAbortEvidenceGate, legacyEvaluateEvidenceGate,
+   legacyCommitEvidenceGate, legacyUpdateEvidenceGateWithChunk, legacyUpdateEvidenceGateWithPartial,
+   createVadSchedulerLegacy, onFrameSpeech as facadeOnFrameSpeech, startVadLoop as facadeStartVadLoop,
+   onTtsStart, onTtsEnd, VadFrameUtils, onSpeechStartCommitted as facadeOnSpeechStartCommitted,
+   onSpeechEndCommitted as facadeOnSpeechEndCommitted, bootstrapLegacyFacade, legacyEmitTurnMetrics,
+ } from './VoiceLegacyFacade.js';
+ import {
+   DEFAULT_MAX_TURN_MS, EVIDENCE_MIN_BYTES, EVIDENCE_MIN_SNR_DB, EVIDENCE_MIN_SPEECH_MS,
+   GREET_BARGE_MIN_SNR_DB, MANUAL_DEBOUNCE_MS, MANUAL_NO_AUDIO_CANCEL_MS, MANUAL_VAD_IGNORE_MS,
+   PARTIAL_CONF_RISE_DELTA, PARTIAL_CONF_THRESHOLD, PRE_ROLL_MS, REC_MIME, SAFETY_CLOSE_DELAY_MS,
+   WEBM_MIME, _beginTurnTrace, _cancelGreetGate, _clearTurnTrace, _completeGreetGate,
+   _handleGreetGateStateFrame, _handleGreetGateUtteranceEnd, _logLifecycle, _now,
+-  _updateAssistantPhaseFromDetail, _voiceLog, _waitForGreetGate, _getActiveTurnTraceId,
+-  optsFromGlobal, state,
++  _registerAsrReadyListener, _resetAsrReady, _updateAssistantPhaseFromDetail, _voiceLog,
++  _waitForGreetGate, _getActiveTurnTraceId, optsFromGlobal, state,
+ } from './VoiceLegacyTopLevel.js';
+ 
+ let _resetEvidenceGate;
+ let _clearSafetyCloseTimer;
+ let _closeTurnIfOpen;
+ let _sendRecorderChunk;
+ let _stopRecorder;
+ 
+ let _setGreetGateActive;
+ let _abortEvidenceGate;
+ let _evaluateEvidenceGate;
+ let _commitEvidenceGate;
+ let _updateEvidenceGateWithChunk;
+ let _updateEvidenceGateWithPartial;
+ let _manualAutoCancel;
+ let _forceBargeInStart;
+ let _forceBargeInEnd;
+ let _ensureWSListener;
+ let _primeRecorderForPreRoll;
+ let _startRecorder;
+ let _bargeIn;
+ let _arm;
+ 
+ const commitCtx = { onFrameSpeech: facadeOnFrameSpeech };
+ const handleSpeechStartCommitted = (detail = {}) => facadeOnSpeechStartCommitted(commitCtx, detail);
+@@ -140,50 +140,52 @@ Object.assign(commitCtx, {
+   getEvidenceSnrRequirement,
+   PRE_ROLL_MS,
+   EVIDENCE_MIN_SNR_DB,
+   EVIDENCE_MIN_SPEECH_MS,
+   EVIDENCE_MIN_BYTES,
+   GREET_BARGE_MIN_SNR_DB,
+   REC_MIME,
+   optsFromGlobal,
+   emitVoiceEvent,
+   startRecorder: (...args) => _startRecorder?.(...args),
+   primeRecorderForPreRoll: (...args) => _primeRecorderForPreRoll?.(...args),
+   bargeIn: (...args) => _bargeIn?.(...args),
+   resetEvidenceGate: _resetEvidenceGate,
+   evaluateEvidenceGate: (...args) => _evaluateEvidenceGate?.(...args),
+   now: _now,
+   logLifecycle: _logLifecycle,
+   voiceLog: _voiceLog,
+   beginTurnTrace: _beginTurnTrace,
+   completeGreetGate: _completeGreetGate,
+   getActiveTurnTraceId: _getActiveTurnTraceId,
+   abortEvidenceGate: (...args) => _abortEvidenceGate?.(...args),
+   clearSafetyCloseTimer: _clearSafetyCloseTimer,
+   stopRecorder: _stopRecorder,
+   performance: typeof performance !== 'undefined' ? performance : undefined,
+   emitTurnMetrics: (...args) => legacyEmitTurnMetrics?.(...args),
++  registerAsrReadyListener: (...args) => _registerAsrReadyListener?.(...args),
++  resetAsrReady: (...args) => _resetAsrReady?.(...args),
+ });
+ 
+ Object.assign(commitCtx, {
+   startRecorder: _startRecorder,
+   primeRecorderForPreRoll: _primeRecorderForPreRoll,
+   bargeIn: _bargeIn,
+   evaluateEvidenceGate: _evaluateEvidenceGate,
+   abortEvidenceGate: _abortEvidenceGate,
+ });
+ 
+ export async function initMic(stream = null) { return await facadeInitMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await facadeArmVAD(stream, opts); }
+ export function disarmVAD() { facadeDisarmVAD(); }
+ export function isRecording() { return !!facadeIsRecording(); }
+ export function bargeIn() { facadeBargeIn(); }
+ export function setVadBoost(value) { facadeSetVadBoost(value); }
+ export function setGreetGateActive(active = true) { facadeSetGreetGateActive(!!active); }
+ export function forceBargeInStart(meta = {}) { return facadeForceBargeInStart(meta); }
+ export function forceBargeInEnd(opts = {}) { return facadeForceBargeInEnd(opts); }
+ 
+ VadFrameUtils.refreshManualConfig();
+ registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: VadFrameUtils.clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
+ 
+ export const __TEST_ONLY__ = {
+   state,

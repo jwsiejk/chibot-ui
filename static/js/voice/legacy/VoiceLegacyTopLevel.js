@@ -70,6 +70,9 @@ const state = {
   turnMetricsBytesBufferedAtCommit: null,
   turnMetricsEmitted: false,
   turnManualBargeInUsed: false,
+  asrReady: false,
+  asrReadyAt: 0,
+  asrReadyListeners: [],
   manual: {
     enabled: true, modeManualOnly: false, autoCommitWhenReady: true,
     buttonDown: false, active: false, debounceUntil: 0, ignoreVadUntil: 0,
@@ -223,6 +226,79 @@ function _resetEvidenceGate(reason = null) {
   try {
     state.evidenceGateCommitPromise = null;
   } catch {}
+}
+
+function _registerAsrReadyListener(handler, options = {}) {
+  if (typeof handler !== 'function') {
+    return () => {};
+  }
+
+  const immediate = options && options.immediate === false ? false : true;
+
+  if (!Array.isArray(state.asrReadyListeners)) {
+    state.asrReadyListeners = [];
+  }
+
+  if (state.asrReady && immediate) {
+    try { handler({ immediate: true, reason: 'already_ready' }); } catch {}
+    return () => {};
+  }
+
+  state.asrReadyListeners.push(handler);
+
+  return () => {
+    if (!Array.isArray(state.asrReadyListeners) || !state.asrReadyListeners.length) {
+      state.asrReadyListeners = [];
+      return;
+    }
+    const index = state.asrReadyListeners.indexOf(handler);
+    if (index >= 0) {
+      state.asrReadyListeners.splice(index, 1);
+    }
+  };
+}
+
+function _notifyAsrReady(reason = 'unknown', detail = null) {
+  if (state.asrReady) {
+    return;
+  }
+
+  state.asrReady = true;
+  try {
+    state.asrReadyAt = _now();
+  } catch {
+    state.asrReadyAt = Date.now();
+  }
+
+  const logPayload = { reason };
+  if (detail && typeof detail === 'object') {
+    const typeField = typeof detail.type === 'string' ? detail.type : undefined;
+    const eventField = typeof detail.event === 'string' ? detail.event : undefined;
+    const labelField = typeof detail.label === 'string' ? detail.label : undefined;
+    if (typeField) logPayload.type = typeField;
+    if (eventField) logPayload.event = eventField;
+    if (labelField) logPayload.label = labelField;
+  }
+  _voiceLog('debug', 'asr ready observed', logPayload);
+
+  const listeners = Array.isArray(state.asrReadyListeners)
+    ? state.asrReadyListeners.splice(0)
+    : [];
+
+  for (const listener of listeners) {
+    try { listener({ reason, detail }); } catch {}
+  }
+}
+
+function _resetAsrReady(reason = 'reset') {
+  state.asrReady = false;
+  state.asrReadyAt = 0;
+  if (!Array.isArray(state.asrReadyListeners) || state.asrReadyListeners.length === 0) {
+    state.asrReadyListeners = [];
+  } else {
+    state.asrReadyListeners.splice(0, state.asrReadyListeners.length);
+  }
+  _voiceLog('debug', 'asr ready state reset', { reason });
 }
 function _startGreetGateCalibrate(source = 'unknown') {
   if (!state.greetGateActive) return;
@@ -382,6 +458,9 @@ export {
   _completeGreetGate,
   _cancelGreetGate,
   _resetEvidenceGate,
+  _registerAsrReadyListener,
+  _notifyAsrReady,
+  _resetAsrReady,
   _startGreetGateCalibrate,
   _waitForGreetGate,
   _handleGreetGateUtteranceEnd,

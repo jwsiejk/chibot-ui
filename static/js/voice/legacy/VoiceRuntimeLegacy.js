@@ -26,8 +26,8 @@ import {
   PARTIAL_CONF_RISE_DELTA, PARTIAL_CONF_THRESHOLD, PRE_ROLL_MS, REC_MIME, SAFETY_CLOSE_DELAY_MS,
   WEBM_MIME, _beginTurnTrace, _cancelGreetGate, _clearTurnTrace, _completeGreetGate,
   _handleGreetGateStateFrame, _handleGreetGateUtteranceEnd, _logLifecycle, _now,
-  _updateAssistantPhaseFromDetail, _voiceLog, _waitForGreetGate, _getActiveTurnTraceId,
-  optsFromGlobal, state,
+  _registerAsrReadyListener, _resetAsrReady, _updateAssistantPhaseFromDetail, _voiceLog,
+  _waitForGreetGate, _getActiveTurnTraceId, optsFromGlobal, state,
 } from './VoiceLegacyTopLevel.js';
 
 let _resetEvidenceGate;
@@ -162,6 +162,8 @@ Object.assign(commitCtx, {
   stopRecorder: _stopRecorder,
   performance: typeof performance !== 'undefined' ? performance : undefined,
   emitTurnMetrics: (...args) => legacyEmitTurnMetrics?.(...args),
+  registerAsrReadyListener: (...args) => _registerAsrReadyListener?.(...args),
+  resetAsrReady: (...args) => _resetAsrReady?.(...args),
 });
 
 Object.assign(commitCtx, {

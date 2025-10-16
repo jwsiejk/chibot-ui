@@ -131,6 +131,54 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
   const wasStreaming = isStreaming(ctx);
   const wasOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
 
+  const registerAsrReadyListener =
+    typeof ctx?.registerAsrReadyListener === 'function'
+      ? ctx.registerAsrReadyListener.bind(ctx)
+      : null;
+  const voiceLogFn = typeof ctx?.voiceLog === 'function' ? ctx.voiceLog : null;
+
+  if (typeof ctx.__pendingFlushOnAsr !== 'boolean') {
+    ctx.__pendingFlushOnAsr = false;
+  }
+
+  const cancelFlushOnAsr = () => {
+    if (ctx.__asrReadyFlushCancel) {
+      try { ctx.__asrReadyFlushCancel(); } catch {}
+      ctx.__asrReadyFlushCancel = null;
+    }
+    ctx.__pendingFlushOnAsr = false;
+  };
+
+  const scheduleFlushOnAsr = () => {
+    if (ctx.__asrReadyFlushCancel || typeof registerAsrReadyListener !== 'function') {
+      return;
+    }
+    const cleanup = registerAsrReadyListener(() => {
+      ctx.__pendingFlushOnAsr = false;
+      ctx.__asrReadyFlushCancel = null;
+      let pendingStats = EMPTY_STATS;
+      try {
+        pendingStats = buffer.stats() || EMPTY_STATS;
+      } catch {}
+      const flushedStats = flushContextShadowBuffer(ctx, buffer);
+      voiceLogFn?.('debug', 'shadow buffer flushed after ASR ready', {
+        pendingChunks: pendingStats.count,
+        pendingMs: pendingStats.durationMs,
+        pendingBytes: pendingStats.totalBytes,
+        flushedChunks: flushedStats.count,
+        flushedBytes: flushedStats.totalBytes,
+      });
+      setStreaming(ctx, true);
+    });
+    if (typeof cleanup === 'function') {
+      if (ctx.__pendingFlushOnAsr) {
+        ctx.__asrReadyFlushCancel = cleanup;
+      } else {
+        try { cleanup(); } catch {}
+      }
+    }
+  };
+
   const manualOverride = !!(ctx?.state?.manual?.buttonDown);
   const mask = ctx && typeof ctx === 'object' ? ctx.ttsMask : null;
   const maskActive = !manualOverride && typeof mask?.isMasked === 'function' ? mask.isMasked() : false;
@@ -181,6 +229,7 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
       flushContextShadowBuffer(ctx, buffer);
       setStreaming(ctx, true);
     }
+    cancelFlushOnAsr();
     if (chunk) {
       sendChunkViaTransport(ctx, chunk, { durationMs, timecode, preRoll: false, vadState });
     }
@@ -196,6 +245,7 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
   } catch {}
 
   if (maskActive) {
+    cancelFlushOnAsr();
     setStreaming(ctx, false);
     return {
       gateOpened: false,
@@ -207,14 +257,37 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
   const nowOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
 
   if (!wasStreaming && !wasOpen && nowOpen) {
-    flushContextShadowBuffer(ctx, buffer);
-    setStreaming(ctx, true);
+    if (ctx?.state?.asrReady) {
+      const flushedStats = flushContextShadowBuffer(ctx, buffer);
+      voiceLogFn?.('debug', 'shadow buffer flushed immediately on gate open', {
+        bufferedMs: stats.durationMs,
+        bufferedBytes: stats.totalBytes,
+        flushedChunks: flushedStats.count,
+        flushedBytes: flushedStats.totalBytes,
+      });
+      setStreaming(ctx, true);
+      cancelFlushOnAsr();
+    } else {
+      if (!ctx.__pendingFlushOnAsr) {
+        ctx.__pendingFlushOnAsr = true;
+        voiceLogFn?.('debug', 'shadow buffer flush deferred until ASR ready', {
+          bufferedMs: stats.durationMs,
+          bufferedBytes: stats.totalBytes,
+        });
+      }
+      scheduleFlushOnAsr();
+    }
   } else if (!nowOpen) {
+    if (ctx.__pendingFlushOnAsr) {
+      voiceLogFn?.('debug', 'shadow buffer flush cancelled before ASR ready');
+    }
+    cancelFlushOnAsr();
     setStreaming(ctx, false);
   }
 
   const streamingNow = isStreaming(ctx);
   if (streamingNow && wasStreaming && chunk) {
+    cancelFlushOnAsr();
     sendChunkViaTransport(ctx, chunk, { durationMs, timecode, preRoll: false, vadState });
   }
 

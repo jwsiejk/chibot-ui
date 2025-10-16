@@ -30,7 +30,9 @@ import {
   _handleGreetGateStateFrame,
   _handleGreetGateUtteranceEnd,
   _logLifecycle,
+  _notifyAsrReady,
   _resetGreetGateState,
+  _resetAsrReady,
   _updateAssistantPhaseFromDetail,
   _voiceLog,
   _now,
@@ -1441,6 +1443,20 @@ export async function legacyOnWsMessageImpl(detail = {}, helpers = {}) {
 
   _updateAssistantPhaseFromDetail(detail);
 
+  const eventRaw = typeof detail?.event === 'string' ? detail.event : '';
+  const kindRaw = typeof detail?.kind === 'string' ? detail.kind : '';
+  const labelRaw = typeof detail?.label === 'string' ? detail.label : '';
+  const diagMatch = [typeNorm, eventRaw, kindRaw].some((value) =>
+    typeof value === 'string' && value.toLowerCase() === 'asr:diag',
+  );
+
+  if (!state.asrReady && diagMatch) {
+    const labelNorm = labelRaw.trim().toLowerCase();
+    if (labelNorm === 'asr_open') {
+      _notifyAsrReady('diag_asr_open', detail);
+    }
+  }
+
   if (typeNorm === 'utteranceend') {
     _handleGreetGateUtteranceEnd(detail);
   }
@@ -1474,6 +1490,9 @@ export async function legacyOnWsMessageImpl(detail = {}, helpers = {}) {
           state.turnMetricsTimeToFirstPartialMs = Math.max(0, nowTs - startAt);
         }
       }
+    }
+    if (!isFinal) {
+      _notifyAsrReady('partial', detail);
     }
   }
 
@@ -1517,6 +1536,7 @@ export async function legacyOnWsMessageImpl(detail = {}, helpers = {}) {
 export function legacyOnWsOpenImpl(detail = null) {
   const payload = (detail && typeof detail === 'object') ? detail : {};
   _voiceLog('debug', 'ws open observed', payload);
+  _resetAsrReady('ws_open');
   state.assistantReady = false;
   state.turnClosePromise = null;
 }
@@ -1525,6 +1545,7 @@ export function legacyOnWsCloseImpl(detail = null) {
   const payload = (detail && typeof detail === 'object') ? detail : {};
   _voiceLog('warn', 'ws close observed', payload);
 
+  _resetAsrReady('ws_close');
   legacyClearSafetyCloseTimer();
 
   const recorder = state.rec;

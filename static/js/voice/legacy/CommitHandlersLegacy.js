@@ -42,6 +42,23 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
   const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(0, timeoutMsRaw) : 1200;
   const SMALL_MASS_BYTES = 12 * 1024;
 
+  if (typeof ctx.resetAsrReady === 'function') {
+    try { ctx.resetAsrReady('speech_start'); } catch {}
+  } else if (state) {
+    try {
+      state.asrReady = false;
+      state.asrReadyAt = 0;
+      if (Array.isArray(state.asrReadyListeners)) {
+        state.asrReadyListeners = [];
+      }
+    } catch {}
+  }
+
+  const registerAsrReadyListener =
+    typeof ctx.registerAsrReadyListener === 'function'
+      ? ctx.registerAsrReadyListener.bind(ctx)
+      : null;
+
   const clearNoPartialTimer = () => {
     if (ctx.__softNoPartialTimer) {
       try { clearTimeout(ctx.__softNoPartialTimer); } catch {}
@@ -49,12 +66,23 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
     }
   };
 
+  const clearAsrReadyListener = () => {
+    if (ctx.__softNoPartialAsrCancel) {
+      try { ctx.__softNoPartialAsrCancel(); } catch {}
+      ctx.__softNoPartialAsrCancel = null;
+    }
+    ctx.__softNoPartialAwaitingAsr = false;
+  };
+
   const resetSoftNoPartialState = () => {
     ctx.__softNoPartialHandleOpen = null;
+    clearAsrReadyListener();
     clearNoPartialTimer();
   };
 
   ctx.__softNoPartialClear = resetSoftNoPartialState;
+  ctx.__softNoPartialAwaitingAsr = false;
+  ctx.__softNoPartialAsrCancel = null;
 
   const handleSoftNoPartialTimeout = () => {
     ctx.__softNoPartialTimer = null;
@@ -148,6 +176,7 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
     if (timeoutMs <= 0) {
       return;
     }
+    clearAsrReadyListener();
     clearNoPartialTimer();
     try {
       ctx.__softNoPartialTimer = setTimeout(handleSoftNoPartialTimeout, timeoutMs);
@@ -159,7 +188,40 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
     voiceLog?.('debug', 'soft no-partial timer armed', { timeoutMs });
   };
 
-  ctx.__softNoPartialHandleOpen = startNoPartialTimer;
+  const armSoftNoPartialTimer = () => {
+    if (timeoutMs <= 0 || ctx.hadPartial) {
+      return;
+    }
+
+    if (!registerAsrReadyListener || state?.asrReady) {
+      startNoPartialTimer();
+      return;
+    }
+
+    if (ctx.__softNoPartialAwaitingAsr) {
+      return;
+    }
+
+    ctx.__softNoPartialAwaitingAsr = true;
+    voiceLog?.('debug', 'soft no-partial timer pending until ASR ready', { timeoutMs });
+    const cleanup = registerAsrReadyListener(() => {
+      ctx.__softNoPartialAsrCancel = null;
+      ctx.__softNoPartialAwaitingAsr = false;
+      if (ctx.hadPartial) {
+        return;
+      }
+      startNoPartialTimer();
+    });
+    if (typeof cleanup === 'function') {
+      if (ctx.__softNoPartialAwaitingAsr) {
+        ctx.__softNoPartialAsrCancel = cleanup;
+      } else {
+        try { cleanup(); } catch {}
+      }
+    }
+  };
+
+  ctx.__softNoPartialHandleOpen = armSoftNoPartialTimer;
 
   const descriptor = Object.getOwnPropertyDescriptor(ctx, 'hadPartial');
   let hadPartialValue = false;
@@ -224,7 +286,7 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
   }
 
   if (typeof evidenceGate?.isOpen === 'function' && evidenceGate.isOpen()) {
-    try { startNoPartialTimer(); } catch {}
+    try { armSoftNoPartialTimer(); } catch {}
   }
 
   const manualPressDuringTts = !!(state?.manual?.buttonDown) && state?.ttsPlaying;
