@@ -28,6 +28,7 @@ const DEFAULT_CONFIG = {
   commit: {
     min_ms: 500,
     drop_if_no_partial: true,
+    no_partial_timeout_ms: 1200,
   },
   transport: {
     close_on_turn_end: false,
@@ -69,6 +70,8 @@ export function getConfig() {
       min_ms: source.commit?.min_ms ?? DEFAULT_CONFIG.commit.min_ms,
       drop_if_no_partial:
         source.commit?.drop_if_no_partial ?? DEFAULT_CONFIG.commit.drop_if_no_partial,
+      no_partial_timeout_ms:
+        source.commit?.no_partial_timeout_ms ?? DEFAULT_CONFIG.commit.no_partial_timeout_ms,
     },
     transport: {
       close_on_turn_end:

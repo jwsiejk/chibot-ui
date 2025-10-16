@@ -36,7 +36,170 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
     throw new Error('CommitHandlersLegacy.onSpeechStartCommitted requires onFrameSpeech');
   }
 
+  const config = getConfig();
+  const commitConfig = (config && typeof config === 'object' ? config.commit : null) || {};
+  const timeoutMsRaw = Number(commitConfig.no_partial_timeout_ms);
+  const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(0, timeoutMsRaw) : 1200;
+  const SMALL_MASS_BYTES = 12 * 1024;
+
+  const clearNoPartialTimer = () => {
+    if (ctx.__softNoPartialTimer) {
+      try { clearTimeout(ctx.__softNoPartialTimer); } catch {}
+      ctx.__softNoPartialTimer = null;
+    }
+  };
+
+  const resetSoftNoPartialState = () => {
+    ctx.__softNoPartialHandleOpen = null;
+    clearNoPartialTimer();
+  };
+
+  ctx.__softNoPartialClear = resetSoftNoPartialState;
+
+  const handleSoftNoPartialTimeout = () => {
+    ctx.__softNoPartialTimer = null;
+    if (ctx.hadPartial) {
+      voiceLog?.('debug', 'soft no-partial timer ignored — partial received');
+      return;
+    }
+
+    const gateInstance = state?.evidenceGate || ctx.evidenceGate || null;
+    const threshold = Number(gateInstance?.evidence?.threshold);
+    const score = Number(gateInstance?.evidenceScore);
+    const evidenceBelowThreshold = Number.isFinite(threshold)
+      && Number.isFinite(score)
+      && score < threshold;
+
+    if (!evidenceBelowThreshold) {
+      voiceLog?.('debug', 'soft no-partial timer skipped — evidence still sufficient', {
+        threshold: Number.isFinite(threshold) ? threshold : null,
+        score: Number.isFinite(score) ? score : null,
+      });
+      resetSoftNoPartialState();
+      return;
+    }
+
+    const bytesSent = Number.isFinite(state?.chunkBytesSent) ? state.chunkBytesSent : 0;
+    if (bytesSent >= SMALL_MASS_BYTES) {
+      voiceLog?.('debug', 'soft no-partial timer skipped — audio mass already sent', {
+        bytesSent,
+        limit: SMALL_MASS_BYTES,
+      });
+      resetSoftNoPartialState();
+      return;
+    }
+
+    if (gateInstance && typeof gateInstance.isOpen === 'function' && !gateInstance.isOpen()) {
+      voiceLog?.('debug', 'soft no-partial timer skipped — gate already closed');
+      resetSoftNoPartialState();
+      return;
+    }
+
+    const dropReason = 'soft_no_partial_timeout';
+    voiceLog?.('info', 'soft no-partial timeout firing', {
+      bytesSent,
+      evidenceScore: Number.isFinite(score) ? score : null,
+      threshold: Number.isFinite(threshold) ? threshold : null,
+    });
+
+    try { VadFrameUtils?.clearPendingEndTimer?.(); } catch {}
+    try { VadFrameUtils?.safeClearTurnTimer?.(); } catch {}
+    try { clearSafetyCloseTimer?.(); } catch {}
+
+    if (state) {
+      state.recStreaming = false;
+      state.recStopShouldSend = false;
+    }
+
+    try {
+      stopRecorder?.({ reason: dropReason });
+    } catch {}
+
+    if (state) {
+      state.recStopping = false;
+      state.turnOpen = false;
+    }
+
+    if (ctx?.shadowBuffer && typeof ctx.shadowBuffer.clear === 'function') {
+      try { ctx.shadowBuffer.clear(); } catch {}
+    }
+    if (state?.shadowBuffer && typeof state.shadowBuffer.clear === 'function' && state.shadowBuffer !== ctx?.shadowBuffer) {
+      try { state.shadowBuffer.clear(); } catch {}
+    }
+
+    if (ctx?.evidenceGate && typeof ctx.evidenceGate.reset === 'function') {
+      try { ctx.evidenceGate.reset(dropReason); } catch {}
+    } else if (typeof resetEvidenceGate === 'function') {
+      try { resetEvidenceGate(dropReason); } catch {}
+    }
+    if (state?.evidenceGate && state.evidenceGate !== ctx?.evidenceGate && typeof state.evidenceGate.reset === 'function') {
+      try { state.evidenceGate.reset(dropReason); } catch {}
+    }
+
+    emitVoiceEvent?.('state', { state: 'armed' });
+    if (state) {
+      state.currentCommitMode = 'idle';
+    }
+
+    resetSoftNoPartialState();
+  };
+
+  const startNoPartialTimer = () => {
+    if (timeoutMs <= 0) {
+      return;
+    }
+    clearNoPartialTimer();
+    try {
+      ctx.__softNoPartialTimer = setTimeout(handleSoftNoPartialTimeout, timeoutMs);
+    } catch (err) {
+      voiceLog?.('debug', 'failed to arm soft no-partial timer', { error: err?.message || err });
+      ctx.__softNoPartialTimer = null;
+      return;
+    }
+    voiceLog?.('debug', 'soft no-partial timer armed', { timeoutMs });
+  };
+
+  ctx.__softNoPartialHandleOpen = startNoPartialTimer;
+
+  const descriptor = Object.getOwnPropertyDescriptor(ctx, 'hadPartial');
+  let hadPartialValue = false;
+  if (!descriptor || descriptor.configurable) {
+    Object.defineProperty(ctx, 'hadPartial', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return hadPartialValue;
+      },
+      set(value) {
+        hadPartialValue = !!value;
+        if (hadPartialValue) {
+          resetSoftNoPartialState();
+        }
+      },
+    });
+  } else {
+    hadPartialValue = !!ctx.hadPartial;
+  }
   ctx.hadPartial = false;
+
+  const evidenceGate = state?.evidenceGate;
+  if (evidenceGate && typeof evidenceGate.update === 'function' && !evidenceGate.__softNoPartialWrapped) {
+    const originalUpdate = evidenceGate.update;
+    evidenceGate.update = function softNoPartialWrappedUpdate(...updateArgs) {
+      const wasOpen = typeof evidenceGate.isOpen === 'function' ? evidenceGate.isOpen() : false;
+      const result = originalUpdate.apply(this, updateArgs);
+      const nowOpen = typeof evidenceGate.isOpen === 'function' ? evidenceGate.isOpen() : false;
+      if (!wasOpen && nowOpen) {
+        try { ctx.__softNoPartialHandleOpen?.(); } catch {}
+      }
+      return result;
+    };
+    evidenceGate.__softNoPartialWrapped = true;
+  }
+
+  if (typeof evidenceGate?.isOpen === 'function' && evidenceGate.isOpen()) {
+    try { startNoPartialTimer(); } catch {}
+  }
 
   const manualPressDuringTts = !!(state?.manual?.buttonDown) && state?.ttsPlaying;
   if (manualPressDuringTts) {
@@ -113,6 +276,10 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
     emitVoiceEvent,
     closeTurnIfOpen,
   } = ctx || {};
+  if (typeof ctx?.__softNoPartialClear === 'function') {
+    try { ctx.__softNoPartialClear(); } catch {}
+  }
+  ctx.__softNoPartialHandleOpen = null;
   const perf = ctx?.performance ?? (typeof performance !== 'undefined' ? performance : null);
   const metrics = detail && typeof detail === 'object' ? detail : {};
   const reason =
@@ -199,6 +366,9 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
   const dropReason = 'commit_min_duration';
 
   if (dropForMinSpeech) {
+    if (typeof ctx?.__softNoPartialClear === 'function') {
+      try { ctx.__softNoPartialClear(); } catch {}
+    }
     VadFrameUtils?.maybeSendAudioStop?.({ reason: dropReason });
     VadFrameUtils?.safeClearTurnTimer?.();
     VadFrameUtils?.clearPendingEndTimer?.();

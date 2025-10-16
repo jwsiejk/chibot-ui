@@ -1,13 +1,8 @@
 diff --git a/static/js/voice/core/Config.js b/static/js/voice/core/Config.js
-index f74fd8a8085177dce3fe966e39641d9f3e0ff287..cda13224f1bdf28857e8d7914601b5ef03c320d7 100644
+index cda13224f1bdf28857e8d7914601b5ef03c320d7..a9e4f116aeafb6b6024d4cc054f5d88794938653 100644
 --- a/static/js/voice/core/Config.js
 +++ b/static/js/voice/core/Config.js
-@@ -1,69 +1,80 @@
- const DEFAULT_CONFIG = {
-   barge_in: {
-     mode: 'manual_only',
-   },
-   vad: {
+@@ -6,75 +6,78 @@ const DEFAULT_CONFIG = {
      enabled: true,
      hysteresis: {
        enter: 3,
@@ -21,11 +16,11 @@ index f74fd8a8085177dce3fe966e39641d9f3e0ff287..cda13224f1bdf28857e8d7914601b5ef
    evidence: {
      snr_sigma: 2.5,
      asr_conf: 0.65,
-+    w1: 0.5,
-+    w2: 0.3,
-+    w3: 0.2,
-+    threshold: 1.0,
-+    asrInstantOpen: 0.7,
+     w1: 0.5,
+     w2: 0.3,
+     w3: 0.2,
+     threshold: 1.0,
+     asrInstantOpen: 0.7,
    },
    shadow: {
      ms: 450,
@@ -33,6 +28,7 @@ index f74fd8a8085177dce3fe966e39641d9f3e0ff287..cda13224f1bdf28857e8d7914601b5ef
    commit: {
      min_ms: 500,
      drop_if_no_partial: true,
++    no_partial_timeout_ms: 1200,
    },
    transport: {
      close_on_turn_end: false,
@@ -60,12 +56,12 @@ index f74fd8a8085177dce3fe966e39641d9f3e0ff287..cda13224f1bdf28857e8d7914601b5ef
      evidence: {
        snr_sigma: source.evidence?.snr_sigma ?? DEFAULT_CONFIG.evidence.snr_sigma,
        asr_conf: source.evidence?.asr_conf ?? DEFAULT_CONFIG.evidence.asr_conf,
-+      w1: source.evidence?.w1 ?? DEFAULT_CONFIG.evidence.w1,
-+      w2: source.evidence?.w2 ?? DEFAULT_CONFIG.evidence.w2,
-+      w3: source.evidence?.w3 ?? DEFAULT_CONFIG.evidence.w3,
-+      threshold: source.evidence?.threshold ?? DEFAULT_CONFIG.evidence.threshold,
-+      asrInstantOpen:
-+        source.evidence?.asrInstantOpen ?? DEFAULT_CONFIG.evidence.asrInstantOpen,
+       w1: source.evidence?.w1 ?? DEFAULT_CONFIG.evidence.w1,
+       w2: source.evidence?.w2 ?? DEFAULT_CONFIG.evidence.w2,
+       w3: source.evidence?.w3 ?? DEFAULT_CONFIG.evidence.w3,
+       threshold: source.evidence?.threshold ?? DEFAULT_CONFIG.evidence.threshold,
+       asrInstantOpen:
+         source.evidence?.asrInstantOpen ?? DEFAULT_CONFIG.evidence.asrInstantOpen,
      },
      shadow: {
        ms: source.shadow?.ms ?? DEFAULT_CONFIG.shadow.ms,
@@ -74,6 +70,8 @@ index f74fd8a8085177dce3fe966e39641d9f3e0ff287..cda13224f1bdf28857e8d7914601b5ef
        min_ms: source.commit?.min_ms ?? DEFAULT_CONFIG.commit.min_ms,
        drop_if_no_partial:
          source.commit?.drop_if_no_partial ?? DEFAULT_CONFIG.commit.drop_if_no_partial,
++      no_partial_timeout_ms:
++        source.commit?.no_partial_timeout_ms ?? DEFAULT_CONFIG.commit.no_partial_timeout_ms,
      },
      transport: {
        close_on_turn_end:
@@ -83,363 +81,332 @@ index f74fd8a8085177dce3fe966e39641d9f3e0ff287..cda13224f1bdf28857e8d7914601b5ef
  }
  
  export { DEFAULT_CONFIG };
-diff --git a/static/js/voice/core/EvidenceGate.js b/static/js/voice/core/EvidenceGate.js
-index aeae2502be98dfffa7e9e39a22d39867f9730ee4..f685771cb16a9ad7a89d77fdb95d29ef1907596b 100644
---- a/static/js/voice/core/EvidenceGate.js
-+++ b/static/js/voice/core/EvidenceGate.js
-@@ -1,167 +1,286 @@
-+import { getConfig } from './Config.js';
+diff --git a/static/js/voice/legacy/CommitHandlersLegacy.js b/static/js/voice/legacy/CommitHandlersLegacy.js
+index b247a2094c8a301059e239a08a7d1cee739ead3c..44bce3925c83fff700bd6f9137223aa0e7d821d8 100644
+--- a/static/js/voice/legacy/CommitHandlersLegacy.js
++++ b/static/js/voice/legacy/CommitHandlersLegacy.js
+@@ -14,52 +14,215 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
+     EVIDENCE_MIN_BYTES,
+     GREET_BARGE_MIN_SNR_DB,
+     REC_MIME,
+     optsFromGlobal,
+     emitVoiceEvent,
+     startRecorder,
+     primeRecorderForPreRoll,
+     bargeIn,
+     resetEvidenceGate,
+     evaluateEvidenceGate,
+     onSpeechStartCommitted: nestedOnSpeechStartCommitted,
+     now,
+     logLifecycle,
+     voiceLog,
+     beginTurnTrace,
+     completeGreetGate,
+     getActiveTurnTraceId,
+     ttsMask,
+     autoVadMasked,
+   } = ctx || {};
+ 
+   if (typeof onFrameSpeech !== 'function') {
+     throw new Error('CommitHandlersLegacy.onSpeechStartCommitted requires onFrameSpeech');
+   }
+ 
++  const config = getConfig();
++  const commitConfig = (config && typeof config === 'object' ? config.commit : null) || {};
++  const timeoutMsRaw = Number(commitConfig.no_partial_timeout_ms);
++  const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(0, timeoutMsRaw) : 1200;
++  const SMALL_MASS_BYTES = 12 * 1024;
 +
- const clampPositive = (value, fallback) => {
-   if (!Number.isFinite(value) || value < 0) return fallback;
-   return value;
- };
- 
- const DEFAULT_BASE_SNR_DB = 3.5;
-+const DEFAULT_SPEECH_WINDOW_FRAMES = 24;
-+const DEFAULT_EVIDENCE_PARAMS = {
-+  w1: 0.5,
-+  w2: 0.3,
-+  w3: 0.2,
-+  threshold: 1.0,
-+  asrInstantOpen: 0.7,
-+};
-+
-+const clampFinite = (value, fallback) => (Number.isFinite(value) ? value : fallback);
-+
-+const resolveEvidenceConfig = (overrides = {}) => {
-+  const configEvidence = getConfig()?.evidence ?? {};
-+  return {
-+    w1: clampFinite(overrides.w1, clampFinite(configEvidence.w1, DEFAULT_EVIDENCE_PARAMS.w1)),
-+    w2: clampFinite(overrides.w2, clampFinite(configEvidence.w2, DEFAULT_EVIDENCE_PARAMS.w2)),
-+    w3: clampFinite(overrides.w3, clampFinite(configEvidence.w3, DEFAULT_EVIDENCE_PARAMS.w3)),
-+    threshold: clampFinite(
-+      overrides.threshold,
-+      clampFinite(configEvidence.threshold, DEFAULT_EVIDENCE_PARAMS.threshold),
-+    ),
-+    asrInstantOpen: clampFinite(
-+      overrides.asrInstantOpen,
-+      clampFinite(configEvidence.asrInstantOpen, DEFAULT_EVIDENCE_PARAMS.asrInstantOpen),
-+    ),
-+    windowFrames: clampFinite(
-+      overrides.windowFrames,
-+      clampFinite(configEvidence.windowFrames, DEFAULT_SPEECH_WINDOW_FRAMES),
-+    ),
-+  };
-+};
-+
-+const normalizeSnr = (snr) => {
-+  const value = Number.isFinite(snr) ? Math.max(0, snr) : 0;
-+  if (value === 0) {
-+    return 0;
-+  }
-+  return value / (value + 1);
-+};
- 
- export class EvidenceGate {
--  constructor({ snrSigma = 2.5, asrConf = 0.65, baseSnrDb = DEFAULT_BASE_SNR_DB } = {}) {
-+  constructor({
-+    snrSigma = 2.5,
-+    asrConf = 0.65,
-+    baseSnrDb = DEFAULT_BASE_SNR_DB,
-+    evidence: evidenceOverrides = {},
-+  } = {}) {
-     this.config = {
-       snrSigma: Number.isFinite(snrSigma) ? snrSigma : 2.5,
-       asrConf: Number.isFinite(asrConf) ? asrConf : 0.65,
-       baseSnrDb: Number.isFinite(baseSnrDb) ? baseSnrDb : DEFAULT_BASE_SNR_DB,
-     };
-+    const resolvedEvidence = resolveEvidenceConfig(evidenceOverrides);
-+    const windowFrames = clampPositive(resolvedEvidence.windowFrames, DEFAULT_SPEECH_WINDOW_FRAMES);
-+    this.evidence = {
-+      w1: resolvedEvidence.w1,
-+      w2: resolvedEvidence.w2,
-+      w3: resolvedEvidence.w3,
-+      threshold: resolvedEvidence.threshold,
-+      asrInstantOpen: resolvedEvidence.asrInstantOpen,
-+    };
-+    this.speechWindowMax = Math.max(5, Math.min(30, Math.round(windowFrames))) || DEFAULT_SPEECH_WINDOW_FRAMES;
-+    this.speechWindowMin = Math.max(5, Math.round(this.speechWindowMax * 0.5));
-     this.reset();
-   }
- 
-   reset(reason = null) {
-     this.active = false;
-     this.satisfied = false;
-     this.aborted = false;
-     this.startedAt = 0;
-     this.lastDetail = null;
-     this.bufferedMs = 0;
-     this.bufferedBytes = 0;
-     this.minMassOk = false;
-     this.snrOk = false;
-     this.partialConfidence = null;
-     this.partialRising = false;
-     this.partialGateOk = false;
-     this.reasonValue = reason || null;
-+    this.evidenceScore = 0;
-+    this.instantGateOpen = false;
-+    this.voicedFrameRatio = 0;
-+    this.voicedFrameRatioForScore = 0;
-+    this._resetSpeechWindow();
-   }
- 
-   reason() {
-     return this.reasonValue;
-   }
- 
-   start({ startedAt = 0, detail = null, bufferedMs = 0, bufferedBytes = 0 } = {}) {
-     this.active = true;
-     this.satisfied = false;
-     this.aborted = false;
-     this.startedAt = Number.isFinite(startedAt) ? startedAt : 0;
-     this.lastDetail = detail || null;
-     this.bufferedMs = clampPositive(bufferedMs, 0);
-     this.bufferedBytes = clampPositive(bufferedBytes, 0);
-     this.minMassOk = false;
-     this.snrOk = false;
-     this.partialConfidence = null;
-     this.partialRising = false;
-     this.partialGateOk = false;
-     this.reasonValue = null;
-+    this.evidenceScore = 0;
-+    this.instantGateOpen = false;
-+    this.voicedFrameRatio = 0;
-+    this.voicedFrameRatioForScore = 0;
-+    this._resetSpeechWindow();
-   }
- 
-   setDetail(detail) {
-     this.lastDetail = detail || this.lastDetail;
-   }
- 
-   setBufferStats({ bufferedMs, bufferedBytes } = {}) {
-     if (Number.isFinite(bufferedMs)) {
-       this.bufferedMs = Math.max(0, bufferedMs);
-     }
-     if (Number.isFinite(bufferedBytes)) {
-       this.bufferedBytes = Math.max(0, bufferedBytes);
-     }
-   }
- 
-   extendBuffer({ durationMs, bytes, bufferedMs, bufferedBytes } = {}) {
-     if (!this.active || this.satisfied || this.aborted) return;
-     if (Number.isFinite(durationMs)) {
-       this.bufferedMs = Math.max(this.bufferedMs, durationMs);
-     }
-     if (Number.isFinite(bytes)) {
-       this.bufferedBytes = Math.max(this.bufferedBytes, bytes);
-     }
-     this.setBufferStats({ bufferedMs, bufferedBytes });
-   }
- 
-+  _resetSpeechWindow() {
-+    this.speechWindow = [];
-+    this.speechWindowVoiced = 0;
-+  }
-+
-+  _ingestVadState(vadState) {
-+    if (!this.speechWindow || !Array.isArray(this.speechWindow)) {
-+      this._resetSpeechWindow();
++  const clearNoPartialTimer = () => {
++    if (ctx.__softNoPartialTimer) {
++      try { clearTimeout(ctx.__softNoPartialTimer); } catch {}
++      ctx.__softNoPartialTimer = null;
 +    }
-+    if (vadState !== 'speech' && vadState !== 'silence') {
++  };
++
++  const resetSoftNoPartialState = () => {
++    ctx.__softNoPartialHandleOpen = null;
++    clearNoPartialTimer();
++  };
++
++  ctx.__softNoPartialClear = resetSoftNoPartialState;
++
++  const handleSoftNoPartialTimeout = () => {
++    ctx.__softNoPartialTimer = null;
++    if (ctx.hadPartial) {
++      voiceLog?.('debug', 'soft no-partial timer ignored — partial received');
 +      return;
 +    }
-+    const isSpeech = vadState === 'speech';
-+    this.speechWindow.push(isSpeech);
-+    if (isSpeech) {
-+      this.speechWindowVoiced += 1;
++
++    const gateInstance = state?.evidenceGate || ctx.evidenceGate || null;
++    const threshold = Number(gateInstance?.evidence?.threshold);
++    const score = Number(gateInstance?.evidenceScore);
++    const evidenceBelowThreshold = Number.isFinite(threshold)
++      && Number.isFinite(score)
++      && score < threshold;
++
++    if (!evidenceBelowThreshold) {
++      voiceLog?.('debug', 'soft no-partial timer skipped — evidence still sufficient', {
++        threshold: Number.isFinite(threshold) ? threshold : null,
++        score: Number.isFinite(score) ? score : null,
++      });
++      resetSoftNoPartialState();
++      return;
 +    }
-+    while (this.speechWindow.length > this.speechWindowMax) {
-+      const removed = this.speechWindow.shift();
-+      if (removed) {
-+        this.speechWindowVoiced = Math.max(0, this.speechWindowVoiced - 1);
++
++    const bytesSent = Number.isFinite(state?.chunkBytesSent) ? state.chunkBytesSent : 0;
++    if (bytesSent >= SMALL_MASS_BYTES) {
++      voiceLog?.('debug', 'soft no-partial timer skipped — audio mass already sent', {
++        bytesSent,
++        limit: SMALL_MASS_BYTES,
++      });
++      resetSoftNoPartialState();
++      return;
++    }
++
++    if (gateInstance && typeof gateInstance.isOpen === 'function' && !gateInstance.isOpen()) {
++      voiceLog?.('debug', 'soft no-partial timer skipped — gate already closed');
++      resetSoftNoPartialState();
++      return;
++    }
++
++    const dropReason = 'soft_no_partial_timeout';
++    voiceLog?.('info', 'soft no-partial timeout firing', {
++      bytesSent,
++      evidenceScore: Number.isFinite(score) ? score : null,
++      threshold: Number.isFinite(threshold) ? threshold : null,
++    });
++
++    try { VadFrameUtils?.clearPendingEndTimer?.(); } catch {}
++    try { VadFrameUtils?.safeClearTurnTimer?.(); } catch {}
++    try { clearSafetyCloseTimer?.(); } catch {}
++
++    if (state) {
++      state.recStreaming = false;
++      state.recStopShouldSend = false;
++    }
++
++    try {
++      stopRecorder?.({ reason: dropReason });
++    } catch {}
++
++    if (state) {
++      state.recStopping = false;
++      state.turnOpen = false;
++    }
++
++    if (ctx?.shadowBuffer && typeof ctx.shadowBuffer.clear === 'function') {
++      try { ctx.shadowBuffer.clear(); } catch {}
++    }
++    if (state?.shadowBuffer && typeof state.shadowBuffer.clear === 'function' && state.shadowBuffer !== ctx?.shadowBuffer) {
++      try { state.shadowBuffer.clear(); } catch {}
++    }
++
++    if (ctx?.evidenceGate && typeof ctx.evidenceGate.reset === 'function') {
++      try { ctx.evidenceGate.reset(dropReason); } catch {}
++    } else if (typeof resetEvidenceGate === 'function') {
++      try { resetEvidenceGate(dropReason); } catch {}
++    }
++    if (state?.evidenceGate && state.evidenceGate !== ctx?.evidenceGate && typeof state.evidenceGate.reset === 'function') {
++      try { state.evidenceGate.reset(dropReason); } catch {}
++    }
++
++    emitVoiceEvent?.('state', { state: 'armed' });
++    if (state) {
++      state.currentCommitMode = 'idle';
++    }
++
++    resetSoftNoPartialState();
++  };
++
++  const startNoPartialTimer = () => {
++    if (timeoutMs <= 0) {
++      return;
++    }
++    clearNoPartialTimer();
++    try {
++      ctx.__softNoPartialTimer = setTimeout(handleSoftNoPartialTimeout, timeoutMs);
++    } catch (err) {
++      voiceLog?.('debug', 'failed to arm soft no-partial timer', { error: err?.message || err });
++      ctx.__softNoPartialTimer = null;
++      return;
++    }
++    voiceLog?.('debug', 'soft no-partial timer armed', { timeoutMs });
++  };
++
++  ctx.__softNoPartialHandleOpen = startNoPartialTimer;
++
++  const descriptor = Object.getOwnPropertyDescriptor(ctx, 'hadPartial');
++  let hadPartialValue = false;
++  if (!descriptor || descriptor.configurable) {
++    Object.defineProperty(ctx, 'hadPartial', {
++      configurable: true,
++      enumerable: true,
++      get() {
++        return hadPartialValue;
++      },
++      set(value) {
++        hadPartialValue = !!value;
++        if (hadPartialValue) {
++          resetSoftNoPartialState();
++        }
++      },
++    });
++  } else {
++    hadPartialValue = !!ctx.hadPartial;
++  }
+   ctx.hadPartial = false;
+ 
++  const evidenceGate = state?.evidenceGate;
++  if (evidenceGate && typeof evidenceGate.update === 'function' && !evidenceGate.__softNoPartialWrapped) {
++    const originalUpdate = evidenceGate.update;
++    evidenceGate.update = function softNoPartialWrappedUpdate(...updateArgs) {
++      const wasOpen = typeof evidenceGate.isOpen === 'function' ? evidenceGate.isOpen() : false;
++      const result = originalUpdate.apply(this, updateArgs);
++      const nowOpen = typeof evidenceGate.isOpen === 'function' ? evidenceGate.isOpen() : false;
++      if (!wasOpen && nowOpen) {
++        try { ctx.__softNoPartialHandleOpen?.(); } catch {}
 +      }
-+    }
-+    const total = this.speechWindow.length;
-+    if (total > 0) {
-+      this.voicedFrameRatio = this.speechWindowVoiced / total;
-+      const progress = Math.min(1, total / this.speechWindowMin);
-+      this.voicedFrameRatioForScore = this.voicedFrameRatio * progress;
-+    } else {
-+      this.voicedFrameRatio = 0;
-+      this.voicedFrameRatioForScore = 0;
-+    }
++      return result;
++    };
++    evidenceGate.__softNoPartialWrapped = true;
 +  }
 +
-   update({
-     vadState,
-     snr,
-     asrCue,
-     snrBoost = 0,
-     bufferedMs,
-     bufferedBytes,
-     minSpeechMs,
-     minBytes,
-   } = {}) {
-     if (!this.active || this.satisfied || this.aborted) {
-       return { shouldCommit: false, state: 'idle' };
-     }
- 
-     this.setBufferStats({ bufferedMs, bufferedBytes });
-+    this._ingestVadState(vadState);
- 
-     const minMs = Number.isFinite(minSpeechMs) ? Math.max(0, minSpeechMs) : 0;
-     const minB = Number.isFinite(minBytes) ? Math.max(0, minBytes) : 0;
-     this.minMassOk = this.bufferedMs >= minMs && this.bufferedBytes >= minB;
- 
-     const requiredSnr = (this.config.baseSnrDb || DEFAULT_BASE_SNR_DB) + Math.max(0, snrBoost);
-     this.snrOk = Number.isFinite(snr) ? snr >= requiredSnr : false;
- 
-     if (asrCue && asrCue.type === 'partial') {
-       const confidence = Number.isFinite(asrCue.conf) ? asrCue.conf : null;
-       const threshold = Number.isFinite(asrCue.threshold)
-         ? asrCue.threshold
-         : (this.config.asrConf ?? 0.65);
-       const delta = Number.isFinite(asrCue.delta) ? asrCue.delta : 0.05;
-       if (confidence !== null) {
-         if (this.partialConfidence === null || !Number.isFinite(this.partialConfidence)) {
-           this.partialConfidence = confidence;
-         } else if (confidence > this.partialConfidence + delta) {
-           this.partialRising = true;
-           this.partialConfidence = confidence;
-         } else {
-           this.partialConfidence = Math.max(this.partialConfidence, confidence);
-         }
-         if (confidence >= threshold) {
-           this.partialGateOk = true;
-         } else if (this.partialRising && confidence >= threshold - delta) {
-           this.partialGateOk = true;
-         }
-       }
-       if (typeof asrCue.transcript === 'string' && asrCue.transcript.trim().length > 2) {
-         this.partialGateOk = this.partialGateOk || this.partialRising;
-       }
-     }
- 
-+    if (asrCue && Number.isFinite(asrCue.conf) && asrCue.type !== 'partial') {
-+      this.partialConfidence = asrCue.conf;
-+    }
++  if (typeof evidenceGate?.isOpen === 'function' && evidenceGate.isOpen()) {
++    try { startNoPartialTimer(); } catch {}
++  }
 +
-     if (asrCue && asrCue.type === 'vad_end' && !this.minMassOk) {
-       this.reasonValue = 'vad_end';
+   const manualPressDuringTts = !!(state?.manual?.buttonDown) && state?.ttsPlaying;
+   if (manualPressDuringTts) {
+     try { bargeIn?.(); } catch {}
+     if (!ctx.ttsMask && state?.ttsMask) {
+       ctx.ttsMask = state.ttsMask;
      }
- 
-+    const snrComponent = normalizeSnr(snr);
-+    const asrConfidence = Number.isFinite(this.partialConfidence) ? this.partialConfidence : 0;
-+    this.instantGateOpen = asrConfidence >= this.evidence.asrInstantOpen;
-+    const ratioComponent = this.voicedFrameRatioForScore;
-+    this.evidenceScore = (this.evidence.w1 * snrComponent)
-+      + (this.evidence.w2 * ratioComponent)
-+      + (this.evidence.w3 * asrConfidence);
-+    this.partialGateOk = this.instantGateOpen || this.evidenceScore >= this.evidence.threshold;
-+
-     const shouldCommit = this.shouldCommit();
-     if (shouldCommit && !this.reasonValue) {
-       this.reasonValue = vadState || 'commit';
-     }
-     return {
-       shouldCommit,
-       state: shouldCommit ? 'commit' : 'hold',
-     };
+     ctx.skipEvidenceGate = true;
+   } else {
+     ctx.skipEvidenceGate = false;
    }
  
-   shouldCommit() {
--    return this.snrOk && (this.minMassOk || this.partialGateOk);
-+    if (this.instantGateOpen) {
-+      return true;
-+    }
-+    const hasMass = this.minMassOk || this.voicedFrameRatio >= 0.5;
-+    return hasMass && this.evidenceScore >= this.evidence.threshold;
+   if (!ctx.ttsMask && ttsMask) {
+     ctx.ttsMask = ttsMask;
+   }
+   if (typeof autoVadMasked === 'boolean' && typeof ctx.autoVadMasked === 'undefined') {
+     ctx.autoVadMasked = autoVadMasked;
    }
  
-   satisfy(reason = 'committed') {
-     if (!this.active) return;
-     this.satisfied = true;
-     this.active = false;
-     this.reasonValue = reason || this.reasonValue || 'committed';
+   const nextHandler =
+     typeof nestedOnSpeechStartCommitted === 'function'
+       ? nestedOnSpeechStartCommitted
+       : (nextDetail = {}) => onSpeechStartCommitted(ctx, nextDetail);
+ 
+   return await onFrameSpeech(
+     {
+@@ -91,50 +254,54 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
+       ttsMask: ctx.ttsMask || state?.ttsMask || null,
+       skipEvidenceGate: manualPressDuringTts,
+       manualPressingDuringTts: manualPressDuringTts,
+       autoVadMasked: ctx.autoVadMasked === true,
+     },
+     detail,
+   );
+ }
+ 
+ export function onSpeechEndCommitted(ctx = {}, detail = null) {
+   const {
+     state,
+     voiceLog,
+     updateSessionNoise,
+     abortEvidenceGate,
+     VadFrameUtils,
+     optsFromGlobal,
+     clearSafetyCloseTimer,
+     stopRecorder,
+     onSpeechEndCommitted: nestedOnSpeechEndCommitted,
+     logLifecycle,
+     resetEvidenceGate,
+     emitVoiceEvent,
+     closeTurnIfOpen,
+   } = ctx || {};
++  if (typeof ctx?.__softNoPartialClear === 'function') {
++    try { ctx.__softNoPartialClear(); } catch {}
++  }
++  ctx.__softNoPartialHandleOpen = null;
+   const perf = ctx?.performance ?? (typeof performance !== 'undefined' ? performance : null);
+   const metrics = detail && typeof detail === 'object' ? detail : {};
+   const reason =
+     detail && typeof detail === 'object' && detail.reason
+       ? detail.reason
+       : typeof detail === 'string'
+       ? detail
+       : 'vad_silence';
+   const now = typeof perf?.now === 'function' ? perf.now() : Date.now();
+   const minTurnMs = Number(optsFromGlobal?.('min_turn_ms', 1200));
+ 
+   if (state?.manual?.ignoreVadUntil && now < state.manual.ignoreVadUntil) {
+     const remaining = Math.max(0, Math.round(state.manual.ignoreVadUntil - now));
+     voiceLog?.('debug', 'speech end suppressed during manual cooldown', { remainingMs: remaining });
+     return;
    }
  
-   abort(reason = 'aborted', detail = null, stats = {}) {
-     if (!this.active || this.satisfied) return;
-     this.aborted = true;
-     this.active = false;
-     this.reasonValue = reason || 'aborted';
-     this.lastDetail = detail || this.lastDetail;
-     if (Number.isFinite(stats.durationMs)) {
-       this.bufferedMs = Math.max(this.bufferedMs, stats.durationMs);
-     }
-     if (Number.isFinite(stats.totalBytes)) {
-       this.bufferedBytes = Math.max(this.bufferedBytes, stats.totalBytes);
-     }
+   if (state) {
+     state.vadMetrics = { ...metrics, phase: 'end' };
    }
  
-   isOpen() {
-     return this.active && !this.satisfied && !this.aborted;
-diff --git a/static/js/voice/legacy/VadProcessLegacy.js b/static/js/voice/legacy/VadProcessLegacy.js
-index f1ad82260b75fef65eb68116c9816ceaab88aa85..dbe04148fe88185d56e32385fc9d42bfdf7db5a2 100644
---- a/static/js/voice/legacy/VadProcessLegacy.js
-+++ b/static/js/voice/legacy/VadProcessLegacy.js
-@@ -129,54 +129,60 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
-   }
- 
-   const wasStreaming = isStreaming(ctx);
-   const wasOpen = typeof gate.isOpen === 'function' ? gate.isOpen() : false;
- 
-   const manualOverride = !!(ctx?.state?.manual?.buttonDown);
-   const mask = ctx && typeof ctx === 'object' ? ctx.ttsMask : null;
-   const maskActive = !manualOverride && typeof mask?.isMasked === 'function' ? mask.isMasked() : false;
-   const snrBoost = typeof mask?.snrBoost === 'function' ? mask.snrBoost() : 0;
-   const skipGate = ctx?.skipEvidenceGate === true;
- 
-   const { chunk, durationMs, timecode } = extractChunkMeta(frame);
-   if (!wasStreaming && chunk) {
-     try {
-       buffer.push(chunk, { durationMs, timecode });
-     } catch {}
-   }
- 
-   let stats = EMPTY_STATS;
-   try {
-     stats = buffer.stats() || EMPTY_STATS;
-   } catch {
-     stats = EMPTY_STATS;
-   }
- 
-+  const frameVadState = typeof frame?.vadState === 'string'
-+    ? frame.vadState
-+    : (typeof frame?.vad?.state === 'string' ? frame.vad.state : null);
-+  const effectiveVadState = frameVadState || vadState;
-+  const asrCue = frame?.asrCue ?? frame?.cue ?? frame?.detail?.asrCue ?? null;
-+
-   const updatePayload = {
--    vadState,
-+    vadState: effectiveVadState,
-     snr: resolveSnr(ctx, frame),
--    asrCue: frame?.asrCue ?? frame?.cue ?? null,
-+    asrCue,
-     bufferedMs: stats.durationMs,
-     bufferedBytes: stats.totalBytes,
+   const roundTenths = (v) => {
+     if (!Number.isFinite(v)) return null;
+     return Math.round(v * 10) / 10;
    };
+@@ -177,50 +344,53 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
+     {
+       reason,
+       snrDb: roundTenths(metrics?.snrDb),
+       noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
+       speechDurationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
+       thresholdStopDb: roundTenths(metrics?.thresholds?.stopDb),
+     },
+     'info',
+   );
  
-   if (updatePayload.asrCue && updatePayload.asrCue.type === 'partial') {
-     ctx.hadPartial = true;
+   const config = getConfig();
+   const rawMinMs = Number(config?.commit?.min_ms);
+   const commitMinMs = Number.isFinite(rawMinMs) ? Math.max(0, rawMinMs) : 0;
+   let totalSpeechMs = null;
+   if (detail && typeof detail === 'object' && Number.isFinite(detail.totalSpeechMs)) {
+     totalSpeechMs = detail.totalSpeechMs;
+   } else if (Number.isFinite(metrics?.speechDurationMs)) {
+     totalSpeechMs = metrics.speechDurationMs;
    }
+   const dropForMinSpeech =
+     !ctx?.hadPartial && Number.isFinite(totalSpeechMs) && totalSpeechMs < commitMinMs;
  
-   if (snrBoost > 0) {
-     updatePayload.snrBoost = snrBoost;
-   }
+   const dropReason = 'commit_min_duration';
  
-   if (skipGate) {
-     if (!wasStreaming) {
-       flushContextShadowBuffer(ctx, buffer);
-       setStreaming(ctx, true);
+   if (dropForMinSpeech) {
++    if (typeof ctx?.__softNoPartialClear === 'function') {
++      try { ctx.__softNoPartialClear(); } catch {}
++    }
+     VadFrameUtils?.maybeSendAudioStop?.({ reason: dropReason });
+     VadFrameUtils?.safeClearTurnTimer?.();
+     VadFrameUtils?.clearPendingEndTimer?.();
+     clearSafetyCloseTimer?.();
+     stopRecorder?.({ reason: dropReason });
+     if (ctx?.shadowBuffer && typeof ctx.shadowBuffer.clear === 'function') {
+       try { ctx.shadowBuffer.clear(); } catch {}
      }
-     if (chunk) {
-       sendChunkViaTransport(ctx, chunk, { durationMs, timecode, preRoll: false, vadState });
+     if (state?.shadowBuffer && typeof state.shadowBuffer.clear === 'function' && state.shadowBuffer !== ctx?.shadowBuffer) {
+       try { state.shadowBuffer.clear(); } catch {}
      }
-     return {
-       gateOpened: !wasStreaming,
-       streamingNow: true,
-       wasStreaming,
-     };
+     if (ctx?.evidenceGate && typeof ctx.evidenceGate.reset === 'function') {
+       try { ctx.evidenceGate.reset(dropReason); } catch {}
+     } else if (typeof resetEvidenceGate === 'function') {
+       try { resetEvidenceGate(dropReason); } catch {}
+     }
+     if (state?.evidenceGate && typeof state.evidenceGate.reset === 'function' && state.evidenceGate !== ctx?.evidenceGate) {
+       try { state.evidenceGate.reset(dropReason); } catch {}
+     }
+     if (state) {
+       state.currentCommitMode = 'idle';
+     }
+     ctx.hadPartial = false;
+     emitVoiceEvent?.('state', { state: 'armed' });
+     emitVoiceEvent?.('debug', {
