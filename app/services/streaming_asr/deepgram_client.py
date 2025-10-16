@@ -12,6 +12,10 @@ from collections import deque
 
 import websockets  # provided by uvicorn[standard]
 
+from app.ws.bus import bus as stream_bus
+
+from .asr_metrics import record_turn_metrics
+
 try:
     from app.admin_log import emit as _admin_emit
 except Exception:  # pragma: no cover - extremely defensive
@@ -669,6 +673,18 @@ class DeepgramClient:
         # Serialize outbound websocket sends to avoid concurrent writer errors
         self._send_lock = asyncio.Lock()
 
+        # Per-turn metrics tracking
+        self._turn_counter: int = 0
+        self._turn_current_id: Optional[int] = None
+        self._turn_active: bool = False
+        self._turn_start_ts: float = 0.0
+        self._turn_first_partial_ts: float = 0.0
+        self._turn_final_ts: float = 0.0
+        self._turn_bytes_baseline: int = 0
+        self._turn_metrics_recorded: bool = False
+        self._turn_saw_1011: bool = False
+        self._turn_last_close_code: Optional[int] = None
+
     def _diag_payload(self, **extra: Any) -> dict:
         payload: dict[str, Any] = {"provider": "deepgram"}
         if self._diag_session_id:
@@ -790,6 +806,111 @@ class DeepgramClient:
             await self._ev_queue.put(data)
         except Exception:
             pass
+
+    def _cfg_value(self, key: str) -> Optional[str]:
+        cfg: dict[str, Any]
+        if isinstance(self._cfg, dict):
+            cfg = self._cfg
+        else:
+            cfg = {}
+        for variant in (key, f"dg_{key}"):
+            try:
+                val = cfg.get(variant)
+            except Exception:
+                val = None
+            if val not in (None, ""):
+                try:
+                    return str(val)
+                except Exception:
+                    continue
+        nested = cfg.get("deepgram") if isinstance(cfg.get("deepgram"), dict) else None
+        if isinstance(nested, dict):
+            try:
+                val = nested.get(key)
+            except Exception:
+                val = None
+            if val not in (None, ""):
+                try:
+                    return str(val)
+                except Exception:
+                    pass
+        env_val = os.getenv(f"DEEPGRAM_{key.upper()}", "").strip()
+        return env_val or None
+
+    def _ensure_turn_started(self, ts: Optional[float] = None) -> None:
+        if self._turn_active:
+            return
+        self._turn_active = True
+        self._turn_counter += 1
+        self._turn_current_id = self._turn_counter
+        now = ts or time.time()
+        self._turn_start_ts = now
+        self._turn_first_partial_ts = 0.0
+        self._turn_final_ts = 0.0
+        self._turn_bytes_baseline = self._bytes_forwarded
+        self._turn_metrics_recorded = False
+        self._turn_saw_1011 = False
+        self._turn_last_close_code = None
+
+    def _note_first_partial(self, ts: Optional[float] = None) -> None:
+        if not self._turn_active:
+            self._ensure_turn_started(ts)
+        if self._turn_first_partial_ts <= 0.0:
+            self._turn_first_partial_ts = ts or time.time()
+
+    def _note_final_observed(self, ts: Optional[float] = None) -> None:
+        if not self._turn_active:
+            self._ensure_turn_started(ts)
+        self._turn_final_ts = ts or time.time()
+
+    def _emit_turn_metrics(self) -> None:
+        if self._turn_metrics_recorded:
+            return
+        turn_id = self._turn_current_id
+        if turn_id is None:
+            return
+        final_ts = self._turn_final_ts or time.time()
+        start_ts = self._turn_start_ts
+        first_partial_ms: Optional[int] = None
+        if start_ts and self._turn_first_partial_ts:
+            first_partial_ms = int(max(0.0, (self._turn_first_partial_ts - start_ts) * 1000))
+        final_ms: Optional[int] = None
+        if start_ts:
+            final_ms = int(max(0.0, (final_ts - start_ts) * 1000))
+        bytes_forwarded = max(0, self._bytes_forwarded - self._turn_bytes_baseline)
+        session_id = self._diag_session_id or None
+        if not session_id:
+            sid_candidate = self._sid_for_log()
+            if sid_candidate and sid_candidate != "?":
+                session_id = sid_candidate
+        payload: dict[str, Any] = {
+            "session_id": session_id,
+            "dg_model": self._cfg_value("model"),
+            "dg_tier": self._cfg_value("tier"),
+            "first_partial_ms": first_partial_ms,
+            "final_ms": final_ms,
+            "dg_1011": bool(self._turn_saw_1011),
+            "bytes_forwarded": bytes_forwarded,
+        }
+        clean_payload = {k: v for k, v in payload.items() if v is not None}
+        record_turn_metrics(turn_id, clean_payload)
+        sid_for_bus = session_id or self._sid_for_log()
+        if sid_for_bus and sid_for_bus != "?":
+            frame = {"type": "asr.metrics", "turn_id": turn_id}
+            frame.update(clean_payload)
+            try:
+                stream_bus.broadcast(str(sid_for_bus), frame)
+            except Exception:
+                pass
+        self._turn_metrics_recorded = True
+        self._turn_active = False
+        self._turn_current_id = None
+        self._turn_start_ts = 0.0
+        self._turn_first_partial_ts = 0.0
+        self._turn_final_ts = 0.0
+        self._turn_bytes_baseline = self._bytes_forwarded
+        self._turn_saw_1011 = False
+        self._turn_last_close_code = None
 
     def _sid_for_log(self) -> str:
         try:
@@ -988,6 +1109,8 @@ class DeepgramClient:
                 self._tx_queue.popleft()
                 continue
             try:
+                send_ts = time.time()
+                self._ensure_turn_started(send_ts)
                 async with self._send_lock:
                     await ws.send(data)
                 self._first_real_sent = True
@@ -1091,6 +1214,15 @@ class DeepgramClient:
         self._ready_observed = False
         self._first_real_sent = False
         self._bytes_forwarded = 0
+        self._turn_active = False
+        self._turn_current_id = None
+        self._turn_start_ts = 0.0
+        self._turn_first_partial_ts = 0.0
+        self._turn_final_ts = 0.0
+        self._turn_bytes_baseline = 0
+        self._turn_metrics_recorded = False
+        self._turn_saw_1011 = False
+        self._turn_last_close_code = None
         try:
             self._open_evt.clear()
         except Exception:
@@ -2007,6 +2139,13 @@ class DeepgramClient:
                     else:
                         continue
 
+                    now_ts = time.time()
+                    if is_final:
+                        self._note_first_partial(now_ts)
+                        self._note_final_observed(now_ts)
+                    else:
+                        self._note_first_partial(now_ts)
+
                     self._logger.debug(
                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
                         sid,
@@ -2041,6 +2180,7 @@ class DeepgramClient:
                         self._schedule_auto_close(final_reason or "provider_final")
                         self._any_result = True
                         self._final_event.set()
+                        self._emit_turn_metrics()
                         self._last_transcript = ""
                         continue
 
@@ -2083,6 +2223,19 @@ class DeepgramClient:
                 reason_txt = str(reason_raw or "")
             except Exception:
                 reason_txt = ""
+            if isinstance(code, int):
+                self._turn_last_close_code = code
+            else:
+                self._turn_last_close_code = None
+            if (
+                code == 1011
+                and self._turn_current_id is not None
+                and not self._turn_metrics_recorded
+            ):
+                self._turn_saw_1011 = True
+                if self._turn_final_ts <= 0.0:
+                    self._turn_final_ts = time.time()
+                self._emit_turn_metrics()
             timeout_flag = False
             try:
                 timeout_flag = bool(reason_txt) and "timeout" in reason_txt.lower()
