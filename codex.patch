@@ -1,56 +1,682 @@
-diff --git a/static/js/voice/legacy/VadSchedulerLegacy.js b/static/js/voice/legacy/VadSchedulerLegacy.js
-index 8a1c22f454753616c09928743ca198480f945309..8b1b79b6670dffe359bd72513cfb027776f5e4b1 100644
---- a/static/js/voice/legacy/VadSchedulerLegacy.js
-+++ b/static/js/voice/legacy/VadSchedulerLegacy.js
-@@ -70,51 +70,50 @@ export function startVadLoop(ctx, onFrame) {
- 
-   const entry = { vad, pollMs };
-   activeLoops.set(ctx, entry);
-   return entry;
- }
- 
- export function stopVadLoop(ctx) {
-   if (!ctx) {
-     return;
-   }
-   const entry = activeLoops.get(ctx);
-   if (entry?.vad && typeof entry.vad.stop === 'function') {
-     try { entry.vad.stop(); } catch {}
-   }
-   activeLoops.delete(ctx);
- }
- 
- export function createVadSchedulerLegacy(deps = {}) {
-   const {
-     state,
-     emitVoiceEvent,
-     sendJSON,
-     stopPlayback,
-     ttsIsPlaying,
-     startVadLoop,
--    forceBargeInEnd,
-     facadeOnWsMessage,
-     legacySetGreetGateActive,
-     legacyAbortEvidenceGate,
-     legacyEvaluateEvidenceGate,
-     legacyCommitEvidenceGate,
-     legacyUpdateEvidenceGateWithChunk,
-     legacyUpdateEvidenceGateWithPartial,
-     legacyPrimeRecorderForPreRoll,
-     legacyStartRecorder,
-     legacyStopRecorder,
-     legacyClearManualTimers,
-     legacyCloseTurnIfOpen,
-     VadFrameUtils,
-     now: nowFn,
-     logLifecycle,
-     voiceLog,
-     MANUAL_DEBOUNCE_MS = 300,
-     MANUAL_NO_AUDIO_CANCEL_MS = 500,
-     MANUAL_VAD_IGNORE_MS = 600,
-     onSpeechEndCommitted,
-     onSpeechStartCommitted,
-   } = deps;
- 
-   function setGreetGateActive(active) {
-     if (typeof legacySetGreetGateActive === 'function') {
+diff --git a/static/js/voice.js b/static/js/voice.js
+index dfed87b77a667048074d63c4a1cef3c254675232..868f1e5874eb44d018b0aa99184707dce6f64236 100644
+--- a/static/js/voice.js
++++ b/static/js/voice.js
+@@ -1,274 +1,12 @@
+-import { emitVoiceEvent } from './voice/ui/Events.js';
+-import { TurnState } from './voice/core/index.js';
+-import { sendJSON } from './ws_module.js';
+-import { stopPlayback, isPlaying as ttsIsPlaying } from './audio.js';
+-import { registerTtsEventListener } from './voice/tts/TtsHandlers.js';
+-import {
+-  updateSessionNoise,
+-  getEvidenceSnrRequirement,
+-  getShadowStats,
+-} from './voice/loops/VadLoop.js';
+-import {
+-  armVAD as facadeArmVAD,
+-  bargeIn as facadeBargeIn,
+-  disarmVAD as facadeDisarmVAD,
+-  forceBargeInEnd as facadeForceBargeInEnd,
+-  forceBargeInStart as facadeForceBargeInStart,
+-  initMic as facadeInitMic,
+-  isRecording as facadeIsRecording,
+-  onWsClose as facadeOnWsClose,
+-  onWsMessage as facadeOnWsMessage,
+-  onWsOpen as facadeOnWsOpen,
+-  registerVoiceLegacyFacade,
+-  setGreetGateActive as facadeSetGreetGateActive,
+-  setVadBoost as facadeSetVadBoost,
+-  legacyClearManualTimers,
+-  legacyClearSafetyCloseTimer,
+-  legacyCloseTurnIfOpen,
+-  legacySetGreetGateActive,
+-  legacyOnWsCloseImpl,
+-  legacyOnWsMessageImpl,
+-  legacyOnWsOpenImpl,
+-  legacyOnMicAvailable,
+-  legacyOnMicStop,
+-  legacyOnRecorderData,
+-  legacyOnRecorderError,
+-  legacyResetEvidenceGate,
+-  legacySendRecorderChunk,
+-  legacyPrimeRecorderForPreRoll,
+-  legacyStartRecorder,
+-  legacyStopRecorder,
+-  legacyAbortEvidenceGate,
+-  legacyEvaluateEvidenceGate,
+-  legacyCommitEvidenceGate,
+-  legacyUpdateEvidenceGateWithChunk,
+-  legacyUpdateEvidenceGateWithPartial,
+-  createVadSchedulerLegacy,
+-  onFrameSpeech as facadeOnFrameSpeech,
+-  startVadLoop as facadeStartVadLoop,
+-  onTtsStart,
+-  onTtsEnd,
+-  VadFrameUtils,
+-} from './voice/legacy/VoiceLegacyFacade.js';
+-import {
+-  DEFAULT_MAX_TURN_MS,
+-  EVIDENCE_MIN_BYTES,
+-  EVIDENCE_MIN_SNR_DB,
+-  EVIDENCE_MIN_SPEECH_MS,
+-  GREET_BARGE_MIN_SNR_DB,
+-  MANUAL_DEBOUNCE_MS,
+-  MANUAL_NO_AUDIO_CANCEL_MS,
+-  MANUAL_VAD_IGNORE_MS,
+-  PARTIAL_CONF_RISE_DELTA,
+-  PARTIAL_CONF_THRESHOLD,
+-  PRE_ROLL_MS,
+-  REC_MIME,
+-  SAFETY_CLOSE_DELAY_MS,
+-  WEBM_MIME,
+-  _beginTurnTrace,
+-  _cancelGreetGate,
+-  _clearTurnTrace,
+-  _completeGreetGate,
+-  _handleGreetGateStateFrame,
+-  _handleGreetGateUtteranceEnd,
+-  _logLifecycle,
+-  _now,
+-  _updateAssistantPhaseFromDetail,
+-  _voiceLog,
+-  _waitForGreetGate,
+-  _getActiveTurnTraceId,
+-  optsFromGlobal,
+-  state,
+-} from './voice/legacy/VoiceLegacyTopLevel.js';
+-
+-const _resetEvidenceGate = legacyResetEvidenceGate;
+-const _clearSafetyCloseTimer = legacyClearSafetyCloseTimer;
+-const _closeTurnIfOpen = legacyCloseTurnIfOpen;
+-const _sendRecorderChunk = legacySendRecorderChunk;
+-const _stopRecorder = legacyStopRecorder;
+-
+-const {
+-  setGreetGateActive: _setGreetGateActive,
+-  abortEvidenceGate: _abortEvidenceGate,
+-  evaluateEvidenceGate: _evaluateEvidenceGate,
+-  commitEvidenceGate: _commitEvidenceGate,
+-  updateEvidenceGateWithChunk: _updateEvidenceGateWithChunk,
+-  updateEvidenceGateWithPartial: _updateEvidenceGateWithPartial,
+-  manualAutoCancel: _manualAutoCancel,
+-  forceBargeInStart: _forceBargeInStart,
+-  forceBargeInEnd: _forceBargeInEnd,
+-  ensureWSListener: _ensureWSListener,
+-  primeRecorderForPreRoll: _primeRecorderForPreRoll,
+-  startRecorder: _startRecorder,
+-  bargeIn: _bargeIn,
+-  arm: _arm,
+-} = createVadSchedulerLegacy({
+-  state,
+-  emitVoiceEvent,
+-  sendJSON,
+-  stopPlayback,
+-  ttsIsPlaying,
+-  startVadLoop: facadeStartVadLoop,
+-  forceBargeInEnd: facadeForceBargeInEnd,
+-  facadeOnWsMessage,
+-  legacySetGreetGateActive,
+-  legacyAbortEvidenceGate,
+-  legacyEvaluateEvidenceGate,
+-  legacyCommitEvidenceGate,
+-  legacyUpdateEvidenceGateWithChunk,
+-  legacyUpdateEvidenceGateWithPartial,
+-  legacyPrimeRecorderForPreRoll,
+-  legacyStartRecorder,
+-  legacyStopRecorder,
+-  legacyClearManualTimers,
+-  legacyCloseTurnIfOpen,
+-  VadFrameUtils,
+-  now: _now,
+-  logLifecycle: _logLifecycle,
+-  voiceLog: _voiceLog,
+-  MANUAL_DEBOUNCE_MS,
+-  MANUAL_NO_AUDIO_CANCEL_MS,
+-  MANUAL_VAD_IGNORE_MS,
+-  onSpeechEndCommitted: _onSpeechEndCommitted,
+-  onSpeechStartCommitted: _onSpeechStartCommitted,
+-});
+-
+-export async function initMic(stream = null) { return await facadeInitMic(stream); }
+-export async function armVAD(stream = null, opts = {}) { return await facadeArmVAD(stream, opts); }
+-export function disarmVAD() { facadeDisarmVAD(); }
+-export function isRecording() { return !!facadeIsRecording(); }
+-export function bargeIn() { facadeBargeIn(); }
+-export function setVadBoost(value) { facadeSetVadBoost(value); }
+-export function setGreetGateActive(active = true) { facadeSetGreetGateActive(!!active); }
+-export function forceBargeInStart(meta = {}) { return facadeForceBargeInStart(meta); }
+-export function forceBargeInEnd(opts = {}) { return facadeForceBargeInEnd(opts); }
+-
+-VadFrameUtils.refreshManualConfig();
+-registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: VadFrameUtils.clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
+-
+-async function _onSpeechStartCommitted(detail = {}) {
+-  return await facadeOnFrameSpeech({
+-    state,
+-    VadFrameUtils,
+-    updateSessionNoise,
+-    getShadowStats,
+-    getEvidenceSnrRequirement,
+-    PRE_ROLL_MS,
+-    EVIDENCE_MIN_SNR_DB,
+-    EVIDENCE_MIN_SPEECH_MS,
+-    EVIDENCE_MIN_BYTES,
+-    GREET_BARGE_MIN_SNR_DB,
+-    REC_MIME,
+-    optsFromGlobal,
+-    emitVoiceEvent,
+-    startRecorder: _startRecorder,
+-    primeRecorderForPreRoll: _primeRecorderForPreRoll,
+-    bargeIn: _bargeIn,
+-    resetEvidenceGate: _resetEvidenceGate,
+-    evaluateEvidenceGate: _evaluateEvidenceGate,
+-    onSpeechStartCommitted: _onSpeechStartCommitted,
+-    now: _now,
+-    logLifecycle: _logLifecycle,
+-    voiceLog: _voiceLog,
+-    beginTurnTrace: _beginTurnTrace,
+-    completeGreetGate: _completeGreetGate,
+-    getActiveTurnTraceId: _getActiveTurnTraceId,
+-  }, detail);
+-}
+-function _onSpeechEndCommitted(detail = null) {
+-  const metrics = (detail && typeof detail === 'object') ? detail : {};
+-  const reason = (detail && typeof detail === 'object' && detail.reason)
+-    ? detail.reason
+-    : (typeof detail === 'string' ? detail : 'vad_silence');
+-  const now = performance.now ? performance.now() : Date.now();
+-  const minTurnMs = Number(optsFromGlobal('min_turn_ms', 1200)); // NEW: min turn length (default 1.2s)
+-
+-  if (state.manual.ignoreVadUntil && now < state.manual.ignoreVadUntil) {
+-    const remaining = Math.max(0, Math.round(state.manual.ignoreVadUntil - now));
+-    _voiceLog('debug', 'speech end suppressed during manual cooldown', { remainingMs: remaining });
+-    return;
+-  }
+-
+-  state.vadMetrics = { ...metrics, phase: 'end' };
+-
+-  const roundTenths = (v) => {
+-    if (!Number.isFinite(v)) return null;
+-    return Math.round(v * 10) / 10;
+-  };
+-
+-  updateSessionNoise(state, metrics);
+-
+-  _voiceLog('info', 'speech ended', {
+-    source: 'vad',
+-    reason,
+-    snrDb: roundTenths(metrics?.snrDb),
+-    durationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
+-  });
+-
+-  if (!state.recStreaming && state.evidenceGate.isOpen()) {
+-    _abortEvidenceGate(reason || 'evidence_not_met', metrics);
+-    return;
+-  }
+-
+-  if (state.bargeConfirmActive) {
+-    VadFrameUtils.clearBargeConfirm(true);
+-  }
+-
+-  // If we haven't recorded at least minTurnMs, delay honoring VAD-end.
+-  // Only applies while recorder is actually running.
+-  if (state.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
+-    const elapsed = Math.max(0, now - (state.recStartedAt || now));
+-    const wait = Math.max(0, minTurnMs - elapsed);
+-    if (wait > 0) {
+-      _voiceLog('debug', 'delaying VAD end', { waitMs: wait, elapsed });
+-      VadFrameUtils.clearPendingEndTimer();
+-      state.pendingEndTimer = setTimeout(() => _onSpeechEndCommitted(detail), wait);
+-      return; // do not stop yet
+-    }
+-  }
+-
+-  _logLifecycle('vad_speech_end', {
+-    reason,
+-    snrDb: roundTenths(metrics?.snrDb),
+-    noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
+-    speechDurationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
+-    thresholdStopDb: roundTenths(metrics?.thresholds?.stopDb),
+-  }, 'info');
+-  VadFrameUtils.maybeSendAudioStop({ reason });
+-  VadFrameUtils.safeClearTurnTimer();
+-  VadFrameUtils.clearPendingEndTimer();
+-  _clearSafetyCloseTimer();
+-  _stopRecorder({ reason });
+-  // Do NOT send CloseStream here; we send it in rec.onstop AFTER the blob is delivered.
+-}
+-
+-registerVoiceLegacyFacade({
+-  initMic: (stream = null) => VadFrameUtils.ensureMic(stream),
+-  armVAD: (stream = null, opts = {}) => _arm(stream, opts),
+-  disarmVAD: () => { VadFrameUtils.disarm(); },
+-  isRecording: () => !!(state.rec && state.rec.state === 'recording'),
+-  bargeIn: () => { _bargeIn(); },
+-  setVadBoost: (_value) => {},
+-  setGreetGateActive: (active = true) => { _setGreetGateActive(!!active); },
+-  forceBargeInStart: (meta = {}) => _forceBargeInStart(meta),
+-  forceBargeInEnd: (opts = {}) => _forceBargeInEnd(opts),
+-  onWsOpen: (detail = null) => { legacyOnWsOpenImpl(detail); },
+-  onWsMessage: (detail = {}, helpers = {}) => legacyOnWsMessageImpl(detail, helpers),
+-  onWsClose: (detail = null) => { legacyOnWsCloseImpl(detail); },
+-  onMicAvailable: (detail = {}) => { legacyOnMicAvailable(detail); },
+-  onMicStop: (detail = {}) => legacyOnMicStop(detail),
+-  onRecorderData: (event, helpers = {}) => legacyOnRecorderData(event, helpers),
+-  onRecorderError: (event = null, helpers = {}) => legacyOnRecorderError(event, helpers),
+-});
+-
+-export const __TEST_ONLY__ = {
+-  state,
+-  startRecorder: _startRecorder,
+-  stopRecorder: _stopRecorder,
+-  ensureWSListener: _ensureWSListener,
+-  closeTurnIfOpen: _closeTurnIfOpen,
+-  sendRecorderChunk: _sendRecorderChunk,
+-  clearSafetyCloseTimer: _clearSafetyCloseTimer,
+-  onSpeechStartCommitted: _onSpeechStartCommitted,
+-  onSpeechEndCommitted: _onSpeechEndCommitted,
+-};
++export {
++  initMic,
++  armVAD,
++  disarmVAD,
++  isRecording,
++  bargeIn,
++  setVadBoost,
++  setGreetGateActive,
++  forceBargeInStart,
++  forceBargeInEnd,
++  __TEST_ONLY__,
++} from './voice/legacy/VoiceRuntimeLegacy.js';
+diff --git a/static/js/voice/legacy/CommitHandlersLegacy.js b/static/js/voice/legacy/CommitHandlersLegacy.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..881862a8a607e3882d215a61b7093ec88ab1b8c1
+--- /dev/null
++++ b/static/js/voice/legacy/CommitHandlersLegacy.js
+@@ -0,0 +1,160 @@
++export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
++  const {
++    onFrameSpeech,
++    state,
++    VadFrameUtils,
++    updateSessionNoise,
++    getShadowStats,
++    getEvidenceSnrRequirement,
++    PRE_ROLL_MS,
++    EVIDENCE_MIN_SNR_DB,
++    EVIDENCE_MIN_SPEECH_MS,
++    EVIDENCE_MIN_BYTES,
++    GREET_BARGE_MIN_SNR_DB,
++    REC_MIME,
++    optsFromGlobal,
++    emitVoiceEvent,
++    startRecorder,
++    primeRecorderForPreRoll,
++    bargeIn,
++    resetEvidenceGate,
++    evaluateEvidenceGate,
++    onSpeechStartCommitted: nestedOnSpeechStartCommitted,
++    now,
++    logLifecycle,
++    voiceLog,
++    beginTurnTrace,
++    completeGreetGate,
++    getActiveTurnTraceId,
++  } = ctx || {};
++
++  if (typeof onFrameSpeech !== 'function') {
++    throw new Error('CommitHandlersLegacy.onSpeechStartCommitted requires onFrameSpeech');
++  }
++
++  const nextHandler =
++    typeof nestedOnSpeechStartCommitted === 'function'
++      ? nestedOnSpeechStartCommitted
++      : (nextDetail = {}) => onSpeechStartCommitted(ctx, nextDetail);
++
++  return await onFrameSpeech(
++    {
++      state,
++      VadFrameUtils,
++      updateSessionNoise,
++      getShadowStats,
++      getEvidenceSnrRequirement,
++      PRE_ROLL_MS,
++      EVIDENCE_MIN_SNR_DB,
++      EVIDENCE_MIN_SPEECH_MS,
++      EVIDENCE_MIN_BYTES,
++      GREET_BARGE_MIN_SNR_DB,
++      REC_MIME,
++      optsFromGlobal,
++      emitVoiceEvent,
++      startRecorder,
++      primeRecorderForPreRoll,
++      bargeIn,
++      resetEvidenceGate,
++      evaluateEvidenceGate,
++      onSpeechStartCommitted: nextHandler,
++      now,
++      logLifecycle,
++      voiceLog,
++      beginTurnTrace,
++      completeGreetGate,
++      getActiveTurnTraceId,
++    },
++    detail,
++  );
++}
++
++export function onSpeechEndCommitted(ctx = {}, detail = null) {
++  const {
++    state,
++    voiceLog,
++    updateSessionNoise,
++    abortEvidenceGate,
++    VadFrameUtils,
++    optsFromGlobal,
++    clearSafetyCloseTimer,
++    stopRecorder,
++    onSpeechEndCommitted: nestedOnSpeechEndCommitted,
++    logLifecycle,
++  } = ctx || {};
++  const perf = ctx?.performance ?? (typeof performance !== 'undefined' ? performance : null);
++  const metrics = detail && typeof detail === 'object' ? detail : {};
++  const reason =
++    detail && typeof detail === 'object' && detail.reason
++      ? detail.reason
++      : typeof detail === 'string'
++      ? detail
++      : 'vad_silence';
++  const now = typeof perf?.now === 'function' ? perf.now() : Date.now();
++  const minTurnMs = Number(optsFromGlobal?.('min_turn_ms', 1200));
++
++  if (state?.manual?.ignoreVadUntil && now < state.manual.ignoreVadUntil) {
++    const remaining = Math.max(0, Math.round(state.manual.ignoreVadUntil - now));
++    voiceLog?.('debug', 'speech end suppressed during manual cooldown', { remainingMs: remaining });
++    return;
++  }
++
++  if (state) {
++    state.vadMetrics = { ...metrics, phase: 'end' };
++  }
++
++  const roundTenths = (v) => {
++    if (!Number.isFinite(v)) return null;
++    return Math.round(v * 10) / 10;
++  };
++
++  updateSessionNoise?.(state, metrics);
++
++  voiceLog?.('info', 'speech ended', {
++    source: 'vad',
++    reason,
++    snrDb: roundTenths(metrics?.snrDb),
++    durationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
++  });
++
++  if (!state?.recStreaming && state?.evidenceGate?.isOpen?.()) {
++    abortEvidenceGate?.(reason || 'evidence_not_met', metrics);
++    return;
++  }
++
++  if (state?.bargeConfirmActive && typeof VadFrameUtils?.clearBargeConfirm === 'function') {
++    VadFrameUtils.clearBargeConfirm(true);
++  }
++
++  if (state?.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
++    const elapsed = Math.max(0, now - (state.recStartedAt || now));
++    const wait = Math.max(0, minTurnMs - elapsed);
++    if (wait > 0) {
++      voiceLog?.('debug', 'delaying VAD end', { waitMs: wait, elapsed });
++      VadFrameUtils?.clearPendingEndTimer?.();
++      const next =
++        typeof nestedOnSpeechEndCommitted === 'function'
++          ? () => nestedOnSpeechEndCommitted(detail)
++          : () => onSpeechEndCommitted(ctx, detail);
++      state.pendingEndTimer = setTimeout(next, wait);
++      return;
++    }
++  }
++
++  logLifecycle?.(
++    'vad_speech_end',
++    {
++      reason,
++      snrDb: roundTenths(metrics?.snrDb),
++      noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
++      speechDurationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
++      thresholdStopDb: roundTenths(metrics?.thresholds?.stopDb),
++    },
++    'info',
++  );
++  VadFrameUtils?.maybeSendAudioStop?.({ reason });
++  VadFrameUtils?.safeClearTurnTimer?.();
++  VadFrameUtils?.clearPendingEndTimer?.();
++  clearSafetyCloseTimer?.();
++  stopRecorder?.({ reason });
++}
+diff --git a/static/js/voice/legacy/VoiceLegacyFacade.js b/static/js/voice/legacy/VoiceLegacyFacade.js
+index acbc37f724999d1faac58961330c12b92db42d02..514becdcdc7aa3ea829a77c1699e531998b2fabe 100644
+--- a/static/js/voice/legacy/VoiceLegacyFacade.js
++++ b/static/js/voice/legacy/VoiceLegacyFacade.js
+@@ -1,27 +1,28 @@
+ import { emitVoiceEvent } from '../ui/Events.js';
+ export { onFrameSilence, onFrameSpeech } from './VadProcessLegacy.js';
++export { onSpeechStartCommitted, onSpeechEndCommitted } from './CommitHandlersLegacy.js';
+ import { bufferPreRollFrame, flushShadowBuffer, resetShadowBufferState } from '../core/index.js';
+ import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from '../../ws_module.js';
+ import {
+   DEFAULT_MAX_TURN_MS,
+   EVIDENCE_MIN_BYTES,
+   EVIDENCE_MIN_SNR_DB,
+   EVIDENCE_MIN_SPEECH_MS,
+   MIN_VALID_BLOB_BYTES,
+   PARTIAL_CONF_RISE_DELTA,
+   PARTIAL_CONF_THRESHOLD,
+   REC_MIME,
+   SAFETY_CLOSE_DELAY_MS,
+   PRE_ROLL_MS,
+   optsFromGlobal,
+   _clearGreetGateWaiters,
+   _completeGreetGate,
+   _handleGreetGateStateFrame,
+   _handleGreetGateUtteranceEnd,
+   _logLifecycle,
+   _resetGreetGateState,
+   _updateAssistantPhaseFromDetail,
+   _voiceLog,
+   _now,
+   _waitForGreetGate,
+   state,
+diff --git a/static/js/voice/legacy/VoiceRuntimeLegacy.js b/static/js/voice/legacy/VoiceRuntimeLegacy.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..6b0eb9d1010b829586c3b46eef996624c1237d0d
+--- /dev/null
++++ b/static/js/voice/legacy/VoiceRuntimeLegacy.js
+@@ -0,0 +1,186 @@
++import { emitVoiceEvent } from '../ui/Events.js';
++import { TurnState } from '../core/index.js';
++import { sendJSON } from '../../ws_module.js';
++import { stopPlayback, isPlaying as ttsIsPlaying } from '../../audio.js';
++import { registerTtsEventListener } from '../tts/TtsHandlers.js';
++import { updateSessionNoise, getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
++import {
++  armVAD as facadeArmVAD, bargeIn as facadeBargeIn, disarmVAD as facadeDisarmVAD,
++  forceBargeInEnd as facadeForceBargeInEnd, forceBargeInStart as facadeForceBargeInStart,
++  initMic as facadeInitMic, isRecording as facadeIsRecording, onWsClose as facadeOnWsClose,
++  onWsMessage as facadeOnWsMessage, onWsOpen as facadeOnWsOpen, registerVoiceLegacyFacade,
++  setGreetGateActive as facadeSetGreetGateActive, setVadBoost as facadeSetVadBoost,
++  legacyClearManualTimers, legacyClearSafetyCloseTimer, legacyCloseTurnIfOpen,
++  legacySetGreetGateActive, legacyOnWsCloseImpl, legacyOnWsMessageImpl, legacyOnWsOpenImpl,
++  legacyOnMicAvailable, legacyOnMicStop, legacyOnRecorderData, legacyOnRecorderError,
++  legacyResetEvidenceGate, legacySendRecorderChunk, legacyPrimeRecorderForPreRoll,
++  legacyStartRecorder, legacyStopRecorder, legacyAbortEvidenceGate, legacyEvaluateEvidenceGate,
++  legacyCommitEvidenceGate, legacyUpdateEvidenceGateWithChunk, legacyUpdateEvidenceGateWithPartial,
++  createVadSchedulerLegacy, onFrameSpeech as facadeOnFrameSpeech, startVadLoop as facadeStartVadLoop,
++  onTtsStart, onTtsEnd, VadFrameUtils, onSpeechStartCommitted as facadeOnSpeechStartCommitted,
++  onSpeechEndCommitted as facadeOnSpeechEndCommitted,
++} from './VoiceLegacyFacade.js';
++import {
++  DEFAULT_MAX_TURN_MS, EVIDENCE_MIN_BYTES, EVIDENCE_MIN_SNR_DB, EVIDENCE_MIN_SPEECH_MS,
++  GREET_BARGE_MIN_SNR_DB, MANUAL_DEBOUNCE_MS, MANUAL_NO_AUDIO_CANCEL_MS, MANUAL_VAD_IGNORE_MS,
++  PARTIAL_CONF_RISE_DELTA, PARTIAL_CONF_THRESHOLD, PRE_ROLL_MS, REC_MIME, SAFETY_CLOSE_DELAY_MS,
++  WEBM_MIME, _beginTurnTrace, _cancelGreetGate, _clearTurnTrace, _completeGreetGate,
++  _handleGreetGateStateFrame, _handleGreetGateUtteranceEnd, _logLifecycle, _now,
++  _updateAssistantPhaseFromDetail, _voiceLog, _waitForGreetGate, _getActiveTurnTraceId,
++  optsFromGlobal, state,
++} from './VoiceLegacyTopLevel.js';
++
++const _resetEvidenceGate = legacyResetEvidenceGate,
++  _clearSafetyCloseTimer = legacyClearSafetyCloseTimer,
++  _closeTurnIfOpen = legacyCloseTurnIfOpen,
++  _sendRecorderChunk = legacySendRecorderChunk,
++  _stopRecorder = legacyStopRecorder;
++
++let _setGreetGateActive;
++let _abortEvidenceGate;
++let _evaluateEvidenceGate;
++let _commitEvidenceGate;
++let _updateEvidenceGateWithChunk;
++let _updateEvidenceGateWithPartial;
++let _manualAutoCancel;
++let _forceBargeInStart;
++let _forceBargeInEnd;
++let _ensureWSListener;
++let _primeRecorderForPreRoll;
++let _startRecorder;
++let _bargeIn;
++let _arm;
++
++const commitCtx = {
++  onFrameSpeech: facadeOnFrameSpeech,
++  state,
++  VadFrameUtils,
++  updateSessionNoise,
++  getShadowStats,
++  getEvidenceSnrRequirement,
++  PRE_ROLL_MS,
++  EVIDENCE_MIN_SNR_DB,
++  EVIDENCE_MIN_SPEECH_MS,
++  EVIDENCE_MIN_BYTES,
++  GREET_BARGE_MIN_SNR_DB,
++  REC_MIME,
++  optsFromGlobal,
++  emitVoiceEvent,
++  startRecorder: (...args) => _startRecorder?.(...args),
++  primeRecorderForPreRoll: (...args) => _primeRecorderForPreRoll?.(...args),
++  bargeIn: (...args) => _bargeIn?.(...args),
++  resetEvidenceGate: _resetEvidenceGate,
++  evaluateEvidenceGate: (...args) => _evaluateEvidenceGate?.(...args),
++  now: _now,
++  logLifecycle: _logLifecycle,
++  voiceLog: _voiceLog,
++  beginTurnTrace: _beginTurnTrace,
++  completeGreetGate: _completeGreetGate,
++  getActiveTurnTraceId: _getActiveTurnTraceId,
++  abortEvidenceGate: (...args) => _abortEvidenceGate?.(...args),
++  clearSafetyCloseTimer: _clearSafetyCloseTimer,
++  stopRecorder: _stopRecorder,
++  performance: typeof performance !== 'undefined' ? performance : undefined,
++};
++const handleSpeechStartCommitted = (detail = {}) => facadeOnSpeechStartCommitted(commitCtx, detail);
++const handleSpeechEndCommitted = (detail = null) => facadeOnSpeechEndCommitted(commitCtx, detail);
++commitCtx.onSpeechStartCommitted = handleSpeechStartCommitted;
++commitCtx.onSpeechEndCommitted = handleSpeechEndCommitted;
++
++({
++  setGreetGateActive: _setGreetGateActive,
++  abortEvidenceGate: _abortEvidenceGate,
++  evaluateEvidenceGate: _evaluateEvidenceGate,
++  commitEvidenceGate: _commitEvidenceGate,
++  updateEvidenceGateWithChunk: _updateEvidenceGateWithChunk,
++  updateEvidenceGateWithPartial: _updateEvidenceGateWithPartial,
++  manualAutoCancel: _manualAutoCancel,
++  forceBargeInStart: _forceBargeInStart,
++  forceBargeInEnd: _forceBargeInEnd,
++  ensureWSListener: _ensureWSListener,
++  primeRecorderForPreRoll: _primeRecorderForPreRoll,
++  startRecorder: _startRecorder,
++  bargeIn: _bargeIn,
++  arm: _arm,
++} = createVadSchedulerLegacy({
++  state,
++  emitVoiceEvent,
++  sendJSON,
++  stopPlayback,
++  ttsIsPlaying,
++  startVadLoop: facadeStartVadLoop,
++  forceBargeInEnd: facadeForceBargeInEnd,
++  facadeOnWsMessage,
++  legacySetGreetGateActive,
++  legacyAbortEvidenceGate,
++  legacyEvaluateEvidenceGate,
++  legacyCommitEvidenceGate,
++  legacyUpdateEvidenceGateWithChunk,
++  legacyUpdateEvidenceGateWithPartial,
++  legacyPrimeRecorderForPreRoll,
++  legacyStartRecorder,
++  legacyStopRecorder,
++  legacyClearManualTimers,
++  legacyCloseTurnIfOpen,
++  VadFrameUtils,
++  now: _now,
++  logLifecycle: _logLifecycle,
++  voiceLog: _voiceLog,
++  MANUAL_DEBOUNCE_MS,
++  MANUAL_NO_AUDIO_CANCEL_MS,
++  MANUAL_VAD_IGNORE_MS,
++  onSpeechEndCommitted: handleSpeechEndCommitted,
++  onSpeechStartCommitted: handleSpeechStartCommitted,
++}));
++
++Object.assign(commitCtx, {
++  startRecorder: _startRecorder,
++  primeRecorderForPreRoll: _primeRecorderForPreRoll,
++  bargeIn: _bargeIn,
++  evaluateEvidenceGate: _evaluateEvidenceGate,
++  abortEvidenceGate: _abortEvidenceGate,
++});
++
++export async function initMic(stream = null) { return await facadeInitMic(stream); }
++export async function armVAD(stream = null, opts = {}) { return await facadeArmVAD(stream, opts); }
++export function disarmVAD() { facadeDisarmVAD(); }
++export function isRecording() { return !!facadeIsRecording(); }
++export function bargeIn() { facadeBargeIn(); }
++export function setVadBoost(value) { facadeSetVadBoost(value); }
++export function setGreetGateActive(active = true) { facadeSetGreetGateActive(!!active); }
++export function forceBargeInStart(meta = {}) { return facadeForceBargeInStart(meta); }
++export function forceBargeInEnd(opts = {}) { return facadeForceBargeInEnd(opts); }
++
++VadFrameUtils.refreshManualConfig();
++registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: VadFrameUtils.clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
++
++registerVoiceLegacyFacade({
++  initMic: (stream = null) => VadFrameUtils.ensureMic(stream),
++  armVAD: (stream = null, opts = {}) => _arm(stream, opts),
++  disarmVAD: () => { VadFrameUtils.disarm(); },
++  isRecording: () => !!(state.rec && state.rec.state === 'recording'),
++  bargeIn: () => { _bargeIn(); },
++  setVadBoost: (_value) => {},
++  setGreetGateActive: (active = true) => { _setGreetGateActive(!!active); },
++  forceBargeInStart: (meta = {}) => _forceBargeInStart(meta),
++  forceBargeInEnd: (opts = {}) => _forceBargeInEnd(opts),
++  onWsOpen: (detail = null) => { legacyOnWsOpenImpl(detail); },
++  onWsMessage: (detail = {}, helpers = {}) => legacyOnWsMessageImpl(detail, helpers),
++  onWsClose: (detail = null) => { legacyOnWsCloseImpl(detail); },
++  onMicAvailable: (detail = {}) => { legacyOnMicAvailable(detail); },
++  onMicStop: (detail = {}) => legacyOnMicStop(detail),
++  onRecorderData: (event, helpers = {}) => legacyOnRecorderData(event, helpers),
++  onRecorderError: (event = null, helpers = {}) => legacyOnRecorderError(event, helpers),
++});
++
++export const __TEST_ONLY__ = {
++  state,
++  startRecorder: _startRecorder,
++  stopRecorder: _stopRecorder,
++  ensureWSListener: _ensureWSListener,
++  closeTurnIfOpen: _closeTurnIfOpen,
++  sendRecorderChunk: _sendRecorderChunk,
++  clearSafetyCloseTimer: _clearSafetyCloseTimer,
++  onSpeechStartCommitted: handleSpeechStartCommitted,
++  onSpeechEndCommitted: handleSpeechEndCommitted,
++};

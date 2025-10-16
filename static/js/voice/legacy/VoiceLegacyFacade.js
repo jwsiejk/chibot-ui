@@ -1,5 +1,6 @@
 import { emitVoiceEvent } from '../ui/Events.js';
 export { onFrameSilence, onFrameSpeech } from './VadProcessLegacy.js';
+export { onSpeechStartCommitted, onSpeechEndCommitted } from './CommitHandlersLegacy.js';
 import { bufferPreRollFrame, flushShadowBuffer, resetShadowBufferState } from '../core/index.js';
 import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from '../../ws_module.js';
 import {
