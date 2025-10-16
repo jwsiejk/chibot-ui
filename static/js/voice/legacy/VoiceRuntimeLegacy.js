@@ -18,7 +18,7 @@ import {
   legacyCommitEvidenceGate, legacyUpdateEvidenceGateWithChunk, legacyUpdateEvidenceGateWithPartial,
   createVadSchedulerLegacy, onFrameSpeech as facadeOnFrameSpeech, startVadLoop as facadeStartVadLoop,
   onTtsStart, onTtsEnd, VadFrameUtils, onSpeechStartCommitted as facadeOnSpeechStartCommitted,
-  onSpeechEndCommitted as facadeOnSpeechEndCommitted,
+  onSpeechEndCommitted as facadeOnSpeechEndCommitted, bootstrapLegacyFacade,
 } from './VoiceLegacyFacade.js';
 import {
   DEFAULT_MAX_TURN_MS, EVIDENCE_MIN_BYTES, EVIDENCE_MIN_SNR_DB, EVIDENCE_MIN_SPEECH_MS,
@@ -30,11 +30,11 @@ import {
   optsFromGlobal, state,
 } from './VoiceLegacyTopLevel.js';
 
-const _resetEvidenceGate = legacyResetEvidenceGate,
-  _clearSafetyCloseTimer = legacyClearSafetyCloseTimer,
-  _closeTurnIfOpen = legacyCloseTurnIfOpen,
-  _sendRecorderChunk = legacySendRecorderChunk,
-  _stopRecorder = legacyStopRecorder;
+let _resetEvidenceGate;
+let _clearSafetyCloseTimer;
+let _closeTurnIfOpen;
+let _sendRecorderChunk;
+let _stopRecorder;
 
 let _setGreetGateActive;
 let _abortEvidenceGate;
@@ -51,37 +51,7 @@ let _startRecorder;
 let _bargeIn;
 let _arm;
 
-const commitCtx = {
-  onFrameSpeech: facadeOnFrameSpeech,
-  state,
-  VadFrameUtils,
-  updateSessionNoise,
-  getShadowStats,
-  getEvidenceSnrRequirement,
-  PRE_ROLL_MS,
-  EVIDENCE_MIN_SNR_DB,
-  EVIDENCE_MIN_SPEECH_MS,
-  EVIDENCE_MIN_BYTES,
-  GREET_BARGE_MIN_SNR_DB,
-  REC_MIME,
-  optsFromGlobal,
-  emitVoiceEvent,
-  startRecorder: (...args) => _startRecorder?.(...args),
-  primeRecorderForPreRoll: (...args) => _primeRecorderForPreRoll?.(...args),
-  bargeIn: (...args) => _bargeIn?.(...args),
-  resetEvidenceGate: _resetEvidenceGate,
-  evaluateEvidenceGate: (...args) => _evaluateEvidenceGate?.(...args),
-  now: _now,
-  logLifecycle: _logLifecycle,
-  voiceLog: _voiceLog,
-  beginTurnTrace: _beginTurnTrace,
-  completeGreetGate: _completeGreetGate,
-  getActiveTurnTraceId: _getActiveTurnTraceId,
-  abortEvidenceGate: (...args) => _abortEvidenceGate?.(...args),
-  clearSafetyCloseTimer: _clearSafetyCloseTimer,
-  stopRecorder: _stopRecorder,
-  performance: typeof performance !== 'undefined' ? performance : undefined,
-};
+const commitCtx = { onFrameSpeech: facadeOnFrameSpeech };
 const handleSpeechStartCommitted = (detail = {}) => facadeOnSpeechStartCommitted(commitCtx, detail);
 const handleSpeechEndCommitted = (detail = null) => facadeOnSpeechEndCommitted(commitCtx, detail);
 commitCtx.onSpeechStartCommitted = handleSpeechStartCommitted;
@@ -133,6 +103,66 @@ commitCtx.onSpeechEndCommitted = handleSpeechEndCommitted;
   onSpeechStartCommitted: handleSpeechStartCommitted,
 }));
 
+({
+  resetEvidenceGate: _resetEvidenceGate,
+  clearSafetyCloseTimer: _clearSafetyCloseTimer,
+  closeTurnIfOpen: _closeTurnIfOpen,
+  sendRecorderChunk: _sendRecorderChunk,
+  stopRecorder: _stopRecorder,
+} = bootstrapLegacyFacade({
+  registerVoiceLegacyFacade,
+  VadFrameUtils,
+  state,
+  arm: _arm,
+  bargeIn: _bargeIn,
+  setGreetGateActive: _setGreetGateActive,
+  forceBargeInStart: _forceBargeInStart,
+  forceBargeInEnd: _forceBargeInEnd,
+  legacyOnWsOpenImpl,
+  legacyOnWsMessageImpl,
+  legacyOnWsCloseImpl,
+  legacyOnMicAvailable,
+  legacyOnMicStop,
+  legacyOnRecorderData,
+  legacyOnRecorderError,
+  legacyResetEvidenceGate,
+  legacyClearSafetyCloseTimer,
+  legacyCloseTurnIfOpen,
+  legacySendRecorderChunk,
+  legacyStopRecorder,
+}));
+
+Object.assign(commitCtx, {
+  state,
+  VadFrameUtils,
+  updateSessionNoise,
+  getShadowStats,
+  getEvidenceSnrRequirement,
+  PRE_ROLL_MS,
+  EVIDENCE_MIN_SNR_DB,
+  EVIDENCE_MIN_SPEECH_MS,
+  EVIDENCE_MIN_BYTES,
+  GREET_BARGE_MIN_SNR_DB,
+  REC_MIME,
+  optsFromGlobal,
+  emitVoiceEvent,
+  startRecorder: (...args) => _startRecorder?.(...args),
+  primeRecorderForPreRoll: (...args) => _primeRecorderForPreRoll?.(...args),
+  bargeIn: (...args) => _bargeIn?.(...args),
+  resetEvidenceGate: _resetEvidenceGate,
+  evaluateEvidenceGate: (...args) => _evaluateEvidenceGate?.(...args),
+  now: _now,
+  logLifecycle: _logLifecycle,
+  voiceLog: _voiceLog,
+  beginTurnTrace: _beginTurnTrace,
+  completeGreetGate: _completeGreetGate,
+  getActiveTurnTraceId: _getActiveTurnTraceId,
+  abortEvidenceGate: (...args) => _abortEvidenceGate?.(...args),
+  clearSafetyCloseTimer: _clearSafetyCloseTimer,
+  stopRecorder: _stopRecorder,
+  performance: typeof performance !== 'undefined' ? performance : undefined,
+});
+
 Object.assign(commitCtx, {
   startRecorder: _startRecorder,
   primeRecorderForPreRoll: _primeRecorderForPreRoll,
@@ -153,25 +183,6 @@ export function forceBargeInEnd(opts = {}) { return facadeForceBargeInEnd(opts);
 
 VadFrameUtils.refreshManualConfig();
 registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: VadFrameUtils.clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
-
-registerVoiceLegacyFacade({
-  initMic: (stream = null) => VadFrameUtils.ensureMic(stream),
-  armVAD: (stream = null, opts = {}) => _arm(stream, opts),
-  disarmVAD: () => { VadFrameUtils.disarm(); },
-  isRecording: () => !!(state.rec && state.rec.state === 'recording'),
-  bargeIn: () => { _bargeIn(); },
-  setVadBoost: (_value) => {},
-  setGreetGateActive: (active = true) => { _setGreetGateActive(!!active); },
-  forceBargeInStart: (meta = {}) => _forceBargeInStart(meta),
-  forceBargeInEnd: (opts = {}) => _forceBargeInEnd(opts),
-  onWsOpen: (detail = null) => { legacyOnWsOpenImpl(detail); },
-  onWsMessage: (detail = {}, helpers = {}) => legacyOnWsMessageImpl(detail, helpers),
-  onWsClose: (detail = null) => { legacyOnWsCloseImpl(detail); },
-  onMicAvailable: (detail = {}) => { legacyOnMicAvailable(detail); },
-  onMicStop: (detail = {}) => legacyOnMicStop(detail),
-  onRecorderData: (event, helpers = {}) => legacyOnRecorderData(event, helpers),
-  onRecorderError: (event = null, helpers = {}) => legacyOnRecorderError(event, helpers),
-});
 
 export const __TEST_ONLY__ = {
   state,
