@@ -7,7 +7,6 @@ import {
   bufferPreRollFrame,
   flushShadowBuffer,
   getConfig,
-  nowMs,
 } from '../core/index.js';
 import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
 import { emitVoiceEvent } from '../ui/Events.js';
@@ -57,10 +56,21 @@ const voiceLog = (level, ...args) => {
 const MASK_LOG_INTERVAL_MS = 180;
 const TTS_POST_PLAY_HOLD_MS = 180;
 
+const nowMs = () => {
+  try {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+      return performance.now();
+    }
+  } catch {}
+  return Date.now();
+};
+
 const resolvePostTtsHoldMs = (ctx) => {
   const cfg = ctx?.config?.tts ?? {};
   let value;
-  if (Number.isFinite(cfg.post_play_hold_ms)) {
+  if (Number.isFinite(cfg.mask_decay_ms)) {
+    value = cfg.mask_decay_ms;
+  } else if (Number.isFinite(cfg.post_play_hold_ms)) {
     value = cfg.post_play_hold_ms;
   } else if (Number.isFinite(cfg.decay_ms)) {
     value = cfg.decay_ms;
@@ -166,20 +176,10 @@ const isTtsMaskActive = (ctx) => {
   if (!ctx?.state) {
     return false;
   }
-  if (ctx.state.ttsPlaying) {
-    return true;
-  }
-  const holdMs = resolvePostTtsHoldMs(ctx);
-  const ts = nowMs();
-  if (holdMs > 0 && Number.isFinite(ctx.ttsEndedAtMs) && ctx.ttsEndedAtMs > 0) {
-    if (ts - ctx.ttsEndedAtMs <= holdMs) {
-      return true;
-    }
-  }
-  if (ctx.ttsMask && typeof ctx.ttsMask.isMasked === 'function') {
-    return ctx.ttsMask.isMasked(ts);
-  }
-  return false;
+  const decayRaw = ctx.config?.tts?.mask_decay_ms ?? 200;
+  const decay = Math.min(200, Math.max(0, Number.isFinite(decayRaw) ? decayRaw : 200)); // keep ≤ 200ms
+  const endedAt = ctx.ttsEndedAtMs ?? 0;
+  return !!(ctx.state.ttsPlaying || (endedAt && (nowMs() - endedAt) < decay));
 };
 
 const ensureCtx = () => {
@@ -242,20 +242,25 @@ const registerTtsListener = (ctx) => {
   if (ctx.ttsListenerRegistered) return;
   ctx.ttsListenerRegistered = true;
   const win = typeof window !== 'undefined' ? window : null;
-  const listener = (event) => {
-    const detail = event?.detail || {};
-    const state = String(detail.state || '').toLowerCase();
-    if (state === 'playing') {
+  const listener = (ev) => {
+    const { detail } = ev || {};
+    const { state } = detail || {};
+    const normalizedState = String(state || '').toLowerCase();
+    if (normalizedState === 'playing') {
       ctx.state.ttsPlaying = true;
-      ctx.ttsEndedAtMs = 0;
+      ctx.ttsEndedAtMs = undefined;
       ctx.ttsMask.start();
       startMaskLogging(ctx);
-    } else if (state === 'ended' || state === 'stopped' || state === 'done') {
+    } else if (
+      normalizedState === 'ended' ||
+      normalizedState === 'stopped' ||
+      normalizedState === 'done'
+    ) {
       ctx.state.ttsPlaying = false;
       ctx.ttsEndedAtMs = nowMs();
-      ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail.snrBoost });
+      ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
       startMaskLogging(ctx);
-    } else if (state === 'ready') {
+    } else if (normalizedState === 'ready') {
       ctx.state.ttsPlaying = false;
       ctx.ttsEndedAtMs = nowMs();
       ctx.ttsMask.clear();
@@ -263,7 +268,7 @@ const registerTtsListener = (ctx) => {
       logReadyState(ctx);
     }
   };
-  try { win?.addEventListener?.('chip-tts', listener); } catch {}
+  try { win?.addEventListener?.('chip-tts', listener, { passive: true }); } catch {}
 };
 
 const ensureTransport = async (ctx) => {
