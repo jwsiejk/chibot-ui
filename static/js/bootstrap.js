@@ -1,3 +1,4 @@
+console.log("[bootstrap] build=2025-10-16T23:15Z");
 // bootstrap.js
 import { openWS, waitWSOpen, isOpen, closeWS, configure } from './ws_module.js';
 import { ensureCSRF, installFetchInterceptor } from '/static/js/csrf.js';
