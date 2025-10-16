@@ -305,7 +305,14 @@ function wireVoiceEventsOnce(){
     const detail = ev?.detail || {};
     const name = detail.name || detail.event;
     if (name === 'turn_open' || name === 'turn_close') {
-      _console('info', `askchip-voice ${name}`, {
+      _console('info', `askchip-voice ${name}
+    if (name === 'turn_open') {
+      try { window.__askchip_has_opened_turn = true; window.__askchip_turn_open = true; } catch {}
+    }
+    if (name === 'turn_close') {
+      try { window.__askchip_turn_open = false; } catch {}
+    }
+`, {
         ts_ms: detail.ts_ms ?? detail.ts ?? Date.now(),
         session_id: detail.sessionId || detail.session_id || null,
         turn_id: detail.turnId ?? detail.turn_id ?? null,

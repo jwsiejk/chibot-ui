@@ -676,7 +676,19 @@ export async function sendAudioChunk(blob){
   }
 }
 
+
+function __suppressCloseIfNoTurn() {
+  try {
+    const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
+    if (!opened) {
+      _console('log', '[ws] CloseStream suppressed: no user turn yet');
+      return true;
+    }
+  } catch {}
+  return false;
+}
 export async function sendCloseStream(){
+  if (__suppressCloseIfNoTurn()) return;
   // Drain the WS send buffer before closing the user turn.
   try{
     const deadline = Date.now() + 1500; // up to ~1.5s drain budget
