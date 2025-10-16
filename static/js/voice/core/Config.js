@@ -2,6 +2,13 @@ const DEFAULT_CONFIG = {
   barge_in: {
     mode: 'manual_only',
   },
+  admin: {
+    voice_metrics_panel: true,
+  },
+  metrics: {
+    client_enabled: true,
+    server_enabled: true,
+  },
   vad: {
     enabled: true,
     hysteresis: {
@@ -41,6 +48,16 @@ export function getConfig() {
   return {
     barge_in: {
       mode: source.barge_in?.mode ?? DEFAULT_CONFIG.barge_in.mode,
+    },
+    admin: {
+      voice_metrics_panel:
+        source.admin?.voice_metrics_panel ?? DEFAULT_CONFIG.admin.voice_metrics_panel,
+    },
+    metrics: {
+      client_enabled:
+        source.metrics?.client_enabled ?? DEFAULT_CONFIG.metrics.client_enabled,
+      server_enabled:
+        source.metrics?.server_enabled ?? DEFAULT_CONFIG.metrics.server_enabled,
     },
     vad: {
       enabled: source.vad?.enabled ?? DEFAULT_CONFIG.vad.enabled,

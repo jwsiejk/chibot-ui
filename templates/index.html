@@ -112,6 +112,8 @@
       const root = (window.__askchip_config = window.__askchip_config || {});
       Object.assign(root, {
         barge_in: root.barge_in || {},
+        admin: root.admin || {},
+        metrics: root.metrics || {},
         vad: root.vad || {},
         tts: root.tts || {},
         evidence: root.evidence || {},
@@ -142,6 +144,17 @@
       }
       if (typeof root.tts.decay_ms === 'undefined') {
         root.tts.decay_ms = 700;
+      }
+
+      if (typeof root.admin.voice_metrics_panel === 'undefined') {
+        root.admin.voice_metrics_panel = true;
+      }
+
+      if (typeof root.metrics.client_enabled === 'undefined') {
+        root.metrics.client_enabled = true;
+      }
+      if (typeof root.metrics.server_enabled === 'undefined') {
+        root.metrics.server_enabled = true;
       }
 
       if (typeof root.evidence.snr_sigma === 'undefined') {

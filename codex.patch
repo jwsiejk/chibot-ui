@@ -1,138 +1,310 @@
-diff --git a/static/js/admin/VoiceMetricsPanel.js b/static/js/admin/VoiceMetricsPanel.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..b3f97c6e0dd11d07a83cf8421617239e9669ab80
---- /dev/null
-+++ b/static/js/admin/VoiceMetricsPanel.js
-@@ -0,0 +1,66 @@
-+const PANEL_ID = 'askchip-voice-metrics-panel';
-+const PANEL_STYLE = 'position:fixed;right:12px;bottom:12px;width:240px;max-height:200px;overflow:auto;background:rgba(255,255,255,0.97);box-shadow:0 2px 6px rgba(0,0,0,0.2);border-radius:6px;padding:8px;z-index:2147483000;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
-+const TABLE_STYLE = 'width:100%;border-collapse:collapse;font-size:11px;';
-+const CELL_STYLE = 'padding:2px 4px;border-top:1px solid rgba(0,0,0,0.1);text-align:left;';
+diff --git a/static/js/voice/core/Config.js b/static/js/voice/core/Config.js
+index a9e4f116aeafb6b6024d4cc054f5d88794938653..e752e35b3c4913d65e1fd56e3b2261076e72ea16 100644
+--- a/static/js/voice/core/Config.js
++++ b/static/js/voice/core/Config.js
+@@ -1,69 +1,86 @@
+ const DEFAULT_CONFIG = {
+   barge_in: {
+     mode: 'manual_only',
+   },
++  admin: {
++    voice_metrics_panel: true,
++  },
++  metrics: {
++    client_enabled: true,
++    server_enabled: true,
++  },
+   vad: {
+     enabled: true,
+     hysteresis: {
+       enter: 3,
+       exit: 4,
+     },
+   },
+   tts: {
+     mask_auto_vad: true,
+     decay_ms: 700,
+   },
+   evidence: {
+     snr_sigma: 2.5,
+     asr_conf: 0.65,
+     w1: 0.5,
+     w2: 0.3,
+     w3: 0.2,
+     threshold: 1.0,
+     asrInstantOpen: 0.7,
+   },
+   shadow: {
+     ms: 450,
+   },
+   commit: {
+     min_ms: 500,
+     drop_if_no_partial: true,
+     no_partial_timeout_ms: 1200,
+   },
+   transport: {
+     close_on_turn_end: false,
+   },
+ };
+ 
+ export function getConfig() {
+   const source = (typeof window !== 'undefined' && window.__askchip_config) || {};
+ 
+   return {
+     barge_in: {
+       mode: source.barge_in?.mode ?? DEFAULT_CONFIG.barge_in.mode,
+     },
++    admin: {
++      voice_metrics_panel:
++        source.admin?.voice_metrics_panel ?? DEFAULT_CONFIG.admin.voice_metrics_panel,
++    },
++    metrics: {
++      client_enabled:
++        source.metrics?.client_enabled ?? DEFAULT_CONFIG.metrics.client_enabled,
++      server_enabled:
++        source.metrics?.server_enabled ?? DEFAULT_CONFIG.metrics.server_enabled,
++    },
+     vad: {
+       enabled: source.vad?.enabled ?? DEFAULT_CONFIG.vad.enabled,
+       hysteresis: {
+         enter: source.vad?.hysteresis?.enter ?? DEFAULT_CONFIG.vad.hysteresis.enter,
+         exit: source.vad?.hysteresis?.exit ?? DEFAULT_CONFIG.vad.hysteresis.exit,
+       },
+     },
+     tts: {
+       mask_auto_vad: source.tts?.mask_auto_vad ?? DEFAULT_CONFIG.tts.mask_auto_vad,
+       decay_ms: source.tts?.decay_ms ?? DEFAULT_CONFIG.tts.decay_ms,
+     },
+     evidence: {
+       snr_sigma: source.evidence?.snr_sigma ?? DEFAULT_CONFIG.evidence.snr_sigma,
+       asr_conf: source.evidence?.asr_conf ?? DEFAULT_CONFIG.evidence.asr_conf,
+       w1: source.evidence?.w1 ?? DEFAULT_CONFIG.evidence.w1,
+       w2: source.evidence?.w2 ?? DEFAULT_CONFIG.evidence.w2,
+       w3: source.evidence?.w3 ?? DEFAULT_CONFIG.evidence.w3,
+       threshold: source.evidence?.threshold ?? DEFAULT_CONFIG.evidence.threshold,
+       asrInstantOpen:
+         source.evidence?.asrInstantOpen ?? DEFAULT_CONFIG.evidence.asrInstantOpen,
+     },
+     shadow: {
+       ms: source.shadow?.ms ?? DEFAULT_CONFIG.shadow.ms,
+     },
+     commit: {
+diff --git a/static/js/voice/index.js b/static/js/voice/index.js
+index 55d54b8deb04be6404ebb742378ed80f2e840562..ee5ef03fbb16415029dbd4fa23ad3c4ee04ad4c4 100644
+--- a/static/js/voice/index.js
++++ b/static/js/voice/index.js
+@@ -1,4 +1,118 @@
++import { DEFAULT_CONFIG } from './core/index.js';
 +
-+function getMetrics() {
-+  try {
-+    return typeof window.__getRecentVoiceMetrics === 'function' ? window.__getRecentVoiceMetrics().slice(0, 10) : [];
-+  } catch {
-+    return [];
++let hasWarned = false;
++
++const warnOnce = (message) => {
++  if (hasWarned) {
++    return;
 +  }
++  hasWarned = true;
++  console.warn(`[voice][config] ${message}`);
++};
++
++const clampNumber = (target, key, { min = 0, fallback, label }) => {
++  if (!target) {
++    return;
++  }
++
++  const raw = target[key];
++  const next = Number(raw);
++
++  if (!Number.isFinite(next) || next < min) {
++    target[key] = Math.max(min, fallback);
++    warnOnce(`Adjusted ${label} from ${raw} to ${target[key]}`);
++  } else {
++    target[key] = next;
++  }
++};
++
++const ensureBoolean = (target, key, { fallback, label }) => {
++  if (!target) {
++    return;
++  }
++
++  if (typeof target[key] !== 'boolean') {
++    target[key] = fallback;
++    warnOnce(`Adjusted ${label} to default (${fallback})`);
++  }
++};
++
++export function validateConfig(config) {
++  if (!config || typeof config !== 'object') {
++    warnOnce('Received invalid config, using defaults');
++    return DEFAULT_CONFIG;
++  }
++
++  const result = {
++    ...config,
++    commit: { ...DEFAULT_CONFIG.commit, ...config.commit },
++    tts: { ...DEFAULT_CONFIG.tts, ...config.tts },
++    shadow: { ...DEFAULT_CONFIG.shadow, ...config.shadow },
++    evidence: { ...DEFAULT_CONFIG.evidence, ...config.evidence },
++    metrics: { ...DEFAULT_CONFIG.metrics, ...config.metrics },
++  };
++
++  clampNumber(result.commit, 'min_ms', {
++    min: 0,
++    fallback: DEFAULT_CONFIG.commit.min_ms,
++    label: 'commit.min_ms',
++  });
++
++  clampNumber(result.commit, 'no_partial_timeout_ms', {
++    min: result.commit.min_ms,
++    fallback: DEFAULT_CONFIG.commit.no_partial_timeout_ms,
++    label: 'commit.no_partial_timeout_ms',
++  });
++
++  ensureBoolean(result.commit, 'drop_if_no_partial', {
++    fallback: DEFAULT_CONFIG.commit.drop_if_no_partial,
++    label: 'commit.drop_if_no_partial',
++  });
++
++  clampNumber(result.tts, 'decay_ms', {
++    min: 0,
++    fallback: DEFAULT_CONFIG.tts.decay_ms,
++    label: 'tts.decay_ms',
++  });
++
++  clampNumber(result.shadow, 'ms', {
++    min: 0,
++    fallback: DEFAULT_CONFIG.shadow.ms,
++    label: 'shadow.ms',
++  });
++
++  clampNumber(result.evidence, 'snr_sigma', {
++    min: 0,
++    fallback: DEFAULT_CONFIG.evidence.snr_sigma,
++    label: 'evidence.snr_sigma',
++  });
++
++  clampNumber(result.evidence, 'asr_conf', {
++    min: 0,
++    fallback: DEFAULT_CONFIG.evidence.asr_conf,
++    label: 'evidence.asr_conf',
++  });
++
++  clampNumber(result.evidence, 'threshold', {
++    min: 0,
++    fallback: DEFAULT_CONFIG.evidence.threshold,
++    label: 'evidence.threshold',
++  });
++
++  ensureBoolean(result.metrics, 'client_enabled', {
++    fallback: DEFAULT_CONFIG.metrics.client_enabled,
++    label: 'metrics.client_enabled',
++  });
++
++  ensureBoolean(result.metrics, 'server_enabled', {
++    fallback: DEFAULT_CONFIG.metrics.server_enabled,
++    label: 'metrics.server_enabled',
++  });
++
++  return result;
 +}
 +
-+export function mountVoiceMetricsPanel() {
-+  try {
-+    if (window?.__askchip_config?.admin?.voice_metrics_panel !== true) return;
-+    if (document.getElementById(PANEL_ID)) return;
-+    const panel = document.createElement('div');
-+    panel.id = PANEL_ID;
-+    panel.style.cssText = PANEL_STYLE;
-+    const title = document.createElement('div');
-+    title.textContent = 'Voice Metrics';
-+    title.style.cssText = 'font-size:12px;font-weight:600;margin-bottom:4px;';
-+    const table = document.createElement('table');
-+    table.style.cssText = TABLE_STYLE;
-+    const thead = document.createElement('thead');
-+    thead.innerHTML = '<tr><th style="text-align:left;padding:2px 4px;">#</th><th style="text-align:left;padding:2px 4px;">Payload</th></tr>';
-+    const tbody = document.createElement('tbody');
-+    const render = () => {
-+      tbody.innerHTML = '';
-+      const metrics = getMetrics();
-+      if (!metrics.length) {
-+        const row = document.createElement('tr');
-+        const cell = document.createElement('td');
-+        cell.colSpan = 2;
-+        cell.style.cssText = CELL_STYLE;
-+        cell.textContent = 'No metrics yet';
-+        row.appendChild(cell);
-+        tbody.appendChild(row);
-+        return;
-+      }
-+      metrics.forEach((entry, idx) => {
-+        const row = document.createElement('tr');
-+        const idxCell = document.createElement('td');
-+        idxCell.style.cssText = CELL_STYLE;
-+        idxCell.textContent = String(idx + 1);
-+        const dataCell = document.createElement('td');
-+        dataCell.style.cssText = CELL_STYLE;
-+        try {
-+          dataCell.textContent = JSON.stringify(entry);
-+        } catch {
-+          dataCell.textContent = String(entry);
-+        }
-+        row.append(idxCell, dataCell);
-+        tbody.appendChild(row);
-+      });
-+    };
-+    render();
-+    window.addEventListener('voice-metrics-updated', render);
-+    table.append(thead, tbody);
-+    panel.append(title, table);
-+    document.body.appendChild(panel);
-+  } catch (err) {
-+    console.warn('[VoiceMetricsPanel] mount failed', err);
-+  }
-+}
-diff --git a/static/js/ws.js b/static/js/ws.js
-index 21b4cbc2930726061fdb7f8a6019958e9103eb4b..c4bf7a81508b36f173cec344576b77be67968fae 100644
---- a/static/js/ws.js
-+++ b/static/js/ws.js
-@@ -159,50 +159,53 @@ function _wsLog(level, message, detail = undefined) {
-         const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
-         method.call(console, `${prefix} ${message}`, payload);
-         return;
-       }
-       if (traceId) {
-         method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
-         return;
-       }
-       method.call(console, `${prefix} ${message}`, detail);
-     } catch {}
-   });
- }
- 
- function _recordVoiceMetrics(payload){
-   try {
-     if (typeof window === 'undefined') return;
-     if (!Array.isArray(window.__voice_metrics)) {
-       window.__voice_metrics = [];
-     }
-     const store = window.__voice_metrics;
-     const base = payload && typeof payload === 'object' ? { ...payload } : {};
-     store.push(Object.freeze(base));
-     if (store.length > 10) {
-       store.splice(0, store.length - 10);
-     }
-+    try {
-+      window.dispatchEvent(new CustomEvent('voice-metrics-updated', { detail: { payload: base } }));
-+    } catch {}
-   } catch {}
- }
- 
- function _scheduleProviderFallback(){
-   if (_keepaliveState.providerGateTimer){
-     clearTimeout(_keepaliveState.providerGateTimer);
-   }
-   if (!_keepaliveState.pauseReasons.has(_KEEPALIVE_REASON_PROVIDER)){
-     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
-   }
-   _keepaliveState.providerGateTimer = setTimeout(()=>{
-     _keepaliveState.providerGateTimer = null;
-     if (!_keepaliveState.providerReady){
-       _keepaliveState.providerReady = true;
-     }
-     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
-   }, _KEEPALIVE_PROVIDER_FALLBACK_MS);
- }
- 
- let _lastUserSendTs = 0;
- let _gotReady = false;
- let _openPromise = null;
- 
- // reconnect state
- let _reconnecting = false;
+ export * from './core/index.js';
+ export * from './io/index.js';
+ export * from './policy/index.js';
+ export * from './ui/index.js';
 diff --git a/templates/index.html b/templates/index.html
-index 22c0ef8db16d1f1585201c92cccf5099f55195f8..24eb51fabdd70990febb4c98827c64e35fc370e3 100644
+index 24eb51fabdd70990febb4c98827c64e35fc370e3..3f09420db70155c9dabacf7b3d2a35692fa5e7cb 100644
 --- a/templates/index.html
 +++ b/templates/index.html
-@@ -165,48 +165,63 @@
+@@ -90,82 +90,95 @@
+ 
+   <div id="profileModal" class="modal hidden">
+     <div class="sheet">
+       <h3>Profile</h3>
+       <div class="grid">
+         <label>Name<input id="prof_name"/></label>
+         <label>Email<input id="prof_email" disabled/></label>
+         <label>Role<input id="prof_role"/></label>
+         <label>Region<input id="prof_region"/></label>
+         <label>Company<input id="prof_company"/></label>
+       </div>
+       <div class="actions">
+         <button id="profileSave" class="primary">Save</button>
+         <button id="profileCancel" type="button">Cancel</button>
+       </div>
+       <div id="profileMsg" class="msgline"></div>
+     </div>
+   </div>
+ 
+   <!-- Scripts -->
+   <script>
+     (function () {
+       const root = (window.__askchip_config = window.__askchip_config || {});
+       Object.assign(root, {
+         barge_in: root.barge_in || {},
++        admin: root.admin || {},
++        metrics: root.metrics || {},
+         vad: root.vad || {},
+         tts: root.tts || {},
+         evidence: root.evidence || {},
+         shadow: root.shadow || {},
+         commit: root.commit || {},
+         transport: root.transport || {},
+       });
+ 
+       if (typeof root.barge_in.mode === 'undefined') {
+         root.barge_in.mode = 'manual_only';
+       }
+ 
+       if (typeof root.vad.enabled === 'undefined') {
+         root.vad.enabled = true;
+       }
+       Object.assign(root.vad, {
+         hysteresis: root.vad.hysteresis || {},
+       });
+       if (typeof root.vad.hysteresis.enter === 'undefined') {
+         root.vad.hysteresis.enter = 3;
+       }
+       if (typeof root.vad.hysteresis.exit === 'undefined') {
+         root.vad.hysteresis.exit = 4;
+       }
+ 
+       if (typeof root.tts.mask_auto_vad === 'undefined') {
+         root.tts.mask_auto_vad = true;
+       }
+       if (typeof root.tts.decay_ms === 'undefined') {
+         root.tts.decay_ms = 700;
+       }
+ 
++      if (typeof root.admin.voice_metrics_panel === 'undefined') {
++        root.admin.voice_metrics_panel = true;
++      }
++
++      if (typeof root.metrics.client_enabled === 'undefined') {
++        root.metrics.client_enabled = true;
++      }
++      if (typeof root.metrics.server_enabled === 'undefined') {
++        root.metrics.server_enabled = true;
++      }
++
+       if (typeof root.evidence.snr_sigma === 'undefined') {
+         root.evidence.snr_sigma = 2.5;
+       }
+       if (typeof root.evidence.asr_conf === 'undefined') {
+         root.evidence.asr_conf = 0.65;
+       }
+ 
+       if (typeof root.shadow.ms === 'undefined') {
+         root.shadow.ms = 450;
+       }
+ 
+       if (typeof root.commit.min_ms === 'undefined') {
+         root.commit.min_ms = 500;
+       }
+       if (typeof root.commit.drop_if_no_partial === 'undefined') {
+         root.commit.drop_if_no_partial = true;
+       }
+ 
        if (typeof root.transport.close_on_turn_end === 'undefined') {
          root.transport.close_on_turn_end = false;
        }
@@ -140,59 +312,3 @@ index 22c0ef8db16d1f1585201c92cccf5099f55195f8..24eb51fabdd70990febb4c98827c64e3
    </script>
    <script>
      (function () {
-       const cfg = {{ askchip_config|tojson }};
-       try {
-         if (cfg && typeof cfg === 'object') {
-           const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
-           for (const [key, value] of Object.entries(cfg)) {
-             if (value && typeof value === 'object' && !Array.isArray(value)) {
-               target[key] = Object.assign({}, target[key] || {}, value);
-             } else {
-               target[key] = value;
-             }
-           }
-         }
-       } catch (err) {
-         console.warn('[index] failed to merge askchip_config', err);
-       }
-     })();
-   </script>
-   {% set asset_ver = asset_version('js/bootstrap.js') %}
-+  {% set admin_voice_metrics_ver = asset_version('js/admin/VoiceMetricsPanel.js') %}
-   <script>
-     window.__askchipAssetVersion = {{ asset_ver|tojson }};
-   </script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/askchip_client_hooks.js') }}?v={{ asset_ver }}"
-   ></script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/bootstrap.js') }}?v={{ asset_ver }}"
-   ></script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
-   ></script>
-   <script
-     type="module"
-     src="{{ url_for('static', filename='js/ui_menu.js') }}?v={{ asset_ver }}"
-   ></script>
-+  <script type="module">
-+    const adminCfg = window?.__askchip_config?.admin;
-+    if (adminCfg?.voice_metrics_panel === true) {
-+      import('{{ url_for('static', filename='js/admin/VoiceMetricsPanel.js') }}?v={{ admin_voice_metrics_ver }}')
-+        .then((mod) => {
-+          try {
-+            mod?.mountVoiceMetricsPanel?.();
-+          } catch (err) {
-+            console.warn('[index] mountVoiceMetricsPanel failed', err);
-+          }
-+        })
-+        .catch((err) => console.warn('[index] VoiceMetricsPanel load failed', err));
-+    }
-+  </script>
-   <script src="{{ url_for('static', filename='js/askchip_probe_instrumentation.js') }}?v={{ asset_ver }}" defer></script>
- 
- </body>
- </html>
