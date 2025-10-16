@@ -1,118 +1,131 @@
-bootstrap.js?v=1760650936:32 [AskChip] bootstrap loaded
-debug.js?v=1760650936:4 [DBG] debug:on Object
-bootstrap.js?v=1760650936:32 [bootstrap] startOnce called N=1
-bootstrap.js?v=1760650936:363 [Violation] 'click' handler took 170ms
-ws.js?v=1760650936:142 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760650936', version: '1760650936', flags: undefined, reconnectEnabled: true, sessionStarted: false}
-ws.js?v=1760650936:142 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760650936:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws#1', event: 'askchip-ws', note: 'bootstrap-wire'}
-bootstrap.js?v=1760650936:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws-close#2', event: 'askchip-ws-close', note: 'bootstrap-wire'}
-bootstrap.js?v=1760650936:32 [bootstrap] startOnce sending greet configure
-ws.js?v=1760650936:732 [ws] [Configure OUT] {"type":"Configure","session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410","greet":true,"reset":1,"feature_manual_barge_in":true,"barge_in_mode_manual":false,"auto_commit_when_ready":true,"greet_seq":1} {ts_ms: 1760651152784}
-debug.js?v=1760650936:4 [DBG] UI→WS {type: 'Configure', session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', greet: true, reset: 1, feature_manual_barge_in: true, …}
-bootstrap.js?v=1760650936:32 [bootstrap] startOnce greet configure sent — recorder setup will follow
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"ready","session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410"}
-bootstrap.js?v=1760650936:32 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
-AdaptiveRuntime.js:58 [audio] context state: running {ts_ms: 1760651152963, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410'}
-AdaptiveRuntime.js:58 [recorder] started {ts_ms: 1760651152968, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', mime_type: 'audio/webm; codecs=opus', timeslice_ms: 150}
-ws.js?v=1760650936:142 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760650936', version: '1760650936', flags: undefined, reconnectEnabled: true, sessionStarted: false}
-ws.js?v=1760650936:142 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760650936:32 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
-bootstrap.js?v=1760650936:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws#3', event: 'askchip-ws', note: 'bootstrap-markAssistant-once'}
-askchip_client_hooks.js?v=1760650936:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760651153726, …}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"5a224dae-afe1-4d97-a24e-6a03422f6410","v":1,"ts_ms":1760651154361,"ts":1760651154.361,"session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410","step":5}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"Configure","sid":"5a224dae-afe1-4d97-a24e-6a03422f6410","session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410"}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760651154362,"ts":1760651154.362,"session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410","sid":"5a224dae-afe1-4d97-a24e-6a03422f6410","step":6}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"greet:reset","route":"/ws/v1/chat","label":"greet:reset","session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410","greet_seq":1,"sid":"5a224dae-afe1-4d97-a24e-6a03422f6410"}
-askchip_client_hooks.js?v=1760650936:319 session_goal {type: 'session_goal', phase: 'clarify', depth: 'normal', delivery_pref: 'explain', working_intent: 'greet', …}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"session_goal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"event":"session_goal","session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410","sid":"5a224dae-afe1-4d97-a24e-6a03422f6410"}
-askchip_client_hooks.js?v=1760650936:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760650936:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '5a224dae-afe1-4d97-a24e-6a03422f6410', …}
-askchip_client_hooks.js?v=1760650936:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '9b143d96166c4c72969058d0015b9d87', …}
-askchip_client_hooks.js?v=1760650936:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '5a224dae-afe1-4d97-a24e-6a03422f6410', …}
-AdaptiveRuntime.js:58 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760651156628, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410'}
-askchip_client_hooks.js?v=1760650936:225 greet:reset {event: 'greet:reset', kind: 'greet:reset', label: 'greet:reset /ws/v1/chat', route: '/ws/v1/chat', greet_seq: 1, …}
-askchip_client_hooks.js?v=1760650936:201 session_goal {event: 'session_goal', kind: 'session_goal', label: 'session_goal:normal', phase: 'clarify', depth: 'normal', …}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"turn_action_metadata","turn_id":"259f35d27cdc4529af392e2ea3b50ff3","is_greet":true,"nlu":{"intent":"fallback","topic":null,"needs_scoping":null,"wants_list":null,"expected_depth":null,"confidence":0.2},"policy":{"action":"offer_steps","verbosity":"brief","show_suggestions":true},"session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410","sid":"5a224dae-afe1-4d97-a24e-6a03422f6410"}
-askchip_client_hooks.js?v=1760650936:313 policy_decision: unknown
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"policy_decision","sid":"5a224dae-afe1-4d97-a24e-6a03422f6410","turn_id":"259f35d27cdc4529af392e2ea3b50ff3","teacher_move":"offer_steps","teacher_move_family":"answer","reason":"meta_override","fallback_fired":false,"fallback_reason":null,"nlu_intent":"fallback","nlu_confidence":0.2,"session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410","meta_action":"offer_steps","policy_move":"check_understanding","persona_move":"compare"}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"suggestions_made","turn_id":"259f35d27cdc4529af392e2ea3b50ff3","items":[{"text":"Send me the email","source":"policy"},{"text":"Walk me through it live","source":"policy"},{"text":"Show install steps","source":"retrieval"}],"max_items":4,"max_words_per_item":7,"count":3,"sid":"5a224dae-afe1-4d97-a24e-6a03422f6410","event":"suggestions_made","session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410"}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"assistant_chunk","turn_id":"259f35d27cdc4529af392e2ea3b50ff3","text":"Hey James, what outcome are you aiming for today?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps","policy_chips":["Send me the email","Walk me through it live"]}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"suggestions","turn_id":"259f35d27cdc4529af392e2ea3b50ff3","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"}]}
-askchip_client_hooks.js?v=1760650936:272 assistant_end
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"assistant_end","turn_id":"259f35d27cdc4529af392e2ea3b50ff3"}
-askchip_client_hooks.js?v=1760650936:225 turn_action_metadata {event: 'turn_action_metadata', kind: 'turn_action_metadata', turn_id: '259f35d27cdc4529af392e2ea3b50ff3', is_greet: true, nlu: {…}, …}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"tts:start","session_id":"5a224dae-afe1-4d97-a24e-6a03422f6410","turn_id":"259f35d27cdc4529af392e2ea3b50ff3","sid":"5a224dae-afe1-4d97-a24e-6a03422f6410"}
-bootstrap.js?v=1760650936:32 [WS→UI] {"type":"assistant_audio","turn_id":"259f35d27cdc4529af392e2ea3b50ff3","mime":"audio/mpeg","audio_chunks":["SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYwLjE2LjEwMAAAAAAAAAAAAAAA//uQxAAD1HDLDgekdQrAm2FBjLJZOtXnOh43wkYuYm55q9+r0+abEoC7iZksQxWJxwV58AJAgB+Rdw5o0aOSMjNiAECQgBADBPMjAOG25o0aCCiBAgQIGG5zXRo0aNGgQIECBAgUYd3d3DgYsQiIiIEAAMWHh4eGAAAAAAeHh4eGAAAAAAeHh4eGAAAAAAeHh4eGAAAAAAeHh4eGAAAAAAeHh4eGAAAAAAeHh4eGAAAACE4eHn/8AAY837YxGYHZIWJZsCPLlHwI9SksVaWoiDBmI4KwTBEhsKJQJAPId0AIwEpMWEI7U4a412rRTbPHKeggAKAl1tuw5yljtXlq0WMqSep3ZuHJpQSlyFp9bIdMVASq3au5azTzaHkN+ms1dlZDXVVI10D92qb9J5jpT16SYpcF+UZ9h3+7nvu+//52v/T7cos41DimfyVbycwKFDQqgJBQWKhKBQUFHRSYKTCsoQ0YTBUIKg3C8xgHA0IiPNE4vSQAzjZHWADKOxkAEAbklxAUUY6qezCmEDK6HyCUhFGKzINTYV8hu2zW3caU//uSxBwDFfVzCCykeoLstCCBlI9ZsWfJkmMICXkk5flujWUaJAvGDxwKVMfblKYJjppxnGT9YZemmOE5+Uq8Uc4ChZRFcaUqJ1Q3TaFS13uddscFyEueierPSU3L6llUiyIg17yXt1M2yrZsUczjjE+RZpaQfCY0AqjxGLRARF9CTjFFieak9KLkUhRZlzjfAKSOR4PFLODQYsYSDCMEGQoTjSPUeEAw14doSAwVEW6NADBRAIFiEuT25NJIsiIjEw1DVyRFxVMlVklHaAAzTICLNKhirOlxsGRUb2TNWpHch2RgsgFRxonjqqB4FGgeWn//lykaPqoujz6ooxKb+Pp1eamvLKbhS9yOGWfurMGXEmVK6KIqR09jrmTFmXm3s1HySm2We3WzI0S2qhEdjkfCOmT6HBBT96XifeeHelBpzv3gpvn2phY8/iiAowTTHRMhtI4GCtMT1DiDXJDHEAwNiHUxiIEoJBLuEZzaGimdiZQCYbJCUaZI1FBym0HrKl7WIALwERCfzqW1IuCucZBZs77sMcgBuzuOBCKBaormrv/7ksQtA9dZfwQMsHrLBb2gQaYPWM1s3JAVC8lTmbn9bXjotOZ9Z+vxdMo9a93dxP/zsFf6l8s7t73zQFT42Zg1LdAaETqhdKBrJiiThk4Qs5rGrDZrKrW3olkA+/pbdQBL2WAX9OqzZwPmgeiwOrduDZM/nGx9AdscQBDRlXoBoIGiRoatwuaMDzEkhoamouAwgsFfnQfVAONCACNCotWYHBzYITCoTXlFlPrDjeOlKWTtcUwYWrY6C/06IGRNYSztsEFNWhyExuB7ziC/ob/CtlekRvkBykv5lftU1QnttXcnu3/q81e6bIqtr9hgtlIU0VoJ79mU2Ud4d8czDK5mzkyrUhoM8BE4wWZLsoxGM8RDJX1c4rkOBjnKbmniOnCKODPUj5xtssmg6Xk+//SMmgLNlGG21TAAMopq8wGbo1BwMvUHFy1z/tvDDSBwOnQ9YUAGABmIFsVnmMqHLFQDCMCmEZs4LNjOhUj2U5uNAkjYjImeMvf5li52CzsifPSoXxjCndmlvUl6HI1K9vJZKByWz7Yebz9zuEEYKa9lme3/+5LENQGXTY0GzTB6wrMw4NWUjyH6Qx9qFFZqLWKXUbFEoounr0tZ3e8UrkpUnhxkynThYItGIoTBrqr20OJJyPLCO4k0czsVpOQI0BPEFh0FAUSAQWMn8FldbjNBttAuSS140iJky7zcKaYFTQaol4XOIBJ24vpEkaBXqmcuYLDusmEg86zJ0sXEe0EIqekSdUnmI7bpnogZ6kgqR9nLfmKtib4HiEZbDTLgdrA1O0Ul2KsSpsAgiWThsIah5E1WPj4ZzuWrEmkpCLlIIqI32TS0hnrHfLWWbmGgWejjLKhQsFpMotdtZ5R9JXM2rWQxlSaw9yVLFOFawgAKSC4ovbZd2rOdJ/6araVvu2W/V/XNKhiIzSpjnAHFrdSoInI0HsAkcOhUtHmpmDNsWRSrUBgl75h3YKbO8SlUSuDdQpW2IJNJSoqDcrCME0ThAVpgqXKhBpQuxbjj91zu2eqytjrm9amdA7OQrL9ZvGoXrralhLzT6AkvSwSctSu9ivT+7CG44pkGDiAcVVEmm6IBuxcQyrhkE2iLepWBWsIuR0mX//uSxEeAFimjBM0wc8Luvd/FpJqxMWzk9MqHc7TQcMMYOOTuPqDuDglUcZtPrSqh4sBbXoY9hogDinDDgIAMOwM+UEj7uIIV4Pyqgtp031fxH9UzuyKAZmES2jijfPa6VLVuxRk4ZE67RU/Q60UgUEiMkSE7bWwKvTrpSNoJJZFNNOdLZCGdhpNmqIoNrW6WHSRZgD59AnMTHuQkxdKEjH6Caky95HEL2zCMsmdcQfuloUz/DiFne9KzdRpFCjyBaODqaDij+QvxQGkbDF1e1zK5hsHq7tmsalOY/vejnjH3rnc5X+vty0XPm95oG8lwseL3B5RQY+f6IY+GdEKCPDzMoT/ATAVZOUlDAZBTWMIYDELhLOBAE6sGY46I4JBIhjKaOEl6tl7GmsThtc6x2wgzFBgYOncbYwVkYtpBIM111hTHslobLyxqOdJUaN5Xh/Dqy7lf5ysxvzdiz/S8wsgO5hovyBIPmsxacOcjxK09BNR4PZ5mPbG5tR82txRhXQgybt262fvDvTwWNQ22wv6dsyb7P3PfIQ1V/hQJnQwIEv/7ksRXgxfJkQRMsNdE2sDfwdya+aQIGic4oir2th6oUGiskgwRSsxBGgxICEytDswxG4xAEMwDA4mBoxCC0w4J0zhcky5OoQkStMwYLAwUA0xMCgwFGswcIoyuEQwUEkxFFUxEAExtEwx4EAzGgQ1eQww3Ywx8McyjCQwdGkKCQZdDQYABIY+BUYAgQYej2beAiBDj31LMGQEBDCbA2hghxOY2pkkTNJW6kormAX4yj7rrHYmyNsRdNIdv2AKWSGISqflUjoORe/djdPYx7Vll+YfTGMXoA2nIgAgR1J1zWVsHaIyhIRMRZk2wxrDWFcKaP5KmuTjWHTVPF3xYnDVdx30iD8TdLjjnfm57OVbuYbpLlFNQ5N37EdtS+njdrnzEo5MRjGh3e3hamlCTINhA4vl58Umm2JUW74/LhcxrpN715yPUd82qz7P2+zTm7Vt5vGjZyVryIlEUIABDkCDqW9QqUrehAEKCmEKANy8hkHBMeZHMYjMFm1yY4NDwmYcVmskps44bUamDghu7UeE5ngEgiKyguMRDwYSGBEIqPHH/+5LEI4AdnVkQVZ2AA0wyqXcxkAKk5jDIZCIBmmDnwHHxg44NGqWCGZhg6CjFiCt7XlShQOXrBMWfaG98l7psyky5FoQZEG/jf171y3b73DnMbeHP/P87c/K42jwoAsIkep+gljpyhMqQ34DgZqzK2QqmbKuuMUqq0YcRy25vuoO/9/B+JRR35fdkdjlTDPWrkzL4bwu3uXMXcwryikpK8ofR1KfKA3bfi7jNy6clGrmbDf3OiD6v///WyWRCYQgGBUto5I3ZbaXLdZBCdcwoGzhKqoDuD2FFVSNBUDEZwUsm81JMRyiIQx24Af901aYWEDmYECiByIv6tF2Had1x1YGhvo/DUIRfoEM3/lOeIGXYPF+eFAq8msfAia7WKKxhEE62dr8lcimHtbrjNyX//daY7h/1NV5yrv8rsMx2O345IbWq9SpD8/d5F8sq+duxyerZ0dbdNe1hcvb7rG1FOZ7v4dz32tK4Ten5+U8zs379Wnq91//////8otYZ3v///DHPn5yadrf///9r4elbZAJmndbXbNqLCrEb6mQbFMmG//uSxAoAGFkvW1mMgBKlnugPtbAAYAd900CVAaltIAwAUM5KGkPWkKXGMhWIJCOEyoILSLSoMQEWEZKFVaUIJLgoBWUFn37aZhBKHZG1cqzAESnU1aM5LQdvvenIDBC3r/1YedS3lSyloDEZdJsYLcNWm3Zwl1r6kw/7oRnH9aidrL/+relUAQ2yxpD1wBMP/GJPR01a3ftU9fkW5jepqX6scl8xRZ3s+Z56axJrEelE7vHHvaWK3yYLC5H+kJv4mihnrAAQAniIoLdYVJFCIxY82jw7NYwwxlAIAgQiYcAY0EWlBgEEgBkEDQIkEBECiEXC4UKFhhhuYZHnIlxiDYaCPkMSYWKAlyHrUSARJfXUNF79p4NJY8mUgSZKNCQCBDHwkEgatyizkw5IreVbH///x3qtZm6fPDX/rLdLP53t//////561+8tcysYW87FSvbr50lTe9a3hzG/y8OIkDJp6OgPE0EL5JovwcSqAG4Fg+YWAiZBoMRGGA0f2d4KOzCTCoKMLnQx2NzGylNBF4YEw9DzAQnMmFEDI0xYezCIAP/7ksQaAdqVGzIuafZTCqdm1cwyy8FjoxaSVPGkAQGLE5WuzluuPUu01E3zbRiNckUwqpxRGCIHGUyCYQDQCDkQkGGTBgRCCFg5Z86wU4682HgcrAA2FAoFJCEUOgXMj6pdOVImIMFSshPlaabNabVtVwxSqe7yf5+vvWawbbj6eYw1NipYzL2oUQiFwNw9T5TCeTLivYiRJ3FleQ7NicY2u3hzUiQI9KxzQnAgIDxIYDp1lXzEFNSiwpSPMSIkyeKDZ96BRMTUBgeIAoZHLQkUDDApMzBow8LTHBCGAwYSGICC5hwbgEHGAwwYlIAFKxnsDG6Did7qxxRmmYo2Zurgo4BKhmvAUZ2BqBhhsFm4YJOoqpSXhCsh
-audio.js:47 [tts] playing: true {ts_ms: 1760651166132, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651166132, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651166165, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-2askchip_client_hooks.js?v=1760650936:272 UtteranceEnd
-askchip_client_hooks.js?v=1760650936:322 state {type: 'state', phase: 'ready'}
-askchip_client_hooks.js?v=1760650936:193 policy_decision: offer_steps
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651166263, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651166315, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651166363, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651166462, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651166495, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651166562, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651166660, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651166672, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651166760, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-askchip_client_hooks.js?v=1760650936:225 suggestions_made {event: 'suggestions_made', kind: 'suggestions_made', turn_id: '259f35d27cdc4529af392e2ea3b50ff3', items: Array(3), max_items: 4, …}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651166857, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651166858, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651166956, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651167033, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651167055, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651167156, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651167221, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651167253, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-askchip_client_hooks.js?v=1760650936:225 assistant_chunk {event: 'assistant_chunk', kind: 'assistant_chunk', turn_id: '259f35d27cdc4529af392e2ea3b50ff3', v: 1, ts_ms: 1760651166163, …}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651167353, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651167394, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651167451, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651167551, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651167583, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651167650, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651167749, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651167753, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-askchip_client_hooks.js?v=1760650936:225 assistant_end {event: 'assistant_end', kind: 'assistant_end', turn_id: '259f35d27cdc4529af392e2ea3b50ff3', v: 1, ts_ms: 1760651166164, …}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651167848, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651167947, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651167947, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651168045, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651168121, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651168146, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651168244, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651168306, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651168343, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651168441, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651168474, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651168540, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651168640, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651168655, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651168738, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-askchip_client_hooks.js?v=1760650936:225 tts:start {event: 'tts:start', kind: 'tts:start', turn_id: '259f35d27cdc4529af392e2ea3b50ff3', v: 1, ts_ms: 1760651167205, …}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651168838, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651168838, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
-audio.js:49 [tts] playing: false {ts_ms: 1760651168850, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651168851, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 200}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651168937, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-AdaptiveRuntime.js:58 [mask] active {ts_ms: 1760651169015, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, boost_db: 0, decay_remaining_ms: 35}
-vad.js:15 [vad] gate blocked this tick {ts_ms: 1760651169035, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null, reason: 'tts_mask'}
-askchip_client_hooks.js?v=1760650936:225 tts:first_chunk {event: 'tts:first_chunk', kind: 'tts:first_chunk', turn_id: '259f35d27cdc4529af392e2ea3b50ff3', v: 1, ts_ms: 1760651167206, …}
-askchip_client_hooks.js?v=1760650936:225 tts:done {event: 'tts:done', kind: 'tts:done', turn_id: '259f35d27cdc4529af392e2ea3b50ff3', v: 1, ts_ms: 1760651167206, …}
-askchip_client_hooks.js?v=1760650936:225 UtteranceEnd {event: 'UtteranceEnd', kind: 'UtteranceEnd', turn_id: '259f35d27cdc4529af392e2ea3b50ff3', reason: 'finalizer', v: 1, …}
-askchip_client_hooks.js?v=1760650936:225 greet:resp {event: 'greet:resp', kind: 'greet:resp', label: 'greet:resp', route: null, turn_id: '259f35d27cdc4529af392e2ea3b50ff3', …}
-AdaptiveRuntime.js:58 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760651176891, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410'}session_id: "5a224dae-afe1-4d97-a24e-6a03422f6410"ts_ms: 1760651176891[[Prototype]]: Objectconstructor: ƒ Object()hasOwnProperty: ƒ hasOwnProperty()isPrototypeOf: ƒ isPrototypeOf()propertyIsEnumerable: ƒ propertyIsEnumerable()toLocaleString: ƒ toLocaleString()length: 0name: "toLocaleString"arguments: (...)caller: (...)[[Prototype]]: ƒ ()[[Scopes]]: Scopes[0]toString: ƒ toString()valueOf: ƒ valueOf()__defineGetter__: ƒ __defineGetter__()__defineSetter__: ƒ __defineSetter__()__lookupGetter__: ƒ __lookupGetter__()__lookupSetter__: ƒ __lookupSetter__()__proto__: (...)get __proto__: ƒ __proto__()set __proto__: ƒ __proto__()
-AdaptiveRuntime.js:58 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760651212167, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410'}
-AdaptiveRuntime.js:58 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760651215138, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410'}
-AdaptiveRuntime.js:58 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760651230350, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410'}
-AdaptiveRuntime.js:58 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760651233321, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410'}
-AdaptiveRuntime.js:58 state { phase:'ready' } {ts_ms: 1760651233322, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410', turn_id: null}
-ws.js?v=1760650936:142 [ws] CloseStream suppressed: no user turn yet
-AdaptiveRuntime.js:58 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760651233325, session_id: '5a224dae-afe1-4d97-a24e-6a03422f6410'}
-bootstrap.js?v=1760650936:32 [WS close] {code: 1000, reason: 'normal closure'}
-askchip_client_hooks.js?v=1760650936:225 ws_conn_disconnect {event: 'ws_conn_disconnect', kind: 'ws_conn_disconnect', label: 'ws_conn_disconnect', route: null, conn_id: '9b143d96166c4c72969058d0015b9d87', …}
-askchip_client_hooks.js?v=1760650936:225 ws_conn_close {event: 'ws_conn_close', kind: 'ws_conn_close', label: 'ws_conn_close', route: null, conn_id: '9b143d96166c4c72969058d0015b9d87', …}
-askchip_client_hooks.js?v=1760650936:225 ws_conn_cleanup {event: 'ws_conn_cleanup', kind: 'ws_conn_cleanup', label: 'ws_conn_cleanup', route: null, conn_id: '9b143d96166c4c72969058d0015b9d87', …}
+[AskChip] bootstrap loaded
+debug.js?v=1760652433:4 [DBG] debug:on Object
+bootstrap.js?v=1760652433:32 [bootstrap] startOnce called N=1
+ws.js?v=1760652433:142 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760652433', version: '1760652433', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760652433:142 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760652433:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws#1', event: 'askchip-ws', note: 'bootstrap-wire'}
+bootstrap.js?v=1760652433:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws-close#2', event: 'askchip-ws-close', note: 'bootstrap-wire'}
+bootstrap.js?v=1760652433:32 [bootstrap] startOnce sending greet configure
+ws.js?v=1760652433:732 [ws] [Configure OUT] {"type":"Configure","session_id":"7279df05-3dcd-4813-93d3-e84236d7f630","greet":true,"reset":1,"feature_manual_barge_in":true,"barge_in_mode_manual":false,"auto_commit_when_ready":true,"greet_seq":1} {ts_ms: 1760652603286}
+debug.js?v=1760652433:4 [DBG] UI→WS {type: 'Configure', session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', greet: true, reset: 1, feature_manual_barge_in: true, …}
+bootstrap.js?v=1760652433:32 [bootstrap] startOnce greet configure sent — recorder setup will follow
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"ready","session_id":"7279df05-3dcd-4813-93d3-e84236d7f630"}
+bootstrap.js?v=1760652433:32 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
+AdaptiveRuntime.js:51 [audio] context state: running {ts_ms: 1760652603458, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630'}
+AdaptiveRuntime.js:51 [recorder] started {ts_ms: 1760652603462, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', mime_type: 'audio/webm; codecs=opus', timeslice_ms: 150}
+ws.js?v=1760652433:142 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760652433', version: '1760652433', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760652433:142 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760652433:32 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
+bootstrap.js?v=1760652433:32 [bootstrap] ws listener attached {listener_id: 'askchip-ws#3', event: 'askchip-ws', note: 'bootstrap-markAssistant-once'}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"7279df05-3dcd-4813-93d3-e84236d7f630","v":1,"ts_ms":1760652604868,"ts":1760652604.868,"session_id":"7279df05-3dcd-4813-93d3-e84236d7f630","step":5}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"Configure","sid":"7279df05-3dcd-4813-93d3-e84236d7f630","session_id":"7279df05-3dcd-4813-93d3-e84236d7f630"}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760652604868,"ts":1760652604.868,"session_id":"7279df05-3dcd-4813-93d3-e84236d7f630","sid":"7279df05-3dcd-4813-93d3-e84236d7f630","step":6}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"greet:reset","route":"/ws/v1/chat","label":"greet:reset","session_id":"7279df05-3dcd-4813-93d3-e84236d7f630","greet_seq":1,"sid":"7279df05-3dcd-4813-93d3-e84236d7f630"}
+askchip_client_hooks.js?v=1760652433:319 session_goal {type: 'session_goal', phase: 'clarify', depth: 'normal', delivery_pref: 'explain', working_intent: 'greet', …}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"session_goal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"event":"session_goal","session_id":"7279df05-3dcd-4813-93d3-e84236d7f630","sid":"7279df05-3dcd-4813-93d3-e84236d7f630"}
+askchip_client_hooks.js?v=1760652433:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760652604233, …}
+askchip_client_hooks.js?v=1760652433:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760652433:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '7279df05-3dcd-4813-93d3-e84236d7f630', …}
+askchip_client_hooks.js?v=1760652433:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '18c67cabd6ff4cac9a35915080fb1676', …}
+askchip_client_hooks.js?v=1760652433:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '7279df05-3dcd-4813-93d3-e84236d7f630', …}
+askchip_client_hooks.js?v=1760652433:225 greet:reset {event: 'greet:reset', kind: 'greet:reset', label: 'greet:reset /ws/v1/chat', route: '/ws/v1/chat', greet_seq: 1, …}
+askchip_client_hooks.js?v=1760652433:201 session_goal {event: 'session_goal', kind: 'session_goal', label: 'session_goal:normal', phase: 'clarify', depth: 'normal', …}
+AdaptiveRuntime.js:51 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760652610786, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630'}
+AdaptiveRuntime.js:51 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760652615471, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630'}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"turn_action_metadata","turn_id":"8d50b1dbfbcc41f99c243777516caf23","is_greet":true,"nlu":{"intent":"fallback","topic":null,"needs_scoping":null,"wants_list":null,"expected_depth":null,"confidence":0.2},"policy":{"action":"offer_steps","verbosity":"brief","show_suggestions":true},"session_id":"7279df05-3dcd-4813-93d3-e84236d7f630","sid":"7279df05-3dcd-4813-93d3-e84236d7f630"}
+askchip_client_hooks.js?v=1760652433:313 policy_decision: unknown
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"policy_decision","sid":"7279df05-3dcd-4813-93d3-e84236d7f630","turn_id":"8d50b1dbfbcc41f99c243777516caf23","teacher_move":"offer_steps","teacher_move_family":"answer","reason":"meta_override","fallback_fired":false,"fallback_reason":null,"nlu_intent":"fallback","nlu_confidence":0.2,"session_id":"7279df05-3dcd-4813-93d3-e84236d7f630","meta_action":"offer_steps","policy_move":"check_understanding","persona_move":"compare"}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"suggestions_made","turn_id":"8d50b1dbfbcc41f99c243777516caf23","items":[{"text":"Send me the email","source":"policy"},{"text":"Walk me through it live","source":"policy"},{"text":"Show install steps","source":"retrieval"}],"max_items":4,"max_words_per_item":7,"count":3,"sid":"7279df05-3dcd-4813-93d3-e84236d7f630","event":"suggestions_made","session_id":"7279df05-3dcd-4813-93d3-e84236d7f630"}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"assistant_chunk","turn_id":"8d50b1dbfbcc41f99c243777516caf23","text":"Hey James, what outcome are you aiming for today?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps","policy_chips":["Send me the email","Walk me through it live"]}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"suggestions","turn_id":"8d50b1dbfbcc41f99c243777516caf23","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"}]}
+askchip_client_hooks.js?v=1760652433:272 assistant_end
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"assistant_end","turn_id":"8d50b1dbfbcc41f99c243777516caf23"}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"tts:start","session_id":"7279df05-3dcd-4813-93d3-e84236d7f630","turn_id":"8d50b1dbfbcc41f99c243777516caf23","sid":"7279df05-3dcd-4813-93d3-e84236d7f630"}
+bootstrap.js?v=1760652433:32 [WS→UI] {"type":"assistant_audio","turn_id":"8d50b1dbfbcc41f99c243777516caf23","mime":"audio/mpeg","audio_chunks":["SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjYwLjE2LjEwMAAAAAAAAAAAAAAA//uQxAAAErUjBsyZCIrytKCl1iJhBAQhahsJ6ziJoaVBQb3ORMv+6hdRZ5PQcAIIhAeLAoKCgueWe5YuLi4oKCgoZ2iO7i57u7oiECgoKChguLi4uLi7ueKIiIhAoY7u7u7uiIiIiI7lnu7i56IiIiIju7u7u5iIiIKCiOWLi4uLi4uegAAAAAHh4eHhgA6AIbHxw9IAAABwPDw8PSAAAAAA///X/zz4//+AAEAzSlRjJMJs2NgVDAMKUxUEYaB4wLA+aUAWyPAaWzC4EkAApvtNctNWq1tWZ41bJdD0SEwR9JLoWmI+qYo6oRmqPBOPyctEUcSSvOajyeJlx0ZJly554unqUxNlZNMuDrhuQ2ZcPd2806VFTHUu8LIkEdW/m5qEga3dOZdDBl3SqOhetynmoXpOKZXIljC1J3ZVR4c8RBlsljUQaqlXCI6ENC2OpTeaOFuS1sevr86FYbVi7FxRJQ0SswTV8Aw3owLCuZQAOYSCiYgBKksYCAS1FMAv6YBAiyKKqbp9tkkZYAEtkz57AqCpe1JCWy+GsKWYgR55//uSxByDV/38/i6kd0rBu5/FzBj5K3SgrzBsqIyU8Kz4wD5PJwLjxAOCMSEaMowhOivGoOtWEGfVdfai+n/K1FO54vtKXHNmwzPolE0zW5Nvr+q21wS5hBwwUyJpK9BCUqiyVHYCOhAbggDzIwWgHmrps2DcETctxjIlF0IU1FDiA5mfE+qJziQgckPypMFhkReR9MpEkX8RJlS3A8z9zVSLT5FgolIoMXEBIPa7Ko8gkDlMHUBfhlEjh5YpIUXCDwSWelk5Lr3Y2/9LIeWqM6HNQSNDWggSWWWCLa9doJ/ulvy3azVs16g8mxPhC0vV5DdSJSdXSaMHlH6ktvptoVLumxWWqeZUNc3mP6l8xqJzUakkddlpFyUqaSRP3ZSOTZJNfxF0UI5y6p0eVlzymT1mZ/+760281LTjzju+V7fapBPUBFdAccwBlPkVAh8B5sEcWFEAgYuNoxiwqGBxABsthEarkQAicBQJW1fFhYKOS9nqRZdF5pz2kbKwmBMyS21A6LEDCQ6VaWJn2C3YzpY+sQsjYdE08rTGk84rC6LSNP/7ksQqgle12v6tsNLKvL2fxaYaWeIll5CwHqmVhPB5Zp00fAuAg4DLsnyxKeo46aflQguPTF1Rema5RvmEhe8qEc1CNxPIOMwvtMVSzWudRZK0EkYLncmTObvNRK0t3jydTt2J9yL0a9epvLMmXU8e6mXTPhySwoQ5FslRUwH8DljyRbHi7SlCY6lK22WqApny14Vg1mLPhEPQqmcpaj0W5tzDaNwzWPrvMBBWLwfEE8Kq7FCRaVmbJFjNLg7axnipQ5MzKp+9afbKMto6tSOPkqOBNhAjgc/4kzpyYyJhzlIW9+kN3NCJ2virTK593POu7VWXqeHpptcbiFvlIZlxBpUz6ijHKKx3wfUWWmUb65eP87ac2UU1JXFdsju1eH7PLFW6V1z/Aq/S5CEGcAAIgqDk0KhCpjKk9Fh4BVyuqHn/WQpUudzZUu95m9XW8chf8uyLoiIgZERg0NBVXVHJkrQqVLoBHqFuM85MSOvzkKwPdMQL84jHMogCEyIPunog5DlnrBREZMwCYAgEpEwi4WglZEHMuETatWrSLTx21ZD/+5LEOoNXMej8DaTSyv/An8m0m1mXRl4Tb4BZlbGxenKmlklnNVUSwtGyZxSM70kr+pnok0HY0TzLSlRlINW0SWbmPSGVkU5X9meX5vbH3N9ydb6ayoNQknWg3ujMVEjAgQxwIFh511ak84AlL7sNwiMkiTit3g+GHSgGWQ3T3Ks9c7XhExhL5P8qocN2Ktb5e9UUky2KelgWhxYYC5FpLBIPCN2ks9Xk2jmtrraiuIozWlEyrBN+0nz8LNziPmYolHk89QYlbLj2xyCSKaE3peIIpuYQUk6a3upQKILVbJ3so8OhsPckEMMm8JuUpp8GW6UKvn3BhtL2XxfQTx9ZDJ2FO07892yvvusyP279oiM3IZ4jXjpbVIoj6GiAYcYoQYFC0TW2Za9DstIuzNhz5pqTivNLXwhUjilw+uiLGEzKhGyMDYVRuEoqKI0ImQ4qYtVpUwk6aS3iltIydEzDLc7JySmyo5dsrBDfRmcIGzWB8SO7BUliamZLKsloGOPQPjo4xYukyjRCVc2tLgmek1CUM55qZjpk8TmsJem1TFII//uSxEQD18H8+gyk08zFQV6Bp7MxuBPq/NkRpiDPB1XJe2ubL8I6ik5uI7blHkDUaS1Ilvf6mXubl8+TKi/Pz1vZCuSY9IktqvmkICAF0mVIDIJYcxhIBGUJ69U6B0ElqhfCTEjyqaQUMKNEY1LYSA1WcPS9dRd77tYYLuQSPJacXYYresMylNdBxjyGDWSckPCGFIdzaUz0l5umAfomYmgwzuUKrSROFt4I+UQPUS44BgJE4kZQeg6CCIkoR1ArBJwxCMieF1IcZg8AIYygjIUIGCAriMAQApwjgiISsCwGOQohgjheSVKIuB/jAEhB/msEcIKZgS1PFaCzVQ5hGCFpg/SYFgPuhBDvE8H6QY4QVYQAgototQNyG7HA1u3SEFjRDQ/Q1DzkUKnXCJW0S5FsJGWIyZFy5Rh9RHCYXO+YSJ8JTZ0WFRgckAsOH8FEyWxkxzF6JbvLWjJ5hIeLaLVvPPO1dyBS78rUaVu6+jNIqnMGLL0OVvvdAwIqIREKi9wPE9rwMolcInHPeaOw+z19G6T8tbSG36gNt4Cp3XzcDP/7ksQSglgCBwAMMHfLGyXhGZ2mIGens7dedoD48iUDqQUaCeWX21c04vqpfvd6+WZ9Y0qWStn0Na4uTRvUWWsdRxLgWP156BVEvHEpldYoLVhKExpIqecKall5UujbwhHLJw4gKzz6qYnnDqsz1IIaLnvuxWkWLq41H1GGqxzTo7o2We5DEBath0TGq6g2NIQI6J2mJE8I2NnezXM3MVyG+WgtVCmaF6abSl5Ha4nzHAD2FuyoEaqb/MgLqlmzTLGGzllNMA6lmzJiI2GAUEUGQUx0Lyg+MzY6IFk4U3MoPjLBowEIFBszkzHiMLAhjA0LDA4BAYEDAuUZrza81Z6ozB8sbK5SEhqDlv3DEOZFHNaRk9UjiRpT6xBOa18uibe3bdJFFXyMCVcTGaAROcVEeqGmBQgeQEii4YiKACRdAC2k5SanIgO7mZs17hsK3I1svluLi49TRAKpVB1Y9bB6FLF2Cj7gIgeXMkmMUBSVjZIC/EeXsgAhGw1CUQASAjR0W4FmBgAAQAYeKmMAQKDBEunl1hhecaC0muCpyL2YsXn/+5LEFYAbdTUVtb4AAxEm5I83oADKr5gSqXcMEBEwePTJI5Oxis51ZTAM8DhwY+IwGDxhwblUQBhKMYGgwsCTKQ8Mnhsw2EgEZ1RJowY40HPe5LYWSuA5mCnZchtGBwqULnZhMP/LXmqzUaoIzFqfcrnMtSuft0E5lGYvSXssKfKvffe9QxCxHIJhuphuxJ8Z+UUPInBMiaXAy7JYxqAXQafNyty4vncopqNXrdWRxjlJn9jXN93+/w59i3nvd4oQD4n7GUhCSEAgJIAJDgo1BzAzM2sNN+URIkMvkzQwgxBVNDNDXisChphokZeEgo/GAYILy1ZwCxkwhrYxkiAAbAoesOpmCyyPZQDLxmPCCzZnbWIzD6hLiLomgMAZRTva7bzxetcGQLLlqN/AKv3Oqzs6/T70mEosQt55Pfl8sdp9r+M9nc/L78qi2//dvdb//Orczu3JPbeaQ160klFp/HQg/Cxc3lOyqZlb3UkalNqzMc/e9Yb7cs1+67f7/fjcUq6+viFRn//RAgEYGtlsb1tlXI0lMZWNPRiAQMWI2zPm//uSxAwAGS2BTPmMgBMcsGnrMUAD3ATDDE4hWswFXKKYjLN+d0zGBCCF5HSSBtFV11QAX2eVQwDCA5dAkXXQHv1Epckajg2dlDLCbkBBq7d1nZe5NbL8lN37v90Cj3ll+dvbL9ZaxxlE/n/f1/8vzEgx/8qtFE///qVOv3P0D9xekpn4vZY2KlaHqHGz3VJG43fr09u/LZ+c3T0kmufYjFLJLF+U1d1N5StkcLuye/TWudyx3lh3///////3j////////z51AgEAAECAjckbdkuycz3oSDi17i+YGM0oyCM4kdUHznIOEAiiSy+bKwbpAYtcBIUBoIwCQoBLwDRmg1SHKgbAEBliQFAYAJwBBYBIAuBbEbwC4gCxMLqwxAIDhs5DRlxpgYweHZEHmCIXaFwY33hxwWJDaVGybtyJop9SH35eJ7zMlCCeYkNNzGWCKk6XFqPJLTRTLheND+dRYvmZNka4nYzWg6ZrojnmRUNkXUrkTLhUPHjVNJV2TTdv/K5OldB2s/5fLJNj0RUAAEBydGBIsNMMLHAxiCJImCyo8f/7ksQKARdFAzx9rgACTKSqNYeuy5kzw81xgISgRoZgIIXBjBhlzBiGzamCR6PAAxCOzKpKM1jY6GczPBENKDMSK5qEUmFQCY9TZhILgZYLHMIBhAMIBSQAEwIBS+YoAyy4iAgQFzAYSLYBxEJguARsYBCphsWyJYBtLkbv8uWbdnHerGGGH///////////////j9TeX9/X/zf591qtLJnDmXbO8OaoKl+5aytAYB58yguiI362LCxYYbRCAAADanOyUuqt2lQ6vOObb6DWFsOVeoAw51Uilg1/LwXnPtfUILZHLRzMbKMvBywEBA4UUypBhoTYnEYkY7Utl2aVB9zCci8EdE6bkvNU51zLeHr46A8g4IWnTdPi
+audio.js:47 [tts] playing: true {ts_ms: 1760652617479, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652617479, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+2askchip_client_hooks.js?v=1760652433:272 UtteranceEnd
+askchip_client_hooks.js?v=1760652433:322 state {type: 'state', phase: 'ready'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652617484, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652617582, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652617662, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652617682, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652617782, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+askchip_client_hooks.js?v=1760652433:225 turn_action_metadata {event: 'turn_action_metadata', kind: 'turn_action_metadata', turn_id: '8d50b1dbfbcc41f99c243777516caf23', is_greet: true, nlu: {…}, …}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652617847, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652617879, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652617978, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652618024, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652618078, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652618177, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652618211, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652618276, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+askchip_client_hooks.js?v=1760652433:193 policy_decision: offer_steps
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652618375, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652618381, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652618474, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652618573, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652618573, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652618673, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652618744, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652618771, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+askchip_client_hooks.js?v=1760652433:225 suggestions_made {event: 'suggestions_made', kind: 'suggestions_made', turn_id: '8d50b1dbfbcc41f99c243777516caf23', items: Array(3), max_items: 4, …}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652618870, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652618936, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652618969, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652619069, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652619101, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652619167, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652619266, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652619288, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760652433:225 assistant_chunk {event: 'assistant_chunk', kind: 'assistant_chunk', turn_id: '8d50b1dbfbcc41f99c243777516caf23', v: 1, ts_ms: 1760652617456, …}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652619364, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652619464, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652619464, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652619563, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652619639, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652619663, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652619761, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652619828, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760652433:225 assistant_end {event: 'assistant_end', kind: 'assistant_end', turn_id: '8d50b1dbfbcc41f99c243777516caf23', v: 1, ts_ms: 1760652617456, …}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652619860, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652619960, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652620005, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652620059, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652620157, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652620190, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652620256, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652620355, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652620361, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760652433:225 tts:start {event: 'tts:start', kind: 'tts:start', turn_id: '8d50b1dbfbcc41f99c243777516caf23', v: 1, ts_ms: 1760652618449, …}
+audio.js:49 [tts] playing: false {ts_ms: 1760652620411, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652620411, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 200}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652620454, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760652620553, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:51 [mask] active {ts_ms: 1760652620553, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null, boost_db: 0, decay_remaining_ms: 58}
+askchip_client_hooks.js?v=1760652433:225 tts:first_chunk {event: 'tts:first_chunk', kind: 'tts:first_chunk', turn_id: '8d50b1dbfbcc41f99c243777516caf23', v: 1, ts_ms: 1760652618449, …}
+askchip_client_hooks.js?v=1760652433:225 tts:done {event: 'tts:done', kind: 'tts:done', turn_id: '8d50b1dbfbcc41f99c243777516caf23', v: 1, ts_ms: 1760652618450, …}
+askchip_client_hooks.js?v=1760652433:225 UtteranceEnd {event: 'UtteranceEnd', kind: 'UtteranceEnd', turn_id: '8d50b1dbfbcc41f99c243777516caf23', reason: 'finalizer', v: 1, …}
+askchip_client_hooks.js?v=1760652433:225 greet:resp {event: 'greet:resp', kind: 'greet:resp', label: 'greet:resp', route: null, turn_id: '8d50b1dbfbcc41f99c243777516caf23', …}
+AdaptiveRuntime.js:51 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760652630025, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630'}
+AdaptiveRuntime.js:51 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760652634908, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630'}
+AdaptiveRuntime.js:51 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760652641045, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630'}
+AdaptiveRuntime.js:51 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760652644610, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630'}
+AdaptiveRuntime.js:51 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760652644872, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630'}
+AdaptiveRuntime.js:51 state { phase:'ready' } {ts_ms: 1760652644873, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630', turn_id: null}
+ws.js?v=1760652433:142 [ws] CloseStream suppressed: no user turn yet
+AdaptiveRuntime.js:51 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760652644875, session_id: '7279df05-3dcd-4813-93d3-e84236d7f630'}
+bootstrap.js?v=1760652433:32 [WS close] {code: 1000, reason: 'normal closure'}
+askchip_client_hooks.js?v=1760652433:225 ws_conn_disconnect {event: 'ws_conn_disconnect', kind: 'ws_conn_disconnect', label: 'ws_conn_disconnect', route: null, conn_id: '18c67cabd6ff4cac9a35915080fb1676', …}
+askchip_client_hooks.js?v=1760652433:225 ws_conn_close {event: 'ws_conn_close', kind: 'ws_conn_close', label: 'ws_conn_close', route: null, conn_id: '18c67cabd6ff4cac9a35915080fb1676', …}
+askchip_client_hooks.js?v=1760652433:225 ws_conn_cleanup {event: 'ws_conn_cleanup', kind: 'ws_conn_cleanup', label: 'ws_conn_cleanup', route: null, conn_id: '18c67cabd6ff4cac9a35915080fb1676', …}
+ws.js:32 [ui] visibility=hidden
+ws.js:32 [ui] visibility=visible
+ws.js:32 [ui] visibility=hidden
+ws.js:32 [ui] visibility=visible
+ws.js:32 [ui] visibility=hidden
+ws.js:32 [ui] visibility=visible
+ws.js:32 [ui] visibility=hidden
+ws.js:32 [ui] visibility=visible
+ws.js:32 [ui] visibility=hidden
+ws.js:32 [ui] visibility=visible
