@@ -159,6 +159,10 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
     bufferedBytes: stats.totalBytes,
   };
 
+  if (updatePayload.asrCue && updatePayload.asrCue.type === 'partial') {
+    ctx.hadPartial = true;
+  }
+
   if (snrBoost > 0) {
     updatePayload.snrBoost = snrBoost;
   }

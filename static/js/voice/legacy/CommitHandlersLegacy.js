@@ -1,3 +1,5 @@
+import { getConfig } from '../core/index.js';
+
 export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
   const {
     onFrameSpeech,
@@ -33,6 +35,8 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
   if (typeof onFrameSpeech !== 'function') {
     throw new Error('CommitHandlersLegacy.onSpeechStartCommitted requires onFrameSpeech');
   }
+
+  ctx.hadPartial = false;
 
   const manualPressDuringTts = !!(state?.manual?.buttonDown) && state?.ttsPlaying;
   if (manualPressDuringTts) {
@@ -105,6 +109,9 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
     stopRecorder,
     onSpeechEndCommitted: nestedOnSpeechEndCommitted,
     logLifecycle,
+    resetEvidenceGate,
+    emitVoiceEvent,
+    closeTurnIfOpen,
   } = ctx || {};
   const perf = ctx?.performance ?? (typeof performance !== 'undefined' ? performance : null);
   const metrics = detail && typeof detail === 'object' ? detail : {};
@@ -176,9 +183,59 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
     },
     'info',
   );
+
+  const config = getConfig();
+  const rawMinMs = Number(config?.commit?.min_ms);
+  const commitMinMs = Number.isFinite(rawMinMs) ? Math.max(0, rawMinMs) : 0;
+  let totalSpeechMs = null;
+  if (detail && typeof detail === 'object' && Number.isFinite(detail.totalSpeechMs)) {
+    totalSpeechMs = detail.totalSpeechMs;
+  } else if (Number.isFinite(metrics?.speechDurationMs)) {
+    totalSpeechMs = metrics.speechDurationMs;
+  }
+  const dropForMinSpeech =
+    !ctx?.hadPartial && Number.isFinite(totalSpeechMs) && totalSpeechMs < commitMinMs;
+
+  const dropReason = 'commit_min_duration';
+
+  if (dropForMinSpeech) {
+    VadFrameUtils?.maybeSendAudioStop?.({ reason: dropReason });
+    VadFrameUtils?.safeClearTurnTimer?.();
+    VadFrameUtils?.clearPendingEndTimer?.();
+    clearSafetyCloseTimer?.();
+    stopRecorder?.({ reason: dropReason });
+    if (ctx?.shadowBuffer && typeof ctx.shadowBuffer.clear === 'function') {
+      try { ctx.shadowBuffer.clear(); } catch {}
+    }
+    if (state?.shadowBuffer && typeof state.shadowBuffer.clear === 'function' && state.shadowBuffer !== ctx?.shadowBuffer) {
+      try { state.shadowBuffer.clear(); } catch {}
+    }
+    if (ctx?.evidenceGate && typeof ctx.evidenceGate.reset === 'function') {
+      try { ctx.evidenceGate.reset(dropReason); } catch {}
+    } else if (typeof resetEvidenceGate === 'function') {
+      try { resetEvidenceGate(dropReason); } catch {}
+    }
+    if (state?.evidenceGate && typeof state.evidenceGate.reset === 'function' && state.evidenceGate !== ctx?.evidenceGate) {
+      try { state.evidenceGate.reset(dropReason); } catch {}
+    }
+    if (state) {
+      state.currentCommitMode = 'idle';
+    }
+    ctx.hadPartial = false;
+    emitVoiceEvent?.('state', { state: 'armed' });
+    emitVoiceEvent?.('debug', {
+      event: 'commit_drop_min_duration',
+      totalSpeechMs: Number.isFinite(totalSpeechMs) ? Math.round(totalSpeechMs) : null,
+      minSpeechMs: commitMinMs,
+      hadPartial: false,
+    });
+    return;
+  }
+
   VadFrameUtils?.maybeSendAudioStop?.({ reason });
   VadFrameUtils?.safeClearTurnTimer?.();
   VadFrameUtils?.clearPendingEndTimer?.();
   clearSafetyCloseTimer?.();
   stopRecorder?.({ reason });
+  closeTurnIfOpen?.();
 }
