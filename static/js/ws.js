@@ -36,6 +36,24 @@
 })();
 
 
+(function __initVoiceMetricsStore(){
+  try {
+    if (typeof window === 'undefined') return;
+    if (!Array.isArray(window.__voice_metrics)) {
+      window.__voice_metrics = [];
+    }
+    window.__getRecentVoiceMetrics = () => {
+      try {
+        const store = Array.isArray(window.__voice_metrics) ? window.__voice_metrics : [];
+        return store.slice().reverse();
+      } catch {
+        return [];
+      }
+    };
+  } catch {}
+})();
+
+
 // === E2E minimal WS message hook (always-on, safe) ===
 (function __installE2EHook(){
   try {
@@ -149,6 +167,21 @@ function _wsLog(level, message, detail = undefined) {
       method.call(console, `${prefix} ${message}`, detail);
     } catch {}
   });
+}
+
+function _recordVoiceMetrics(payload){
+  try {
+    if (typeof window === 'undefined') return;
+    if (!Array.isArray(window.__voice_metrics)) {
+      window.__voice_metrics = [];
+    }
+    const store = window.__voice_metrics;
+    const base = payload && typeof payload === 'object' ? { ...payload } : {};
+    store.push(Object.freeze(base));
+    if (store.length > 10) {
+      store.splice(0, store.length - 10);
+    }
+  } catch {}
 }
 
 function _scheduleProviderFallback(){
@@ -515,8 +548,15 @@ export function openWS(options = {}){
               frameType: t,
             });
           }
-          
+
           _handleProviderSignal(obj);
+
+          if (t === 'asr.metrics') {
+            try {
+              const payload = obj && obj.payload && typeof obj.payload === 'object' ? obj.payload : {};
+              _recordVoiceMetrics(payload);
+            } catch {}
+          }
 
           if (t === 'ready') {
             _gotReady = true;

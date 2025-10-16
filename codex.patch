@@ -1,603 +1,502 @@
-diff --git a/app/services/streaming_asr/asr_metrics.py b/app/services/streaming_asr/asr_metrics.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..0589f16e04fefda2ed561027ee39c18d25521d17
---- /dev/null
-+++ b/app/services/streaming_asr/asr_metrics.py
-@@ -0,0 +1,47 @@
-+from __future__ import annotations
-+
-+import threading
-+import time
-+from collections import deque
-+from typing import Any, Deque, Dict, List
-+
-+__all__ = ["record_turn_metrics", "get_recent"]
-+
-+_MAX_HISTORY = 200
-+_buffer: Deque[Dict[str, Any]] = deque(maxlen=_MAX_HISTORY)
-+_lock = threading.Lock()
-+
-+
-+def _sanitize_metrics(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
-+    if not isinstance(metrics, dict):
-+        return {}
-+    sanitized: Dict[str, Any] = {}
-+    for key, value in metrics.items():
-+        if value is None:
-+            continue
-+        sanitized[key] = value
-+    return sanitized
-+
-+
-+def record_turn_metrics(turn_id: Any, metrics: Dict[str, Any] | None) -> Dict[str, Any]:
-+    """Store metrics for a completed ASR turn in a bounded ring buffer."""
-+
-+    entry: Dict[str, Any] = {
-+        "turn_id": turn_id,
-+        "recorded_at_ms": int(time.time() * 1000),
-+    }
-+    entry.update(_sanitize_metrics(metrics))
-+    with _lock:
-+        _buffer.append(entry)
-+    return dict(entry)
-+
-+
-+def get_recent(n: int = 10) -> List[Dict[str, Any]]:
-+    """Return the most recent ``n`` ASR turn metrics (newest first)."""
-+
-+    if n <= 0:
-+        return []
-+    with _lock:
-+        items = list(_buffer)[-n:]
-+    items.reverse()
-+    return [dict(item) for item in items]
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 4c7aacb5bea845ffda32253e90689517595620a9..a68fd8fff8ba88ab9e7473f56b90941adbe2d3af 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -1,39 +1,43 @@
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 51a9ace74678664f57a99ab51c93eb92b59bdebd..621fc9425c753f5efec4d2dbd8ac603e62b1a48c 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -1,28 +1,29 @@
+ # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
  from __future__ import annotations
+ import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
++from functools import partial
+ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
+ from collections import deque, defaultdict
+ from app.services.audio.container_sniffer import (
+     AudioContainerSniffer,
+     coerce_detection_from_meta,
+ )
  
- import asyncio
- import json
- import logging
- import os
- import re
- import time
- import warnings
- from typing import AsyncGenerator, Optional, Any, Deque, Tuple, Callable
- from collections import deque
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.config import load_settings
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
  
- import websockets  # provided by uvicorn[standard]
- 
-+from app.ws.bus import bus as stream_bus
-+
-+from .asr_metrics import record_turn_metrics
-+
- try:
-     from app.admin_log import emit as _admin_emit
- except Exception:  # pragma: no cover - extremely defensive
- 
-     def _admin_emit(*a, **k):  # type: ignore[empty-body]
-         pass
- 
- try:
-     from websockets import exceptions as _ws_exceptions  # type: ignore[attr-defined]
- except Exception:  # pragma: no cover - extremely defensive
-     _ws_exceptions = None  # type: ignore[assignment]
- else:
-     _invalid_types = []
-     with warnings.catch_warnings():
-         warnings.simplefilter("ignore", DeprecationWarning)
-         for _name in ("InvalidStatus", "InvalidStatusCode"):
-             _cls = getattr(_ws_exceptions, _name, None)
-             if isinstance(_cls, type):
-                 _invalid_types.append(_cls)
-     _INVALID_STATUS_TYPES = tuple(_invalid_types)
- if "_INVALID_STATUS_TYPES" not in globals():
-     _INVALID_STATUS_TYPES = ()
- 
- try:  # pragma: no cover - exercised indirectly
-     _WEBSOCKETS_PROTOCOL = websockets.protocol  # type: ignore[attr-defined]
-@@ -647,50 +651,62 @@ class DeepgramClient:
-         self._linger_ms: int = int(
-             os.getenv("DG_LINGER_MS", "800")
-         )  # slightly longer default
-         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
- 
-         # Open gate
-         self._open_evt: asyncio.Event = asyncio.Event()
-         self._asr_open_emitted: bool = False
-         self._asr_start_emitted: bool = False
-         self._ready_observed: bool = False
-         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
-         self._open_gate_warned: bool = False
- 
-         # Keepalive
-         self._keepalive_task: Optional[asyncio.Task] = None
-         self._keepalive_interval: float = float(
-             os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0")
+@@ -506,50 +507,155 @@ async def _ws_send_diagnostic_audio(send, turn_id: int, mime: str, data: bytes)
+             "part": part,
+             "is_last": (total == 0),
+             "b64": "",  # header-only announcement
+         },
+     )
+     while off < total:
+         chunk = data[off : off + CHUNK]
+         off += len(chunk)
+         part += 1
+         await _ws_send_json(
+             send,
+             {
+                 "type": "diagnostic_audio",
+                 "turn_id": str(turn_id),
+                 "mime": mime,
+                 "total_bytes": total,
+                 "part": part,
+                 "is_last": (off >= total),
+                 "b64": base64.b64encode(chunk).decode("ascii"),
+             },
          )
  
-         # Optional JSON logger injected by WS layer (ws_asgi)
-         self._jlog = self._cfg.get("_jlog")
  
-         # Serialize outbound websocket sends to avoid concurrent writer errors
-         self._send_lock = asyncio.Lock()
+ # ------------------------------ bus pumpers ------------------------------
  
-+        # Per-turn metrics tracking
-+        self._turn_counter: int = 0
-+        self._turn_current_id: Optional[int] = None
-+        self._turn_active: bool = False
-+        self._turn_start_ts: float = 0.0
-+        self._turn_first_partial_ts: float = 0.0
-+        self._turn_final_ts: float = 0.0
-+        self._turn_bytes_baseline: int = 0
-+        self._turn_metrics_recorded: bool = False
-+        self._turn_saw_1011: bool = False
-+        self._turn_last_close_code: Optional[int] = None
++_VOICE_METRICS_SUBSCRIBERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[None]]] = {}
++_VOICE_METRICS_QUEUE = None
++_VOICE_METRICS_TASK: Optional[asyncio.Task] = None
++_VOICE_METRICS_LOCK: Optional[asyncio.Lock] = None
 +
-     def _diag_payload(self, **extra: Any) -> dict:
-         payload: dict[str, Any] = {"provider": "deepgram"}
-         if self._diag_session_id:
-             payload["session_id"] = self._diag_session_id
-         tag = self._url_tag or self._diag_tag_hint
-         if tag:
-             payload["tag"] = tag
-         payload.update(extra)
-         return payload
- 
-     def _emit_diag(self, label: str, **extra: Any) -> None:
-         hook = self._diag_hook
-         if not callable(hook):
-             return
-         payload = self._diag_payload(**extra)
-         try:
-             hook(label, **payload)
-         except TypeError:
-             try:
-                 hook(label, payload)
-             except Exception:
-                 pass
-         except Exception:
-             pass
- 
-@@ -769,50 +785,155 @@ class DeepgramClient:
-             try:
-                 await self._ev_queue.put({"type": "asr_open"})
-             except Exception:
-                 pass
-         await self._maybe_emit_asr_start()
-         # schedule a flush shortly after ASR open (lets DG finish configure)
-         self._schedule_flush(delay=0.0)
- 
-     async def _maybe_emit_asr_start(self) -> None:
-         if self._asr_start_emitted:
-             return
-         if not self._ready_observed or not self._first_real_sent:
-             return
-         self._asr_start_emitted = True
-         self._emit_diag("asr_open", active=True)
- 
-     async def _publish_provider_event(self, event: str, payload: Any) -> None:
-         data: dict[str, Any] = {"type": "provider_event", "event": event or "unknown"}
-         if payload is not None:
-             data["payload"] = payload
-         try:
-             await self._ev_queue.put(data)
-         except Exception:
-             pass
- 
-+    def _cfg_value(self, key: str) -> Optional[str]:
-+        cfg: dict[str, Any]
-+        if isinstance(self._cfg, dict):
-+            cfg = self._cfg
-+        else:
-+            cfg = {}
-+        for variant in (key, f"dg_{key}"):
++
++def _get_voice_metrics_lock() -> asyncio.Lock:
++    global _VOICE_METRICS_LOCK
++    lock = _VOICE_METRICS_LOCK
++    if lock is None:
++        lock = asyncio.Lock()
++        _VOICE_METRICS_LOCK = lock
++    return lock
++
++
++async def _voice_metrics_pump_loop(queue) -> None:
++    from queue import Empty
++
++    global _VOICE_METRICS_QUEUE, _VOICE_METRICS_TASK
++
++    try:
++        while True:
 +            try:
-+                val = cfg.get(variant)
-+            except Exception:
-+                val = None
-+            if val not in (None, ""):
++                frame = queue.get(timeout=0.2)
++            except Empty:
++                await asyncio.sleep(0.05)
++                continue
++
++            if not isinstance(frame, dict):
++                continue
++
++            payload = {k: v for k, v in frame.items() if k != "type"}
++
++            lock = _get_voice_metrics_lock()
++            async with lock:
++                subscribers = list(_VOICE_METRICS_SUBSCRIBERS.items())
++
++            if not subscribers:
++                continue
++
++            to_remove: List[str] = []
++            for key, sender in subscribers:
++                message = {"type": "asr.metrics", "payload": dict(payload)}
 +                try:
-+                    return str(val)
++                    await sender(message)
 +                except Exception:
-+                    continue
-+        nested = cfg.get("deepgram") if isinstance(cfg.get("deepgram"), dict) else None
-+        if isinstance(nested, dict):
-+            try:
-+                val = nested.get(key)
-+            except Exception:
-+                val = None
-+            if val not in (None, ""):
-+                try:
-+                    return str(val)
-+                except Exception:
-+                    pass
-+        env_val = os.getenv(f"DEEPGRAM_{key.upper()}", "").strip()
-+        return env_val or None
++                    to_remove.append(key)
 +
-+    def _ensure_turn_started(self, ts: Optional[float] = None) -> None:
-+        if self._turn_active:
++            if to_remove:
++                lock = _get_voice_metrics_lock()
++                async with lock:
++                    for key in to_remove:
++                        _VOICE_METRICS_SUBSCRIBERS.pop(key, None)
++    except asyncio.CancelledError:
++        pass
++    finally:
++        with contextlib.suppress(Exception):
++            if hasattr(bus, "unsubscribe"):
++                bus.unsubscribe("asr.metrics", queue)
++        if _VOICE_METRICS_QUEUE is queue:
++            _VOICE_METRICS_QUEUE = None
++        if _VOICE_METRICS_TASK is not None and _VOICE_METRICS_TASK.done():
++            _VOICE_METRICS_TASK = None
++
++
++async def _ensure_voice_metrics_pump() -> None:
++    global _VOICE_METRICS_QUEUE, _VOICE_METRICS_TASK
++
++    lock = _get_voice_metrics_lock()
++    async with lock:
++        task = _VOICE_METRICS_TASK
++        if task is not None and not task.done():
 +            return
-+        self._turn_active = True
-+        self._turn_counter += 1
-+        self._turn_current_id = self._turn_counter
-+        now = ts or time.time()
-+        self._turn_start_ts = now
-+        self._turn_first_partial_ts = 0.0
-+        self._turn_final_ts = 0.0
-+        self._turn_bytes_baseline = self._bytes_forwarded
-+        self._turn_metrics_recorded = False
-+        self._turn_saw_1011 = False
-+        self._turn_last_close_code = None
++        if task is not None and task.done():
++            with contextlib.suppress(Exception):
++                task.result()
++            _VOICE_METRICS_TASK = None
 +
-+    def _note_first_partial(self, ts: Optional[float] = None) -> None:
-+        if not self._turn_active:
-+            self._ensure_turn_started(ts)
-+        if self._turn_first_partial_ts <= 0.0:
-+            self._turn_first_partial_ts = ts or time.time()
++        queue = _VOICE_METRICS_QUEUE
++        if queue is None:
++            queue = bus.subscribe("asr.metrics")
++            _VOICE_METRICS_QUEUE = queue
 +
-+    def _note_final_observed(self, ts: Optional[float] = None) -> None:
-+        if not self._turn_active:
-+            self._ensure_turn_started(ts)
-+        self._turn_final_ts = ts or time.time()
++        loop = asyncio.get_running_loop()
++        _VOICE_METRICS_TASK = loop.create_task(_voice_metrics_pump_loop(queue))
 +
-+    def _emit_turn_metrics(self) -> None:
-+        if self._turn_metrics_recorded:
-+            return
-+        turn_id = self._turn_current_id
-+        if turn_id is None:
-+            return
-+        final_ts = self._turn_final_ts or time.time()
-+        start_ts = self._turn_start_ts
-+        first_partial_ms: Optional[int] = None
-+        if start_ts and self._turn_first_partial_ts:
-+            first_partial_ms = int(max(0.0, (self._turn_first_partial_ts - start_ts) * 1000))
-+        final_ms: Optional[int] = None
-+        if start_ts:
-+            final_ms = int(max(0.0, (final_ts - start_ts) * 1000))
-+        bytes_forwarded = max(0, self._bytes_forwarded - self._turn_bytes_baseline)
-+        session_id = self._diag_session_id or None
-+        if not session_id:
-+            sid_candidate = self._sid_for_log()
-+            if sid_candidate and sid_candidate != "?":
-+                session_id = sid_candidate
-+        payload: dict[str, Any] = {
-+            "session_id": session_id,
-+            "dg_model": self._cfg_value("model"),
-+            "dg_tier": self._cfg_value("tier"),
-+            "first_partial_ms": first_partial_ms,
-+            "final_ms": final_ms,
-+            "dg_1011": bool(self._turn_saw_1011),
-+            "bytes_forwarded": bytes_forwarded,
-+        }
-+        clean_payload = {k: v for k, v in payload.items() if v is not None}
-+        record_turn_metrics(turn_id, clean_payload)
-+        sid_for_bus = session_id or self._sid_for_log()
-+        if sid_for_bus and sid_for_bus != "?":
-+            frame = {"type": "asr.metrics", "turn_id": turn_id}
-+            frame.update(clean_payload)
-+            try:
-+                stream_bus.broadcast(str(sid_for_bus), frame)
-+            except Exception:
-+                pass
-+        self._turn_metrics_recorded = True
-+        self._turn_active = False
-+        self._turn_current_id = None
-+        self._turn_start_ts = 0.0
-+        self._turn_first_partial_ts = 0.0
-+        self._turn_final_ts = 0.0
-+        self._turn_bytes_baseline = self._bytes_forwarded
-+        self._turn_saw_1011 = False
-+        self._turn_last_close_code = None
 +
-     def _sid_for_log(self) -> str:
-         try:
-             for key in ("session_id", "sid"):
-                 if key in self._cfg and self._cfg[key]:
-                     return str(self._cfg[key])
-         except Exception:
-             pass
-         return "?"
++async def _register_voice_metrics_subscriber(conn_id: str, send) -> bool:
++    try:
++        await _ensure_voice_metrics_pump()
++    except Exception:
++        return False
++
++    lock = _get_voice_metrics_lock()
++    async with lock:
++        _VOICE_METRICS_SUBSCRIBERS[conn_id] = partial(_ws_send_json, send)
++    return True
++
++
++async def _unregister_voice_metrics_subscriber(conn_id: str) -> None:
++    lock = _get_voice_metrics_lock()
++    async with lock:
++        _VOICE_METRICS_SUBSCRIBERS.pop(conn_id, None)
++
++
+ async def _pump_bus_to_client(sid: str, send):
+     """Forward frames from StreamBus to the WS client as JSON, suppressing duplicate assistant finals."""
+     import json as _json
+     import asyncio
+     import contextlib
+     from queue import Empty
+     from app.ws.bus import bus
  
-     async def wait_socket_open(self, timeout: float = 1.5) -> bool:
-         """Micro-wait until the underlying websocket's .open flag is True."""
-         if self._ws_is_open():
-             return True
-         end = time.time() + timeout
-         while time.time() < end:
-             if self._ws_is_open():
-                 return True
-             await asyncio.sleep(0.01)
-         return False
+     # Session-scoped guard: only one assistant final per turn_id
+     assistant_finals_sent: set[int] = set()
  
-     def _schedule_flush(self, delay: float = 0.0) -> None:
-         if self._flush_task and not self._flush_task.done():
-             return
- 
-         async def _runner():
-@@ -966,50 +1087,52 @@ class DeepgramClient:
- 
-         sid = self._sid_for_log()
-         total_sent = 0
-         sent_chunks = 0
-         first_chunk: Optional[bytes] = None
-         while self._tx_queue and self._ws_is_open():
-             ws = self._ws
-             if ws is None:
-                 break
-             data = self._tx_queue[0]
-             # Drop tiny preamble once (RAW only)
-             if (
-                 not containerized
-                 and (not self._first_real_sent)
-                 and len(data) < self._min_valid_bytes
-             ):
-                 self._logger.debug(
-                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
-                     sid,
-                     len(data),
-                     self._min_valid_bytes,
-                 )
-                 self._tx_queue.popleft()
+     q = bus.subscribe(sid)
+     try:
+         while True:
+             try:
+                 fr = q.get(timeout=0.05)  # 'fr' is already a dict from the bus
+             except Empty:
+                 await asyncio.sleep(0.01)
                  continue
+ 
+             # --- Duplicate assistant-final suppression ---
              try:
-+                send_ts = time.time()
-+                self._ensure_turn_started(send_ts)
-                 async with self._send_lock:
-                     await ws.send(data)
-                 self._first_real_sent = True
-                 self._bytes_forwarded += len(data)
-                 self._last_chunk_ts = time.time()
-                 self._tx_queue.popleft()
-                 total_sent += len(data)
-                 sent_chunks += 1
-                 if first_chunk is None:
-                     first_chunk = data
-                 self._logger.debug(
-                     "Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
-                     sid,
-                     len(data),
-                     len(self._tx_queue),
-                 )
-                 if callable(self._jlog):
-                     try:
-                         self._jlog(
-                             "dg_forward",
-                             sid=sid,
-                             dg_id=self._dg_id,
-                             tag=self._url_tag,
-                             bytes=len(data),
-                             queued=len(self._tx_queue),
-@@ -1069,50 +1192,59 @@ class DeepgramClient:
-     async def connect(self) -> None:
-         global DG_LAST_URL, DG_LAST_CONFIG
-         sid = self._sid_for_log()
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "dg_connect_begin",
-                     sid=sid,
-                     dg_id=self._dg_id,
-                     tag=self._url_tag,
-                     already_open=bool(self._ws),
-                     closing=self._closing,
-                     closed=self._closed,
-                 )
-             except Exception:
-                 pass
-         if self._ws:
-             self._logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
-             return
+                 msg_type = (fr.get("type") or "").lower()
+                 is_results = msg_type == "results"
+                 role_like = (fr.get("role") or fr.get("source") or fr.get("speaker") or "").lower()
+@@ -1177,50 +1283,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             path=scope.get("path"),
+             query_string=raw_query,
+         )
+     active_count = await _register_active_ws_entry()
+     if active_count is not None:
+         with contextlib.suppress(Exception):
+             _jlog("ws_conn_active", conn_id=conn_id, sid=sid, active=active_count)
+     with contextlib.suppress(Exception):
+         if _admin_emit:
+             _admin_emit(
+                 "ws_conn_open",
+                 sid=sid,
+                 conn_id=conn_id,
+                 client_ip=client_ip,
+                 path=scope.get("path"),
+                 query_string=raw_query,
+             )
+             if active_count is not None:
+                 _admin_emit("ws_conn_active", conn_id=conn_id, active=active_count)
  
-         self._asr_open_emitted = False
-         self._asr_start_emitted = False
-         self._ready_observed = False
-         self._first_real_sent = False
-         self._bytes_forwarded = 0
-+        self._turn_active = False
-+        self._turn_current_id = None
-+        self._turn_start_ts = 0.0
-+        self._turn_first_partial_ts = 0.0
-+        self._turn_final_ts = 0.0
-+        self._turn_bytes_baseline = 0
-+        self._turn_metrics_recorded = False
-+        self._turn_saw_1011 = False
-+        self._turn_last_close_code = None
-         try:
-             self._open_evt.clear()
-         except Exception:
-             self._open_evt = asyncio.Event()
-         try:
-             self._final_event.clear()
-         except Exception:
-             self._final_event = asyncio.Event()
+     with contextlib.suppress(Exception):
+         clear_greet_turn_cache(sid)
  
-         url = _dg_url(self._cfg)
-         self._emit_diag("provider_open", active=True, url=url)
+     bus_task = asyncio.create_task(_pump_bus_to_client(sid, send))
  
-         containerized = False
-         safe_url = url
-         url_meta: dict[str, Any] = {}
- 
-         try:
-             # Diagnostic: parse params and emit compact JSON log that shows
-             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
-             import urllib.parse as _p
- 
-             parts = _p.urlsplit(url)
-             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
-             self._url_tag = q.get("tag") or None
-             transport = (self._cfg or {}).get("_transport", {}) or {}
-@@ -1985,126 +2117,147 @@ class DeepgramClient:
-                             final_reason_detail = endpointing.get("type")
-                         for key in ("reason", "end_reason", "speech_final_reason"):
-                             val = msg.get(key)
-                             if isinstance(val, str) and val:
-                                 final_reason_detail = val
-                                 break
-                         if evt_type == "utteranceend" or msg.get("utterance_end"):
-                             final_reason = "utterance_end"
-                         if not final_reason and isinstance(final_reason_detail, str):
-                             lowered = final_reason_detail.strip().lower()
-                             if "utterance" in lowered or "endpoint" in lowered:
-                                 final_reason = "utterance_end"
-                         if self._closing and not final_reason:
-                             final_reason = "close_stream"
-                         if not final_reason:
-                             final_reason = "provider_final"
- 
-                     # No usable text in this message; keep listening
-                     if text:
-                         self._last_transcript = text
-                     elif is_final:
-                         text = self._last_transcript or ""
-                     else:
-                         continue
- 
-+                    now_ts = time.time()
-+                    if is_final:
-+                        self._note_first_partial(now_ts)
-+                        self._note_final_observed(now_ts)
-+                    else:
-+                        self._note_first_partial(now_ts)
++    voice_metrics_registered = False
++    try:
++        voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
++    except Exception:
++        voice_metrics_registered = False
 +
-                     self._logger.debug(
-                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
-                         sid,
-                         is_final,
-                         len(text),
-                         _clip_text(text),
+     async def _ping_loop():
+         try:
+             while True:
+                 await asyncio.sleep(20)
+                 try:
+                     await _ws_send_json(
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
                      )
-                     self._emit_diag(
-                         "asr_final" if is_final else "asr_partial",
-                         text=text,
-                         chars=len(text),
-                         active=True,
-                     )
-                     try:
-                         payload = {
-                             "type": "user_final" if is_final else "user_partial",
-                             "text": text,
-                         }
-                         if is_final:
-                             payload["final_reason"] = final_reason
-                             if final_reason_detail:
-                                 payload["final_reason_detail"] = final_reason_detail
-                         if confidence is not None:
-                             payload["confidence"] = confidence
-                         if token_count:
-                             payload["token_count"] = token_count
-                         await self._ev_queue.put(payload)
-                     except Exception:
-                         pass
- 
-                     if is_final:
-                         self._schedule_auto_close(final_reason or "provider_final")
-                         self._any_result = True
-                         self._final_event.set()
-+                        self._emit_turn_metrics()
-                         self._last_transcript = ""
-                         continue
- 
-                 elif evt_type in ("error", "close"):
-                     await self._publish_provider_event(evt_type or evt_name, msg)
-                     self._logger.warning(
-                         "Deepgram error event sid=%s evt_type=%s detail=%s",
-                         sid,
-                         evt_type,
-                         _clip_text(str(msg), 200),
-                     )
-                     self._emit_diag(
-                         "asr_error",
-                         error=msg.get("error") or evt_type,
-                         provider_error=True,
-                         detail=_clip_text(str(msg), 200),
-                     )
-                     try:
-                         await self._ev_queue.put(
-                             {"type": "asr_error", "error": msg.get("error") or evt_type}
-                         )
-                     except Exception:
-                         pass
- 
-                 else:
-                     await self._publish_provider_event(evt_type or evt_name, msg)
-                     self._logger.debug(
-                         "Deepgram unhandled event sid=%s evt_type=%s",
-                         sid,
-                         evt_type or "unknown",
-                     )
-                     continue
- 
+                 except Exception:
+                     break
          except asyncio.CancelledError:
-             return
-         except websockets.ConnectionClosed as e:
-             code = getattr(e, "code", None)
-             reason_raw = getattr(e, "reason", "")
-             try:
-                 reason_txt = str(reason_raw or "")
-             except Exception:
-                 reason_txt = ""
-+            if isinstance(code, int):
-+                self._turn_last_close_code = code
-+            else:
-+                self._turn_last_close_code = None
-+            if (
-+                code == 1011
-+                and self._turn_current_id is not None
-+                and not self._turn_metrics_recorded
-+            ):
-+                self._turn_saw_1011 = True
-+                if self._turn_final_ts <= 0.0:
-+                    self._turn_final_ts = time.time()
-+                self._emit_turn_metrics()
-             timeout_flag = False
-             try:
-                 timeout_flag = bool(reason_txt) and "timeout" in reason_txt.lower()
-             except Exception:
-                 timeout_flag = False
-             log_kwargs = {
-                 "sid": sid,
-                 "code": code,
-                 "reason": reason_txt,
-                 "had_result": self._had_result(),
-             }
-             log_fn = self._logger.warning
-             if timeout_flag or code == 1011:
-                 log_fn = self._logger.info
-             log_fn(
-                 "Deepgram websocket closed sid=%(sid)s code=%(code)s reason=%(reason)s had_result=%(had_result)s",
-                 log_kwargs,
+             pass
+ 
+     ping_task = asyncio.create_task(_ping_loop())
+ 
+     try:
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
+     except Exception:
+         with contextlib.suppress(Exception):
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
+@@ -3188,50 +3300,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 had_disconnect=had_disconnect,
              )
-             await self._publish_provider_event(
-                 "connection_closed",
-                 {"code": code, "reason": reason_txt, "timeout": timeout_flag},
+         with contextlib.suppress(Exception):
+             if _admin_emit:
+                 _admin_emit(
+                     "ws_conn_cleanup",
+                     conn_id=conn_id,
+                     sid=sid,
+                     duration=duration,
+                     had_disconnect=had_disconnect,
+                 )
+         # Clean up safely; never raise in cleanup
+         with contextlib.suppress(Exception):
+             if rx_task:
+                 rx_task.cancel()
+                 await rx_task
+         with contextlib.suppress(Exception):
+             if dg is not None:
+                 await dg.close(wait_for_final=False)
+         with contextlib.suppress(Exception):
+             bus_task.cancel()
+             await bus_task
+         with contextlib.suppress(Exception):
+             ping_task.cancel()
+             await ping_task
++        if voice_metrics_registered:
++            with contextlib.suppress(Exception):
++                await _unregister_voice_metrics_subscriber(conn_id)
+         for task in list(confirm_timeout_cancelled):
+             with contextlib.suppress(asyncio.CancelledError, Exception):
+                 await task
+         confirm_timeout_cancelled.clear()
+         with contextlib.suppress(Exception):
+             await send(
+                 {"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"}
              )
-             if timeout_flag or code == 1011:
-                 self._emit_diag(
-                     "asr_timeout",
-diff --git a/tests/test_asr_metrics.py b/tests/test_asr_metrics.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..eb3560d5c8d9ccfd63b5dcce734e2204b591a31b
---- /dev/null
-+++ b/tests/test_asr_metrics.py
-@@ -0,0 +1,16 @@
-+from app.services.streaming_asr.asr_metrics import get_recent, record_turn_metrics
+ 
+ 
+ # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
+ try:
+     from starlette.websockets import WebSocket as _StarletteWebSocket  # noqa
+ except Exception:
+     _StarletteWebSocket = None
+ 
+ 
+ async def ws_chat(websocket):
+     """Accept, validate, send ready, then pump frames to keep the connection alive."""
+     _jlog("ws_chat_compat_invoked")
+     await websocket.accept()
+     try:
+         sid = _get_session_id(websocket.scope)
+     except Exception:
+         sid = "default"
+diff --git a/static/js/ws.js b/static/js/ws.js
+index 0d40e32793092ee3cd4f994493b40d500eb8bad7..21b4cbc2930726061fdb7f8a6019958e9103eb4b 100644
+--- a/static/js/ws.js
++++ b/static/js/ws.js
+@@ -14,50 +14,68 @@
+         return _add.call(this, ev, wrap);
+       }
+       if (ev === 'error') {
+         const wrap = (e) => { try { console.info('[ws] error'); } catch {} try { return fn(e); } catch {} };
+         return _add.call(this, ev, wrap);
+       }
+       return _add.call(this, ev, fn);
+     };
+     WebSocket.prototype.addEventListener.__askchip_lifecycle_patched = true;
+   } catch {}
+ })();
+ 
+ // Page-exit breadcrumbs (to distinguish user navigation vs. programmatic close)
+ (function __installPageExitBreadcrumbs(){
+   try {
+     if (window.__askchip_exit_hooks_installed) return;
+     window.addEventListener('beforeunload', () => { try { console.info('[ui] beforeunload'); } catch {} });
+     document.addEventListener('visibilitychange', () => {
+       try { console.info(`[ui] visibility=${document.visibilityState}`); } catch {}
+     });
+     window.__askchip_exit_hooks_installed = true;
+   } catch {}
+ })();
+ 
+ 
++(function __initVoiceMetricsStore(){
++  try {
++    if (typeof window === 'undefined') return;
++    if (!Array.isArray(window.__voice_metrics)) {
++      window.__voice_metrics = [];
++    }
++    window.__getRecentVoiceMetrics = () => {
++      try {
++        const store = Array.isArray(window.__voice_metrics) ? window.__voice_metrics : [];
++        return store.slice().reverse();
++      } catch {
++        return [];
++      }
++    };
++  } catch {}
++})();
 +
 +
-+def test_record_turn_metrics_appends_and_returns_latest():
-+    payload = {"dg_model": "nova-test", "bytes_forwarded": 256, "dg_1011": False}
-+    entry = record_turn_metrics(42, payload)
-+    assert entry["turn_id"] == 42
-+    assert entry["dg_model"] == "nova-test"
-+    assert entry["bytes_forwarded"] == 256
-+    recent = get_recent(1)
-+    assert recent
-+    latest = recent[0]
-+    assert latest["turn_id"] == 42
-+    assert latest["dg_model"] == "nova-test"
-+    assert latest["bytes_forwarded"] == 256
-+    assert latest["dg_1011"] is False
+ // === E2E minimal WS message hook (always-on, safe) ===
+ (function __installE2EHook(){
+   try {
+     const _add = WebSocket.prototype.addEventListener;
+     if (!_add.__askchip_e2e_patched) {
+       WebSocket.prototype.addEventListener = function(ev, fn){
+         if (ev === 'message') {
+           const wrapper = (e) => {
+             try {
+               if (typeof e.data === 'string' && e.data.length < 4096) {
+                 try {
+                   const d = JSON.parse(e.data);
+                   if (d && typeof d === 'object') {
+                     if (d.type === 'assistant_end') { try { console.info('assistant_end'); } catch {} }
+                     if (d.type === 'UtteranceEnd')  { try { console.info('UtteranceEnd'); } catch {} }
+                     if (d.type === 'latency_breakdown' || d.event === 'latency_breakdown') { try { console.info('latency_breakdown'); } catch {} }
+                     if (d.type === 'policy_decision' || (d.event && String(d.event).includes('policy_decision'))) {
+                       const val = d.detail || d.decision || (d.payload && d.payload.decision) || 'unknown';
+                       try { console.info('policy_decision: ' + String(val)); } catch {}
+                     }
+                   }
+                 } catch {}
+               }
+             } catch {}
+             try { return fn(e); } catch {}
+@@ -129,50 +147,65 @@ function _console(level, ...args) {
+ function _wsLog(level, message, detail = undefined) {
+   logIfEnabled(() => {
+     try {
+       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+       if (!method) return;
+       const traceId = _getActiveTurnTraceId();
+       const prefix = traceId ? `[ws][trace:${traceId}]` : '[ws]';
+       if (detail === undefined) {
+         method.call(console, `${prefix} ${message}`);
+         return;
+       }
+       if (detail && typeof detail === 'object') {
+         const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
+         method.call(console, `${prefix} ${message}`, payload);
+         return;
+       }
+       if (traceId) {
+         method.call(console, `${prefix} ${message}`, detail, `trace:${traceId}`);
+         return;
+       }
+       method.call(console, `${prefix} ${message}`, detail);
+     } catch {}
+   });
+ }
+ 
++function _recordVoiceMetrics(payload){
++  try {
++    if (typeof window === 'undefined') return;
++    if (!Array.isArray(window.__voice_metrics)) {
++      window.__voice_metrics = [];
++    }
++    const store = window.__voice_metrics;
++    const base = payload && typeof payload === 'object' ? { ...payload } : {};
++    store.push(Object.freeze(base));
++    if (store.length > 10) {
++      store.splice(0, store.length - 10);
++    }
++  } catch {}
++}
++
+ function _scheduleProviderFallback(){
+   if (_keepaliveState.providerGateTimer){
+     clearTimeout(_keepaliveState.providerGateTimer);
+   }
+   if (!_keepaliveState.pauseReasons.has(_KEEPALIVE_REASON_PROVIDER)){
+     _pauseKeepalive(_KEEPALIVE_REASON_PROVIDER);
+   }
+   _keepaliveState.providerGateTimer = setTimeout(()=>{
+     _keepaliveState.providerGateTimer = null;
+     if (!_keepaliveState.providerReady){
+       _keepaliveState.providerReady = true;
+     }
+     _resumeKeepalive(_KEEPALIVE_REASON_PROVIDER);
+   }, _KEEPALIVE_PROVIDER_FALLBACK_MS);
+ }
+ 
+ let _lastUserSendTs = 0;
+ let _gotReady = false;
+ let _openPromise = null;
+ 
+ // reconnect state
+ let _reconnecting = false;
+ let _reconnectTimer = null;
+ let _backoff = 500;            // start 0.5s
+ const _BACKOFF_MAX = 8000;     // cap 8s
+@@ -493,53 +526,60 @@ export function openWS(options = {}){
+     ws.onerror = (e) => _console('warn', '[ws] error', e);
+ 
+     ws.onmessage = (ev) => {
+       try{
+         if (typeof ev.data === 'string'){
+           const obj = JSON.parse(ev.data);
+           const t = obj && obj.type;
+ 
+           if (t === 'Result' || t === 'Results') {
+             const channel = obj && obj.channel;
+             const alternatives = channel && channel.alternatives;
+             const transcript = alternatives && alternatives[0] && alternatives[0].transcript;
+             const isFinal =
+               (channel && typeof channel.is_final === 'boolean' && channel.is_final) ||
+               (typeof obj.final === 'boolean' && obj.final) ||
+               false;
+             const chars = typeof transcript === 'string' ? transcript.length : 0;
+             const kind = isFinal ? 'final' : 'partial';
+             _wsLog('info', `ASR result (${kind})`, {
+               final: isFinal,
+               chars,
+               text: transcript || '',
+               frameType: t,
+             });
+           }
+-          
++
+           _handleProviderSignal(obj);
+ 
++          if (t === 'asr.metrics') {
++            try {
++              const payload = obj && obj.payload && typeof obj.payload === 'object' ? obj.payload : {};
++              _recordVoiceMetrics(payload);
++            } catch {}
++          }
++
+           if (t === 'ready') {
+             _gotReady = true;
+             // small audio unlock nudge on first ready (harmless if already unlocked)
+             try { unlockAudio().catch(()=>{}); } catch {}
+           }
+ 
+           // Re-emit as DOM events so UI can respond
+           window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
+ 
+           // --- Audio routing (WS-only) ---------------------------------------
+           if (t === 'assistant_audio') {
+             // Server provides { mime, audio_chunks:[], is_last }
+             playStream(obj);
+             return;
+           }
+           if (t === 'UtteranceEnd') {
+             // Authoritative end-of-utterance: drain and endOfStream
+             audioEnd();
+             return;
+           }
+ 
+           // --- Other control/info messages -----------------------------------
+           if (t === 'KeepAliveAck'){
+             // no-op
+           } else if (t === 'Error'){

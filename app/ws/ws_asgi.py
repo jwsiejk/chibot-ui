@@ -1,6 +1,7 @@
 # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
 import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
+from functools import partial
 from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
 from collections import deque, defaultdict
 from app.services.audio.container_sniffer import (
@@ -527,6 +528,111 @@ async def _ws_send_diagnostic_audio(send, turn_id: int, mime: str, data: bytes) 
 
 
 # ------------------------------ bus pumpers ------------------------------
+
+_VOICE_METRICS_SUBSCRIBERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[None]]] = {}
+_VOICE_METRICS_QUEUE = None
+_VOICE_METRICS_TASK: Optional[asyncio.Task] = None
+_VOICE_METRICS_LOCK: Optional[asyncio.Lock] = None
+
+
+def _get_voice_metrics_lock() -> asyncio.Lock:
+    global _VOICE_METRICS_LOCK
+    lock = _VOICE_METRICS_LOCK
+    if lock is None:
+        lock = asyncio.Lock()
+        _VOICE_METRICS_LOCK = lock
+    return lock
+
+
+async def _voice_metrics_pump_loop(queue) -> None:
+    from queue import Empty
+
+    global _VOICE_METRICS_QUEUE, _VOICE_METRICS_TASK
+
+    try:
+        while True:
+            try:
+                frame = queue.get(timeout=0.2)
+            except Empty:
+                await asyncio.sleep(0.05)
+                continue
+
+            if not isinstance(frame, dict):
+                continue
+
+            payload = {k: v for k, v in frame.items() if k != "type"}
+
+            lock = _get_voice_metrics_lock()
+            async with lock:
+                subscribers = list(_VOICE_METRICS_SUBSCRIBERS.items())
+
+            if not subscribers:
+                continue
+
+            to_remove: List[str] = []
+            for key, sender in subscribers:
+                message = {"type": "asr.metrics", "payload": dict(payload)}
+                try:
+                    await sender(message)
+                except Exception:
+                    to_remove.append(key)
+
+            if to_remove:
+                lock = _get_voice_metrics_lock()
+                async with lock:
+                    for key in to_remove:
+                        _VOICE_METRICS_SUBSCRIBERS.pop(key, None)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            if hasattr(bus, "unsubscribe"):
+                bus.unsubscribe("asr.metrics", queue)
+        if _VOICE_METRICS_QUEUE is queue:
+            _VOICE_METRICS_QUEUE = None
+        if _VOICE_METRICS_TASK is not None and _VOICE_METRICS_TASK.done():
+            _VOICE_METRICS_TASK = None
+
+
+async def _ensure_voice_metrics_pump() -> None:
+    global _VOICE_METRICS_QUEUE, _VOICE_METRICS_TASK
+
+    lock = _get_voice_metrics_lock()
+    async with lock:
+        task = _VOICE_METRICS_TASK
+        if task is not None and not task.done():
+            return
+        if task is not None and task.done():
+            with contextlib.suppress(Exception):
+                task.result()
+            _VOICE_METRICS_TASK = None
+
+        queue = _VOICE_METRICS_QUEUE
+        if queue is None:
+            queue = bus.subscribe("asr.metrics")
+            _VOICE_METRICS_QUEUE = queue
+
+        loop = asyncio.get_running_loop()
+        _VOICE_METRICS_TASK = loop.create_task(_voice_metrics_pump_loop(queue))
+
+
+async def _register_voice_metrics_subscriber(conn_id: str, send) -> bool:
+    try:
+        await _ensure_voice_metrics_pump()
+    except Exception:
+        return False
+
+    lock = _get_voice_metrics_lock()
+    async with lock:
+        _VOICE_METRICS_SUBSCRIBERS[conn_id] = partial(_ws_send_json, send)
+    return True
+
+
+async def _unregister_voice_metrics_subscriber(conn_id: str) -> None:
+    lock = _get_voice_metrics_lock()
+    async with lock:
+        _VOICE_METRICS_SUBSCRIBERS.pop(conn_id, None)
+
 
 async def _pump_bus_to_client(sid: str, send):
     """Forward frames from StreamBus to the WS client as JSON, suppressing duplicate assistant finals."""
@@ -1198,6 +1304,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         clear_greet_turn_cache(sid)
 
     bus_task = asyncio.create_task(_pump_bus_to_client(sid, send))
+
+    voice_metrics_registered = False
+    try:
+        voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
+    except Exception:
+        voice_metrics_registered = False
 
     async def _ping_loop():
         try:
@@ -3210,6 +3322,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         with contextlib.suppress(Exception):
             ping_task.cancel()
             await ping_task
+        if voice_metrics_registered:
+            with contextlib.suppress(Exception):
+                await _unregister_voice_metrics_subscriber(conn_id)
         for task in list(confirm_timeout_cancelled):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
