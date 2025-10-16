@@ -92,7 +92,6 @@ export function createVadSchedulerLegacy(deps = {}) {
     stopPlayback,
     ttsIsPlaying,
     startVadLoop,
-    forceBargeInEnd,
     facadeOnWsMessage,
     legacySetGreetGateActive,
     legacyAbortEvidenceGate,
