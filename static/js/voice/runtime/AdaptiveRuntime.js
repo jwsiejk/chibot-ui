@@ -13,9 +13,21 @@ import {
   openWS,
   waitWSOpen,
   sendAudioChunk,
-  sendCloseStream,
   sendJSON,
 } from '../../ws_module.js';
+// Guarded CloseStream wrapper so we never kill the session before the first user turn.
+import { sendCloseStream as __sendCloseStream } from '../../ws';
+
+function safeCloseStream(reason = '') {
+  try {
+    const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
+    if (!opened) {
+      console.debug('[voice] skip CloseStream (no user turn yet)', { reason });
+      return;
+    }
+  } catch {}
+  __sendCloseStream();
+}
 import { VAD } from '../vad.js';
 import { stopPlayback } from '../../audio.js';
 import { logIfEnabled } from '../../util/logging.js';
@@ -384,7 +396,7 @@ const scheduleSafetyClose = (ctx) => {
   }
   ctx.transport.safetyTimer = setTimeout(() => {
     if (!ctx.state.turnOpen) return;
-    sendCloseStream({ reason: 'safety_close' });
+    safeCloseStream('adaptive');
     ctx.state.turnOpen = false;
     teardownTransport(ctx);
   }, SAFETY_CLOSE_DELAY_MS);
@@ -433,7 +445,7 @@ const closeTurn = (ctx, reason = 'vad_end') => {
     return;
   }
   const turnId = ctx.state.activeTurnId || ctx.state.turnSeq || null;
-  sendCloseStream({ reason });
+  safeCloseStream('adaptive');
   ctx.state.turnOpen = false;
   const ts = Date.now();
   const stats = getShadowStats(ctx.state);

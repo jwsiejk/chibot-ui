@@ -1,262 +1,47 @@
-diff --git a/app/__init__.py b/app/__init__.py
-index b68b281811429aa777efef5bf1deff6ffb626f38..1b6b0b32c61cca212eeedb0bd9c1cd072ae060d1 100644
---- a/app/__init__.py
-+++ b/app/__init__.py
-@@ -85,78 +85,78 @@ def create_app():
- 
-     @app.context_processor
-     def _inject_askchip_config():
-         enabled = True
-         try:
-             enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
-         except Exception:
-             enabled = True
-         auth_config = {}
-         auto_login_email = (os.environ.get("ASKCHIP_AUTO_LOGIN_EMAIL") or "").strip()
-         if auto_login_email:
-             auth_config["autoLoginEmail"] = auto_login_email
-         vad_config = {}
-         try:
-             vad_config = {
-                 "baseThresholdDb": float(getattr(_SETTINGS, "vad_base_threshold_db", 10.0)),
-                 "exitThresholdDb": float(getattr(_SETTINGS, "vad_exit_threshold_db", 6.0)),
-                 "ttsBoostDb": float(getattr(_SETTINGS, "vad_tts_boost_db", 6.0)),
-                 "minSpeechMs": int(getattr(_SETTINGS, "vad_min_speech_ms", 360)),
-             }
-         except Exception:
-             vad_config = {}
- 
-         feature_flags = {
-             "feature_manual_barge_in": True,
--            "barge_in_mode_manual": True,
-+            "barge_in_mode_manual": False,
-             "auto_commit_when_ready": True,
-         }
-         try:
-             from .services import admin_settings as _admin_settings  # inline import to avoid cycles
- 
-             settings = _admin_settings.get_settings()
-         except Exception:
-             settings = {}
-         try:
-             from .db import db as _db
- 
-             db_cfg = _db.get_config()
-         except Exception:
-             db_cfg = {}
- 
-         def _resolve_flag(name: str, default: bool) -> bool:
-             if isinstance(settings, dict) and name in settings:
-                 return bool(settings.get(name))
-             if isinstance(db_cfg, dict) and name in db_cfg:
-                 return bool(db_cfg.get(name))
-             return default
- 
-         feature_flags["feature_manual_barge_in"] = _resolve_flag(
-             "feature_manual_barge_in", True
-         )
-         feature_flags["barge_in_mode_manual"] = _resolve_flag(
--            "barge_in_mode_manual", True
-+            "barge_in_mode_manual", False
-         )
-         feature_flags["auto_commit_when_ready"] = _resolve_flag(
-             "auto_commit_when_ready", True
-         )
-         return {
-             "askchip_config": {
-                 "logging": {"enabled": enabled},
-                 "auth": auth_config,
-                 "vad": vad_config,
-                 "features": feature_flags,
-                 "feature_manual_barge_in": feature_flags["feature_manual_barge_in"],
-                 "barge_in_mode_manual": feature_flags["barge_in_mode_manual"],
-                 "auto_commit_when_ready": feature_flags["auto_commit_when_ready"],
-             }
-         }
- 
-     @app.after_request
-     def maybe_allow_cors(resp):
-         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
-         if allow:
-             origins = [o.strip() for o in allow.split(",") if o.strip()]
-             ori = request.headers.get("Origin", "")
-             if ori in origins:
-                 resp.headers["Access-Control-Allow-Origin"] = ori
-                 resp.headers["Vary"] = "Origin"
-diff --git a/app/db.py b/app/db.py
-index 6b97475ceb9e9f817c62e44ab85e6a28ff28d44f..b8b2d7a5a02c0cd7bc76395d71b6e1a445870d1e 100644
---- a/app/db.py
-+++ b/app/db.py
-@@ -53,51 +53,51 @@ class DB:
-                 'audio_worklet_enabled': False,
-                 'vad_attack_ms': 12,
-                 'vad_release_ms': 240,
-                 'vad_dbfs_threshold': -42,
-                 'csrf_enforced': bool(__import__('os').environ.get('CSRF_ENFORCED','')).__bool__(),'profile_gate_enabled':False,
-                 'show_instruction_strip': True,'show_state_dots': True,'theme':'light',
-                 'suggestions_enabled': True,'suggestions_max_items':4,'suggestions_max_words':7,
-                 'nudges_enabled': True,'nudge_delay_ms':4200,'nudge_backoff_after_ignored':2,
-                 'silence_guard_ms':1800,
-                 'confirm_ms':420,'echo_threshold_boost':1.9,'min_speech_ms':220,'voice_command_hints':True,
-                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
-                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,
-                 'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'auto','openai_model':'gpt-4o-mini','stt_provider':'auto','tts_provider':'auto',
-                 'redact_email_in_logs':True,
-                 'nlu_logging_enabled': True,
-                 'gen_humor': 0.0,
-                 'gen_target_verbosity': 'medium',
-                 'gen_max_sentences': 4,
-                 'gen_top_p': 1.0,
-                 'gen_temperature': 0.3,
-                 'feature_audio': True,
-                 'tts_voice_id': '',
-                 'tts_output_format': 'mp3_44100_128',
-                 'tts_model_id': 'eleven_multilingual_v2',
-                 'feature_manual_barge_in': True,
--                'barge_in_mode_manual': True,
-+                'barge_in_mode_manual': False,
-                 'auto_commit_when_ready': True,
-                 'planner_high_threshold': 0.75,
-                 'planner_medium_threshold': 0.60,
-             },
-             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
-         }
-         self._ensure_config_defaults()
-     def ensure_session(self, sid, email):
-         try:
-             if persist_enabled():
-                 from .dal import neon_pg
-                 neon_pg.ensure_schema(); neon_pg.upsert_user(email); neon_pg.ensure_session(sid, email)
-         except Exception:
-             pass
-         session = self.memory['sessions'].setdefault(
-             sid,
-             {'email':email,'messages':[],'nudges':0,'persona_id':'chip'}
-         )
-         if not isinstance(session.get('goal'), dict):
-             session['goal'] = _empty_session_goal()
-         else:
-             session['goal'] = _normalize_session_goal(session['goal'])
-     def add_message(self, sid, role, text):
-         try:
-             if persist_enabled():
-diff --git a/app/services/admin_settings.py b/app/services/admin_settings.py
-index 3e04f292f851bddcf6c9f8da459f958d959b6886..60c41cfb257f2b1cd2996699e3ed9580e296aa85 100644
---- a/app/services/admin_settings.py
-+++ b/app/services/admin_settings.py
-@@ -1,49 +1,49 @@
- # app/services/admin_settings.py
- from __future__ import annotations
- import os, json, threading
- from typing import Any, Dict
- 
- _LOCK = threading.Lock()
- 
- # ---------------- In-memory defaults (used as base / fallback) ----------------
- _settings: Dict[str, Any] = {
-     "confirm_ms": 420,
-     "echo_threshold_boost": 1.9,
-     "language_lock": "en",
-     "min_speech_ms": 220,
-     "nudge_delay_ms": 4200,
-     "nudge_backoff_after_ignored": 2,
-     "silence_guard_ms": 1800,
-     "max_turn_seconds": 90,
- 
-     # Audio feature toggle — default TRUE unless explicitly forced false via env/DB
-     "feature_audio": (os.environ.get("FEATURE_AUDIO") or "true").lower() == "true",
- 
-     # Manual barge-in (PTT) feature flags
-     "feature_manual_barge_in": True,
--    "barge_in_mode_manual": True,
-+    "barge_in_mode_manual": False,
-     "auto_commit_when_ready": True,
- 
-     # TTS runtime tunables (non-secret) – keys remain in env only unless user saves
-     "tts_voice_id": os.environ.get("ELEVENLABS_VOICE_ID", ""),
-     "tts_output_format": os.environ.get("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128"),
-     "tts_model_id": os.environ.get("ELEVEN_MODEL_ID", "eleven_multilingual_v2"),
- }
- 
- # ------------------------- DB helpers (safe best-effort) ----------------------
- 
- def _persist_enabled() -> bool:
-     try:
-         from ..db import persist_enabled
-         return bool(persist_enabled())
-     except Exception:
-         return False
- 
- def _db_get_settings() -> Dict[str, Any]:
-     """
-     Load admin settings from Neon (admin_settings.value_jsonb where key='settings').
-     Returns {} if not available. Safe to call even if schema is missing.
-     """
-     if not _persist_enabled():
-         return {}
-     try:
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index d2529664156645bb199d191ca7a3a2a490c4b895..1856b3e91111f11bf7504b4af842dbee6d0c2e98 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1320,51 +1320,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                     await _ws_send_json(
-                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
-                     )
-                 except Exception:
-                     break
-         except asyncio.CancelledError:
-             pass
- 
-     ping_task = asyncio.create_task(_ping_loop())
- 
-     try:
-         await _ws_send_json(send, {"type": "ready", "session_id": sid})
-     except Exception:
-         with contextlib.suppress(Exception):
-             await send(
-                 {
-                     "type": "websocket.close",
-                     "code": 1011,
-                     "reason": "initial_ready_failed",
-                 }
-             )
-         return
- 
-     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
-     manual_feature_enabled = True
--    manual_mode_manual_only = True
-+    manual_mode_manual_only = False
-     auto_commit_when_ready = True
-     try:
-         runtime_cfg = db.get_config()
-         if isinstance(runtime_cfg, dict):
-             manual_feature_enabled = bool(
-                 runtime_cfg.get("feature_manual_barge_in", manual_feature_enabled)
-             )
-             manual_mode_manual_only = bool(
-                 runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-             )
-             auto_commit_when_ready = bool(
-                 runtime_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-             )
-     except Exception:
-         pass
-     try:
-         from app.services import admin_settings as _admin_settings  # type: ignore
- 
-         admin_cfg = _admin_settings.get_settings()
-         if isinstance(admin_cfg, dict):
-             manual_feature_enabled = bool(
-                 admin_cfg.get("feature_manual_barge_in", manual_feature_enabled)
-             )
-             manual_mode_manual_only = bool(
-                 admin_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index 9edc5e1270e95f036a415780a51404531884b743..a44b8e2f39b58bb8193c9a0ce7218b1c728b37ae 100644
+index a44b8e2f39b58bb8193c9a0ce7218b1c728b37ae..311c95b8e5eba6c8821d8a090ea4b45dff95eb4f 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -27,50 +27,77 @@ const PRE_ROLL_MS = 550,
+@@ -1,43 +1,55 @@
+ import {
+   EvidenceGate,
+   ShadowBuffer,
+   TtsMask,
+   TurnState,
+   bufferPreRollFrame,
+   flushShadowBuffer,
+   getConfig,
+ } from '../core/index.js';
+ import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
+ import { emitVoiceEvent } from '../ui/Events.js';
+ import {
+   openWS,
+   waitWSOpen,
+   sendAudioChunk,
+-  sendCloseStream,
+   sendJSON,
+ } from '../../ws_module.js';
++// Guarded CloseStream wrapper so we never kill the session before the first user turn.
++import { sendCloseStream as __sendCloseStream } from '../../ws';
++
++function safeCloseStream(reason = '') {
++  try {
++    const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
++    if (!opened) {
++      console.debug('[voice] skip CloseStream (no user turn yet)', { reason });
++      return;
++    }
++  } catch {}
++  __sendCloseStream();
++}
+ import { VAD } from '../vad.js';
+ import { stopPlayback } from '../../audio.js';
+ import { logIfEnabled } from '../../util/logging.js';
+ import { getSID } from '../../util/sid.js';
+ 
+ const PRE_ROLL_MS = 550,
+   RECORD_TIMESLICE_MS = 150,
+   SAFETY_CLOSE_DELAY_MS = 2200,
    EVIDENCE_MIN_SPEECH_MS = 480,
    EVIDENCE_MIN_BYTES = 8 * 1024,
    MIN_VALID_BLOB_BYTES = 1,
@@ -274,223 +59,7 @@ index 9edc5e1270e95f036a415780a51404531884b743..a44b8e2f39b58bb8193c9a0ce7218b1c
  
  const voiceLog = (level, ...args) => {
    logIfEnabled(() => {
-     try {
-       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
-       method?.apply(console, args);
-     } catch {}
-   });
- };
- 
- const MASK_LOG_INTERVAL_MS = 180;
-+const TTS_POST_PLAY_HOLD_MS = 180;
-+
-+const resolvePostTtsHoldMs = (ctx) => {
-+  const cfg = ctx?.config?.tts ?? {};
-+  let value;
-+  if (Number.isFinite(cfg.post_play_hold_ms)) {
-+    value = cfg.post_play_hold_ms;
-+  } else if (Number.isFinite(cfg.decay_ms)) {
-+    value = cfg.decay_ms;
-+  } else {
-+    value = TTS_POST_PLAY_HOLD_MS;
-+  }
-+  if (!Number.isFinite(value)) {
-+    return TTS_POST_PLAY_HOLD_MS;
-+  }
-+  if (value <= 0) {
-+    return 0;
-+  }
-+  return Math.min(200, value);
-+};
-+
-+const setManualGate = (ctx, active) => {
-+  if (!ctx?.state) return;
-+  const value = !!active;
-+  ctx.state.manualGate = value;
-+  ctx.state.manualPttActive = value;
-+};
- 
- const logReadyState = (ctx) => {
-   if (!ctx || !ctx.state) return;
-   const tsLocal = nowMs();
-   const last = Number.isFinite(ctx.state.lastReadyLogAt) ? ctx.state.lastReadyLogAt : 0;
-   if (tsLocal - last < 25) {
-     return;
-   }
-   ctx.state.lastReadyLogAt = tsLocal;
-   const ts = Date.now();
-   voiceLog('info', "state { phase:'ready' }", {
-     ts_ms: ts,
-     session_id: ctx.sessionId || null,
-     turn_id: ctx.state.activeTurnId || null,
-   });
- };
- 
- const stopMaskLogging = (ctx) => {
-   if (!ctx) return;
-   if (ctx.maskLogTimer) {
-     try { clearInterval(ctx.maskLogTimer); } catch {}
-   }
-   ctx.maskLogTimer = null;
- };
- 
-@@ -107,124 +134,146 @@ const startMaskLogging = (ctx) => {
- };
- 
- const resolveSnrBoost = (ctx, baseSnrDb = 3.5) => {
-   try {
-     const requirement = getEvidenceSnrRequirement(ctx.state, nowMs, baseSnrDb);
-     return Math.max(0, requirement - baseSnrDb);
-   } catch {
-     return 0;
-   }
- };
- const setState = (ctx, stateName, detail) => {
-   ctx.state.turnState = stateName;
-   const ts = Date.now();
-   const baseDetail = detail && typeof detail === 'object' ? { ...detail } : {};
-   emitVoiceEvent('state', {
-     state: stateName,
-     ts_ms: ts,
-     sessionId: ctx.sessionId || null,
-     ...baseDetail,
-   });
-   if (stateName === TurnState.Ready) {
-     logReadyState(ctx);
-   }
- };
- 
--const isTtsMaskActive = (ctx) => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
-+const isTtsMaskActive = (ctx) => {
-+  if (!ctx?.state) {
-+    return false;
-+  }
-+  if (ctx.state.ttsPlaying) {
-+    return true;
-+  }
-+  const holdMs = resolvePostTtsHoldMs(ctx);
-+  const ts = nowMs();
-+  if (holdMs > 0 && Number.isFinite(ctx.ttsEndedAtMs) && ctx.ttsEndedAtMs > 0) {
-+    if (ts - ctx.ttsEndedAtMs <= holdMs) {
-+      return true;
-+    }
-+  }
-+  if (ctx.ttsMask && typeof ctx.ttsMask.isMasked === 'function') {
-+    return ctx.ttsMask.isMasked(ts);
-+  }
-+  return false;
-+};
- 
- const ensureCtx = () => {
-   if (ctxRef.current) {
-     return ctxRef.current;
-   }
-   const config = getConfig();
-   let sessionId = null;
-   try {
-     sessionId = getSID();
-   } catch {}
-   const evidenceGate = new EvidenceGate({
-     snrSigma: config.evidence?.snr_sigma,
-     asrConf: config.evidence?.asr_conf,
-     baseSnrDb: config.evidence?.baseSnrDb,
-     evidence: config.evidence,
-   });
-   const shadowBuffer = new ShadowBuffer({ maxMs: config.shadow?.ms ?? PRE_ROLL_MS });
-   const ttsMask = new TtsMask();
-   try {
-     if (typeof window !== 'undefined') {
-       window.__askchip_voice_session_id = sessionId;
-     }
-   } catch {}
- 
-   const ctx = {
-     config,
-     sessionId,
-     state: {
-       turnState: TurnState.Ready, recording: false, vadArmed: false,
-       vadBoostDb: 0, greetGateActive: false, greetGatePhase: 'idle',
-       greetGateWaiters: [], manualBargeInUsed: false,
-       bargeConfirmActive: false, bargeConfirmUntil: 0,
-       wsReady: false, turnOpen: false, hasOpenedTurn: false,
--      manualPttActive: false,
-+      manualGate: false, manualPttActive: false, pttHeld: false,
-       turnSeq: 0, activeTurnId: null,
-       ttsPlaying: false, lastChunkAt: 0,
-       lastReadyLogAt: 0,
-       evidenceGate, shadowBuffer, ttsMask,
-     },
-     audio: {
-       stream: null, context: null, source: null, analyser: null,
-       vad: null, recorder: null, recTimeslice: RECORD_TIMESLICE_MS,
-       lastTimecode: null,
-     },
-     transport: { wsPromise: null, connected: false, safetyTimer: null },
-     evidenceGate,
-     shadowBuffer,
-     ttsMask,
-     maskLogTimer: null,
-   };
- 
-   registerTtsListener(ctx);
-+  ctx.ttsEndedAtMs = 0;
-   ctxRef.current = ctx;
-   return ctx;
- };
- 
- const registerTtsListener = (ctx) => {
-   if (ctx.ttsListenerRegistered) return;
-   ctx.ttsListenerRegistered = true;
-   const win = typeof window !== 'undefined' ? window : null;
-   const listener = (event) => {
-     const detail = event?.detail || {};
-     const state = String(detail.state || '').toLowerCase();
-     if (state === 'playing') {
-       ctx.state.ttsPlaying = true;
-+      ctx.ttsEndedAtMs = 0;
-       ctx.ttsMask.start();
-       startMaskLogging(ctx);
--    } else if (state === 'ended' || state === 'stopped') {
-+    } else if (state === 'ended' || state === 'stopped' || state === 'done') {
-       ctx.state.ttsPlaying = false;
--      ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms ?? 700, snrBoost: detail.snrBoost });
-+      ctx.ttsEndedAtMs = nowMs();
-+      ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail.snrBoost });
-       startMaskLogging(ctx);
-     } else if (state === 'ready') {
-       ctx.state.ttsPlaying = false;
-+      ctx.ttsEndedAtMs = nowMs();
-       ctx.ttsMask.clear();
-       stopMaskLogging(ctx);
-       logReadyState(ctx);
-     }
-   };
-   try { win?.addEventListener?.('chip-tts', listener); } catch {}
- };
- 
- const ensureTransport = async (ctx) => {
-   if (ctx.transport.connected) {
-     return ctx.transport.wsPromise;
-   }
-   if (!ctx.transport.wsPromise) {
-     ctx.transport.wsPromise = openWS();
-   }
-   try {
-     const wsHandle = await waitWSOpen();
-     ctx.transport.connected = true;
-     ctx.state.wsReady = true;
-     return wsHandle;
-   } catch (err) {
-     ctx.transport.wsPromise = null;
-     ctx.transport.connected = false;
-     ctx.state.wsReady = false;
-     throw err;
-@@ -308,51 +357,51 @@ const handleRecorderData = (ctx, event) => {
-     timecode,
-     timeslice: ctx.audio.recTimeslice,
-     fallbackMs: PRE_ROLL_MS,
-     lastTimecode: ctx.audio.lastTimecode,
-     onBuffered: ({ durationMs: dur, byteLength }) => {
+@@ -362,100 +374,100 @@ const handleRecorderData = (ctx, event) => {
        ctx.evidenceGate.extendBuffer({ durationMs: dur, bytes: byteLength });
      },
    });
@@ -511,13 +80,13 @@ index 9edc5e1270e95f036a415780a51404531884b743..a44b8e2f39b58bb8193c9a0ce7218b1c
  const scheduleSafetyClose = (ctx) => {
    if (ctx.transport.safetyTimer) { try { clearTimeout(ctx.transport.safetyTimer); } catch {} }
    ctx.transport.safetyTimer = null;
--  if (!ctx.state.hasOpenedTurn || ctx.state.manualPttActive) {
-+  if (!ctx.state.hasOpenedTurn || ctx.state.manualGate) {
+   if (!ctx.state.hasOpenedTurn || ctx.state.manualGate) {
      return;
    }
    ctx.transport.safetyTimer = setTimeout(() => {
      if (!ctx.state.turnOpen) return;
-     sendCloseStream({ reason: 'safety_close' });
+-    sendCloseStream({ reason: 'safety_close' });
++    safeCloseStream('adaptive');
      ctx.state.turnOpen = false;
      teardownTransport(ctx);
    }, SAFETY_CLOSE_DELAY_MS);
@@ -538,7 +107,37 @@ index 9edc5e1270e95f036a415780a51404531884b743..a44b8e2f39b58bb8193c9a0ce7218b1c
      sessionId: ctx.sessionId || null,
      ts_ms: ts,
    });
-@@ -389,92 +438,103 @@ const closeTurn = (ctx, reason = 'vad_end') => {
+   voiceLog('info', '[turn] open', {
+     ts_ms: ts,
+     session_id: ctx.sessionId || null,
+     turn_id: turnId,
+     reason,
+   });
+   try {
+     if (typeof window !== 'undefined') {
+       window.__askchip_turn_trace_id = String(turnId);
+     }
+   } catch {}
+   const stats = flushShadowBuffer(ctx.shadowBuffer, (entry) => {
+     if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs: entry.durationMs });
+   });
+   ctx.evidenceGate.setBufferStats(stats);
+ };
+ 
+ const closeTurn = (ctx, reason = 'vad_end') => {
+   if (!ctx.state.turnOpen) {
+     if (!ctx.state.hasOpenedTurn) {
+       voiceLog('info', '[ws] CloseStream suppressed: no user turn yet', {
+         ts_ms: Date.now(),
+         session_id: ctx.sessionId || null,
+       });
+     }
+     return;
+   }
+   const turnId = ctx.state.activeTurnId || ctx.state.turnSeq || null;
+-  sendCloseStream({ reason });
++  safeCloseStream('adaptive');
+   ctx.state.turnOpen = false;
    const ts = Date.now();
    const stats = getShadowStats(ctx.state);
    emitVoiceEvent('turn_close', {
@@ -563,255 +162,3 @@ index 9edc5e1270e95f036a415780a51404531884b743..a44b8e2f39b58bb8193c9a0ce7218b1c
    scheduleSafetyClose(ctx);
  };
  
- const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', asrCue = null } = {}) => {
--  if (!ctx.state.manualPttActive && isTtsMaskActive(ctx)) {
-+  if (ctx.state.manualGate) {
-+    ctx.evidenceGate.reset('manual_gate');
-+    return;
-+  }
-+  if (ctx.state.ttsPlaying) {
-+    ctx.evidenceGate.reset('tts_playing');
-+    return;
-+  }
-+  if (isTtsMaskActive(ctx)) {
-     ctx.evidenceGate.reset('tts_mask');
-     return;
-   }
-   const snr = Number.isFinite(detail?.snrDb) ? detail.snrDb : null;
-   const snrBoost = resolveSnrBoost(ctx, ctx.evidenceGate?.config?.baseSnrDb ?? 3.5);
-   const stats = getShadowStats(ctx.state);
-   const result = ctx.evidenceGate.update({
-     vadState,
-     snr,
-     snrBoost,
-     bufferedMs: stats.durationMs,
-     bufferedBytes: stats.totalBytes,
-     minSpeechMs: EVIDENCE_MIN_SPEECH_MS,
-     minBytes: EVIDENCE_MIN_BYTES,
-     asrCue,
-   });
-   if (result.shouldCommit) {
-     ctx.evidenceGate.satisfy('commit');
-     await openTurn(ctx, 'evidence_gate_commit');
-     if (detail) ctx.evidenceGate.setDetail(detail);
-   }
- };
- 
- const handleSpeechStart = async (ctx, detail) => {
--  if (ctx.state.manualPttActive) {
-+  if (ctx.state.manualGate) {
-+    return;
-+  }
-+  if (ctx.state.ttsPlaying) {
-     return;
-   }
-   if (isTtsMaskActive(ctx)) {
-     return;
-   }
-   ctx.state.bargeConfirmActive = true;
-   ctx.state.bargeConfirmUntil = nowMs() + BARGE_CONFIRM_MS;
-   setState(ctx, TurnState.Recording, { detail });
-   const stats = ctx.shadowBuffer.stats();
-   ctx.evidenceGate.start({ startedAt: nowMs(), detail, bufferedMs: stats.durationMs, bufferedBytes: stats.totalBytes });
-   emitVoiceEvent('speech_start', detail);
-   await evaluateEvidenceGate(ctx, { detail, vadState: 'speech' });
- };
- 
- const handleSpeechEnd = async (ctx, detail) => {
--  if (ctx.state.manualPttActive) {
-+  if (ctx.state.manualGate) {
-     return;
-   }
-   ctx.state.bargeConfirmActive = false;
-   ctx.state.bargeConfirmUntil = 0;
-   emitVoiceEvent('speech_end', detail);
-   await evaluateEvidenceGate(ctx, { detail, vadState: 'silence', asrCue: { type: 'vad_end' } });
-   closeTurn(ctx, 'speech_end');
-   ctx.evidenceGate.reset('vad_end');
-   ctx.shadowBuffer.clear();
-   ctx.audio.lastTimecode = null;
-   setState(ctx, TurnState.Listening);
- };
- 
- const ensureVad = (ctx, opts = {}) => {
-   const { audio } = ctx;
-   if (audio.vad) return;
-   const echoStateFn = () => isTtsMaskActive(ctx);
-   audio.vad = new VAD(audio.analyser, {
-     startDbOffset: 10 + ctx.state.vadBoostDb,
-     stopDbOffset: 6 + ctx.state.vadBoostDb,
-     echoStateFn,
-     minSpeechMs: Math.max(180, opts.minSpeechMs ?? 280),
-     minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
-     gateFn: () => !isTtsMaskActive(ctx),
-   }, {
-@@ -518,142 +578,157 @@ export async function armVAD(stream = null, opts = {}) {
-   ensureAudioGraph(ctx, mic);
-   try {
-     if (typeof ctx.audio?.context?.resume === 'function') {
-       await ctx.audio.context.resume();
-     }
-   } catch {}
-   if (ctx.audio?.context) {
-     const contextState = ctx.audio.context.state || 'unknown';
-     voiceLog('info', `[audio] context state: ${contextState}`, {
-       ts_ms: Date.now(),
-       session_id: ctx.sessionId || null,
-     });
-   }
-   ensureVad(ctx, opts);
-   startRecorder(ctx, mic);
-   await ensureTransport(ctx).catch(() => {});
-   emitVoiceEvent('armed', { mode: 'adaptive' });
-   return mic;
- }
- 
- export function disarmVAD() {
-   const ctx = ensureCtx();
-   teardownVad(ctx); stopRecorder(ctx);
-   closeTurn(ctx, 'manual_disarm');
-   teardownTransport(ctx);
-+  setManualGate(ctx, false);
-+  ctx.state.pttHeld = false;
-   ctx.state.hasOpenedTurn = false;
-   stopMaskLogging(ctx);
-   setState(ctx, TurnState.Ready);
- }
- 
- export function isRecording() {
-   const ctx = ensureCtx();
-   return !!ctx.state.recording;
- }
- 
- export function bargeIn() {
-   const ctx = ensureCtx();
-   const shouldNotify = manualBargeAllowed(ctx);
-   ctx.state.manualBargeInUsed = true;
-   ctx.state.bargeConfirmActive = false;
-   ctx.state.bargeConfirmUntil = 0;
-   try { stopPlayback(); } catch {}
-   if (ctx.state.turnOpen) {
-     closeTurn(ctx, 'manual_barge_preempt');
-   }
-   ctx.state.ttsPlaying = false;
-+  ctx.ttsEndedAtMs = nowMs();
-   ctx.ttsMask.clear();
-   if (shouldNotify) {
-     sendJSON({ type: 'manual_barge_in' });
-   }
-   ctx.evidenceGate.reset('manual_barge_in');
-   ctx.shadowBuffer.clear();
-   ctx.audio.lastTimecode = null;
-   emitVoiceEvent('barge_in', { reason: 'manual' });
-   return true;
- }
- 
- export function setVadBoost(value) {
-   const ctx = ensureCtx();
-   const numeric = Number.isFinite(value) ? value : 0;
-   ctx.state.vadBoostDb = Math.max(0, numeric);
-   if (ctx.audio.vad) {
-     teardownVad(ctx); ensureVad(ctx, {});
-   }
- }
- 
- export function setGreetGateActive(active = true) {
-   const ctx = ensureCtx();
-   ensureGreetGate(ctx, active);
-   emitVoiceEvent('greet_gate', { active: ctx.state.greetGateActive });
- }
- 
- export function forceBargeInStart(meta = {}) {
-   const ctx = ensureCtx();
--  if (ctx.state.manualPttActive) {
-+  if (ctx.state.manualGate) {
-+    ctx.state.pttHeld = true;
-     return false;
-   }
- 
-+  ctx.state.pttHeld = true;
-+  setManualGate(ctx, true);
-+
-   bargeIn();
- 
-   ctx.state.manualBargeInUsed = true;
--  ctx.state.manualPttActive = true;
-   ctx.state.ttsPlaying = false;
-   ctx.ttsMask.clear();
-+  ctx.ttsEndedAtMs = nowMs();
- 
-   const controlFrame = { type: 'Control', action: 'barge_in_start' };
-   const sent = sendJSON(controlFrame);
-   if (!sent) {
-     ensureTransport(ctx).then(() => {
-       try { sendJSON(controlFrame); } catch {}
-     }).catch(() => {});
-   }
- 
-   setState(ctx, TurnState.Recording, { reason: 'manual_start' });
-   emitVoiceEvent('barge_in_start', meta);
- 
-   const open = openTurn(ctx, 'manual_start');
-   if (open && typeof open.then === 'function') {
-     open.catch(() => {});
-   }
- 
-   return true;
- }
- 
- export function forceBargeInEnd(opts = {}) {
-   const ctx = ensureCtx();
--  const wasActive = ctx.state.manualPttActive;
--  ctx.state.manualPttActive = false;
-+  const wasActive = ctx.state.manualGate;
-+  const stillHeld = !!opts?.pttHeld;
-+  ctx.state.pttHeld = stillHeld;
-+  if (!stillHeld) {
-+    setManualGate(ctx, false);
-+  }
-   ctx.state.ttsPlaying = false;
--  ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms, snrBoost: opts.snrBoost });
-+  ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });
-+  ctx.ttsEndedAtMs = nowMs();
- 
-   const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
--  if (wasActive) {
-+  const released = wasActive && !ctx.state.manualGate;
-+  if (released) {
-     const controlFrame = { type: 'Control', action: 'barge_in_end' };
-     const sent = sendJSON(controlFrame);
-     if (!sent) {
-       ensureTransport(ctx).then(() => {
-         try { sendJSON(controlFrame); } catch {}
-       }).catch(() => {});
-     }
- 
-     if (ctx.state.turnOpen) {
-       closeTurn(ctx, reason);
-     }
-     setState(ctx, TurnState.Listening, { reason });
-   }
- 
--  ctx.state.bargeConfirmActive = false;
--  ctx.state.bargeConfirmUntil = 0;
--  ctx.evidenceGate.reset('manual_release');
--  ctx.shadowBuffer.clear();
--  ctx.audio.lastTimecode = null;
--  emitVoiceEvent('barge_in_end', opts);
-+  if (released) {
-+    ctx.state.bargeConfirmActive = false;
-+    ctx.state.bargeConfirmUntil = 0;
-+    ctx.evidenceGate.reset('manual_release');
-+    ctx.shadowBuffer.clear();
-+    ctx.audio.lastTimecode = null;
-+    emitVoiceEvent('barge_in_end', opts);
-+  }
-   return wasActive;
- }
- 
- const getCtx = () => ctxRef.current;
- 
- export const __TEST_ONLY__ = Object.freeze({
-   getCtx: () => (globalThis.ADVANCED_LOGGING_ENABLED ? getCtx() : null),
-   nowMs,
- });
