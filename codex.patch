@@ -1,18 +1,154 @@
-diff --git a/static/js/voice.js b/static/js/voice.js
-index 868f1e5874eb44d018b0aa99184707dce6f64236..854bd1126a8a60fc78c7bd8d363f205f5f4da4a8 100644
---- a/static/js/voice.js
-+++ b/static/js/voice.js
-@@ -1,12 +1,12 @@
- export {
-   initMic,
-   armVAD,
-   disarmVAD,
-   isRecording,
-   bargeIn,
-   setVadBoost,
-   setGreetGateActive,
-   forceBargeInStart,
-   forceBargeInEnd,
-   __TEST_ONLY__,
--} from './voice/legacy/VoiceRuntimeLegacy.js';
-+} from './voice/runtime/AdaptiveRuntime.js';
+diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
+index 432cc44f9aca7ab171a9f6f366157f3252753d63..60976548a2233c8073487323286a4ce33801d90c 100644
+--- a/static/js/voice/runtime/AdaptiveRuntime.js
++++ b/static/js/voice/runtime/AdaptiveRuntime.js
+@@ -124,50 +124,55 @@ const ensureTransport = async (ctx) => {
+     ctx.state.wsReady = true;
+     return wsHandle;
+   } catch (err) {
+     ctx.transport.wsPromise = null;
+     ctx.transport.connected = false;
+     ctx.state.wsReady = false;
+     throw err;
+   }
+ };
+ 
+ const teardownTransport = (ctx) => {
+   ctx.transport.connected = false;
+   ctx.state.wsReady = false;
+   ctx.transport.wsPromise = null;
+   if (ctx.transport.safetyTimer) {
+     try { clearTimeout(ctx.transport.safetyTimer); } catch {}
+     ctx.transport.safetyTimer = null;
+   }
+ };
+ const ensureAudioGraph = (ctx, stream) => {
+   const audio = ctx.audio;
+   if (audio.context && audio.analyser && audio.source) return;
+   const AudioCtx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
+   if (!AudioCtx) throw new Error('AudioContext not supported');
+   audio.context = audio.context || new AudioCtx();
++  try {
++    if (typeof audio.context?.resume === 'function') {
++      audio.context.resume().catch(() => {});
++    }
++  } catch {}
+   audio.analyser = audio.context.createAnalyser();
+   audio.analyser.fftSize = 2048;
+   audio.analyser.smoothingTimeConstant = 0.4;
+   audio.source = audio.context.createMediaStreamSource(stream);
+   audio.source.connect(audio.analyser);
+ };
+ 
+ const startRecorder = (ctx, stream) => {
+   const { audio } = ctx;
+   if (audio.recorder) return;
+   let mimeType = 'audio/webm; codecs=opus';
+   try {
+     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
+       && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
+       mimeType = 'audio/ogg; codecs=opus';
+     }
+   } catch {}
+   const recorder = new MediaRecorder(stream, { mimeType });
+   recorder.addEventListener('dataavailable', (event) => handleRecorderData(ctx, event));
+   recorder.addEventListener('error', (event) => {
+     emitVoiceEvent('recorder_error', { message: event?.error?.message || 'unknown' });
+     stopRecorder(ctx);
+   });
+   recorder.start(audio.recTimeslice);
+   audio.recorder = recorder;
+@@ -310,50 +315,55 @@ const teardownVad = (ctx) => {
+ };
+ 
+ const ensureGreetGate = (ctx, active) => {
+   ctx.state.greetGateActive = !!active;
+   if (!active) { ctx.state.greetGatePhase = 'idle'; ctx.state.greetGateWaiters = []; }
+   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
+ };
+ 
+ const manualBargeAllowed = (ctx) => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
+ 
+ export async function initMic(stream = null) {
+   const ctx = ensureCtx();
+   if (stream) ctx.audio.stream = stream;
+   if (!ctx.audio.stream) {
+     const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
+     ctx.audio.stream = await navigator.mediaDevices.getUserMedia(constraints);
+   }
+   ensureAudioGraph(ctx, ctx.audio.stream);
+   return ctx.audio.stream;
+ }
+ 
+ export async function armVAD(stream = null, opts = {}) {
+   const ctx = ensureCtx();
+   const mic = await initMic(stream);
+   ensureAudioGraph(ctx, mic);
++  try {
++    if (typeof ctx.audio?.context?.resume === 'function') {
++      await ctx.audio.context.resume();
++    }
++  } catch {}
+   ensureVad(ctx, opts);
+   startRecorder(ctx, mic);
+   await ensureTransport(ctx).catch(() => {});
+   emitVoiceEvent('armed', { mode: 'adaptive' });
+   return mic;
+ }
+ 
+ export function disarmVAD() {
+   const ctx = ensureCtx();
+   teardownVad(ctx); stopRecorder(ctx);
+   closeTurn(ctx, 'manual_disarm');
+   teardownTransport(ctx);
+   setState(ctx, TurnState.Ready);
+ }
+ 
+ export function isRecording() {
+   const ctx = ensureCtx();
+   return !!ctx.state.recording;
+ }
+ 
+ export function bargeIn() {
+   const ctx = ensureCtx();
+   if (!manualBargeAllowed(ctx)) return false;
+   ctx.state.manualBargeInUsed = true;
+   ctx.state.ttsPlaying = false;
+diff --git a/static/js/voice/ui/Events.js b/static/js/voice/ui/Events.js
+index 030e037cd469f8fb6e9d39c3a2840e06250eccf4..f3fa346d861b2f9164b928cc426acf0e5090168e 100644
+--- a/static/js/voice/ui/Events.js
++++ b/static/js/voice/ui/Events.js
+@@ -1,8 +1,32 @@
++const MAX_BREADCRUMBS = 50;
++
++function recordVoiceBreadcrumb(entry) {
++  try {
++    if (typeof window === 'undefined') return;
++    let store = window.__voice_breadcrumbs;
++    if (!Array.isArray(store)) {
++      store = [];
++      window.__voice_breadcrumbs = store;
++    }
++    const payload = Object.freeze({ ...entry });
++    store.push(payload);
++    if (store.length > MAX_BREADCRUMBS) {
++      store.splice(0, store.length - MAX_BREADCRUMBS);
++    }
++    try {
++      console.info(`[voice][${payload.name}]`, payload);
++    } catch {}
++  } catch {}
++}
++
+ export function emitVoiceEvent(name, detail) {
+   if (!window.ADVANCED_LOGGING_ENABLED) return;
++  const baseDetail = detail && typeof detail === 'object' ? { ...detail } : {};
++  const eventDetail = { name, ts: Date.now(), ...baseDetail };
++  recordVoiceBreadcrumb(eventDetail);
+   try {
+     window.dispatchEvent(new CustomEvent('askchip-voice', {
+-      detail: { name, ts: Date.now(), ...detail },
++      detail: eventDetail,
+     }));
+   } catch {}
+ }

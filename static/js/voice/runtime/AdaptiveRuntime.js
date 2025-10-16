@@ -146,6 +146,11 @@ const ensureAudioGraph = (ctx, stream) => {
   const AudioCtx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
   if (!AudioCtx) throw new Error('AudioContext not supported');
   audio.context = audio.context || new AudioCtx();
+  try {
+    if (typeof audio.context?.resume === 'function') {
+      audio.context.resume().catch(() => {});
+    }
+  } catch {}
   audio.analyser = audio.context.createAnalyser();
   audio.analyser.fftSize = 2048;
   audio.analyser.smoothingTimeConstant = 0.4;
@@ -332,6 +337,11 @@ export async function armVAD(stream = null, opts = {}) {
   const ctx = ensureCtx();
   const mic = await initMic(stream);
   ensureAudioGraph(ctx, mic);
+  try {
+    if (typeof ctx.audio?.context?.resume === 'function') {
+      await ctx.audio.context.resume();
+    }
+  } catch {}
   ensureVad(ctx, opts);
   startRecorder(ctx, mic);
   await ensureTransport(ctx).catch(() => {});
