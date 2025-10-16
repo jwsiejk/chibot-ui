@@ -49,6 +49,33 @@ const voiceLog = (level, ...args) => {
 };
 
 const MASK_LOG_INTERVAL_MS = 180;
+const TTS_POST_PLAY_HOLD_MS = 180;
+
+const resolvePostTtsHoldMs = (ctx) => {
+  const cfg = ctx?.config?.tts ?? {};
+  let value;
+  if (Number.isFinite(cfg.post_play_hold_ms)) {
+    value = cfg.post_play_hold_ms;
+  } else if (Number.isFinite(cfg.decay_ms)) {
+    value = cfg.decay_ms;
+  } else {
+    value = TTS_POST_PLAY_HOLD_MS;
+  }
+  if (!Number.isFinite(value)) {
+    return TTS_POST_PLAY_HOLD_MS;
+  }
+  if (value <= 0) {
+    return 0;
+  }
+  return Math.min(200, value);
+};
+
+const setManualGate = (ctx, active) => {
+  if (!ctx?.state) return;
+  const value = !!active;
+  ctx.state.manualGate = value;
+  ctx.state.manualPttActive = value;
+};
 
 const logReadyState = (ctx) => {
   if (!ctx || !ctx.state) return;
@@ -129,7 +156,25 @@ const setState = (ctx, stateName, detail) => {
   }
 };
 
-const isTtsMaskActive = (ctx) => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
+const isTtsMaskActive = (ctx) => {
+  if (!ctx?.state) {
+    return false;
+  }
+  if (ctx.state.ttsPlaying) {
+    return true;
+  }
+  const holdMs = resolvePostTtsHoldMs(ctx);
+  const ts = nowMs();
+  if (holdMs > 0 && Number.isFinite(ctx.ttsEndedAtMs) && ctx.ttsEndedAtMs > 0) {
+    if (ts - ctx.ttsEndedAtMs <= holdMs) {
+      return true;
+    }
+  }
+  if (ctx.ttsMask && typeof ctx.ttsMask.isMasked === 'function') {
+    return ctx.ttsMask.isMasked(ts);
+  }
+  return false;
+};
 
 const ensureCtx = () => {
   if (ctxRef.current) {
@@ -163,7 +208,7 @@ const ensureCtx = () => {
       greetGateWaiters: [], manualBargeInUsed: false,
       bargeConfirmActive: false, bargeConfirmUntil: 0,
       wsReady: false, turnOpen: false, hasOpenedTurn: false,
-      manualPttActive: false,
+      manualGate: false, manualPttActive: false, pttHeld: false,
       turnSeq: 0, activeTurnId: null,
       ttsPlaying: false, lastChunkAt: 0,
       lastReadyLogAt: 0,
@@ -182,6 +227,7 @@ const ensureCtx = () => {
   };
 
   registerTtsListener(ctx);
+  ctx.ttsEndedAtMs = 0;
   ctxRef.current = ctx;
   return ctx;
 };
@@ -195,14 +241,17 @@ const registerTtsListener = (ctx) => {
     const state = String(detail.state || '').toLowerCase();
     if (state === 'playing') {
       ctx.state.ttsPlaying = true;
+      ctx.ttsEndedAtMs = 0;
       ctx.ttsMask.start();
       startMaskLogging(ctx);
-    } else if (state === 'ended' || state === 'stopped') {
+    } else if (state === 'ended' || state === 'stopped' || state === 'done') {
       ctx.state.ttsPlaying = false;
-      ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms ?? 700, snrBoost: detail.snrBoost });
+      ctx.ttsEndedAtMs = nowMs();
+      ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail.snrBoost });
       startMaskLogging(ctx);
     } else if (state === 'ready') {
       ctx.state.ttsPlaying = false;
+      ctx.ttsEndedAtMs = nowMs();
       ctx.ttsMask.clear();
       stopMaskLogging(ctx);
       logReadyState(ctx);
@@ -330,7 +379,7 @@ const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
 const scheduleSafetyClose = (ctx) => {
   if (ctx.transport.safetyTimer) { try { clearTimeout(ctx.transport.safetyTimer); } catch {} }
   ctx.transport.safetyTimer = null;
-  if (!ctx.state.hasOpenedTurn || ctx.state.manualPttActive) {
+  if (!ctx.state.hasOpenedTurn || ctx.state.manualGate) {
     return;
   }
   ctx.transport.safetyTimer = setTimeout(() => {
@@ -411,7 +460,15 @@ const closeTurn = (ctx, reason = 'vad_end') => {
 };
 
 const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', asrCue = null } = {}) => {
-  if (!ctx.state.manualPttActive && isTtsMaskActive(ctx)) {
+  if (ctx.state.manualGate) {
+    ctx.evidenceGate.reset('manual_gate');
+    return;
+  }
+  if (ctx.state.ttsPlaying) {
+    ctx.evidenceGate.reset('tts_playing');
+    return;
+  }
+  if (isTtsMaskActive(ctx)) {
     ctx.evidenceGate.reset('tts_mask');
     return;
   }
@@ -436,7 +493,10 @@ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', a
 };
 
 const handleSpeechStart = async (ctx, detail) => {
-  if (ctx.state.manualPttActive) {
+  if (ctx.state.manualGate) {
+    return;
+  }
+  if (ctx.state.ttsPlaying) {
     return;
   }
   if (isTtsMaskActive(ctx)) {
@@ -452,7 +512,7 @@ const handleSpeechStart = async (ctx, detail) => {
 };
 
 const handleSpeechEnd = async (ctx, detail) => {
-  if (ctx.state.manualPttActive) {
+  if (ctx.state.manualGate) {
     return;
   }
   ctx.state.bargeConfirmActive = false;
@@ -540,6 +600,8 @@ export function disarmVAD() {
   teardownVad(ctx); stopRecorder(ctx);
   closeTurn(ctx, 'manual_disarm');
   teardownTransport(ctx);
+  setManualGate(ctx, false);
+  ctx.state.pttHeld = false;
   ctx.state.hasOpenedTurn = false;
   stopMaskLogging(ctx);
   setState(ctx, TurnState.Ready);
@@ -561,6 +623,7 @@ export function bargeIn() {
     closeTurn(ctx, 'manual_barge_preempt');
   }
   ctx.state.ttsPlaying = false;
+  ctx.ttsEndedAtMs = nowMs();
   ctx.ttsMask.clear();
   if (shouldNotify) {
     sendJSON({ type: 'manual_barge_in' });
@@ -589,16 +652,20 @@ export function setGreetGateActive(active = true) {
 
 export function forceBargeInStart(meta = {}) {
   const ctx = ensureCtx();
-  if (ctx.state.manualPttActive) {
+  if (ctx.state.manualGate) {
+    ctx.state.pttHeld = true;
     return false;
   }
+
+  ctx.state.pttHeld = true;
+  setManualGate(ctx, true);
 
   bargeIn();
 
   ctx.state.manualBargeInUsed = true;
-  ctx.state.manualPttActive = true;
   ctx.state.ttsPlaying = false;
   ctx.ttsMask.clear();
+  ctx.ttsEndedAtMs = nowMs();
 
   const controlFrame = { type: 'Control', action: 'barge_in_start' };
   const sent = sendJSON(controlFrame);
@@ -621,13 +688,19 @@ export function forceBargeInStart(meta = {}) {
 
 export function forceBargeInEnd(opts = {}) {
   const ctx = ensureCtx();
-  const wasActive = ctx.state.manualPttActive;
-  ctx.state.manualPttActive = false;
+  const wasActive = ctx.state.manualGate;
+  const stillHeld = !!opts?.pttHeld;
+  ctx.state.pttHeld = stillHeld;
+  if (!stillHeld) {
+    setManualGate(ctx, false);
+  }
   ctx.state.ttsPlaying = false;
-  ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms, snrBoost: opts.snrBoost });
+  ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });
+  ctx.ttsEndedAtMs = nowMs();
 
   const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
-  if (wasActive) {
+  const released = wasActive && !ctx.state.manualGate;
+  if (released) {
     const controlFrame = { type: 'Control', action: 'barge_in_end' };
     const sent = sendJSON(controlFrame);
     if (!sent) {
@@ -642,12 +715,14 @@ export function forceBargeInEnd(opts = {}) {
     setState(ctx, TurnState.Listening, { reason });
   }
 
-  ctx.state.bargeConfirmActive = false;
-  ctx.state.bargeConfirmUntil = 0;
-  ctx.evidenceGate.reset('manual_release');
-  ctx.shadowBuffer.clear();
-  ctx.audio.lastTimecode = null;
-  emitVoiceEvent('barge_in_end', opts);
+  if (released) {
+    ctx.state.bargeConfirmActive = false;
+    ctx.state.bargeConfirmUntil = 0;
+    ctx.evidenceGate.reset('manual_release');
+    ctx.shadowBuffer.clear();
+    ctx.audio.lastTimecode = null;
+    emitVoiceEvent('barge_in_end', opts);
+  }
   return wasActive;
 }
 

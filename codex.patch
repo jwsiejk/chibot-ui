@@ -1,607 +1,262 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 621fc9425c753f5efec4d2dbd8ac603e62b1a48c..d2529664156645bb199d191ca7a3a2a490c4b895 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1034,50 +1034,51 @@ async def _emit_user_final_payload(
-                         except Exception:
-                             next_turn_id = turn_id_ref[0]
-                     else:
-                         synthetic_final_turns.discard(next_turn_id)
-                     turn_id_for_event = next_turn_id
-                 else:
-                     with contextlib.suppress(Exception):
-                         asr_seen_partial[0] = True
-                     if turn_timing is not None:
-                         with contextlib.suppress(Exception):
-                             first_holder = turn_timing.setdefault("first_partial", [0.0])
-                             if not first_holder[0]:
-                                 first_holder[0] = time.time()
-                 if (not is_final) and on_asr_partial:
-                     with contextlib.suppress(Exception):
-                         on_asr_partial(ev)
+diff --git a/app/__init__.py b/app/__init__.py
+index b68b281811429aa777efef5bf1deff6ffb626f38..1b6b0b32c61cca212eeedb0bd9c1cd072ae060d1 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -85,78 +85,78 @@ def create_app():
  
-                 preview_text = _clip_text(text)
-                 _jlog(
-                     "dg_transcript",
-                     sid=sid,
-                     turn_id=turn_id_for_event,
-                     is_final=is_final,
-                     chars=len(text),
-                     preview=preview_text,
-+                    ts_ms=int(time.time() * 1000),
-                 )
-                 if not is_final:
-                     with contextlib.suppress(Exception):
-                         if _admin_emit:
-                             asr_partial_counter[0] += 1
-                             emit_partial = (
-                                 asr_partial_counter[0] == 1
-                                 or asr_partial_counter[0] % 5 == 0
-                             )
-                             if emit_partial:
-                                 _admin_emit(
-                                     "asr:partial",
-                                     session_id=sid,
-                                     turn_id=turn_id_for_event,
-                                     text_preview=preview_text,
-                                 )
- 
-                 if not is_final:
-                     await _ws_send_json(
-                         send,
-                         make_results(
-                             turn_id_for_event,
-                             transcript=text,
-                             confidence=0.0,
-                             is_final=False,
-@@ -1913,50 +1914,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-     def _on_barge_commit() -> None:
-         mode_raw = turn_commit_mode_ref[0]
-         mode = mode_raw or ("manual" if manual_commit_pending[0] else "vad")
-         manual_commit_pending[0] = False
-         turn_commit_mode_ref[0] = "vad"
-         active_turn_mode_ref[0] = mode or "vad"
-         target_turn = current_assistant_turn_ref[0]
+     @app.context_processor
+     def _inject_askchip_config():
+         enabled = True
          try:
-             latest = bus.current_assistant_turn(sid)
-             if latest:
-                 target_turn = latest
+             enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
+         except Exception:
+             enabled = True
+         auth_config = {}
+         auto_login_email = (os.environ.get("ASKCHIP_AUTO_LOGIN_EMAIL") or "").strip()
+         if auto_login_email:
+             auth_config["autoLoginEmail"] = auto_login_email
+         vad_config = {}
+         try:
+             vad_config = {
+                 "baseThresholdDb": float(getattr(_SETTINGS, "vad_base_threshold_db", 10.0)),
+                 "exitThresholdDb": float(getattr(_SETTINGS, "vad_exit_threshold_db", 6.0)),
+                 "ttsBoostDb": float(getattr(_SETTINGS, "vad_tts_boost_db", 6.0)),
+                 "minSpeechMs": int(getattr(_SETTINGS, "vad_min_speech_ms", 360)),
+             }
+         except Exception:
+             vad_config = {}
+ 
+         feature_flags = {
+             "feature_manual_barge_in": True,
+-            "barge_in_mode_manual": True,
++            "barge_in_mode_manual": False,
+             "auto_commit_when_ready": True,
+         }
+         try:
+             from .services import admin_settings as _admin_settings  # inline import to avoid cycles
+ 
+             settings = _admin_settings.get_settings()
+         except Exception:
+             settings = {}
+         try:
+             from .db import db as _db
+ 
+             db_cfg = _db.get_config()
+         except Exception:
+             db_cfg = {}
+ 
+         def _resolve_flag(name: str, default: bool) -> bool:
+             if isinstance(settings, dict) and name in settings:
+                 return bool(settings.get(name))
+             if isinstance(db_cfg, dict) and name in db_cfg:
+                 return bool(db_cfg.get(name))
+             return default
+ 
+         feature_flags["feature_manual_barge_in"] = _resolve_flag(
+             "feature_manual_barge_in", True
+         )
+         feature_flags["barge_in_mode_manual"] = _resolve_flag(
+-            "barge_in_mode_manual", True
++            "barge_in_mode_manual", False
+         )
+         feature_flags["auto_commit_when_ready"] = _resolve_flag(
+             "auto_commit_when_ready", True
+         )
+         return {
+             "askchip_config": {
+                 "logging": {"enabled": enabled},
+                 "auth": auth_config,
+                 "vad": vad_config,
+                 "features": feature_flags,
+                 "feature_manual_barge_in": feature_flags["feature_manual_barge_in"],
+                 "barge_in_mode_manual": feature_flags["barge_in_mode_manual"],
+                 "auto_commit_when_ready": feature_flags["auto_commit_when_ready"],
+             }
+         }
+ 
+     @app.after_request
+     def maybe_allow_cors(resp):
+         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
+         if allow:
+             origins = [o.strip() for o in allow.split(",") if o.strip()]
+             ori = request.headers.get("Origin", "")
+             if ori in origins:
+                 resp.headers["Access-Control-Allow-Origin"] = ori
+                 resp.headers["Vary"] = "Origin"
+diff --git a/app/db.py b/app/db.py
+index 6b97475ceb9e9f817c62e44ab85e6a28ff28d44f..b8b2d7a5a02c0cd7bc76395d71b6e1a445870d1e 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -53,51 +53,51 @@ class DB:
+                 'audio_worklet_enabled': False,
+                 'vad_attack_ms': 12,
+                 'vad_release_ms': 240,
+                 'vad_dbfs_threshold': -42,
+                 'csrf_enforced': bool(__import__('os').environ.get('CSRF_ENFORCED','')).__bool__(),'profile_gate_enabled':False,
+                 'show_instruction_strip': True,'show_state_dots': True,'theme':'light',
+                 'suggestions_enabled': True,'suggestions_max_items':4,'suggestions_max_words':7,
+                 'nudges_enabled': True,'nudge_delay_ms':4200,'nudge_backoff_after_ignored':2,
+                 'silence_guard_ms':1800,
+                 'confirm_ms':420,'echo_threshold_boost':1.9,'min_speech_ms':220,'voice_command_hints':True,
+                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
+                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,
+                 'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'auto','openai_model':'gpt-4o-mini','stt_provider':'auto','tts_provider':'auto',
+                 'redact_email_in_logs':True,
+                 'nlu_logging_enabled': True,
+                 'gen_humor': 0.0,
+                 'gen_target_verbosity': 'medium',
+                 'gen_max_sentences': 4,
+                 'gen_top_p': 1.0,
+                 'gen_temperature': 0.3,
+                 'feature_audio': True,
+                 'tts_voice_id': '',
+                 'tts_output_format': 'mp3_44100_128',
+                 'tts_model_id': 'eleven_multilingual_v2',
+                 'feature_manual_barge_in': True,
+-                'barge_in_mode_manual': True,
++                'barge_in_mode_manual': False,
+                 'auto_commit_when_ready': True,
+                 'planner_high_threshold': 0.75,
+                 'planner_medium_threshold': 0.60,
+             },
+             'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
+         }
+         self._ensure_config_defaults()
+     def ensure_session(self, sid, email):
+         try:
+             if persist_enabled():
+                 from .dal import neon_pg
+                 neon_pg.ensure_schema(); neon_pg.upsert_user(email); neon_pg.ensure_session(sid, email)
          except Exception:
              pass
-         if target_turn:
-             with contextlib.suppress(Exception):
-                 bus.cancel_turn(sid, target_turn)
-         with contextlib.suppress(Exception):
-             bus.broadcast(sid, {"type": "state", "phase": "ready"})
-         _jlog(
-             "turn_committed",
-             sid=sid,
-             mode=mode,
-             manual=(mode == "manual"),
-             auto_commit=(mode == "auto_commit"),
-+            turn_id=turn_id_ref[0],
-+            ts_ms=int(time.time() * 1000),
-             admin_event="turn_committed",
-             admin_label="turn_committed",
+         session = self.memory['sessions'].setdefault(
+             sid,
+             {'email':email,'messages':[],'nudges':0,'persona_id':'chip'}
          )
-         if not turn_stream_committed[0]:
-             turn_stream_committed[0] = True
-             asr_direct_stream[0] = True
-             _schedule_asr_stream_activation(mode or "vad")
+         if not isinstance(session.get('goal'), dict):
+             session['goal'] = _empty_session_goal()
+         else:
+             session['goal'] = _normalize_session_goal(session['goal'])
+     def add_message(self, sid, role, text):
+         try:
+             if persist_enabled():
+diff --git a/app/services/admin_settings.py b/app/services/admin_settings.py
+index 3e04f292f851bddcf6c9f8da459f958d959b6886..60c41cfb257f2b1cd2996699e3ed9580e296aa85 100644
+--- a/app/services/admin_settings.py
++++ b/app/services/admin_settings.py
+@@ -1,49 +1,49 @@
+ # app/services/admin_settings.py
+ from __future__ import annotations
+ import os, json, threading
+ from typing import Any, Dict
  
-     def _cancel_no_audio_watch() -> None:
-         task = no_audio_watch_task[0]
-         if task and not task.done():
-             task.cancel()
-         no_audio_watch_task[0] = None
+ _LOCK = threading.Lock()
  
-     def _schedule_no_audio_watch(turn_id: int) -> None:
-         if no_audio_window_s <= 0:
-             return
-         _cancel_no_audio_watch()
-         no_audio_notified[0] = False
-         no_audio_turn_id[0] = turn_id
+ # ---------------- In-memory defaults (used as base / fallback) ----------------
+ _settings: Dict[str, Any] = {
+     "confirm_ms": 420,
+     "echo_threshold_boost": 1.9,
+     "language_lock": "en",
+     "min_speech_ms": 220,
+     "nudge_delay_ms": 4200,
+     "nudge_backoff_after_ignored": 2,
+     "silence_guard_ms": 1800,
+     "max_turn_seconds": 90,
  
-         async def _watch() -> None:
-             try:
-                 await asyncio.sleep(no_audio_window_s)
-                 if sent_any_audio[0] or no_audio_notified[0]:
-@@ -2354,69 +2357,82 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             if et == "websocket.receive":
-                 last_msg_ts = time.time()
-                 # -------------------- Binary / audio lane --------------------
-                 if ev.get("bytes") is not None:
-                     now = time.time()
-                     frame_bytes = ev.get("bytes")
-                     chunk = frame_bytes or b""
-                     ws_frames_in += 1
-                     ws_bytes_in += len(chunk)
-                     if ws_frames_in % 20 == 0:
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "ws_bin_recv",
-                                 sid=sid,
-                                 frames_in=ws_frames_in,
-                                 bytes_total=ws_bytes_in,
-                             )
-                         if _admin_emit:
-                             with contextlib.suppress(Exception):
-                                 _admin_emit(
-                                     "ws_bin_recv",
-                                     sid=sid,
-                                     frames_in=ws_frames_in,
-                                     bytes_total=ws_bytes_in,
-                                 )
-+                    raw_chunk = chunk
-+
-+                    new_turn = buf.is_empty()
-+                    turn_hint = turn_id_ref[0] or (buf.turn_seq + (1 if new_turn else 0))
-                     if chunk:
--                        _jlog("ws_audio_chunk", sid=sid, bytes=len(chunk))
-+                        _jlog(
-+                            "ws_audio_chunk",
-+                            sid=sid,
-+                            bytes=len(chunk),
-+                            turn_id=turn_hint,
-+                            ts_ms=int(now * 1000),
-+                        )
-                         if not audio_sig_logged:
-                             with contextlib.suppress(Exception):
--                                _jlog("audio_sig", sid=sid, first8_hex=chunk[:8].hex())
-+                                _jlog(
-+                                    "audio_sig",
-+                                    sid=sid,
-+                                    first8_hex=chunk[:8].hex(),
-+                                    turn_id=turn_hint,
-+                                    ts_ms=int(now * 1000),
-+                                )
-                             audio_sig_logged = True
-                     else:
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "ws_audio_chunk_empty",
-                                 sid=sid,
-                                 bytes=len(frame_bytes or b""),
--                                turn_id=turn_id_ref[0],
--                                buf_empty=buf.is_empty(),
-+                                turn_id=turn_hint,
-+                                buf_empty=new_turn,
-+                                ts_ms=int(now * 1000),
-                             )
--
--                    raw_chunk = chunk
--
--                    new_turn = buf.is_empty()
-                     if new_turn:
-                         try:
-                             current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
-                         except Exception:
-                             current_assistant_turn_ref[0] = None
+     # Audio feature toggle — default TRUE unless explicitly forced false via env/DB
+     "feature_audio": (os.environ.get("FEATURE_AUDIO") or "true").lower() == "true",
  
-                         commit_mode = "vad"
-                         if manual_turn_active[0]:
-                             commit_mode = "manual"
-                         elif manual_mode_manual_only:
-                             if not auto_commit_when_ready:
-                                 _jlog(
-                                     "manual_mode_voice_chunk_ignored",
-                                     sid=sid,
-                                     bytes=len(raw_chunk or b""),
-                                     reason="auto_commit_disabled",
-                                 )
-                                 continue
-                             if not _session_ready_for_auto_commit():
-                                 _jlog(
-                                     "manual_mode_voice_chunk_ignored",
-                                     sid=sid,
-                                     bytes=len(raw_chunk or b""),
-                                     reason="session_not_ready",
-                                 )
-@@ -2463,50 +2479,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         turn_connect_started[0] = False
-                         turn_stream_committed[0] = False
-                         asr_direct_stream[0] = False
-                         _cancel_asr_stream_activation()
-                         _cancel_asr_not_ready_timeout()
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "turn_start",
-                                 sid=sid,
-                                 turn_id=turn_id_ref[0],
-                                 first_bytes=len(raw_chunk),
-                                 commit_mode=commit_mode,
-                                 auto_commit=(commit_mode == "auto_commit"),
-+                                ts_ms=int(time.time() * 1000),
-                             )
-                         if commit_mode == "auto_commit":
-                             try:
-                                 _on_barge_commit()
-                             except Exception:
-                                 pass
-                     # Detect container early using raw bytes
+     # Manual barge-in (PTT) feature flags
+     "feature_manual_barge_in": True,
+-    "barge_in_mode_manual": True,
++    "barge_in_mode_manual": False,
+     "auto_commit_when_ready": True,
  
-                     # Detect container early
-                     try:
-                         if transport.get("container") is None and raw_chunk:
-                             det = sniffer.feed(raw_chunk)
-                             if det:
-                                 container = getattr(det, "container", None)
-                                 codec = getattr(det, "codec", None)
-                                 containerized = bool(
-                                     getattr(det, "containerized", codec == "opus")
-                                 )
-                                 transport["container"] = container
-                                 transport["codec"] = codec
-                                 transport["containerized_opus"] = containerized
-                                 _jlog(
-                                     "sniffer_detect",
-                                     sid=sid,
-                                     container=transport.get("container"),
-@@ -2533,50 +2550,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                     _jlog(
-                                         "sniffer_detect",
-                                         sid=sid,
-                                         container=transport.get("container"),
-                                         codec=transport.get("codec"),
-                                         containerized_opus=transport.get(
-                                             "containerized_opus"
-                                         ),
-                                     )
-                     except Exception:
-                         pass
+     # TTS runtime tunables (non-secret) – keys remain in env only unless user saves
+     "tts_voice_id": os.environ.get("ELEVENLABS_VOICE_ID", ""),
+     "tts_output_format": os.environ.get("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128"),
+     "tts_model_id": os.environ.get("ELEVEN_MODEL_ID", "eleven_multilingual_v2"),
+ }
  
-                     chunk = raw_chunk
-                     buf.append(chunk)
+ # ------------------------- DB helpers (safe best-effort) ----------------------
  
-                     # capture bytes for diagnostic playback
-                     if MIC_CAPTURE:
-                         mic_chunks.append(chunk)
-                         mic_last_ts[0] = now
-                     _jlog(
-                         "mic_capture_append",
-                         sid=sid,
-                         turn_id=turn_id_ref[0],
-                         chunks=len(mic_chunks),
-                         last_bytes=len(chunk),
-+                        ts_ms=int(time.time() * 1000),
+ def _persist_enabled() -> bool:
+     try:
+         from ..db import persist_enabled
+         return bool(persist_enabled())
+     except Exception:
+         return False
+ 
+ def _db_get_settings() -> Dict[str, Any]:
+     """
+     Load admin settings from Neon (admin_settings.value_jsonb where key='settings').
+     Returns {} if not available. Safe to call even if schema is missing.
+     """
+     if not _persist_enabled():
+         return {}
+     try:
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index d2529664156645bb199d191ca7a3a2a490c4b895..1856b3e91111f11bf7504b4af842dbee6d0c2e98 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -1320,51 +1320,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                     await _ws_send_json(
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
                      )
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
  
-                     _handle_confirm_chunk(raw_chunk, now)
+     ping_task = asyncio.create_task(_ping_loop())
  
-                     if not _has_deepgram_key():
-                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
-                         continue
+     try:
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
+     except Exception:
+         with contextlib.suppress(Exception):
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
+             )
+         return
  
-                     # Stage early frames or stream directly when ASR is ready
-                     if chunk:
-                         if callable(final_guard_reset_ref[0]):
-                             with contextlib.suppress(Exception):
-                                 final_guard_reset_ref[0]("chunk")
+     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
+     manual_feature_enabled = True
+-    manual_mode_manual_only = True
++    manual_mode_manual_only = False
+     auto_commit_when_ready = True
+     try:
+         runtime_cfg = db.get_config()
+         if isinstance(runtime_cfg, dict):
+             manual_feature_enabled = bool(
+                 runtime_cfg.get("feature_manual_barge_in", manual_feature_enabled)
+             )
+             manual_mode_manual_only = bool(
+                 runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+             )
+             auto_commit_when_ready = bool(
+                 runtime_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
+             )
+     except Exception:
+         pass
+     try:
+         from app.services import admin_settings as _admin_settings  # type: ignore
  
-                         direct_sent = False
-                         if (
-                             asr_direct_stream[0]
-                             and dg_state == "open"
-                             and dg is not None
-                             and asr_ready_evt.is_set()
-                             and not buffered_chunks
-                         ):
-                             direct_sent = await _send_chunk(chunk, from_buffer=False)
-                             if not direct_sent:
-                                 _jlog("ws_direct_stream_fallback", sid=sid)
-@@ -2727,50 +2745,58 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 if manual_feature_enabled:
-                                     manual_button_down[0] = False
-                                     manual_turn_active[0] = False
-                                     manual_commit_pending[0] = False
-                                     turn_commit_mode_ref[0] = "vad"
-                                     buffered_bytes = _manual_buffered_bytes()
-                                     _manual_log_event(
-                                         "manual_barge_in_end",
-                                         bytes_buffered=buffered_bytes,
-                                         provider_open=dg_state == "open",
-                                     )
-                                 continue
-                             continue
- 
-                         elif t == "Configure":
-                             cfg.update(obj or {})
-                             manual_feature_enabled = bool(
-                                 cfg.get("feature_manual_barge_in", manual_feature_enabled)
-                             )
-                             manual_mode_manual_only = bool(
-                                 cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-                             )
-                             auto_commit_when_ready = bool(
-                                 cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-                             )
-+                            _jlog(
-+                                "ws_configure",
-+                                sid=sid,
-+                                ts_ms=int(time.time() * 1000),
-+                                barge_in_mode_manual=manual_mode_manual_only,
-+                                feature_manual_barge_in=manual_feature_enabled,
-+                                auto_commit_when_ready=auto_commit_when_ready,
-+                            )
-                             if not manual_feature_enabled:
-                                 manual_button_down[0] = False
-                                 manual_turn_active[0] = False
-                                 manual_commit_pending[0] = False
-                             greet_seq_raw = obj.get("greet_seq")
-                             greet_seq: Optional[int] = None
-                             is_new_greet_seq = True
-                             if greet_seq_raw is not None:
-                                 try:
-                                     greet_seq = int(greet_seq_raw)
-                                 except Exception:
-                                     greet_seq = None
-                             if greet_seq is not None and (obj.get("greet") or obj.get("reset")):
-                                 try:
-                                     is_new_greet_seq = await _greet_seq_mark_if_new(sid, greet_seq)
-                                 except Exception:
-                                     is_new_greet_seq = True
-                             if obj.get("reset"):
-                                 if is_new_greet_seq:
-                                     with contextlib.suppress(Exception):
-                                         clear_greet_turn_cache(sid)
-                                     with contextlib.suppress(Exception):
-                                         _admin_emit and _admin_emit(
-                                             "greet:reset",
-                                             route="/ws/v1/chat",
-diff --git a/static/js/audio.js b/static/js/audio.js
-index 02676297272c91dc5192070391251bd711f89101..303adb8f06a4a408a89c5221be4283df98d47473 100644
---- a/static/js/audio.js
-+++ b/static/js/audio.js
-@@ -1,60 +1,77 @@
- // static/js/audio.js — unified playback (MSE chunked by MIME) + unlockAudio
- // Backwards compatible:
- //   • playStream(chunks, mime?)            // legacy
- //   • playStream(frameObject)              // { mime, audio_chunks:[], is_last }
- // New helpers:
- //   • audioEnd() — mark natural end-of-utterance (drain then endOfStream)
- //   • audioTeardown() — hard reset pipeline (optional)
- 
- import { ChunkedAudioPlayer } from './audio_player.js';
-+import { logIfEnabled } from './util/logging.js';
- 
- const DEFAULT_SIGNATURE = Object.freeze({ rms: 0, rmsDb: -Infinity, mfcc: [], timestamp: 0 });
- 
- let _player = null;
- let _el = null;
- let _lastTtsState = 'ended';
- 
- const _analysis = {
-   ctx: null,
-   source: null,
-   analyser: null,
-   raf: null,
-   timeBuf: null,
-   freqBuf: null,
-   signature: { ...DEFAULT_SIGNATURE },
-   mfccConfig: null,
- };
- 
- const TTS_IDLE_VOLUME = 1.0;
- const TTS_ATTENUATED_VOLUME = 0.5; // ~6 dB reduction to limit mic bleed
- 
- const DEFAULT_MIME = 'audio/webm; codecs="opus"';
- 
- function _emitTtsState(state) {
-   if (!state || state === _lastTtsState) return;
-   _lastTtsState = state;
-+  logIfEnabled(() => {
-+    try {
-+      const tsMs = Date.now();
-+      const sessionId = (() => {
-+        try { return window?.__askchip_voice_session_id || null; } catch { return null; }
-+      })();
-+      const turnId = (() => {
-+        try { return window?.__askchip_turn_trace_id || null; } catch { return null; }
-+      })();
-+      if (state === 'playing') {
-+        console.info('[tts] playing: true', { ts_ms: tsMs, session_id: sessionId, turn_id: turnId });
-+      } else if (state === 'ended' || state === 'stopped') {
-+        console.info('[tts] playing: false', { ts_ms: tsMs, session_id: sessionId, turn_id: turnId });
-+      }
-+    } catch {}
-+  });
-   try {
-     window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state } }));
-   } catch {}
- }
- 
- export async function unlockAudio() {
-   try {
-     const AC = window.AudioContext || window.webkitAudioContext;
-     if (!AC) return;
-     const ctx = new AC();
-     if (ctx.state === 'suspended') await ctx.resume();
-     const o = ctx.createOscillator();
-     const g = ctx.createGain();
-     g.gain.value = 0.00001;
-     o.connect(g).connect(ctx.destination);
-     o.start();
-     o.stop(ctx.currentTime + 0.01);
-   } catch (_) {}
- }
- 
- function ensureEl() {
-   if (_el) return _el;
-   _el = new Audio();
-   _el.autoplay = true;
-   // _el.playsInline = true; // optional (mobile)
-diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index 670c30ec2af682068bf27c9f85895be3b267d569..1a94dd791876624cabe3bcb6a6a23c540a1360c4 100644
---- a/static/js/bootstrap.js
-+++ b/static/js/bootstrap.js
-@@ -281,50 +281,59 @@ function wireWSEventsOnce(){
-   window.addEventListener('askchip-ws-close', (ev) => {
-     const detail = ev.detail || {};
-     const normal = detail.code === 1000 || detail.code === 1001;
-     const reason = detail.reason || (normal ? 'normal closure' : '');
-     const payload = { ...detail, reason };
- 
-     if (normal) {
-       _console('info', '[WS close]', payload);
-     } else {
-       _console('warn', '[WS close]', payload);
-     }
-     // When WS closes, disable Send/End and re-enable Start
-     _disableButtons();
-     const sb = $('#startButton');
-     if (sb) sb.disabled = false;
-     setDot('ready');
-   });
- }
- 
- function wireVoiceEventsOnce(){
-   if (window.__askchip_voice_wired) return;
-   window.__askchip_voice_wired = true;
- 
-   window.addEventListener('askchip-voice', (ev) => {
-     const detail = ev?.detail || {};
-+    const name = detail.name || detail.event;
-+    if (name === 'turn_open' || name === 'turn_close') {
-+      _console('info', `askchip-voice ${name}`, {
-+        ts_ms: detail.ts_ms ?? detail.ts ?? Date.now(),
-+        session_id: detail.sessionId || detail.session_id || null,
-+        turn_id: detail.turnId ?? detail.turn_id ?? null,
-+        reason: detail.reason || undefined,
-+      });
-+    }
-     const state = detail.state;
-     const label = detail.statusText ?? detail.label ?? detail.message;
- 
-     if (state === 'armed'){
-       setDot('listening');
-       setStatusText(label || 'Listening…');
-       return;
-     }
- 
-     if (state === 'recording'){
-       setDot('speaking');
-       setStatusText(label || 'Recording…');
-       return;
-     }
- 
-     if (state === 'idle'){
-       setDot('ready');
-       setStatusText(label || 'Ready');
-     }
-   });
- }
- 
- async function ensureWsOpenOrFail(timeoutMs = 5000){
-   if (isOpen()) return true;
-   try {
-@@ -370,60 +379,59 @@ async function startOnce(){
- 
-     // 0) Audio unlock so TTS is permitted by browser autoplay policies
-     try { await unlockAudio(); } catch {}
- 
-     // 1) Network/CSRF prep (kept for compatibility; harmless in WS-only mode)
-     try { installFetchInterceptor(); } catch {}
-     try { await ensureCSRF(); } catch {}
- 
-     // 2) WS first — verify actually OPEN or abort
-     const ok = await ensureWsOpenOrFail(5000);
-     if (!ok){
-       showBanner('WebSocket did not open — greet aborted.');
-       setDot('ready');
-       if (startBtn) startBtn.disabled = false;
-       startInFlight = false;
-       return;
-     }
- 
-     // 3) Wire WS → UI events exactly once
-     wireWSEventsOnce();
- 
-     // 4) WS-only greet using the SAME session id as WS — fire ASAP so text arrives while
-     //    audio hardware comes online.
-     const sid = getSID();
-     try {
--      const manualMode = !!_cfgValue('barge_in_mode_manual', true);
-+      const manualMode = !!_cfgValue('barge_in_mode_manual', false);
-       const autoCommit = !!_cfgValue('auto_commit_when_ready', true);
-       _console('log', '[bootstrap] startOnce sending greet configure');
-       configure({
-         greet: true,
-         reset: 1,
-         session_id: sid,
--        // Keep VAD enabled for the session; manual barge-in is now gated client-side
--        // off the TTS state so we always advertise "false" here.
--        feature_manual_barge_in: false,
-+        // Surface the runtime toggles so diagnostics can confirm policy.
-+        feature_manual_barge_in: manualFeatureEnabled,
-         barge_in_mode_manual: manualMode,
-         auto_commit_when_ready: autoCommit,
-       });
-       _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
-       try {
-         window.dispatchEvent(new CustomEvent('chip-tts', {
-           detail: { state: 'playing', prime: true }
-         }));
-       } catch {}
-       // ^^ This “primes” holdoff if your server’s first audio event is delayed;
-       // when real assistant_audio arrives, your existing listener will extend the hold.
-     } catch (e) {
-       _console('warn', '[bootstrap] WS configure failed, cannot greet', e);
-       showBanner('Greet failed to send — check WS configure()');
-       throw e;
-     }
- 
-     // 5) Mic permission + arm echo-aware VAD (voice-first path)
-     let visualizerStream = null;
-     try {
-       visualizerStream = await Visualizer.start();
-     } catch (e) {
-       _console('warn', '[bootstrap] visualizer init failed', e);
-     }
- 
+         admin_cfg = _admin_settings.get_settings()
+         if isinstance(admin_cfg, dict):
+             manual_feature_enabled = bool(
+                 admin_cfg.get("feature_manual_barge_in", manual_feature_enabled)
+             )
+             manual_mode_manual_only = bool(
+                 admin_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a51404531884b743 100644
+index 9edc5e1270e95f036a415780a51404531884b743..a44b8e2f39b58bb8193c9a0ce7218b1c728b37ae 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -1,137 +1,233 @@
- import {
-   EvidenceGate,
-   ShadowBuffer,
-   TtsMask,
-   TurnState,
-   bufferPreRollFrame,
-   flushShadowBuffer,
-   getConfig,
- } from '../core/index.js';
- import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
- import { emitVoiceEvent } from '../ui/Events.js';
- import {
-   openWS,
-   waitWSOpen,
-   sendAudioChunk,
-   sendCloseStream,
-   sendJSON,
- } from '../../ws_module.js';
- import { VAD } from '../vad.js';
- import { stopPlayback } from '../../audio.js';
-+import { logIfEnabled } from '../../util/logging.js';
-+import { getSID } from '../../util/sid.js';
- 
- const PRE_ROLL_MS = 550,
-   RECORD_TIMESLICE_MS = 150,
-   SAFETY_CLOSE_DELAY_MS = 2200,
+@@ -27,50 +27,77 @@ const PRE_ROLL_MS = 550,
    EVIDENCE_MIN_SPEECH_MS = 480,
    EVIDENCE_MIN_BYTES = 8 * 1024,
    MIN_VALID_BLOB_BYTES = 1,
@@ -617,73 +272,71 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
    return Date.now();
  };
  
-+const voiceLog = (level, ...args) => {
-+  logIfEnabled(() => {
-+    try {
-+      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
-+      method?.apply(console, args);
-+    } catch {}
-+  });
-+};
+ const voiceLog = (level, ...args) => {
+   logIfEnabled(() => {
+     try {
+       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+       method?.apply(console, args);
+     } catch {}
+   });
+ };
+ 
+ const MASK_LOG_INTERVAL_MS = 180;
++const TTS_POST_PLAY_HOLD_MS = 180;
 +
-+const MASK_LOG_INTERVAL_MS = 180;
-+
-+const logReadyState = (ctx) => {
-+  if (!ctx || !ctx.state) return;
-+  const tsLocal = nowMs();
-+  const last = Number.isFinite(ctx.state.lastReadyLogAt) ? ctx.state.lastReadyLogAt : 0;
-+  if (tsLocal - last < 25) {
-+    return;
++const resolvePostTtsHoldMs = (ctx) => {
++  const cfg = ctx?.config?.tts ?? {};
++  let value;
++  if (Number.isFinite(cfg.post_play_hold_ms)) {
++    value = cfg.post_play_hold_ms;
++  } else if (Number.isFinite(cfg.decay_ms)) {
++    value = cfg.decay_ms;
++  } else {
++    value = TTS_POST_PLAY_HOLD_MS;
 +  }
-+  ctx.state.lastReadyLogAt = tsLocal;
-+  const ts = Date.now();
-+  voiceLog('info', "state { phase:'ready' }", {
-+    ts_ms: ts,
-+    session_id: ctx.sessionId || null,
-+    turn_id: ctx.state.activeTurnId || null,
-+  });
-+};
-+
-+const stopMaskLogging = (ctx) => {
-+  if (!ctx) return;
-+  if (ctx.maskLogTimer) {
-+    try { clearInterval(ctx.maskLogTimer); } catch {}
++  if (!Number.isFinite(value)) {
++    return TTS_POST_PLAY_HOLD_MS;
 +  }
-+  ctx.maskLogTimer = null;
-+};
-+
-+const logMaskTick = (ctx) => {
-+  if (!ctx) return;
-+  const tsLocal = nowMs();
-+  if (!ctx.ttsMask?.isMasked(tsLocal)) {
-+    stopMaskLogging(ctx);
-+    return;
++  if (value <= 0) {
++    return 0;
 +  }
-+  const boost = ctx.ttsMask.snrBoost(tsLocal);
-+  const decayUntil = ctx.ttsMask.decayUntil();
-+  const remaining = Number.isFinite(decayUntil)
-+    ? Math.max(0, Math.round(decayUntil - tsLocal))
-+    : null;
-+  const ts = Date.now();
-+  voiceLog('info', '[mask] active', {
-+    ts_ms: ts,
-+    session_id: ctx.sessionId || null,
-+    turn_id: ctx.state?.activeTurnId || null,
-+    boost_db: Number.isFinite(boost) ? Number.parseFloat(boost.toFixed(2)) : null,
-+    decay_remaining_ms: remaining,
-+  });
++  return Math.min(200, value);
 +};
 +
-+const startMaskLogging = (ctx) => {
-+  if (!ctx) return;
-+  if (!ctx.maskLogTimer) {
-+    ctx.maskLogTimer = setInterval(() => {
-+      logMaskTick(ctx);
-+    }, MASK_LOG_INTERVAL_MS);
-+  }
-+  logMaskTick(ctx);
++const setManualGate = (ctx, active) => {
++  if (!ctx?.state) return;
++  const value = !!active;
++  ctx.state.manualGate = value;
++  ctx.state.manualPttActive = value;
 +};
-+
+ 
+ const logReadyState = (ctx) => {
+   if (!ctx || !ctx.state) return;
+   const tsLocal = nowMs();
+   const last = Number.isFinite(ctx.state.lastReadyLogAt) ? ctx.state.lastReadyLogAt : 0;
+   if (tsLocal - last < 25) {
+     return;
+   }
+   ctx.state.lastReadyLogAt = tsLocal;
+   const ts = Date.now();
+   voiceLog('info', "state { phase:'ready' }", {
+     ts_ms: ts,
+     session_id: ctx.sessionId || null,
+     turn_id: ctx.state.activeTurnId || null,
+   });
+ };
+ 
+ const stopMaskLogging = (ctx) => {
+   if (!ctx) return;
+   if (ctx.maskLogTimer) {
+     try { clearInterval(ctx.maskLogTimer); } catch {}
+   }
+   ctx.maskLogTimer = null;
+ };
+ 
+@@ -107,124 +134,146 @@ const startMaskLogging = (ctx) => {
+ };
+ 
  const resolveSnrBoost = (ctx, baseSnrDb = 3.5) => {
    try {
      const requirement = getEvidenceSnrRequirement(ctx.state, nowMs, baseSnrDb);
@@ -694,31 +347,49 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
  };
  const setState = (ctx, stateName, detail) => {
    ctx.state.turnState = stateName;
--  emitVoiceEvent('state', detail ? { state: stateName, ...detail } : { state: stateName });
-+  const ts = Date.now();
-+  const baseDetail = detail && typeof detail === 'object' ? { ...detail } : {};
-+  emitVoiceEvent('state', {
-+    state: stateName,
-+    ts_ms: ts,
-+    sessionId: ctx.sessionId || null,
-+    ...baseDetail,
-+  });
-+  if (stateName === TurnState.Ready) {
-+    logReadyState(ctx);
-+  }
+   const ts = Date.now();
+   const baseDetail = detail && typeof detail === 'object' ? { ...detail } : {};
+   emitVoiceEvent('state', {
+     state: stateName,
+     ts_ms: ts,
+     sessionId: ctx.sessionId || null,
+     ...baseDetail,
+   });
+   if (stateName === TurnState.Ready) {
+     logReadyState(ctx);
+   }
  };
  
- const isTtsMaskActive = (ctx) => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
+-const isTtsMaskActive = (ctx) => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
++const isTtsMaskActive = (ctx) => {
++  if (!ctx?.state) {
++    return false;
++  }
++  if (ctx.state.ttsPlaying) {
++    return true;
++  }
++  const holdMs = resolvePostTtsHoldMs(ctx);
++  const ts = nowMs();
++  if (holdMs > 0 && Number.isFinite(ctx.ttsEndedAtMs) && ctx.ttsEndedAtMs > 0) {
++    if (ts - ctx.ttsEndedAtMs <= holdMs) {
++      return true;
++    }
++  }
++  if (ctx.ttsMask && typeof ctx.ttsMask.isMasked === 'function') {
++    return ctx.ttsMask.isMasked(ts);
++  }
++  return false;
++};
  
  const ensureCtx = () => {
    if (ctxRef.current) {
      return ctxRef.current;
    }
    const config = getConfig();
-+  let sessionId = null;
-+  try {
-+    sessionId = getSID();
-+  } catch {}
+   let sessionId = null;
+   try {
+     sessionId = getSID();
+   } catch {}
    const evidenceGate = new EvidenceGate({
      snrSigma: config.evidence?.snr_sigma,
      asrConf: config.evidence?.asr_conf,
@@ -727,25 +398,26 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
    });
    const shadowBuffer = new ShadowBuffer({ maxMs: config.shadow?.ms ?? PRE_ROLL_MS });
    const ttsMask = new TtsMask();
-+  try {
-+    if (typeof window !== 'undefined') {
-+      window.__askchip_voice_session_id = sessionId;
-+    }
-+  } catch {}
+   try {
+     if (typeof window !== 'undefined') {
+       window.__askchip_voice_session_id = sessionId;
+     }
+   } catch {}
  
    const ctx = {
      config,
-+    sessionId,
+     sessionId,
      state: {
        turnState: TurnState.Ready, recording: false, vadArmed: false,
        vadBoostDb: 0, greetGateActive: false, greetGatePhase: 'idle',
        greetGateWaiters: [], manualBargeInUsed: false,
        bargeConfirmActive: false, bargeConfirmUntil: 0,
        wsReady: false, turnOpen: false, hasOpenedTurn: false,
-       manualPttActive: false,
-+      turnSeq: 0, activeTurnId: null,
+-      manualPttActive: false,
++      manualGate: false, manualPttActive: false, pttHeld: false,
+       turnSeq: 0, activeTurnId: null,
        ttsPlaying: false, lastChunkAt: 0,
-+      lastReadyLogAt: 0,
+       lastReadyLogAt: 0,
        evidenceGate, shadowBuffer, ttsMask,
      },
      audio: {
@@ -757,10 +429,11 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
      evidenceGate,
      shadowBuffer,
      ttsMask,
-+    maskLogTimer: null,
+     maskLogTimer: null,
    };
  
    registerTtsListener(ctx);
++  ctx.ttsEndedAtMs = 0;
    ctxRef.current = ctx;
    return ctx;
  };
@@ -774,17 +447,22 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
      const state = String(detail.state || '').toLowerCase();
      if (state === 'playing') {
        ctx.state.ttsPlaying = true;
++      ctx.ttsEndedAtMs = 0;
        ctx.ttsMask.start();
-+      startMaskLogging(ctx);
-     } else if (state === 'ended' || state === 'stopped') {
+       startMaskLogging(ctx);
+-    } else if (state === 'ended' || state === 'stopped') {
++    } else if (state === 'ended' || state === 'stopped' || state === 'done') {
        ctx.state.ttsPlaying = false;
-       ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms ?? 700, snrBoost: detail.snrBoost });
-+      startMaskLogging(ctx);
+-      ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms ?? 700, snrBoost: detail.snrBoost });
++      ctx.ttsEndedAtMs = nowMs();
++      ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail.snrBoost });
+       startMaskLogging(ctx);
      } else if (state === 'ready') {
        ctx.state.ttsPlaying = false;
++      ctx.ttsEndedAtMs = nowMs();
        ctx.ttsMask.clear();
-+      stopMaskLogging(ctx);
-+      logReadyState(ctx);
+       stopMaskLogging(ctx);
+       logReadyState(ctx);
      }
    };
    try { win?.addEventListener?.('chip-tts', listener); } catch {}
@@ -807,67 +485,23 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
      ctx.transport.connected = false;
      ctx.state.wsReady = false;
      throw err;
-   }
- };
- 
-@@ -162,50 +258,56 @@ const ensureAudioGraph = (ctx, stream) => {
-   } catch {}
-   audio.analyser = audio.context.createAnalyser();
-   audio.analyser.fftSize = 2048;
-   audio.analyser.smoothingTimeConstant = 0.4;
-   audio.source = audio.context.createMediaStreamSource(stream);
-   audio.source.connect(audio.analyser);
- };
- 
- const startRecorder = (ctx, stream) => {
-   const { audio } = ctx;
-   if (audio.recorder) return;
-   let mimeType = 'audio/webm; codecs=opus';
-   try {
-     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
-       && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
-       mimeType = 'audio/ogg; codecs=opus';
-     }
-   } catch {}
-   const recorder = new MediaRecorder(stream, { mimeType });
-   recorder.addEventListener('dataavailable', (event) => handleRecorderData(ctx, event));
-   recorder.addEventListener('error', (event) => {
-     emitVoiceEvent('recorder_error', { message: event?.error?.message || 'unknown' });
-     stopRecorder(ctx);
-   });
-   recorder.start(audio.recTimeslice);
-+  voiceLog('info', '[recorder] started', {
-+    ts_ms: Date.now(),
-+    session_id: ctx.sessionId || null,
-+    mime_type: mimeType,
-+    timeslice_ms: audio.recTimeslice,
-+  });
-   audio.recorder = recorder;
-   ctx.state.recording = true;
- };
- 
- const stopRecorder = (ctx) => {
-   const { recorder } = ctx.audio;
-   if (!recorder) return;
-   try { if (recorder.state !== 'inactive') recorder.stop(); } catch {}
-   ctx.audio.recorder = null;
-   ctx.state.recording = false;
- };
- 
- const handleRecorderData = (ctx, event) => {
-   const blob = event?.data;
-   if (!blob || typeof blob.size !== 'number' || blob.size < MIN_VALID_BLOB_BYTES) return;
-   const timecode = Number.isFinite(event?.timecode) ? event.timecode : null;
-   const { durationMs, nextTimecode } = bufferPreRollFrame({
-     shadowBuffer: ctx.shadowBuffer,
-     blob,
+@@ -308,51 +357,51 @@ const handleRecorderData = (ctx, event) => {
      timecode,
      timeslice: ctx.audio.recTimeslice,
      fallbackMs: PRE_ROLL_MS,
      lastTimecode: ctx.audio.lastTimecode,
      onBuffered: ({ durationMs: dur, byteLength }) => {
        ctx.evidenceGate.extendBuffer({ durationMs: dur, bytes: byteLength });
-@@ -222,62 +324,111 @@ const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
+     },
+   });
+   ctx.audio.lastTimecode = nextTimecode;
+   if (ctx.state.turnOpen) sendChunk(ctx, blob, { durationMs });
+ };
+ 
+ const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
+   if (!blob) {
+     return;
+   }
    sendAudioChunk(blob);
    ctx.state.lastChunkAt = nowMs();
    ctx.evidenceGate.extendBuffer({ durationMs });
@@ -877,7 +511,8 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
  const scheduleSafetyClose = (ctx) => {
    if (ctx.transport.safetyTimer) { try { clearTimeout(ctx.transport.safetyTimer); } catch {} }
    ctx.transport.safetyTimer = null;
-   if (!ctx.state.hasOpenedTurn || ctx.state.manualPttActive) {
+-  if (!ctx.state.hasOpenedTurn || ctx.state.manualPttActive) {
++  if (!ctx.state.hasOpenedTurn || ctx.state.manualGate) {
      return;
    }
    ctx.transport.safetyTimer = setTimeout(() => {
@@ -893,75 +528,52 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
    await ensureTransport(ctx);
    ctx.state.turnOpen = true;
    ctx.state.hasOpenedTurn = true;
--  emitVoiceEvent('turn_open', { reason });
-+  ctx.state.turnSeq = (ctx.state.turnSeq || 0) + 1;
-+  const turnId = ctx.state.turnSeq;
-+  ctx.state.activeTurnId = turnId;
-+  const ts = Date.now();
-+  emitVoiceEvent('turn_open', {
-+    reason,
-+    turnId,
-+    sessionId: ctx.sessionId || null,
-+    ts_ms: ts,
-+  });
-+  voiceLog('info', '[turn] open', {
-+    ts_ms: ts,
-+    session_id: ctx.sessionId || null,
-+    turn_id: turnId,
-+    reason,
-+  });
-+  try {
-+    if (typeof window !== 'undefined') {
-+      window.__askchip_turn_trace_id = String(turnId);
-+    }
-+  } catch {}
-   const stats = flushShadowBuffer(ctx.shadowBuffer, (entry) => {
-     if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs: entry.durationMs });
+   ctx.state.turnSeq = (ctx.state.turnSeq || 0) + 1;
+   const turnId = ctx.state.turnSeq;
+   ctx.state.activeTurnId = turnId;
+   const ts = Date.now();
+   emitVoiceEvent('turn_open', {
+     reason,
+     turnId,
+     sessionId: ctx.sessionId || null,
+     ts_ms: ts,
    });
-   ctx.evidenceGate.setBufferStats(stats);
- };
- 
- const closeTurn = (ctx, reason = 'vad_end') => {
--  if (!ctx.state.turnOpen) return;
-+  if (!ctx.state.turnOpen) {
-+    if (!ctx.state.hasOpenedTurn) {
-+      voiceLog('info', '[ws] CloseStream suppressed: no user turn yet', {
-+        ts_ms: Date.now(),
-+        session_id: ctx.sessionId || null,
-+      });
-+    }
-+    return;
-+  }
-+  const turnId = ctx.state.activeTurnId || ctx.state.turnSeq || null;
-   sendCloseStream({ reason });
-   ctx.state.turnOpen = false;
--  emitVoiceEvent('turn_close', { reason, stats: getShadowStats(ctx.state) });
-+  const ts = Date.now();
-+  const stats = getShadowStats(ctx.state);
-+  emitVoiceEvent('turn_close', {
-+    reason,
-+    stats,
-+    turnId,
-+    sessionId: ctx.sessionId || null,
-+    ts_ms: ts,
-+  });
-+  voiceLog('info', '[turn] close', {
-+    ts_ms: ts,
-+    session_id: ctx.sessionId || null,
-+    turn_id: turnId,
-+    reason,
-+  });
-+  ctx.state.activeTurnId = null;
-+  try {
-+    if (typeof window !== 'undefined') {
-+      window.__askchip_turn_trace_id = null;
-+    }
-+  } catch {}
+@@ -389,92 +438,103 @@ const closeTurn = (ctx, reason = 'vad_end') => {
+   const ts = Date.now();
+   const stats = getShadowStats(ctx.state);
+   emitVoiceEvent('turn_close', {
+     reason,
+     stats,
+     turnId,
+     sessionId: ctx.sessionId || null,
+     ts_ms: ts,
+   });
+   voiceLog('info', '[turn] close', {
+     ts_ms: ts,
+     session_id: ctx.sessionId || null,
+     turn_id: turnId,
+     reason,
+   });
+   ctx.state.activeTurnId = null;
+   try {
+     if (typeof window !== 'undefined') {
+       window.__askchip_turn_trace_id = null;
+     }
+   } catch {}
    scheduleSafetyClose(ctx);
  };
  
  const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', asrCue = null } = {}) => {
-   if (!ctx.state.manualPttActive && isTtsMaskActive(ctx)) {
+-  if (!ctx.state.manualPttActive && isTtsMaskActive(ctx)) {
++  if (ctx.state.manualGate) {
++    ctx.evidenceGate.reset('manual_gate');
++    return;
++  }
++  if (ctx.state.ttsPlaying) {
++    ctx.evidenceGate.reset('tts_playing');
++    return;
++  }
++  if (isTtsMaskActive(ctx)) {
      ctx.evidenceGate.reset('tts_mask');
      return;
    }
@@ -982,39 +594,71 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
      ctx.evidenceGate.satisfy('commit');
      await openTurn(ctx, 'evidence_gate_commit');
      if (detail) ctx.evidenceGate.setDetail(detail);
-@@ -348,63 +499,71 @@ const ensureGreetGate = (ctx, active) => {
-   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
+   }
  };
  
- const manualBargeAllowed = (ctx) => isTtsMaskActive(ctx);
- 
- export async function initMic(stream = null) {
-   const ctx = ensureCtx();
-   if (stream) ctx.audio.stream = stream;
-   if (!ctx.audio.stream) {
-     const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
-     ctx.audio.stream = await navigator.mediaDevices.getUserMedia(constraints);
+ const handleSpeechStart = async (ctx, detail) => {
+-  if (ctx.state.manualPttActive) {
++  if (ctx.state.manualGate) {
++    return;
++  }
++  if (ctx.state.ttsPlaying) {
+     return;
    }
-   ensureAudioGraph(ctx, ctx.audio.stream);
-   return ctx.audio.stream;
- }
+   if (isTtsMaskActive(ctx)) {
+     return;
+   }
+   ctx.state.bargeConfirmActive = true;
+   ctx.state.bargeConfirmUntil = nowMs() + BARGE_CONFIRM_MS;
+   setState(ctx, TurnState.Recording, { detail });
+   const stats = ctx.shadowBuffer.stats();
+   ctx.evidenceGate.start({ startedAt: nowMs(), detail, bufferedMs: stats.durationMs, bufferedBytes: stats.totalBytes });
+   emitVoiceEvent('speech_start', detail);
+   await evaluateEvidenceGate(ctx, { detail, vadState: 'speech' });
+ };
  
- export async function armVAD(stream = null, opts = {}) {
-   const ctx = ensureCtx();
-   const mic = await initMic(stream);
+ const handleSpeechEnd = async (ctx, detail) => {
+-  if (ctx.state.manualPttActive) {
++  if (ctx.state.manualGate) {
+     return;
+   }
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
+   emitVoiceEvent('speech_end', detail);
+   await evaluateEvidenceGate(ctx, { detail, vadState: 'silence', asrCue: { type: 'vad_end' } });
+   closeTurn(ctx, 'speech_end');
+   ctx.evidenceGate.reset('vad_end');
+   ctx.shadowBuffer.clear();
+   ctx.audio.lastTimecode = null;
+   setState(ctx, TurnState.Listening);
+ };
+ 
+ const ensureVad = (ctx, opts = {}) => {
+   const { audio } = ctx;
+   if (audio.vad) return;
+   const echoStateFn = () => isTtsMaskActive(ctx);
+   audio.vad = new VAD(audio.analyser, {
+     startDbOffset: 10 + ctx.state.vadBoostDb,
+     stopDbOffset: 6 + ctx.state.vadBoostDb,
+     echoStateFn,
+     minSpeechMs: Math.max(180, opts.minSpeechMs ?? 280),
+     minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
+     gateFn: () => !isTtsMaskActive(ctx),
+   }, {
+@@ -518,142 +578,157 @@ export async function armVAD(stream = null, opts = {}) {
    ensureAudioGraph(ctx, mic);
    try {
      if (typeof ctx.audio?.context?.resume === 'function') {
        await ctx.audio.context.resume();
      }
    } catch {}
-+  if (ctx.audio?.context) {
-+    const contextState = ctx.audio.context.state || 'unknown';
-+    voiceLog('info', `[audio] context state: ${contextState}`, {
-+      ts_ms: Date.now(),
-+      session_id: ctx.sessionId || null,
-+    });
-+  }
+   if (ctx.audio?.context) {
+     const contextState = ctx.audio.context.state || 'unknown';
+     voiceLog('info', `[audio] context state: ${contextState}`, {
+       ts_ms: Date.now(),
+       session_id: ctx.sessionId || null,
+     });
+   }
    ensureVad(ctx, opts);
    startRecorder(ctx, mic);
    await ensureTransport(ctx).catch(() => {});
@@ -1027,8 +671,10 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
    teardownVad(ctx); stopRecorder(ctx);
    closeTurn(ctx, 'manual_disarm');
    teardownTransport(ctx);
++  setManualGate(ctx, false);
++  ctx.state.pttHeld = false;
    ctx.state.hasOpenedTurn = false;
-+  stopMaskLogging(ctx);
+   stopMaskLogging(ctx);
    setState(ctx, TurnState.Ready);
  }
  
@@ -1048,323 +694,124 @@ index ec301bf9c32cc1f5bb23650eab3c0e5b35261a77..9edc5e1270e95f036a415780a5140453
      closeTurn(ctx, 'manual_barge_preempt');
    }
    ctx.state.ttsPlaying = false;
++  ctx.ttsEndedAtMs = nowMs();
    ctx.ttsMask.clear();
    if (shouldNotify) {
      sendJSON({ type: 'manual_barge_in' });
    }
    ctx.evidenceGate.reset('manual_barge_in');
    ctx.shadowBuffer.clear();
-diff --git a/static/js/voice/vad.js b/static/js/voice/vad.js
-index 861fee08a8706c8fd0dd75671d7e35cab3cb34d0..431d4b25a199452f7d47b57237bfea41d2350b21 100644
---- a/static/js/voice/vad.js
-+++ b/static/js/voice/vad.js
-@@ -1,33 +1,62 @@
- // static/js/voice/vad.js
- // Lightweight RMS-based VAD tuned for conversational UX.
- // Features:
- //  • Rolling noise-floor tracking with adaptive thresholds (dB offsets)
- //  • Echo-aware gating (raise thresholds while TTS is active)
- //  • Emits onSpeechStart / onSpeechEnd callbacks with metrics
- //  • Safe timers; idempotent start/stop
+   ctx.audio.lastTimecode = null;
+   emitVoiceEvent('barge_in', { reason: 'manual' });
+   return true;
+ }
  
-+import { logIfEnabled } from '../util/logging.js';
-+
-+const voiceLog = (level, ...args) => {
-+  logIfEnabled(() => {
-+    try {
-+      const method = typeof console?.[level] === 'function' ? console[level] : console.log;
-+      method?.apply(console, args);
-+    } catch {}
-+  });
-+};
-+
-+const getSessionId = () => {
-+  try {
-+    if (typeof window !== 'undefined' && window.__askchip_voice_session_id) {
-+      return window.__askchip_voice_session_id;
-+    }
-+  } catch {}
-+  return null;
-+};
-+
-+const getTurnId = () => {
-+  try {
-+    if (typeof window !== 'undefined' && window.__askchip_turn_trace_id != null) {
-+      return window.__askchip_turn_trace_id;
-+    }
-+  } catch {}
-+  return null;
-+};
-+
- const EPSILON = 1e-8;
- const CLAMP_MIN_DB = -120;
- const CLAMP_MAX_DB = -10;
- 
- const rmsToDb = (rms) => 20 * Math.log10(Math.max(EPSILON, rms));
- const dbToRms = (db) => Math.pow(10, db / 20);
- const clampDb = (db) => Math.min(CLAMP_MAX_DB, Math.max(CLAMP_MIN_DB, db));
- const DEFAULT_SUPPRESS_DB = 15;
- const DEFAULT_SIGNATURE_MAX_AGE_MS = 350;
- 
- /** @typedef {{
-  *   minSpeechMs?: number,
-  *   minSilenceMs?: number,
-  *   pollMs?: number,
-  *   cooldownMs?: number,
-  *   startDbOffset?: number,
-  *   stopDbOffset?: number,
-  *   minStartDb?: number,
-  *   minStopDb?: number,
-  *   echoBoostStartDb?: number,
-  *   echoBoostStopDb?: number,
-  *   noiseFloorAlpha?: number,
-  *   noiseFloorRiseAlpha?: number,
-  *   noiseFloorGuardDb?: number,
-  *   noiseFloorHangMs?: number,
-@@ -81,50 +110,51 @@ export class VAD {
-       noiseFloorGuardDb: 3,
-       noiseFloorHangMs: 600,
-       initialNoiseFloorDb: -72,
-       echoStateFn: null,
-       gateFn: null,
-     }, opts || {});
-     this.cbs = cbs || {};
-     this._buf = new Float32Array(this.analyser.fftSize || 2048);
-     this._timer = null;
-     this._recording = false;
-     this._aboveSince = 0;
-     this._belowSince = 0;
-     this._cooldownUntil = 0;
-     this._speechStartedAt = 0;
-     this._activeDetail = null;
-     this._activeNoiseFloorDb = null;
-     this._noiseFloorDb = clampDb(
-       Number.isFinite(this.opts.initialNoiseFloorDb)
-         ? this.opts.initialNoiseFloorDb
-         : -72
-     );
-     this._lastNoiseUpdate = 0;
-     this._legacyStartDb = Number.isFinite(this.opts.startRms) ? rmsToDb(this.opts.startRms) : null;
-     this._legacyStopDb = Number.isFinite(this.opts.stopRms) ? rmsToDb(this.opts.stopRms) : null;
-     this._suppressingEcho = false;
-+    this._lastGateLogTs = 0;
+ export function setVadBoost(value) {
+   const ctx = ensureCtx();
+   const numeric = Number.isFinite(value) ? value : 0;
+   ctx.state.vadBoostDb = Math.max(0, numeric);
+   if (ctx.audio.vad) {
+     teardownVad(ctx); ensureVad(ctx, {});
    }
+ }
  
-   _rms() {
-     this.analyser.getFloatTimeDomainData(this._buf);
-     let sum = 0;
-     for (let i = 0; i < this._buf.length; i++) {
-       const v = this._buf[i];
-       sum += v * v;
-     }
-     return Math.sqrt(sum / this._buf.length);
-   }
+ export function setGreetGateActive(active = true) {
+   const ctx = ensureCtx();
+   ensureGreetGate(ctx, active);
+   emitVoiceEvent('greet_gate', { active: ctx.state.greetGateActive });
+ }
  
-   _makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb) {
-     const snrDb = (Number.isFinite(rmsDb) && Number.isFinite(noiseFloorDb))
-       ? rmsDb - noiseFloorDb
-       : null;
-     return {
-       rms,
-       rmsDb,
-       noiseFloorDb,
-       snrDb,
-       thresholds: { startDb, stopDb },
-     };
-   }
- 
-@@ -259,63 +289,74 @@ export class VAD {
-     }
-     this._suppressingEcho = false;
+ export function forceBargeInStart(meta = {}) {
+   const ctx = ensureCtx();
+-  if (ctx.state.manualPttActive) {
++  if (ctx.state.manualGate) {
++    ctx.state.pttHeld = true;
      return false;
    }
  
-   _pollFrame() {
-     const rms = this._rms();
-     const rmsDb = rmsToDb(rms);
-     const now = (typeof performance !== 'undefined' && performance?.now)
-       ? performance.now()
-       : Date.now();
-     const inCooldown = now < this._cooldownUntil;
-     const echo = this.opts.echoStateFn ? !!this.opts.echoStateFn() : false;
-     const gateAllowed = this.opts.gateFn ? !!this.opts.gateFn() : true;
- 
-     const noiseFloorDb = Number.isFinite(this._noiseFloorDb) ? this._noiseFloorDb : rmsDb;
-     const { startDb, stopDb, baseStartDb } = this._computeThresholds(noiseFloorDb, echo);
-     const startR = dbToRms(startDb);
-     const stopR = dbToRms(stopDb);
- 
-     if (!this._recording) {
-       this._updateNoiseFloor(rmsDb, now, baseStartDb);
-     }
- 
-     if (!gateAllowed) {
-+      if (!Number.isFinite(this._lastGateLogTs) || now - this._lastGateLogTs >= 75) {
-+        voiceLog('info', '[vad] gate blocked this tick', {
-+          ts_ms: Date.now(),
-+          session_id: getSessionId(),
-+          turn_id: getTurnId(),
-+          reason: 'tts_mask',
-+        });
-+        this._lastGateLogTs = now;
-+      }
-       if (this._recording) {
-         this._recording = false;
-         this._speechStartedAt = 0;
-         this._activeDetail = null;
-         this._activeNoiseFloorDb = null;
-       }
-       this._aboveSince = 0;
-       this._belowSince = 0;
-       this._cooldownUntil = 0;
-       this._suppressingEcho = false;
-       return;
-     }
- 
-+    this._lastGateLogTs = 0;
++  ctx.state.pttHeld = true;
++  setManualGate(ctx, true);
 +
-     if (!this._recording) {
-       if (inCooldown) {
-         this._aboveSince = 0;
-         this._suppressingEcho = false;
-         return;
-       }
-       if (rms >= startR) {
-         if (this._shouldSuppressEcho(rmsDb, now)) {
-           this._aboveSince = 0;
-           return;
-         }
-         this._suppressingEcho = false;
-         if (!this._aboveSince) this._aboveSince = now;
-         if (now - this._aboveSince >= (this.opts.minSpeechMs ?? 0)) {
-           this._recording = true;
-           this._belowSince = 0;
-           this._speechStartedAt = now;
-           this._activeDetail = this._makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb);
-           this._activeNoiseFloorDb = noiseFloorDb;
-           try {
-             this.cbs.onSpeechStart && this.cbs.onSpeechStart({
-               ...this._activeDetail,
-               peakDb: this._activeDetail?.rmsDb,
-               speechDurationMs: 0,
-             });
-diff --git a/static/js/ws.js b/static/js/ws.js
-index c4bf7a81508b36f173cec344576b77be67968fae..59e250f7b7d0309b72df638a8534a4f0817e83e3 100644
---- a/static/js/ws.js
-+++ b/static/js/ws.js
-@@ -634,97 +634,114 @@ export function closeWS(code = 1000, reason = ''){
- export function sendJSON(obj){
-   if (!_ws || _ws.readyState !== WebSocket.OPEN) return false;
-   try {
-     const s = JSON.stringify(obj);
-     if (bufferedAmount() > 5_000_000) { // ~5MB buffer guardrail
-       _console('warn', '[ws] bufferedAmount high; sending anyway', bufferedAmount());
+   bargeIn();
+ 
+   ctx.state.manualBargeInUsed = true;
+-  ctx.state.manualPttActive = true;
+   ctx.state.ttsPlaying = false;
+   ctx.ttsMask.clear();
++  ctx.ttsEndedAtMs = nowMs();
+ 
+   const controlFrame = { type: 'Control', action: 'barge_in_start' };
+   const sent = sendJSON(controlFrame);
+   if (!sent) {
+     ensureTransport(ctx).then(() => {
+       try { sendJSON(controlFrame); } catch {}
+     }).catch(() => {});
+   }
+ 
+   setState(ctx, TurnState.Recording, { reason: 'manual_start' });
+   emitVoiceEvent('barge_in_start', meta);
+ 
+   const open = openTurn(ctx, 'manual_start');
+   if (open && typeof open.then === 'function') {
+     open.catch(() => {});
+   }
+ 
+   return true;
+ }
+ 
+ export function forceBargeInEnd(opts = {}) {
+   const ctx = ensureCtx();
+-  const wasActive = ctx.state.manualPttActive;
+-  ctx.state.manualPttActive = false;
++  const wasActive = ctx.state.manualGate;
++  const stillHeld = !!opts?.pttHeld;
++  ctx.state.pttHeld = stillHeld;
++  if (!stillHeld) {
++    setManualGate(ctx, false);
++  }
+   ctx.state.ttsPlaying = false;
+-  ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms, snrBoost: opts.snrBoost });
++  ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });
++  ctx.ttsEndedAtMs = nowMs();
+ 
+   const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
+-  if (wasActive) {
++  const released = wasActive && !ctx.state.manualGate;
++  if (released) {
+     const controlFrame = { type: 'Control', action: 'barge_in_end' };
+     const sent = sendJSON(controlFrame);
+     if (!sent) {
+       ensureTransport(ctx).then(() => {
+         try { sendJSON(controlFrame); } catch {}
+       }).catch(() => {});
      }
-     _ws.send(s);
-     _lastUserSendTs = Date.now();
-     if (obj && obj.type === 'CloseStream') {
-       try { console.info('CloseStream ack'); } catch {}
+ 
+     if (ctx.state.turnOpen) {
+       closeTurn(ctx, reason);
      }
-     return true;
-   } catch(e){
-     _console('warn', '[ws] sendJSON error', e);
-     return false;
+     setState(ctx, TurnState.Listening, { reason });
    }
+ 
+-  ctx.state.bargeConfirmActive = false;
+-  ctx.state.bargeConfirmUntil = 0;
+-  ctx.evidenceGate.reset('manual_release');
+-  ctx.shadowBuffer.clear();
+-  ctx.audio.lastTimecode = null;
+-  emitVoiceEvent('barge_in_end', opts);
++  if (released) {
++    ctx.state.bargeConfirmActive = false;
++    ctx.state.bargeConfirmUntil = 0;
++    ctx.evidenceGate.reset('manual_release');
++    ctx.shadowBuffer.clear();
++    ctx.audio.lastTimecode = null;
++    emitVoiceEvent('barge_in_end', opts);
++  }
+   return wasActive;
  }
  
- export async function sendAudioChunk(blob){
-   if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
-   _pauseKeepalive(_KEEPALIVE_REASON_UPLOAD);
-   try{
-     const buf = await blob.arrayBuffer();
-     try {
--      _console('debug', '[ws] sending audio chunk', { bytes: buf.byteLength, mime: blob.type });
-+      const tsMs = Date.now();
-+      const payload = {
-+        bytes: buf.byteLength,
-+        mime: blob.type,
-+        ts_ms: tsMs,
-+        session_id: getSID?.() ?? null,
-+      };
-+      const turnId = _getActiveTurnTraceId();
-+      if (turnId) payload.turn_id = turnId;
-+      _console('debug', '[ws] sending audio chunk', payload);
-     } catch {}
-     _ws.send(buf);
-     _lastUserSendTs = Date.now();
-   }catch(e){
-     _console('warn', '[ws] sendAudioChunk error', e);
-   } finally {
-     _scheduleKeepaliveResume(_KEEPALIVE_REASON_UPLOAD, _KEEPALIVE_RESUME_AFTER_UPLOAD_MS);
-   }
- }
+ const getCtx = () => ctxRef.current;
  
- export async function sendCloseStream(){
-   // Drain the WS send buffer before closing the user turn.
-   try{
-     const deadline = Date.now() + 1500; // up to ~1.5s drain budget
-     // small sleep helper
-     const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
-     // allow two cycles to ensure MediaRecorder 'stop' enqueued the last blob
-     await sleep(20);
-     await sleep(20);
-     // drain bufferedAmount down near zero, without blocking forever
-     while (isOpen() && bufferedAmount() > 0 && Date.now() < deadline){
-       await sleep(20);
-     }
-   }catch(e){
-     _console('warn', '[ws] sendCloseStream drain failed', e);
-   } finally {
-     try { _console('debug', '[DBG] UI→WS', { type: 'CloseStream' }); } catch {}
-     sendJSON({ type: "CloseStream" });
-   }
- }
- 
- export function configure(opts = {}){
-   // ensure session id is included if caller forgot
-   const sid = getSID();
-   if (_lastConfigureSid !== sid) {
-     _lastConfigureSid = sid;
-     _greetSeqCounter = 0;
-   }
-   const payload = { type: "Configure", session_id: sid, ...opts };
-   if (payload.greet) {
-     _greetSeqCounter += 1;
-     payload.greet_seq = _greetSeqCounter;
-     try {
-       window.__askchip_last_greet_seq = _greetSeqCounter;
-     } catch {}
-   }
-+  logIfEnabled(() => {
-+    try {
-+      const tsMs = Date.now();
-+      const json = JSON.stringify(payload);
-+      const prefix = _getActiveTurnTraceId() ? `[ws][trace:${_getActiveTurnTraceId()}]` : '[ws]';
-+      console.info(`${prefix} [Configure OUT] ${json}`, { ts_ms: tsMs });
-+    } catch {}
-+  });
-   sendJSON(payload);
- }
- 
- export const __TEST_ONLY__ = {
-   wsLog: _wsLog,
-   console: _console,
- };
- 
- // Diagnostic: hold UI from ending too quickly unless explicitly allowed.
- // Opt-in: localStorage.DIAG_MIN_SESSION_MS = '3500'
- (function __installDiagMinSessionHold(){
-   try {
-     const minMs = parseInt((localStorage && localStorage.DIAG_MIN_SESSION_MS) || '0', 10);
-     if (!minMs || isNaN(minMs) || minMs <= 0) return;
-     const t0 = Date.now();
-     const _oldClose = WebSocket.prototype.close;
-     WebSocket.prototype.close = function(...args){
-       const elapsed = Date.now() - t0;
-       if (elapsed < minMs) {
-         try { console.info(`[diag] deferring WS close ${elapsed}ms < ${minMs}`); } catch {}
-         setTimeout(() => { try { _oldClose.apply(this, args); } catch {} }, (minMs - elapsed));
-         return;
-       }
-       return _oldClose.apply(this, args);
-     };
+ export const __TEST_ONLY__ = Object.freeze({
+   getCtx: () => (globalThis.ADVANCED_LOGGING_ENABLED ? getCtx() : null),
+   nowMs,
+ });

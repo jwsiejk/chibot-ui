@@ -1342,7 +1342,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
     manual_feature_enabled = True
-    manual_mode_manual_only = True
+    manual_mode_manual_only = False
     auto_commit_when_ready = True
     try:
         runtime_cfg = db.get_config()

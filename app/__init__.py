@@ -107,7 +107,7 @@ def create_app():
 
         feature_flags = {
             "feature_manual_barge_in": True,
-            "barge_in_mode_manual": True,
+            "barge_in_mode_manual": False,
             "auto_commit_when_ready": True,
         }
         try:
@@ -134,7 +134,7 @@ def create_app():
             "feature_manual_barge_in", True
         )
         feature_flags["barge_in_mode_manual"] = _resolve_flag(
-            "barge_in_mode_manual", True
+            "barge_in_mode_manual", False
         )
         feature_flags["auto_commit_when_ready"] = _resolve_flag(
             "auto_commit_when_ready", True
