@@ -71,7 +71,7 @@ const ensureCtx = () => {
       vadBoostDb: 0, greetGateActive: false, greetGatePhase: 'idle',
       greetGateWaiters: [], manualBargeInUsed: false,
       bargeConfirmActive: false, bargeConfirmUntil: 0,
-      wsReady: false, turnOpen: false,
+      wsReady: false, turnOpen: false, hasOpenedTurn: false,
       manualPttActive: false,
       ttsPlaying: false, lastChunkAt: 0,
       evidenceGate, shadowBuffer, ttsMask,
@@ -153,6 +153,11 @@ const ensureAudioGraph = (ctx, stream) => {
       audio.context.resume().catch(() => {});
     }
   } catch {}
+  try {
+    if (audio.context?.state === 'suspended' && typeof audio.context.resume === 'function') {
+      audio.context.resume().catch(() => {});
+    }
+  } catch {}
   audio.analyser = audio.context.createAnalyser();
   audio.analyser.fftSize = 2048;
   audio.analyser.smoothingTimeConstant = 0.4;
@@ -220,6 +225,10 @@ const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
 
 const scheduleSafetyClose = (ctx) => {
   if (ctx.transport.safetyTimer) { try { clearTimeout(ctx.transport.safetyTimer); } catch {} }
+  ctx.transport.safetyTimer = null;
+  if (!ctx.state.hasOpenedTurn || ctx.state.manualPttActive) {
+    return;
+  }
   ctx.transport.safetyTimer = setTimeout(() => {
     if (!ctx.state.turnOpen) return;
     sendCloseStream({ reason: 'safety_close' });
@@ -232,6 +241,7 @@ const openTurn = async (ctx, reason = 'speech_commit') => {
   if (ctx.state.turnOpen) return;
   await ensureTransport(ctx);
   ctx.state.turnOpen = true;
+  ctx.state.hasOpenedTurn = true;
   emitVoiceEvent('turn_open', { reason });
   const stats = flushShadowBuffer(ctx.shadowBuffer, (entry) => {
     if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs: entry.durationMs });
@@ -269,6 +279,12 @@ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', a
 };
 
 const handleSpeechStart = async (ctx, detail) => {
+  if (ctx.state.manualPttActive) {
+    return;
+  }
+  if (manualBargeAllowed(ctx)) {
+    return;
+  }
   ctx.state.bargeConfirmActive = true;
   ctx.state.bargeConfirmUntil = nowMs() + BARGE_CONFIRM_MS;
   setState(ctx, TurnState.Recording, { detail });
@@ -279,6 +295,9 @@ const handleSpeechStart = async (ctx, detail) => {
 };
 
 const handleSpeechEnd = async (ctx, detail) => {
+  if (ctx.state.manualPttActive) {
+    return;
+  }
   ctx.state.bargeConfirmActive = false;
   ctx.state.bargeConfirmUntil = 0;
   emitVoiceEvent('speech_end', detail);
@@ -356,6 +375,7 @@ export function disarmVAD() {
   teardownVad(ctx); stopRecorder(ctx);
   closeTurn(ctx, 'manual_disarm');
   teardownTransport(ctx);
+  ctx.state.hasOpenedTurn = false;
   setState(ctx, TurnState.Ready);
 }
 
@@ -379,6 +399,9 @@ export function bargeIn() {
   if (shouldNotify) {
     sendJSON({ type: 'manual_barge_in' });
   }
+  ctx.evidenceGate.reset('manual_barge_in');
+  ctx.shadowBuffer.clear();
+  ctx.audio.lastTimecode = null;
   emitVoiceEvent('barge_in', { reason: 'manual' });
   return true;
 }
@@ -455,6 +478,9 @@ export function forceBargeInEnd(opts = {}) {
 
   ctx.state.bargeConfirmActive = false;
   ctx.state.bargeConfirmUntil = 0;
+  ctx.evidenceGate.reset('manual_release');
+  ctx.shadowBuffer.clear();
+  ctx.audio.lastTimecode = null;
   emitVoiceEvent('barge_in_end', opts);
   return wasActive;
 }

@@ -1,54 +1,9 @@
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index 60976548a2233c8073487323286a4ce33801d90c..aa864b8bfa42e529ac89820afa7f636f5326f8b2 100644
+index aa864b8bfa42e529ac89820afa7f636f5326f8b2..c168ef2552677d4b8bf70e4270d85a39e0309398 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -1,44 +1,45 @@
- import {
-   EvidenceGate,
-   ShadowBuffer,
-   TtsMask,
-   TurnState,
-   bufferPreRollFrame,
-   flushShadowBuffer,
-   getConfig,
- } from '../core/index.js';
- import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
- import { emitVoiceEvent } from '../ui/Events.js';
- import {
-   openWS,
-   waitWSOpen,
-   sendAudioChunk,
-   sendCloseStream,
-   sendJSON,
- } from '../../ws_module.js';
- import { VAD } from '../vad.js';
-+import { stopPlayback } from '../../audio.js';
- 
- const PRE_ROLL_MS = 550,
-   RECORD_TIMESLICE_MS = 150,
-   SAFETY_CLOSE_DELAY_MS = 2200,
-   EVIDENCE_MIN_SPEECH_MS = 480,
-   EVIDENCE_MIN_BYTES = 8 * 1024,
-   MIN_VALID_BLOB_BYTES = 1,
-   BARGE_CONFIRM_MS = 420;
- 
- const ctxRef = { current: null };
- const nowMs = () => {
-   try {
-     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-       return performance.now();
-     }
-   } catch {}
-   return Date.now();
- };
- 
- const resolveSnrBoost = (ctx, baseSnrDb = 3.5) => {
-   try {
-     const requirement = getEvidenceSnrRequirement(ctx.state, nowMs, baseSnrDb);
-     return Math.max(0, requirement - baseSnrDb);
-   } catch {
-     return 0;
-@@ -49,50 +50,51 @@ const setState = (ctx, stateName, detail) => {
+@@ -49,51 +49,51 @@ const setState = (ctx, stateName, detail) => {
+   ctx.state.turnState = stateName;
    emitVoiceEvent('state', detail ? { state: stateName, ...detail } : { state: stateName });
  };
  
@@ -73,8 +28,9 @@ index 60976548a2233c8073487323286a4ce33801d90c..aa864b8bfa42e529ac89820afa7f636f
        vadBoostDb: 0, greetGateActive: false, greetGatePhase: 'idle',
        greetGateWaiters: [], manualBargeInUsed: false,
        bargeConfirmActive: false, bargeConfirmUntil: 0,
-       wsReady: false, turnOpen: false,
-+      manualPttActive: false,
+-      wsReady: false, turnOpen: false,
++      wsReady: false, turnOpen: false, hasOpenedTurn: false,
+       manualPttActive: false,
        ttsPlaying: false, lastChunkAt: 0,
        evidenceGate, shadowBuffer, ttsMask,
      },
@@ -99,8 +55,197 @@ index 60976548a2233c8073487323286a4ce33801d90c..aa864b8bfa42e529ac89820afa7f636f
    ctx.ttsListenerRegistered = true;
    const win = typeof window !== 'undefined' ? window : null;
    const listener = (event) => {
-     const detail = event?.detail || {};
-@@ -342,67 +344,124 @@ export async function armVAD(stream = null, opts = {}) {
+@@ -131,50 +131,55 @@ const ensureTransport = async (ctx) => {
+     ctx.state.wsReady = false;
+     throw err;
+   }
+ };
+ 
+ const teardownTransport = (ctx) => {
+   ctx.transport.connected = false;
+   ctx.state.wsReady = false;
+   ctx.transport.wsPromise = null;
+   if (ctx.transport.safetyTimer) {
+     try { clearTimeout(ctx.transport.safetyTimer); } catch {}
+     ctx.transport.safetyTimer = null;
+   }
+ };
+ const ensureAudioGraph = (ctx, stream) => {
+   const audio = ctx.audio;
+   if (audio.context && audio.analyser && audio.source) return;
+   const AudioCtx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
+   if (!AudioCtx) throw new Error('AudioContext not supported');
+   audio.context = audio.context || new AudioCtx();
+   try {
+     if (typeof audio.context?.resume === 'function') {
+       audio.context.resume().catch(() => {});
+     }
+   } catch {}
++  try {
++    if (audio.context?.state === 'suspended' && typeof audio.context.resume === 'function') {
++      audio.context.resume().catch(() => {});
++    }
++  } catch {}
+   audio.analyser = audio.context.createAnalyser();
+   audio.analyser.fftSize = 2048;
+   audio.analyser.smoothingTimeConstant = 0.4;
+   audio.source = audio.context.createMediaStreamSource(stream);
+   audio.source.connect(audio.analyser);
+ };
+ 
+ const startRecorder = (ctx, stream) => {
+   const { audio } = ctx;
+   if (audio.recorder) return;
+   let mimeType = 'audio/webm; codecs=opus';
+   try {
+     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
+       && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
+       mimeType = 'audio/ogg; codecs=opus';
+     }
+   } catch {}
+   const recorder = new MediaRecorder(stream, { mimeType });
+   recorder.addEventListener('dataavailable', (event) => handleRecorderData(ctx, event));
+   recorder.addEventListener('error', (event) => {
+     emitVoiceEvent('recorder_error', { message: event?.error?.message || 'unknown' });
+     stopRecorder(ctx);
+   });
+   recorder.start(audio.recTimeslice);
+   audio.recorder = recorder;
+@@ -198,109 +203,123 @@ const handleRecorderData = (ctx, event) => {
+     blob,
+     timecode,
+     timeslice: ctx.audio.recTimeslice,
+     fallbackMs: PRE_ROLL_MS,
+     lastTimecode: ctx.audio.lastTimecode,
+     onBuffered: ({ durationMs: dur, byteLength }) => {
+       ctx.evidenceGate.extendBuffer({ durationMs: dur, bytes: byteLength });
+     },
+   });
+   ctx.audio.lastTimecode = nextTimecode;
+   if (ctx.state.turnOpen) sendChunk(ctx, blob, { durationMs });
+ };
+ 
+ const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
+   if (!blob) {
+     return;
+   }
+   sendAudioChunk(blob);
+   ctx.state.lastChunkAt = nowMs();
+   ctx.evidenceGate.extendBuffer({ durationMs });
+   scheduleSafetyClose(ctx);
+ };
+ 
+ const scheduleSafetyClose = (ctx) => {
+   if (ctx.transport.safetyTimer) { try { clearTimeout(ctx.transport.safetyTimer); } catch {} }
++  ctx.transport.safetyTimer = null;
++  if (!ctx.state.hasOpenedTurn || ctx.state.manualPttActive) {
++    return;
++  }
+   ctx.transport.safetyTimer = setTimeout(() => {
+     if (!ctx.state.turnOpen) return;
+     sendCloseStream({ reason: 'safety_close' });
+     ctx.state.turnOpen = false;
+     teardownTransport(ctx);
+   }, SAFETY_CLOSE_DELAY_MS);
+ };
+ 
+ const openTurn = async (ctx, reason = 'speech_commit') => {
+   if (ctx.state.turnOpen) return;
+   await ensureTransport(ctx);
+   ctx.state.turnOpen = true;
++  ctx.state.hasOpenedTurn = true;
+   emitVoiceEvent('turn_open', { reason });
+   const stats = flushShadowBuffer(ctx.shadowBuffer, (entry) => {
+     if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs: entry.durationMs });
+   });
+   ctx.evidenceGate.setBufferStats(stats);
+ };
+ 
+ const closeTurn = (ctx, reason = 'vad_end') => {
+   if (!ctx.state.turnOpen) return;
+   sendCloseStream({ reason });
+   ctx.state.turnOpen = false;
+   emitVoiceEvent('turn_close', { reason, stats: getShadowStats(ctx.state) });
+   scheduleSafetyClose(ctx);
+ };
+ 
+ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', asrCue = null } = {}) => {
+   const snr = Number.isFinite(detail?.snrDb) ? detail.snrDb : null;
+   const snrBoost = resolveSnrBoost(ctx, ctx.evidenceGate?.config?.baseSnrDb ?? 3.5);
+   const stats = getShadowStats(ctx.state);
+   const result = ctx.evidenceGate.update({
+     vadState,
+     snr,
+     snrBoost,
+     bufferedMs: stats.durationMs,
+     bufferedBytes: stats.totalBytes,
+     minSpeechMs: EVIDENCE_MIN_SPEECH_MS,
+     minBytes: EVIDENCE_MIN_BYTES,
+     asrCue,
+   });
+   if (result.shouldCommit) {
+     ctx.evidenceGate.satisfy('commit');
+     await openTurn(ctx, 'evidence_gate_commit');
+     if (detail) ctx.evidenceGate.setDetail(detail);
+   }
+ };
+ 
+ const handleSpeechStart = async (ctx, detail) => {
++  if (ctx.state.manualPttActive) {
++    return;
++  }
++  if (manualBargeAllowed(ctx)) {
++    return;
++  }
+   ctx.state.bargeConfirmActive = true;
+   ctx.state.bargeConfirmUntil = nowMs() + BARGE_CONFIRM_MS;
+   setState(ctx, TurnState.Recording, { detail });
+   const stats = ctx.shadowBuffer.stats();
+   ctx.evidenceGate.start({ startedAt: nowMs(), detail, bufferedMs: stats.durationMs, bufferedBytes: stats.totalBytes });
+   emitVoiceEvent('speech_start', detail);
+   await evaluateEvidenceGate(ctx, { detail, vadState: 'speech' });
+ };
+ 
+ const handleSpeechEnd = async (ctx, detail) => {
++  if (ctx.state.manualPttActive) {
++    return;
++  }
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
+   emitVoiceEvent('speech_end', detail);
+   await evaluateEvidenceGate(ctx, { detail, vadState: 'silence', asrCue: { type: 'vad_end' } });
+   closeTurn(ctx, 'speech_end');
+   ctx.evidenceGate.reset('vad_end');
+   ctx.shadowBuffer.clear();
+   ctx.audio.lastTimecode = null;
+   setState(ctx, TurnState.Listening);
+ };
+ 
+ const ensureVad = (ctx, opts = {}) => {
+   const { audio } = ctx;
+   if (audio.vad) return;
+   const echoStateFn = () => ctx.state.ttsPlaying || ctx.ttsMask.isMasked(nowMs());
+   audio.vad = new VAD(audio.analyser, {
+     startDbOffset: 10 + ctx.state.vadBoostDb,
+     stopDbOffset: 6 + ctx.state.vadBoostDb,
+     echoStateFn,
+     minSpeechMs: Math.max(180, opts.minSpeechMs ?? 280),
+     minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
+   }, {
+     onSpeechStart: (detail) => { handleSpeechStart(ctx, detail); },
+     onSpeechEnd: (detail) => { handleSpeechEnd(ctx, detail); },
+   });
+@@ -334,73 +353,77 @@ export async function initMic(stream = null) {
+   ensureAudioGraph(ctx, ctx.audio.stream);
+   return ctx.audio.stream;
+ }
+ 
+ export async function armVAD(stream = null, opts = {}) {
+   const ctx = ensureCtx();
+   const mic = await initMic(stream);
+   ensureAudioGraph(ctx, mic);
+   try {
+     if (typeof ctx.audio?.context?.resume === 'function') {
        await ctx.audio.context.resume();
      }
    } catch {}
@@ -116,6 +261,7 @@ index 60976548a2233c8073487323286a4ce33801d90c..aa864b8bfa42e529ac89820afa7f636f
    teardownVad(ctx); stopRecorder(ctx);
    closeTurn(ctx, 'manual_disarm');
    teardownTransport(ctx);
++  ctx.state.hasOpenedTurn = false;
    setState(ctx, TurnState.Ready);
  }
  
@@ -126,21 +272,22 @@ index 60976548a2233c8073487323286a4ce33801d90c..aa864b8bfa42e529ac89820afa7f636f
  
  export function bargeIn() {
    const ctx = ensureCtx();
--  if (!manualBargeAllowed(ctx)) return false;
-+  const shouldNotify = manualBargeAllowed(ctx);
+   const shouldNotify = manualBargeAllowed(ctx);
    ctx.state.manualBargeInUsed = true;
-+  ctx.state.bargeConfirmActive = false;
-+  ctx.state.bargeConfirmUntil = 0;
-+  try { stopPlayback(); } catch {}
-+  if (ctx.state.turnOpen) {
-+    closeTurn(ctx, 'manual_barge_preempt');
-+  }
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
+   try { stopPlayback(); } catch {}
+   if (ctx.state.turnOpen) {
+     closeTurn(ctx, 'manual_barge_preempt');
+   }
    ctx.state.ttsPlaying = false;
    ctx.ttsMask.clear();
--  sendJSON({ type: 'manual_barge_in' });
-+  if (shouldNotify) {
-+    sendJSON({ type: 'manual_barge_in' });
-+  }
+   if (shouldNotify) {
+     sendJSON({ type: 'manual_barge_in' });
+   }
++  ctx.evidenceGate.reset('manual_barge_in');
++  ctx.shadowBuffer.clear();
++  ctx.audio.lastTimecode = null;
    emitVoiceEvent('barge_in', { reason: 'manual' });
    return true;
  }
@@ -162,65 +309,41 @@ index 60976548a2233c8073487323286a4ce33801d90c..aa864b8bfa42e529ac89820afa7f636f
  
  export function forceBargeInStart(meta = {}) {
    const ctx = ensureCtx();
--  ctx.state.manualBargeInUsed = true; ctx.state.ttsPlaying = true; ctx.ttsMask.start();
-+  if (ctx.state.manualPttActive) {
-+    return false;
-+  }
-+
-+  bargeIn();
-+
-+  ctx.state.manualBargeInUsed = true;
-+  ctx.state.manualPttActive = true;
-+  ctx.state.ttsPlaying = false;
-+  ctx.ttsMask.clear();
-+
-+  const controlFrame = { type: 'Control', action: 'barge_in_start' };
-+  const sent = sendJSON(controlFrame);
-+  if (!sent) {
-+    ensureTransport(ctx).then(() => {
-+      try { sendJSON(controlFrame); } catch {}
-+    }).catch(() => {});
-+  }
-+
-+  setState(ctx, TurnState.Recording, { reason: 'manual_start' });
-   emitVoiceEvent('barge_in_start', meta);
-+
-+  const open = openTurn(ctx, 'manual_start');
-+  if (open && typeof open.then === 'function') {
-+    open.catch(() => {});
-+  }
-+
-+  return true;
- }
+   if (ctx.state.manualPttActive) {
+     return false;
+   }
  
+@@ -433,35 +456,38 @@ export function forceBargeInStart(meta = {}) {
  export function forceBargeInEnd(opts = {}) {
    const ctx = ensureCtx();
--  ctx.state.ttsPlaying = false; ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms, snrBoost: opts.snrBoost });
-+  const wasActive = ctx.state.manualPttActive;
-+  ctx.state.manualPttActive = false;
-+  ctx.state.ttsPlaying = false;
-+  ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms, snrBoost: opts.snrBoost });
-+
-+  const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
-+  if (wasActive) {
-+    const controlFrame = { type: 'Control', action: 'barge_in_end' };
-+    const sent = sendJSON(controlFrame);
-+    if (!sent) {
-+      ensureTransport(ctx).then(() => {
-+        try { sendJSON(controlFrame); } catch {}
-+      }).catch(() => {});
-+    }
-+
-+    if (ctx.state.turnOpen) {
-+      closeTurn(ctx, reason);
-+    }
-+    setState(ctx, TurnState.Listening, { reason });
-+  }
-+
-+  ctx.state.bargeConfirmActive = false;
-+  ctx.state.bargeConfirmUntil = 0;
+   const wasActive = ctx.state.manualPttActive;
+   ctx.state.manualPttActive = false;
+   ctx.state.ttsPlaying = false;
+   ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms, snrBoost: opts.snrBoost });
+ 
+   const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
+   if (wasActive) {
+     const controlFrame = { type: 'Control', action: 'barge_in_end' };
+     const sent = sendJSON(controlFrame);
+     if (!sent) {
+       ensureTransport(ctx).then(() => {
+         try { sendJSON(controlFrame); } catch {}
+       }).catch(() => {});
+     }
+ 
+     if (ctx.state.turnOpen) {
+       closeTurn(ctx, reason);
+     }
+     setState(ctx, TurnState.Listening, { reason });
+   }
+ 
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
++  ctx.evidenceGate.reset('manual_release');
++  ctx.shadowBuffer.clear();
++  ctx.audio.lastTimecode = null;
    emitVoiceEvent('barge_in_end', opts);
-+  return wasActive;
+   return wasActive;
  }
  
  const getCtx = () => ctxRef.current;
