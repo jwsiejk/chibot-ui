@@ -1,5 +1,5 @@
 from app.asgi_gateway import app as flask_app
-from app.admin_log import clear_admin_log_history_for_tests
+from app.admin_log import clear_admin_log_history_for_tests, admin_log_emit
 
 
 def _with_admin_session(client, email: str = "admin@example.com"):
@@ -91,3 +91,23 @@ def test_admin_log_helper_records_event(monkeypatch):
     assert logs["events"][0]["kind"] == "admin_log"
     assert logs["events"][0]["message"] == "Hello world"
     assert logs["events"][0]["email"] == "prod@example.com"
+
+
+def test_admin_logs_stream_mode(monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
+
+    admin_log_emit({"event": "diag", "label": "from stream"})
+
+    client = flask_app.test_client()
+    _with_admin_session(client)
+
+    resp = client.get("/api/v1/admin/logs?live=1", buffered=False)
+    assert resp.status_code == 200
+    assert resp.headers.get("Content-Type", "").startswith("text/event-stream")
+
+    stream_iter = iter(resp.response)
+    first_chunk = next(stream_iter)
+    assert b":ok" in first_chunk
+
+    second_chunk = next(stream_iter)
+    assert b"from stream" in second_chunk

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import platform
 import secrets
 import sys
 import time
-from flask import Blueprint, request, session, abort, jsonify
+import typing
+from flask import Blueprint, request, session, abort, jsonify, Response, stream_with_context
 from werkzeug.exceptions import HTTPException
 
 from ..utils.admin import is_admin_email
@@ -166,6 +168,54 @@ def logs_snapshot():
 
     if limit is not None and limit >= 0:
         events = events[-limit:]
+
+    def _is_truthy(value: str | None) -> bool:
+        if value is None:
+            return False
+        lowered = value.strip().lower()
+        return lowered not in {"", "0", "false", "no", "off"}
+
+    wants_stream = _is_truthy(request.args.get("live")) or _is_truthy(request.args.get("sse"))
+    if not wants_stream:
+        accept_header = request.headers.get("Accept", "")
+        wants_stream = "text/event-stream" in accept_header.lower()
+
+    if wants_stream:
+        def _format(evt: dict) -> str:
+            try:
+                payload = json.dumps(evt, ensure_ascii=False, separators=(",", ":"))
+            except Exception:
+                payload = "{}"
+            return f"data: {payload}\n\n"
+
+        def _stream() -> typing.Iterator[str]:
+            last_step_seen = after_step if after_step is not None else 0
+            yield ":ok\n\n"
+
+            backlog = get_admin_log_history(limit=limit, after_step=after_step)
+            for item in backlog:
+                try:
+                    last_step_seen = max(last_step_seen, int(item.get("step", 0)))
+                except Exception:
+                    pass
+                yield _format(item)
+
+            while True:
+                time.sleep(0.75)
+                pending = get_admin_log_history(after_step=last_step_seen)
+                if not pending:
+                    yield ": keep-alive\n\n"
+                    continue
+
+                for item in pending:
+                    try:
+                        last_step_seen = max(last_step_seen, int(item.get("step", 0)))
+                    except Exception:
+                        pass
+                    yield _format(item)
+
+        resp = Response(stream_with_context(_stream()), mimetype="text/event-stream")
+        return _no_store(resp)
 
     return (
         jsonify({

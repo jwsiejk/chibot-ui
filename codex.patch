@@ -1,273 +1,219 @@
-diff --git a/static/js/askchip_client_hooks.js b/static/js/askchip_client_hooks.js
-index a653484b95942837d2402e7f2f0149983be58180..516ff338471bd5ca55559e7fcfd397c19df56150 100644
---- a/static/js/askchip_client_hooks.js
-+++ b/static/js/askchip_client_hooks.js
-@@ -59,99 +59,55 @@
-         if (payload.container) {
-           try { console.info(`container=${payload.container}`); } catch {}
-         }
-       }
-     } catch {}
-   }
+diff --git a/app/api_v1/admin.py b/app/api_v1/admin.py
+index 6feba6aadf3805a057e54eb1c7c1393f6546880e..39a81fe6cdf5e8af85a080a8a8100e0b81fafbc8 100644
+--- a/app/api_v1/admin.py
++++ b/app/api_v1/admin.py
+@@ -1,33 +1,35 @@
+ from __future__ import annotations
  
-   async function postAdmin(evt) {
-     try {
-       const payload = normalizePayload(evt);
-       logAdminBreadcrumb(payload);
-       await fetch(ADMIN_POST, {
-         method: "POST",
-         headers: { "Content-Type": "application/json" },
-         credentials: "include",
-         body: JSON.stringify(payload),
-       });
-     } catch {}
-   }
++import json
+ import os
+ import platform
+ import secrets
+ import sys
+ import time
+-from flask import Blueprint, request, session, abort, jsonify
++import typing
++from flask import Blueprint, request, session, abort, jsonify, Response, stream_with_context
+ from werkzeug.exceptions import HTTPException
  
-   async function openEventSource(url, options = {}) {
-     if (typeof window === "undefined" || typeof window.EventSource !== "function") {
-       return null;
-     }
+ from ..utils.admin import is_admin_email
+ from ..security_state import get_user
+ from ..services.config_store import get_config
+ from ..services import admin_settings as cfg
+ from ..services import test_runner as testr
+ from ..admin_log import (
+     admin_log_emit as _admin_log_emit_core,
+     get_admin_log_history,
+ )
  
--    if (typeof fetch === "function") {
--      let controller = null;
--      let response = null;
--      try {
--        if (typeof AbortController === "function") {
--          controller = new AbortController();
--        }
--        const fetchOptions = {
--          method: "GET",
--          credentials: options.withCredentials ? "include" : "same-origin",
--          headers: { Accept: "text/event-stream" },
--        };
--        if (controller) fetchOptions.signal = controller.signal;
--        response = await fetch(url, fetchOptions);
--        const contentType = String(response?.headers?.get?.("content-type") || "");
--        const isEventStream = /^text\/event-stream/i.test(contentType);
--        if (!isEventStream) {
--          try { controller?.abort(); } catch {}
--          try { response?.body?.cancel?.(); } catch {}
--          try {
--            console.warn("[askchip] admin console bridge disabled — unexpected response", {
--              url,
--              status: response?.status,
--              contentType,
--            });
--          } catch {}
--          return null;
--        }
--      } catch (err) {
--        try { controller?.abort(); } catch {}
--        try { response?.body?.cancel?.(); } catch {}
--        try {
--          console.warn("[askchip] admin console bridge unavailable", {
--            url,
--            error: err?.message || err,
--          });
--        } catch {}
--        return null;
--      } finally {
--        try { controller?.abort(); } catch {}
--        try { response?.body?.cancel?.(); } catch {}
--      }
--    }
--
-     try {
-       return new EventSource(url, options);
-     } catch (err) {
-       try {
--        console.warn("[askchip] failed to create EventSource", {
-+        console.info("[askchip] admin console bridge unavailable", {
-           url,
-           error: err?.message || err,
-         });
-       } catch {}
-       return null;
-     }
-   }
+ # add the prefix here so route is /api/v1/admin/logs
+ bp = Blueprint("admin", __name__, url_prefix="/api/v1/admin")
+ # ----------------- Admin access helpers -----------------
  
-   // Minimal upstream hook; wire this to your WS uplink if not present.
-   if (!window.askchip) window.askchip = {};
-   if (typeof window.askchip.audioUp !== "function") {
-     window.askchip.audioUp = function noop(_) {};
-   }
+ def _require_admin() -> None:
+     email = (session.get("user") or {}).get("email") or request.headers.get("X-User-Email") or (get_user() or "")
+     if not is_admin_email((email or "").strip().lower()):
+         abort(403)
  
-   // Expose a start hook so tests can trigger the same flow your Start button uses.
-   if (typeof window.startCall !== "function") {
-     window.startCall = function () {
-       // no-op placeholder; your UI can replace this to match the real Start.
-       // The E2E runner can still click your Start button; this is a fallback.
-       console.log("[askchip] startCall() placeholder");
-       return true;
-     };
-     window.startCall.__askchipPlaceholder = true;
-   }
+ # ----------------- Admin event log helpers -----------------
  
-@@ -181,50 +137,61 @@
-     } catch (err) {
-       console.error("armMic failed", err);
-       postAdmin({ event: "asr:error", msg: String(err && err.message || err) });
-     }
-   };
  
-   // Handle control frames from the server bus
-   window.askchip_onControl = function (msg) {
-     if (msg && msg.type === "control" && msg.op === "arm_mic") {
-       const delay = Number(msg.delay_ms || 0);
-       setTimeout(() => window.askchip.armMic(), delay);
-       postAdmin({ event: "mic:auto_arm_suggested", delay_ms: delay });
-     }
-   };
+ def admin_log_emit(evt: dict | None) -> dict | None:
+@@ -145,50 +147,98 @@ def logs_snapshot():
  
-   async function installAdminConsoleBridge() {
-     try {
-       if (window.__askchip_admin_console_bridge) {
-         return;
-       }
-       const es = await openEventSource(ADMIN_LOG_STREAM, { withCredentials: true });
-       if (!es) {
-         return;
-       }
-       window.__askchip_admin_console_bridge = es;
-+      let bridgeErrorLogged = false;
-+      const logBridgeIssue = (detail) => {
-+        if (bridgeErrorLogged) return;
-+        bridgeErrorLogged = true;
-+        try {
-+          console.info("[askchip] admin console bridge unavailable", detail);
-+        } catch {}
-+      };
-+      es.addEventListener("error", (event) => {
-+        logBridgeIssue({ url: ADMIN_LOG_STREAM, event: event?.type || "error" });
-+      }, { once: true });
-       es.addEventListener("message", (ev) => {
-         try {
-           const data = JSON.parse(ev.data || "{}");
-           const kind = data?.kind || data?.event || data?.label;
-           if (!kind) return;
-           const payload = data?.payload && typeof data.payload === "object" ? data.payload : undefined;
-           const info = payload || data;
-           switch (String(kind)) {
-             case "latency_breakdown": {
-               try { console.info("latency_breakdown", info); } catch {}
-               const metrics = info?.metrics || data?.metrics;
-               if (metrics && typeof metrics === "object") {
-                 Object.entries(metrics).forEach(([name, value]) => {
-                   try { console.info(`${name}=${value}`); } catch {}
-                 });
-               }
-               break;
-             }
-             case "policy_decision": {
-               const detail = info?.decision || info?.detail || info?.label || data?.decision || data?.detail;
-               try { console.info(`policy_decision: ${detail ?? "unknown"}`); } catch {}
-               break;
-             }
-             case "nlu": {
-               try { console.info("nlu", info); } catch {}
-diff --git a/static/js/voice/legacy/VoiceLegacyTopLevel.js b/static/js/voice/legacy/VoiceLegacyTopLevel.js
-index 14e9d6dbb14034a76f89a1c36e4856f377daeb50..fc5a510516d263d5cb50f3bcb01bfd9f103a00d0 100644
---- a/static/js/voice/legacy/VoiceLegacyTopLevel.js
-+++ b/static/js/voice/legacy/VoiceLegacyTopLevel.js
-@@ -192,50 +192,60 @@ function _completeGreetGate(reason = 'open') {
-   state.greetGatePhase = 'open';
-   state.greetGateLastReason = reason;
-   if (state.eligibility === 'blocked_pregreet') {
-     state.eligibility = 'eligible';
-   }
-   _clearGreetGateCalibrateTimer();
-   _clearGreetGateWaiters(true);
-   _resetGreetGateState();
- }
- function _cancelGreetGate(reason = 'cancelled') {
-   if (!state.greetGateActive) {
-     _resetGreetGateState();
-     return;
-   }
-   _voiceLog('info', 'greet gate cancelled', { reason });
-   state.greetGateActive = false;
-   state.greetGatePhase = 'cancelled';
-   state.greetGateLastReason = reason;
-   if (state.eligibility === 'blocked_pregreet') {
-     state.eligibility = 'eligible';
-   }
-   _clearGreetGateCalibrateTimer();
-   _clearGreetGateWaiters(false);
-   _resetGreetGateState();
- }
-+function _resetEvidenceGate(reason = null) {
-+  try {
-+    if (state?.evidenceGate && typeof state.evidenceGate.reset === 'function') {
-+      state.evidenceGate.reset(reason);
-+    }
-+  } catch {}
-+  try {
-+    state.evidenceGateCommitPromise = null;
-+  } catch {}
-+}
- function _startGreetGateCalibrate(source = 'unknown') {
-   if (!state.greetGateActive) return;
-   if (state.greetGatePhase === 'calibrating' && state.greetGateCalibrateTimer) {
-     state.greetGateLastSignal = source;
-     return;
-   }
-   const durationMs = _resolveGreetGateCalibrateMs();
-   const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-     ? performance.now()
-     : Date.now();
-   _clearGreetGateCalibrateTimer();
-   state.greetGatePhase = 'calibrating';
-   state.greetGateLastSignal = source;
-   state.greetGateCalibrateLastMs = durationMs;
-   state.greetGateCalibrateUntil = now + durationMs;
-   _voiceLog('info', 'greet gate calibrating', {
-     source,
-     calibrateMs: durationMs,
-     ttsPlaying: !!state.ttsPlaying,
-   });
-   try {
-     state.greetGateCalibrateTimer = setTimeout(() => {
-       state.greetGateCalibrateTimer = null;
-       state.greetGateCalibrateUntil = 0;
-       _completeGreetGate('calibrated');
-@@ -349,39 +359,40 @@ export {
-   MANUAL_NO_AUDIO_CANCEL_MS,
-   MANUAL_VAD_IGNORE_MS,
-   EVIDENCE_MIN_SPEECH_MS,
-   EVIDENCE_MIN_BYTES,
-   EVIDENCE_MIN_SNR_DB,
-   PARTIAL_CONF_THRESHOLD,
-   PARTIAL_CONF_RISE_DELTA,
-   GREET_BARGE_MIN_SNR_DB,
-   GREET_CALIBRATE_DEFAULT_MS,
-   GREET_CALIBRATE_MIN_MS,
-   GREET_CALIBRATE_MAX_MS,
-   BARGE_CONFIRM_DEFAULT_MS,
-   bargeConfirmMs,
-   state,
-   _now,
-   optsFromGlobal,
-   _normalizePhase,
-   _valueIsReadyFlag,
-   _updateAssistantPhaseFromDetail,
-   _clearGreetGateWaiters,
-   _clearGreetGateCalibrateTimer,
-   _resetGreetGateState,
-   _resolveGreetGateCalibrateMs,
-   _completeGreetGate,
-   _cancelGreetGate,
-+  _resetEvidenceGate,
-   _startGreetGateCalibrate,
-   _waitForGreetGate,
-   _handleGreetGateUtteranceEnd,
-   _handleGreetGateStateFrame,
-   _setActiveTurnTraceId,
-   _getActiveTurnTraceId,
-   _ensureTurnTraceBase,
-   _beginTurnTrace,
-   _clearTurnTrace,
-   _withTrace,
-   _formatVoiceMessage,
-   _voiceLog,
-   _logLifecycle,
- };
+     limit_value = request.args.get("limit")
+     after_value = request.args.get("after") or request.args.get("after_step")
+ 
+     try:
+         limit = int(limit_value) if limit_value is not None else None
+     except (TypeError, ValueError):
+         limit = None
+ 
+     try:
+         after_step = int(after_value) if after_value is not None else None
+     except (TypeError, ValueError):
+         after_step = None
+ 
+     all_events = get_admin_log_history()
+     total = len(all_events)
+     latest_step = int(all_events[-1]["step"]) if all_events and "step" in all_events[-1] else 0
+ 
+     events = all_events
+     if after_step is not None:
+         events = [evt for evt in events if int(evt.get("step", 0)) > after_step]
+ 
+     if limit is not None and limit >= 0:
+         events = events[-limit:]
+ 
++    def _is_truthy(value: str | None) -> bool:
++        if value is None:
++            return False
++        lowered = value.strip().lower()
++        return lowered not in {"", "0", "false", "no", "off"}
++
++    wants_stream = _is_truthy(request.args.get("live")) or _is_truthy(request.args.get("sse"))
++    if not wants_stream:
++        accept_header = request.headers.get("Accept", "")
++        wants_stream = "text/event-stream" in accept_header.lower()
++
++    if wants_stream:
++        def _format(evt: dict) -> str:
++            try:
++                payload = json.dumps(evt, ensure_ascii=False, separators=(",", ":"))
++            except Exception:
++                payload = "{}"
++            return f"data: {payload}\n\n"
++
++        def _stream() -> typing.Iterator[str]:
++            last_step_seen = after_step if after_step is not None else 0
++            yield ":ok\n\n"
++
++            backlog = get_admin_log_history(limit=limit, after_step=after_step)
++            for item in backlog:
++                try:
++                    last_step_seen = max(last_step_seen, int(item.get("step", 0)))
++                except Exception:
++                    pass
++                yield _format(item)
++
++            while True:
++                time.sleep(0.75)
++                pending = get_admin_log_history(after_step=last_step_seen)
++                if not pending:
++                    yield ": keep-alive\n\n"
++                    continue
++
++                for item in pending:
++                    try:
++                        last_step_seen = max(last_step_seen, int(item.get("step", 0)))
++                    except Exception:
++                        pass
++                    yield _format(item)
++
++        resp = Response(stream_with_context(_stream()), mimetype="text/event-stream")
++        return _no_store(resp)
++
+     return (
+         jsonify({
+             "ok": True,
+             "events": events,
+             "total": total,
+             "latest_step": latest_step,
+         }),
+         200,
+     )
+ 
+ @bp.post("/log")
+ def logs_append():
+     """Append a custom admin log event from the UI diagnostic tools."""
+     payload_obj = request.get_json(silent=True)
+     payload_dict = payload_obj if isinstance(payload_obj, dict) else {}
+ 
+     if not _has_valid_admin_token(payload_dict):
+         _require_admin()
+ 
+     filtered_payload = {k: v for k, v in payload_dict.items() if k != "token"}
+ 
+     kind = (filtered_payload.get("kind") or "admin_diag").strip() if isinstance(filtered_payload.get("kind"), str) else "admin_diag"
+     label = filtered_payload.get("label") if isinstance(filtered_payload.get("label"), str) else None
+     route = filtered_payload.get("route") if isinstance(filtered_payload.get("route"), str) else None
+ 
+diff --git a/tests/test_admin_log_post.py b/tests/test_admin_log_post.py
+index 0d670e9aeef1567973ecbe33986013eda67204f7..c1566eba42d3f71f54d84c2389a5066abb27cbc1 100644
+--- a/tests/test_admin_log_post.py
++++ b/tests/test_admin_log_post.py
+@@ -1,27 +1,27 @@
+ from app.asgi_gateway import app as flask_app
+-from app.admin_log import clear_admin_log_history_for_tests
++from app.admin_log import clear_admin_log_history_for_tests, admin_log_emit
+ 
+ 
+ def _with_admin_session(client, email: str = "admin@example.com"):
+     with client.session_transaction() as sess:
+         sess["user"] = {"email": email}
+ 
+ 
+ def _csrf(client):
+     resp = client.get("/api/v1/csrf")
+     return resp.get_json()["csrf"]
+ 
+ 
+ def setup_function():
+     clear_admin_log_history_for_tests()
+ 
+ 
+ def test_admin_log_post_appends_event(monkeypatch):
+     monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
+ 
+     client = flask_app.test_client()
+     _with_admin_session(client)
+ 
+     token = _csrf(client)
+     payload = {"kind": "admin_diag", "label": "diagnostic_start", "session_id": "sid-123"}
+ 
+@@ -69,25 +69,45 @@ def test_admin_logs_allow_e2e_token(monkeypatch):
+     resp = client.post(
+         "/api/v1/admin/log",
+         json={"token": "secret-token", "kind": "media", "label": "mic_start"},
+         headers={"X-CSRF-Token": token},
+     )
+     assert resp.status_code == 200
+ 
+     logs = client.get("/api/v1/admin/logs?k=secret-token").get_json()
+     assert logs["events"][0]["kind"] == "media"
+ 
+ 
+ def test_admin_log_helper_records_event(monkeypatch):
+     monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
+ 
+     client = flask_app.test_client()
+     _with_admin_session(client)
+ 
+     from app.logging import admin_log as admin_log_helper
+ 
+     admin_log_helper("Hello world", email="prod@example.com", role="system")
+ 
+     logs = client.get("/api/v1/admin/logs").get_json()
+     assert logs["events"][0]["kind"] == "admin_log"
+     assert logs["events"][0]["message"] == "Hello world"
+     assert logs["events"][0]["email"] == "prod@example.com"
++
++
++def test_admin_logs_stream_mode(monkeypatch):
++    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
++
++    admin_log_emit({"event": "diag", "label": "from stream"})
++
++    client = flask_app.test_client()
++    _with_admin_session(client)
++
++    resp = client.get("/api/v1/admin/logs?live=1", buffered=False)
++    assert resp.status_code == 200
++    assert resp.headers.get("Content-Type", "").startswith("text/event-stream")
++
++    stream_iter = iter(resp.response)
++    first_chunk = next(stream_iter)
++    assert b":ok" in first_chunk
++
++    second_chunk = next(stream_iter)
++    assert b"from stream" in second_chunk
