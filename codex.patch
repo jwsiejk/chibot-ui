@@ -1,8 +1,8 @@
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index a44b8e2f39b58bb8193c9a0ce7218b1c728b37ae..311c95b8e5eba6c8821d8a090ea4b45dff95eb4f 100644
+index 311c95b8e5eba6c8821d8a090ea4b45dff95eb4f..e307a450c619f5ae087149262eba34a1f22009cc 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -1,43 +1,55 @@
+@@ -1,44 +1,44 @@
  import {
    EvidenceGate,
    ShadowBuffer,
@@ -18,22 +18,22 @@ index a44b8e2f39b58bb8193c9a0ce7218b1c728b37ae..311c95b8e5eba6c8821d8a090ea4b45d
    openWS,
    waitWSOpen,
    sendAudioChunk,
--  sendCloseStream,
    sendJSON,
  } from '../../ws_module.js';
-+// Guarded CloseStream wrapper so we never kill the session before the first user turn.
-+import { sendCloseStream as __sendCloseStream } from '../../ws';
-+
-+function safeCloseStream(reason = '') {
-+  try {
-+    const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
-+    if (!opened) {
-+      console.debug('[voice] skip CloseStream (no user turn yet)', { reason });
-+      return;
-+    }
-+  } catch {}
-+  __sendCloseStream();
-+}
+ // Guarded CloseStream wrapper so we never kill the session before the first user turn.
+-import { sendCloseStream as __sendCloseStream } from '../../ws';
++import { sendCloseStream as __sendCloseStream } from '../../ws.js';
+ 
+ function safeCloseStream(reason = '') {
+   try {
+     const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
+     if (!opened) {
+       console.debug('[voice] skip CloseStream (no user turn yet)', { reason });
+       return;
+     }
+   } catch {}
+   __sendCloseStream();
+ }
  import { VAD } from '../vad.js';
  import { stopPlayback } from '../../audio.js';
  import { logIfEnabled } from '../../util/logging.js';
@@ -48,117 +48,3 @@ index a44b8e2f39b58bb8193c9a0ce7218b1c728b37ae..311c95b8e5eba6c8821d8a090ea4b45d
    BARGE_CONFIRM_MS = 420;
  
  const ctxRef = { current: null };
- const nowMs = () => {
-   try {
-     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-       return performance.now();
-     }
-   } catch {}
-   return Date.now();
- };
- 
- const voiceLog = (level, ...args) => {
-   logIfEnabled(() => {
-@@ -362,100 +374,100 @@ const handleRecorderData = (ctx, event) => {
-       ctx.evidenceGate.extendBuffer({ durationMs: dur, bytes: byteLength });
-     },
-   });
-   ctx.audio.lastTimecode = nextTimecode;
-   if (ctx.state.turnOpen) sendChunk(ctx, blob, { durationMs });
- };
- 
- const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
-   if (!blob) {
-     return;
-   }
-   sendAudioChunk(blob);
-   ctx.state.lastChunkAt = nowMs();
-   ctx.evidenceGate.extendBuffer({ durationMs });
-   scheduleSafetyClose(ctx);
- };
- 
- const scheduleSafetyClose = (ctx) => {
-   if (ctx.transport.safetyTimer) { try { clearTimeout(ctx.transport.safetyTimer); } catch {} }
-   ctx.transport.safetyTimer = null;
-   if (!ctx.state.hasOpenedTurn || ctx.state.manualGate) {
-     return;
-   }
-   ctx.transport.safetyTimer = setTimeout(() => {
-     if (!ctx.state.turnOpen) return;
--    sendCloseStream({ reason: 'safety_close' });
-+    safeCloseStream('adaptive');
-     ctx.state.turnOpen = false;
-     teardownTransport(ctx);
-   }, SAFETY_CLOSE_DELAY_MS);
- };
- 
- const openTurn = async (ctx, reason = 'speech_commit') => {
-   if (ctx.state.turnOpen) return;
-   await ensureTransport(ctx);
-   ctx.state.turnOpen = true;
-   ctx.state.hasOpenedTurn = true;
-   ctx.state.turnSeq = (ctx.state.turnSeq || 0) + 1;
-   const turnId = ctx.state.turnSeq;
-   ctx.state.activeTurnId = turnId;
-   const ts = Date.now();
-   emitVoiceEvent('turn_open', {
-     reason,
-     turnId,
-     sessionId: ctx.sessionId || null,
-     ts_ms: ts,
-   });
-   voiceLog('info', '[turn] open', {
-     ts_ms: ts,
-     session_id: ctx.sessionId || null,
-     turn_id: turnId,
-     reason,
-   });
-   try {
-     if (typeof window !== 'undefined') {
-       window.__askchip_turn_trace_id = String(turnId);
-     }
-   } catch {}
-   const stats = flushShadowBuffer(ctx.shadowBuffer, (entry) => {
-     if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs: entry.durationMs });
-   });
-   ctx.evidenceGate.setBufferStats(stats);
- };
- 
- const closeTurn = (ctx, reason = 'vad_end') => {
-   if (!ctx.state.turnOpen) {
-     if (!ctx.state.hasOpenedTurn) {
-       voiceLog('info', '[ws] CloseStream suppressed: no user turn yet', {
-         ts_ms: Date.now(),
-         session_id: ctx.sessionId || null,
-       });
-     }
-     return;
-   }
-   const turnId = ctx.state.activeTurnId || ctx.state.turnSeq || null;
--  sendCloseStream({ reason });
-+  safeCloseStream('adaptive');
-   ctx.state.turnOpen = false;
-   const ts = Date.now();
-   const stats = getShadowStats(ctx.state);
-   emitVoiceEvent('turn_close', {
-     reason,
-     stats,
-     turnId,
-     sessionId: ctx.sessionId || null,
-     ts_ms: ts,
-   });
-   voiceLog('info', '[turn] close', {
-     ts_ms: ts,
-     session_id: ctx.sessionId || null,
-     turn_id: turnId,
-     reason,
-   });
-   ctx.state.activeTurnId = null;
-   try {
-     if (typeof window !== 'undefined') {
-       window.__askchip_turn_trace_id = null;
-     }
-   } catch {}
-   scheduleSafetyClose(ctx);
- };
- 

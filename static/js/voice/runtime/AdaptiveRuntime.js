@@ -16,7 +16,7 @@ import {
   sendJSON,
 } from '../../ws_module.js';
 // Guarded CloseStream wrapper so we never kill the session before the first user turn.
-import { sendCloseStream as __sendCloseStream } from '../../ws';
+import { sendCloseStream as __sendCloseStream } from '../../ws.js';
 
 function safeCloseStream(reason = '') {
   try {
