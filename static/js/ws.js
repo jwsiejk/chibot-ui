@@ -181,6 +181,9 @@ function _recordVoiceMetrics(payload){
     if (store.length > 10) {
       store.splice(0, store.length - 10);
     }
+    try {
+      window.dispatchEvent(new CustomEvent('voice-metrics-updated', { detail: { payload: base } }));
+    } catch {}
   } catch {}
 }
 

@@ -187,6 +187,7 @@
     })();
   </script>
   {% set asset_ver = asset_version('js/bootstrap.js') %}
+  {% set admin_voice_metrics_ver = asset_version('js/admin/VoiceMetricsPanel.js') %}
   <script>
     window.__askchipAssetVersion = {{ asset_ver|tojson }};
   </script>
@@ -206,6 +207,20 @@
     type="module"
     src="{{ url_for('static', filename='js/ui_menu.js') }}?v={{ asset_ver }}"
   ></script>
+  <script type="module">
+    const adminCfg = window?.__askchip_config?.admin;
+    if (adminCfg?.voice_metrics_panel === true) {
+      import('{{ url_for('static', filename='js/admin/VoiceMetricsPanel.js') }}?v={{ admin_voice_metrics_ver }}')
+        .then((mod) => {
+          try {
+            mod?.mountVoiceMetricsPanel?.();
+          } catch (err) {
+            console.warn('[index] mountVoiceMetricsPanel failed', err);
+          }
+        })
+        .catch((err) => console.warn('[index] VoiceMetricsPanel load failed', err));
+    }
+  </script>
   <script src="{{ url_for('static', filename='js/askchip_probe_instrumentation.js') }}?v={{ asset_ver }}" defer></script>
 
 </body>

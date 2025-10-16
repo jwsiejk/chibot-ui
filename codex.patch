@@ -1,390 +1,80 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 51a9ace74678664f57a99ab51c93eb92b59bdebd..621fc9425c753f5efec4d2dbd8ac603e62b1a48c 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1,28 +1,29 @@
- # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
- from __future__ import annotations
- import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
-+from functools import partial
- from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
- from collections import deque, defaultdict
- from app.services.audio.container_sniffer import (
-     AudioContainerSniffer,
-     coerce_detection_from_meta,
- )
- 
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.config import load_settings
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
- 
-@@ -506,50 +507,155 @@ async def _ws_send_diagnostic_audio(send, turn_id: int, mime: str, data: bytes)
-             "part": part,
-             "is_last": (total == 0),
-             "b64": "",  # header-only announcement
-         },
-     )
-     while off < total:
-         chunk = data[off : off + CHUNK]
-         off += len(chunk)
-         part += 1
-         await _ws_send_json(
-             send,
-             {
-                 "type": "diagnostic_audio",
-                 "turn_id": str(turn_id),
-                 "mime": mime,
-                 "total_bytes": total,
-                 "part": part,
-                 "is_last": (off >= total),
-                 "b64": base64.b64encode(chunk).decode("ascii"),
-             },
-         )
- 
- 
- # ------------------------------ bus pumpers ------------------------------
- 
-+_VOICE_METRICS_SUBSCRIBERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[None]]] = {}
-+_VOICE_METRICS_QUEUE = None
-+_VOICE_METRICS_TASK: Optional[asyncio.Task] = None
-+_VOICE_METRICS_LOCK: Optional[asyncio.Lock] = None
+diff --git a/static/js/admin/VoiceMetricsPanel.js b/static/js/admin/VoiceMetricsPanel.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..b3f97c6e0dd11d07a83cf8421617239e9669ab80
+--- /dev/null
++++ b/static/js/admin/VoiceMetricsPanel.js
+@@ -0,0 +1,66 @@
++const PANEL_ID = 'askchip-voice-metrics-panel';
++const PANEL_STYLE = 'position:fixed;right:12px;bottom:12px;width:240px;max-height:200px;overflow:auto;background:rgba(255,255,255,0.97);box-shadow:0 2px 6px rgba(0,0,0,0.2);border-radius:6px;padding:8px;z-index:2147483000;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
++const TABLE_STYLE = 'width:100%;border-collapse:collapse;font-size:11px;';
++const CELL_STYLE = 'padding:2px 4px;border-top:1px solid rgba(0,0,0,0.1);text-align:left;';
 +
++function getMetrics() {
++  try {
++    return typeof window.__getRecentVoiceMetrics === 'function' ? window.__getRecentVoiceMetrics().slice(0, 10) : [];
++  } catch {
++    return [];
++  }
++}
 +
-+def _get_voice_metrics_lock() -> asyncio.Lock:
-+    global _VOICE_METRICS_LOCK
-+    lock = _VOICE_METRICS_LOCK
-+    if lock is None:
-+        lock = asyncio.Lock()
-+        _VOICE_METRICS_LOCK = lock
-+    return lock
-+
-+
-+async def _voice_metrics_pump_loop(queue) -> None:
-+    from queue import Empty
-+
-+    global _VOICE_METRICS_QUEUE, _VOICE_METRICS_TASK
-+
-+    try:
-+        while True:
-+            try:
-+                frame = queue.get(timeout=0.2)
-+            except Empty:
-+                await asyncio.sleep(0.05)
-+                continue
-+
-+            if not isinstance(frame, dict):
-+                continue
-+
-+            payload = {k: v for k, v in frame.items() if k != "type"}
-+
-+            lock = _get_voice_metrics_lock()
-+            async with lock:
-+                subscribers = list(_VOICE_METRICS_SUBSCRIBERS.items())
-+
-+            if not subscribers:
-+                continue
-+
-+            to_remove: List[str] = []
-+            for key, sender in subscribers:
-+                message = {"type": "asr.metrics", "payload": dict(payload)}
-+                try:
-+                    await sender(message)
-+                except Exception:
-+                    to_remove.append(key)
-+
-+            if to_remove:
-+                lock = _get_voice_metrics_lock()
-+                async with lock:
-+                    for key in to_remove:
-+                        _VOICE_METRICS_SUBSCRIBERS.pop(key, None)
-+    except asyncio.CancelledError:
-+        pass
-+    finally:
-+        with contextlib.suppress(Exception):
-+            if hasattr(bus, "unsubscribe"):
-+                bus.unsubscribe("asr.metrics", queue)
-+        if _VOICE_METRICS_QUEUE is queue:
-+            _VOICE_METRICS_QUEUE = None
-+        if _VOICE_METRICS_TASK is not None and _VOICE_METRICS_TASK.done():
-+            _VOICE_METRICS_TASK = None
-+
-+
-+async def _ensure_voice_metrics_pump() -> None:
-+    global _VOICE_METRICS_QUEUE, _VOICE_METRICS_TASK
-+
-+    lock = _get_voice_metrics_lock()
-+    async with lock:
-+        task = _VOICE_METRICS_TASK
-+        if task is not None and not task.done():
-+            return
-+        if task is not None and task.done():
-+            with contextlib.suppress(Exception):
-+                task.result()
-+            _VOICE_METRICS_TASK = None
-+
-+        queue = _VOICE_METRICS_QUEUE
-+        if queue is None:
-+            queue = bus.subscribe("asr.metrics")
-+            _VOICE_METRICS_QUEUE = queue
-+
-+        loop = asyncio.get_running_loop()
-+        _VOICE_METRICS_TASK = loop.create_task(_voice_metrics_pump_loop(queue))
-+
-+
-+async def _register_voice_metrics_subscriber(conn_id: str, send) -> bool:
-+    try:
-+        await _ensure_voice_metrics_pump()
-+    except Exception:
-+        return False
-+
-+    lock = _get_voice_metrics_lock()
-+    async with lock:
-+        _VOICE_METRICS_SUBSCRIBERS[conn_id] = partial(_ws_send_json, send)
-+    return True
-+
-+
-+async def _unregister_voice_metrics_subscriber(conn_id: str) -> None:
-+    lock = _get_voice_metrics_lock()
-+    async with lock:
-+        _VOICE_METRICS_SUBSCRIBERS.pop(conn_id, None)
-+
-+
- async def _pump_bus_to_client(sid: str, send):
-     """Forward frames from StreamBus to the WS client as JSON, suppressing duplicate assistant finals."""
-     import json as _json
-     import asyncio
-     import contextlib
-     from queue import Empty
-     from app.ws.bus import bus
- 
-     # Session-scoped guard: only one assistant final per turn_id
-     assistant_finals_sent: set[int] = set()
- 
-     q = bus.subscribe(sid)
-     try:
-         while True:
-             try:
-                 fr = q.get(timeout=0.05)  # 'fr' is already a dict from the bus
-             except Empty:
-                 await asyncio.sleep(0.01)
-                 continue
- 
-             # --- Duplicate assistant-final suppression ---
-             try:
-                 msg_type = (fr.get("type") or "").lower()
-                 is_results = msg_type == "results"
-                 role_like = (fr.get("role") or fr.get("source") or fr.get("speaker") or "").lower()
-@@ -1177,50 +1283,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             path=scope.get("path"),
-             query_string=raw_query,
-         )
-     active_count = await _register_active_ws_entry()
-     if active_count is not None:
-         with contextlib.suppress(Exception):
-             _jlog("ws_conn_active", conn_id=conn_id, sid=sid, active=active_count)
-     with contextlib.suppress(Exception):
-         if _admin_emit:
-             _admin_emit(
-                 "ws_conn_open",
-                 sid=sid,
-                 conn_id=conn_id,
-                 client_ip=client_ip,
-                 path=scope.get("path"),
-                 query_string=raw_query,
-             )
-             if active_count is not None:
-                 _admin_emit("ws_conn_active", conn_id=conn_id, active=active_count)
- 
-     with contextlib.suppress(Exception):
-         clear_greet_turn_cache(sid)
- 
-     bus_task = asyncio.create_task(_pump_bus_to_client(sid, send))
- 
-+    voice_metrics_registered = False
-+    try:
-+        voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
-+    except Exception:
-+        voice_metrics_registered = False
-+
-     async def _ping_loop():
-         try:
-             while True:
-                 await asyncio.sleep(20)
-                 try:
-                     await _ws_send_json(
-                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
-                     )
-                 except Exception:
-                     break
-         except asyncio.CancelledError:
-             pass
- 
-     ping_task = asyncio.create_task(_ping_loop())
- 
-     try:
-         await _ws_send_json(send, {"type": "ready", "session_id": sid})
-     except Exception:
-         with contextlib.suppress(Exception):
-             await send(
-                 {
-                     "type": "websocket.close",
-                     "code": 1011,
-                     "reason": "initial_ready_failed",
-                 }
-@@ -3188,50 +3300,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 had_disconnect=had_disconnect,
-             )
-         with contextlib.suppress(Exception):
-             if _admin_emit:
-                 _admin_emit(
-                     "ws_conn_cleanup",
-                     conn_id=conn_id,
-                     sid=sid,
-                     duration=duration,
-                     had_disconnect=had_disconnect,
-                 )
-         # Clean up safely; never raise in cleanup
-         with contextlib.suppress(Exception):
-             if rx_task:
-                 rx_task.cancel()
-                 await rx_task
-         with contextlib.suppress(Exception):
-             if dg is not None:
-                 await dg.close(wait_for_final=False)
-         with contextlib.suppress(Exception):
-             bus_task.cancel()
-             await bus_task
-         with contextlib.suppress(Exception):
-             ping_task.cancel()
-             await ping_task
-+        if voice_metrics_registered:
-+            with contextlib.suppress(Exception):
-+                await _unregister_voice_metrics_subscriber(conn_id)
-         for task in list(confirm_timeout_cancelled):
-             with contextlib.suppress(asyncio.CancelledError, Exception):
-                 await task
-         confirm_timeout_cancelled.clear()
-         with contextlib.suppress(Exception):
-             await send(
-                 {"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"}
-             )
- 
- 
- # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
- try:
-     from starlette.websockets import WebSocket as _StarletteWebSocket  # noqa
- except Exception:
-     _StarletteWebSocket = None
- 
- 
- async def ws_chat(websocket):
-     """Accept, validate, send ready, then pump frames to keep the connection alive."""
-     _jlog("ws_chat_compat_invoked")
-     await websocket.accept()
-     try:
-         sid = _get_session_id(websocket.scope)
-     except Exception:
-         sid = "default"
++export function mountVoiceMetricsPanel() {
++  try {
++    if (window?.__askchip_config?.admin?.voice_metrics_panel !== true) return;
++    if (document.getElementById(PANEL_ID)) return;
++    const panel = document.createElement('div');
++    panel.id = PANEL_ID;
++    panel.style.cssText = PANEL_STYLE;
++    const title = document.createElement('div');
++    title.textContent = 'Voice Metrics';
++    title.style.cssText = 'font-size:12px;font-weight:600;margin-bottom:4px;';
++    const table = document.createElement('table');
++    table.style.cssText = TABLE_STYLE;
++    const thead = document.createElement('thead');
++    thead.innerHTML = '<tr><th style="text-align:left;padding:2px 4px;">#</th><th style="text-align:left;padding:2px 4px;">Payload</th></tr>';
++    const tbody = document.createElement('tbody');
++    const render = () => {
++      tbody.innerHTML = '';
++      const metrics = getMetrics();
++      if (!metrics.length) {
++        const row = document.createElement('tr');
++        const cell = document.createElement('td');
++        cell.colSpan = 2;
++        cell.style.cssText = CELL_STYLE;
++        cell.textContent = 'No metrics yet';
++        row.appendChild(cell);
++        tbody.appendChild(row);
++        return;
++      }
++      metrics.forEach((entry, idx) => {
++        const row = document.createElement('tr');
++        const idxCell = document.createElement('td');
++        idxCell.style.cssText = CELL_STYLE;
++        idxCell.textContent = String(idx + 1);
++        const dataCell = document.createElement('td');
++        dataCell.style.cssText = CELL_STYLE;
++        try {
++          dataCell.textContent = JSON.stringify(entry);
++        } catch {
++          dataCell.textContent = String(entry);
++        }
++        row.append(idxCell, dataCell);
++        tbody.appendChild(row);
++      });
++    };
++    render();
++    window.addEventListener('voice-metrics-updated', render);
++    table.append(thead, tbody);
++    panel.append(title, table);
++    document.body.appendChild(panel);
++  } catch (err) {
++    console.warn('[VoiceMetricsPanel] mount failed', err);
++  }
++}
 diff --git a/static/js/ws.js b/static/js/ws.js
-index 0d40e32793092ee3cd4f994493b40d500eb8bad7..21b4cbc2930726061fdb7f8a6019958e9103eb4b 100644
+index 21b4cbc2930726061fdb7f8a6019958e9103eb4b..c4bf7a81508b36f173cec344576b77be67968fae 100644
 --- a/static/js/ws.js
 +++ b/static/js/ws.js
-@@ -14,50 +14,68 @@
-         return _add.call(this, ev, wrap);
-       }
-       if (ev === 'error') {
-         const wrap = (e) => { try { console.info('[ws] error'); } catch {} try { return fn(e); } catch {} };
-         return _add.call(this, ev, wrap);
-       }
-       return _add.call(this, ev, fn);
-     };
-     WebSocket.prototype.addEventListener.__askchip_lifecycle_patched = true;
-   } catch {}
- })();
- 
- // Page-exit breadcrumbs (to distinguish user navigation vs. programmatic close)
- (function __installPageExitBreadcrumbs(){
-   try {
-     if (window.__askchip_exit_hooks_installed) return;
-     window.addEventListener('beforeunload', () => { try { console.info('[ui] beforeunload'); } catch {} });
-     document.addEventListener('visibilitychange', () => {
-       try { console.info(`[ui] visibility=${document.visibilityState}`); } catch {}
-     });
-     window.__askchip_exit_hooks_installed = true;
-   } catch {}
- })();
- 
- 
-+(function __initVoiceMetricsStore(){
-+  try {
-+    if (typeof window === 'undefined') return;
-+    if (!Array.isArray(window.__voice_metrics)) {
-+      window.__voice_metrics = [];
-+    }
-+    window.__getRecentVoiceMetrics = () => {
-+      try {
-+        const store = Array.isArray(window.__voice_metrics) ? window.__voice_metrics : [];
-+        return store.slice().reverse();
-+      } catch {
-+        return [];
-+      }
-+    };
-+  } catch {}
-+})();
-+
-+
- // === E2E minimal WS message hook (always-on, safe) ===
- (function __installE2EHook(){
-   try {
-     const _add = WebSocket.prototype.addEventListener;
-     if (!_add.__askchip_e2e_patched) {
-       WebSocket.prototype.addEventListener = function(ev, fn){
-         if (ev === 'message') {
-           const wrapper = (e) => {
-             try {
-               if (typeof e.data === 'string' && e.data.length < 4096) {
-                 try {
-                   const d = JSON.parse(e.data);
-                   if (d && typeof d === 'object') {
-                     if (d.type === 'assistant_end') { try { console.info('assistant_end'); } catch {} }
-                     if (d.type === 'UtteranceEnd')  { try { console.info('UtteranceEnd'); } catch {} }
-                     if (d.type === 'latency_breakdown' || d.event === 'latency_breakdown') { try { console.info('latency_breakdown'); } catch {} }
-                     if (d.type === 'policy_decision' || (d.event && String(d.event).includes('policy_decision'))) {
-                       const val = d.detail || d.decision || (d.payload && d.payload.decision) || 'unknown';
-                       try { console.info('policy_decision: ' + String(val)); } catch {}
-                     }
-                   }
-                 } catch {}
-               }
-             } catch {}
-             try { return fn(e); } catch {}
-@@ -129,50 +147,65 @@ function _console(level, ...args) {
- function _wsLog(level, message, detail = undefined) {
-   logIfEnabled(() => {
-     try {
-       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
-       if (!method) return;
-       const traceId = _getActiveTurnTraceId();
-       const prefix = traceId ? `[ws][trace:${traceId}]` : '[ws]';
-       if (detail === undefined) {
-         method.call(console, `${prefix} ${message}`);
-         return;
-       }
-       if (detail && typeof detail === 'object') {
+@@ -159,50 +159,53 @@ function _wsLog(level, message, detail = undefined) {
          const payload = traceId && detail.traceId !== traceId ? { ...detail, traceId } : detail;
          method.call(console, `${prefix} ${message}`, payload);
          return;
@@ -398,21 +88,24 @@ index 0d40e32793092ee3cd4f994493b40d500eb8bad7..21b4cbc2930726061fdb7f8a6019958e
    });
  }
  
-+function _recordVoiceMetrics(payload){
-+  try {
-+    if (typeof window === 'undefined') return;
-+    if (!Array.isArray(window.__voice_metrics)) {
-+      window.__voice_metrics = [];
-+    }
-+    const store = window.__voice_metrics;
-+    const base = payload && typeof payload === 'object' ? { ...payload } : {};
-+    store.push(Object.freeze(base));
-+    if (store.length > 10) {
-+      store.splice(0, store.length - 10);
-+    }
-+  } catch {}
-+}
-+
+ function _recordVoiceMetrics(payload){
+   try {
+     if (typeof window === 'undefined') return;
+     if (!Array.isArray(window.__voice_metrics)) {
+       window.__voice_metrics = [];
+     }
+     const store = window.__voice_metrics;
+     const base = payload && typeof payload === 'object' ? { ...payload } : {};
+     store.push(Object.freeze(base));
+     if (store.length > 10) {
+       store.splice(0, store.length - 10);
+     }
++    try {
++      window.dispatchEvent(new CustomEvent('voice-metrics-updated', { detail: { payload: base } }));
++    } catch {}
+   } catch {}
+ }
+ 
  function _scheduleProviderFallback(){
    if (_keepaliveState.providerGateTimer){
      clearTimeout(_keepaliveState.providerGateTimer);
@@ -435,68 +128,71 @@ index 0d40e32793092ee3cd4f994493b40d500eb8bad7..21b4cbc2930726061fdb7f8a6019958e
  
  // reconnect state
  let _reconnecting = false;
- let _reconnectTimer = null;
- let _backoff = 500;            // start 0.5s
- const _BACKOFF_MAX = 8000;     // cap 8s
-@@ -493,53 +526,60 @@ export function openWS(options = {}){
-     ws.onerror = (e) => _console('warn', '[ws] error', e);
- 
-     ws.onmessage = (ev) => {
-       try{
-         if (typeof ev.data === 'string'){
-           const obj = JSON.parse(ev.data);
-           const t = obj && obj.type;
- 
-           if (t === 'Result' || t === 'Results') {
-             const channel = obj && obj.channel;
-             const alternatives = channel && channel.alternatives;
-             const transcript = alternatives && alternatives[0] && alternatives[0].transcript;
-             const isFinal =
-               (channel && typeof channel.is_final === 'boolean' && channel.is_final) ||
-               (typeof obj.final === 'boolean' && obj.final) ||
-               false;
-             const chars = typeof transcript === 'string' ? transcript.length : 0;
-             const kind = isFinal ? 'final' : 'partial';
-             _wsLog('info', `ASR result (${kind})`, {
-               final: isFinal,
-               chars,
-               text: transcript || '',
-               frameType: t,
-             });
+diff --git a/templates/index.html b/templates/index.html
+index 22c0ef8db16d1f1585201c92cccf5099f55195f8..24eb51fabdd70990febb4c98827c64e35fc370e3 100644
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -165,48 +165,63 @@
+       if (typeof root.transport.close_on_turn_end === 'undefined') {
+         root.transport.close_on_turn_end = false;
+       }
+     })();
+   </script>
+   <script>
+     (function () {
+       const cfg = {{ askchip_config|tojson }};
+       try {
+         if (cfg && typeof cfg === 'object') {
+           const target = (window.__askchip_config = Object.assign({}, window.__askchip_config || {}));
+           for (const [key, value] of Object.entries(cfg)) {
+             if (value && typeof value === 'object' && !Array.isArray(value)) {
+               target[key] = Object.assign({}, target[key] || {}, value);
+             } else {
+               target[key] = value;
+             }
            }
--          
-+
-           _handleProviderSignal(obj);
- 
-+          if (t === 'asr.metrics') {
-+            try {
-+              const payload = obj && obj.payload && typeof obj.payload === 'object' ? obj.payload : {};
-+              _recordVoiceMetrics(payload);
-+            } catch {}
+         }
+       } catch (err) {
+         console.warn('[index] failed to merge askchip_config', err);
+       }
+     })();
+   </script>
+   {% set asset_ver = asset_version('js/bootstrap.js') %}
++  {% set admin_voice_metrics_ver = asset_version('js/admin/VoiceMetricsPanel.js') %}
+   <script>
+     window.__askchipAssetVersion = {{ asset_ver|tojson }};
+   </script>
+   <script
+     type="module"
+     src="{{ url_for('static', filename='js/askchip_client_hooks.js') }}?v={{ asset_ver }}"
+   ></script>
+   <script
+     type="module"
+     src="{{ url_for('static', filename='js/bootstrap.js') }}?v={{ asset_ver }}"
+   ></script>
+   <script
+     type="module"
+     src="{{ url_for('static', filename='js/auth_gate.js') }}?v={{ asset_ver }}"
+   ></script>
+   <script
+     type="module"
+     src="{{ url_for('static', filename='js/ui_menu.js') }}?v={{ asset_ver }}"
+   ></script>
++  <script type="module">
++    const adminCfg = window?.__askchip_config?.admin;
++    if (adminCfg?.voice_metrics_panel === true) {
++      import('{{ url_for('static', filename='js/admin/VoiceMetricsPanel.js') }}?v={{ admin_voice_metrics_ver }}')
++        .then((mod) => {
++          try {
++            mod?.mountVoiceMetricsPanel?.();
++          } catch (err) {
++            console.warn('[index] mountVoiceMetricsPanel failed', err);
 +          }
-+
-           if (t === 'ready') {
-             _gotReady = true;
-             // small audio unlock nudge on first ready (harmless if already unlocked)
-             try { unlockAudio().catch(()=>{}); } catch {}
-           }
++        })
++        .catch((err) => console.warn('[index] VoiceMetricsPanel load failed', err));
++    }
++  </script>
+   <script src="{{ url_for('static', filename='js/askchip_probe_instrumentation.js') }}?v={{ asset_ver }}" defer></script>
  
-           // Re-emit as DOM events so UI can respond
-           window.dispatchEvent(new CustomEvent('askchip-ws', { detail: obj }));
- 
-           // --- Audio routing (WS-only) ---------------------------------------
-           if (t === 'assistant_audio') {
-             // Server provides { mime, audio_chunks:[], is_last }
-             playStream(obj);
-             return;
-           }
-           if (t === 'UtteranceEnd') {
-             // Authoritative end-of-utterance: drain and endOfStream
-             audioEnd();
-             return;
-           }
- 
-           // --- Other control/info messages -----------------------------------
-           if (t === 'KeepAliveAck'){
-             // no-op
-           } else if (t === 'Error'){
+ </body>
+ </html>
