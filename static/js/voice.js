@@ -9,4 +9,4 @@ export {
   forceBargeInStart,
   forceBargeInEnd,
   __TEST_ONLY__,
-} from './voice/legacy/VoiceRuntimeLegacy.js';
+} from './voice/runtime/AdaptiveRuntime.js';
