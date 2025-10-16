@@ -17,6 +17,7 @@ import {
   sendJSON,
 } from '../../ws_module.js';
 import { VAD } from '../vad.js';
+import { stopPlayback } from '../../audio.js';
 
 const PRE_ROLL_MS = 550,
   RECORD_TIMESLICE_MS = 150,
@@ -71,6 +72,7 @@ const ensureCtx = () => {
       greetGateWaiters: [], manualBargeInUsed: false,
       bargeConfirmActive: false, bargeConfirmUntil: 0,
       wsReady: false, turnOpen: false,
+      manualPttActive: false,
       ttsPlaying: false, lastChunkAt: 0,
       evidenceGate, shadowBuffer, ttsMask,
     },
@@ -364,11 +366,19 @@ export function isRecording() {
 
 export function bargeIn() {
   const ctx = ensureCtx();
-  if (!manualBargeAllowed(ctx)) return false;
+  const shouldNotify = manualBargeAllowed(ctx);
   ctx.state.manualBargeInUsed = true;
+  ctx.state.bargeConfirmActive = false;
+  ctx.state.bargeConfirmUntil = 0;
+  try { stopPlayback(); } catch {}
+  if (ctx.state.turnOpen) {
+    closeTurn(ctx, 'manual_barge_preempt');
+  }
   ctx.state.ttsPlaying = false;
   ctx.ttsMask.clear();
-  sendJSON({ type: 'manual_barge_in' });
+  if (shouldNotify) {
+    sendJSON({ type: 'manual_barge_in' });
+  }
   emitVoiceEvent('barge_in', { reason: 'manual' });
   return true;
 }
@@ -390,14 +400,63 @@ export function setGreetGateActive(active = true) {
 
 export function forceBargeInStart(meta = {}) {
   const ctx = ensureCtx();
-  ctx.state.manualBargeInUsed = true; ctx.state.ttsPlaying = true; ctx.ttsMask.start();
+  if (ctx.state.manualPttActive) {
+    return false;
+  }
+
+  bargeIn();
+
+  ctx.state.manualBargeInUsed = true;
+  ctx.state.manualPttActive = true;
+  ctx.state.ttsPlaying = false;
+  ctx.ttsMask.clear();
+
+  const controlFrame = { type: 'Control', action: 'barge_in_start' };
+  const sent = sendJSON(controlFrame);
+  if (!sent) {
+    ensureTransport(ctx).then(() => {
+      try { sendJSON(controlFrame); } catch {}
+    }).catch(() => {});
+  }
+
+  setState(ctx, TurnState.Recording, { reason: 'manual_start' });
   emitVoiceEvent('barge_in_start', meta);
+
+  const open = openTurn(ctx, 'manual_start');
+  if (open && typeof open.then === 'function') {
+    open.catch(() => {});
+  }
+
+  return true;
 }
 
 export function forceBargeInEnd(opts = {}) {
   const ctx = ensureCtx();
-  ctx.state.ttsPlaying = false; ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms, snrBoost: opts.snrBoost });
+  const wasActive = ctx.state.manualPttActive;
+  ctx.state.manualPttActive = false;
+  ctx.state.ttsPlaying = false;
+  ctx.ttsMask.end({ decayMs: ctx.config.tts?.decay_ms, snrBoost: opts.snrBoost });
+
+  const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
+  if (wasActive) {
+    const controlFrame = { type: 'Control', action: 'barge_in_end' };
+    const sent = sendJSON(controlFrame);
+    if (!sent) {
+      ensureTransport(ctx).then(() => {
+        try { sendJSON(controlFrame); } catch {}
+      }).catch(() => {});
+    }
+
+    if (ctx.state.turnOpen) {
+      closeTurn(ctx, reason);
+    }
+    setState(ctx, TurnState.Listening, { reason });
+  }
+
+  ctx.state.bargeConfirmActive = false;
+  ctx.state.bargeConfirmUntil = 0;
   emitVoiceEvent('barge_in_end', opts);
+  return wasActive;
 }
 
 const getCtx = () => ctxRef.current;

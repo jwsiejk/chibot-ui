@@ -1,118 +1,107 @@
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] = connection is CONNECTING
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < GET /ws/v1/chat?session_id=bd77eabf-55bf-4b49-9473-6d5a058897fd HTTP/1.1
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < host: chibot-ui.onrender.com
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < accept-encoding: gzip, br
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < accept-language: en-US,en;q=0.9
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < cache-control: no-cache
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < cdn-loop: cloudflare; loops=1
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < cf-connecting-ip: 170.85.73.7
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < cf-ipcountry: US
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < cf-ray: 98f7f00e8a79762c-EWR
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < cf-visitor: {"scheme":"https"}
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < connection: Upgrade
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < cookie: XSRF-TOKEN=26c0bf512f68a8b792dbbcd751daca9d; session=.eJwNzEsOhCAMANC7dG0mSuKP1dyElFImKA6kQFwY764HeO8CQ0W8qWnnP2hQE_XWj4Py04KLnVflrCU3j4NDwtVBB1mSD5ENpSNHrgy6SuMOWmEBfQEfGOJbbWcJvO3f3IRLTYI__rwG7vsB8JsoWQ.aPD0dw.0Fxujn3VAjLQg-Udjn8x57xyiB8
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < origin: https://chibot-ui.onrender.com
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < pragma: no-cache
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < render-cf-start-time-msec: 570
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < render-cf-start-time-sec: 1760621708
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < render-proxy-ttl: 4
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < rndr-id: 6b5cb972-577c-4766
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < sec-websocket-key: X936/YFkj2seu4oPPojUJQ==
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < sec-websocket-protocol: bearer, bearer.eyJzaWQiOiJiZDc3ZWFiZi01NWJmLTRiNDktOTQ3My02ZDVhMDU4ODk3ZmQiLCJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsImlhdCI6MTc2MDYyMTcwOCwiZXhwIjoxNzYwNjIyMDA4LCJqdGkiOiJ4V3dKcFd2clRvaHpFbGMxaloyYjN3In0.dX0jrnpGAPE5HdwIUDhLMHfgLWj5rqzxxJ4DmlWRY80
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < sec-websocket-version: 13
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < true-client-ip: 170.85.73.7
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < upgrade: websocket
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < x-forwarded-for: 170.85.73.7, 10.226.77.4
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < x-forwarded-proto: https
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < x-render-as-num: 22616
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] < x-render-threat-score: 0
-[2025-10-16 13:35:09 +0000] [58] [INFO] 170.85.73.7:0 - "WebSocket /ws/v1/chat?session_id=bd77eabf-55bf-4b49-9473-6d5a058897fd" [accepted]
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] > HTTP/1.1 101 Switching Protocols
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] > Upgrade: websocket
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] > Connection: Upgrade
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] > Sec-WebSocket-Accept: ar4bvOJAbN6b06Bfk4BRiMIZTiA=
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] > Sec-WebSocket-Protocol: bearer
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] > date: Thu, 16 Oct 2025 13:35:09 GMT
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] > server: uvicorn
-[2025-10-16 13:35:09 +0000] [58] [INFO] connection open
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] = connection is OPEN
-[2025-10-16 13:35:09 +0000] [58] [DEBUG] > TEXT '{"type":"ready","session_id":"bd77eabf-55bf-4b49-9473-6d5a058897fd"}' [68 bytes]
-[2025-10-16 13:35:10 +0000] [58] [DEBUG] < TEXT '{"type":"Configure","session_id":"bd77eabf-55bf...dy":true,"greet_seq":1}' [198 bytes]
-[2025-10-16 13:35:10 +0000] [58] [DEBUG] > TEXT '{"type":"Configure","event":"ws_json_recv","kin...6d5a058897fd","step":5}' [255 bytes]
-[2025-10-16 13:35:10 +0000] [58] [DEBUG] > TEXT '{"type":"Configure","sid":"bd77eabf-55bf-4b49-9...b49-9473-6d5a058897fd"}' [117 bytes]
-[2025-10-16 13:35:10 +0000] [58] [DEBUG] > TEXT '{"type":"greet:reset","event":"greet:reset","ki...6d5a058897fd","step":6}' [289 bytes]
-[2025-10-16 13:35:10 +0000] [58] [DEBUG] > TEXT '{"type":"greet:reset","route":"/ws/v1/chat","la...b49-9473-6d5a058897fd"}' [177 bytes]
-[2025-10-16 13:35:10 +0000] [58] [DEBUG] > TEXT '{"type":"session_goal","phase":"clarify","depth...b49-9473-6d5a058897fd"}' [333 bytes]
-{"sid":"pending","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1760621709.6451485}
-{"sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1760621709.6452487}
-{"sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","conn_id":"e210f14b0d9e4aed97267ba2d81d93f4","client_ip":"170.85.73.7","path":"/ws/v1/chat","query_string":"session_id=bd77eabf-55bf-4b49-9473-6d5a058897fd","event":"ws_conn_open","ts":1760621709.6455185}
-{"conn_id":"e210f14b0d9e4aed97267ba2d81d93f4","sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","active":1,"event":"ws_conn_active","ts":1760621709.645566}
-{"sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","type":"Configure","event":"ws_json_recv","ts":1760621710.282}
-{"sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","via":"Configure","greet_seq":1,"event":"ws_greet_recv","ts":1760621710.2822394}
-10.225.25.121:39636 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.121:56772 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-16 13:35:19 +0000] [58] [DEBUG] > TEXT '{"type":"turn_action_metadata","turn_id":"020e6...b49-9473-6d5a058897fd"}' [386 bytes]
-[2025-10-16 13:35:19 +0000] [58] [DEBUG] > TEXT '{"type":"policy_decision","sid":"bd77eabf-55bf-...ummarize_next_actions"}' [448 bytes]
-[2025-10-16 13:35:19 +0000] [58] [DEBUG] > TEXT '{"type":"suggestions_made","turn_id":"020e63507...b49-9473-6d5a058897fd"}' [404 bytes]
-[2025-10-16 13:35:19 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_chunk","turn_id":"020e63507b...k me through it live"]}' [249 bytes]
-[2025-10-16 13:35:19 +0000] [58] [DEBUG] > TEXT '{"type":"suggestions","turn_id":"020e63507bf148..."Show install steps"}]}' [171 bytes]
-[2025-10-16 13:35:19 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_end","turn_id":"020e63507bf14897a1e8678fac950a1e"}' [69 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"tts:start","session_id":"bd77eabf-55bf...b49-9473-6d5a058897fd"}' [162 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"020e63507b...JL8="],"is_last":false}' [11051 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"tts:first_chunk","session_id":"bd77eab...b49-9473-6d5a058897fd"}' [168 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"020e63507b...quE="],"is_last":false}' [11051 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"020e63507b...hwk="],"is_last":false}' [11051 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"020e63507b...YnA="],"is_last":false}' [11051 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"020e63507b...qqqqq"],"is_last":true}' [6650 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"tts:done","session_id":"bd77eabf-55bf-...b49-9473-6d5a058897fd"}' [161 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"UtteranceEnd","session_id":"bd77eabf-5...b49-9473-6d5a058897fd"}' [186 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"UtteranceEnd","turn_id":"020e63507bf14897a1e8678fac950a1e"}' [68 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"state","phase":"ready"}' [32 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"greet:resp","event":"greet:resp","kind...d5a058897fd","step":17}' [319 bytes]
-[2025-10-16 13:35:20 +0000] [58] [DEBUG] > TEXT '{"type":"greet:resp","label":"greet:resp","sess...b49-9473-6d5a058897fd"}' [207 bytes]
-10.225.25.121:56782 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.121:35638 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-16 13:35:30 +0000] [58] [DEBUG] > TEXT '{"type":"keepalive","ts":1760621730122}' [39 bytes]
-[2025-10-16 13:35:30 +0000] [58] [DEBUG] % sending keepalive ping
-[2025-10-16 13:35:30 +0000] [58] [DEBUG] > PING cc 45 0b 63 [binary, 4 bytes]
-[2025-10-16 13:35:30 +0000] [58] [DEBUG] < PONG cc 45 0b 63 [binary, 4 bytes]
-[2025-10-16 13:35:30 +0000] [58] [DEBUG] % received keepalive pong
-10.225.25.121:35646 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.121:35644 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.121:41000 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.121:41008 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.121:59456 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-16 13:35:50 +0000] [58] [DEBUG] > TEXT '{"type":"keepalive","ts":1760621750178}' [39 bytes]
-[2025-10-16 13:35:50 +0000] [58] [DEBUG] % sending keepalive ping
-[2025-10-16 13:35:50 +0000] [58] [DEBUG] > PING 2d c5 fd c9 [binary, 4 bytes]
-[2025-10-16 13:35:50 +0000] [58] [DEBUG] < PONG 2d c5 fd c9 [binary, 4 bytes]
-10.225.25.121:59458 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-16 13:35:51 +0000] [58] [DEBUG] % received keepalive pong
-10.225.25.121:53292 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.121:53302 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.121:53304 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.121:48484 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-16 13:36:10 +0000] [58] [DEBUG] > TEXT '{"type":"keepalive","ts":1760621770235}' [39 bytes]
-10.225.25.121:48492 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-16 13:36:11 +0000] [58] [DEBUG] % sending keepalive ping
-[2025-10-16 13:36:11 +0000] [58] [DEBUG] > PING 5a df eb c8 [binary, 4 bytes]
-[2025-10-16 13:36:11 +0000] [58] [DEBUG] < PONG 5a df eb c8 [binary, 4 bytes]
-[2025-10-16 13:36:11 +0000] [58] [DEBUG] % received keepalive pong
-[2025-10-16 13:36:12 +0000] [58] [DEBUG] < TEXT '{"type":"CloseStream"}' [22 bytes]
-[2025-10-16 13:36:12 +0000] [58] [DEBUG] < CLOSE 1000 (OK) user_end [10 bytes]
-[2025-10-16 13:36:12 +0000] [58] [DEBUG] = connection is CLOSING
-[2025-10-16 13:36:12 +0000] [58] [DEBUG] > CLOSE 1000 (OK) user_end [10 bytes]
-[2025-10-16 13:36:12 +0000] [58] [DEBUG] x half-closing TCP connection
-[2025-10-16 13:36:12 +0000] [58] [DEBUG] = connection is CLOSED
-[2025-10-16 13:36:12 +0000] [58] [INFO] connection closed
-{"sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","type":"CloseStream","event":"ws_json_recv","ts":1760621772.9454124}
-{"sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","event":"ws_close_stream","ts":1760621772.9455478}
-{"sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","turn_id":1,"first_bytes":0,"empty_turn":true,"event":"turn_start","ts":1760621772.9456112}
-{"sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","next_turn_id":1,"event":"before_close_turn","ts":1760621772.9456384}
-{"sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","turn_id":1,"event":"after_close_turn","ts":1760621772.9456694}
-{"sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","event":"ws_close_skip_no_audio","ts":1760621775.0226412}
-{"conn_id":"e210f14b0d9e4aed97267ba2d81d93f4","sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","active":0,"source":"cleanup","event":"ws_conn_close","ts":1760621775.0227735}
-{"conn_id":"e210f14b0d9e4aed97267ba2d81d93f4","sid":"bd77eabf-55bf-4b49-9473-6d5a058897fd","duration":65.37758302688599,"had_disconnect":false,"event":"ws_conn_cleanup","ts":1760621775.0228336}
-10.225.25.121:55366 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.121:55382 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] = connection is CONNECTING
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < GET /ws/v1/chat?session_id=f52a6f3d-a90d-4d68-831d-385a91045722 HTTP/1.1
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < host: chibot-ui.onrender.com
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < accept-encoding: gzip, br
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < accept-language: en-US,en;q=0.9
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < cache-control: no-cache
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < cdn-loop: cloudflare; loops=1
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < cf-connecting-ip: 170.85.73.7
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < cf-ipcountry: US
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < cf-ray: 98f866996b9d72b7-EWR
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < cf-visitor: {"scheme":"https"}
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < connection: Upgrade
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < cookie: XSRF-TOKEN=26c0bf512f68a8b792dbbcd751daca9d; session=.eJwNzEsOhCAMANC7dG0mSuKP1dyElFImKA6kQFwY764HeO8CQ0W8qWnnP2hQE_XWj4Py04KLnVflrCU3j4NDwtVBB1mSD5ENpSNHrgy6SuMOWmEBfQEfGOJbbWcJvO3f3IRLTYI__rwG7vsB8JsoWQ.aPEHaw.nnIUxDA0huov35IwI1TuT8y_yfk
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < origin: https://chibot-ui.onrender.com
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < pragma: no-cache
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < render-cf-start-time-msec: 70
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < render-cf-start-time-sec: 1760626564
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < render-proxy-ttl: 4
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < rndr-id: 6a782c32-ca27-42ab
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < sec-websocket-key: SpAwih3WeXoTeZ0Mx7R7GQ==
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < sec-websocket-protocol: bearer, bearer.eyJzaWQiOiJmNTJhNmYzZC1hOTBkLTRkNjgtODMxZC0zODVhOTEwNDU3MjIiLCJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsImlhdCI6MTc2MDYyNjU2MywiZXhwIjoxNzYwNjI2ODYzLCJqdGkiOiJEaXdaVnp4N19pV3NlN3cyNG9LYjN3In0.2cyU_FTMfvuTG9jz0xntEh0VsKElXESpCDa5IJ0t2VU
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < sec-websocket-version: 13
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < true-client-ip: 170.85.73.7
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < upgrade: websocket
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < x-forwarded-for: 170.85.73.7, 10.226.77.4
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < x-forwarded-proto: https
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < x-render-as-num: 22616
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < x-render-threat-score: 0
+[2025-10-16 14:56:04 +0000] [58] [INFO] 170.85.73.7:0 - "WebSocket /ws/v1/chat?session_id=f52a6f3d-a90d-4d68-831d-385a91045722" [accepted]
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > HTTP/1.1 101 Switching Protocols
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > Upgrade: websocket
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > Connection: Upgrade
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > Sec-WebSocket-Accept: fqnY9jNeY9wY3AAW0SDhZkTskBc=
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > Sec-WebSocket-Protocol: bearer
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > date: Thu, 16 Oct 2025 14:56:03 GMT
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > server: uvicorn
+[2025-10-16 14:56:04 +0000] [58] [INFO] connection open
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] = connection is OPEN
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > TEXT '{"type":"ready","session_id":"f52a6f3d-a90d-4d68-831d-385a91045722"}' [68 bytes]
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] < TEXT '{"type":"Configure","session_id":"f52a6f3d-a90d...dy":true,"greet_seq":1}' [198 bytes]
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > TEXT '{"type":"Configure","event":"ws_json_recv","kin...385a91045722","step":5}' [255 bytes]
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > TEXT '{"type":"Configure","sid":"f52a6f3d-a90d-4d68-8...d68-831d-385a91045722"}' [117 bytes]
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > TEXT '{"type":"greet:reset","event":"greet:reset","ki...385a91045722","step":6}' [289 bytes]
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > TEXT '{"type":"greet:reset","route":"/ws/v1/chat","la...d68-831d-385a91045722"}' [177 bytes]
+[2025-10-16 14:56:04 +0000] [58] [DEBUG] > TEXT '{"type":"session_goal","phase":"clarify","depth...d68-831d-385a91045722"}' [333 bytes]
+{"sid":"pending","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1760626564.1273432}
+{"sid":"f52a6f3d-a90d-4d68-831d-385a91045722","enabled":true,"echo_ws":true,"event":"mic_capture_cfg","ts":1760626564.1274798}
+{"sid":"f52a6f3d-a90d-4d68-831d-385a91045722","conn_id":"dc9a8ee949444d5eb85c42cdde3291a1","client_ip":"170.85.73.7","path":"/ws/v1/chat","query_string":"session_id=f52a6f3d-a90d-4d68-831d-385a91045722","event":"ws_conn_open","ts":1760626564.127868}
+{"conn_id":"dc9a8ee949444d5eb85c42cdde3291a1","sid":"f52a6f3d-a90d-4d68-831d-385a91045722","active":1,"event":"ws_conn_active","ts":1760626564.1279197}
+{"sid":"f52a6f3d-a90d-4d68-831d-385a91045722","type":"Configure","event":"ws_json_recv","ts":1760626564.7631297}
+{"sid":"f52a6f3d-a90d-4d68-831d-385a91045722","via":"Configure","greet_seq":1,"event":"ws_greet_recv","ts":1760626564.7633739}
+10.225.26.125:53028 - "GET /api/v1/health HTTP/1.1" 200
+10.225.26.125:52770 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-16 14:56:16 +0000] [58] [DEBUG] > TEXT '{"type":"turn_action_metadata","turn_id":"e61e9...d68-831d-385a91045722"}' [386 bytes]
+[2025-10-16 14:56:16 +0000] [58] [DEBUG] > TEXT '{"type":"policy_decision","sid":"f52a6f3d-a90d-...ummarize_next_actions"}' [448 bytes]
+[2025-10-16 14:56:16 +0000] [58] [DEBUG] > TEXT '{"type":"suggestions_made","turn_id":"e61e9ca1d...d68-831d-385a91045722"}' [404 bytes]
+[2025-10-16 14:56:16 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_chunk","turn_id":"e61e9ca1de...k me through it live"]}' [254 bytes]
+[2025-10-16 14:56:16 +0000] [58] [DEBUG] > TEXT '{"type":"suggestions","turn_id":"e61e9ca1de8e4f..."Show install steps"}]}' [171 bytes]
+[2025-10-16 14:56:16 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_end","turn_id":"e61e9ca1de8e4fba9f80c90982915821"}' [69 bytes]
+10.225.26.125:52786 - "GET /api/v1/health HTTP/1.1" 200
+10.225.26.125:52800 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"tts:start","session_id":"f52a6f3d-a90d...d68-831d-385a91045722"}' [162 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"e61e9ca1de...U+w="],"is_last":false}' [11051 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"tts:first_chunk","session_id":"f52a6f3...d68-831d-385a91045722"}' [168 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"e61e9ca1de...NGA="],"is_last":false}' [11051 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"e61e9ca1de...tEg="],"is_last":false}' [11051 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"e61e9ca1de...YXA="],"is_last":false}' [11051 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"e61e9ca1de...CTI="],"is_last":false}' [11051 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"assistant_audio","turn_id":"e61e9ca1de...qqqo="],"is_last":true}' [1858 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"tts:done","session_id":"f52a6f3d-a90d-...d68-831d-385a91045722"}' [161 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"UtteranceEnd","session_id":"f52a6f3d-a...d68-831d-385a91045722"}' [186 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"UtteranceEnd","turn_id":"e61e9ca1de8e4fba9f80c90982915821"}' [68 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"state","phase":"ready"}' [32 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"greet:resp","event":"greet:resp","kind...85a91045722","step":17}' [319 bytes]
+[2025-10-16 14:56:18 +0000] [58] [DEBUG] > TEXT '{"type":"greet:resp","label":"greet:resp","sess...d68-831d-385a91045722"}' [207 bytes]
+10.225.26.125:39406 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-16 14:56:24 +0000] [58] [DEBUG] > TEXT '{"type":"keepalive","ts":1760626584569}' [39 bytes]
+[2025-10-16 14:56:24 +0000] [58] [DEBUG] % sending keepalive ping
+[2025-10-16 14:56:24 +0000] [58] [DEBUG] > PING 6b 99 06 93 [binary, 4 bytes]
+[2025-10-16 14:56:24 +0000] [58] [DEBUG] < PONG 6b 99 06 93 [binary, 4 bytes]
+[2025-10-16 14:56:25 +0000] [58] [DEBUG] % received keepalive pong
+10.225.26.125:39414 - "GET /api/v1/health HTTP/1.1" 200
+10.225.26.125:59750 - "GET /api/v1/health HTTP/1.1" 200
+10.225.26.125:59762 - "GET /api/v1/health HTTP/1.1" 200
+10.225.26.125:37488 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-16 14:56:44 +0000] [58] [DEBUG] > TEXT '{"type":"keepalive","ts":1760626604625}' [39 bytes]
+[2025-10-16 14:56:45 +0000] [58] [DEBUG] % sending keepalive ping
+[2025-10-16 14:56:45 +0000] [58] [DEBUG] > PING 6b ec d1 ec [binary, 4 bytes]
+[2025-10-16 14:56:45 +0000] [58] [DEBUG] < PONG 6b ec d1 ec [binary, 4 bytes]
+[2025-10-16 14:56:45 +0000] [58] [DEBUG] % received keepalive pong
+[2025-10-16 14:56:45 +0000] [58] [DEBUG] < TEXT '{"type":"CloseStream"}' [22 bytes]
+[2025-10-16 14:56:45 +0000] [58] [DEBUG] < CLOSE 1000 (OK) user_end [10 bytes]
+[2025-10-16 14:56:45 +0000] [58] [DEBUG] = connection is CLOSING
+[2025-10-16 14:56:45 +0000] [58] [DEBUG] > CLOSE 1000 (OK) user_end [10 bytes]
+[2025-10-16 14:56:45 +0000] [58] [DEBUG] x half-closing TCP connection
+[2025-10-16 14:56:45 +0000] [58] [DEBUG] = connection is CLOSED
+[2025-10-16 14:56:46 +0000] [58] [INFO] connection closed
+{"sid":"f52a6f3d-a90d-4d68-831d-385a91045722","type":"CloseStream","event":"ws_json_recv","ts":1760626605.8806129}
+{"sid":"f52a6f3d-a90d-4d68-831d-385a91045722","event":"ws_close_stream","ts":1760626605.8807783}
+{"sid":"f52a6f3d-a90d-4d68-831d-385a91045722","turn_id":1,"first_bytes":0,"empty_turn":true,"event":"turn_start","ts":1760626605.880826}
+{"sid":"f52a6f3d-a90d-4d68-831d-385a91045722","next_turn_id":1,"event":"before_close_turn","ts":1760626605.8808577}
+{"sid":"f52a6f3d-a90d-4d68-831d-385a91045722","turn_id":1,"event":"after_close_turn","ts":1760626605.8808813}
+{"sid":"f52a6f3d-a90d-4d68-831d-385a91045722","event":"ws_close_skip_no_audio","ts":1760626607.9089508}
+{"conn_id":"dc9a8ee949444d5eb85c42cdde3291a1","sid":"f52a6f3d-a90d-4d68-831d-385a91045722","active":0,"source":"cleanup","event":"ws_conn_close","ts":1760626607.9090877}
+{"conn_id":"dc9a8ee949444d5eb85c42cdde3291a1","sid":"f52a6f3d-a90d-4d68-831d-385a91045722","duration":43.78167009353638,"had_disconnect":false,"event":"ws_conn_cleanup","ts":1760626607.9091504}
+10.225.26.125:37504 - "GET /api/v1/health HTTP/1.1" 200
