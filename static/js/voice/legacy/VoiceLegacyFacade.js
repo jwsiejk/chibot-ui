@@ -6,6 +6,7 @@ import {
   EvidenceGate,
   ShadowBuffer,
   TtsMask,
+  dbToRms,
   getConfig,
   bufferPreRollFrame,
   flushShadowBuffer,
@@ -61,6 +62,56 @@ const KNOWN_METHODS = [
   'onRecorderData',
   'onRecorderError',
 ];
+
+const roundMetric = (value, decimals = 2) => {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const places = Math.max(0, decimals);
+  const factor = 10 ** places;
+  return Math.round(value * factor) / factor;
+};
+
+export function legacyEmitTurnMetrics(overrides = {}) {
+  if (state.turnMetricsEmitted) {
+    return;
+  }
+
+  const detail = (overrides && typeof overrides === 'object') ? { ...overrides } : {};
+  const noiseDb = Number.isFinite(state.sessionNoiseFloorDb) ? state.sessionNoiseFloorDb : null;
+  const noiseRmsRaw = Number.isFinite(noiseDb) ? dbToRms(noiseDb) : null;
+  detail.noise_floor_rms = Number.isFinite(noiseRmsRaw) ? roundMetric(noiseRmsRaw, 6) : null;
+  detail.noise_sigma = roundMetric(state.sessionSnrStd, 3);
+  detail.avg_snr = roundMetric(state.sessionSnrMean, 3);
+
+  const gateReason = state.turnMetricsGateReason
+    || (typeof state.evidenceGate?.reason === 'function' ? state.evidenceGate.reason() : null);
+  detail.gate_reason = gateReason || null;
+
+  if (Number.isFinite(state.turnMetricsBytesBufferedAtCommit)) {
+    detail.bytes_buffered_at_commit = Math.max(0, Math.round(state.turnMetricsBytesBufferedAtCommit));
+  } else {
+    detail.bytes_buffered_at_commit = null;
+  }
+
+  if (Number.isFinite(state.turnMetricsTimeToFirstPartialMs)) {
+    detail.time_to_first_partial_ms = Math.max(0, Math.round(state.turnMetricsTimeToFirstPartialMs));
+  } else {
+    detail.time_to_first_partial_ms = null;
+  }
+
+  if (Number.isFinite(state.turnMetricsFinalConfidence)) {
+    detail.final_confidence = roundMetric(state.turnMetricsFinalConfidence, 4);
+  } else {
+    detail.final_confidence = null;
+  }
+
+  detail.false_start = !!state.turnMetricsFalseStart;
+  detail.manual_barge_in_used = !!state.turnManualBargeInUsed;
+
+  emitVoiceEvent('turn_metrics', detail);
+  state.turnMetricsEmitted = true;
+}
 
 function resolveImplementation(name) {
   const fn = IMPLEMENTATION[name];
@@ -368,6 +419,10 @@ export function legacyAbortEvidenceGate(reason, detail = null) {
     bufferedMs: stats.durationMs,
     bufferedBytes: stats.totalBytes,
   });
+  state.turnMetricsGateReason = state.evidenceGate.reason();
+  if (Number.isFinite(stats?.totalBytes)) {
+    state.turnMetricsBytesBufferedAtCommit = stats.totalBytes;
+  }
   resetShadowBufferState(state);
   legacyResetEvidenceGate(state.evidenceGate.reason());
   emitVoiceEvent('state', { state: 'armed' });
@@ -423,6 +478,10 @@ export async function legacyCommitEvidenceGate(trigger = 'unknown', helpers = {}
     partialGateOk: gate.partialGateOk,
   };
   gate.satisfy(trigger);
+  state.turnMetricsGateReason = gate.reason();
+  if (Number.isFinite(snapshot.bufferedBytes)) {
+    state.turnMetricsBytesBufferedAtCommit = snapshot.bufferedBytes;
+  }
   _voiceLog('info', 'evidence gate satisfied', { trigger, ...snapshot });
 
   const startRecorder = typeof helpers.startRecorder === 'function'
@@ -594,6 +653,7 @@ export function legacyCloseTurnIfOpen() {
       state.turnOpen = false;
       state.turnClosePromise = null;
       state.manual.deferCloseStream = false;
+      legacyEmitTurnMetrics();
     }
   })();
   state.turnClosePromise = closePromise;
@@ -1178,6 +1238,21 @@ export async function legacyStartRecorder(helpers = {}) {
   state.recStopShouldSend = false;
   helpers.ensureWSListener?.();
 
+  if (Number.isFinite(state.recStartedAt)) {
+    state.turnMetricsStartAt = state.recStartedAt;
+  } else {
+    state.turnMetricsStartAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+      ? performance.now()
+      : Date.now();
+  }
+  state.turnMetricsTimeToFirstPartialMs = null;
+  state.turnMetricsHadPartial = false;
+  state.turnMetricsFinalConfidence = null;
+  state.turnMetricsTotalSpeechMs = null;
+  state.turnMetricsFalseStart = false;
+  state.turnMetricsEmitted = false;
+  state.turnManualBargeInUsed = state.currentCommitMode === 'manual' || !!state.manual?.buttonDown;
+
   const manualActive = !!(state.manual && state.manual.buttonDown);
   if (manualActive) {
     resetShadowBufferState(state);
@@ -1389,6 +1464,28 @@ export async function legacyOnWsMessageImpl(detail = {}, helpers = {}) {
         ? firstAlt.transcript
         : (typeof detail?.transcript === 'string' ? detail.transcript : '');
       helpers.updateEvidenceGateWithPartial(confidence, transcriptText);
+      state.turnMetricsHadPartial = true;
+      if (!Number.isFinite(state.turnMetricsTimeToFirstPartialMs)) {
+        const startAt = Number.isFinite(state.turnMetricsStartAt)
+          ? state.turnMetricsStartAt
+          : (Number.isFinite(state.recStartedAt) ? state.recStartedAt : null);
+        const nowTs = _now();
+        if (Number.isFinite(startAt) && Number.isFinite(nowTs)) {
+          state.turnMetricsTimeToFirstPartialMs = Math.max(0, nowTs - startAt);
+        }
+      }
+    }
+  }
+
+  if (isFinal) {
+    const firstAlt = Array.isArray(detail?.channel?.alternatives)
+      ? detail.channel.alternatives[0]
+      : null;
+    const confidence = Number.isFinite(firstAlt?.confidence)
+      ? firstAlt.confidence
+      : (Number.isFinite(detail?.confidence) ? detail.confidence : null);
+    if (Number.isFinite(confidence)) {
+      state.turnMetricsFinalConfidence = confidence;
     }
   }
 
@@ -1456,6 +1553,10 @@ export function legacyOnWsCloseImpl(detail = null) {
   state.finalized = false;
 
   emitVoiceEvent('state', { state: 'armed', statusText: 'Listening…' });
+  if (!state.turnMetricsGateReason) {
+    state.turnMetricsGateReason = 'ws_close';
+  }
+  legacyEmitTurnMetrics();
 }
 
 export * as VadFrameUtils from './VadFrameUtilsLegacy.js';

@@ -174,6 +174,9 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
         hadPartialValue = !!value;
         if (hadPartialValue) {
           resetSoftNoPartialState();
+          if (state) {
+            state.turnMetricsHadPartial = true;
+          }
         }
       },
     });
@@ -181,6 +184,29 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
     hadPartialValue = !!ctx.hadPartial;
   }
   ctx.hadPartial = false;
+
+  if (state) {
+    const nowFn = typeof now === 'function' ? now : () => Date.now();
+    state.turnMetricsStartAt = nowFn();
+    state.turnMetricsTimeToFirstPartialMs = null;
+    state.turnMetricsHadPartial = false;
+    state.turnMetricsFinalConfidence = null;
+    state.turnMetricsTotalSpeechMs = null;
+    state.turnMetricsFalseStart = false;
+    if (state.turnMetricsGateReason !== 'manual_barge_in') {
+      try {
+        state.turnMetricsGateReason = typeof state.evidenceGate?.reason === 'function'
+          ? state.evidenceGate.reason()
+          : null;
+      } catch {
+        state.turnMetricsGateReason = null;
+      }
+    }
+    state.turnMetricsBytesBufferedAtCommit = null;
+    state.turnMetricsEmitted = false;
+    state.turnManualBargeInUsed = state.currentCommitMode === 'manual'
+      || !!state.manual?.buttonDown;
+  }
 
   const evidenceGate = state?.evidenceGate;
   if (evidenceGate && typeof evidenceGate.update === 'function' && !evidenceGate.__softNoPartialWrapped) {
@@ -315,6 +341,10 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
     durationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
   });
 
+  if (state && state.turnMetricsGateReason !== 'manual_barge_in') {
+    state.turnMetricsGateReason = state.turnMetricsGateReason || reason;
+  }
+
   if (!state?.recStreaming && state?.evidenceGate?.isOpen?.()) {
     abortEvidenceGate?.(reason || 'evidence_not_met', metrics);
     return;
@@ -366,6 +396,13 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
   const dropReason = 'commit_min_duration';
 
   if (dropForMinSpeech) {
+    if (state) {
+      state.turnMetricsTotalSpeechMs = Number.isFinite(totalSpeechMs) ? totalSpeechMs : null;
+      state.turnMetricsFalseStart = true;
+      if (!state.turnMetricsGateReason) {
+        state.turnMetricsGateReason = dropReason;
+      }
+    }
     if (typeof ctx?.__softNoPartialClear === 'function') {
       try { ctx.__softNoPartialClear(); } catch {}
     }
@@ -399,7 +436,15 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
       minSpeechMs: commitMinMs,
       hadPartial: false,
     });
+    ctx.emitTurnMetrics?.();
     return;
+  }
+
+  if (state) {
+    state.turnMetricsTotalSpeechMs = Number.isFinite(totalSpeechMs) ? totalSpeechMs : state.turnMetricsTotalSpeechMs;
+    state.turnMetricsFalseStart = !ctx?.hadPartial
+      && Number.isFinite(totalSpeechMs)
+      && totalSpeechMs < commitMinMs;
   }
 
   VadFrameUtils?.maybeSendAudioStop?.({ reason });

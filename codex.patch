@@ -1,745 +1,988 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 210006b04d25cdfc2425ad8eccc6676bbc0c747f..4c7aacb5bea845ffda32253e90689517595620a9 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -156,50 +156,54 @@ class _FakeWSForTests:
-         return _gen()
+diff --git a/static/js/voice/legacy/CommitHandlersLegacy.js b/static/js/voice/legacy/CommitHandlersLegacy.js
+index 44bce3925c83fff700bd6f9137223aa0e7d821d8..8e114bedabe7376639aa48d82b3b507c827b5d3a 100644
+--- a/static/js/voice/legacy/CommitHandlersLegacy.js
++++ b/static/js/voice/legacy/CommitHandlersLegacy.js
+@@ -152,58 +152,84 @@ export async function onSpeechStartCommitted(ctx = {}, detail = {}) {
+     try {
+       ctx.__softNoPartialTimer = setTimeout(handleSoftNoPartialTimeout, timeoutMs);
+     } catch (err) {
+       voiceLog?.('debug', 'failed to arm soft no-partial timer', { error: err?.message || err });
+       ctx.__softNoPartialTimer = null;
+       return;
+     }
+     voiceLog?.('debug', 'soft no-partial timer armed', { timeoutMs });
+   };
  
+   ctx.__softNoPartialHandleOpen = startNoPartialTimer;
  
- # ------------------------- URL & Config Helpers -------------------------------
+   const descriptor = Object.getOwnPropertyDescriptor(ctx, 'hadPartial');
+   let hadPartialValue = false;
+   if (!descriptor || descriptor.configurable) {
+     Object.defineProperty(ctx, 'hadPartial', {
+       configurable: true,
+       enumerable: true,
+       get() {
+         return hadPartialValue;
+       },
+       set(value) {
+         hadPartialValue = !!value;
+         if (hadPartialValue) {
+           resetSoftNoPartialState();
++          if (state) {
++            state.turnMetricsHadPartial = true;
++          }
+         }
+       },
+     });
+   } else {
+     hadPartialValue = !!ctx.hadPartial;
+   }
+   ctx.hadPartial = false;
  
- 
- def _clip_text(txt: str, limit: int = 120) -> str:
-     try:
-         txt = txt or ""
-         if len(txt) <= limit:
-             return txt
-         return txt[:limit] + "…"
-     except Exception:
-         return ""
- 
- 
- def _safe_float(val):
-     try:
-         if val is None:
-             return None
-         return float(val)
-     except (TypeError, ValueError):
-         return None
- 
- 
-+_flag_raw = os.getenv("DG_CONTAINERIZED_INCLUDE_ENCODING", "")
-+_CONTAINER_ENCODING_FLAG = _flag_raw.strip().lower() in {"1", "true", "yes", "on"}
++  if (state) {
++    const nowFn = typeof now === 'function' ? now : () => Date.now();
++    state.turnMetricsStartAt = nowFn();
++    state.turnMetricsTimeToFirstPartialMs = null;
++    state.turnMetricsHadPartial = false;
++    state.turnMetricsFinalConfidence = null;
++    state.turnMetricsTotalSpeechMs = null;
++    state.turnMetricsFalseStart = false;
++    if (state.turnMetricsGateReason !== 'manual_barge_in') {
++      try {
++        state.turnMetricsGateReason = typeof state.evidenceGate?.reason === 'function'
++          ? state.evidenceGate.reason()
++          : null;
++      } catch {
++        state.turnMetricsGateReason = null;
++      }
++    }
++    state.turnMetricsBytesBufferedAtCommit = null;
++    state.turnMetricsEmitted = false;
++    state.turnManualBargeInUsed = state.currentCommitMode === 'manual'
++      || !!state.manual?.buttonDown;
++  }
 +
+   const evidenceGate = state?.evidenceGate;
+   if (evidenceGate && typeof evidenceGate.update === 'function' && !evidenceGate.__softNoPartialWrapped) {
+     const originalUpdate = evidenceGate.update;
+     evidenceGate.update = function softNoPartialWrappedUpdate(...updateArgs) {
+       const wasOpen = typeof evidenceGate.isOpen === 'function' ? evidenceGate.isOpen() : false;
+       const result = originalUpdate.apply(this, updateArgs);
+       const nowOpen = typeof evidenceGate.isOpen === 'function' ? evidenceGate.isOpen() : false;
+       if (!wasOpen && nowOpen) {
+         try { ctx.__softNoPartialHandleOpen?.(); } catch {}
+       }
+       return result;
+     };
+     evidenceGate.__softNoPartialWrapped = true;
+   }
+ 
+   if (typeof evidenceGate?.isOpen === 'function' && evidenceGate.isOpen()) {
+     try { startNoPartialTimer(); } catch {}
+   }
+ 
+   const manualPressDuringTts = !!(state?.manual?.buttonDown) && state?.ttsPlaying;
+   if (manualPressDuringTts) {
+     try { bargeIn?.(); } catch {}
+     if (!ctx.ttsMask && state?.ttsMask) {
+       ctx.ttsMask = state.ttsMask;
+     }
+@@ -293,50 +319,54 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
+ 
+   if (state?.manual?.ignoreVadUntil && now < state.manual.ignoreVadUntil) {
+     const remaining = Math.max(0, Math.round(state.manual.ignoreVadUntil - now));
+     voiceLog?.('debug', 'speech end suppressed during manual cooldown', { remainingMs: remaining });
+     return;
+   }
+ 
+   if (state) {
+     state.vadMetrics = { ...metrics, phase: 'end' };
+   }
+ 
+   const roundTenths = (v) => {
+     if (!Number.isFinite(v)) return null;
+     return Math.round(v * 10) / 10;
+   };
+ 
+   updateSessionNoise?.(state, metrics);
+ 
+   voiceLog?.('info', 'speech ended', {
+     source: 'vad',
+     reason,
+     snrDb: roundTenths(metrics?.snrDb),
+     durationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
+   });
+ 
++  if (state && state.turnMetricsGateReason !== 'manual_barge_in') {
++    state.turnMetricsGateReason = state.turnMetricsGateReason || reason;
++  }
 +
- def _dg_url(overrides: Optional[dict] = None) -> str:
-     """Return the Deepgram listen URL with safe defaults.
+   if (!state?.recStreaming && state?.evidenceGate?.isOpen?.()) {
+     abortEvidenceGate?.(reason || 'evidence_not_met', metrics);
+     return;
+   }
  
-     Audio transport parameters must be in the URL query for Deepgram's v1/listen.
-     For **containerized Opus** (OGG/WebM), we must NOT send encoding, sample_rate, or channels.
-     """
-     base = os.getenv("DEEPGRAM_LISTEN_URL", "wss://api.deepgram.com/v1/listen")
+   if (state?.bargeConfirmActive && typeof VadFrameUtils?.clearBargeConfirm === 'function') {
+     VadFrameUtils.clearBargeConfirm(true);
+   }
  
-     # Detect containerized Opus from overrides (nested under _transport)
-     containerized = False
-     try:
-         if overrides and isinstance(overrides.get("_transport"), dict):
-             containerized = bool(overrides["_transport"].get("containerized_opus"))
-     except Exception:
-         containerized = False
+   if (state?.rec && typeof state.rec.state === 'string' && state.rec.state === 'recording') {
+     const elapsed = Math.max(0, now - (state.recStartedAt || now));
+     const wait = Math.max(0, minTurnMs - elapsed);
+     if (wait > 0) {
+       voiceLog?.('debug', 'delaying VAD end', { waitMs: wait, elapsed });
+       VadFrameUtils?.clearPendingEndTimer?.();
+       const next =
+         typeof nestedOnSpeechEndCommitted === 'function'
+           ? () => nestedOnSpeechEndCommitted(detail)
+           : () => onSpeechEndCommitted(ctx, detail);
+       state.pendingEndTimer = setTimeout(next, wait);
+       return;
+     }
+   }
  
-     if isinstance(overrides, dict):
-         try:
-             transport_cfg = overrides.setdefault("_transport", {})
-             if not isinstance(transport_cfg, dict):
-                 transport_cfg = {}
-                 overrides["_transport"] = transport_cfg
-         except Exception:
-             transport_cfg = {}
+   logLifecycle?.(
+@@ -344,68 +374,83 @@ export function onSpeechEndCommitted(ctx = {}, detail = null) {
+     {
+       reason,
+       snrDb: roundTenths(metrics?.snrDb),
+       noiseFloorDb: roundTenths(metrics?.noiseFloorDb),
+       speechDurationMs: Number.isFinite(metrics?.speechDurationMs) ? Math.round(metrics.speechDurationMs) : null,
+       thresholdStopDb: roundTenths(metrics?.thresholds?.stopDb),
+     },
+     'info',
+   );
  
-@@ -297,53 +301,60 @@ def _dg_url(overrides: Optional[dict] = None) -> str:
-                 qd["sample_rate"] = sr
-             if ch:
-                 qd["channels"] = ch
+   const config = getConfig();
+   const rawMinMs = Number(config?.commit?.min_ms);
+   const commitMinMs = Number.isFinite(rawMinMs) ? Math.max(0, rawMinMs) : 0;
+   let totalSpeechMs = null;
+   if (detail && typeof detail === 'object' && Number.isFinite(detail.totalSpeechMs)) {
+     totalSpeechMs = detail.totalSpeechMs;
+   } else if (Number.isFinite(metrics?.speechDurationMs)) {
+     totalSpeechMs = metrics.speechDurationMs;
+   }
+   const dropForMinSpeech =
+     !ctx?.hadPartial && Number.isFinite(totalSpeechMs) && totalSpeechMs < commitMinMs;
  
-         # Ensure default feature flags are present without overwriting explicit overrides
-         qd.setdefault("interim_results", "true")
-         qd.setdefault("vad_events", "true")
-         qd.setdefault("smart_format", "true")
-         qd.setdefault("punctuate", "true")
+   const dropReason = 'commit_min_duration';
  
-         # If DG_MODEL env is set and no model present yet, add it (back-compat)
-         _env_model = os.getenv("DG_MODEL")
-         if _env_model and "model" not in qd:
-             qd["model"] = _env_model
+   if (dropForMinSpeech) {
++    if (state) {
++      state.turnMetricsTotalSpeechMs = Number.isFinite(totalSpeechMs) ? totalSpeechMs : null;
++      state.turnMetricsFalseStart = true;
++      if (!state.turnMetricsGateReason) {
++        state.turnMetricsGateReason = dropReason;
++      }
++    }
+     if (typeof ctx?.__softNoPartialClear === 'function') {
+       try { ctx.__softNoPartialClear(); } catch {}
+     }
+     VadFrameUtils?.maybeSendAudioStop?.({ reason: dropReason });
+     VadFrameUtils?.safeClearTurnTimer?.();
+     VadFrameUtils?.clearPendingEndTimer?.();
+     clearSafetyCloseTimer?.();
+     stopRecorder?.({ reason: dropReason });
+     if (ctx?.shadowBuffer && typeof ctx.shadowBuffer.clear === 'function') {
+       try { ctx.shadowBuffer.clear(); } catch {}
+     }
+     if (state?.shadowBuffer && typeof state.shadowBuffer.clear === 'function' && state.shadowBuffer !== ctx?.shadowBuffer) {
+       try { state.shadowBuffer.clear(); } catch {}
+     }
+     if (ctx?.evidenceGate && typeof ctx.evidenceGate.reset === 'function') {
+       try { ctx.evidenceGate.reset(dropReason); } catch {}
+     } else if (typeof resetEvidenceGate === 'function') {
+       try { resetEvidenceGate(dropReason); } catch {}
+     }
+     if (state?.evidenceGate && typeof state.evidenceGate.reset === 'function' && state.evidenceGate !== ctx?.evidenceGate) {
+       try { state.evidenceGate.reset(dropReason); } catch {}
+     }
+     if (state) {
+       state.currentCommitMode = 'idle';
+     }
+     ctx.hadPartial = false;
+     emitVoiceEvent?.('state', { state: 'armed' });
+     emitVoiceEvent?.('debug', {
+       event: 'commit_drop_min_duration',
+       totalSpeechMs: Number.isFinite(totalSpeechMs) ? Math.round(totalSpeechMs) : null,
+       minSpeechMs: commitMinMs,
+       hadPartial: false,
+     });
++    ctx.emitTurnMetrics?.();
+     return;
+   }
  
-         # If a language env is provided (optional), prefer it if not set
-         _env_lang = os.getenv("DEEPGRAM_LANG")
-         if _env_lang and "language" not in qd:
-             qd["language"] = _env_lang
- 
-         # Ensure some model is present; default to nova-2 if none provided
-         if "model" not in qd:
-             qd["model"] = os.getenv("DEEPGRAM_MODEL", "nova-2")
- 
-         # Provide a sensible default for utterance_end_ms unless explicitly overridden
--        qd.setdefault(
--            "utterance_end_ms", os.getenv("DEEPGRAM_UTTERANCE_END_MS", "3000")
--        )
-+        default_utterance = os.getenv("DEEPGRAM_UTTERANCE_END_MS", "3000")
-+        if containerized:
-+            default_utterance = "1200"
-+        qd.setdefault("utterance_end_ms", default_utterance)
++  if (state) {
++    state.turnMetricsTotalSpeechMs = Number.isFinite(totalSpeechMs) ? totalSpeechMs : state.turnMetricsTotalSpeechMs;
++    state.turnMetricsFalseStart = !ctx?.hadPartial
++      && Number.isFinite(totalSpeechMs)
++      && totalSpeechMs < commitMinMs;
++  }
 +
-+        if containerized:
-+            if not _CONTAINER_ENCODING_FLAG:
-+                qd.pop("encoding", None)
-+            else:
-+                qd.setdefault("encoding", "opus")
+   VadFrameUtils?.maybeSendAudioStop?.({ reason });
+   VadFrameUtils?.safeClearTurnTimer?.();
+   VadFrameUtils?.clearPendingEndTimer?.();
+   clearSafetyCloseTimer?.();
+   stopRecorder?.({ reason });
+   closeTurnIfOpen?.();
+ }
+diff --git a/static/js/voice/legacy/VadProcessLegacy.js b/static/js/voice/legacy/VadProcessLegacy.js
+index dbe04148fe88185d56e32385fc9d42bfdf7db5a2..d8cba6463b0f2ce3c18ef80f2d4996cb962bcedc 100644
+--- a/static/js/voice/legacy/VadProcessLegacy.js
++++ b/static/js/voice/legacy/VadProcessLegacy.js
+@@ -145,50 +145,53 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
+   }
  
-         interim_val = qd.get("interim_results")
-         interim_false = False
-         try:
-             if isinstance(interim_val, bool):
-                 interim_false = not interim_val
-             elif interim_val is None:
-                 interim_false = False
-             else:
-                 interim_false = str(interim_val).strip().lower() in {"false", "0"}
-         except Exception:
-             interim_false = False
-         if interim_false:
-             qd.pop("utterance_end_ms", None)
-             effective_utterance_end_ms = 0
-         else:
-             try:
-                 val = qd.get("utterance_end_ms")
-                 if val is not None:
-                     effective_utterance_end_ms = int(str(val))
-             except Exception:
-                 effective_utterance_end_ms = 0
+   let stats = EMPTY_STATS;
+   try {
+     stats = buffer.stats() || EMPTY_STATS;
+   } catch {
+     stats = EMPTY_STATS;
+   }
  
-         query = _p.urlencode(qd)
-         base = _p.urlunsplit(
-@@ -605,63 +616,66 @@ class DeepgramClient:
-             raw_logging_enabled = None
-         if raw_logging_enabled is None:
-             raw_logging_enabled = True
-         self._advanced_logging_enabled: bool = bool(raw_logging_enabled)
-         self._logger: logging.Logger | _NullLogger = (
-             logger if self._advanced_logging_enabled else _NullLogger()
-         )
+   const frameVadState = typeof frame?.vadState === 'string'
+     ? frame.vadState
+     : (typeof frame?.vad?.state === 'string' ? frame.vad.state : null);
+   const effectiveVadState = frameVadState || vadState;
+   const asrCue = frame?.asrCue ?? frame?.cue ?? frame?.detail?.asrCue ?? null;
  
-         # TX queue + flushing
-         self._tx_queue: Deque[bytes] = deque()
-         self._flush_task: Optional[asyncio.Task] = None
-         self._auto_close_task: Optional[asyncio.Task] = None
-         self._auto_close_requested: bool = False
+   const updatePayload = {
+     vadState: effectiveVadState,
+     snr: resolveSnr(ctx, frame),
+     asrCue,
+     bufferedMs: stats.durationMs,
+     bufferedBytes: stats.totalBytes,
+   };
  
-         # Graceful shutdown coordination
-         self._final_event: asyncio.Event = asyncio.Event()
-         self._any_result: bool = False
-         self._drain_event: asyncio.Event = asyncio.Event()
-         self._drain_event.set()
-         self._drain_timeout_s: float = float(
-             os.getenv("DG_CLOSE_DRAIN_TIMEOUT_S", "1.5")
-         )
+   if (updatePayload.asrCue && updatePayload.asrCue.type === 'partial') {
+     ctx.hadPartial = true;
++    if (ctx?.state) {
++      ctx.state.turnMetricsHadPartial = true;
++    }
+   }
  
-         # First-chunk guard & timing
-         self._first_real_sent: bool = False
-+        self._bytes_forwarded: int = 0
-         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
-         self._last_chunk_ts: float = 0.0
-         self._last_transcript: str = ""
+   if (snrBoost > 0) {
+     updatePayload.snrBoost = snrBoost;
+   }
  
-         # Tunables
-         self._linger_ms: int = int(
-             os.getenv("DG_LINGER_MS", "800")
-         )  # slightly longer default
-         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
+   if (skipGate) {
+     if (!wasStreaming) {
+       flushContextShadowBuffer(ctx, buffer);
+       setStreaming(ctx, true);
+     }
+     if (chunk) {
+       sendChunkViaTransport(ctx, chunk, { durationMs, timecode, preRoll: false, vadState });
+     }
+     return {
+       gateOpened: !wasStreaming,
+       streamingNow: true,
+       wasStreaming,
+     };
+   }
  
-         # Open gate
-         self._open_evt: asyncio.Event = asyncio.Event()
-         self._asr_open_emitted: bool = False
-+        self._asr_start_emitted: bool = False
-+        self._ready_observed: bool = False
-         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
-         self._open_gate_warned: bool = False
+   try {
+     gate.update(updatePayload);
+   } catch {}
  
-         # Keepalive
-         self._keepalive_task: Optional[asyncio.Task] = None
-         self._keepalive_interval: float = float(
-             os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0")
-         )
+diff --git a/static/js/voice/legacy/VadSchedulerLegacy.js b/static/js/voice/legacy/VadSchedulerLegacy.js
+index 8b1b79b6670dffe359bd72513cfb027776f5e4b1..f09ef9236945147b5de0a56e907595463c3fa025 100644
+--- a/static/js/voice/legacy/VadSchedulerLegacy.js
++++ b/static/js/voice/legacy/VadSchedulerLegacy.js
+@@ -200,50 +200,54 @@ export function createVadSchedulerLegacy(deps = {}) {
  
-         # Optional JSON logger injected by WS layer (ws_asgi)
-         self._jlog = self._cfg.get("_jlog")
+     const now = Date.now();
+     if (manual.buttonDown) {
+       return true;
+     }
+     if (now < manual.debounceUntil) {
+       const remaining = Math.max(0, manual.debounceUntil - now);
+       if (typeof voiceLog === 'function') {
+         voiceLog('debug', 'manual barge-in start debounced', { remainingMs: remaining });
+       }
+       return false;
+     }
  
-         # Serialize outbound websocket sends to avoid concurrent writer errors
-         self._send_lock = asyncio.Lock()
+     manual.buttonDown = true;
+     manual.active = false;
+     manual.deferCloseStream = false;
+     manual.sentStartFrame = false;
+     manual.startAt = typeof nowFn === 'function' ? nowFn() : Date.now();
+     manual.firstChunkAt = 0;
+     manual.ignoreVadUntil = 0;
+     manual.debounceUntil = now + MANUAL_DEBOUNCE_MS;
+     if (typeof legacyClearManualTimers === 'function') {
+       legacyClearManualTimers();
+     }
  
-     def _diag_payload(self, **extra: Any) -> dict:
-         payload: dict[str, Any] = {"provider": "deepgram"}
-         if self._diag_session_id:
-             payload["session_id"] = self._diag_session_id
-         tag = self._url_tag or self._diag_tag_hint
-         if tag:
-             payload["tag"] = tag
-         payload.update(extra)
-         return payload
- 
-@@ -725,62 +739,80 @@ class DeepgramClient:
-                     return not closed_attr
-             except Exception:
-                 pass
- 
-         return False
- 
-     def is_open(self) -> bool:
-         """Return True if the underlying websocket appears open."""
-         try:
-             return self._ws_is_open()
-         except Exception:
-             return False
- 
-     def _had_result(self) -> bool:
-         """True if any final result has been observed (event-aware)."""
-         if self._any_result:
-             return True
-         if self._final_event.is_set():
-             self._any_result = True
-             return True
-         return False
- 
-     # -- helpers ---------------------------------------------------------------
- 
-     async def _signal_ready(self) -> None:
-+        self._ready_observed = True
-         if not self._open_evt.is_set():
-             self._open_evt.set()
-         if not self._asr_open_emitted:
-             self._asr_open_emitted = True
--            self._emit_diag("asr_open", active=True)
-             try:
-                 await self._ev_queue.put({"type": "asr_open"})
-             except Exception:
-                 pass
-+        await self._maybe_emit_asr_start()
-         # schedule a flush shortly after ASR open (lets DG finish configure)
-         self._schedule_flush(delay=0.0)
- 
-+    async def _maybe_emit_asr_start(self) -> None:
-+        if self._asr_start_emitted:
-+            return
-+        if not self._ready_observed or not self._first_real_sent:
-+            return
-+        self._asr_start_emitted = True
-+        self._emit_diag("asr_open", active=True)
++    state.turnManualBargeInUsed = true;
++    state.turnMetricsGateReason = 'manual_barge_in';
++    state.turnMetricsBytesBufferedAtCommit = null;
 +
-+    async def _publish_provider_event(self, event: str, payload: Any) -> None:
-+        data: dict[str, Any] = {"type": "provider_event", "event": event or "unknown"}
-+        if payload is not None:
-+            data["payload"] = payload
-+        try:
-+            await self._ev_queue.put(data)
-+        except Exception:
-+            pass
+     bargeIn();
+ 
+     state.currentCommitMode = 'manual';
+     state.assistantReady = false;
+ 
+     const source = (typeof meta === 'object' && meta && meta.source)
+       ? String(meta.source)
+       : 'ui';
+     if (typeof logLifecycle === 'function') {
+       logLifecycle('manual_barge_in_start', { source });
+     }
+     try { console.info?.('manual_barge_in_start'); } catch {}
+ 
+     try {
+       const sent = typeof sendJSON === 'function'
+         ? sendJSON({ type: 'Control', action: 'barge_in_start' })
+         : null;
+       manual.sentStartFrame = sent === true;
+     } catch (err) {
+       if (typeof voiceLog === 'function') {
+         voiceLog('warn', 'failed to send manual barge-in start frame', { error: err?.message || err });
+       }
+       manual.sentStartFrame = false;
+     }
+ 
+diff --git a/static/js/voice/legacy/VoiceLegacyFacade.js b/static/js/voice/legacy/VoiceLegacyFacade.js
+index de0640d1499f354ce492a79aa1e12c1f8fd6125a..a37aa37d0c83c4ed9763d13a4a1e9ea48f082a77 100644
+--- a/static/js/voice/legacy/VoiceLegacyFacade.js
++++ b/static/js/voice/legacy/VoiceLegacyFacade.js
+@@ -1,33 +1,34 @@
+ import { emitVoiceEvent } from '../ui/Events.js';
+ export { onFrameSilence, onFrameSpeech } from './VadProcessLegacy.js';
+ export { onSpeechStartCommitted, onSpeechEndCommitted } from './CommitHandlersLegacy.js';
+ import { bootstrapLegacyFacade as baseBootstrapLegacyFacade } from './FacadeBootstrapLegacy.js';
+ import {
+   EvidenceGate,
+   ShadowBuffer,
+   TtsMask,
++  dbToRms,
+   getConfig,
+   bufferPreRollFrame,
+   flushShadowBuffer,
+   resetShadowBufferState,
+ } from '../core/index.js';
+ import { sendAudioChunk, sendCloseStream, sendJSON, waitWSOpen } from '../../ws_module.js';
+ import {
+   DEFAULT_MAX_TURN_MS,
+   EVIDENCE_MIN_BYTES,
+   EVIDENCE_MIN_SNR_DB,
+   EVIDENCE_MIN_SPEECH_MS,
+   MIN_VALID_BLOB_BYTES,
+   PARTIAL_CONF_RISE_DELTA,
+   PARTIAL_CONF_THRESHOLD,
+   REC_MIME,
+   SAFETY_CLOSE_DELAY_MS,
+   PRE_ROLL_MS,
+   optsFromGlobal,
+   _clearGreetGateWaiters,
+   _completeGreetGate,
+   _handleGreetGateStateFrame,
+   _handleGreetGateUtteranceEnd,
+   _logLifecycle,
+   _resetGreetGateState,
+   _updateAssistantPhaseFromDetail,
+@@ -40,50 +41,100 @@ import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
+ 
+ const IMPLEMENTATION = Object.create(null);
+ 
+ const KNOWN_METHODS = [
+   'initMic',
+   'armVAD',
+   'disarmVAD',
+   'isRecording',
+   'bargeIn',
+   'setVadBoost',
+   'setGreetGateActive',
+   'forceBargeInStart',
+   'forceBargeInEnd',
+   'initVoice',
+   'startVoice',
+   'stopVoice',
+   'onWsOpen',
+   'onWsMessage',
+   'onWsClose',
+   'onMicAvailable',
+   'onMicStop',
+   'onRecorderData',
+   'onRecorderError',
+ ];
+ 
++const roundMetric = (value, decimals = 2) => {
++  if (!Number.isFinite(value)) {
++    return null;
++  }
++  const places = Math.max(0, decimals);
++  const factor = 10 ** places;
++  return Math.round(value * factor) / factor;
++};
 +
-     def _sid_for_log(self) -> str:
-         try:
-             for key in ("session_id", "sid"):
-                 if key in self._cfg and self._cfg[key]:
-                     return str(self._cfg[key])
-         except Exception:
-             pass
-         return "?"
- 
-     async def wait_socket_open(self, timeout: float = 1.5) -> bool:
-         """Micro-wait until the underlying websocket's .open flag is True."""
-         if self._ws_is_open():
-             return True
-         end = time.time() + timeout
-         while time.time() < end:
-             if self._ws_is_open():
-                 return True
-             await asyncio.sleep(0.01)
-         return False
- 
-     def _schedule_flush(self, delay: float = 0.0) -> None:
-         if self._flush_task and not self._flush_task.done():
-             return
- 
-         async def _runner():
-@@ -937,75 +969,77 @@ class DeepgramClient:
-         sent_chunks = 0
-         first_chunk: Optional[bytes] = None
-         while self._tx_queue and self._ws_is_open():
-             ws = self._ws
-             if ws is None:
-                 break
-             data = self._tx_queue[0]
-             # Drop tiny preamble once (RAW only)
-             if (
-                 not containerized
-                 and (not self._first_real_sent)
-                 and len(data) < self._min_valid_bytes
-             ):
-                 self._logger.debug(
-                     "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
-                     sid,
-                     len(data),
-                     self._min_valid_bytes,
-                 )
-                 self._tx_queue.popleft()
-                 continue
-             try:
-                 async with self._send_lock:
-                     await ws.send(data)
-                 self._first_real_sent = True
-+                self._bytes_forwarded += len(data)
-                 self._last_chunk_ts = time.time()
-                 self._tx_queue.popleft()
-                 total_sent += len(data)
-                 sent_chunks += 1
-                 if first_chunk is None:
-                     first_chunk = data
-                 self._logger.debug(
-                     "Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
-                     sid,
-                     len(data),
-                     len(self._tx_queue),
-                 )
-                 if callable(self._jlog):
-                     try:
-                         self._jlog(
-                             "dg_forward",
-                             sid=sid,
-                             dg_id=self._dg_id,
-                             tag=self._url_tag,
-                             bytes=len(data),
-                             queued=len(self._tx_queue),
-                             total_sent=total_sent,
-                         )
-                     except Exception:
-                         pass
-+                await self._maybe_emit_asr_start()
-             except Exception as e:
-                 # Transient send issue; stop and retry on next trigger
-                 self._logger.debug(
-                     "Deepgram deferred send sid=%s err=%s queued=%s",
-                     sid,
-                     type(e).__name__,
-                     len(self._tx_queue),
-                 )
-                 break
-         if not self._tx_queue and not self._drain_event.is_set():
-             self._drain_event.set()
-         first8_hex: Optional[str] = None
-         if first_chunk:
-             try:
-                 first8_hex = first_chunk[:8].hex()
-             except Exception:
-                 first8_hex = None
-         ws_open_after = self._ws_is_open()
-         open_evt_after = self._open_evt.is_set()
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "dg_flush_exit",
-                     sid=sid,
-                     dg_id=self._dg_id,
-@@ -1030,50 +1064,64 @@ class DeepgramClient:
-         )
-         return total_sent, first8_hex
- 
-     # -- lifecycle -------------------------------------------------------------
- 
-     async def connect(self) -> None:
-         global DG_LAST_URL, DG_LAST_CONFIG
-         sid = self._sid_for_log()
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "dg_connect_begin",
-                     sid=sid,
-                     dg_id=self._dg_id,
-                     tag=self._url_tag,
-                     already_open=bool(self._ws),
-                     closing=self._closing,
-                     closed=self._closed,
-                 )
-             except Exception:
-                 pass
-         if self._ws:
-             self._logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
-             return
- 
-+        self._asr_open_emitted = False
-+        self._asr_start_emitted = False
-+        self._ready_observed = False
-+        self._first_real_sent = False
-+        self._bytes_forwarded = 0
-+        try:
-+            self._open_evt.clear()
-+        except Exception:
-+            self._open_evt = asyncio.Event()
-+        try:
-+            self._final_event.clear()
-+        except Exception:
-+            self._final_event = asyncio.Event()
++export function legacyEmitTurnMetrics(overrides = {}) {
++  if (state.turnMetricsEmitted) {
++    return;
++  }
 +
-         url = _dg_url(self._cfg)
-         self._emit_diag("provider_open", active=True, url=url)
- 
-         containerized = False
-         safe_url = url
-         url_meta: dict[str, Any] = {}
- 
-         try:
-             # Diagnostic: parse params and emit compact JSON log that shows
-             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
-             import urllib.parse as _p
- 
-             parts = _p.urlsplit(url)
-             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
-             self._url_tag = q.get("tag") or None
-             transport = (self._cfg or {}).get("_transport", {}) or {}
-             containerized = bool(transport.get("containerized_opus"))
-             url_meta = {
-                 "container": transport.get("container"),
-                 "codec": transport.get("codec"),
-                 "containerized_opus": containerized,
-                 "normalized_pcm": bool(transport.get("normalized_pcm")),
-                 "omitted_params": None,
-                 "raw_params": None,
-             }
-@@ -1667,64 +1715,68 @@ class DeepgramClient:
-             try:
-                 task = self._rx_task
-                 self._rx_task = None
-                 if task:
-                     try:
-                         task.cancel()
-                     except Exception:
-                         pass
-             finally:
-                 self._closed = True
-                 self._closing = False
-                 await self._stop_keepalive()
- 
-             self._logger.info("Deepgram close complete sid=%s", sid)
-             if callable(self._jlog):
-                 try:
-                     self._jlog(
-                         "dg_close",
-                         sid=sid,
-                         dg_id=self._dg_id,
-                         tag=self._url_tag,
-                         wait_for_final=wait_for_final,
-                         linger_ms=linger_ms,
-                         had_result=self._had_result(),
-                         drain_failed=drain_failed,
-+                        bytes_forwarded=self._bytes_forwarded,
-+                        no_audio=self._bytes_forwarded == 0,
-                     )
-                 except Exception:
-                     pass
- 
-             ack_payload = {
-                 "status": "ok" if not drain_failed else "drain_timeout",
-                 "dg_id": self._dg_id,
-                 "wait_for_final": wait_for_final,
-                 "linger_ms": linger_ms,
-                 "had_result": self._had_result(),
-                 "drain_failed": drain_failed,
-                 "queued_chunks": dropped_chunks,
-                 "queued_bytes": dropped_bytes,
-                 "drain_wait_timeout": drain_wait_timeout,
-+                "bytes_forwarded": self._bytes_forwarded,
-+                "no_audio": self._bytes_forwarded == 0,
-             }
-             self._emit_diag("CloseStream ack", **ack_payload)
- 
-             if drain_failed:
-                 drain_exc = DeepgramDrainTimeoutError(
-                     sid,
-                     queued_chunks=dropped_chunks,
-                     queued_bytes=dropped_bytes,
-                     wait_timeout=drain_wait_timeout,
-                 )
-         finally:
-             if not self._diag_end_emitted:
-                 self._emit_diag(
-                     "end",
-                     active=False,
-                     had_result=self._had_result(),
-                     drain_failed=drain_failed,
-                     queued_chunks=dropped_chunks,
-                     queued_bytes=dropped_bytes,
-                     wait_timeout=drain_wait_timeout,
-                 )
-                 self._diag_end_emitted = True
- 
-         if drain_exc:
-             self._emit_diag(
-@@ -1807,62 +1859,80 @@ class DeepgramClient:
-         # Opportunistic flush now (won't raise if socket not open yet)
-         self._schedule_flush()
- 
-     # -- events API ------------------------------------------------------------
- 
-     async def events(self) -> AsyncGenerator[dict, None]:
-         while True:
-             ev = await self._ev_queue.get()
-             yield ev
- 
-     # -- receiver --------------------------------------------------------------
- 
-     async def _rx_loop(self) -> None:
-         sid = self._sid_for_log()
-         try:
-             async for raw in self._ws:  # type: ignore
-                 try:
-                     msg = (
-                         json.loads(raw)
-                         if isinstance(raw, (str, bytes, bytearray))
-                         else raw
-                     )
-                 except Exception:
-                     continue
- 
--                evt_type = (msg.get("type") or "").lower()
-+                if not isinstance(msg, dict):
-+                    await self._publish_provider_event("invalid_payload", msg)
-+                    continue
++  const detail = (overrides && typeof overrides === 'object') ? { ...overrides } : {};
++  const noiseDb = Number.isFinite(state.sessionNoiseFloorDb) ? state.sessionNoiseFloorDb : null;
++  const noiseRmsRaw = Number.isFinite(noiseDb) ? dbToRms(noiseDb) : null;
++  detail.noise_floor_rms = Number.isFinite(noiseRmsRaw) ? roundMetric(noiseRmsRaw, 6) : null;
++  detail.noise_sigma = roundMetric(state.sessionSnrStd, 3);
++  detail.avg_snr = roundMetric(state.sessionSnrMean, 3);
 +
-+                raw_type = msg.get("type")
-+                evt_type = ""
-+                evt_name = "unknown"
-+                if isinstance(raw_type, str):
-+                    evt_name = raw_type
-+                    evt_type = raw_type.lower()
-+                elif raw_type is not None:
-+                    try:
-+                        evt_name = str(raw_type)
-+                        evt_type = evt_name.lower()
-+                    except Exception:
-+                        evt_type = ""
++  const gateReason = state.turnMetricsGateReason
++    || (typeof state.evidenceGate?.reason === 'function' ? state.evidenceGate.reason() : null);
++  detail.gate_reason = gateReason || null;
++
++  if (Number.isFinite(state.turnMetricsBytesBufferedAtCommit)) {
++    detail.bytes_buffered_at_commit = Math.max(0, Math.round(state.turnMetricsBytesBufferedAtCommit));
++  } else {
++    detail.bytes_buffered_at_commit = null;
++  }
++
++  if (Number.isFinite(state.turnMetricsTimeToFirstPartialMs)) {
++    detail.time_to_first_partial_ms = Math.max(0, Math.round(state.turnMetricsTimeToFirstPartialMs));
++  } else {
++    detail.time_to_first_partial_ms = null;
++  }
++
++  if (Number.isFinite(state.turnMetricsFinalConfidence)) {
++    detail.final_confidence = roundMetric(state.turnMetricsFinalConfidence, 4);
++  } else {
++    detail.final_confidence = null;
++  }
++
++  detail.false_start = !!state.turnMetricsFalseStart;
++  detail.manual_barge_in_used = !!state.turnManualBargeInUsed;
++
++  emitVoiceEvent('turn_metrics', detail);
++  state.turnMetricsEmitted = true;
++}
++
+ function resolveImplementation(name) {
+   const fn = IMPLEMENTATION[name];
+   if (typeof fn !== 'function') {
+     throw new Error(`VoiceLegacyFacade.${name} not wired`);
+   }
+   return fn;
+ }
  
-                 if evt_type in ("metadata", "listening", "connected", "ready"):
-                     await self._signal_ready()
-+                    await self._publish_provider_event(evt_type or evt_name, msg)
-                     continue
+ function delegate(name) {
+   return function legacyDelegate(...args) {
+     return resolveImplementation(name)(...args);
+   };
+ }
  
-                 if evt_type in (
-                     "results",
-                     "transcript",
-                     "partialtranscript",
-                     "speech.update",
-                 ):
-+                    await self._signal_ready()
-+                    await self._publish_provider_event(evt_type or evt_name, msg)
-                     text = ""
-                     is_final = False
+ export const initMic = delegate('initMic');
+ export const armVAD = delegate('armVAD');
+ export const disarmVAD = delegate('disarmVAD');
+ export const isRecording = delegate('isRecording');
+ export const bargeIn = delegate('bargeIn');
+ export const setVadBoost = delegate('setVadBoost');
+ export const setGreetGateActive = delegate('setGreetGateActive');
+ export const forceBargeInStart = delegate('forceBargeInStart');
+ export const forceBargeInEnd = delegate('forceBargeInEnd');
+ export const initVoice = delegate('initVoice');
+ export const startVoice = delegate('startVoice');
+@@ -346,50 +397,54 @@ export function legacySetGreetGateActive(active, helpers = {}) {
+       ? helpers.ensureWsListener
+       : null;
+     if (ensureWsListener) {
+       ensureWsListener();
+     }
+     return;
+   }
+   if (state.greetGateActive) {
+     _completeGreetGate('manual_release');
+   } else {
+     _resetGreetGateState();
+   }
+ }
  
-                     # Prefer channel.* first (typical DG shape)
-                     channel = msg.get("channel") or {}
-                     alts = channel.get("alternatives")
-                     confidence = None
-                     token_count = 0
-                     if isinstance(alts, list) and alts:
-                         first_alt = alts[0]
-                         text = (first_alt.get("transcript") or "").strip()
-                         confidence = _safe_float(first_alt.get("confidence"))
-                         words = first_alt.get("words")
-                         if isinstance(words, list):
-                             token_count = len(
-                                 [
-                                     w
-                                     for w in words
-                                     if isinstance(w, dict)
-                                     and (w.get("word") or "").strip()
-                                 ]
-                             )
+ export function legacyAbortEvidenceGate(reason, detail = null) {
+   if (!state.evidenceGate.isOpen()) {
+     return;
+   }
+   const stats = getShadowStats(state);
+   state.evidenceGate.abort(reason || 'aborted', detail, stats);
+   _voiceLog('info', 'evidence gate aborted', {
+     reason: state.evidenceGate.reason(),
+     bufferedMs: stats.durationMs,
+     bufferedBytes: stats.totalBytes,
+   });
++  state.turnMetricsGateReason = state.evidenceGate.reason();
++  if (Number.isFinite(stats?.totalBytes)) {
++    state.turnMetricsBytesBufferedAtCommit = stats.totalBytes;
++  }
+   resetShadowBufferState(state);
+   legacyResetEvidenceGate(state.evidenceGate.reason());
+   emitVoiceEvent('state', { state: 'armed' });
+ }
  
-                     # Fallback: top-level alternatives (some messages)
-                     if not text:
-@@ -1915,136 +1985,166 @@ class DeepgramClient:
-                             final_reason_detail = endpointing.get("type")
-                         for key in ("reason", "end_reason", "speech_final_reason"):
-                             val = msg.get(key)
-                             if isinstance(val, str) and val:
-                                 final_reason_detail = val
-                                 break
-                         if evt_type == "utteranceend" or msg.get("utterance_end"):
-                             final_reason = "utterance_end"
-                         if not final_reason and isinstance(final_reason_detail, str):
-                             lowered = final_reason_detail.strip().lower()
-                             if "utterance" in lowered or "endpoint" in lowered:
-                                 final_reason = "utterance_end"
-                         if self._closing and not final_reason:
-                             final_reason = "close_stream"
-                         if not final_reason:
-                             final_reason = "provider_final"
+ export function legacyEvaluateEvidenceGate(trigger = 'poll', helpers = {}) {
+   if (!state.evidenceGate.isOpen()) {
+     return false;
+   }
+   const stats = getShadowStats(state);
+   const snrDb = Number.isFinite(state.evidenceGate.lastDetail?.snrDb)
+     ? state.evidenceGate.lastDetail.snrDb
+     : null;
+   const requiredSnr = getEvidenceSnrRequirement(state, _now, EVIDENCE_MIN_SNR_DB);
+   const minMsRaw = Number(optsFromGlobal('evidence_min_speech_ms', EVIDENCE_MIN_SPEECH_MS));
+   const minBytesRaw = Number(optsFromGlobal('evidence_min_bytes', EVIDENCE_MIN_BYTES));
+   const minMs = Number.isFinite(minMsRaw) ? Math.max(0, minMsRaw) : EVIDENCE_MIN_SPEECH_MS;
+   const minBytes = Number.isFinite(minBytesRaw) ? Math.max(0, minBytesRaw) : EVIDENCE_MIN_BYTES;
+   const { shouldCommit } = state.evidenceGate.update({
+     vadState: 'speech',
+     snr: snrDb,
+     snrBoost: Math.max(0, requiredSnr - EVIDENCE_MIN_SNR_DB),
+     bufferedMs: stats.durationMs,
+     bufferedBytes: stats.totalBytes,
+     minSpeechMs: minMs,
+@@ -401,50 +456,54 @@ export function legacyEvaluateEvidenceGate(trigger = 'poll', helpers = {}) {
+       throw err;
+     });
+     state.evidenceGateCommitPromise = commitPromise;
+     commitPromise.finally(() => {
+       if (state.evidenceGateCommitPromise === commitPromise) {
+         state.evidenceGateCommitPromise = null;
+       }
+     });
+   }
+   return shouldCommit;
+ }
  
-                     # No usable text in this message; keep listening
-                     if text:
-                         self._last_transcript = text
-                     elif is_final:
-                         text = self._last_transcript or ""
-                     else:
-                         continue
+ export async function legacyCommitEvidenceGate(trigger = 'unknown', helpers = {}) {
+   const gate = state.evidenceGate;
+   if (gate.satisfied) {
+     return true;
+   }
+   const snapshot = {
+     bufferedMs: gate.bufferedMs,
+     bufferedBytes: gate.bufferedBytes,
+     snrOk: gate.snrOk,
+     minMassOk: gate.minMassOk,
+     partialGateOk: gate.partialGateOk,
+   };
+   gate.satisfy(trigger);
++  state.turnMetricsGateReason = gate.reason();
++  if (Number.isFinite(snapshot.bufferedBytes)) {
++    state.turnMetricsBytesBufferedAtCommit = snapshot.bufferedBytes;
++  }
+   _voiceLog('info', 'evidence gate satisfied', { trigger, ...snapshot });
  
--                    # Seeing a result also implies the upstream is functioning
--                    await self._signal_ready()
--
-                     self._logger.debug(
-                         "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
-                         sid,
-                         is_final,
-                         len(text),
-                         _clip_text(text),
-                     )
-                     self._emit_diag(
-                         "asr_final" if is_final else "asr_partial",
-                         text=text,
-                         chars=len(text),
-                         active=True,
-                     )
-                     try:
-                         payload = {
-                             "type": "user_final" if is_final else "user_partial",
-                             "text": text,
-                         }
-                         if is_final:
-                             payload["final_reason"] = final_reason
-                             if final_reason_detail:
-                                 payload["final_reason_detail"] = final_reason_detail
-                         if confidence is not None:
-                             payload["confidence"] = confidence
-                         if token_count:
-                             payload["token_count"] = token_count
-                         await self._ev_queue.put(payload)
-                     except Exception:
-                         pass
+   const startRecorder = typeof helpers.startRecorder === 'function'
+     ? helpers.startRecorder
+     : (() => legacyStartRecorder({
+       primeRecorderForPreRoll: helpers.primeRecorderForPreRoll,
+       clearPendingEndTimer: helpers.clearPendingEndTimer,
+       ensureWSListener: helpers.ensureWsListener,
+       onSpeechEndCommitted: helpers.onSpeechEndCommitted,
+       clearTurnTimer: helpers.clearTurnTimer,
+     }));
+   const primeRecorder = typeof helpers.primeRecorderForPreRoll === 'function'
+     ? helpers.primeRecorderForPreRoll
+     : ((opts = {}) => legacyPrimeRecorderForPreRoll(opts));
  
-                     if is_final:
-                         self._schedule_auto_close(final_reason or "provider_final")
-                         self._any_result = True
-                         self._final_event.set()
-                         self._last_transcript = ""
-                         continue
+   let ok = await startRecorder();
+   if (!ok) {
+     try {
+       await primeRecorder({ resetBuffer: false });
+     } catch {}
+     ok = await startRecorder();
+   }
  
-                 elif evt_type in ("error", "close"):
-+                    await self._publish_provider_event(evt_type or evt_name, msg)
-                     self._logger.warning(
-                         "Deepgram error event sid=%s evt_type=%s detail=%s",
-                         sid,
-                         evt_type,
-                         _clip_text(str(msg), 200),
-                     )
-                     self._emit_diag(
-                         "asr_error",
-                         error=msg.get("error") or evt_type,
-                         provider_error=True,
-                         detail=_clip_text(str(msg), 200),
-                     )
-                     try:
-                         await self._ev_queue.put(
-                             {"type": "asr_error", "error": msg.get("error") or evt_type}
-                         )
-                     except Exception:
-                         pass
+   if (ok) {
+     state.evidenceGateCommitPromise = null;
+@@ -572,50 +631,51 @@ export function legacyCloseTurnIfOpen() {
+       if (waitMs > 0) {
+         _voiceLog('debug', 'delaying CloseStream', { waitMs });
+         await new Promise((resolve) => {
+           try {
+             setTimeout(resolve, waitMs);
+           } catch {
+             resolve();
+           }
+         });
+       }
+       const recorderActive = !!(state.rec && state.rec.state === 'recording');
+       if (!recorderActive && state.chunkBytesSent === 0) {
+         _logLifecycle('turn_close_skipped', { reason: 'no_audio', bytesSent: 0, waitMs }, 'warn');
+         _voiceLog('warn', 'skipping CloseStream — no audio captured');
+         return;
+       }
+       const closeFrame = { type: 'CloseStream' };
+       const totalBytes = state.chunkBytesSent;
+       _logLifecycle('turn_close_signal', { frame: closeFrame, bytesSent: totalBytes }, 'info');
+       _voiceLog('info', 'turn-end signal sent', { bytesSent: totalBytes });
+       await sendCloseStream();
+     } finally {
+       state.turnOpen = false;
+       state.turnClosePromise = null;
+       state.manual.deferCloseStream = false;
++      legacyEmitTurnMetrics();
+     }
+   })();
+   state.turnClosePromise = closePromise;
+   return closePromise;
+ }
  
-                 else:
-+                    await self._publish_provider_event(evt_type or evt_name, msg)
-                     self._logger.debug(
-                         "Deepgram unhandled event sid=%s evt_type=%s",
-                         sid,
-                         evt_type or "unknown",
-                     )
-                     continue
+ function legacyAttemptAudioStartSend(mime) {
+   try {
+     const result = sendJSON({ type: 'AudioStart', mime });
+     return result === true;
+   } catch (err) {
+     _voiceLog('warn', 'failed to send AudioStart hint', { error: err?.message || err });
+     return false;
+   }
+ }
  
-         except asyncio.CancelledError:
-             return
-         except websockets.ConnectionClosed as e:
--            self._logger.warning(
--                "Deepgram websocket closed sid=%s code=%s reason=%s had_result=%s",
--                sid,
--                getattr(e, "code", None),
--                getattr(e, "reason", ""),
--                self._had_result(),
-+            code = getattr(e, "code", None)
-+            reason_raw = getattr(e, "reason", "")
-+            try:
-+                reason_txt = str(reason_raw or "")
-+            except Exception:
-+                reason_txt = ""
-+            timeout_flag = False
-+            try:
-+                timeout_flag = bool(reason_txt) and "timeout" in reason_txt.lower()
-+            except Exception:
-+                timeout_flag = False
-+            log_kwargs = {
-+                "sid": sid,
-+                "code": code,
-+                "reason": reason_txt,
-+                "had_result": self._had_result(),
-+            }
-+            log_fn = self._logger.warning
-+            if timeout_flag or code == 1011:
-+                log_fn = self._logger.info
-+            log_fn(
-+                "Deepgram websocket closed sid=%(sid)s code=%(code)s reason=%(reason)s had_result=%(had_result)s",
-+                log_kwargs,
-+            )
-+            await self._publish_provider_event(
-+                "connection_closed",
-+                {"code": code, "reason": reason_txt, "timeout": timeout_flag},
-             )
-+            if timeout_flag or code == 1011:
-+                self._emit_diag(
-+                    "asr_timeout",
-+                    provider_error=False,
-+                    code=code,
-+                    reason=reason_txt,
-+                    active=False,
-+                )
-+                self._final_event.set()
-+                return
-             if not self._had_result():
--                err_txt = f"recv_closed:{getattr(e, 'code', '')}:{getattr(e, 'reason', '')}"
-+                err_txt = f"recv_closed:{code}:{reason_txt}"
-                 self._emit_diag(
-                     "asr_error",
-                     error=err_txt,
-                     provider_error=True,
--                    code=getattr(e, "code", None),
--                    reason=getattr(e, "reason", ""),
-+                    code=code,
-+                    reason=reason_txt,
-                 )
-                 try:
-                     await self._ev_queue.put(
-                         {
-                             "type": "asr_error",
-                             "error": err_txt,
-                         }
-                     )
-                 except Exception:
-                     pass
-         except Exception as e:
-             self._logger.exception("Deepgram rx loop error sid=%s", sid)
-             self._emit_diag(
-                 "asr_error",
-                 error=f"rx:{e.__class__.__name__}",
-                 provider_error=True,
-             )
-             try:
-                 await self._ev_queue.put(
-                     {"type": "asr_error", "error": f"rx:{e.__class__.__name__}"}
-                 )
-             except Exception:
-                 pass
+ export async function legacyEnsureAudioStartSent() {
+   _voiceLog('debug', 'ensure AudioStart called', {
+     greetGateActive: state.greetGateActive,
+     greetGatePhase: state.greetGatePhase,
+     turnHintSent: state.turnHintSent,
+     turnHintAwaitingWS: state.turnHintAwaitingWS,
+   });
+   if (state.turnHintSent) {
+     return true;
+@@ -1156,50 +1216,65 @@ export async function legacyStartRecorder(helpers = {}) {
+       return false;
+     }
+   }
  
-     # -- keepalive -------------------------------------------------------------
+   if (state.recStreaming) {
+     return true;
+   }
+ 
+   state.chunkSendPromise = Promise.resolve();
+   state.chunkBytesSent = 0;
+   state.chunkSendError = null;
+   state.turnClosePromise = null;
+   state.lastChunkAt = 0;
+   state.audioStopSent = false;
+   helpers.clearPendingEndTimer?.();
+   state.recStartedAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+     ? performance.now()
+     : Date.now();
+   state.finalized = false;
+   state.postFinalHoldUntil = 0;
+   state.recStreaming = true;
+   state.recStopping = false;
+   state.recStopShouldSend = false;
+   helpers.ensureWSListener?.();
+ 
++  if (Number.isFinite(state.recStartedAt)) {
++    state.turnMetricsStartAt = state.recStartedAt;
++  } else {
++    state.turnMetricsStartAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
++      ? performance.now()
++      : Date.now();
++  }
++  state.turnMetricsTimeToFirstPartialMs = null;
++  state.turnMetricsHadPartial = false;
++  state.turnMetricsFinalConfidence = null;
++  state.turnMetricsTotalSpeechMs = null;
++  state.turnMetricsFalseStart = false;
++  state.turnMetricsEmitted = false;
++  state.turnManualBargeInUsed = state.currentCommitMode === 'manual' || !!state.manual?.buttonDown;
++
+   const manualActive = !!(state.manual && state.manual.buttonDown);
+   if (manualActive) {
+     resetShadowBufferState(state);
+   } else {
+     flushShadowBuffer(
+       state.shadowBuffer,
+       (buffer, { durationMs, timecode }) => legacySendRecorderChunk(buffer, { preRoll: true, durationMs, timecode }),
+       (stats) => stats?.count && _voiceLog('debug', 'flushed pre-roll buffer', {
+         chunks: stats.count,
+         durationMs: stats.durationMs,
+         bytes: stats.totalBytes,
+       }),
+     );
+   }
+ 
+   _voiceLog('info', 'recorder streaming', {
+     mime: (state.rec && state.rec.mimeType) || REC_MIME,
+   });
+ 
+   const limitMs = Number(optsFromGlobal('max_turn_seconds', 90)) * 1000 || DEFAULT_MAX_TURN_MS;
+   helpers.clearTurnTimer?.();
+   try {
+     state.turnTimer = setTimeout(() => {
+       try { helpers.onSpeechEndCommitted?.({ reason: 'turn_timeout' }); } catch {}
+     }, limitMs);
+@@ -1367,50 +1442,72 @@ export async function legacyOnWsMessageImpl(detail = {}, helpers = {}) {
+   _updateAssistantPhaseFromDetail(detail);
+ 
+   if (typeNorm === 'utteranceend') {
+     _handleGreetGateUtteranceEnd(detail);
+   }
+   _handleGreetGateStateFrame(detail);
+ 
+   let isFinal = false;
+   if (typeNorm === 'utteranceend') {
+     isFinal = true;
+   } else if (typeNorm === 'results' || typeNorm === 'result') {
+     const channelFinal = detail?.channel?.is_final === true;
+     const payloadFinal = detail?.is_final === true;
+     isFinal = channelFinal || payloadFinal;
+     if (!isFinal && typeof helpers.updateEvidenceGateWithPartial === 'function') {
+       const firstAlt = Array.isArray(detail?.channel?.alternatives)
+         ? detail.channel.alternatives[0]
+         : null;
+       const confidence = Number.isFinite(firstAlt?.confidence)
+         ? firstAlt.confidence
+         : (Number.isFinite(detail?.confidence) ? detail.confidence : null);
+       const transcriptText = typeof firstAlt?.transcript === 'string'
+         ? firstAlt.transcript
+         : (typeof detail?.transcript === 'string' ? detail.transcript : '');
+       helpers.updateEvidenceGateWithPartial(confidence, transcriptText);
++      state.turnMetricsHadPartial = true;
++      if (!Number.isFinite(state.turnMetricsTimeToFirstPartialMs)) {
++        const startAt = Number.isFinite(state.turnMetricsStartAt)
++          ? state.turnMetricsStartAt
++          : (Number.isFinite(state.recStartedAt) ? state.recStartedAt : null);
++        const nowTs = _now();
++        if (Number.isFinite(startAt) && Number.isFinite(nowTs)) {
++          state.turnMetricsTimeToFirstPartialMs = Math.max(0, nowTs - startAt);
++        }
++      }
++    }
++  }
++
++  if (isFinal) {
++    const firstAlt = Array.isArray(detail?.channel?.alternatives)
++      ? detail.channel.alternatives[0]
++      : null;
++    const confidence = Number.isFinite(firstAlt?.confidence)
++      ? firstAlt.confidence
++      : (Number.isFinite(detail?.confidence) ? detail.confidence : null);
++    if (Number.isFinite(confidence)) {
++      state.turnMetricsFinalConfidence = confidence;
+     }
+   }
+ 
+   if (!isFinal || state.finalized) {
+     return;
+   }
+ 
+   legacyApplyPostFinalHold('ws_final');
+ 
+   const recorder = state.rec;
+   const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
+   if (!isRecording) {
+     return;
+   }
+ 
+   try {
+     legacyStopRecorder({ reason: 'server_final' });
+   } catch (err) {
+     _voiceLog('warn', 'failed to stop recorder on server final', { error: err?.message || err });
+   }
+ 
+   try {
+     await Promise.resolve(state.chunkSendPromise).catch(() => {});
+   } catch (err) {
+     _voiceLog('warn', 'chunk send did not settle after server final', { error: err?.message || err });
+@@ -1434,28 +1531,32 @@ export function legacyOnWsCloseImpl(detail = null) {
+   const isRecording = !!(recorder && typeof recorder.state === 'string' && recorder.state !== 'inactive');
+   if (isRecording) {
+     try {
+       legacyStopRecorder({ reason: 'ws_close' });
+     } catch (err) {
+       _voiceLog('warn', 'failed to stop recorder on ws close', { error: err?.message || err });
+     }
+   }
+ 
+   resetShadowBufferState(state);
+   legacyResetEvidenceGate('ws_close');
+ 
+   state.turnOpen = false;
+   state.turnClosePromise = null;
+   state.turnHintSent = false;
+   state.turnHintMime = null;
+   state.turnHintPromise = null;
+   state.turnHintAwaitingWS = false;
+   state.chunkSendPromise = Promise.resolve();
+   state.chunkSendError = null;
+   state.chunkBytesSent = 0;
+   state.audioStopSent = false;
+   state.finalized = false;
+ 
+   emitVoiceEvent('state', { state: 'armed', statusText: 'Listening…' });
++  if (!state.turnMetricsGateReason) {
++    state.turnMetricsGateReason = 'ws_close';
++  }
++  legacyEmitTurnMetrics();
+ }
+ 
+ export * as VadFrameUtils from './VadFrameUtilsLegacy.js';
+diff --git a/static/js/voice/legacy/VoiceLegacyTopLevel.js b/static/js/voice/legacy/VoiceLegacyTopLevel.js
+index fcfca067c4b7bca3bff0f75160293724a7a53a23..14e9d6dbb14034a76f89a1c36e4856f377daeb50 100644
+--- a/static/js/voice/legacy/VoiceLegacyTopLevel.js
++++ b/static/js/voice/legacy/VoiceLegacyTopLevel.js
+@@ -38,50 +38,60 @@ const state = {
+   chunkSendPromise: Promise.resolve(), chunkBytesSent: 0, chunkSendError: null,
+   turnTimer: null, turnOpen: false, // track whether a turn is currently open server-side
+   turnClosePromise: null, turnHintSent: false, turnHintMime: null, turnHintPromise: null, turnHintAwaitingWS: false,
+   deviceLogged: false, recStartedAt: 0, pendingEndTimer: null,
+   ttsPlaying: false, bargeConfirmTimer: null, bargeConfirmActive: false,
+   preRollNode: null, preRollGain: null,
+   shadowBuffer: new ShadowBuffer({ maxMs: PRE_ROLL_MS }),
+   preRollLastTimecode: null, preRollTimeslice: 150,
+   recStreaming: false, recStopping: false, recStopShouldSend: false,
+   lastChunkAt: 0, safetyCloseTimer: null,
+   turnTraceBase: null, turnTraceSeq: 0, turnTraceId: null,
+   audioStopSent: false, vadMetrics: null,
+   greetGateActive: false, greetGatePhase: 'idle', greetGateWaiters: [],
+   greetGateCalibrateTimer: null, greetGateCalibrateUntil: 0, greetGateCalibrateLastMs: null,
+   greetGateCalibrateMs: GREET_CALIBRATE_DEFAULT_MS,
+   greetGateCalibrateMinMs: GREET_CALIBRATE_MIN_MS,
+   greetGateCalibrateMaxMs: GREET_CALIBRATE_MAX_MS,
+   greetGateLastSignal: null, greetGateLastReason: null,
+   postTtsHoldUntil: 0, postTtsHoldTimer: null,
+   ttsMask: new TtsMask(),
+   eligibility: 'blocked_pregreet', refractoryUntil: 0,
+   noiseModel: new NoiseModel({ alpha: 0.2 }), vadHysteresis: new HysteresisVAD(),
+   sessionNoiseFloorDb: null,
+   sessionSnrMean: 0, sessionSnrM2: 0, sessionSnrStd: 0, sessionSnrSamples: 0,
+   evidenceGate: new EvidenceGate(), evidenceGateCommitPromise: null,
++  turnMetricsStartAt: null,
++  turnMetricsTimeToFirstPartialMs: null,
++  turnMetricsHadPartial: false,
++  turnMetricsFinalConfidence: null,
++  turnMetricsTotalSpeechMs: null,
++  turnMetricsFalseStart: false,
++  turnMetricsGateReason: null,
++  turnMetricsBytesBufferedAtCommit: null,
++  turnMetricsEmitted: false,
++  turnManualBargeInUsed: false,
+   manual: {
+     enabled: true, modeManualOnly: false, autoCommitWhenReady: true,
+     buttonDown: false, active: false, debounceUntil: 0, ignoreVadUntil: 0,
+     deferCloseStream: false, sentStartFrame: false, noAudioTimer: null,
+     startAt: 0, firstChunkAt: 0,
+   },
+   assistantPhase: 'init', assistantReady: false, lastAssistantReadyAt: 0,
+   currentCommitMode: 'idle',
+ };
+ 
+ const BARGE_CONFIRM_DEFAULT_MS = 420;
+ let bargeConfirmMs = BARGE_CONFIRM_DEFAULT_MS;
+ try {
+   const cfg = window.__askchip_config || {};
+   if (cfg && typeof cfg.barge_confirm_ms === 'number') {
+     bargeConfirmMs = cfg.barge_confirm_ms;
+   }
+ } catch {}
+ bargeConfirmMs = Math.max(120, Number(bargeConfirmMs) || BARGE_CONFIRM_DEFAULT_MS);
+ function _now() {
+   try {
+     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+       return performance.now();
+     }
+   } catch {}
+diff --git a/static/js/voice/legacy/VoiceRuntimeLegacy.js b/static/js/voice/legacy/VoiceRuntimeLegacy.js
+index a4f901e26a6d4496c0de198d3a66e719289ea593..78a3857712f43d2317c41d91a7deef7a2f3e04eb 100644
+--- a/static/js/voice/legacy/VoiceRuntimeLegacy.js
++++ b/static/js/voice/legacy/VoiceRuntimeLegacy.js
+@@ -1,46 +1,46 @@
+ import { emitVoiceEvent } from '../ui/Events.js';
+ import { TurnState } from '../core/index.js';
+ import { sendJSON } from '../../ws_module.js';
+ import { stopPlayback, isPlaying as ttsIsPlaying } from '../../audio.js';
+ import { registerTtsEventListener } from '../tts/TtsHandlers.js';
+ import { updateSessionNoise, getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
+ import {
+   armVAD as facadeArmVAD, bargeIn as facadeBargeIn, disarmVAD as facadeDisarmVAD,
+   forceBargeInEnd as facadeForceBargeInEnd, forceBargeInStart as facadeForceBargeInStart,
+   initMic as facadeInitMic, isRecording as facadeIsRecording, onWsClose as facadeOnWsClose,
+   onWsMessage as facadeOnWsMessage, onWsOpen as facadeOnWsOpen, registerVoiceLegacyFacade,
+   setGreetGateActive as facadeSetGreetGateActive, setVadBoost as facadeSetVadBoost,
+   legacyClearManualTimers, legacyClearSafetyCloseTimer, legacyCloseTurnIfOpen,
+   legacySetGreetGateActive, legacyOnWsCloseImpl, legacyOnWsMessageImpl, legacyOnWsOpenImpl,
+   legacyOnMicAvailable, legacyOnMicStop, legacyOnRecorderData, legacyOnRecorderError,
+   legacyResetEvidenceGate, legacySendRecorderChunk, legacyPrimeRecorderForPreRoll,
+   legacyStartRecorder, legacyStopRecorder, legacyAbortEvidenceGate, legacyEvaluateEvidenceGate,
+   legacyCommitEvidenceGate, legacyUpdateEvidenceGateWithChunk, legacyUpdateEvidenceGateWithPartial,
+   createVadSchedulerLegacy, onFrameSpeech as facadeOnFrameSpeech, startVadLoop as facadeStartVadLoop,
+   onTtsStart, onTtsEnd, VadFrameUtils, onSpeechStartCommitted as facadeOnSpeechStartCommitted,
+-  onSpeechEndCommitted as facadeOnSpeechEndCommitted, bootstrapLegacyFacade,
++  onSpeechEndCommitted as facadeOnSpeechEndCommitted, bootstrapLegacyFacade, legacyEmitTurnMetrics,
+ } from './VoiceLegacyFacade.js';
+ import {
+   DEFAULT_MAX_TURN_MS, EVIDENCE_MIN_BYTES, EVIDENCE_MIN_SNR_DB, EVIDENCE_MIN_SPEECH_MS,
+   GREET_BARGE_MIN_SNR_DB, MANUAL_DEBOUNCE_MS, MANUAL_NO_AUDIO_CANCEL_MS, MANUAL_VAD_IGNORE_MS,
+   PARTIAL_CONF_RISE_DELTA, PARTIAL_CONF_THRESHOLD, PRE_ROLL_MS, REC_MIME, SAFETY_CLOSE_DELAY_MS,
+   WEBM_MIME, _beginTurnTrace, _cancelGreetGate, _clearTurnTrace, _completeGreetGate,
+   _handleGreetGateStateFrame, _handleGreetGateUtteranceEnd, _logLifecycle, _now,
+   _updateAssistantPhaseFromDetail, _voiceLog, _waitForGreetGate, _getActiveTurnTraceId,
+   optsFromGlobal, state,
+ } from './VoiceLegacyTopLevel.js';
+ 
+ let _resetEvidenceGate;
+ let _clearSafetyCloseTimer;
+ let _closeTurnIfOpen;
+ let _sendRecorderChunk;
+ let _stopRecorder;
+ 
+ let _setGreetGateActive;
+ let _abortEvidenceGate;
+ let _evaluateEvidenceGate;
+ let _commitEvidenceGate;
+ let _updateEvidenceGateWithChunk;
+ let _updateEvidenceGateWithPartial;
+ let _manualAutoCancel;
+ let _forceBargeInStart;
+@@ -139,50 +139,51 @@ Object.assign(commitCtx, {
+   getShadowStats,
+   getEvidenceSnrRequirement,
+   PRE_ROLL_MS,
+   EVIDENCE_MIN_SNR_DB,
+   EVIDENCE_MIN_SPEECH_MS,
+   EVIDENCE_MIN_BYTES,
+   GREET_BARGE_MIN_SNR_DB,
+   REC_MIME,
+   optsFromGlobal,
+   emitVoiceEvent,
+   startRecorder: (...args) => _startRecorder?.(...args),
+   primeRecorderForPreRoll: (...args) => _primeRecorderForPreRoll?.(...args),
+   bargeIn: (...args) => _bargeIn?.(...args),
+   resetEvidenceGate: _resetEvidenceGate,
+   evaluateEvidenceGate: (...args) => _evaluateEvidenceGate?.(...args),
+   now: _now,
+   logLifecycle: _logLifecycle,
+   voiceLog: _voiceLog,
+   beginTurnTrace: _beginTurnTrace,
+   completeGreetGate: _completeGreetGate,
+   getActiveTurnTraceId: _getActiveTurnTraceId,
+   abortEvidenceGate: (...args) => _abortEvidenceGate?.(...args),
+   clearSafetyCloseTimer: _clearSafetyCloseTimer,
+   stopRecorder: _stopRecorder,
+   performance: typeof performance !== 'undefined' ? performance : undefined,
++  emitTurnMetrics: (...args) => legacyEmitTurnMetrics?.(...args),
+ });
+ 
+ Object.assign(commitCtx, {
+   startRecorder: _startRecorder,
+   primeRecorderForPreRoll: _primeRecorderForPreRoll,
+   bargeIn: _bargeIn,
+   evaluateEvidenceGate: _evaluateEvidenceGate,
+   abortEvidenceGate: _abortEvidenceGate,
+ });
+ 
+ export async function initMic(stream = null) { return await facadeInitMic(stream); }
+ export async function armVAD(stream = null, opts = {}) { return await facadeArmVAD(stream, opts); }
+ export function disarmVAD() { facadeDisarmVAD(); }
+ export function isRecording() { return !!facadeIsRecording(); }
+ export function bargeIn() { facadeBargeIn(); }
+ export function setVadBoost(value) { facadeSetVadBoost(value); }
+ export function setGreetGateActive(active = true) { facadeSetGreetGateActive(!!active); }
+ export function forceBargeInStart(meta = {}) { return facadeForceBargeInStart(meta); }
+ export function forceBargeInEnd(opts = {}) { return facadeForceBargeInEnd(opts); }
+ 
+ VadFrameUtils.refreshManualConfig();
+ registerTtsEventListener({ createContext: () => ({ state, now: _now, abortEvidenceGate: _abortEvidenceGate, ttsIsPlaying, clearPostTtsHoldTimer: VadFrameUtils.clearPostTtsHoldTimer, TurnState }), onTtsStart, onTtsEnd });
+ 
+ export const __TEST_ONLY__ = {
+   state,

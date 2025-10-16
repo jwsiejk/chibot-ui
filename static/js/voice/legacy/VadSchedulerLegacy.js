@@ -222,6 +222,10 @@ export function createVadSchedulerLegacy(deps = {}) {
       legacyClearManualTimers();
     }
 
+    state.turnManualBargeInUsed = true;
+    state.turnMetricsGateReason = 'manual_barge_in';
+    state.turnMetricsBytesBufferedAtCommit = null;
+
     bargeIn();
 
     state.currentCommitMode = 'manual';

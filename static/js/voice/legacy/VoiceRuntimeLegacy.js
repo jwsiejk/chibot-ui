@@ -18,7 +18,7 @@ import {
   legacyCommitEvidenceGate, legacyUpdateEvidenceGateWithChunk, legacyUpdateEvidenceGateWithPartial,
   createVadSchedulerLegacy, onFrameSpeech as facadeOnFrameSpeech, startVadLoop as facadeStartVadLoop,
   onTtsStart, onTtsEnd, VadFrameUtils, onSpeechStartCommitted as facadeOnSpeechStartCommitted,
-  onSpeechEndCommitted as facadeOnSpeechEndCommitted, bootstrapLegacyFacade,
+  onSpeechEndCommitted as facadeOnSpeechEndCommitted, bootstrapLegacyFacade, legacyEmitTurnMetrics,
 } from './VoiceLegacyFacade.js';
 import {
   DEFAULT_MAX_TURN_MS, EVIDENCE_MIN_BYTES, EVIDENCE_MIN_SNR_DB, EVIDENCE_MIN_SPEECH_MS,
@@ -161,6 +161,7 @@ Object.assign(commitCtx, {
   clearSafetyCloseTimer: _clearSafetyCloseTimer,
   stopRecorder: _stopRecorder,
   performance: typeof performance !== 'undefined' ? performance : undefined,
+  emitTurnMetrics: (...args) => legacyEmitTurnMetrics?.(...args),
 });
 
 Object.assign(commitCtx, {

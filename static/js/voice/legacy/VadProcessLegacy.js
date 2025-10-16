@@ -167,6 +167,9 @@ function processAdaptiveFrame(ctx = {}, frame = {}, vadState = 'silence') {
 
   if (updatePayload.asrCue && updatePayload.asrCue.type === 'partial') {
     ctx.hadPartial = true;
+    if (ctx?.state) {
+      ctx.state.turnMetricsHadPartial = true;
+    }
   }
 
   if (snrBoost > 0) {
