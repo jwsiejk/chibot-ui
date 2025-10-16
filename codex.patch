@@ -1,5 +1,5 @@
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index aa864b8bfa42e529ac89820afa7f636f5326f8b2..c168ef2552677d4b8bf70e4270d85a39e0309398 100644
+index aa864b8bfa42e529ac89820afa7f636f5326f8b2..7096f112f5c8a896bc625c3d45fa4e06b144cfb4 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
 @@ -49,51 +49,51 @@ const setState = (ctx, stateName, detail) => {
@@ -194,7 +194,7 @@ index aa864b8bfa42e529ac89820afa7f636f5326f8b2..c168ef2552677d4b8bf70e4270d85a39
 +  if (ctx.state.manualPttActive) {
 +    return;
 +  }
-+  if (manualBargeAllowed(ctx)) {
++  if (ctx.state.ttsPlaying) {
 +    return;
 +  }
    ctx.state.bargeConfirmActive = true;
