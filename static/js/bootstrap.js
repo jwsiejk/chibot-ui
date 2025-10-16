@@ -45,7 +45,7 @@ function _cfgValue(key, fallback) {
 
 const manualState = {
   button: null,
-  featureEnabled: !!_cfgValue('feature_manual_barge_in', true),
+  featureEnabled: !!_cfgValue('feature_manual_barge_in', false),
   phase: 'ready',
   pointerActive: false,
   keyActive: false,
