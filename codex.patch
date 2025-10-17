@@ -1,148 +1,49 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 81224d1bba03a6ab37de385db9bed4d8e12316fb..a2cf1752c89fe1afe00bfa5af406a5d302581990 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -3053,72 +3053,79 @@ def schedule_tts_audio(session_id: str,
- 
-     def _run():
-         total_audio_bytes = 0
-         chunk_count = 0
-         chunk_bytes_sent = 0
-         canceled = False
-         truncated = False
-         utterance_end_sent = False
-         max_frames = 256  # guardrail
- 
-         def _emit_utterance_end(reason: str) -> None:
-             nonlocal utterance_end_sent
-             if utterance_end_sent:
-                 _log("tts.utterance_end.skip", reason=reason, already_sent=True)
-                 return
-             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
-             end_payload = {
-                 "session_id": session_id,
-                 "turn_id": safe_turn_id,
-                 "reason": reason,
-             }
-             try:
-                 _admin_emit('UtteranceEnd', **end_payload)
-             except Exception:
-                 pass
--            _broadcast_admin_ws_event('UtteranceEnd', end_payload)
-             try:
-                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
-             except Exception:
-                 pass
-             utterance_end_sent = True
- 
-         stream_payload = audio_bytes if audio_override else payload_for_stream
-         try:
-             # Small pacing delay if requested
-             if delay_ms and delay_ms > 0:
-                 _t.sleep(max(0, delay_ms) / 1000.0)
- 
-             total_audio_bytes = len(stream_payload or b"")
- 
-             start_payload = {"session_id": session_id, "turn_id": safe_turn_id}
-             try:
-                 _admin_emit('tts:start', **start_payload)
-             except Exception:
-                 pass
-             _broadcast_admin_ws_event('tts:start', start_payload)
- 
-+            start_frame: Dict[str, Any] = {"type": "TTS_START", "turn_id": safe_turn_id}
-+            if correlation_user_msg_id:
-+                start_frame["correlation_user_msg_id"] = correlation_user_msg_id
-+            try:
-+                bus.broadcast(session_id, start_frame)
-+            except Exception:
-+                pass
-+
-             # Chunk and broadcast
-             mv = memoryview(stream_payload)
-             idx = 0
-             first_sent = False
- 
-             while idx < len(mv):
-                 # stop early if canceled
-                 try:
-                     from ..ws.bus import bus as _bus_ref
-                     if _bus_ref.is_canceled(session_id, safe_turn_id):
-                         canceled = True
-                         _log(
-                             "tts.chunks.cancelled",
-                             chunk_count=chunk_count,
-                             bytes_sent=chunk_bytes_sent,
-                             total_bytes=total_audio_bytes,
-                         )
-                         break
-                 except Exception:
-                     pass
- 
-                 next_idx = idx + int(chunk_bytes)
-                 part = bytes(mv[idx: next_idx])
-                 idx = next_idx
-                 chunk_len = len(part)
-@@ -3356,50 +3363,54 @@ def run_ws_greet(session_id: str) -> str:
-         "greet",
-         session_id,
-         meta={"source": "ws_greet", "channel": "ws"},
-         force_turn_id=forced_tid,
-         cfg=cfg,
-     )
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(forced_tid)
-         frames = _emit_ws_outage(session_id, tid)
-         outage_payload = {"session_id": session_id, "phase": 'greet'}
-         try:
-             _admin_emit('ws_pipeline_outage', **outage_payload)
-         except Exception:
-             pass
-         _broadcast_admin_ws_event('ws_pipeline_outage', outage_payload)
-         try:
-             bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-         except Exception:
-             pass
-         return tid
-     existing_frame_types = [
-         fr.get("type")
-         for fr in frames
-         if isinstance(fr, dict) and fr.get("type") is not None
-     ]
-+    try:
-+        _apply_assistant_turn_state(session_id, frames)
-+    except Exception:
-+        pass
-     state_already_sent = any(ft == "state" for ft in existing_frame_types)
-     suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
- 
-     ready_sent = state_already_sent
-     idle_armed = False
- 
-     def _emit_ready_once() -> None:
-         nonlocal ready_sent
-         if ready_sent:
-             return
-         try:
-             if should_emit_phase(session_id, "ready"):
-                 set_phase(session_id, "ready", emitted=True)
-                 bus.broadcast(session_id, {"type": "state", "phase": "ready"})
-             else:
-                 set_phase(session_id, "ready")
-             ready_sent = True
-         except Exception:
-             pass
- 
-     def _arm_idle_once() -> None:
-         nonlocal idle_armed
-         if idle_armed:
-             return
-         idle_armed = True
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 7bfcf9cf52aedc2a59860cb35f5a5d5920b20edc..b806e3f18bb146740d9bd082233e9e33f4867dda 100644
+index 8188aa7f26c51c34c22658a8210cd2b9d1cf6fc3..cbb82937e8e369b9a9756bfb0ed70ac4e3324430 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1322,50 +1322,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+@@ -1289,51 +1289,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             conn_id=conn_id,
+             client_ip=client_ip,
+             path=scope.get("path"),
+             query_string=raw_query,
+         )
+     active_count = await _register_active_ws_entry()
+     if active_count is not None:
+         with contextlib.suppress(Exception):
+             _jlog("ws_conn_active", conn_id=conn_id, sid=sid, active=active_count)
+     with contextlib.suppress(Exception):
+         if _admin_emit:
+             _admin_emit(
+                 "ws_conn_open",
+                 sid=sid,
+                 conn_id=conn_id,
+                 client_ip=client_ip,
+                 path=scope.get("path"),
+                 query_string=raw_query,
+             )
+             if active_count is not None:
+                 _admin_emit("ws_conn_active", conn_id=conn_id, active=active_count)
+ 
+     with contextlib.suppress(Exception):
+         clear_greet_turn_cache(sid)
+ 
+-    bus_task: Optional[asyncio.Task] = None)
++    bus_task: Optional[asyncio.Task] = None
+ 
+     voice_metrics_registered = False
+     try:
+         voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
+     except Exception:
+         voice_metrics_registered = False
+ 
+     async def _ping_loop():
+         try:
+             while True:
+                 await asyncio.sleep(20)
+                 try:
+                     await _ws_send_json(
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
                      )
                  except Exception:
                      break
@@ -154,129 +55,9 @@ index 7bfcf9cf52aedc2a59860cb35f5a5d5920b20edc..b806e3f18bb146740d9bd082233e9e33
      try:
          await _ws_send_json(send, {"type": "ready", "session_id": sid})
      except Exception:
-         with contextlib.suppress(Exception):
-             await send(
-                 {
-                     "type": "websocket.close",
-                     "code": 1011,
-                     "reason": "initial_ready_failed",
-                 }
-             )
-         return
- 
-     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
-     manual_feature_enabled = True
-     manual_mode_manual_only = False
-     auto_commit_when_ready = True
-+    ws_configured = False
-     try:
-         runtime_cfg = db.get_config()
-         if isinstance(runtime_cfg, dict):
-             manual_feature_enabled = bool(
-                 runtime_cfg.get("feature_manual_barge_in", manual_feature_enabled)
-             )
-             manual_mode_manual_only = bool(
-                 runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-             )
-             auto_commit_when_ready = bool(
-                 runtime_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-             )
-     except Exception:
-         pass
-     try:
-         from app.services import admin_settings as _admin_settings  # type: ignore
- 
-         admin_cfg = _admin_settings.get_settings()
-         if isinstance(admin_cfg, dict):
-             manual_feature_enabled = bool(
-                 admin_cfg.get("feature_manual_barge_in", manual_feature_enabled)
-             )
-             manual_mode_manual_only = bool(
-                 admin_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-             )
-@@ -1906,52 +1907,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             if asr_stream_activation_task[0] is asyncio.current_task():
-                 asr_stream_activation_task[0] = None
- 
-     def _schedule_asr_stream_activation(trigger: str) -> None:
-         _cancel_asr_stream_activation()
-         asr_stream_activation_task[0] = asyncio.create_task(
-             _run_asr_stream_activation(trigger)
-         )
- 
-     def _on_barge_commit() -> None:
-         mode_raw = turn_commit_mode_ref[0]
-         mode = mode_raw or ("manual" if manual_commit_pending[0] else "vad")
-         manual_commit_pending[0] = False
-         turn_commit_mode_ref[0] = "vad"
-         active_turn_mode_ref[0] = mode or "vad"
-         target_turn = current_assistant_turn_ref[0]
-         try:
-             latest = bus.current_assistant_turn(sid)
-             if latest:
-                 target_turn = latest
-         except Exception:
-             pass
-         if target_turn:
-             with contextlib.suppress(Exception):
-                 bus.cancel_turn(sid, target_turn)
--        with contextlib.suppress(Exception):
--            bus.broadcast(sid, {"type": "state", "phase": "ready"})
-+        _send_barge_state("ready")
-         _jlog(
-             "turn_committed",
-             sid=sid,
-             mode=mode,
-             manual=(mode == "manual"),
-             auto_commit=(mode == "auto_commit"),
-             turn_id=turn_id_ref[0],
-             ts_ms=int(time.time() * 1000),
-             admin_event="turn_committed",
-             admin_label="turn_committed",
-         )
-         if not turn_stream_committed[0]:
-             turn_stream_committed[0] = True
-             asr_direct_stream[0] = True
-             _schedule_asr_stream_activation(mode or "vad")
- 
-     def _cancel_no_audio_watch() -> None:
-         task = no_audio_watch_task[0]
-         if task and not task.done():
-             task.cancel()
-         no_audio_watch_task[0] = None
- 
-     def _schedule_no_audio_watch(turn_id: int) -> None:
-         if no_audio_window_s <= 0:
-             return
-@@ -2275,51 +2275,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         except Exception as e:
-             _jlog("asr_send_error", sid=sid, err=type(e).__name__)
-         return False
- 
-     async def _flush_buffered_chunks() -> None:
-         nonlocal dg, backpressure_drop_count
-         if not buffered_chunks:
-             return
-         if not _has_deepgram_key() or dg is None:
-             return
-         initial_queued = len(buffered_chunks)
-         flushed_chunks = 0
-         flushed_bytes = 0
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_flush_request",
-                 sid=sid,
-                 queued=initial_queued,
-                 dg_ready=_dg_client_ready(dg),
-             )
-         while buffered_chunks:
-             chunk = buffered_chunks[0]
-             chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
-             ok = await _send_chunk(chunk, from_buffer=True)
-             if ok:
--                buffered_chunks.popleft()
-+                if buffered_chunks:
-+                    buffered_chunks.popleft()
+@@ -2363,53 +2363,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 if buffered_chunks:
+                     buffered_chunks.popleft()
                  flushed_chunks += 1
                  flushed_bytes += chunk_len
                  if callable(final_guard_reset_ref[0]):
@@ -299,521 +80,35 @@ index 7bfcf9cf52aedc2a59860cb35f5a5d5920b20edc..b806e3f18bb146740d9bd082233e9e33
              if dg_state == "open":
                  asr_direct_stream[0] = True
  
+         if bus_task is None:
+-        bus_task = asyncio.create_task(
+-            _pump_bus_to_client(sid, send, _handle_bus_frame)
+-        )
++            bus_task = asyncio.create_task(
++                _pump_bus_to_client(sid, send, _handle_bus_frame)
++            )
+ 
      try:
          while True:
              ev = await receive()
-@@ -2433,50 +2434,65 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 continue
-                             if not _session_ready_for_auto_commit():
-                                 _jlog(
-                                     "manual_mode_voice_chunk_ignored",
-                                     sid=sid,
-                                     bytes=len(raw_chunk or b""),
-                                     reason="session_not_ready",
-                                 )
-                                 continue
-                             commit_mode = "auto_commit"
+             et = ev.get("type")
  
-                         active_turn_mode_ref[0] = commit_mode
-                         turn_commit_mode_ref[0] = commit_mode
-                         if commit_mode != "manual":
-                             manual_commit_pending[0] = False
- 
-                         confirm_ms = 420
-                         try:
-                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
-                         except Exception:
-                             confirm_ms = 420
-                         barge_started = False
-                         should_pause = not (
-                             manual_mode_manual_only and commit_mode == "auto_commit"
-                         )
-+                        if should_pause:
-+                            active_assistant_turn = current_assistant_turn_ref[0]
-+                            tts_state, _tts_key = _lookup_tts_state(
-+                                sid, active_assistant_turn
-+                            )
-+                            if _is_tts_active(tts_state):
-+                                should_pause = False
-+                                try:
-+                                    _jlog(
-+                                        "barge_skip_tts_active",
-+                                        sid=sid,
-+                                        turn_hint=turn_hint,
-+                                    )
-+                                except Exception:
-+                                    pass
-                         if not manual_turn_active[0] and should_pause:
-                             try:
-                                 barge_started = barge.start(
-                                     confirm_ms=confirm_ms,
-                                     on_commit=_on_barge_commit,
-                                     send_state=_send_barge_state,
-                                     auto_commit=False,
-                                 )
-                             except Exception:
-                                 barge_started = False
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         if barge_started:
-                             if manual_mode_manual_only:
-                                 try:
-                                     barge.commit(_send_barge_state)
-                                 except Exception:
-                                     pass
-                             else:
-                                 _start_confirm_window(now)
-                         else:
-                             confirm_window_ref[0] = None
-                             local_vad_meta_sent[0] = False
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-@@ -2747,50 +2763,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 if manual_feature_enabled:
-                                     manual_button_down[0] = False
-                                     manual_turn_active[0] = False
-                                     manual_commit_pending[0] = False
-                                     turn_commit_mode_ref[0] = "vad"
-                                     buffered_bytes = _manual_buffered_bytes()
-                                     _manual_log_event(
-                                         "manual_barge_in_end",
-                                         bytes_buffered=buffered_bytes,
-                                         provider_open=dg_state == "open",
-                                     )
-                                 continue
-                             continue
- 
-                         elif t == "Configure":
-                             cfg.update(obj or {})
-                             manual_feature_enabled = bool(
-                                 cfg.get("feature_manual_barge_in", manual_feature_enabled)
-                             )
-                             manual_mode_manual_only = bool(
-                                 cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-                             )
-                             auto_commit_when_ready = bool(
-                                 cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-                             )
-+                            ws_configured = True
-                             _jlog(
-                                 "ws_configure",
-                                 sid=sid,
-                                 ts_ms=int(time.time() * 1000),
-                                 barge_in_mode_manual=manual_mode_manual_only,
-                                 feature_manual_barge_in=manual_feature_enabled,
-                                 auto_commit_when_ready=auto_commit_when_ready,
-                             )
-                             if not manual_feature_enabled:
-                                 manual_button_down[0] = False
-                                 manual_turn_active[0] = False
-                                 manual_commit_pending[0] = False
-                             greet_seq_raw = obj.get("greet_seq")
-                             greet_seq: Optional[int] = None
-                             is_new_greet_seq = True
-                             if greet_seq_raw is not None:
-                                 try:
-                                     greet_seq = int(greet_seq_raw)
-                                 except Exception:
-                                     greet_seq = None
-                             if greet_seq is not None and (obj.get("greet") or obj.get("reset")):
-                                 try:
-                                     is_new_greet_seq = await _greet_seq_mark_if_new(sid, greet_seq)
-                                 except Exception:
-                                     is_new_greet_seq = True
-@@ -3196,50 +3213,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                         with contextlib.suppress(ValueError):
-                                             pending_final_turns.remove(turn_id)
-                                         synthetic_final_turns.add(turn_id)
- 
-                             _cancel_no_audio_watch()
-                             if (not sent_any_audio[0]) and not no_audio_notified[0]:
-                                 elapsed = None
-                                 if mic_first_ts[0]:
-                                     elapsed = time.time() - mic_first_ts[0]
-                                 if no_audio_window_s <= 0 or (
-                                     elapsed is not None and elapsed >= no_audio_window_s
-                                 ):
-                                     _emit_no_audio_alert("close_stream")
- 
-                             if synthetic_emitted:
-                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
-                                 final_seen[0] = False
- 
-                             if barge.is_paused():
-                                 _ensure_confirm_closed("cleanup")
-                                 if not manual_button_down[0]:
-                                     with contextlib.suppress(Exception):
-                                         barge.cancel(_send_barge_state)
-                                 await asyncio.sleep(0)
- 
-+                            if ws_configured and not turn_stream_committed[0]:
-+                                _on_barge_commit()
-+
-                             active_turn_mode_ref[0] = "vad"
-                             turn_commit_mode_ref[0] = "vad"
- 
-                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
- 
-                             _jlog(
-                                 "mic_capture_block_enter",
-                                 sid=sid,
-                                 turn_id=turn_id,
-                                 mic_chunks=len(mic_chunks),
-                             )
-                             if MIC_CAPTURE:
-                                 try:
-                                     raw = b"".join(mic_chunks)
-                                     _jlog(
-                                         "mic_capture_summary",
-                                         sid=sid,
-                                         turn_id=turn_id,
-                                         bytes=len(raw),
-                                         chunks=len(mic_chunks),
-                                         container=transport.get("container"),
-                                         codec=transport.get("codec"),
-                                         containerized_opus=transport.get(
-                                             "containerized_opus"
-                                         ),
-diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index c07e1386fe7911c2b7f86362588de9a4c9ff650c..d9a6089f540f8eb13d59f3d80c57c3baeb63dea4 100644
---- a/static/js/bootstrap.js
-+++ b/static/js/bootstrap.js
-@@ -31,52 +31,55 @@ function _console(level, ...args) {
-     try {
-       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
-       method?.apply(console, args);
-     } catch {}
-   });
- }
- 
- function _cfgValue(key, fallback) {
-   try {
-     const cfg = window.__askchip_config || {};
-     if (key in cfg) return cfg[key];
-     if (cfg.features && key in cfg.features) return cfg.features[key];
-   } catch {}
-   return fallback;
- }
- 
- const manualState = {
-   button: null,
-   featureEnabled: !!_cfgValue('feature_manual_barge_in', true),
-   phase: 'ready',
-   pointerActive: false,
-   keyActive: false,
-   sessionActive: false,
- };
- 
--const GREET_VAD_DEFER_MS = 400;
--const GREET_VAD_WAIT_TIMEOUT_MS = 8000;
-+const TTS_REARM_DELAY_MS = 360; // ms delay before re-arming VAD after TTS completes
-+let _lastMicStream = null;
-+let _ttsHoldActive = false;
-+let _ttsActiveTurnId = null;
-+let _ttsRearmTimer = null;
- 
- function _updateManualButtonAvailability() {
-   const btn = manualState.button;
-   if (!btn) return;
-   if (!manualState.featureEnabled) {
-     btn.hidden = true;
-     btn.disabled = true;
-     return;
-   }
-   btn.hidden = false;
-   const shouldEnable = manualState.sessionActive
-     && !manualState.pointerActive
-     && !manualState.keyActive;
-   btn.disabled = !shouldEnable;
- }
- 
- function _setManualSessionActive(active) {
-   manualState.sessionActive = !!active;
-   _updateManualButtonAvailability();
- }
- 
- function _manualPhaseChanged(phase) {
-   manualState.phase = phase || 'ready';
-   _updateManualButtonAvailability();
- }
-@@ -241,165 +244,126 @@ function _enableButtons() {
-   _setManualSessionActive(true);
- }
- 
- function _handleMicVadFailure(err, { startBtn = null, endBtn = null } = {}) {
-   try { _console('warn', '[bootstrap] mic/VAD init failed', err); } catch {}
-   showBanner('Microphone unavailable — voice capture disabled.');
-   setStatusText('Voice capture unavailable');
-   try {
-     window.dispatchEvent(new CustomEvent('askchip-voice', {
-       detail: { state: 'idle', label: 'Voice capture unavailable' }
-     }));
-   } catch {}
-   try { Visualizer.stop({ reset: true }); } catch {}
-   _disableButtons();
-   const resolvedStartBtn = startBtn || $('#startButton');
-   const resolvedEndBtn   = endBtn   || $('#endButton');
-   if (resolvedEndBtn) resolvedEndBtn.disabled = true;
-   if (resolvedStartBtn) resolvedStartBtn.disabled = false;
-   setDot('ready');
-   started = false;
-   try { window.__askchip_session_started = false; } catch {}
-   try { closeWS(1000, 'mic_unavailable'); } catch {}
-   startInFlight = false;
- }
- 
--function _waitForInitialTtsCompletion(timeoutMs = GREET_VAD_WAIT_TIMEOUT_MS) {
--  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
--    return Promise.reject(new Error('window_unavailable'));
--  }
--
--  return new Promise((resolve, reject) => {
--    let finished = false;
--    let timer = null;
--
--    const cleanup = () => {
--      if (timer) { clearTimeout(timer); timer = null; }
--      try { window.removeEventListener('askchip-ws', onWs); } catch {}
--      try { window.removeEventListener('chip-tts', onTts); } catch {}
--    };
--
--    const resolveOnce = (info) => {
--      if (finished) return;
--      finished = true;
--      cleanup();
--      resolve(info);
--    };
--
--    const rejectOnce = (err) => {
--      if (finished) return;
--      finished = true;
--      cleanup();
--      reject(err);
--    };
--
--    const onWs = (ev) => {
--      const detail = ev?.detail || {};
--      const type = detail?.type || detail?.label || '';
--      if (type === 'UtteranceEnd') {
--        resolveOnce({ source: 'UtteranceEnd', detail });
--      }
--    };
--
--    const onTts = (ev) => {
--      const state = ev?.detail?.state;
--      if (state === 'ended' || state === 'stopped') {
--        resolveOnce({ source: 'chip-tts', detail: ev?.detail });
--      }
--    };
--
--    try { window.addEventListener('askchip-ws', onWs); } catch (err) {
--      rejectOnce(err);
--      return;
--    }
--    try { window.addEventListener('chip-tts', onTts); } catch (err) {
--      rejectOnce(err);
--      return;
--    }
--
--    timer = setTimeout(() => {
--      rejectOnce(new Error('UtteranceEnd timeout'));
--    }, timeoutMs);
--  });
-+function _ensureVoiceCtxLoaded() {
-+  if (typeof window === 'undefined') return;
-+  if (window.__askchip_voice_ctx != null) return;
-+  import('./voice/runtime/AdaptiveRuntime.js')
-+    .then((mod) => {
-+      const ctx = mod?.__TEST_ONLY__?.getCtx?.();
-+      if (ctx) window.__askchip_voice_ctx = ctx;
-+    })
-+    .catch(() => {});
- }
- 
--function _scheduleVadArmAfterGreet(stream, { startBtn = null, endBtn = null } = {}) {
--  const attemptArm = (trigger = 'unknown') => {
--    if (attemptArm._armed) return;
--    attemptArm._armed = true;
--    setTimeout(async () => {
--      try {
--        _console('log', `[bootstrap] startOnce VAD arming (trigger=${trigger})`);
--      } catch {}
--      try {
--        await armVAD(stream ?? undefined);
--        _console('log', '[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
--        if (typeof window !== 'undefined' && window.__askchip_voice_ctx == null) {
--          import('./voice/runtime/AdaptiveRuntime.js').then(mod => {
--            const ctx = mod?.__TEST_ONLY__?.getCtx?.();
--            if (ctx) window.__askchip_voice_ctx = ctx;
--          }).catch(() => {});
--        }
--      } catch (err) {
--        _handleMicVadFailure(err, { startBtn, endBtn });
--      }
--    }, GREET_VAD_DEFER_MS);
--  };
--  attemptArm._armed = false;
-+function _cancelTtsRearmTimer() {
-+  if (_ttsRearmTimer) {
-+    try { clearTimeout(_ttsRearmTimer); } catch {}
-+    _ttsRearmTimer = null;
-+  }
-+}
- 
--  try {
--    _waitForInitialTtsCompletion()
--      .then((info = {}) => {
--        const trigger = info?.source || 'UtteranceEnd';
--        try {
--          _console('log', `[bootstrap] UtteranceEnd observed — scheduling VAD arm (trigger=${trigger})`);
--        } catch {}
--        attemptArm(trigger);
-+function _scheduleVadRearmAfterTts(trigger = 'UtteranceEnd') {
-+  _cancelTtsRearmTimer();
-+  _ttsRearmTimer = setTimeout(() => {
-+    _ttsRearmTimer = null;
-+    if (_ttsHoldActive) return;
-+    try {
-+      _console('log', `[bootstrap] VAD re-arming after TTS (trigger=${trigger})`);
-+    } catch {}
-+    armVAD(_lastMicStream ?? undefined)
-+      .then(() => {
-+        _ensureVoiceCtxLoaded();
-+        try { _console('log', '[bootstrap] VAD armed — ready for user audio'); } catch {}
-       })
-       .catch((err) => {
--        try {
--          _console('warn', '[bootstrap] UtteranceEnd wait failed; arming VAD via fallback', err);
--        } catch {}
--        attemptArm('timeout');
-+        try { _console('warn', '[bootstrap] VAD re-arm failed after TTS', err); } catch {}
-       });
--  } catch (err) {
--    try { _console('warn', '[bootstrap] Unable to defer VAD; arming immediately', err); } catch {}
--    attemptArm('immediate');
--  }
-+  }, TTS_REARM_DELAY_MS);
- }
- 
- function wireWSEventsOnce(){
-   if (window.__askchip_ws_wired) return;
-   window.__askchip_ws_wired = true;
- 
-   // Log first few frames to verify payload shape
-   let seen = 0;
-   const loggedTypes = new Set();
-   logWsListenerAttach('askchip-ws', 'bootstrap-wire');
-   window.addEventListener('askchip-ws', (ev) => {
-     const d = ev.detail || {};
-     const t = d.type || '';
-+    const normalizedType = typeof t === 'string' ? t : '';
-+    const frameTurnId = d && d.turn_id != null ? String(d.turn_id) : null;
-+
-+    if (normalizedType === 'TTS_START' || normalizedType === 'assistant_audio' || normalizedType === 'tts:start') {
-+      if (!_ttsHoldActive) {
-+        _ttsHoldActive = true;
-+        _ttsActiveTurnId = frameTurnId;
-+        _cancelTtsRearmTimer();
-+        try {
-+          disarmVAD();
-+          _console('log', '[bootstrap] VAD disarmed while TTS is active');
-+        } catch (err) {
-+          try { _console('warn', '[bootstrap] VAD disarm failed during TTS', err); } catch {}
-+        }
-+      } else if (!_ttsActiveTurnId && frameTurnId) {
-+        _ttsActiveTurnId = frameTurnId;
-+      }
-+    }
-+
-+    if (normalizedType === 'UtteranceEnd' || normalizedType === 'utteranceend') {
-+      const idsMatch =
-+        !_ttsActiveTurnId || !frameTurnId || String(frameTurnId) === String(_ttsActiveTurnId);
-+      if (_ttsHoldActive && idsMatch) {
-+        _ttsHoldActive = false;
-+        _ttsActiveTurnId = null;
-+        _scheduleVadRearmAfterTts('UtteranceEnd');
-+      }
-+    }
- 
-     if (seen < 5 || (!loggedTypes.has(t) && loggedTypes.size < 12)) {
-       try { _console('log', '[WS→UI]', JSON.stringify(d)); } catch {}
-       seen++;
-       if (t) loggedTypes.add(t);
-     }
- 
-     // Lightweight state dot hints (no UI regressions)
-     if (t === 'assistant_audio') setDot('speaking');
-     if (t === 'assistant_audio') _manualPhaseChanged('speaking');
-     if (t === 'UtteranceEnd')    setDot('ready');
-     if (t === 'UtteranceEnd')    _manualPhaseChanged('ready');
-     if (t === 'ready')           _manualPhaseChanged('ready');
-     if (t === 'state' && d.phase) {
-       if (d.phase === 'ready')    setDot('ready');
-       if (d.phase === 'thinking') setDot('thinking');
-       if (d.phase === 'speaking') setDot('speaking');
-       if (d.phase === 'listening')setDot('listening');
-       _manualPhaseChanged(String(d.phase));
-     }
- 
-     // De-dupe assistant text frames so greet can't double-render
-     if (_isAssistantTextFrame(d)) {
-       if (!_dedupeAssistant(d)) return; // swallow duplicate
-     }
-@@ -552,52 +516,55 @@ async function startOnce(){
-       });
-       _console('log', '[bootstrap] startOnce greet configure sent — recorder setup will follow');
-       try {
-         window.dispatchEvent(new CustomEvent('chip-tts', {
-           detail: { state: 'playing', prime: true }
-         }));
-       } catch {}
-       // ^^ This “primes” holdoff if your server’s first audio event is delayed;
-       // when real assistant_audio arrives, your existing listener will extend the hold.
-     } catch (e) {
-       _console('warn', '[bootstrap] WS configure failed, cannot greet', e);
-       showBanner('Greet failed to send — check WS configure()');
-       throw e;
-     }
- 
-     // 5) Mic permission + arm echo-aware VAD (voice-first path)
-     let visualizerStream = null;
-     try {
-       visualizerStream = await Visualizer.start();
-     } catch (e) {
-       _console('warn', '[bootstrap] visualizer init failed', e);
-     }
- 
-     try {
-       const stream = await initMic(visualizerStream ?? undefined);
--      _console('log', '[bootstrap] startOnce mic initialized — deferring VAD arm until greet completes');
--      _scheduleVadArmAfterGreet(stream, { startBtn, endBtn });
-+      _lastMicStream = stream ?? null;
-+      _console('log', '[bootstrap] startOnce mic initialized — arming VAD for voice turns');
-+      await armVAD(stream ?? undefined);
-+      _console('log', '[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
-+      _ensureVoiceCtxLoaded();
-     } catch (e) {
-       _handleMicVadFailure(e, { startBtn, endBtn });
-       return;
-     }
- 
-     // Watchdog: if no assistant frames within 6s after sending WS greet, warn
-     let gotAssistant = false;
-     let markAssistantRemove = false;
-     const markAssistant = (ev) => {
-       const d = ev.detail || {};
-       if (_isAssistantTextFrame(d)) gotAssistant = true;
-       if (markAssistantRemove) {
-         markAssistantRemove = false;
-         try { window.removeEventListener('askchip-ws', markAssistant); } catch {}
-       }
-     };
-     try {
-       logWsListenerAttach('askchip-ws', 'bootstrap-markAssistant-once');
-       window.addEventListener('askchip-ws', markAssistant, { once: true });
-     } catch (err) {
-       markAssistantRemove = true;
-       logWsListenerAttach('askchip-ws', 'bootstrap-markAssistant-fallback');
-       window.addEventListener('askchip-ws', markAssistant);
-       try { _console('warn', '[bootstrap] once listener fallback', err); } catch {}
-     }
+             if et == "websocket.disconnect":
+                 had_disconnect = True
+                 now = time.time()
+                 idle_s = (
+                     max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
+                 )
+                 with contextlib.suppress(Exception):
+                     _jlog(
+                         "ws_conn_disconnect",
+                         conn_id=conn_id,
+                         sid=sid,
+                         code=ev.get("code"),
+                         reason=ev.get("reason"),
+                         idle_s=idle_s,
+                     )
+                 with contextlib.suppress(Exception):
+                     if _admin_emit:
+                         _admin_emit(
+                             "ws_conn_disconnect",

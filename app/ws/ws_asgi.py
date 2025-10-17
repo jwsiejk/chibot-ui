@@ -1311,7 +1311,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     with contextlib.suppress(Exception):
         clear_greet_turn_cache(sid)
 
-    bus_task: Optional[asyncio.Task] = None)
+    bus_task: Optional[asyncio.Task] = None
 
     voice_metrics_registered = False
     try:
@@ -2385,9 +2385,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 asr_direct_stream[0] = True
 
         if bus_task is None:
-        bus_task = asyncio.create_task(
-            _pump_bus_to_client(sid, send, _handle_bus_frame)
-        )
+            bus_task = asyncio.create_task(
+                _pump_bus_to_client(sid, send, _handle_bus_frame)
+            )
 
     try:
         while True:
