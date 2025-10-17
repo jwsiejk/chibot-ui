@@ -473,21 +473,8 @@ const registerTtsListener = (ctx) => {
   const win = typeof window !== 'undefined' ? window : null;
   const listener = (ev) => {
     const { detail } = ev || {};
-    const { state } = detail || {};
-    const normalizedState = String(state || '').toLowerCase();
-    if (normalizedState === 'playing') {
-      ctx.state.ttsPlaying = true;
-      ctx.ttsEndedAtMs = undefined;
-      ctx.ttsMask.start();
-      startMaskLogging(ctx);
-    } else if (
-      normalizedState === 'ended' ||
-      normalizedState === 'stopped' ||
-      normalizedState === 'done'
-    ) {
-      ctx.state.ttsPlaying = false;
-      ctx.ttsEndedAtMs = nowMs();
-      ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
+    const handled = applyTtsState(ctx, detail?.state, detail);
+    if (handled && normalizeVadLabel(detail?.state) === 'ended') {
       try {
         ctx.state.vadBoostDb = Math.max(0, (ctx.state.vadBoostDb ?? 0) - 3);
         setTimeout(() => {
@@ -496,19 +483,45 @@ const registerTtsListener = (ctx) => {
           } catch {}
         }, 250);
       } catch {}
-      startMaskLogging(ctx);
-    } else if (normalizedState === 'ready') {
-      ctx.state.ttsPlaying = false;
-      ctx.ttsEndedAtMs = nowMs();
-      ctx.ttsMask.clear();
-      stopMaskLogging(ctx);
-      logReadyState(ctx);
     }
   };
   try { win?.addEventListener?.('chip-tts', listener, { passive: true }); } catch {}
 };
 
 const normalizeVadLabel = (value) => (typeof value === 'string' ? value.toLowerCase() : '');
+
+const applyTtsState = (ctx, rawState, detail = {}) => {
+  if (!ctx || !ctx.state || !ctx.ttsMask) return false;
+  const normalized = normalizeVadLabel(rawState);
+  if (!normalized) return false;
+
+  if (['playing', 'assistant_speaking', 'speaking', 'paused'].includes(normalized)) {
+    ctx.state.ttsPlaying = true;
+    ctx.ttsEndedAtMs = undefined;
+    ctx.ttsMask.start();
+    startMaskLogging(ctx);
+    return true;
+  }
+
+  if (['ended', 'stopped', 'done'].includes(normalized)) {
+    ctx.state.ttsPlaying = false;
+    ctx.ttsEndedAtMs = nowMs();
+    ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
+    startMaskLogging(ctx);
+    return true;
+  }
+
+  if (['ready', 'idle', 'listening', 'assistant_listening'].includes(normalized)) {
+    ctx.state.ttsPlaying = false;
+    ctx.ttsEndedAtMs = nowMs();
+    ctx.ttsMask.clear();
+    stopMaskLogging(ctx);
+    logReadyState(ctx);
+    return true;
+  }
+
+  return false;
+};
 
 const resolveVadEventType = (frame) => {
   if (!frame || typeof frame !== 'object') return null;
@@ -622,6 +635,22 @@ function handleWsFrame(ctx, frame) {
   if (!ctx?.state) return;
   const type = normalizeVadLabel(frame?.type);
   const event = normalizeVadLabel(frame?.event);
+
+  if (type === 'state') {
+    if (applyTtsState(ctx, frame?.phase, frame)) {
+      return;
+    }
+  }
+
+  if (type === 'barge_in' || event === 'barge_in') {
+    applyTtsState(ctx, frame?.phase || 'paused', frame);
+    return;
+  }
+
+  if (type === 'barge_resume' || event === 'barge_resume') {
+    applyTtsState(ctx, frame?.phase || 'assistant_speaking', frame);
+    return;
+  }
 
   if (frameIndicatesAsrResult(frame)) {
     const confidence = extractAsrConfidence(frame);
