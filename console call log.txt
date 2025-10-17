@@ -1,50 +1,298 @@
 [ws] build=2025-10-16T23:15Z
 AdaptiveRuntime.js:1 [AdaptiveRuntime] build=2025-10-16T23:15Z
-bootstrap.js?v=1760675953:1 [bootstrap] build=2025-10-16T23:15Z
-bootstrap.js?v=1760675953:33 [AskChip] bootstrap loaded
-debug.js?v=1760675953:4 [DBG] debug:on Object
-ws.js?v=1760675953:1 [ws] build=2025-10-16T23:15Z
-bootstrap.js?v=1760675953:33 [bootstrap] startOnce called N=1
-ws.js?v=1760675953:144 [ws] openWS build Object
-ws.js?v=1760675953:144 [ws] openWS options= Object reconnect= true
-bootstrap.js?v=1760675953:33 [bootstrap] ws listener attached Object
-bootstrap.js?v=1760675953:33 [bootstrap] ws listener attached Object
-bootstrap.js?v=1760675953:33 [bootstrap] startOnce sending greet configure
-ws.js?v=1760675953:738 [ws] [Configure OUT] {"type":"Configure","session_id":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4","greet":true,"reset":1,"feature_manual_barge_in":true,"barge_in_mode_manual":false,"auto_commit_when_ready":true,"greet_seq":1} Object
-debug.js?v=1760675953:4 [DBG] UI→WS Object
-bootstrap.js?v=1760675953:33 [bootstrap] startOnce greet configure sent — recorder setup will follow
-bootstrap.js?v=1760675953:33 [WS→UI] {"type":"ready","session_id":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4"}
-bootstrap.js?v=1760675953:33 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
-AdaptiveRuntime.js:225 [audio] context state: running Object
-AdaptiveRuntime.js:225 [recorder] started Object
-ws.js?v=1760675953:144 [ws] openWS build Object
-ws.js?v=1760675953:144 [ws] openWS options= Object reconnect= true
-bootstrap.js?v=1760675953:33 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
-bootstrap.js?v=1760675953:33 [bootstrap] ws listener attached Object
-bootstrap.js?v=1760675953:33 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4","v":1,"ts_ms":1760676256558,"ts":1760676256.558,"session_id":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4","step":5}
-bootstrap.js?v=1760675953:33 [WS→UI] {"type":"Configure","sid":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4","session_id":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4"}
-bootstrap.js?v=1760675953:33 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760676256558,"ts":1760676256.558,"session_id":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4","sid":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4","step":6}
-bootstrap.js?v=1760675953:33 [WS→UI] {"type":"greet:reset","route":"/ws/v1/chat","label":"greet:reset","session_id":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4","greet_seq":1,"sid":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4"}
-askchip_client_hooks.js?v=1760675953:319 session_goal Object
-bootstrap.js?v=1760675953:33 [WS→UI] {"type":"session_goal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"event":"session_goal","session_id":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4","sid":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4"}
-AdaptiveRuntime.js:225 [asr] pre-commit feed Object
-AdaptiveRuntime.js:1131 [dual-vad] commit? Object
-AdaptiveRuntime.js:225 [dual-vad] decision Object
-ws.js?v=1760675953:144 [ws] sending audio chunk Object
-debug.js?v=1760675953:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760675953:144 [ws] sending audio chunk Object
-debug.js?v=1760675953:4 [DBG] UI→WS ArrayBuffer(2898)
-askchip_client_hooks.js?v=1760675953:225 ws_scope_arrived Object
-ws.js?v=1760675953:144 [ws] sending audio chunk Object
-debug.js?v=1760675953:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760675953:144 [ws] sending audio chunk Object
-debug.js?v=1760675953:4 [DBG] UI→WS ArrayBuffer(2898)
-askchip_client_hooks.js?v=1760675953:322 state Object
-bootstrap.js?v=1760675953:33 [WS→UI] {"type":"state","phase":"paused"}
-askchip_client_hooks.js?v=1760675953:272 barge_in
-bootstrap.js?v=1760675953:33 [WS→UI] {"type":"barge_in","event":"barge_in","kind":"barge_in","label":"barge_in","route":null,"sid":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4","phase":"paused","v":1,"ts_ms":1760676257570,"ts":1760676257.57,"session_id":"0f67e144-3d2d-4702-a6e3-eb446a3b53c4","step":8}
-askchip_client_hooks.js?v=1760675953:272 barge_in
-bootstrap.js?v=1760675953:33 [WS→UI] {"type":"meta","turn_id":1,"meta":{"local_vad":"start","ts":1760676257570}}
-AdaptiveRuntime.js:225 [asr] vad Object
-AdaptiveRuntime.js:1131 [dual-vad] commit? Object
-AdaptiveRuntime.js:225 [dual-vad] decision Object
+bootstrap.js?v=1760681728:1 [bootstrap] build=2025-10-16T23:15Z
+bootstrap.js?v=1760681728:33 [AskChip] bootstrap loaded
+debug.js?v=1760681728:4 [DBG] debug:on Object
+ws.js?v=1760681728:1 [ws] build=2025-10-16T23:15Z
+bootstrap.js?v=1760681728:33 [bootstrap] startOnce called N=1
+ws.js?v=1760681728:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760681728', version: '1760681728', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760681728:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760681728:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws#1', event: 'askchip-ws', note: 'bootstrap-wire'}
+bootstrap.js?v=1760681728:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws-close#2', event: 'askchip-ws-close', note: 'bootstrap-wire'}
+bootstrap.js?v=1760681728:33 [bootstrap] startOnce sending greet configure
+ws.js?v=1760681728:738 [ws] [Configure OUT] {"type":"Configure","session_id":"7714057c-c41e-48af-a466-4a2153229804","greet":true,"reset":1,"feature_manual_barge_in":true,"barge_in_mode_manual":false,"auto_commit_when_ready":true,"greet_seq":1} {ts_ms: 1760681868944}
+debug.js?v=1760681728:4 [DBG] UI→WS {type: 'Configure', session_id: '7714057c-c41e-48af-a466-4a2153229804', greet: true, reset: 1, feature_manual_barge_in: true, …}
+bootstrap.js?v=1760681728:33 [bootstrap] startOnce greet configure sent — recorder setup will follow
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"ready","session_id":"7714057c-c41e-48af-a466-4a2153229804"}
+bootstrap.js?v=1760681728:33 [bootstrap] startOnce mic initialized — about to arm VAD for voice turns
+AdaptiveRuntime.js:225 [audio] context state: running {ts_ms: 1760681869137, session_id: '7714057c-c41e-48af-a466-4a2153229804'}
+AdaptiveRuntime.js:225 [recorder] started {ts_ms: 1760681869142, session_id: '7714057c-c41e-48af-a466-4a2153229804', mime_type: 'audio/webm; codecs=opus', timeslice_ms: 150}
+ws.js?v=1760681728:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760681728', version: '1760681728', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760681728:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760681728:33 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
+bootstrap.js?v=1760681728:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws#3', event: 'askchip-ws', note: 'bootstrap-markAssistant-once'}
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"7714057c-c41e-48af-a466-4a2153229804","v":1,"ts_ms":1760681871507,"ts":1760681871.507,"session_id":"7714057c-c41e-48af-a466-4a2153229804","step":5}
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"Configure","sid":"7714057c-c41e-48af-a466-4a2153229804","session_id":"7714057c-c41e-48af-a466-4a2153229804"}
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760681871507,"ts":1760681871.507,"session_id":"7714057c-c41e-48af-a466-4a2153229804","sid":"7714057c-c41e-48af-a466-4a2153229804","step":6}
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"greet:reset","route":"/ws/v1/chat","label":"greet:reset","session_id":"7714057c-c41e-48af-a466-4a2153229804","greet_seq":1,"sid":"7714057c-c41e-48af-a466-4a2153229804"}
+askchip_client_hooks.js?v=1760681728:319 session_goal {type: 'session_goal', phase: 'clarify', depth: 'normal', delivery_pref: 'explain', working_intent: 'greet', …}
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"session_goal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"event":"session_goal","session_id":"7714057c-c41e-48af-a466-4a2153229804","sid":"7714057c-c41e-48af-a466-4a2153229804"}
+askchip_client_hooks.js?v=1760681728:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760681870866, …}
+AdaptiveRuntime.js:225 [asr] pre-commit feed {ts_ms: 1760681869865, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
+AdaptiveRuntime.js:1132 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
+AdaptiveRuntime.js:225 [dual-vad] decision {ts_ms: 1760681869867, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, client_speech: true, asr_speaking: false, …}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681870042, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 1}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681870221, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 2}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681870399, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 3}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681870579, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 4}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+askchip_client_hooks.js?v=1760681728:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681870760, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 5}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+askchip_client_hooks.js?v=1760681728:322 state {type: 'state', phase: 'paused'}
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"state","phase":"paused"}
+askchip_client_hooks.js?v=1760681728:272 barge_in
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"barge_in","event":"barge_in","kind":"barge_in","label":"barge_in","route":null,"sid":"7714057c-c41e-48af-a466-4a2153229804","phase":"paused","v":1,"ts_ms":1760681872914,"ts":1760681872.914,"session_id":"7714057c-c41e-48af-a466-4a2153229804","step":8}
+askchip_client_hooks.js?v=1760681728:272 barge_in
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"meta","turn_id":1,"meta":{"local_vad":"start","ts":1760681872914}}
+AdaptiveRuntime.js:225 [asr] vad {ts_ms: 1760681870832, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, event: 'speech_start', speaking: true}
+AdaptiveRuntime.js:1132 [dual-vad] commit? {client: true, asrSpeaking: true, asrConf: 0}
+AdaptiveRuntime.js:225 [dual-vad] decision {ts_ms: 1760681870832, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, client_speech: true, asr_speaking: true, …}
+AdaptiveRuntime.js:225 [asr] pre-commit feed {ts_ms: 1760681870832, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: 1, mode: 'streaming', reason: 'turn_open'}
+AdaptiveRuntime.js:225 [turn] open {ts_ms: 1760681870832, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: 1, reason: 'speech_commit'}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681870940, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 6, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+askchip_client_hooks.js?v=1760681728:322 state {type: 'state', phase: 'paused'}
+AdaptiveRuntime.js:225 [asr] vad {ts_ms: 1760681871032, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: 1, event: 'speech_start', speaking: true}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681871121, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 7, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681871300, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 8, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681871480, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 9, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681871660, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 10, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"asr:diag","event":"asr:diag","kind":"asr:diag","label":"provider_open","route":null,"provider":"deepgram","tag":"miccap-v4:7714057c-c41e-48af-a466-4a2153229804","active":true,"url":"wss://api.deepgram.com/v1/listen?tag=miccap-v4%3A7714057c-c41e-48af-a466-4a2153229804&interim_results=true&vad_events=true&smart_format=true&punctuate=true&model=nova-2&utterance_end_ms=1200","v":1,"ts_ms":1760681873212,"ts":1760681873.212,"session_id":"7714057c-c41e-48af-a466-4a2153229804","sid":"7714057c-c41e-48af-a466-4a2153229804","step":9}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681871840, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 11, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681872020, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 12, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+askchip_client_hooks.js?v=1760681728:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681872200, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 13, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+askchip_client_hooks.js?v=1760681728:322 state {type: 'state', phase: 'assistant_speaking'}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681872380, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 14, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+askchip_client_hooks.js?v=1760681728:322 state {type: 'state', phase: 'assistant_speaking'}
+askchip_client_hooks.js?v=1760681728:272 barge_resume
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"barge_resume","event":"barge_resume","kind":"barge_resume","label":"barge_resume","route":null,"sid":"7714057c-c41e-48af-a466-4a2153229804","phase":"assistant_speaking","previous_phase":"paused","v":1,"ts_ms":1760681874313,"ts":1760681874.313,"session_id":"7714057c-c41e-48af-a466-4a2153229804","step":10}
+askchip_client_hooks.js?v=1760681728:272 barge_resume
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681872560, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 15, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+AdaptiveRuntime.js:600 [dual-vad] close? {clientSilent: true, asrSilent: true, quietMs: 44, silentDebounceMs: 0}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681872740, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 16, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+askchip_client_hooks.js?v=1760681728:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '71f4b460489340b0974c60818b3ce437', …}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681872920, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 17, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681873100, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 18, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681873280, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 19, …}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+AdaptiveRuntime.js:600 [dual-vad] close? {clientSilent: true, asrSilent: true, quietMs: 35.39999999944121, silentDebounceMs: 711.2000000001863}
+AdaptiveRuntime.js:26 [voice] skip CloseStream (no user turn yet) {reason: 'adaptive'}
+AdaptiveRuntime.js:225 [asr] pre-commit feed {ts_ms: 1760681873315, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: 1, mode: 'shadow_only', reason: 'turn_close'}
+AdaptiveRuntime.js:225 [turn] close {ts_ms: 1760681873316, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: 1, reason: 'dual_vad_quiet'}
+AdaptiveRuntime.js:225 [vad] ambient recalibration {ts_ms: 1760681873636, session_id: '7714057c-c41e-48af-a466-4a2153229804', noise_db: -71.87, baseline_db: -71.87, delta_db: 0, …}
+askchip_client_hooks.js?v=1760681728:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+askchip_client_hooks.js?v=1760681728:225 greet:reset {event: 'greet:reset', kind: 'greet:reset', label: 'greet:reset /ws/v1/chat', route: '/ws/v1/chat', greet_seq: 1, …}
+askchip_client_hooks.js?v=1760681728:201 session_goal {event: 'session_goal', kind: 'session_goal', label: 'session_goal:normal', phase: 'clarify', depth: 'normal', …}
+askchip_client_hooks.js?v=1760681728:221 barge_in {event: 'barge_in', kind: 'barge_in', label: 'barge_in', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+askchip_client_hooks.js?v=1760681728:225 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'provider_open', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760681728:221 barge_resume {event: 'barge_resume', kind: 'barge_resume', label: 'barge_resume', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+askchip_client_hooks.js?v=1760681728:225 dg_connect {event: 'dg_connect', kind: 'dg_connect', dg_id: 133406784837280, safe_url: 'wss://api.deepgram.com/v1/listen?interim_results=t…a2153229804&utterance_end_ms=1200&vad_events=true', containerized: true, …}
+askchip_client_hooks.js?v=1760681728:225 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'asr_open', route: null, provider: 'deepgram', …}
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"turn_action_metadata","turn_id":"0c0c48bbbb064bbe96e94fa3e48b4e1f","is_greet":true,"nlu":{"intent":"fallback","topic":null,"needs_scoping":null,"wants_list":null,"expected_depth":null,"confidence":0.2},"policy":{"action":"offer_steps","verbosity":"brief","show_suggestions":true},"session_id":"7714057c-c41e-48af-a466-4a2153229804","sid":"7714057c-c41e-48af-a466-4a2153229804"}
+askchip_client_hooks.js?v=1760681728:313 policy_decision: unknown
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"policy_decision","sid":"7714057c-c41e-48af-a466-4a2153229804","turn_id":"0c0c48bbbb064bbe96e94fa3e48b4e1f","teacher_move":"offer_steps","teacher_move_family":"answer","reason":"meta_override","fallback_fired":false,"fallback_reason":null,"nlu_intent":"fallback","nlu_confidence":0.2,"session_id":"7714057c-c41e-48af-a466-4a2153229804","meta_action":"offer_steps","policy_move":"check_understanding","persona_move":"summarize_next_actions"}
+bootstrap.js?v=1760681728:33 [WS→UI] {"type":"suggestions_made","turn_id":"0c0c48bbbb064bbe96e94fa3e48b4e1f","items":[{"text":"Send me the email","source":"policy"},{"text":"Walk me through it live","source":"policy"},{"text":"Show install steps","source":"retrieval"}],"max_items":4,"max_words_per_item":7,"count":3,"sid":"7714057c-c41e-48af-a466-4a2153229804","event":"suggestions_made","session_id":"7714057c-c41e-48af-a466-4a2153229804"}
+askchip_client_hooks.js?v=1760681728:272 assistant_end
+askchip_client_hooks.js?v=1760681728:225 turn_action_metadata {event: 'turn_action_metadata', kind: 'turn_action_metadata', turn_id: '0c0c48bbbb064bbe96e94fa3e48b4e1f', is_greet: true, nlu: {…}, …}
+2askchip_client_hooks.js?v=1760681728:272 UtteranceEnd
+askchip_client_hooks.js?v=1760681728:322 state {type: 'state', phase: 'ready'}
+audio.js:47 [tts] playing: true {ts_ms: 1760681879106, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681879107, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681879138, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681879236, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681879303, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681879335, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681879434, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681879467, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760681728:193 policy_decision: offer_steps
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681879533, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681879632, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681879648, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681879731, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+debug.js?v=1760681728:4 [DBG] UI→WS {type: 'KeepAlive'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681879830, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681879830, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681879929, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+askchip_client_hooks.js?v=1760681728:225 suggestions_made {event: 'suggestions_made', kind: 'suggestions_made', turn_id: '0c0c48bbbb064bbe96e94fa3e48b4e1f', items: Array(3), max_items: 4, …}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681880013, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681880028, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681880128, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681880193, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681880226, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681880326, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681880379, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681880425, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+askchip_client_hooks.js?v=1760681728:225 assistant_chunk {event: 'assistant_chunk', kind: 'assistant_chunk', turn_id: '0c0c48bbbb064bbe96e94fa3e48b4e1f', v: 1, ts_ms: 1760681880176, …}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681880524, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681880557, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681880623, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681880721, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681880730, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760681728:225 assistant_end {event: 'assistant_end', kind: 'assistant_end', turn_id: '0c0c48bbbb064bbe96e94fa3e48b4e1f', v: 1, ts_ms: 1760681880176, …}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681880820, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681880919, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681880920, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681881018, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681881097, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681881117, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681881216, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681881282, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681881316, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+audio.js:49 [tts] playing: false {ts_ms: 1760681881358, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681881358, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 200}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681881415, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+AdaptiveRuntime.js:225 [mask] active {ts_ms: 1760681881447, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, boost_db: 0, decay_remaining_ms: 111}
+vad.js:16 [vad] gate blocked this tick {ts_ms: 1760681881513, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask'}
+vad.js:16 [vad] gate reopened {ts_ms: 1760681881579, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, reason: 'tts_mask_clear'}
+askchip_client_hooks.js?v=1760681728:225 tts:start {event: 'tts:start', kind: 'tts:start', turn_id: '0c0c48bbbb064bbe96e94fa3e48b4e1f', v: 1, ts_ms: 1760681881103, …}
+askchip_client_hooks.js?v=1760681728:225 tts:first_chunk {event: 'tts:first_chunk', kind: 'tts:first_chunk', turn_id: '0c0c48bbbb064bbe96e94fa3e48b4e1f', v: 1, ts_ms: 1760681881103, …}
+askchip_client_hooks.js?v=1760681728:225 tts:done {event: 'tts:done', kind: 'tts:done', turn_id: '0c0c48bbbb064bbe96e94fa3e48b4e1f', v: 1, ts_ms: 1760681881103, …}
+askchip_client_hooks.js?v=1760681728:225 UtteranceEnd {event: 'UtteranceEnd', kind: 'UtteranceEnd', turn_id: '0c0c48bbbb064bbe96e94fa3e48b4e1f', reason: 'finalizer', v: 1, …}
+debug.js?v=1760681728:4 [DBG] UI→WS {type: 'KeepAlive'}
+askchip_client_hooks.js?v=1760681728:225 greet:resp {event: 'greet:resp', kind: 'greet:resp', label: 'greet:resp', route: null, turn_id: '0c0c48bbbb064bbe96e94fa3e48b4e1f', …}
+askchip_client_hooks.js?v=1760681728:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+AdaptiveRuntime.js:225 [asr] pre-commit feed {ts_ms: 1760681885308, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
+AdaptiveRuntime.js:1132 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
+AdaptiveRuntime.js:225 [dual-vad] decision {ts_ms: 1760681885308, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, client_speech: true, asr_speaking: false, …}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681885339, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 20}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+askchip_client_hooks.js?v=1760681728:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681885520, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 21}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681885700, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 22}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681885880, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 23}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681886061, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 24}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681886240, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 25}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681886420, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 26}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+askchip_client_hooks.js?v=1760681728:225 ws_bin_recv {event: 'ws_bin_recv', kind: 'ws_bin_recv', label: 'ws_bin_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681886600, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 27}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681886780, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 28}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681886960, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 29}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681887140, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 30}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681887319, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 31}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681887500, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 32}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681887680, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 33}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681887860, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 34}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681888040, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 35}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681888220, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 36}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681888400, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 37}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681888581, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 38}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681888760, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 39}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681888940, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 40}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681889120, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 41}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+AdaptiveRuntime.js:225 [asr] pre-commit feed {ts_ms: 1760681889235, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
+askchip_client_hooks.js?v=1760681728:225 ws_bin_recv {event: 'ws_bin_recv', kind: 'ws_bin_recv', label: 'ws_bin_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+debug.js?v=1760681728:4 [DBG] UI→WS {type: 'KeepAlive'}
+askchip_client_hooks.js?v=1760681728:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+debug.js?v=1760681728:4 [DBG] UI→WS {type: 'KeepAlive'}
+askchip_client_hooks.js?v=1760681728:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+debug.js?v=1760681728:4 [DBG] UI→WS {type: 'KeepAlive'}
+askchip_client_hooks.js?v=1760681728:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+AdaptiveRuntime.js:225 [asr] pre-commit feed {ts_ms: 1760681902435, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
+AdaptiveRuntime.js:1132 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
+AdaptiveRuntime.js:225 [dual-vad] decision {ts_ms: 1760681902436, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, client_speech: true, asr_speaking: false, …}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681902440, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 42}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681902620, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 43}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681902799, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 44}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681902980, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 45}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681903160, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 46}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681903340, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 47}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681903520, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 48}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681903699, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 49}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681903881, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 50}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681904060, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 51}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681904239, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 52}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681904421, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 53}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681904599, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 54}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681904779, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 55}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681904960, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 56}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681905140, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 57}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681905320, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 58}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681905499, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 59}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681905679, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 60}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681905860, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 61}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681906039, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 62}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681906221, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 63}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681906399, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 64}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681906580, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 65}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681906760, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 66}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+askchip_client_hooks.js?v=1760681728:225 ws_bin_recv {event: 'ws_bin_recv', kind: 'ws_bin_recv', label: 'ws_bin_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+ws.js?v=1760681728:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760681906940, session_id: '7714057c-c41e-48af-a466-4a2153229804', chunk_seq: 67}
+debug.js?v=1760681728:4 [DBG] UI→WS ArrayBuffer(2898)
+AdaptiveRuntime.js:225 [asr] pre-commit feed {ts_ms: 1760681906957, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
+debug.js?v=1760681728:4 [DBG] UI→WS {type: 'KeepAlive'}
+askchip_client_hooks.js?v=1760681728:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+debug.js?v=1760681728:4 [DBG] UI→WS {type: 'KeepAlive'}
+askchip_client_hooks.js?v=1760681728:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '7714057c-c41e-48af-a466-4a2153229804', …}
+AdaptiveRuntime.js:225 state { phase:'ready' } {ts_ms: 1760681916288, session_id: '7714057c-c41e-48af-a466-4a2153229804', turn_id: null}
+ws.js?v=1760681728:144 [ws] CloseStream suppressed: no user turn yet
+AdaptiveRuntime.js:225 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760681916290, session_id: '7714057c-c41e-48af-a466-4a2153229804'}
+bootstrap.js?v=1760681728:33 [WS close] {code: 1000, reason: 'normal closure'}
+askchip_client_hooks.js?v=1760681728:225 ws_conn_disconnect {event: 'ws_conn_disconnect', kind: 'ws_conn_disconnect', label: 'ws_conn_disconnect', route: null, conn_id: '71f4b460489340b0974c60818b3ce437', …}
+askchip_client_hooks.js?v=1760681728:225 ws_conn_close {event: 'ws_conn_close', kind: 'ws_conn_close', label: 'ws_conn_close', route: null, conn_id: '71f4b460489340b0974c60818b3ce437', …}
+askchip_client_hooks.js?v=1760681728:225 ws_conn_cleanup {event: 'ws_conn_cleanup', kind: 'ws_conn_cleanup', label: 'ws_conn_cleanup', route: null, conn_id: '71f4b460489340b0974c60818b3ce437', …}
+askchip_client_hooks.js?v=1760681728:225 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'CloseStream ack', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760681728:225 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'end', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760681728:225 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'asr_error', route: null, provider: 'deepgram', …}
