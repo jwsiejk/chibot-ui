@@ -324,6 +324,9 @@ export function playStream(frameOrChunks, maybeMime) {
       const mime = frame.mime || maybeMime || DEFAULT_MIME;
       const p = ensurePlayer(mime);
       const list = Array.isArray(frame.audio_chunks) ? frame.audio_chunks : [];
+      if (list.length) {
+        _emitTtsState('playing');
+      }      
       for (const c of list) {
         if (!c) continue;
         if (typeof c === 'string') p.appendBase64(c);
@@ -339,6 +342,9 @@ export function playStream(frameOrChunks, maybeMime) {
     if (!list.length) return;
     const mime = maybeMime || DEFAULT_MIME;
     const p = ensurePlayer(mime);
+    if (list.some((c) => c)) {
+      _emitTtsState('playing');
+    }    
     for (const c of list) {
       if (!c) continue;
       if (typeof c === 'string') p.appendBase64(c);
