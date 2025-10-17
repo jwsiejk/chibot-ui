@@ -2340,7 +2340,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return False
 
     async def _flush_buffered_chunks() -> None:
-        nonlocal dg, backpressure_drop_count
+        nonlocal dg, backpressure_drop_count, bus_task
         if not buffered_chunks:
             return
         if not _has_deepgram_key() or dg is None:
