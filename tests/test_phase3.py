@@ -175,3 +175,35 @@ def test_confirm_window_borderline_snr_commits_with_slack():
     metrics = decision.metrics or {}
     assert metrics.get("reason") == "partial"
 
+
+def test_confirm_window_extends_and_commits_with_borderline_snr():
+    from app.ws.confirm_window import ConfirmWindow
+    import struct
+
+    chunk = struct.pack("<4000h", *([1200] * 4000))
+    win = ConfirmWindow(
+        min_duration_ms=200,
+        max_duration_ms=320,
+        max_gap_ms=300,
+        min_tokens=2,
+        snr_threshold_db=8.0,
+        snr_slack_db=0.5,
+    )
+    start = 0.0
+    win.start(start)
+
+    assert win.observe_chunk(chunk, start + 0.1).action is None
+    win.snr_db = 7.4
+
+    decision = win.observe_chunk(chunk, start + 0.38)
+    assert decision.action is None
+    assert win.max_duration_ms > 320
+
+    commit = win.observe_partial(2, 0.8, start + 0.55)
+    assert commit.action == "commit"
+    metrics = commit.metrics or {}
+    assert metrics.get("reason") == "partial"
+    assert metrics.get("snr_floor_db") is not None
+    assert metrics.get("snr_relaxation_db") is not None
+    assert metrics.get("window_extended_ms")
+
