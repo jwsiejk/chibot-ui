@@ -107,6 +107,7 @@ let _ws = null;
 let _onOpen = [];
 let _lastConfigureSid = null;
 let _greetSeqCounter = 0;
+let _audioChunkSeq = 0;
 const _KEEPALIVE_POLL_MS = 1000;
 const _KEEPALIVE_IDLE_THRESHOLD_MS = 3500;
 const _KEEPALIVE_RESUME_AFTER_UPLOAD_MS = 750;
@@ -493,6 +494,7 @@ export function openWS(options = {}){
     _ws = ws; // assign immediately so helpers see it
 
     ws.onopen = () => {
+      _audioChunkSeq = 0;
       _notifyOpen();
       _clearKeepaliveTimer();
       _resetKeepaliveState(true);
@@ -656,6 +658,7 @@ export async function sendAudioChunk(blob){
   _pauseKeepalive(_KEEPALIVE_REASON_UPLOAD);
   try{
     const buf = await blob.arrayBuffer();
+    const seq = (_audioChunkSeq += 1);
     try {
       const tsMs = Date.now();
       const payload = {
@@ -663,10 +666,12 @@ export async function sendAudioChunk(blob){
         mime: blob.type,
         ts_ms: tsMs,
         session_id: getSID?.() ?? null,
+        chunk_seq: seq,
       };
       const turnId = _getActiveTurnTraceId();
       if (turnId) payload.turn_id = turnId;
       _console('debug', '[ws] sending audio chunk', payload);
+      try { window.__askchip_last_audio_seq = seq; } catch {}
     } catch {}
     _ws.send(buf);
     _lastUserSendTs = Date.now();

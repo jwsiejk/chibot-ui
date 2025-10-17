@@ -2390,6 +2390,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             bytes=len(chunk),
                             turn_id=turn_hint,
                             ts_ms=int(now * 1000),
+                            frame_seq=ws_frames_in,
                         )
                         if not audio_sig_logged:
                             with contextlib.suppress(Exception):
@@ -2410,6 +2411,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 turn_id=turn_hint,
                                 buf_empty=new_turn,
                                 ts_ms=int(now * 1000),
+                                frame_seq=ws_frames_in,
                             )
                     if new_turn:
                         try:

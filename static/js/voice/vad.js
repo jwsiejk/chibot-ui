@@ -134,6 +134,7 @@ export class VAD {
     this._legacyStopDb = Number.isFinite(this.opts.stopRms) ? rmsToDb(this.opts.stopRms) : null;
     this._suppressingEcho = false;
     this._lastGateLogTs = 0;
+    this._gateWasBlocked = false;
   }
 
   _rms() {
@@ -319,6 +320,7 @@ export class VAD {
         });
         this._lastGateLogTs = now;
       }
+      this._gateWasBlocked = true;
       if (this._recording) {
         this._recording = false;
         this._speechStartedAt = 0;
@@ -333,6 +335,15 @@ export class VAD {
     }
 
     this._lastGateLogTs = 0;
+    if (this._gateWasBlocked) {
+      this._gateWasBlocked = false;
+      voiceLog('info', '[vad] gate reopened', {
+        ts_ms: Date.now(),
+        session_id: getSessionId(),
+        turn_id: getTurnId(),
+        reason: 'tts_mask_clear',
+      });
+    }
 
     if (!this._recording) {
       if (inCooldown) {
