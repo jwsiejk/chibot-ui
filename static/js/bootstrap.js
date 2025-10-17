@@ -59,6 +59,15 @@ let _ttsHoldActive = false;
 let _ttsActiveTurnId = null;
 let _ttsRearmTimer = null;
 
+function _setVoiceMask(active) {
+  try {
+    const ctx = window.__askchip_voice_ctx;
+    if (ctx?.state) {
+      ctx.state.maskLocalBargeIn = !!active;
+    }
+  } catch {}
+}
+
 function _updateManualButtonAvailability() {
   const btn = manualState.button;
   if (!btn) return;
@@ -284,8 +293,9 @@ function _cancelTtsRearmTimer() {
   }
 }
 
-function _scheduleVadRearmAfterTts(trigger = 'UtteranceEnd') {
+function _startTtsRearmTimer(delayMs = TTS_REARM_DELAY_MS, trigger = 'UtteranceEnd') {
   _cancelTtsRearmTimer();
+  const waitMs = Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : TTS_REARM_DELAY_MS;  
   _ttsRearmTimer = setTimeout(() => {
     _ttsRearmTimer = null;
     if (_ttsHoldActive) return;
@@ -300,7 +310,11 @@ function _scheduleVadRearmAfterTts(trigger = 'UtteranceEnd') {
       .catch((err) => {
         try { _console('warn', '[bootstrap] VAD re-arm failed after TTS', err); } catch {}
       });
-  }, TTS_REARM_DELAY_MS);
+  }, waitMs);
+}
+
+function _scheduleVadRearmAfterTts(trigger = 'UtteranceEnd') {
+  _startTtsRearmTimer(TTS_REARM_DELAY_MS, trigger);
 }
 
 function wireWSEventsOnce(){
@@ -331,6 +345,7 @@ function wireWSEventsOnce(){
       } else if (!_ttsActiveTurnId && frameTurnId) {
         _ttsActiveTurnId = frameTurnId;
       }
+      _setVoiceMask(true);      
     }
 
     if (normalizedType === 'UtteranceEnd' || normalizedType === 'utteranceend') {
@@ -339,7 +354,8 @@ function wireWSEventsOnce(){
       if (_ttsHoldActive && idsMatch) {
         _ttsHoldActive = false;
         _ttsActiveTurnId = null;
-        _scheduleVadRearmAfterTts('UtteranceEnd');
+        _startTtsRearmTimer(280, 'UtteranceEnd');
+        _setVoiceMask(false);
       }
     }
 
@@ -398,6 +414,14 @@ function wireVoiceEventsOnce(){
   window.addEventListener('askchip-voice', (ev) => {
     const detail = ev?.detail || {};
     const name = detail.name || detail.event;
+    if (name === 'barge_in') {
+      const reason = typeof detail.reason === 'string' ? detail.reason.toLowerCase() : '';
+      const manual = detail.manual === true || reason === 'manual';
+      if (_ttsHoldActive && !manual) {
+        try { _console('log', '[bootstrap] suppressed local barge_in during TTS'); } catch {}
+        return;
+      }
+    }    
     if (name === 'turn_open' || name === 'turn_close') {
       _console('info', `askchip-voice ${name}
     if (name === 'turn_open') {
