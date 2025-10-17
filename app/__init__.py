@@ -110,6 +110,7 @@ def create_app():
             "barge_in_mode_manual": False,
             "auto_commit_when_ready": True,
         }
+        debug_config = {"vad": True}
         try:
             from .services import admin_settings as _admin_settings  # inline import to avoid cycles
 
@@ -122,6 +123,25 @@ def create_app():
             db_cfg = _db.get_config()
         except Exception:
             db_cfg = {}
+
+        def _resolve_debug_vad(default: bool) -> bool:
+            try:
+                if isinstance(settings, dict):
+                    debug_settings = settings.get("debug")
+                    if isinstance(debug_settings, dict) and "vad" in debug_settings:
+                        return bool(debug_settings.get("vad"))
+            except Exception:
+                pass
+            try:
+                if isinstance(db_cfg, dict):
+                    debug_settings = db_cfg.get("debug")
+                    if isinstance(debug_settings, dict) and "vad" in debug_settings:
+                        return bool(debug_settings.get("vad"))
+            except Exception:
+                pass
+            return default
+
+        debug_config["vad"] = _resolve_debug_vad(debug_config["vad"])
 
         def _resolve_flag(name: str, default: bool) -> bool:
             if isinstance(settings, dict) and name in settings:
@@ -144,6 +164,7 @@ def create_app():
                 "logging": {"enabled": enabled},
                 "auth": auth_config,
                 "vad": vad_config,
+                "debug": debug_config,
                 "features": feature_flags,
                 "feature_manual_barge_in": feature_flags["feature_manual_barge_in"],
                 "barge_in_mode_manual": feature_flags["barge_in_mode_manual"],

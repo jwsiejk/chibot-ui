@@ -81,6 +81,7 @@ const resetAsrState = (ctx) => {
 };
 
 const dualVadEnabled = (ctx) => !!(ctx?.config?.dual_vad?.enabled);
+const dualVadDebugEnabled = (ctx) => ctx?.config?.debug?.vad === true;
 
 const asrStaleMs = (ctx) => {
   const raw = ctx?.config?.dual_vad?.asr_stale_ms;
@@ -469,6 +470,23 @@ function shouldCloseTurn(ctx) {
   const asrSilent = !isAsrSpeakingNow(ctx);
   const lastAudio = Number.isFinite(ctx.state.lastUserAudioMs) ? ctx.state.lastUserAudioMs : 0;
   const quietMs = lastAudio > 0 ? Math.max(0, nowMs() - lastAudio) : 0;
+  if (dualVadDebugEnabled(ctx)) {
+    let quietLogMs = quietMs;
+    try {
+      if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+        quietLogMs = performance.now() - (ctx.state.lastUserAudioMs || 0);
+      } else {
+        quietLogMs = Date.now() - (ctx.state.lastUserAudioMs || 0);
+      }
+    } catch {}
+    try {
+      console.debug('[dual-vad] close?', {
+        clientSilent,
+        asrSilent,
+        quietMs: quietLogMs,
+      });
+    } catch {}
+  }
   return (clientSilent && asrSilent) || quietMs > quietCloseMs(ctx);
 }
 
@@ -908,7 +926,18 @@ function shouldCommitTurn(ctx) {
   }
   const clientSaysSpeech = ctx.state.vadRecording === true;
   const asrSpeaking = isAsrSpeakingNow(ctx);
-  const asrConfOK = (ensureAsrState(ctx).lastConf ?? 0) >= commitConfidenceThreshold(ctx);
+  const asrState = ensureAsrState(ctx);
+  const asrConf = asrState.lastConf ?? 0;
+  const asrConfOK = asrConf >= commitConfidenceThreshold(ctx);
+  if (dualVadDebugEnabled(ctx)) {
+    try {
+      console.debug('[dual-vad] commit?', {
+        client: ctx.state.vadRecording,
+        asrSpeaking,
+        asrConf,
+      });
+    } catch {}
+  }
   return (clientSaysSpeech && asrSpeaking) || asrConfOK;
 }
 
