@@ -53,8 +53,11 @@ const manualState = {
   sessionActive: false,
 };
 
-const GREET_VAD_DEFER_MS = 400;
-const GREET_VAD_WAIT_TIMEOUT_MS = 8000;
+const TTS_REARM_DELAY_MS = 360; // ms delay before re-arming VAD after TTS completes
+let _lastMicStream = null;
+let _ttsHoldActive = false;
+let _ttsActiveTurnId = null;
+let _ttsRearmTimer = null;
 
 function _updateManualButtonAvailability() {
   const btn = manualState.button;
@@ -263,108 +266,41 @@ function _handleMicVadFailure(err, { startBtn = null, endBtn = null } = {}) {
   startInFlight = false;
 }
 
-function _waitForInitialTtsCompletion(timeoutMs = GREET_VAD_WAIT_TIMEOUT_MS) {
-  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
-    return Promise.reject(new Error('window_unavailable'));
-  }
-
-  return new Promise((resolve, reject) => {
-    let finished = false;
-    let timer = null;
-
-    const cleanup = () => {
-      if (timer) { clearTimeout(timer); timer = null; }
-      try { window.removeEventListener('askchip-ws', onWs); } catch {}
-      try { window.removeEventListener('chip-tts', onTts); } catch {}
-    };
-
-    const resolveOnce = (info) => {
-      if (finished) return;
-      finished = true;
-      cleanup();
-      resolve(info);
-    };
-
-    const rejectOnce = (err) => {
-      if (finished) return;
-      finished = true;
-      cleanup();
-      reject(err);
-    };
-
-    const onWs = (ev) => {
-      const detail = ev?.detail || {};
-      const type = detail?.type || detail?.label || '';
-      if (type === 'UtteranceEnd') {
-        resolveOnce({ source: 'UtteranceEnd', detail });
-      }
-    };
-
-    const onTts = (ev) => {
-      const state = ev?.detail?.state;
-      if (state === 'ended' || state === 'stopped') {
-        resolveOnce({ source: 'chip-tts', detail: ev?.detail });
-      }
-    };
-
-    try { window.addEventListener('askchip-ws', onWs); } catch (err) {
-      rejectOnce(err);
-      return;
-    }
-    try { window.addEventListener('chip-tts', onTts); } catch (err) {
-      rejectOnce(err);
-      return;
-    }
-
-    timer = setTimeout(() => {
-      rejectOnce(new Error('UtteranceEnd timeout'));
-    }, timeoutMs);
-  });
+function _ensureVoiceCtxLoaded() {
+  if (typeof window === 'undefined') return;
+  if (window.__askchip_voice_ctx != null) return;
+  import('./voice/runtime/AdaptiveRuntime.js')
+    .then((mod) => {
+      const ctx = mod?.__TEST_ONLY__?.getCtx?.();
+      if (ctx) window.__askchip_voice_ctx = ctx;
+    })
+    .catch(() => {});
 }
 
-function _scheduleVadArmAfterGreet(stream, { startBtn = null, endBtn = null } = {}) {
-  const attemptArm = (trigger = 'unknown') => {
-    if (attemptArm._armed) return;
-    attemptArm._armed = true;
-    setTimeout(async () => {
-      try {
-        _console('log', `[bootstrap] startOnce VAD arming (trigger=${trigger})`);
-      } catch {}
-      try {
-        await armVAD(stream ?? undefined);
-        _console('log', '[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
-        if (typeof window !== 'undefined' && window.__askchip_voice_ctx == null) {
-          import('./voice/runtime/AdaptiveRuntime.js').then(mod => {
-            const ctx = mod?.__TEST_ONLY__?.getCtx?.();
-            if (ctx) window.__askchip_voice_ctx = ctx;
-          }).catch(() => {});
-        }
-      } catch (err) {
-        _handleMicVadFailure(err, { startBtn, endBtn });
-      }
-    }, GREET_VAD_DEFER_MS);
-  };
-  attemptArm._armed = false;
+function _cancelTtsRearmTimer() {
+  if (_ttsRearmTimer) {
+    try { clearTimeout(_ttsRearmTimer); } catch {}
+    _ttsRearmTimer = null;
+  }
+}
 
-  try {
-    _waitForInitialTtsCompletion()
-      .then((info = {}) => {
-        const trigger = info?.source || 'UtteranceEnd';
-        try {
-          _console('log', `[bootstrap] UtteranceEnd observed — scheduling VAD arm (trigger=${trigger})`);
-        } catch {}
-        attemptArm(trigger);
+function _scheduleVadRearmAfterTts(trigger = 'UtteranceEnd') {
+  _cancelTtsRearmTimer();
+  _ttsRearmTimer = setTimeout(() => {
+    _ttsRearmTimer = null;
+    if (_ttsHoldActive) return;
+    try {
+      _console('log', `[bootstrap] VAD re-arming after TTS (trigger=${trigger})`);
+    } catch {}
+    armVAD(_lastMicStream ?? undefined)
+      .then(() => {
+        _ensureVoiceCtxLoaded();
+        try { _console('log', '[bootstrap] VAD armed — ready for user audio'); } catch {}
       })
       .catch((err) => {
-        try {
-          _console('warn', '[bootstrap] UtteranceEnd wait failed; arming VAD via fallback', err);
-        } catch {}
-        attemptArm('timeout');
+        try { _console('warn', '[bootstrap] VAD re-arm failed after TTS', err); } catch {}
       });
-  } catch (err) {
-    try { _console('warn', '[bootstrap] Unable to defer VAD; arming immediately', err); } catch {}
-    attemptArm('immediate');
-  }
+  }, TTS_REARM_DELAY_MS);
 }
 
 function wireWSEventsOnce(){
@@ -378,6 +314,34 @@ function wireWSEventsOnce(){
   window.addEventListener('askchip-ws', (ev) => {
     const d = ev.detail || {};
     const t = d.type || '';
+    const normalizedType = typeof t === 'string' ? t : '';
+    const frameTurnId = d && d.turn_id != null ? String(d.turn_id) : null;
+
+    if (normalizedType === 'TTS_START' || normalizedType === 'assistant_audio' || normalizedType === 'tts:start') {
+      if (!_ttsHoldActive) {
+        _ttsHoldActive = true;
+        _ttsActiveTurnId = frameTurnId;
+        _cancelTtsRearmTimer();
+        try {
+          disarmVAD();
+          _console('log', '[bootstrap] VAD disarmed while TTS is active');
+        } catch (err) {
+          try { _console('warn', '[bootstrap] VAD disarm failed during TTS', err); } catch {}
+        }
+      } else if (!_ttsActiveTurnId && frameTurnId) {
+        _ttsActiveTurnId = frameTurnId;
+      }
+    }
+
+    if (normalizedType === 'UtteranceEnd' || normalizedType === 'utteranceend') {
+      const idsMatch =
+        !_ttsActiveTurnId || !frameTurnId || String(frameTurnId) === String(_ttsActiveTurnId);
+      if (_ttsHoldActive && idsMatch) {
+        _ttsHoldActive = false;
+        _ttsActiveTurnId = null;
+        _scheduleVadRearmAfterTts('UtteranceEnd');
+      }
+    }
 
     if (seen < 5 || (!loggedTypes.has(t) && loggedTypes.size < 12)) {
       try { _console('log', '[WS→UI]', JSON.stringify(d)); } catch {}
@@ -574,8 +538,11 @@ async function startOnce(){
 
     try {
       const stream = await initMic(visualizerStream ?? undefined);
-      _console('log', '[bootstrap] startOnce mic initialized — deferring VAD arm until greet completes');
-      _scheduleVadArmAfterGreet(stream, { startBtn, endBtn });
+      _lastMicStream = stream ?? null;
+      _console('log', '[bootstrap] startOnce mic initialized — arming VAD for voice turns');
+      await armVAD(stream ?? undefined);
+      _console('log', '[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
+      _ensureVoiceCtxLoaded();
     } catch (e) {
       _handleMicVadFailure(e, { startBtn, endBtn });
       return;

@@ -3075,7 +3075,6 @@ def schedule_tts_audio(session_id: str,
                 _admin_emit('UtteranceEnd', **end_payload)
             except Exception:
                 pass
-            _broadcast_admin_ws_event('UtteranceEnd', end_payload)
             try:
                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
             except Exception:
@@ -3096,6 +3095,14 @@ def schedule_tts_audio(session_id: str,
             except Exception:
                 pass
             _broadcast_admin_ws_event('tts:start', start_payload)
+
+            start_frame: Dict[str, Any] = {"type": "TTS_START", "turn_id": safe_turn_id}
+            if correlation_user_msg_id:
+                start_frame["correlation_user_msg_id"] = correlation_user_msg_id
+            try:
+                bus.broadcast(session_id, start_frame)
+            except Exception:
+                pass
 
             # Chunk and broadcast
             mv = memoryview(stream_payload)
@@ -3378,6 +3385,10 @@ def run_ws_greet(session_id: str) -> str:
         for fr in frames
         if isinstance(fr, dict) and fr.get("type") is not None
     ]
+    try:
+        _apply_assistant_turn_state(session_id, frames)
+    except Exception:
+        pass
     state_already_sent = any(ft == "state" for ft in existing_frame_types)
     suggestions_already_sent = any(ft == "suggestions" for ft in existing_frame_types)
 

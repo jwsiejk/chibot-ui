@@ -1344,6 +1344,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     manual_feature_enabled = True
     manual_mode_manual_only = False
     auto_commit_when_ready = True
+    ws_configured = False
     try:
         runtime_cfg = db.get_config()
         if isinstance(runtime_cfg, dict):
@@ -1928,8 +1929,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if target_turn:
             with contextlib.suppress(Exception):
                 bus.cancel_turn(sid, target_turn)
-        with contextlib.suppress(Exception):
-            bus.broadcast(sid, {"type": "state", "phase": "ready"})
+        _send_barge_state("ready")
         _jlog(
             "turn_committed",
             sid=sid,
@@ -2297,7 +2297,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             chunk_len = len(chunk) if isinstance(chunk, (bytes, bytearray)) else 0
             ok = await _send_chunk(chunk, from_buffer=True)
             if ok:
-                buffered_chunks.popleft()
+                if buffered_chunks:
+                    buffered_chunks.popleft()
                 flushed_chunks += 1
                 flushed_bytes += chunk_len
                 if callable(final_guard_reset_ref[0]):
@@ -2455,6 +2456,21 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         should_pause = not (
                             manual_mode_manual_only and commit_mode == "auto_commit"
                         )
+                        if should_pause:
+                            active_assistant_turn = current_assistant_turn_ref[0]
+                            tts_state, _tts_key = _lookup_tts_state(
+                                sid, active_assistant_turn
+                            )
+                            if _is_tts_active(tts_state):
+                                should_pause = False
+                                try:
+                                    _jlog(
+                                        "barge_skip_tts_active",
+                                        sid=sid,
+                                        turn_hint=turn_hint,
+                                    )
+                                except Exception:
+                                    pass
                         if not manual_turn_active[0] and should_pause:
                             try:
                                 barge_started = barge.start(
@@ -2769,6 +2785,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             auto_commit_when_ready = bool(
                                 cfg.get("auto_commit_when_ready", auto_commit_when_ready)
                             )
+                            ws_configured = True
                             _jlog(
                                 "ws_configure",
                                 sid=sid,
@@ -3217,6 +3234,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     with contextlib.suppress(Exception):
                                         barge.cancel(_send_barge_state)
                                 await asyncio.sleep(0)
+
+                            if ws_configured and not turn_stream_committed[0]:
+                                _on_barge_commit()
 
                             active_turn_mode_ref[0] = "vad"
                             turn_commit_mode_ref[0] = "vad"
