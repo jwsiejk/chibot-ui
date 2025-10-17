@@ -44,6 +44,89 @@ const PRE_ROLL_MS = 550,
 
 const ctxRef = { current: null };
 
+const initAsrState = () => ({ speaking: false, lastPartialTs: 0, lastConf: 0 });
+
+const ensureAsrState = (ctx) => {
+  if (!ctx?.state) return initAsrState();
+  if (!ctx.state.asr) {
+    ctx.state.asr = initAsrState();
+  }
+  return ctx.state.asr;
+};
+
+const resetAsrState = (ctx) => {
+  const target = ensureAsrState(ctx);
+  target.speaking = false;
+  target.lastPartialTs = 0;
+  target.lastConf = 0;
+};
+
+const dualVadEnabled = (ctx) => !!(ctx?.config?.dual_vad?.enabled);
+
+const asrStaleMs = (ctx) => {
+  const raw = ctx?.config?.dual_vad?.asr_stale_ms;
+  return Number.isFinite(raw) && raw > 0 ? raw : 800;
+};
+
+const commitConfidenceThreshold = (ctx) => {
+  const raw = ctx?.config?.dual_vad?.commit_conf;
+  return Number.isFinite(raw) ? raw : 0.6;
+};
+
+const quietCloseMs = (ctx) => {
+  const raw = ctx?.config?.dual_vad?.close_quiet_ms;
+  return Number.isFinite(raw) && raw >= 0 ? raw : 700;
+};
+
+const isAsrSpeakingNow = (ctx) => {
+  if (!dualVadEnabled(ctx)) return true;
+  const asr = ensureAsrState(ctx);
+  const age = nowMs() - (Number.isFinite(asr.lastPartialTs) ? asr.lastPartialTs : 0);
+  return !!asr.speaking && age < asrStaleMs(ctx);
+};
+
+const onAsrPartial = (ctx, partial = {}) => {
+  const asr = ensureAsrState(ctx);
+  const conf = Number.isFinite(partial?.confidence) ? partial.confidence : null;
+  if (Number.isFinite(conf)) {
+    asr.lastConf = Math.max(asr.lastConf ?? 0, conf);
+  }
+  asr.lastPartialTs = nowMs();
+  asr.speaking = true;
+};
+
+const onAsrVad = (ctx, event = {}) => {
+  const asr = ensureAsrState(ctx);
+  const type = (event?.type || '').toLowerCase();
+  if (type === 'speech_start' || type === 'start' || type === 'begin') {
+    asr.speaking = true;
+    asr.lastPartialTs = nowMs();
+  } else if (type === 'speech_end' || type === 'end' || type === 'stop') {
+    asr.speaking = false;
+  }
+};
+
+const clearDualVadTimer = (ctx) => {
+  if (!ctx?.state?.dualVadCloseTimer) return;
+  try { clearTimeout(ctx.state.dualVadCloseTimer); } catch {}
+  ctx.state.dualVadCloseTimer = null;
+};
+
+const scheduleDualVadTimer = (ctx) => {
+  if (!ctx?.state || !dualVadEnabled(ctx) || !ctx.state.turnOpen) return;
+  const delay = quietCloseMs(ctx);
+  if (!Number.isFinite(delay) || delay <= 0) {
+    return;
+  }
+  clearDualVadTimer(ctx);
+  ctx.state.dualVadCloseTimer = setTimeout(() => {
+    ctx.state.dualVadCloseTimer = null;
+    if (!attemptCloseWithReason(ctx, 'dual_vad_quiet', 'dual_vad_quiet')) {
+      scheduleDualVadTimer(ctx);
+    }
+  }, delay);
+};
+
 const voiceLog = (level, ...args) => {
   logIfEnabled(() => {
     try {
@@ -91,6 +174,8 @@ const setManualGate = (ctx, active) => {
   const value = !!active;
   ctx.state.manualGate = value;
   ctx.state.manualPttActive = value;
+  ctx.state.pendingCommitReason = null;
+  clearDualVadTimer(ctx);
 };
 
 const logReadyState = (ctx) => {
@@ -218,6 +303,11 @@ const ensureCtx = () => {
       turnSeq: 0, activeTurnId: null,
       ttsPlaying: false, lastChunkAt: 0,
       lastReadyLogAt: 0,
+      vadRecording: false,
+      lastUserAudioMs: 0,
+      pendingCommitReason: null,
+      asr: initAsrState(),
+      dualVadCloseTimer: null,
       evidenceGate, shadowBuffer, ttsMask,
     },
     audio: {
@@ -233,6 +323,7 @@ const ensureCtx = () => {
   };
 
   registerTtsListener(ctx);
+  registerWsListener(ctx);
   ctx.ttsEndedAtMs = 0;
   ctxRef.current = ctx;
   return ctx;
@@ -278,6 +369,144 @@ const registerTtsListener = (ctx) => {
   };
   try { win?.addEventListener?.('chip-tts', listener, { passive: true }); } catch {}
 };
+
+const normalizeVadLabel = (value) => (typeof value === 'string' ? value.toLowerCase() : '');
+
+const resolveVadEventType = (frame) => {
+  if (!frame || typeof frame !== 'object') return null;
+  const metaVad = normalizeVadLabel(frame?.meta?.local_vad);
+  if (metaVad) {
+    if (['start', 'active', 'speech_start', 'begin'].includes(metaVad)) return 'speech_start';
+    if (['stop', 'end', 'inactive', 'speech_end'].includes(metaVad)) return 'speech_end';
+  }
+
+  const candidates = [
+    frame?.type,
+    frame?.event,
+    frame?.kind,
+    frame?.label,
+    frame?.state,
+    frame?.signal,
+    frame?.detail?.type,
+    frame?.detail?.event,
+    frame?.payload?.type,
+    frame?.payload?.event,
+  ].map(normalizeVadLabel);
+
+  for (const token of candidates) {
+    if (!token) continue;
+    if (token.includes('speech_start')) return 'speech_start';
+    if (token.includes('speech_end')) return 'speech_end';
+    if (token.includes('vad')) {
+      if (token.includes('start') || token.includes('begin') || token.includes('active')) {
+        return 'speech_start';
+      }
+      if (token.includes('stop') || token.includes('end') || token.includes('inactive')) {
+        return 'speech_end';
+      }
+    }
+  }
+  return null;
+};
+
+const extractAsrConfidence = (frame) => {
+  const alt = Array.isArray(frame?.channel?.alternatives)
+    ? frame.channel.alternatives[0]
+    : (Array.isArray(frame?.alternatives) ? frame.alternatives[0] : null);
+  const confs = [
+    alt?.confidence,
+    frame?.confidence,
+    frame?.detail?.confidence,
+    frame?.payload?.confidence,
+  ];
+  for (const value of confs) {
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+};
+
+function shouldCloseTurn(ctx) {
+  if (!ctx?.state) return true;
+  if (!dualVadEnabled(ctx)) return true;
+  const clientSilent = ctx.state.vadRecording === false;
+  const asrSilent = !isAsrSpeakingNow(ctx);
+  const lastAudio = Number.isFinite(ctx.state.lastUserAudioMs) ? ctx.state.lastUserAudioMs : 0;
+  const quietMs = lastAudio > 0 ? Math.max(0, nowMs() - lastAudio) : 0;
+  return (clientSilent && asrSilent) || quietMs > quietCloseMs(ctx);
+}
+
+const frameIndicatesAsrResult = (frame) => {
+  const type = normalizeVadLabel(frame?.type);
+  const event = normalizeVadLabel(frame?.event);
+  return type === 'result' || type === 'results' || event === 'result' || event === 'results';
+};
+
+function handleWsFrame(ctx, frame) {
+  if (!ctx?.state) return;
+  const type = normalizeVadLabel(frame?.type);
+  const event = normalizeVadLabel(frame?.event);
+
+  if (frameIndicatesAsrResult(frame)) {
+    const confidence = extractAsrConfidence(frame);
+    onAsrPartial(ctx, { confidence });
+    if (dualVadEnabled(ctx) && Number.isFinite(confidence) && confidence >= commitConfidenceThreshold(ctx)) {
+      if (!ctx.state.pendingCommitReason) {
+        ctx.state.pendingCommitReason = 'asr_confidence';
+      }
+    }
+    if (dualVadEnabled(ctx)) {
+      const attempt = maybeCommitSpeech(ctx);
+      if (attempt && typeof attempt.then === 'function') {
+        attempt.catch(() => {});
+      }
+    }
+    const isFinal = Boolean(
+      frame?.channel?.is_final ?? frame?.is_final ?? frame?.final ?? frame?.detail?.is_final
+    );
+    if (isFinal) {
+      ensureAsrState(ctx).speaking = false;
+    }
+    return;
+  }
+
+  const vadType = resolveVadEventType(frame);
+  if (vadType) {
+    onAsrVad(ctx, { type: vadType });
+    if (dualVadEnabled(ctx) && vadType === 'speech_start') {
+      const attempt = maybeCommitSpeech(ctx);
+      if (attempt && typeof attempt.then === 'function') {
+        attempt.catch(() => {});
+      }
+    } else if (dualVadEnabled(ctx) && vadType === 'speech_end') {
+      if (!attemptCloseWithReason(ctx, 'asr_vad_end', 'asr_vad_end')) {
+        scheduleDualVadTimer(ctx);
+      }
+    }
+    return;
+  }
+
+  if (type === 'utteranceend' || event === 'utteranceend') {
+    ensureAsrState(ctx).speaking = false;
+    if (dualVadEnabled(ctx)) {
+      if (!attemptCloseWithReason(ctx, 'utterance_end', 'utterance_end')) {
+        scheduleDualVadTimer(ctx);
+      }
+    }
+  }
+}
+
+function registerWsListener(ctx) {
+  if (!ctx || ctx.wsListenerRegistered) return;
+  const win = typeof window !== 'undefined' ? window : null;
+  const handler = (ev) => {
+    try { handleWsFrame(ctx, ev?.detail); } catch {}
+  };
+  try { win?.addEventListener?.('askchip-ws', handler, { passive: true }); } catch {}
+  ctx.wsListenerRegistered = true;
+  ctx.wsListener = handler;
+}
 
 const ensureTransport = async (ctx) => {
   if (ctx.transport.connected) {
@@ -389,8 +618,10 @@ const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
   if (!blob) {
     return;
   }
+  const tsNow = nowMs();
   sendAudioChunk(blob);
-  ctx.state.lastChunkAt = nowMs();
+  ctx.state.lastChunkAt = tsNow;
+  ctx.state.lastUserAudioMs = tsNow;
   ctx.evidenceGate.extendBuffer({ durationMs });
   scheduleSafetyClose(ctx);
 };
@@ -453,7 +684,12 @@ const closeTurn = (ctx, reason = 'vad_end') => {
   }
   const turnId = ctx.state.activeTurnId || ctx.state.turnSeq || null;
   safeCloseStream('adaptive');
+  clearDualVadTimer(ctx);
   ctx.state.turnOpen = false;
+  ctx.state.pendingCommitReason = null;
+  ctx.state.vadRecording = false;
+  ctx.state.lastUserAudioMs = 0;
+  resetAsrState(ctx);
   const ts = Date.now();
   const stats = getShadowStats(ctx.state);
   emitVoiceEvent('turn_close', {
@@ -477,6 +713,77 @@ const closeTurn = (ctx, reason = 'vad_end') => {
   } catch {}
   scheduleSafetyClose(ctx);
 };
+
+function finalizeTurnClose(ctx, reason = 'dual_vad_quiet', resetReason = reason) {
+  closeTurn(ctx, reason);
+  ctx.evidenceGate.reset(resetReason);
+  ctx.shadowBuffer.clear();
+  ctx.audio.lastTimecode = null;
+  setState(ctx, TurnState.Listening);
+}
+
+function attemptCloseWithReason(ctx, reason = 'dual_vad_quiet', resetReason = reason) {
+  if (!ctx?.state?.turnOpen) {
+    return false;
+  }
+  if (!shouldCloseTurn(ctx)) {
+    return false;
+  }
+  finalizeTurnClose(ctx, reason, resetReason);
+  return true;
+}
+
+function shouldCommitTurn(ctx) {
+  if (!ctx?.state) return false;
+  if (ctx.state.turnOpen) return false;
+  if (ctx.state.ttsPlaying || ctx.state.manualGate) return false;
+  if (!dualVadEnabled(ctx)) {
+    return true;
+  }
+  const clientSaysSpeech = ctx.state.vadRecording === true;
+  const asrSpeaking = isAsrSpeakingNow(ctx);
+  const asrConfOK = (ensureAsrState(ctx).lastConf ?? 0) >= commitConfidenceThreshold(ctx);
+  return (clientSaysSpeech && asrSpeaking) || asrConfOK;
+}
+
+function maybeCommitSpeech(ctx, reason = 'speech_commit') {
+  if (!ctx?.state) return null;
+  if (ctx.state.turnOpen) {
+    ctx.state.pendingCommitReason = null;
+    return null;
+  }
+
+  if (!dualVadEnabled(ctx)) {
+    if (!reason && !ctx.state.pendingCommitReason) {
+      return null;
+    }
+    if (reason && !ctx.state.pendingCommitReason) {
+      ctx.state.pendingCommitReason = reason;
+    }
+    if (!shouldCommitTurn(ctx)) {
+      return null;
+    }
+    const commitReason = reason || ctx.state.pendingCommitReason || 'speech_commit';
+    ctx.state.pendingCommitReason = null;
+    return openTurn(ctx, commitReason);
+  }
+
+  if (reason && !ctx.state.pendingCommitReason) {
+    ctx.state.pendingCommitReason = reason;
+  }
+
+  if (!ctx.state.pendingCommitReason) {
+    return null;
+  }
+
+  if (!shouldCommitTurn(ctx)) {
+    return null;
+  }
+
+  const commitReason = ctx.state.pendingCommitReason || reason || 'speech_commit';
+  ctx.state.pendingCommitReason = null;
+  return openTurn(ctx, commitReason);
+}
 
 const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', asrCue = null } = {}) => {
   if (ctx.state.manualGate) {
@@ -506,7 +813,10 @@ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', a
   });
   if (result.shouldCommit) {
     ctx.evidenceGate.satisfy('commit');
-    await openTurn(ctx, 'evidence_gate_commit');
+    const pending = maybeCommitSpeech(ctx, 'evidence_gate_commit');
+    if (pending && typeof pending.then === 'function') {
+      pending.catch(() => {});
+    }
     if (detail) ctx.evidenceGate.setDetail(detail);
   }
 };
@@ -521,6 +831,7 @@ const handleSpeechStart = async (ctx, detail) => {
   if (isTtsMaskActive(ctx)) {
     return;
   }
+  clearDualVadTimer(ctx);
   ctx.state.bargeConfirmActive = true;
   ctx.state.bargeConfirmUntil = nowMs() + BARGE_CONFIRM_MS;
   setState(ctx, TurnState.Recording, { detail });
@@ -528,6 +839,10 @@ const handleSpeechStart = async (ctx, detail) => {
   ctx.evidenceGate.start({ startedAt: nowMs(), detail, bufferedMs: stats.durationMs, bufferedBytes: stats.totalBytes });
   emitVoiceEvent('speech_start', detail);
   await evaluateEvidenceGate(ctx, { detail, vadState: 'speech' });
+  const commitAttempt = maybeCommitSpeech(ctx);
+  if (commitAttempt && typeof commitAttempt.then === 'function') {
+    commitAttempt.catch(() => {});
+  }
 };
 
 const handleSpeechEnd = async (ctx, detail) => {
@@ -538,11 +853,11 @@ const handleSpeechEnd = async (ctx, detail) => {
   ctx.state.bargeConfirmUntil = 0;
   emitVoiceEvent('speech_end', detail);
   await evaluateEvidenceGate(ctx, { detail, vadState: 'silence', asrCue: { type: 'vad_end' } });
-  closeTurn(ctx, 'speech_end');
-  ctx.evidenceGate.reset('vad_end');
-  ctx.shadowBuffer.clear();
-  ctx.audio.lastTimecode = null;
+  if (attemptCloseWithReason(ctx, 'vad_end', 'vad_end')) {
+    return;
+  }
   setState(ctx, TurnState.Listening);
+  scheduleDualVadTimer(ctx);
 };
 
 const ensureVad = (ctx, opts = {}) => {
@@ -557,8 +872,14 @@ const ensureVad = (ctx, opts = {}) => {
     minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
     gateFn: () => !isTtsMaskActive(ctx),
   }, {
-    onSpeechStart: (detail) => { handleSpeechStart(ctx, detail); },
-    onSpeechEnd: (detail) => { handleSpeechEnd(ctx, detail); },
+    onSpeechStart: (detail) => {
+      ctx.state.vadRecording = true;
+      handleSpeechStart(ctx, detail);
+    },
+    onSpeechEnd: (detail) => {
+      ctx.state.vadRecording = false;
+      handleSpeechEnd(ctx, detail);
+    },
   });
   audio.vad.start();
   ctx.state.vadArmed = true;
@@ -637,6 +958,8 @@ export function bargeIn() {
   ctx.state.manualBargeInUsed = true;
   ctx.state.bargeConfirmActive = false;
   ctx.state.bargeConfirmUntil = 0;
+  ctx.state.pendingCommitReason = null;
+  clearDualVadTimer(ctx);
   try { stopPlayback(); } catch {}
   if (ctx.state.turnOpen) {
     closeTurn(ctx, 'manual_barge_preempt');

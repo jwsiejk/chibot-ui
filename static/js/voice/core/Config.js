@@ -37,6 +37,12 @@ const DEFAULT_CONFIG = {
     drop_if_no_partial: true,
     no_partial_timeout_ms: 1200,
   },
+  dual_vad: {
+    enabled: true,
+    commit_conf: 0.6,
+    asr_stale_ms: 800,
+    close_quiet_ms: 700,
+  },
   transport: {
     close_on_turn_end: false,
   },
@@ -89,6 +95,12 @@ export function getConfig() {
         source.commit?.drop_if_no_partial ?? DEFAULT_CONFIG.commit.drop_if_no_partial,
       no_partial_timeout_ms:
         source.commit?.no_partial_timeout_ms ?? DEFAULT_CONFIG.commit.no_partial_timeout_ms,
+    },
+    dual_vad: {
+      enabled: source.dual_vad?.enabled ?? DEFAULT_CONFIG.dual_vad.enabled,
+      commit_conf: source.dual_vad?.commit_conf ?? DEFAULT_CONFIG.dual_vad.commit_conf,
+      asr_stale_ms: source.dual_vad?.asr_stale_ms ?? DEFAULT_CONFIG.dual_vad.asr_stale_ms,
+      close_quiet_ms: source.dual_vad?.close_quiet_ms ?? DEFAULT_CONFIG.dual_vad.close_quiet_ms,
     },
     transport: {
       close_on_turn_end:

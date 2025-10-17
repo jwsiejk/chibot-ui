@@ -50,6 +50,7 @@ export function validateConfig(config) {
     shadow: { ...DEFAULT_CONFIG.shadow, ...config.shadow },
     evidence: { ...DEFAULT_CONFIG.evidence, ...config.evidence },
     metrics: { ...DEFAULT_CONFIG.metrics, ...config.metrics },
+    dual_vad: { ...DEFAULT_CONFIG.dual_vad, ...config.dual_vad },
   };
 
   clampNumber(result.commit, 'min_ms', {
@@ -107,6 +108,29 @@ export function validateConfig(config) {
   ensureBoolean(result.metrics, 'server_enabled', {
     fallback: DEFAULT_CONFIG.metrics.server_enabled,
     label: 'metrics.server_enabled',
+  });
+
+  ensureBoolean(result.dual_vad, 'enabled', {
+    fallback: DEFAULT_CONFIG.dual_vad.enabled,
+    label: 'dual_vad.enabled',
+  });
+
+  clampNumber(result.dual_vad, 'commit_conf', {
+    min: 0,
+    fallback: DEFAULT_CONFIG.dual_vad.commit_conf,
+    label: 'dual_vad.commit_conf',
+  });
+
+  clampNumber(result.dual_vad, 'asr_stale_ms', {
+    min: 0,
+    fallback: DEFAULT_CONFIG.dual_vad.asr_stale_ms,
+    label: 'dual_vad.asr_stale_ms',
+  });
+
+  clampNumber(result.dual_vad, 'close_quiet_ms', {
+    min: 0,
+    fallback: DEFAULT_CONFIG.dual_vad.close_quiet_ms,
+    label: 'dual_vad.close_quiet_ms',
   });
 
   return result;
