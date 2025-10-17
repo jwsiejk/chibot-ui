@@ -1,389 +1,254 @@
-diff --git a/app/__init__.py b/app/__init__.py
-index 1b6b0b32c61cca212eeedb0bd9c1cd072ae060d1..d8f2daf4499ed2038bf2e211c2c37fdc40389c1c 100644
---- a/app/__init__.py
-+++ b/app/__init__.py
-@@ -88,84 +88,105 @@ def create_app():
-         enabled = True
-         try:
-             enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
-         except Exception:
-             enabled = True
-         auth_config = {}
-         auto_login_email = (os.environ.get("ASKCHIP_AUTO_LOGIN_EMAIL") or "").strip()
-         if auto_login_email:
-             auth_config["autoLoginEmail"] = auto_login_email
-         vad_config = {}
-         try:
-             vad_config = {
-                 "baseThresholdDb": float(getattr(_SETTINGS, "vad_base_threshold_db", 10.0)),
-                 "exitThresholdDb": float(getattr(_SETTINGS, "vad_exit_threshold_db", 6.0)),
-                 "ttsBoostDb": float(getattr(_SETTINGS, "vad_tts_boost_db", 6.0)),
-                 "minSpeechMs": int(getattr(_SETTINGS, "vad_min_speech_ms", 360)),
-             }
-         except Exception:
-             vad_config = {}
- 
-         feature_flags = {
-             "feature_manual_barge_in": True,
-             "barge_in_mode_manual": False,
-             "auto_commit_when_ready": True,
-         }
-+        debug_config = {"vad": True}
-         try:
-             from .services import admin_settings as _admin_settings  # inline import to avoid cycles
- 
-             settings = _admin_settings.get_settings()
-         except Exception:
-             settings = {}
-         try:
-             from .db import db as _db
- 
-             db_cfg = _db.get_config()
-         except Exception:
-             db_cfg = {}
- 
-+        def _resolve_debug_vad(default: bool) -> bool:
-+            try:
-+                if isinstance(settings, dict):
-+                    debug_settings = settings.get("debug")
-+                    if isinstance(debug_settings, dict) and "vad" in debug_settings:
-+                        return bool(debug_settings.get("vad"))
-+            except Exception:
-+                pass
-+            try:
-+                if isinstance(db_cfg, dict):
-+                    debug_settings = db_cfg.get("debug")
-+                    if isinstance(debug_settings, dict) and "vad" in debug_settings:
-+                        return bool(debug_settings.get("vad"))
-+            except Exception:
-+                pass
-+            return default
-+
-+        debug_config["vad"] = _resolve_debug_vad(debug_config["vad"])
-+
-         def _resolve_flag(name: str, default: bool) -> bool:
-             if isinstance(settings, dict) and name in settings:
-                 return bool(settings.get(name))
-             if isinstance(db_cfg, dict) and name in db_cfg:
-                 return bool(db_cfg.get(name))
-             return default
- 
-         feature_flags["feature_manual_barge_in"] = _resolve_flag(
-             "feature_manual_barge_in", True
-         )
-         feature_flags["barge_in_mode_manual"] = _resolve_flag(
-             "barge_in_mode_manual", False
-         )
-         feature_flags["auto_commit_when_ready"] = _resolve_flag(
-             "auto_commit_when_ready", True
-         )
-         return {
-             "askchip_config": {
-                 "logging": {"enabled": enabled},
-                 "auth": auth_config,
-                 "vad": vad_config,
-+                "debug": debug_config,
-                 "features": feature_flags,
-                 "feature_manual_barge_in": feature_flags["feature_manual_barge_in"],
-                 "barge_in_mode_manual": feature_flags["barge_in_mode_manual"],
-                 "auto_commit_when_ready": feature_flags["auto_commit_when_ready"],
-             }
-         }
- 
-     @app.after_request
-     def maybe_allow_cors(resp):
-         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
-         if allow:
-             origins = [o.strip() for o in allow.split(",") if o.strip()]
-             ori = request.headers.get("Origin", "")
-             if ori in origins:
-                 resp.headers["Access-Control-Allow-Origin"] = ori
-                 resp.headers["Vary"] = "Origin"
-                 resp.headers["Access-Control-Allow-Credentials"] = "true"
-                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
-                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-         return resp
- 
-     @app.route("/<path:_>", methods=["OPTIONS"])
-     def _cors_preflight(_):
-         return ("", 204)
- 
-diff --git a/static/js/voice/core/Config.js b/static/js/voice/core/Config.js
-index ed295102958250c2ee32252e7cbfa6047f3bcf3b..733a9616e5bb2c49281107cd666086a365a1f695 100644
---- a/static/js/voice/core/Config.js
-+++ b/static/js/voice/core/Config.js
-@@ -1,29 +1,32 @@
- const DEFAULT_CONFIG = {
-   barge_in: {
-     mode: 'manual_only',
-   },
-+  debug: {
-+    vad: true,
-+  },
-   admin: {
-     voice_metrics_panel: true,
-   },
-   metrics: {
-     client_enabled: true,
-     server_enabled: true,
-   },
-   vad: {
-     enabled: true,
-     hysteresis: {
-       enter: 3,
-       exit: 4,
-     },
-   },
-   tts: {
-     mask_auto_vad: true,
-     decay_ms: 700,
-   },
-   evidence: {
-     snr_sigma: 2.5,
-     asr_conf: 0.65,
-     w1: 0.4,
-     w2: 0.2,
-     w3: 0.6,
-     threshold: 1.0,
-@@ -37,50 +40,53 @@ const DEFAULT_CONFIG = {
-     ms: 450,
-   },
-   commit: {
-     min_ms: 500,
-     drop_if_no_partial: true,
-     no_partial_timeout_ms: 1200,
-   },
-   dual_vad: {
-     enabled: true,
-     commit_conf: 0.6,
-     asr_stale_ms: 800,
-     close_quiet_ms: 700,
-   },
-   transport: {
-     close_on_turn_end: false,
-   },
- };
- 
- export function getConfig() {
-   const source = (typeof window !== 'undefined' && window.__askchip_config) || {};
- 
-   return {
-     barge_in: {
-       mode: source.barge_in?.mode ?? DEFAULT_CONFIG.barge_in.mode,
-     },
-+    debug: {
-+      vad: source.debug?.vad ?? DEFAULT_CONFIG.debug.vad,
-+    },
-     admin: {
-       voice_metrics_panel:
-         source.admin?.voice_metrics_panel ?? DEFAULT_CONFIG.admin.voice_metrics_panel,
-     },
-     metrics: {
-       client_enabled:
-         source.metrics?.client_enabled ?? DEFAULT_CONFIG.metrics.client_enabled,
-       server_enabled:
-         source.metrics?.server_enabled ?? DEFAULT_CONFIG.metrics.server_enabled,
-     },
-     vad: {
-       enabled: source.vad?.enabled ?? DEFAULT_CONFIG.vad.enabled,
-       hysteresis: {
-         enter: source.vad?.hysteresis?.enter ?? DEFAULT_CONFIG.vad.hysteresis.enter,
-         exit: source.vad?.hysteresis?.exit ?? DEFAULT_CONFIG.vad.hysteresis.exit,
-       },
-     },
-     tts: {
-       mask_auto_vad: source.tts?.mask_auto_vad ?? DEFAULT_CONFIG.tts.mask_auto_vad,
-       decay_ms: source.tts?.decay_ms ?? DEFAULT_CONFIG.tts.decay_ms,
-     },
-     evidence: {
-       snr_sigma: source.evidence?.snr_sigma ?? DEFAULT_CONFIG.evidence.snr_sigma,
-       asr_conf: source.evidence?.asr_conf ?? DEFAULT_CONFIG.evidence.asr_conf,
-       w1: source.evidence?.w1 ?? DEFAULT_CONFIG.evidence.w1,
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index 7761ac3fa2b0bf0e6af091200a8467317cf34613..1aa0ad68ce0ffd945e567d129497479d81f39fb1 100644
+index 1aa0ad68ce0ffd945e567d129497479d81f39fb1..eb13ee8ea3a800ca9a2bfbb4becd9b50a049aa3e 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -59,50 +59,51 @@ const PRE_ROLL_MS = 550,
-   EVIDENCE_MIN_SPEECH_MS = 480,
-   EVIDENCE_MIN_BYTES = 8 * 1024,
-   MIN_VALID_BLOB_BYTES = 1,
-   BARGE_CONFIRM_MS = 420;
- 
- const ctxRef = { current: null };
- 
- const initAsrState = () => ({ speaking: false, lastPartialTs: 0, lastConf: 0 });
- 
- const ensureAsrState = (ctx) => {
-   if (!ctx?.state) return initAsrState();
-   if (!ctx.state.asr) {
-     ctx.state.asr = initAsrState();
-   }
-   return ctx.state.asr;
- };
- 
- const resetAsrState = (ctx) => {
-   const target = ensureAsrState(ctx);
-   target.speaking = false;
-   target.lastPartialTs = 0;
-   target.lastConf = 0;
- };
- 
- const dualVadEnabled = (ctx) => !!(ctx?.config?.dual_vad?.enabled);
-+const dualVadDebugEnabled = (ctx) => ctx?.config?.debug?.vad === true;
- 
- const asrStaleMs = (ctx) => {
-   const raw = ctx?.config?.dual_vad?.asr_stale_ms;
-   return Number.isFinite(raw) && raw > 0 ? raw : 800;
- };
- 
- const commitConfidenceThreshold = (ctx) => {
-   const raw = ctx?.config?.dual_vad?.commit_conf;
-   return Number.isFinite(raw) ? raw : 0.6;
- };
- 
- const quietCloseMs = (ctx) => {
-   const raw = ctx?.config?.dual_vad?.close_quiet_ms;
-   return Number.isFinite(raw) && raw >= 0 ? raw : 700;
- };
- 
- const isAsrSpeakingNow = (ctx) => {
-   if (!dualVadEnabled(ctx)) return true;
-   const asr = ensureAsrState(ctx);
-   const age = nowMs() - (Number.isFinite(asr.lastPartialTs) ? asr.lastPartialTs : 0);
-   return !!asr.speaking && age < asrStaleMs(ctx);
- };
- 
- const onAsrPartial = (ctx, partial = {}) => {
-   const asr = ensureAsrState(ctx);
-@@ -447,50 +448,67 @@ const resolveVadEventType = (frame) => {
- const extractAsrConfidence = (frame) => {
-   const alt = Array.isArray(frame?.channel?.alternatives)
-     ? frame.channel.alternatives[0]
-     : (Array.isArray(frame?.alternatives) ? frame.alternatives[0] : null);
-   const confs = [
-     alt?.confidence,
-     frame?.confidence,
-     frame?.detail?.confidence,
-     frame?.payload?.confidence,
-   ];
-   for (const value of confs) {
-     if (Number.isFinite(value)) {
-       return value;
+@@ -319,50 +319,51 @@ const ensureCtx = () => {
+     evidence: config.evidence,
+   });
+   const shadowBuffer = new ShadowBuffer({ maxMs: config.shadow?.ms ?? PRE_ROLL_MS });
+   const ttsMask = new TtsMask();
+   try {
+     if (typeof window !== 'undefined') {
+       window.__askchip_voice_session_id = sessionId;
      }
-   }
-   return null;
+   } catch {}
+ 
+   const ctx = {
+     config,
+     sessionId,
+     state: {
+       turnState: TurnState.Ready, recording: false, vadArmed: false,
+       vadBoostDb: 0, vadNoiseBaselineDb: null, greetGateActive: false, greetGatePhase: 'idle',
+       greetGateWaiters: [], manualBargeInUsed: false,
+       bargeConfirmActive: false, bargeConfirmUntil: 0,
+       wsReady: false, turnOpen: false, hasOpenedTurn: false,
+       manualGate: false, manualPttActive: false, pttHeld: false,
+       turnSeq: 0, activeTurnId: null,
+       ttsPlaying: false, lastChunkAt: 0,
+       lastReadyLogAt: 0,
+       vadRecording: false,
+       lastUserAudioMs: 0,
++      preCommitASRFeed: false,
+       pendingCommitReason: null,
+       asr: initAsrState(),
+       dualVadCloseTimer: null,
+       evidenceGate, shadowBuffer, ttsMask,
+     },
+     audio: {
+       stream: null, context: null, source: null, analyser: null,
+       vad: null, recorder: null, recTimeslice: RECORD_TIMESLICE_MS,
+       lastTimecode: null,
+     },
+     transport: { wsPromise: null, connected: false, safetyTimer: null },
+     evidenceGate,
+     shadowBuffer,
+     ttsMask,
+     maskLogTimer: null,
+   };
+ 
+   registerTtsListener(ctx);
+   registerWsListener(ctx);
+   ctx.ttsEndedAtMs = 0;
+   ctxRef.current = ctx;
+   return ctx;
  };
  
- function shouldCloseTurn(ctx) {
-   if (!ctx?.state) return true;
-   if (!dualVadEnabled(ctx)) return true;
-   const clientSilent = ctx.state.vadRecording === false;
-   const asrSilent = !isAsrSpeakingNow(ctx);
-   const lastAudio = Number.isFinite(ctx.state.lastUserAudioMs) ? ctx.state.lastUserAudioMs : 0;
-   const quietMs = lastAudio > 0 ? Math.max(0, nowMs() - lastAudio) : 0;
-+  if (dualVadDebugEnabled(ctx)) {
-+    let quietLogMs = quietMs;
-+    try {
-+      if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-+        quietLogMs = performance.now() - (ctx.state.lastUserAudioMs || 0);
-+      } else {
-+        quietLogMs = Date.now() - (ctx.state.lastUserAudioMs || 0);
-+      }
-+    } catch {}
-+    try {
-+      console.debug('[dual-vad] close?', {
-+        clientSilent,
-+        asrSilent,
-+        quietMs: quietLogMs,
-+      });
-+    } catch {}
+ const registerTtsListener = (ctx) => {
+@@ -642,125 +643,138 @@ const startRecorder = (ctx, stream) => {
+ 
+ const stopRecorder = (ctx) => {
+   const { recorder } = ctx.audio;
+   if (!recorder) return;
+   try { if (recorder.state !== 'inactive') recorder.stop(); } catch {}
+   ctx.audio.recorder = null;
+   ctx.state.recording = false;
+ };
+ 
+ const handleRecorderData = (ctx, event) => {
+   const blob = event?.data;
+   if (!blob || typeof blob.size !== 'number' || blob.size < MIN_VALID_BLOB_BYTES) return;
+   const timecode = Number.isFinite(event?.timecode) ? event.timecode : null;
+   const { durationMs, nextTimecode } = bufferPreRollFrame({
+     shadowBuffer: ctx.shadowBuffer,
+     blob,
+     timecode,
+     timeslice: ctx.audio.recTimeslice,
+     fallbackMs: PRE_ROLL_MS,
+     lastTimecode: ctx.audio.lastTimecode,
+     onBuffered: ({ durationMs: dur, byteLength }) => {
+       ctx.evidenceGate.extendBuffer({ durationMs: dur, bytes: byteLength });
+     },
+   });
+   ctx.audio.lastTimecode = nextTimecode;
++  if (!ctx.state.turnOpen) {
++    if (ctx.state.preCommitASRFeed) {
++      try {
++        const maybePromise = sendAudioChunk(blob);
++        if (maybePromise && typeof maybePromise.catch === 'function') {
++          maybePromise.catch(() => {});
++        }
++      } catch {}
++    }
++    return;
 +  }
-   return (clientSilent && asrSilent) || quietMs > quietCloseMs(ctx);
- }
- 
- const frameIndicatesAsrResult = (frame) => {
-   const type = normalizeVadLabel(frame?.type);
-   const event = normalizeVadLabel(frame?.event);
-   return type === 'result' || type === 'results' || event === 'result' || event === 'results';
+   if (ctx.state.turnOpen) sendChunk(ctx, blob, { durationMs });
  };
  
- function handleWsFrame(ctx, frame) {
-   if (!ctx?.state) return;
-   const type = normalizeVadLabel(frame?.type);
-   const event = normalizeVadLabel(frame?.event);
+ const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
+   if (!blob) {
+     return;
+   }
+   const tsNow = nowMs();
+   sendAudioChunk(blob);
+   ctx.state.lastChunkAt = tsNow;
+   ctx.state.lastUserAudioMs = tsNow;
+   ctx.evidenceGate.extendBuffer({ durationMs });
+   scheduleSafetyClose(ctx);
+ };
  
-   if (frameIndicatesAsrResult(frame)) {
-     const confidence = extractAsrConfidence(frame);
-     onAsrPartial(ctx, { confidence });
-     if (dualVadEnabled(ctx) && Number.isFinite(confidence) && confidence >= commitConfidenceThreshold(ctx)) {
-       if (!ctx.state.pendingCommitReason) {
-         ctx.state.pendingCommitReason = 'asr_confidence';
-       }
+ const scheduleSafetyClose = (ctx) => {
+   if (ctx.transport.safetyTimer) { try { clearTimeout(ctx.transport.safetyTimer); } catch {} }
+   ctx.transport.safetyTimer = null;
+   if (!ctx.state.hasOpenedTurn || ctx.state.manualGate) {
+     return;
+   }
+   ctx.transport.safetyTimer = setTimeout(() => {
+     if (!ctx.state.turnOpen) return;
+     safeCloseStream('adaptive');
+     ctx.state.turnOpen = false;
+     teardownTransport(ctx);
+   }, SAFETY_CLOSE_DELAY_MS);
+ };
+ 
+ const openTurn = async (ctx, reason = 'speech_commit') => {
+   if (ctx.state.turnOpen) return;
+   await ensureTransport(ctx);
+   ctx.state.turnOpen = true;
+   ctx.state.hasOpenedTurn = true;
++  ctx.state.preCommitASRFeed = false;
+   ctx.state.turnSeq = (ctx.state.turnSeq || 0) + 1;
+   const turnId = ctx.state.turnSeq;
+   ctx.state.activeTurnId = turnId;
+   const ts = Date.now();
+   emitVoiceEvent('turn_open', {
+     reason,
+     turnId,
+     sessionId: ctx.sessionId || null,
+     ts_ms: ts,
+   });
+   voiceLog('info', '[turn] open', {
+     ts_ms: ts,
+     session_id: ctx.sessionId || null,
+     turn_id: turnId,
+     reason,
+   });
+   try {
+     if (typeof window !== 'undefined') {
+       window.__askchip_turn_trace_id = String(turnId);
      }
-     if (dualVadEnabled(ctx)) {
-       const attempt = maybeCommitSpeech(ctx);
-       if (attempt && typeof attempt.then === 'function') {
-@@ -886,51 +904,62 @@ function finalizeTurnClose(ctx, reason = 'dual_vad_quiet', resetReason = reason)
-   ctx.shadowBuffer.clear();
-   ctx.audio.lastTimecode = null;
+   } catch {}
+   const stats = flushShadowBuffer(ctx.shadowBuffer, (entry) => {
+     if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs: entry.durationMs });
+   });
+   ctx.evidenceGate.setBufferStats(stats);
+ };
+ 
+ const closeTurn = (ctx, reason = 'vad_end') => {
+   if (!ctx.state.turnOpen) {
+     if (!ctx.state.hasOpenedTurn) {
+       voiceLog('info', '[ws] CloseStream suppressed: no user turn yet', {
+         ts_ms: Date.now(),
+         session_id: ctx.sessionId || null,
+       });
+     }
+     return;
+   }
+   const turnId = ctx.state.activeTurnId || ctx.state.turnSeq || null;
+   safeCloseStream('adaptive');
+   clearDualVadTimer(ctx);
+   ctx.state.turnOpen = false;
++  ctx.state.preCommitASRFeed = false;
+   ctx.state.pendingCommitReason = null;
+   ctx.state.vadRecording = false;
+   ctx.state.lastUserAudioMs = 0;
+   resetAsrState(ctx);
+   const ts = Date.now();
+   const stats = getShadowStats(ctx.state);
+   emitVoiceEvent('turn_close', {
+     reason,
+     stats,
+     turnId,
+     sessionId: ctx.sessionId || null,
+     ts_ms: ts,
+   });
+   voiceLog('info', '[turn] close', {
+     ts_ms: ts,
+     session_id: ctx.sessionId || null,
+     turn_id: turnId,
+     reason,
+   });
+   ctx.state.activeTurnId = null;
+   try {
+     if (typeof window !== 'undefined') {
+       window.__askchip_turn_trace_id = null;
+     }
+   } catch {}
+@@ -1065,54 +1079,58 @@ const handleSpeechEnd = async (ctx, detail) => {
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
+   emitVoiceEvent('speech_end', detail);
+   await evaluateEvidenceGate(ctx, { detail, vadState: 'silence', asrCue: { type: 'vad_end' } });
+   if (attemptCloseWithReason(ctx, 'vad_end', 'vad_end')) {
+     return;
+   }
    setState(ctx, TurnState.Listening);
- }
+   scheduleDualVadTimer(ctx);
+ };
  
- function attemptCloseWithReason(ctx, reason = 'dual_vad_quiet', resetReason = reason) {
-   if (!ctx?.state?.turnOpen) {
-     return false;
-   }
-   if (!shouldCloseTurn(ctx)) {
-     return false;
-   }
-   finalizeTurnClose(ctx, reason, resetReason);
-   return true;
- }
+ const ensureVad = (ctx, opts = {}) => {
+   const { audio } = ctx;
+   if (audio.vad) return;
+   const echoStateFn = () => isTtsMaskActive(ctx);
+   audio.vad = new VAD(audio.analyser, {
+     startDbOffset: 6 + ctx.state.vadBoostDb,
+     stopDbOffset: 6 + ctx.state.vadBoostDb,
+     echoStateFn,
+     minSpeechMs: Math.max(160, opts.minSpeechMs ?? 200),
+     minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
+     gateFn: () => !isTtsMaskActive(ctx),
+   }, {
+     onSpeechStart: (detail) => {
+       ctx.state.vadRecording = true;
++      ctx.state.preCommitASRFeed = true;
+       handleSpeechStart(ctx, detail);
+     },
+     onSpeechEnd: (detail) => {
+       ctx.state.vadRecording = false;
++      if (!ctx.state.turnOpen) {
++        ctx.state.preCommitASRFeed = false;
++      }
+       handleSpeechEnd(ctx, detail);
+     },
+   });
+   audio.vad.start();
+   ctx.state.vadArmed = true;
+   setState(ctx, TurnState.Listening);
+ };
  
- function shouldCommitTurn(ctx) {
-   if (!ctx?.state) return false;
-   if (ctx.state.turnOpen) return false;
-   if (ctx.state.ttsPlaying || ctx.state.manualGate) return false;
-   if (!dualVadEnabled(ctx)) {
-     return true;
-   }
-   const clientSaysSpeech = ctx.state.vadRecording === true;
-   const asrSpeaking = isAsrSpeakingNow(ctx);
--  const asrConfOK = (ensureAsrState(ctx).lastConf ?? 0) >= commitConfidenceThreshold(ctx);
-+  const asrState = ensureAsrState(ctx);
-+  const asrConf = asrState.lastConf ?? 0;
-+  const asrConfOK = asrConf >= commitConfidenceThreshold(ctx);
-+  if (dualVadDebugEnabled(ctx)) {
-+    try {
-+      console.debug('[dual-vad] commit?', {
-+        client: ctx.state.vadRecording,
-+        asrSpeaking,
-+        asrConf,
-+      });
-+    } catch {}
-+  }
-   return (clientSaysSpeech && asrSpeaking) || asrConfOK;
- }
+ const teardownVad = (ctx) => {
+   const { audio } = ctx;
+   if (audio.vad) { try { audio.vad.stop(); } catch {} }
+   audio.vad = null;
+   ctx.state.vadArmed = false;
+ };
  
- function maybeCommitSpeech(ctx, reason = 'speech_commit') {
-   if (!ctx?.state) return null;
-   if (ctx.state.turnOpen) {
-     ctx.state.pendingCommitReason = null;
-     return null;
-   }
+ const ensureGreetGate = (ctx, active) => {
+   ctx.state.greetGateActive = !!active;
+   if (!active) { ctx.state.greetGatePhase = 'idle'; ctx.state.greetGateWaiters = []; }
+   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
+ };
  
-   if (!dualVadEnabled(ctx)) {
-     if (!reason && !ctx.state.pendingCommitReason) {
-       return null;
-     }
-     if (reason && !ctx.state.pendingCommitReason) {
-       ctx.state.pendingCommitReason = reason;
-     }
-     if (!shouldCommitTurn(ctx)) {
-       return null;
-     }
-     const commitReason = reason || ctx.state.pendingCommitReason || 'speech_commit';
-     ctx.state.pendingCommitReason = null;
-     return openTurn(ctx, commitReason);
-   }
+ const manualBargeAllowed = (ctx) => isTtsMaskActive(ctx);
  
+ export async function initMic(stream = null) {
+   const ctx = ensureCtx();

@@ -341,6 +341,7 @@ const ensureCtx = () => {
       lastReadyLogAt: 0,
       vadRecording: false,
       lastUserAudioMs: 0,
+      preCommitASRFeed: false,
       pendingCommitReason: null,
       asr: initAsrState(),
       dualVadCloseTimer: null,
@@ -664,6 +665,17 @@ const handleRecorderData = (ctx, event) => {
     },
   });
   ctx.audio.lastTimecode = nextTimecode;
+  if (!ctx.state.turnOpen) {
+    if (ctx.state.preCommitASRFeed) {
+      try {
+        const maybePromise = sendAudioChunk(blob);
+        if (maybePromise && typeof maybePromise.catch === 'function') {
+          maybePromise.catch(() => {});
+        }
+      } catch {}
+    }
+    return;
+  }
   if (ctx.state.turnOpen) sendChunk(ctx, blob, { durationMs });
 };
 
@@ -698,6 +710,7 @@ const openTurn = async (ctx, reason = 'speech_commit') => {
   await ensureTransport(ctx);
   ctx.state.turnOpen = true;
   ctx.state.hasOpenedTurn = true;
+  ctx.state.preCommitASRFeed = false;
   ctx.state.turnSeq = (ctx.state.turnSeq || 0) + 1;
   const turnId = ctx.state.turnSeq;
   ctx.state.activeTurnId = turnId;
@@ -739,6 +752,7 @@ const closeTurn = (ctx, reason = 'vad_end') => {
   safeCloseStream('adaptive');
   clearDualVadTimer(ctx);
   ctx.state.turnOpen = false;
+  ctx.state.preCommitASRFeed = false;
   ctx.state.pendingCommitReason = null;
   ctx.state.vadRecording = false;
   ctx.state.lastUserAudioMs = 0;
@@ -1087,10 +1101,14 @@ const ensureVad = (ctx, opts = {}) => {
   }, {
     onSpeechStart: (detail) => {
       ctx.state.vadRecording = true;
+      ctx.state.preCommitASRFeed = true;
       handleSpeechStart(ctx, detail);
     },
     onSpeechEnd: (detail) => {
       ctx.state.vadRecording = false;
+      if (!ctx.state.turnOpen) {
+        ctx.state.preCommitASRFeed = false;
+      }
       handleSpeechEnd(ctx, detail);
     },
   });
