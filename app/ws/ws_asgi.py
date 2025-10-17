@@ -627,14 +627,17 @@ async def _register_voice_metrics_subscriber(conn_id: str, send) -> bool:
         _VOICE_METRICS_SUBSCRIBERS[conn_id] = partial(_ws_send_json, send)
     return True
 
-
 async def _unregister_voice_metrics_subscriber(conn_id: str) -> None:
     lock = _get_voice_metrics_lock()
     async with lock:
         _VOICE_METRICS_SUBSCRIBERS.pop(conn_id, None)
 
 
-async def _pump_bus_to_client(sid: str, send):
+async def _pump_bus_to_client(
+    sid: str,
+    send,
+    on_frame: Optional[Callable[[Dict[str, Any]], None]] = None,
+):
     """Forward frames from StreamBus to the WS client as JSON, suppressing duplicate assistant finals."""
     import json as _json
     import asyncio
@@ -653,6 +656,10 @@ async def _pump_bus_to_client(sid: str, send):
             except Empty:
                 await asyncio.sleep(0.01)
                 continue
+
+            if callable(on_frame):
+                with contextlib.suppress(Exception):
+                    on_frame(fr)            
 
             # --- Duplicate assistant-final suppression ---
             try:
@@ -1304,7 +1311,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     with contextlib.suppress(Exception):
         clear_greet_turn_cache(sid)
 
-    bus_task = asyncio.create_task(_pump_bus_to_client(sid, send))
+    bus_task: Optional[asyncio.Task] = None)
 
     voice_metrics_registered = False
     try:
@@ -1430,6 +1437,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     manual_commit_pending = [False]
     manual_button_down = [False]
     manual_turn_active = [False]
+    # Runtime flags to coordinate commit + VAD gating
+    assistant_speaking = [False]
+    asr_ready = [False]
+    local_vad_open = [False]    
     turn_commit_mode_ref: List[str] = ["vad"]
     active_turn_mode_ref: List[str] = ["vad"]
     turn_timing: Dict[str, List[float]] = {
@@ -1537,6 +1548,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if _manual_mode_active():
             return
         local_vad_meta_sent[0] = True
+        _on_local_vad_start()
         if callable(final_guard_local_vad_ref[0]):
             with contextlib.suppress(Exception):
                 final_guard_local_vad_ref[0]("start")
@@ -1725,6 +1737,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         decision = window.cancel(reason, time.time())
         if decision.action == "abort" and decision.metrics is not None:
             _finalize_confirm_abort(reason, decision.metrics, window)
+            
+    def _on_assistant_tts_start(turn_id: Any) -> None:
+        assistant_speaking[0] = True
+        _ensure_confirm_closed("tts_start")
+        if not manual_button_down[0]:
+            with contextlib.suppress(Exception):
+                barge.cancel(_send_barge_state)
+
+    def _on_assistant_tts_end(turn_id: Any) -> None:
+        assistant_speaking[0] = False
+
+    def _on_asr_connect_ok() -> None:
+        asr_ready[0] = True
+
+    def _on_local_vad_start() -> None:
+        local_vad_open[0] = True
+
+    def _on_local_vad_stop() -> None:
+        local_vad_open[0] = False
+
+    def _handle_bus_frame(frame: Dict[str, Any]) -> None:
+        ftype_raw = frame.get("type")
+        ftype = (ftype_raw or "").lower()
+        if not ftype:
+            return
+        turn_id = frame.get("turn_id")
+        if ftype in {"tts_start", "assistant_audio", "tts:start"}:
+            _on_assistant_tts_start(turn_id)
+            if ftype == "assistant_audio":
+                is_last_val = frame.get("is_last")
+                is_last = False
+                if isinstance(is_last_val, bool):
+                    is_last = is_last_val
+                elif isinstance(is_last_val, str):
+                    is_last = is_last_val.strip().lower() in {"1", "true", "yes"}
+                elif isinstance(is_last_val, (int, float)):
+                    is_last = bool(is_last_val)
+                if is_last:
+                    _on_assistant_tts_end(turn_id)
+        elif ftype in {
+            "utteranceend",
+            "utterance_end",
+            "tts_end",
+            "tts:stop",
+            "tts_stop",
+        }:
+            _on_assistant_tts_end(turn_id)
 
     def _reset_turn_metrics(start_ts: float) -> None:
         turn_timing["start"][0] = start_ts
@@ -1913,8 +1972,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             _run_asr_stream_activation(trigger)
         )
 
-    def _on_barge_commit() -> None:
-        mode_raw = turn_commit_mode_ref[0]
+    def _on_barge_commit(forced_mode: Optional[str] = None) -> None:
+        mode_raw = forced_mode or turn_commit_mode_ref[0]
         mode = mode_raw or ("manual" if manual_commit_pending[0] else "vad")
         manual_commit_pending[0] = False
         turn_commit_mode_ref[0] = "vad"
@@ -2076,6 +2135,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             return False
 
         if dg_state == "open" and dg is not None:
+            asr_ready[0] = True            
             return True
 
         if dg_state == "connecting" and dg_connect_task is not None:
@@ -2093,6 +2153,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 dg_state = "connecting"
                 with contextlib.suppress(Exception):
                     asr_ready_evt.clear()
+                asr_ready[0] = False                    
                 asr_direct_stream[0] = False
 
                 cfg["_transport"] = transport
@@ -2139,6 +2200,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     )
                 )
                 _jlog("asr_connect_ok", sid=sid)
+                _on_asr_connect_ok()
                 _cancel_asr_not_ready_timeout()
 
                 queued_chunks = len(buffered_chunks)
@@ -2171,6 +2233,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 dg_state = "closed"
                 dg = None
                 asr_direct_stream[0] = False
+                asr_ready[0] = False                
                 _cancel_asr_not_ready_timeout()
                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
                 with contextlib.suppress(Exception):
@@ -2320,6 +2383,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             backpressure_drop_count = 0
             if dg_state == "open":
                 asr_direct_stream[0] = True
+
+        if bus_task is None:
+        bus_task = asyncio.create_task(
+            _pump_bus_to_client(sid, send, _handle_bus_frame)
+        )
 
     try:
         while True:
@@ -2493,6 +2561,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         else:
                             confirm_window_ref[0] = None
                             local_vad_meta_sent[0] = False
+                            local_vad_open[0] = False
                         with contextlib.suppress(Exception):
                             pending_final_turns.append(turn_id_ref[0])
                             completed_llm_turns.discard(turn_id_ref[0])
@@ -2523,7 +2592,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             )
                         if commit_mode == "auto_commit":
                             try:
-                                _on_barge_commit()
+                                _on_barge_commit("auto")
                             except Exception:
                                 pass
                     # Detect container early using raw bytes
@@ -2969,6 +3038,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             if callable(final_guard_local_vad_ref[0]):
                                 with contextlib.suppress(Exception):
                                     final_guard_local_vad_ref[0]("stop")
+                            _on_local_vad_stop()                                    
 
                             _ensure_confirm_closed("close_stream")
 
@@ -3219,9 +3289,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 elapsed = None
                                 if mic_first_ts[0]:
                                     elapsed = time.time() - mic_first_ts[0]
-                                if no_audio_window_s <= 0 or (
-                                    elapsed is not None and elapsed >= no_audio_window_s
-                                ):
+                                should_emit = (not assistant_speaking[0]) and (
+                                    no_audio_window_s <= 0
+                                    or (
+                                        elapsed is not None
+                                        and elapsed >= no_audio_window_s
+                                    )
+                                )
+                                if should_emit:
                                     _emit_no_audio_alert("close_stream")
 
                             if synthetic_emitted:
@@ -3236,7 +3311,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 await asyncio.sleep(0)
 
                             if ws_configured and not turn_stream_committed[0]:
-                                _on_barge_commit()
+                                if manual_commit_pending[0] and not assistant_speaking[0]:
+                                    _on_barge_commit("manual")
+                                elif (
+                                    auto_commit_when_ready
+                                    and asr_ready[0]
+                                    and (sent_any_audio[0] or local_vad_open[0])
+                                    and not assistant_speaking[0]
+                                ):
+                                    _on_barge_commit("auto")
 
                             active_turn_mode_ref[0] = "vad"
                             turn_commit_mode_ref[0] = "vad"
@@ -3364,9 +3447,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         with contextlib.suppress(Exception):
             if dg is not None:
                 await dg.close(wait_for_final=False)
-        with contextlib.suppress(Exception):
-            bus_task.cancel()
-            await bus_task
+        if bus_task:
+            with contextlib.suppress(Exception):
+                bus_task.cancel()
+                await bus_task
         with contextlib.suppress(Exception):
             ping_task.cancel()
             await ping_task
