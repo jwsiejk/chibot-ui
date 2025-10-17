@@ -34,6 +34,20 @@ import { stopPlayback } from '../../audio.js';
 import { logIfEnabled } from '../../util/logging.js';
 import { getSID } from '../../util/sid.js';
 
+const clamp01 = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return 0;
+  }
+  if (num <= 0) {
+    return 0;
+  }
+  if (num >= 1) {
+    return 1;
+  }
+  return num;
+};
+
 const PRE_ROLL_MS = 550,
   RECORD_TIMESLICE_MS = 150,
   SAFETY_CLOSE_DELAY_MS = 2200,
@@ -811,6 +825,24 @@ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', a
     minBytes: EVIDENCE_MIN_BYTES,
     asrCue,
   });
+  const evidenceCfg = ctx.config?.evidence ?? {};
+  const snrDetail = Number.isFinite(detail?.snr)
+    ? detail.snr
+    : Number.isFinite(detail?.snrDb)
+      ? detail.snrDb
+      : 0;
+  const snr01 = clamp01(snrDetail / 20);
+  const voiced = Number.isFinite(detail?.voicedRatio) ? detail.voicedRatio : 0;
+  const asrConf = Number.isFinite(ctx.state?.asr?.lastConf) ? ctx.state.asr.lastConf : 0;
+  const w1 = Number.isFinite(evidenceCfg.w_snr) ? evidenceCfg.w_snr : 0.4;
+  const w2 = Number.isFinite(evidenceCfg.w_voiced) ? evidenceCfg.w_voiced : 0.2;
+  const w3 = Number.isFinite(evidenceCfg.w_asr) ? evidenceCfg.w_asr : 0.6;
+  const score = (w1 * snr01) + (w2 * voiced) + (w3 * asrConf);
+  const commitScore = Number.isFinite(evidenceCfg.commit_score) ? evidenceCfg.commit_score : 1.0;
+
+  if (score >= commitScore) {
+    openTurn(ctx);
+  }
   if (result.shouldCommit) {
     ctx.evidenceGate.satisfy('commit');
     const pending = maybeCommitSpeech(ctx, 'evidence_gate_commit');

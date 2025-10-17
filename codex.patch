@@ -1,8 +1,22 @@
 diff --git a/static/js/voice/core/Config.js b/static/js/voice/core/Config.js
-index 9ba37ca41a61ffc7c2da43d126701069128caee5..d5138a3dd0a28fb9de0715a98a10d4da0702bea1 100644
+index d5138a3dd0a28fb9de0715a98a10d4da0702bea1..ed295102958250c2ee32252e7cbfa6047f3bcf3b 100644
 --- a/static/js/voice/core/Config.js
 +++ b/static/js/voice/core/Config.js
-@@ -15,50 +15,56 @@ const DEFAULT_CONFIG = {
+@@ -1,54 +1,58 @@
+ const DEFAULT_CONFIG = {
+   barge_in: {
+     mode: 'manual_only',
+   },
+   admin: {
+     voice_metrics_panel: true,
+   },
+   metrics: {
+     client_enabled: true,
+     server_enabled: true,
+   },
+   vad: {
+     enabled: true,
+     hysteresis: {
        enter: 3,
        exit: 4,
      },
@@ -14,10 +28,17 @@ index 9ba37ca41a61ffc7c2da43d126701069128caee5..d5138a3dd0a28fb9de0715a98a10d4da
    evidence: {
      snr_sigma: 2.5,
      asr_conf: 0.65,
-     w1: 0.5,
-     w2: 0.3,
-     w3: 0.2,
+-    w1: 0.5,
+-    w2: 0.3,
+-    w3: 0.2,
++    w1: 0.4,
++    w2: 0.2,
++    w3: 0.6,
      threshold: 1.0,
++    w_snr: 0.4,
++    w_voiced: 0.2,
++    w_asr: 0.6,
++    commit_score: 1.0,
      asrInstantOpen: 0.7,
    },
    shadow: {
@@ -28,12 +49,12 @@ index 9ba37ca41a61ffc7c2da43d126701069128caee5..d5138a3dd0a28fb9de0715a98a10d4da
      drop_if_no_partial: true,
      no_partial_timeout_ms: 1200,
    },
-+  dual_vad: {
-+    enabled: true,
-+    commit_conf: 0.6,
-+    asr_stale_ms: 800,
-+    close_quiet_ms: 700,
-+  },
+   dual_vad: {
+     enabled: true,
+     commit_conf: 0.6,
+     asr_stale_ms: 800,
+     close_quiet_ms: 700,
+   },
    transport: {
      close_on_turn_end: false,
    },
@@ -43,12 +64,7 @@ index 9ba37ca41a61ffc7c2da43d126701069128caee5..d5138a3dd0a28fb9de0715a98a10d4da
    const source = (typeof window !== 'undefined' && window.__askchip_config) || {};
  
    return {
-     barge_in: {
-       mode: source.barge_in?.mode ?? DEFAULT_CONFIG.barge_in.mode,
-     },
-     admin: {
-       voice_metrics_panel:
-         source.admin?.voice_metrics_panel ?? DEFAULT_CONFIG.admin.voice_metrics_panel,
+@@ -61,50 +65,55 @@ export function getConfig() {
      },
      metrics: {
        client_enabled:
@@ -59,7 +75,9 @@ index 9ba37ca41a61ffc7c2da43d126701069128caee5..d5138a3dd0a28fb9de0715a98a10d4da
      vad: {
        enabled: source.vad?.enabled ?? DEFAULT_CONFIG.vad.enabled,
        hysteresis: {
-@@ -68,33 +74,39 @@ export function getConfig() {
+         enter: source.vad?.hysteresis?.enter ?? DEFAULT_CONFIG.vad.hysteresis.enter,
+         exit: source.vad?.hysteresis?.exit ?? DEFAULT_CONFIG.vad.hysteresis.exit,
+       },
      },
      tts: {
        mask_auto_vad: source.tts?.mask_auto_vad ?? DEFAULT_CONFIG.tts.mask_auto_vad,
@@ -72,6 +90,11 @@ index 9ba37ca41a61ffc7c2da43d126701069128caee5..d5138a3dd0a28fb9de0715a98a10d4da
        w2: source.evidence?.w2 ?? DEFAULT_CONFIG.evidence.w2,
        w3: source.evidence?.w3 ?? DEFAULT_CONFIG.evidence.w3,
        threshold: source.evidence?.threshold ?? DEFAULT_CONFIG.evidence.threshold,
++      w_snr: source.evidence?.w_snr ?? DEFAULT_CONFIG.evidence.w_snr,
++      w_voiced: source.evidence?.w_voiced ?? DEFAULT_CONFIG.evidence.w_voiced,
++      w_asr: source.evidence?.w_asr ?? DEFAULT_CONFIG.evidence.w_asr,
++      commit_score:
++        source.evidence?.commit_score ?? DEFAULT_CONFIG.evidence.commit_score,
        asrInstantOpen:
          source.evidence?.asrInstantOpen ?? DEFAULT_CONFIG.evidence.asrInstantOpen,
      },
@@ -85,137 +108,33 @@ index 9ba37ca41a61ffc7c2da43d126701069128caee5..d5138a3dd0a28fb9de0715a98a10d4da
        no_partial_timeout_ms:
          source.commit?.no_partial_timeout_ms ?? DEFAULT_CONFIG.commit.no_partial_timeout_ms,
      },
-+    dual_vad: {
-+      enabled: source.dual_vad?.enabled ?? DEFAULT_CONFIG.dual_vad.enabled,
-+      commit_conf: source.dual_vad?.commit_conf ?? DEFAULT_CONFIG.dual_vad.commit_conf,
-+      asr_stale_ms: source.dual_vad?.asr_stale_ms ?? DEFAULT_CONFIG.dual_vad.asr_stale_ms,
-+      close_quiet_ms: source.dual_vad?.close_quiet_ms ?? DEFAULT_CONFIG.dual_vad.close_quiet_ms,
-+    },
+     dual_vad: {
+       enabled: source.dual_vad?.enabled ?? DEFAULT_CONFIG.dual_vad.enabled,
+       commit_conf: source.dual_vad?.commit_conf ?? DEFAULT_CONFIG.dual_vad.commit_conf,
+       asr_stale_ms: source.dual_vad?.asr_stale_ms ?? DEFAULT_CONFIG.dual_vad.asr_stale_ms,
+       close_quiet_ms: source.dual_vad?.close_quiet_ms ?? DEFAULT_CONFIG.dual_vad.close_quiet_ms,
+     },
      transport: {
        close_on_turn_end:
          source.transport?.close_on_turn_end ?? DEFAULT_CONFIG.transport.close_on_turn_end,
      },
    };
  }
- 
- export { DEFAULT_CONFIG };
-diff --git a/static/js/voice/index.js b/static/js/voice/index.js
-index ee5ef03fbb16415029dbd4fa23ad3c4ee04ad4c4..100088d965f3d37c78c478d7825f3cc2199b200b 100644
---- a/static/js/voice/index.js
-+++ b/static/js/voice/index.js
-@@ -28,50 +28,51 @@ const clampNumber = (target, key, { min = 0, fallback, label }) => {
- 
- const ensureBoolean = (target, key, { fallback, label }) => {
-   if (!target) {
-     return;
-   }
- 
-   if (typeof target[key] !== 'boolean') {
-     target[key] = fallback;
-     warnOnce(`Adjusted ${label} to default (${fallback})`);
-   }
- };
- 
- export function validateConfig(config) {
-   if (!config || typeof config !== 'object') {
-     warnOnce('Received invalid config, using defaults');
-     return DEFAULT_CONFIG;
-   }
- 
-   const result = {
-     ...config,
-     commit: { ...DEFAULT_CONFIG.commit, ...config.commit },
-     tts: { ...DEFAULT_CONFIG.tts, ...config.tts },
-     shadow: { ...DEFAULT_CONFIG.shadow, ...config.shadow },
-     evidence: { ...DEFAULT_CONFIG.evidence, ...config.evidence },
-     metrics: { ...DEFAULT_CONFIG.metrics, ...config.metrics },
-+    dual_vad: { ...DEFAULT_CONFIG.dual_vad, ...config.dual_vad },
-   };
- 
-   clampNumber(result.commit, 'min_ms', {
-     min: 0,
-     fallback: DEFAULT_CONFIG.commit.min_ms,
-     label: 'commit.min_ms',
-   });
- 
-   clampNumber(result.commit, 'no_partial_timeout_ms', {
-     min: result.commit.min_ms,
-     fallback: DEFAULT_CONFIG.commit.no_partial_timeout_ms,
-     label: 'commit.no_partial_timeout_ms',
-   });
- 
-   ensureBoolean(result.commit, 'drop_if_no_partial', {
-     fallback: DEFAULT_CONFIG.commit.drop_if_no_partial,
-     label: 'commit.drop_if_no_partial',
-   });
- 
-   clampNumber(result.tts, 'decay_ms', {
-     min: 0,
-     fallback: DEFAULT_CONFIG.tts.decay_ms,
-     label: 'tts.decay_ms',
-   });
- 
-@@ -87,32 +88,55 @@ export function validateConfig(config) {
-     label: 'evidence.snr_sigma',
-   });
- 
-   clampNumber(result.evidence, 'asr_conf', {
-     min: 0,
-     fallback: DEFAULT_CONFIG.evidence.asr_conf,
-     label: 'evidence.asr_conf',
-   });
- 
-   clampNumber(result.evidence, 'threshold', {
-     min: 0,
-     fallback: DEFAULT_CONFIG.evidence.threshold,
-     label: 'evidence.threshold',
-   });
- 
-   ensureBoolean(result.metrics, 'client_enabled', {
-     fallback: DEFAULT_CONFIG.metrics.client_enabled,
-     label: 'metrics.client_enabled',
-   });
- 
-   ensureBoolean(result.metrics, 'server_enabled', {
-     fallback: DEFAULT_CONFIG.metrics.server_enabled,
-     label: 'metrics.server_enabled',
-   });
- 
-+  ensureBoolean(result.dual_vad, 'enabled', {
-+    fallback: DEFAULT_CONFIG.dual_vad.enabled,
-+    label: 'dual_vad.enabled',
-+  });
-+
-+  clampNumber(result.dual_vad, 'commit_conf', {
-+    min: 0,
-+    fallback: DEFAULT_CONFIG.dual_vad.commit_conf,
-+    label: 'dual_vad.commit_conf',
-+  });
-+
-+  clampNumber(result.dual_vad, 'asr_stale_ms', {
-+    min: 0,
-+    fallback: DEFAULT_CONFIG.dual_vad.asr_stale_ms,
-+    label: 'dual_vad.asr_stale_ms',
-+  });
-+
-+  clampNumber(result.dual_vad, 'close_quiet_ms', {
-+    min: 0,
-+    fallback: DEFAULT_CONFIG.dual_vad.close_quiet_ms,
-+    label: 'dual_vad.close_quiet_ms',
-+  });
-+
-   return result;
- }
- 
- export * from './core/index.js';
- export * from './io/index.js';
- export * from './policy/index.js';
- export * from './ui/index.js';
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index 03a458ecb49e15668adcfc722d78509bbacacc74..1abe745627373d2ccbba01e703ae6e1f43569500 100644
+index 1abe745627373d2ccbba01e703ae6e1f43569500..35e6189c5db071286d8deb9eab5ff93949c0885b 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -22,97 +22,182 @@ import { sendCloseStream as __sendCloseStream } from '../../ws.js';
+@@ -12,50 +12,64 @@ import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
+ import { emitVoiceEvent } from '../ui/Events.js';
+ import {
+   openWS,
+   waitWSOpen,
+   sendAudioChunk,
+   sendJSON,
+ } from '../../ws_module.js';
+ // Guarded CloseStream wrapper so we never kill the session before the first user turn.
+ import { sendCloseStream as __sendCloseStream } from '../../ws.js';
+ 
  function safeCloseStream(reason = '') {
    try {
      const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
@@ -231,6 +150,20 @@ index 03a458ecb49e15668adcfc722d78509bbacacc74..1abe745627373d2ccbba01e703ae6e1f
  import { logIfEnabled } from '../../util/logging.js';
  import { getSID } from '../../util/sid.js';
  
++const clamp01 = (value) => {
++  const num = Number(value);
++  if (!Number.isFinite(num)) {
++    return 0;
++  }
++  if (num <= 0) {
++    return 0;
++  }
++  if (num >= 1) {
++    return 1;
++  }
++  return num;
++};
++
  const PRE_ROLL_MS = 550,
    RECORD_TIMESLICE_MS = 150,
    SAFETY_CLOSE_DELAY_MS = 2200,
@@ -241,603 +174,22 @@ index 03a458ecb49e15668adcfc722d78509bbacacc74..1abe745627373d2ccbba01e703ae6e1f
  
  const ctxRef = { current: null };
  
-+const initAsrState = () => ({ speaking: false, lastPartialTs: 0, lastConf: 0 });
-+
-+const ensureAsrState = (ctx) => {
-+  if (!ctx?.state) return initAsrState();
-+  if (!ctx.state.asr) {
-+    ctx.state.asr = initAsrState();
-+  }
-+  return ctx.state.asr;
-+};
-+
-+const resetAsrState = (ctx) => {
-+  const target = ensureAsrState(ctx);
-+  target.speaking = false;
-+  target.lastPartialTs = 0;
-+  target.lastConf = 0;
-+};
-+
-+const dualVadEnabled = (ctx) => !!(ctx?.config?.dual_vad?.enabled);
-+
-+const asrStaleMs = (ctx) => {
-+  const raw = ctx?.config?.dual_vad?.asr_stale_ms;
-+  return Number.isFinite(raw) && raw > 0 ? raw : 800;
-+};
-+
-+const commitConfidenceThreshold = (ctx) => {
-+  const raw = ctx?.config?.dual_vad?.commit_conf;
-+  return Number.isFinite(raw) ? raw : 0.6;
-+};
-+
-+const quietCloseMs = (ctx) => {
-+  const raw = ctx?.config?.dual_vad?.close_quiet_ms;
-+  return Number.isFinite(raw) && raw >= 0 ? raw : 700;
-+};
-+
-+const isAsrSpeakingNow = (ctx) => {
-+  if (!dualVadEnabled(ctx)) return true;
-+  const asr = ensureAsrState(ctx);
-+  const age = nowMs() - (Number.isFinite(asr.lastPartialTs) ? asr.lastPartialTs : 0);
-+  return !!asr.speaking && age < asrStaleMs(ctx);
-+};
-+
-+const onAsrPartial = (ctx, partial = {}) => {
-+  const asr = ensureAsrState(ctx);
-+  const conf = Number.isFinite(partial?.confidence) ? partial.confidence : null;
-+  if (Number.isFinite(conf)) {
-+    asr.lastConf = Math.max(asr.lastConf ?? 0, conf);
-+  }
-+  asr.lastPartialTs = nowMs();
-+  asr.speaking = true;
-+};
-+
-+const onAsrVad = (ctx, event = {}) => {
-+  const asr = ensureAsrState(ctx);
-+  const type = (event?.type || '').toLowerCase();
-+  if (type === 'speech_start' || type === 'start' || type === 'begin') {
-+    asr.speaking = true;
-+    asr.lastPartialTs = nowMs();
-+  } else if (type === 'speech_end' || type === 'end' || type === 'stop') {
-+    asr.speaking = false;
-+  }
-+};
-+
-+const clearDualVadTimer = (ctx) => {
-+  if (!ctx?.state?.dualVadCloseTimer) return;
-+  try { clearTimeout(ctx.state.dualVadCloseTimer); } catch {}
-+  ctx.state.dualVadCloseTimer = null;
-+};
-+
-+const scheduleDualVadTimer = (ctx) => {
-+  if (!ctx?.state || !dualVadEnabled(ctx) || !ctx.state.turnOpen) return;
-+  const delay = quietCloseMs(ctx);
-+  if (!Number.isFinite(delay) || delay <= 0) {
-+    return;
-+  }
-+  clearDualVadTimer(ctx);
-+  ctx.state.dualVadCloseTimer = setTimeout(() => {
-+    ctx.state.dualVadCloseTimer = null;
-+    if (!attemptCloseWithReason(ctx, 'dual_vad_quiet', 'dual_vad_quiet')) {
-+      scheduleDualVadTimer(ctx);
-+    }
-+  }, delay);
-+};
-+
- const voiceLog = (level, ...args) => {
-   logIfEnabled(() => {
-     try {
-       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
-       method?.apply(console, args);
-     } catch {}
-   });
- };
+ const initAsrState = () => ({ speaking: false, lastPartialTs: 0, lastConf: 0 });
  
- const MASK_LOG_INTERVAL_MS = 180;
- const TTS_POST_PLAY_HOLD_MS = 180;
- 
- const nowMs = () => {
-   try {
-     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-       return performance.now();
-     }
-   } catch {}
-   return Date.now();
- };
- 
- const resolvePostTtsHoldMs = (ctx) => {
-   const cfg = ctx?.config?.tts ?? {};
-   let value;
-   if (Number.isFinite(cfg.mask_decay_ms)) {
-     value = cfg.mask_decay_ms;
-   } else if (Number.isFinite(cfg.post_play_hold_ms)) {
-     value = cfg.post_play_hold_ms;
-   } else if (Number.isFinite(cfg.decay_ms)) {
-     value = cfg.decay_ms;
-   } else {
-     value = TTS_POST_PLAY_HOLD_MS;
+ const ensureAsrState = (ctx) => {
+   if (!ctx?.state) return initAsrState();
+   if (!ctx.state.asr) {
+     ctx.state.asr = initAsrState();
    }
-   if (!Number.isFinite(value)) {
-     return TTS_POST_PLAY_HOLD_MS;
-   }
-   if (value <= 0) {
-     return 0;
-   }
-   return Math.min(200, value);
+   return ctx.state.asr;
  };
  
- const setManualGate = (ctx, active) => {
-   if (!ctx?.state) return;
-   const value = !!active;
-   ctx.state.manualGate = value;
-   ctx.state.manualPttActive = value;
-+  ctx.state.pendingCommitReason = null;
-+  clearDualVadTimer(ctx);
- };
- 
- const logReadyState = (ctx) => {
-   if (!ctx || !ctx.state) return;
-   const tsLocal = nowMs();
-   const last = Number.isFinite(ctx.state.lastReadyLogAt) ? ctx.state.lastReadyLogAt : 0;
-   if (tsLocal - last < 25) {
-     return;
-   }
-   ctx.state.lastReadyLogAt = tsLocal;
-   const ts = Date.now();
-   voiceLog('info', "state { phase:'ready' }", {
-     ts_ms: ts,
-     session_id: ctx.sessionId || null,
-     turn_id: ctx.state.activeTurnId || null,
-   });
- };
- 
- const stopMaskLogging = (ctx) => {
-   if (!ctx) return;
-   if (ctx.maskLogTimer) {
-     try { clearInterval(ctx.maskLogTimer); } catch {}
-   }
-   ctx.maskLogTimer = null;
- };
-@@ -196,111 +281,255 @@ const ensureCtx = () => {
-     asrConf: config.evidence?.asr_conf,
-     baseSnrDb: config.evidence?.baseSnrDb,
-     evidence: config.evidence,
-   });
-   const shadowBuffer = new ShadowBuffer({ maxMs: config.shadow?.ms ?? PRE_ROLL_MS });
-   const ttsMask = new TtsMask();
-   try {
-     if (typeof window !== 'undefined') {
-       window.__askchip_voice_session_id = sessionId;
-     }
-   } catch {}
- 
-   const ctx = {
-     config,
-     sessionId,
-     state: {
-       turnState: TurnState.Ready, recording: false, vadArmed: false,
-       vadBoostDb: 0, greetGateActive: false, greetGatePhase: 'idle',
-       greetGateWaiters: [], manualBargeInUsed: false,
-       bargeConfirmActive: false, bargeConfirmUntil: 0,
-       wsReady: false, turnOpen: false, hasOpenedTurn: false,
-       manualGate: false, manualPttActive: false, pttHeld: false,
-       turnSeq: 0, activeTurnId: null,
-       ttsPlaying: false, lastChunkAt: 0,
-       lastReadyLogAt: 0,
-+      vadRecording: false,
-+      lastUserAudioMs: 0,
-+      pendingCommitReason: null,
-+      asr: initAsrState(),
-+      dualVadCloseTimer: null,
-       evidenceGate, shadowBuffer, ttsMask,
-     },
-     audio: {
-       stream: null, context: null, source: null, analyser: null,
-       vad: null, recorder: null, recTimeslice: RECORD_TIMESLICE_MS,
-       lastTimecode: null,
-     },
-     transport: { wsPromise: null, connected: false, safetyTimer: null },
-     evidenceGate,
-     shadowBuffer,
-     ttsMask,
-     maskLogTimer: null,
-   };
- 
-   registerTtsListener(ctx);
-+  registerWsListener(ctx);
-   ctx.ttsEndedAtMs = 0;
-   ctxRef.current = ctx;
-   return ctx;
- };
- 
- const registerTtsListener = (ctx) => {
-   if (ctx.ttsListenerRegistered) return;
-   ctx.ttsListenerRegistered = true;
-   const win = typeof window !== 'undefined' ? window : null;
-   const listener = (ev) => {
-     const { detail } = ev || {};
-     const { state } = detail || {};
-     const normalizedState = String(state || '').toLowerCase();
-     if (normalizedState === 'playing') {
-       ctx.state.ttsPlaying = true;
-       ctx.ttsEndedAtMs = undefined;
-       ctx.ttsMask.start();
-       startMaskLogging(ctx);
-     } else if (
-       normalizedState === 'ended' ||
-       normalizedState === 'stopped' ||
-       normalizedState === 'done'
-     ) {
-       ctx.state.ttsPlaying = false;
-       ctx.ttsEndedAtMs = nowMs();
-       ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
-       try {
-         ctx.state.vadBoostDb = Math.max(0, (ctx.state.vadBoostDb ?? 0) - 3);
-         setTimeout(() => {
-           try {
-             ctx.state.vadBoostDb = 0;
-           } catch {}
-         }, 250);
-       } catch {}
-       startMaskLogging(ctx);
-     } else if (normalizedState === 'ready') {
-       ctx.state.ttsPlaying = false;
-       ctx.ttsEndedAtMs = nowMs();
-       ctx.ttsMask.clear();
-       stopMaskLogging(ctx);
-       logReadyState(ctx);
-     }
-   };
-   try { win?.addEventListener?.('chip-tts', listener, { passive: true }); } catch {}
- };
- 
-+const normalizeVadLabel = (value) => (typeof value === 'string' ? value.toLowerCase() : '');
-+
-+const resolveVadEventType = (frame) => {
-+  if (!frame || typeof frame !== 'object') return null;
-+  const metaVad = normalizeVadLabel(frame?.meta?.local_vad);
-+  if (metaVad) {
-+    if (['start', 'active', 'speech_start', 'begin'].includes(metaVad)) return 'speech_start';
-+    if (['stop', 'end', 'inactive', 'speech_end'].includes(metaVad)) return 'speech_end';
-+  }
-+
-+  const candidates = [
-+    frame?.type,
-+    frame?.event,
-+    frame?.kind,
-+    frame?.label,
-+    frame?.state,
-+    frame?.signal,
-+    frame?.detail?.type,
-+    frame?.detail?.event,
-+    frame?.payload?.type,
-+    frame?.payload?.event,
-+  ].map(normalizeVadLabel);
-+
-+  for (const token of candidates) {
-+    if (!token) continue;
-+    if (token.includes('speech_start')) return 'speech_start';
-+    if (token.includes('speech_end')) return 'speech_end';
-+    if (token.includes('vad')) {
-+      if (token.includes('start') || token.includes('begin') || token.includes('active')) {
-+        return 'speech_start';
-+      }
-+      if (token.includes('stop') || token.includes('end') || token.includes('inactive')) {
-+        return 'speech_end';
-+      }
-+    }
-+  }
-+  return null;
-+};
-+
-+const extractAsrConfidence = (frame) => {
-+  const alt = Array.isArray(frame?.channel?.alternatives)
-+    ? frame.channel.alternatives[0]
-+    : (Array.isArray(frame?.alternatives) ? frame.alternatives[0] : null);
-+  const confs = [
-+    alt?.confidence,
-+    frame?.confidence,
-+    frame?.detail?.confidence,
-+    frame?.payload?.confidence,
-+  ];
-+  for (const value of confs) {
-+    if (Number.isFinite(value)) {
-+      return value;
-+    }
-+  }
-+  return null;
-+};
-+
-+function shouldCloseTurn(ctx) {
-+  if (!ctx?.state) return true;
-+  if (!dualVadEnabled(ctx)) return true;
-+  const clientSilent = ctx.state.vadRecording === false;
-+  const asrSilent = !isAsrSpeakingNow(ctx);
-+  const lastAudio = Number.isFinite(ctx.state.lastUserAudioMs) ? ctx.state.lastUserAudioMs : 0;
-+  const quietMs = lastAudio > 0 ? Math.max(0, nowMs() - lastAudio) : 0;
-+  return (clientSilent && asrSilent) || quietMs > quietCloseMs(ctx);
-+}
-+
-+const frameIndicatesAsrResult = (frame) => {
-+  const type = normalizeVadLabel(frame?.type);
-+  const event = normalizeVadLabel(frame?.event);
-+  return type === 'result' || type === 'results' || event === 'result' || event === 'results';
-+};
-+
-+function handleWsFrame(ctx, frame) {
-+  if (!ctx?.state) return;
-+  const type = normalizeVadLabel(frame?.type);
-+  const event = normalizeVadLabel(frame?.event);
-+
-+  if (frameIndicatesAsrResult(frame)) {
-+    const confidence = extractAsrConfidence(frame);
-+    onAsrPartial(ctx, { confidence });
-+    if (dualVadEnabled(ctx) && Number.isFinite(confidence) && confidence >= commitConfidenceThreshold(ctx)) {
-+      if (!ctx.state.pendingCommitReason) {
-+        ctx.state.pendingCommitReason = 'asr_confidence';
-+      }
-+    }
-+    if (dualVadEnabled(ctx)) {
-+      const attempt = maybeCommitSpeech(ctx);
-+      if (attempt && typeof attempt.then === 'function') {
-+        attempt.catch(() => {});
-+      }
-+    }
-+    const isFinal = Boolean(
-+      frame?.channel?.is_final ?? frame?.is_final ?? frame?.final ?? frame?.detail?.is_final
-+    );
-+    if (isFinal) {
-+      ensureAsrState(ctx).speaking = false;
-+    }
-+    return;
-+  }
-+
-+  const vadType = resolveVadEventType(frame);
-+  if (vadType) {
-+    onAsrVad(ctx, { type: vadType });
-+    if (dualVadEnabled(ctx) && vadType === 'speech_start') {
-+      const attempt = maybeCommitSpeech(ctx);
-+      if (attempt && typeof attempt.then === 'function') {
-+        attempt.catch(() => {});
-+      }
-+    } else if (dualVadEnabled(ctx) && vadType === 'speech_end') {
-+      if (!attemptCloseWithReason(ctx, 'asr_vad_end', 'asr_vad_end')) {
-+        scheduleDualVadTimer(ctx);
-+      }
-+    }
-+    return;
-+  }
-+
-+  if (type === 'utteranceend' || event === 'utteranceend') {
-+    ensureAsrState(ctx).speaking = false;
-+    if (dualVadEnabled(ctx)) {
-+      if (!attemptCloseWithReason(ctx, 'utterance_end', 'utterance_end')) {
-+        scheduleDualVadTimer(ctx);
-+      }
-+    }
-+  }
-+}
-+
-+function registerWsListener(ctx) {
-+  if (!ctx || ctx.wsListenerRegistered) return;
-+  const win = typeof window !== 'undefined' ? window : null;
-+  const handler = (ev) => {
-+    try { handleWsFrame(ctx, ev?.detail); } catch {}
-+  };
-+  try { win?.addEventListener?.('askchip-ws', handler, { passive: true }); } catch {}
-+  ctx.wsListenerRegistered = true;
-+  ctx.wsListener = handler;
-+}
-+
- const ensureTransport = async (ctx) => {
-   if (ctx.transport.connected) {
-     return ctx.transport.wsPromise;
-   }
-   if (!ctx.transport.wsPromise) {
-     ctx.transport.wsPromise = openWS();
-   }
-   try {
-     const wsHandle = await waitWSOpen();
-     ctx.transport.connected = true;
-     ctx.state.wsReady = true;
-     return wsHandle;
-   } catch (err) {
-     ctx.transport.wsPromise = null;
-     ctx.transport.connected = false;
-     ctx.state.wsReady = false;
-     throw err;
-   }
- };
- 
- const teardownTransport = (ctx) => {
-   ctx.transport.connected = false;
-   ctx.state.wsReady = false;
-   ctx.transport.wsPromise = null;
-   if (ctx.transport.safetyTimer) {
-@@ -367,52 +596,54 @@ const stopRecorder = (ctx) => {
- };
- 
- const handleRecorderData = (ctx, event) => {
-   const blob = event?.data;
-   if (!blob || typeof blob.size !== 'number' || blob.size < MIN_VALID_BLOB_BYTES) return;
-   const timecode = Number.isFinite(event?.timecode) ? event.timecode : null;
-   const { durationMs, nextTimecode } = bufferPreRollFrame({
-     shadowBuffer: ctx.shadowBuffer,
-     blob,
-     timecode,
-     timeslice: ctx.audio.recTimeslice,
-     fallbackMs: PRE_ROLL_MS,
-     lastTimecode: ctx.audio.lastTimecode,
-     onBuffered: ({ durationMs: dur, byteLength }) => {
-       ctx.evidenceGate.extendBuffer({ durationMs: dur, bytes: byteLength });
-     },
-   });
-   ctx.audio.lastTimecode = nextTimecode;
-   if (ctx.state.turnOpen) sendChunk(ctx, blob, { durationMs });
- };
- 
- const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
-   if (!blob) {
-     return;
-   }
-+  const tsNow = nowMs();
-   sendAudioChunk(blob);
--  ctx.state.lastChunkAt = nowMs();
-+  ctx.state.lastChunkAt = tsNow;
-+  ctx.state.lastUserAudioMs = tsNow;
-   ctx.evidenceGate.extendBuffer({ durationMs });
-   scheduleSafetyClose(ctx);
- };
- 
- const scheduleSafetyClose = (ctx) => {
-   if (ctx.transport.safetyTimer) { try { clearTimeout(ctx.transport.safetyTimer); } catch {} }
-   ctx.transport.safetyTimer = null;
-   if (!ctx.state.hasOpenedTurn || ctx.state.manualGate) {
-     return;
-   }
-   ctx.transport.safetyTimer = setTimeout(() => {
-     if (!ctx.state.turnOpen) return;
-     safeCloseStream('adaptive');
-     ctx.state.turnOpen = false;
-     teardownTransport(ctx);
-   }, SAFETY_CLOSE_DELAY_MS);
- };
- 
- const openTurn = async (ctx, reason = 'speech_commit') => {
-   if (ctx.state.turnOpen) return;
-   await ensureTransport(ctx);
-   ctx.state.turnOpen = true;
-   ctx.state.hasOpenedTurn = true;
-   ctx.state.turnSeq = (ctx.state.turnSeq || 0) + 1;
-   const turnId = ctx.state.turnSeq;
-@@ -431,156 +662,246 @@ const openTurn = async (ctx, reason = 'speech_commit') => {
-     reason,
-   });
-   try {
-     if (typeof window !== 'undefined') {
-       window.__askchip_turn_trace_id = String(turnId);
-     }
-   } catch {}
-   const stats = flushShadowBuffer(ctx.shadowBuffer, (entry) => {
-     if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs: entry.durationMs });
-   });
-   ctx.evidenceGate.setBufferStats(stats);
- };
- 
- const closeTurn = (ctx, reason = 'vad_end') => {
-   if (!ctx.state.turnOpen) {
-     if (!ctx.state.hasOpenedTurn) {
-       voiceLog('info', '[ws] CloseStream suppressed: no user turn yet', {
-         ts_ms: Date.now(),
-         session_id: ctx.sessionId || null,
-       });
-     }
-     return;
-   }
-   const turnId = ctx.state.activeTurnId || ctx.state.turnSeq || null;
-   safeCloseStream('adaptive');
-+  clearDualVadTimer(ctx);
-   ctx.state.turnOpen = false;
-+  ctx.state.pendingCommitReason = null;
-+  ctx.state.vadRecording = false;
-+  ctx.state.lastUserAudioMs = 0;
-+  resetAsrState(ctx);
-   const ts = Date.now();
-   const stats = getShadowStats(ctx.state);
-   emitVoiceEvent('turn_close', {
-     reason,
-     stats,
-     turnId,
-     sessionId: ctx.sessionId || null,
-     ts_ms: ts,
-   });
-   voiceLog('info', '[turn] close', {
-     ts_ms: ts,
-     session_id: ctx.sessionId || null,
-     turn_id: turnId,
-     reason,
-   });
-   ctx.state.activeTurnId = null;
-   try {
-     if (typeof window !== 'undefined') {
-       window.__askchip_turn_trace_id = null;
-     }
-   } catch {}
-   scheduleSafetyClose(ctx);
- };
- 
-+function finalizeTurnClose(ctx, reason = 'dual_vad_quiet', resetReason = reason) {
-+  closeTurn(ctx, reason);
-+  ctx.evidenceGate.reset(resetReason);
-+  ctx.shadowBuffer.clear();
-+  ctx.audio.lastTimecode = null;
-+  setState(ctx, TurnState.Listening);
-+}
-+
-+function attemptCloseWithReason(ctx, reason = 'dual_vad_quiet', resetReason = reason) {
-+  if (!ctx?.state?.turnOpen) {
-+    return false;
-+  }
-+  if (!shouldCloseTurn(ctx)) {
-+    return false;
-+  }
-+  finalizeTurnClose(ctx, reason, resetReason);
-+  return true;
-+}
-+
-+function shouldCommitTurn(ctx) {
-+  if (!ctx?.state) return false;
-+  if (ctx.state.turnOpen) return false;
-+  if (ctx.state.ttsPlaying || ctx.state.manualGate) return false;
-+  if (!dualVadEnabled(ctx)) {
-+    return true;
-+  }
-+  const clientSaysSpeech = ctx.state.vadRecording === true;
-+  const asrSpeaking = isAsrSpeakingNow(ctx);
-+  const asrConfOK = (ensureAsrState(ctx).lastConf ?? 0) >= commitConfidenceThreshold(ctx);
-+  return (clientSaysSpeech && asrSpeaking) || asrConfOK;
-+}
-+
-+function maybeCommitSpeech(ctx, reason = 'speech_commit') {
-+  if (!ctx?.state) return null;
-+  if (ctx.state.turnOpen) {
-+    ctx.state.pendingCommitReason = null;
-+    return null;
-+  }
-+
-+  if (!dualVadEnabled(ctx)) {
-+    if (!reason && !ctx.state.pendingCommitReason) {
-+      return null;
-+    }
-+    if (reason && !ctx.state.pendingCommitReason) {
-+      ctx.state.pendingCommitReason = reason;
-+    }
-+    if (!shouldCommitTurn(ctx)) {
-+      return null;
-+    }
-+    const commitReason = reason || ctx.state.pendingCommitReason || 'speech_commit';
-+    ctx.state.pendingCommitReason = null;
-+    return openTurn(ctx, commitReason);
-+  }
-+
-+  if (reason && !ctx.state.pendingCommitReason) {
-+    ctx.state.pendingCommitReason = reason;
-+  }
-+
-+  if (!ctx.state.pendingCommitReason) {
-+    return null;
-+  }
-+
-+  if (!shouldCommitTurn(ctx)) {
-+    return null;
-+  }
-+
-+  const commitReason = ctx.state.pendingCommitReason || reason || 'speech_commit';
-+  ctx.state.pendingCommitReason = null;
-+  return openTurn(ctx, commitReason);
-+}
-+
- const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', asrCue = null } = {}) => {
+ const resetAsrState = (ctx) => {
+   const target = ensureAsrState(ctx);
+   target.speaking = false;
+   target.lastPartialTs = 0;
+   target.lastConf = 0;
+@@ -789,50 +803,68 @@ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', a
    if (ctx.state.manualGate) {
      ctx.evidenceGate.reset('manual_gate');
      return;
@@ -863,13 +215,30 @@ index 03a458ecb49e15668adcfc722d78509bbacacc74..1abe745627373d2ccbba01e703ae6e1f
      minBytes: EVIDENCE_MIN_BYTES,
      asrCue,
    });
++  const evidenceCfg = ctx.config?.evidence ?? {};
++  const snrDetail = Number.isFinite(detail?.snr)
++    ? detail.snr
++    : Number.isFinite(detail?.snrDb)
++      ? detail.snrDb
++      : 0;
++  const snr01 = clamp01(snrDetail / 20);
++  const voiced = Number.isFinite(detail?.voicedRatio) ? detail.voicedRatio : 0;
++  const asrConf = Number.isFinite(ctx.state?.asr?.lastConf) ? ctx.state.asr.lastConf : 0;
++  const w1 = Number.isFinite(evidenceCfg.w_snr) ? evidenceCfg.w_snr : 0.4;
++  const w2 = Number.isFinite(evidenceCfg.w_voiced) ? evidenceCfg.w_voiced : 0.2;
++  const w3 = Number.isFinite(evidenceCfg.w_asr) ? evidenceCfg.w_asr : 0.6;
++  const score = (w1 * snr01) + (w2 * voiced) + (w3 * asrConf);
++  const commitScore = Number.isFinite(evidenceCfg.commit_score) ? evidenceCfg.commit_score : 1.0;
++
++  if (score >= commitScore) {
++    openTurn(ctx);
++  }
    if (result.shouldCommit) {
      ctx.evidenceGate.satisfy('commit');
--    await openTurn(ctx, 'evidence_gate_commit');
-+    const pending = maybeCommitSpeech(ctx, 'evidence_gate_commit');
-+    if (pending && typeof pending.then === 'function') {
-+      pending.catch(() => {});
-+    }
+     const pending = maybeCommitSpeech(ctx, 'evidence_gate_commit');
+     if (pending && typeof pending.then === 'function') {
+       pending.catch(() => {});
+     }
      if (detail) ctx.evidenceGate.setDetail(detail);
    }
  };
@@ -884,136 +253,8 @@ index 03a458ecb49e15668adcfc722d78509bbacacc74..1abe745627373d2ccbba01e703ae6e1f
    if (isTtsMaskActive(ctx)) {
      return;
    }
-+  clearDualVadTimer(ctx);
+   clearDualVadTimer(ctx);
    ctx.state.bargeConfirmActive = true;
    ctx.state.bargeConfirmUntil = nowMs() + BARGE_CONFIRM_MS;
    setState(ctx, TurnState.Recording, { detail });
    const stats = ctx.shadowBuffer.stats();
-   ctx.evidenceGate.start({ startedAt: nowMs(), detail, bufferedMs: stats.durationMs, bufferedBytes: stats.totalBytes });
-   emitVoiceEvent('speech_start', detail);
-   await evaluateEvidenceGate(ctx, { detail, vadState: 'speech' });
-+  const commitAttempt = maybeCommitSpeech(ctx);
-+  if (commitAttempt && typeof commitAttempt.then === 'function') {
-+    commitAttempt.catch(() => {});
-+  }
- };
- 
- const handleSpeechEnd = async (ctx, detail) => {
-   if (ctx.state.manualGate) {
-     return;
-   }
-   ctx.state.bargeConfirmActive = false;
-   ctx.state.bargeConfirmUntil = 0;
-   emitVoiceEvent('speech_end', detail);
-   await evaluateEvidenceGate(ctx, { detail, vadState: 'silence', asrCue: { type: 'vad_end' } });
--  closeTurn(ctx, 'speech_end');
--  ctx.evidenceGate.reset('vad_end');
--  ctx.shadowBuffer.clear();
--  ctx.audio.lastTimecode = null;
-+  if (attemptCloseWithReason(ctx, 'vad_end', 'vad_end')) {
-+    return;
-+  }
-   setState(ctx, TurnState.Listening);
-+  scheduleDualVadTimer(ctx);
- };
- 
- const ensureVad = (ctx, opts = {}) => {
-   const { audio } = ctx;
-   if (audio.vad) return;
-   const echoStateFn = () => isTtsMaskActive(ctx);
-   audio.vad = new VAD(audio.analyser, {
-     startDbOffset: 6 + ctx.state.vadBoostDb,
-     stopDbOffset: 6 + ctx.state.vadBoostDb,
-     echoStateFn,
-     minSpeechMs: Math.max(160, opts.minSpeechMs ?? 200),
-     minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
-     gateFn: () => !isTtsMaskActive(ctx),
-   }, {
--    onSpeechStart: (detail) => { handleSpeechStart(ctx, detail); },
--    onSpeechEnd: (detail) => { handleSpeechEnd(ctx, detail); },
-+    onSpeechStart: (detail) => {
-+      ctx.state.vadRecording = true;
-+      handleSpeechStart(ctx, detail);
-+    },
-+    onSpeechEnd: (detail) => {
-+      ctx.state.vadRecording = false;
-+      handleSpeechEnd(ctx, detail);
-+    },
-   });
-   audio.vad.start();
-   ctx.state.vadArmed = true;
-   setState(ctx, TurnState.Listening);
- };
- 
- const teardownVad = (ctx) => {
-   const { audio } = ctx;
-   if (audio.vad) { try { audio.vad.stop(); } catch {} }
-   audio.vad = null;
-   ctx.state.vadArmed = false;
- };
- 
- const ensureGreetGate = (ctx, active) => {
-   ctx.state.greetGateActive = !!active;
-   if (!active) { ctx.state.greetGatePhase = 'idle'; ctx.state.greetGateWaiters = []; }
-   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
- };
- 
- const manualBargeAllowed = (ctx) => isTtsMaskActive(ctx);
- 
- export async function initMic(stream = null) {
-   const ctx = ensureCtx();
-   if (stream) ctx.audio.stream = stream;
-   if (!ctx.audio.stream) {
-@@ -615,50 +936,52 @@ export async function armVAD(stream = null, opts = {}) {
- }
- 
- export function disarmVAD() {
-   const ctx = ensureCtx();
-   teardownVad(ctx); stopRecorder(ctx);
-   closeTurn(ctx, 'manual_disarm');
-   teardownTransport(ctx);
-   setManualGate(ctx, false);
-   ctx.state.pttHeld = false;
-   ctx.state.hasOpenedTurn = false;
-   stopMaskLogging(ctx);
-   setState(ctx, TurnState.Ready);
- }
- 
- export function isRecording() {
-   const ctx = ensureCtx();
-   return !!ctx.state.recording;
- }
- 
- export function bargeIn() {
-   const ctx = ensureCtx();
-   const shouldNotify = manualBargeAllowed(ctx);
-   ctx.state.manualBargeInUsed = true;
-   ctx.state.bargeConfirmActive = false;
-   ctx.state.bargeConfirmUntil = 0;
-+  ctx.state.pendingCommitReason = null;
-+  clearDualVadTimer(ctx);
-   try { stopPlayback(); } catch {}
-   if (ctx.state.turnOpen) {
-     closeTurn(ctx, 'manual_barge_preempt');
-   }
-   ctx.state.ttsPlaying = false;
-   ctx.ttsEndedAtMs = nowMs();
-   ctx.ttsMask.clear();
-   if (shouldNotify) {
-     sendJSON({ type: 'manual_barge_in' });
-   }
-   ctx.evidenceGate.reset('manual_barge_in');
-   ctx.shadowBuffer.clear();
-   ctx.audio.lastTimecode = null;
-   emitVoiceEvent('barge_in', { reason: 'manual' });
-   return true;
- }
- 
- export function setVadBoost(value) {
-   const ctx = ensureCtx();
-   const numeric = Number.isFinite(value) ? value : 0;
-   ctx.state.vadBoostDb = Math.max(0, numeric);
-   if (ctx.audio.vad) {
-     teardownVad(ctx); ensureVad(ctx, {});
-   }
- }

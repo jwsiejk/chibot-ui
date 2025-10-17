@@ -23,10 +23,14 @@ const DEFAULT_CONFIG = {
   evidence: {
     snr_sigma: 2.5,
     asr_conf: 0.65,
-    w1: 0.5,
-    w2: 0.3,
-    w3: 0.2,
+    w1: 0.4,
+    w2: 0.2,
+    w3: 0.6,
     threshold: 1.0,
+    w_snr: 0.4,
+    w_voiced: 0.2,
+    w_asr: 0.6,
+    commit_score: 1.0,
     asrInstantOpen: 0.7,
   },
   shadow: {
@@ -83,6 +87,11 @@ export function getConfig() {
       w2: source.evidence?.w2 ?? DEFAULT_CONFIG.evidence.w2,
       w3: source.evidence?.w3 ?? DEFAULT_CONFIG.evidence.w3,
       threshold: source.evidence?.threshold ?? DEFAULT_CONFIG.evidence.threshold,
+      w_snr: source.evidence?.w_snr ?? DEFAULT_CONFIG.evidence.w_snr,
+      w_voiced: source.evidence?.w_voiced ?? DEFAULT_CONFIG.evidence.w_voiced,
+      w_asr: source.evidence?.w_asr ?? DEFAULT_CONFIG.evidence.w_asr,
+      commit_score:
+        source.evidence?.commit_score ?? DEFAULT_CONFIG.evidence.commit_score,
       asrInstantOpen:
         source.evidence?.asrInstantOpen ?? DEFAULT_CONFIG.evidence.asrInstantOpen,
     },
