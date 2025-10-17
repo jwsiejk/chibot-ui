@@ -53,6 +53,9 @@ const manualState = {
   sessionActive: false,
 };
 
+const GREET_VAD_DEFER_MS = 400;
+const GREET_VAD_WAIT_TIMEOUT_MS = 8000;
+
 function _updateManualButtonAvailability() {
   const btn = manualState.button;
   if (!btn) return;
@@ -236,6 +239,132 @@ function _enableButtons() {
   if (sendBtnB) sendBtnB.disabled = false;
   if (endBtn)   endBtn.disabled   = false;
   _setManualSessionActive(true);
+}
+
+function _handleMicVadFailure(err, { startBtn = null, endBtn = null } = {}) {
+  try { _console('warn', '[bootstrap] mic/VAD init failed', err); } catch {}
+  showBanner('Microphone unavailable — voice capture disabled.');
+  setStatusText('Voice capture unavailable');
+  try {
+    window.dispatchEvent(new CustomEvent('askchip-voice', {
+      detail: { state: 'idle', label: 'Voice capture unavailable' }
+    }));
+  } catch {}
+  try { Visualizer.stop({ reset: true }); } catch {}
+  _disableButtons();
+  const resolvedStartBtn = startBtn || $('#startButton');
+  const resolvedEndBtn   = endBtn   || $('#endButton');
+  if (resolvedEndBtn) resolvedEndBtn.disabled = true;
+  if (resolvedStartBtn) resolvedStartBtn.disabled = false;
+  setDot('ready');
+  started = false;
+  try { window.__askchip_session_started = false; } catch {}
+  try { closeWS(1000, 'mic_unavailable'); } catch {}
+  startInFlight = false;
+}
+
+function _waitForInitialTtsCompletion(timeoutMs = GREET_VAD_WAIT_TIMEOUT_MS) {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+    return Promise.reject(new Error('window_unavailable'));
+  }
+
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    let timer = null;
+
+    const cleanup = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      try { window.removeEventListener('askchip-ws', onWs); } catch {}
+      try { window.removeEventListener('chip-tts', onTts); } catch {}
+    };
+
+    const resolveOnce = (info) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve(info);
+    };
+
+    const rejectOnce = (err) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(err);
+    };
+
+    const onWs = (ev) => {
+      const detail = ev?.detail || {};
+      const type = detail?.type || detail?.label || '';
+      if (type === 'UtteranceEnd') {
+        resolveOnce({ source: 'UtteranceEnd', detail });
+      }
+    };
+
+    const onTts = (ev) => {
+      const state = ev?.detail?.state;
+      if (state === 'ended' || state === 'stopped') {
+        resolveOnce({ source: 'chip-tts', detail: ev?.detail });
+      }
+    };
+
+    try { window.addEventListener('askchip-ws', onWs); } catch (err) {
+      rejectOnce(err);
+      return;
+    }
+    try { window.addEventListener('chip-tts', onTts); } catch (err) {
+      rejectOnce(err);
+      return;
+    }
+
+    timer = setTimeout(() => {
+      rejectOnce(new Error('UtteranceEnd timeout'));
+    }, timeoutMs);
+  });
+}
+
+function _scheduleVadArmAfterGreet(stream, { startBtn = null, endBtn = null } = {}) {
+  const attemptArm = (trigger = 'unknown') => {
+    if (attemptArm._armed) return;
+    attemptArm._armed = true;
+    setTimeout(async () => {
+      try {
+        _console('log', `[bootstrap] startOnce VAD arming (trigger=${trigger})`);
+      } catch {}
+      try {
+        await armVAD(stream ?? undefined);
+        _console('log', '[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
+        if (typeof window !== 'undefined' && window.__askchip_voice_ctx == null) {
+          import('./voice/runtime/AdaptiveRuntime.js').then(mod => {
+            const ctx = mod?.__TEST_ONLY__?.getCtx?.();
+            if (ctx) window.__askchip_voice_ctx = ctx;
+          }).catch(() => {});
+        }
+      } catch (err) {
+        _handleMicVadFailure(err, { startBtn, endBtn });
+      }
+    }, GREET_VAD_DEFER_MS);
+  };
+  attemptArm._armed = false;
+
+  try {
+    _waitForInitialTtsCompletion()
+      .then((info = {}) => {
+        const trigger = info?.source || 'UtteranceEnd';
+        try {
+          _console('log', `[bootstrap] UtteranceEnd observed — scheduling VAD arm (trigger=${trigger})`);
+        } catch {}
+        attemptArm(trigger);
+      })
+      .catch((err) => {
+        try {
+          _console('warn', '[bootstrap] UtteranceEnd wait failed; arming VAD via fallback', err);
+        } catch {}
+        attemptArm('timeout');
+      });
+  } catch (err) {
+    try { _console('warn', '[bootstrap] Unable to defer VAD; arming immediately', err); } catch {}
+    attemptArm('immediate');
+  }
 }
 
 function wireWSEventsOnce(){
@@ -445,33 +574,10 @@ async function startOnce(){
 
     try {
       const stream = await initMic(visualizerStream ?? undefined);
-      _console('log', '[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
-      await armVAD(stream);         // begins voice turns (one blob per user turn)
-      _console('log', '[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
-      if (typeof window !== 'undefined' && window.__askchip_voice_ctx == null) {
-        import('./voice/runtime/AdaptiveRuntime.js').then(mod => {
-          const ctx = mod?.__TEST_ONLY__?.getCtx?.();
-          if (ctx) window.__askchip_voice_ctx = ctx;
-        }).catch(() => {});
-      }
+      _console('log', '[bootstrap] startOnce mic initialized — deferring VAD arm until greet completes');
+      _scheduleVadArmAfterGreet(stream, { startBtn, endBtn });
     } catch (e) {
-      _console('warn', '[bootstrap] mic/VAD init failed', e);
-      showBanner('Microphone unavailable — voice capture disabled.');
-      setStatusText('Voice capture unavailable');
-      try {
-        window.dispatchEvent(new CustomEvent('askchip-voice', {
-          detail: { state: 'idle', label: 'Voice capture unavailable' }
-        }));
-      } catch {}
-      try { Visualizer.stop({ reset: true }); } catch {}
-      _disableButtons();
-      if (endBtn) endBtn.disabled = true;
-      if (startBtn) startBtn.disabled = false;
-      setDot('ready');
-      started = false;
-      try { window.__askchip_session_started = false; } catch {}
-      try { closeWS(1000, 'mic_unavailable'); } catch {}
-      startInFlight = false;
+      _handleMicVadFailure(e, { startBtn, endBtn });
       return;
     }
 
