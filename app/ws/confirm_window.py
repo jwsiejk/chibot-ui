@@ -35,12 +35,17 @@ class ConfirmWindow:
         if max_dur < self.min_duration_ms:
             max_dur = self.min_duration_ms
         self.max_duration_ms = max_dur
+        self._initial_window_span = self.max_duration_ms - self.min_duration_ms
         self.max_gap_ms = max(0.0, float(max_gap_ms))
         self.min_tokens = max(1, int(min_tokens))
         self.min_confidence = float(min_confidence)
         self.snr_threshold_db = float(snr_threshold_db)
         self.snr_slack_db = max(0.0, float(snr_slack_db))
         self.snr_enabled = bool(snr_enabled)
+
+        self._base_snr_floor = max(0.0, self.snr_threshold_db - self.snr_slack_db)
+        self._max_extension_used = False
+        self._last_snr_floor: Optional[float] = None
 
         self.active = False
         self.start_ts = 0.0
@@ -53,6 +58,8 @@ class ConfirmWindow:
         self.partial_ts = 0.0
         self.total_bytes = 0
         self.gap_grace_used = False
+        self._max_extension_used = False
+        self._last_snr_floor = None
 
     def set_snr_enabled(self, enabled: bool) -> None:
         self.snr_enabled = bool(enabled)
@@ -69,6 +76,8 @@ class ConfirmWindow:
         self.partial_ts = 0.0
         self.total_bytes = 0
         self.gap_grace_used = False
+        self._max_extension_used = False
+        self._last_snr_floor = None
 
     # ------------------------------- Public API -------------------------------
 
@@ -94,6 +103,9 @@ class ConfirmWindow:
         if elapsed_ms >= self.max_duration_ms:
             if self._can_commit():
                 return self._finish("timeout_commit", elapsed_ms)
+            if not self._max_extension_used and self._should_extend_window():
+                self._extend_window()
+                return ConfirmDecision(None, None)
             return self._finish("timeout", elapsed_ms)
 
         return ConfirmDecision(None, None)
@@ -177,13 +189,58 @@ class ConfirmWindow:
             return True
         if self.snr_db is None:
             return False
-        effective_threshold = max(0.0, self.snr_threshold_db - self.snr_slack_db)
-        return self.snr_db >= effective_threshold
+        floor = self._snr_floor()
+        self._last_snr_floor = floor
+        return self.snr_db >= floor
 
     def _maybe_commit(self, trigger: str, elapsed_ms: float) -> ConfirmDecision:
         if elapsed_ms >= self.min_duration_ms and self._can_commit():
             return self._finish(trigger, elapsed_ms)
         return ConfirmDecision(None, None)
+
+    def _snr_floor(self) -> float:
+        if not self.snr_enabled:
+            return 0.0
+        base = self._base_snr_floor
+        if self.snr_db is None:
+            return base
+
+        dynamic_relaxation = 0.0
+        if self.total_bytes >= 4800:
+            dynamic_relaxation += 0.5
+        if self.total_bytes >= 9600:
+            dynamic_relaxation += 0.5
+        if (
+            self.partial_confidence is not None
+            and self.partial_confidence >= max(self.min_confidence, 0.6)
+        ):
+            dynamic_relaxation += 0.25
+
+        if dynamic_relaxation >= base:
+            return 0.0
+        return max(0.0, base - dynamic_relaxation)
+
+    def _should_extend_window(self) -> bool:
+        if not self.active:
+            return False
+        if self.partial_tokens >= self.min_tokens and self.partial_confidence is not None:
+            # If ASR has already produced a confident partial, there is no
+            # reason to extend unless SNR is borderline.
+            floor = self._snr_floor()
+            return self.snr_db is not None and self.snr_db + 0.75 >= floor
+        # Without a partial transcript yet, give the ASR a chance to catch up
+        # provided we have seen meaningful audio.
+        return self.total_bytes >= 2400
+
+    def _extend_window(self) -> None:
+        self._max_extension_used = True
+        self.max_duration_ms += max(300, min(600, self.min_duration_ms))
+
+    def _window_extension_ms(self) -> Optional[int]:
+        extension = self.max_duration_ms - self.min_duration_ms - self._initial_window_span
+        if extension <= 0:
+            return None
+        return int(extension)
 
     def _update_snr(self, chunk: bytes) -> None:
         if not chunk:
@@ -225,16 +282,24 @@ class ConfirmWindow:
         self, reason: str, elapsed_ms: float, extra: Optional[Dict[str, object]] = None
     ) -> ConfirmDecision:
         self.active = False
+        relaxation = None
+        if self._last_snr_floor is not None:
+            relaxation = max(0.0, round(self._base_snr_floor - self._last_snr_floor, 2))
         metrics: Dict[str, object] = {
             "reason": reason,
             "elapsed_ms": int(elapsed_ms),
             "snr_db": round(self.snr_db, 2) if self.snr_db is not None else None,
+            "snr_floor_db": round(self._last_snr_floor, 2)
+            if self._last_snr_floor is not None
+            else None,
+            "snr_relaxation_db": relaxation,
             "gap_grace_used": self.gap_grace_used,
             "noise_rms": round(self.noise_rms, 2) if self.noise_rms is not None else None,
             "peak_rms": round(self.peak_rms, 2) if self.peak_rms else None,
             "partial_tokens": self.partial_tokens or None,
             "partial_confidence": self.partial_confidence,
             "total_bytes": self.total_bytes,
+            "window_extended_ms": self._window_extension_ms(),
         }
         if extra:
             metrics.update(extra)
