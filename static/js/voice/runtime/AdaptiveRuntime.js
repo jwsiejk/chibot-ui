@@ -432,6 +432,7 @@ const ensureCtx = () => {
       dualVadBothSilentAt: null,
       turnOpenedAtMs: 0,
       preCommitASRFeed: false,
+      vadMasked: false,
       pendingCommitReason: null,
       asr: initAsrState(),
       dualVadCloseTimer: null,
@@ -1285,6 +1286,16 @@ const ensureVad = (ctx, opts = {}) => {
     gateFn: () => !isTtsMaskActive(ctx),
   }, {
     onSpeechStart: (detail) => {
+      const masked = ctx.state.manualGate || ctx.state.ttsPlaying || isTtsMaskActive(ctx);
+      if (masked) {
+        ctx.state.vadMasked = true;
+        ctx.state.vadRecording = false;
+        ctx.state.preCommitASRFeed = false;
+        ctx.evidenceGate.reset('tts_mask_block');
+        logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_block' });
+        return;
+      }
+      ctx.state.vadMasked = false;
       ctx.state.vadRecording = true;
       ctx.state.preCommitASRFeed = true;
       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'asr_priming', {
@@ -1296,6 +1307,12 @@ const ensureVad = (ctx, opts = {}) => {
       ctx.state.vadRecording = false;
       if (!ctx.state.turnOpen) {
         ctx.state.preCommitASRFeed = false;
+      }
+      if (ctx.state.vadMasked) {
+        ctx.state.vadMasked = false;
+        ctx.evidenceGate.reset('tts_mask_block');
+        logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_release' });
+        return;
       }
       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'shadow_only', {
         reason: 'speech_end',
