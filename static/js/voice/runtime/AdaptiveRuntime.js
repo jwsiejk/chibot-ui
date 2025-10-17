@@ -48,6 +48,11 @@ const clamp01 = (value) => {
   return num;
 };
 
+const clampRange = (value, min, max) => {
+  const numeric = Number.isFinite(value) ? value : 0;
+  return Math.min(max, Math.max(min, numeric));
+};
+
 const PRE_ROLL_MS = 550,
   RECORD_TIMESLICE_MS = 150,
   SAFETY_CLOSE_DELAY_MS = 2200,
@@ -152,6 +157,22 @@ const voiceLog = (level, ...args) => {
 
 const MASK_LOG_INTERVAL_MS = 180;
 const TTS_POST_PLAY_HOLD_MS = 180;
+const RMS_EPSILON = 1e-8;
+const VAD_NOISE_SAMPLE_MS = 320;
+const VAD_NOISE_SAMPLE_STEP_MS = 40;
+const VAD_NOISE_DEADBAND_DB = 0.35;
+const VAD_NOISE_DELTA_LIMIT_DB = 1.75;
+const VAD_NOISE_SMOOTHING = 0.25;
+
+const updateVadBoost = (ctx, boostDb) => {
+  if (!ctx?.state) return;
+  const clamped = clampRange(boostDb, -3, 3);
+  ctx.state.vadBoostDb = clamped;
+  if (ctx?.audio?.vad?.opts) {
+    ctx.audio.vad.opts.startDbOffset = 6 + clamped;
+    ctx.audio.vad.opts.stopDbOffset = 6 + clamped;
+  }
+};
 
 const nowMs = () => {
   try {
@@ -309,7 +330,7 @@ const ensureCtx = () => {
     sessionId,
     state: {
       turnState: TurnState.Ready, recording: false, vadArmed: false,
-      vadBoostDb: 0, greetGateActive: false, greetGatePhase: 'idle',
+      vadBoostDb: 0, vadNoiseBaselineDb: null, greetGateActive: false, greetGatePhase: 'idle',
       greetGateWaiters: [], manualBargeInUsed: false,
       bargeConfirmActive: false, bargeConfirmUntil: 0,
       wsReady: false, turnOpen: false, hasOpenedTurn: false,
@@ -726,7 +747,138 @@ const closeTurn = (ctx, reason = 'vad_end') => {
     }
   } catch {}
   scheduleSafetyClose(ctx);
+  onTurnClosed(ctx);
 };
+
+const median = (values) => {
+  if (!Array.isArray(values) || values.length === 0) {
+    return null;
+  }
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2) {
+    return sorted[mid];
+  }
+  if (mid === 0) {
+    return sorted[0];
+  }
+  return (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+function onTurnClosed(ctx) {
+  if (!ctx?.state) {
+    return;
+  }
+
+  const previousBoost = Number.isFinite(ctx.state.vadBoostDb) ? ctx.state.vadBoostDb : 0;
+  updateVadBoost(ctx, 0);
+
+  const analyser = ctx?.audio?.analyser;
+  if (!analyser) {
+    updateVadBoost(ctx, previousBoost);
+    return;
+  }
+
+  if (ctx.vadCalibrator && typeof ctx.vadCalibrator.cancel === 'function') {
+    try { ctx.vadCalibrator.cancel(); } catch {}
+  } else if (ctx.vadCalibrator) {
+    ctx.vadCalibrator.cancelled = true;
+  }
+
+  const token = {
+    cancelled: false,
+    cancel() { this.cancelled = true; },
+  };
+  ctx.vadCalibrator = token;
+
+  const scratch = new Float32Array(analyser.fftSize || 2048);
+  const samples = [];
+  const steps = Math.max(1, Math.round(VAD_NOISE_SAMPLE_MS / VAD_NOISE_SAMPLE_STEP_MS));
+  let done = false;
+
+  const finalize = () => {
+    if (done) return;
+    done = true;
+    token.cancelled = true;
+    if (ctx.vadCalibrator === token) {
+      ctx.vadCalibrator = null;
+    }
+
+    let nextBoost = clampRange(previousBoost, -3, 3);
+
+    const medianRms = median(samples);
+    if (Number.isFinite(medianRms) && medianRms > 0) {
+      const noiseDb = 20 * Math.log10(Math.max(RMS_EPSILON, medianRms));
+      const prevBaseline = Number.isFinite(ctx.state.vadNoiseBaselineDb)
+        ? ctx.state.vadNoiseBaselineDb
+        : null;
+      let deltaDb = Number.isFinite(prevBaseline) ? noiseDb - prevBaseline : 0;
+      const updatedBaseline = Number.isFinite(prevBaseline)
+        ? prevBaseline + (VAD_NOISE_SMOOTHING * (noiseDb - prevBaseline))
+        : noiseDb;
+      ctx.state.vadNoiseBaselineDb = updatedBaseline;
+
+      if (Math.abs(deltaDb) < VAD_NOISE_DEADBAND_DB) {
+        deltaDb = 0;
+      } else {
+        deltaDb = clampRange(deltaDb, -VAD_NOISE_DELTA_LIMIT_DB, VAD_NOISE_DELTA_LIMIT_DB);
+      }
+
+      nextBoost = clampRange(previousBoost + deltaDb, -3, 3);
+
+      voiceLog('info', '[vad] ambient recalibration', {
+        ts_ms: Date.now(),
+        session_id: ctx.sessionId || null,
+        noise_db: Number.isFinite(noiseDb) ? Number.parseFloat(noiseDb.toFixed(2)) : null,
+        baseline_db: Number.isFinite(updatedBaseline) ? Number.parseFloat(updatedBaseline.toFixed(2)) : null,
+        delta_db: Number.isFinite(deltaDb) ? Number.parseFloat(deltaDb.toFixed(2)) : null,
+        boost_db: Number.isFinite(nextBoost) ? Number.parseFloat(nextBoost.toFixed(2)) : null,
+        samples: samples.length,
+      });
+    }
+
+    updateVadBoost(ctx, nextBoost);
+  };
+
+  const takeSample = () => {
+    if (token.cancelled || done) {
+      return;
+    }
+    if (!ctx?.state || ctx.state.turnOpen) {
+      finalize();
+      return;
+    }
+    try {
+      analyser.getFloatTimeDomainData(scratch);
+    } catch {
+      finalize();
+      return;
+    }
+    let sum = 0;
+    for (let i = 0; i < scratch.length; i += 1) {
+      const v = scratch[i];
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / scratch.length);
+    if (Number.isFinite(rms) && rms > 0) {
+      samples.push(rms);
+    }
+  };
+
+  const schedule = (index) => {
+    if (token.cancelled || done) {
+      return;
+    }
+    takeSample();
+    if (index + 1 >= steps) {
+      finalize();
+      return;
+    }
+    setTimeout(() => schedule(index + 1), VAD_NOISE_SAMPLE_STEP_MS);
+  };
+
+  schedule(0);
+}
 
 function finalizeTurnClose(ctx, reason = 'dual_vad_quiet', resetReason = reason) {
   closeTurn(ctx, reason);
