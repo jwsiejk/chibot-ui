@@ -456,6 +456,13 @@ const ensureCtx = () => {
   registerWsListener(ctx);
   ctx.ttsEndedAtMs = 0;
   ctxRef.current = ctx;
+  try {
+    if (typeof window !== 'undefined') {
+      window.__askchip_voice_ctx = ctx;
+    }
+  } catch (err) {
+    console.warn('[AdaptiveRuntime] unable to attach __askchip_voice_ctx', err);
+  }
   return ctx;
 };
 

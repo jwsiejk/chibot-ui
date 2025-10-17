@@ -448,6 +448,12 @@ async function startOnce(){
       _console('log', '[bootstrap] startOnce mic initialized — about to arm VAD for voice turns');
       await armVAD(stream);         // begins voice turns (one blob per user turn)
       _console('log', '[bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state');
+      if (typeof window !== 'undefined' && window.__askchip_voice_ctx == null) {
+        import('./voice/runtime/AdaptiveRuntime.js').then(mod => {
+          const ctx = mod?.__TEST_ONLY__?.getCtx?.();
+          if (ctx) window.__askchip_voice_ctx = ctx;
+        }).catch(() => {});
+      }
     } catch (e) {
       _console('warn', '[bootstrap] mic/VAD init failed', e);
       showBanner('Microphone unavailable — voice capture disabled.');
