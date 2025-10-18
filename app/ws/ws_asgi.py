@@ -1729,6 +1729,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         "dg_open": [0.0],
         "first_partial": [0.0],
         "final": [0.0],
+        "tts_end": [0.0],
     }
     turn_finish_logged = [False]
     last_partial_ts: List[float] = [0.0]
@@ -2537,6 +2538,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         except (TypeError, ValueError):
             conf_val = None
 
+        if turn_timing is not None:
+            with contextlib.suppress(Exception):
+                holder = turn_timing.setdefault("first_partial", [0.0])
+                if not holder[0]:
+                    holder[0] = time.time()
+
         if not asr_partial_first_emitted[0]:
             asr_partial_first_emitted[0] = True
             meta_conf = conf_val if conf_val is not None else 0.0
@@ -2577,6 +2584,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     def _on_assistant_tts_end(turn_id: Any) -> None:
         assistant_speaking[0] = False
+        if turn_timing is not None:
+            with contextlib.suppress(Exception):
+                holder = turn_timing.setdefault("tts_end", [0.0])
+                holder[0] = time.time()
         if tts_mask_active[0] and barge_post_tts_hold_ms > 0:
             delay_ms = barge_post_tts_hold_ms
             _cancel_tts_mask_release()
@@ -2640,6 +2651,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         turn_timing["dg_open"][0] = 0.0
         turn_timing["first_partial"][0] = 0.0
         turn_timing["final"][0] = 0.0
+        turn_timing["tts_end"][0] = 0.0
         turn_finish_logged[0] = False
         asr_partial_counter[0] = 0
         asr_partial_first_emitted[0] = False
@@ -2900,15 +2912,35 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             admin_event="turn_committed",
             admin_label="turn_committed",
         )
+        commit_event_id = ""
         if post_greet_phase_active[0]:
             turn_id_hint = _flow_turn_id_hint()
             if turn_id_hint not in flow_turn_commit_emitted:
                 flow_turn_commit_emitted.add(turn_id_hint)
                 flow_turn_abort_emitted.discard(turn_id_hint)
-                _emit_flow_event(
+                commit_event_id = _emit_flow_event(
                     "turn_commit",
                     phase="turn",
                     meta={"turn_id": turn_id_hint},
+                )
+        if not commit_event_id:
+            parent_event_id = confirm_flow_parent_id[0] or ""
+        else:
+            parent_event_id = commit_event_id
+        if parent_event_id:
+            tts_end_ts = turn_timing.get("tts_end", [0.0])[0]
+            first_partial_ts = turn_timing.get("first_partial", [0.0])[0]
+            if tts_end_ts and first_partial_ts and first_partial_ts >= tts_end_ts:
+                latency_ms = int(max(0.0, (first_partial_ts - tts_end_ts) * 1000))
+                _emit_debug_event(
+                    "latency_tick",
+                    phase="turn",
+                    parent_id=parent_event_id,
+                    meta={
+                        "from": "tts_end",
+                        "to": "asr_partial_first",
+                        "ms": latency_ms,
+                    },
                 )
         with contextlib.suppress(Exception):
             _jlog(
