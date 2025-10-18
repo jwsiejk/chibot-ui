@@ -96,6 +96,11 @@ class FlowStore:
     _instance: Optional["FlowStore"] = None
     _singleton_lock = threading.Lock()
 
+    @classmethod
+    def instance(cls) -> "FlowStore":
+        """Return the singleton FlowStore instance."""
+        return cls()
+
     def __new__(cls) -> "FlowStore":
         with cls._singleton_lock:
             if cls._instance is None:
@@ -106,6 +111,7 @@ class FlowStore:
     def _init(self) -> None:
         self._lock = threading.RLock()
         self._sessions: Dict[str, SessionBucket] = {}
+        self._event_sessions: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -174,6 +180,28 @@ class FlowStore:
             raise ValueError("batch exceeds size limit")
 
         with self._lock:
+            bucket = self._sessions.get(session_id)
+            if not bucket:
+                return False
+            record = bucket.event_index.get(parent_id)
+            if not record:
+                return False
+            batch_payload = {"kind": kind, "items": items_list}
+            record.batches.append(batch_payload)
+            return True
+
+    def add_batch_for_event(self, parent_id: str, kind: str, items: Iterable[Any]) -> bool:
+        items_list = list(items)
+        if len(items_list) > MAX_BATCH_ITEMS:
+            raise ValueError("batch too large")
+        serialized = str(items_list).encode("utf-8")
+        if len(serialized) > MAX_BATCH_BYTES:
+            raise ValueError("batch exceeds size limit")
+
+        with self._lock:
+            session_id = self._event_sessions.get(parent_id)
+            if session_id is None:
+                return False
             bucket = self._sessions.get(session_id)
             if not bucket:
                 return False
@@ -325,6 +353,7 @@ class FlowStore:
             turn_id = self._extract_turn_id(meta)
             key = (type_, who, turn_id)
             bucket.dedupe[key] = (now, event_id)
+        self._event_sessions[event_id] = bucket.session_id
         return record
 
     def _append_event(self, bucket: SessionBucket, record: EventRecord) -> None:
@@ -339,6 +368,8 @@ class FlowStore:
         event_id = record.data["id"]
         meta = record.data.get("meta") or {}
         turn_id = self._extract_turn_id(meta)
+
+        self._event_sessions.pop(event_id, None)
 
         confirm_key = self._confirm_key(meta)
         if confirm_key and bucket.open_confirms.get(confirm_key) == record:
