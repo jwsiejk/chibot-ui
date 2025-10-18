@@ -1,57 +1,256 @@
-diff --git a/tests/js/voice-tts-handlers.test.mjs b/tests/js/voice-tts-handlers.test.mjs
-index a8cbdf923c2a5f1b043f072d2cab6d4c7897610f..3a67c1af69232d4f37622c994e92ca31e00e0178 100644
---- a/tests/js/voice-tts-handlers.test.mjs
-+++ b/tests/js/voice-tts-handlers.test.mjs
-@@ -67,51 +67,51 @@ test('onTtsEnd resets playback state for ended events', () => {
-     sessionSnrStd: 2,
-     assistantReady: false,
-     assistantPhase: 'speaking',
-     lastAssistantReadyAt: 0,
-     eligibility: 'holdoff',
-     ttsMask: { start: () => {}, end: (args) => maskArgs.push(args) },
-   };
-   const ctx = {
-     state,
-     now: () => 2000,
-     clearPostTtsHoldTimer: () => { cleared += 1; },
-     TurnState: { Ready: 'READY', Speaking: 'SPEAKING' },
-     event: { detail: { state: 'ended' } },
-   };
- 
-   const result = onTtsEnd(ctx);
- 
-   assert.equal(result, true);
-   assert.equal(cleared, 1);
-   assert.equal(state.ttsPlaying, false);
-   assert.equal(state.postTtsHoldUntil, 0);
-   assert.equal(state.assistantReady, true);
-   assert.equal(state.assistantPhase, 'ready');
-   assert.equal(state.lastAssistantReadyAt, 2000);
-   assert.equal(state.eligibility, 'eligible');
--  assert.deepEqual(maskArgs, [{ decayMs: 750, snrBoost: 3 }]);
-+  assert.deepEqual(maskArgs, [{ decayMs: 700, snrBoost: 3 }]);
- });
- 
- test('registerTtsEventListener reuses context between handlers', () => {
-   resetWindowListeners();
-   const contexts = [];
- 
-   registerTtsEventListener({
-     createContext: () => ({ markers: [] }),
-     onTtsStart: (ctx) => {
-       contexts.push({ phase: 'start', ctx });
-       ctx.markers.push('start');
-       return false;
-     },
-     onTtsEnd: (ctx) => {
-       contexts.push({ phase: 'end', ctx });
-       ctx.markers.push('end');
-       return true;
-     },
+diff --git a/static/js/voice/index.js b/static/js/voice/index.js
+index 100088d965f3d37c78c478d7825f3cc2199b200b..61a68bc3b5c6f616e0e393175f49e0e77edb9faf 100644
+--- a/static/js/voice/index.js
++++ b/static/js/voice/index.js
+@@ -118,25 +118,26 @@ export function validateConfig(config) {
+   clampNumber(result.dual_vad, 'commit_conf', {
+     min: 0,
+     fallback: DEFAULT_CONFIG.dual_vad.commit_conf,
+     label: 'dual_vad.commit_conf',
    });
  
-   window.dispatchEvent({ type: 'chip-tts', detail: { state: 'ended' } });
+   clampNumber(result.dual_vad, 'asr_stale_ms', {
+     min: 0,
+     fallback: DEFAULT_CONFIG.dual_vad.asr_stale_ms,
+     label: 'dual_vad.asr_stale_ms',
+   });
  
-   assert.equal(contexts.length, 2);
-   assert.strictEqual(contexts[0].ctx, contexts[1].ctx);
-   assert.deepEqual(contexts[1].ctx.markers, ['start', 'end']);
+   clampNumber(result.dual_vad, 'close_quiet_ms', {
+     min: 0,
+     fallback: DEFAULT_CONFIG.dual_vad.close_quiet_ms,
+     label: 'dual_vad.close_quiet_ms',
+   });
+ 
+   return result;
+ }
+ 
+ export * from './core/index.js';
+ export * from './io/index.js';
+ export * from './policy/index.js';
+ export * from './ui/index.js';
++export * from './utils/policy.js';
+diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
+index b732567acb0392db5f7be849e6e61ddef06add36..6e9634e3627ba2db8c4891c59f8fb1f2cb4c05ad 100644
+--- a/static/js/voice/runtime/AdaptiveRuntime.js
++++ b/static/js/voice/runtime/AdaptiveRuntime.js
+@@ -1,129 +1,89 @@
+ console.log("[AdaptiveRuntime] build=2025-10-16T23:15Z");
+ import {
+   EvidenceGate,
+   ShadowBuffer,
+   TtsMask,
+   TurnState,
+   bufferPreRollFrame,
+   flushShadowBuffer,
+   getConfig,
+ } from '../core/index.js';
+ import { ensurePolicy, getPolicySync, pget as policyGet, POLICY_NOT_SET } from '../policy/index.js';
++import {
++  POLICY_SUPPRESS_ALL,
++  POLICY_SUPPRESS_NONE,
++  policyAllowLocalVad,
++  resolveSuppressionMode,
++} from '../utils/policy.js';
+ import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
+ import { emitVoiceEvent } from '../ui/Events.js';
+ import {
+   openWS,
+   waitWSOpen,
+   sendAudioChunk,
+   sendJSON,
+ } from '../../ws_module.js';
+ // Guarded CloseStream wrapper so we never kill the session before the first user turn.
+ import { sendCloseStream as __sendCloseStream } from '../../ws.js';
+ 
+ function safeCloseStream(reason = '') {
+   try {
+     const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
+     if (!opened) {
+       console.debug('[voice] skip CloseStream (no user turn yet)', { reason });
+       return;
+     }
+   } catch {}
+   __sendCloseStream();
+ }
+ import { VAD } from '../vad.js';
+ import { stopPlayback } from '../../audio.js';
+ import { logIfEnabled } from '../../util/logging.js';
+ import { getSID } from '../../util/sid.js';
+ 
+ const clamp01 = (value) => {
+   const num = Number(value);
+   if (!Number.isFinite(num)) {
+     return 0;
+   }
+   if (num <= 0) {
+     return 0;
+   }
+   if (num >= 1) {
+     return 1;
+   }
+   return num;
+ };
+ 
+ const clampRange = (value, min, max) => {
+   const numeric = Number.isFinite(value) ? value : 0;
+   return Math.min(max, Math.max(min, numeric));
+ };
+ 
+-const POLICY_SUPPRESS_ALL = 'all';
+-const POLICY_SUPPRESS_NONE = 'none';
+-const POLICY_SUPPRESS_GREET_ONLY = 'greet_only';
+ const POST_TTS_HOLD_MAX_MS = 200;
+ 
+-const policyString = (path, fallback) => {
+-  const value = policyGet(path, fallback);
+-  return typeof value === 'string' ? value.trim().toLowerCase() : fallback;
+-};
+-
+-const policyBoolean = (path, fallback) => {
+-  const value = policyGet(path, POLICY_NOT_SET);
+-  if (value === POLICY_NOT_SET) {
+-    return fallback;
+-  }
+-  return value === true;
+-};
+-
+-const policyAllowLocalVad = () => policyBoolean('voice_runtime.barge_in.allow_local_vad', true);
+-
+-const resolveSuppressionMode = (detail = {}) => {
+-  const raw = policyString('voice_runtime.barge_in.suppress_during_tts', POLICY_SUPPRESS_ALL);
+-  if (raw === POLICY_SUPPRESS_NONE) {
+-    return POLICY_SUPPRESS_NONE;
+-  }
+-  if (raw === POLICY_SUPPRESS_GREET_ONLY) {
+-    return isGreetingDetail(detail) ? POLICY_SUPPRESS_ALL : POLICY_SUPPRESS_NONE;
+-  }
+-  return POLICY_SUPPRESS_ALL;
+-};
+-
+-function isGreetingDetail(detail = {}) {
+-  try {
+-    if (detail == null || typeof detail !== 'object') {
+-      return false;
+-    }
+-    if (detail.prime === true || detail?.channel?.prime === true) {
+-      return true;
+-    }
+-    const tokens = [detail.phase, detail?.channel?.phase, detail.state, detail.label, detail.type]
+-      .map((value) => (typeof value === 'string' ? value.toLowerCase() : ''))
+-      .filter(Boolean);
+-    return tokens.some((token) => token.includes('greet') || token.includes('welcome'));
+-  } catch {
+-    return false;
+-  }
+-}
+-
+ function clearPostTtsRearm(ctx) {
+   if (!ctx?.state) return;
+   const timer = ctx.state.ttsRearmTimer;
+   if (timer) {
+     try { clearTimeout(timer); } catch {}
+   }
+   ctx.state.ttsRearmTimer = null;
+   ctx.state.ttsHoldUntilMs = 0;
+ }
+ 
+ function rearmLocalVad(ctx) {
+   if (!ctx?.state) return;
+   ctx.state.vadSuppressedForTts = false;
+   if (!policyAllowLocalVad()) {
+     ctx.state.vadShouldRearmAfterTts = false;
+     return;
+   }
+   if (ctx.state.manualGate) {
+     return;
+   }
+   if (ctx.state.vadArmed) {
+     return;
+   }
+   try {
+     ensureVad(ctx, {});
+diff --git a/static/js/voice/utils/policy.js b/static/js/voice/utils/policy.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..8b13d651f046fbe093fa5b6c30ddbcabf0c2995d
+--- /dev/null
++++ b/static/js/voice/utils/policy.js
+@@ -0,0 +1,79 @@
++import { pget as policyGet, POLICY_NOT_SET } from '../policy/index.js';
++
++export const POLICY_SUPPRESS_ALL = 'all';
++export const POLICY_SUPPRESS_NONE = 'none';
++export const POLICY_SUPPRESS_GREET_ONLY = 'greet_only';
++
++const normalizeStringPolicy = (value, fallback) => {
++  if (typeof value === 'string') {
++    const trimmed = value.trim().toLowerCase();
++    if (trimmed) {
++      return trimmed;
++    }
++  }
++  return fallback;
++};
++
++export const policyString = (path, fallback) => {
++  const value = policyGet(path, fallback);
++  return normalizeStringPolicy(value, fallback);
++};
++
++export const policyBoolean = (path, fallback) => {
++  const value = policyGet(path, POLICY_NOT_SET);
++  if (value === POLICY_NOT_SET) {
++    return fallback;
++  }
++  return value === true;
++};
++
++export const policyAllowLocalVad = () => (
++  policyBoolean('voice_runtime.barge_in.allow_local_vad', true)
++);
++
++export const isGreetingDetail = (detail = {}) => {
++  try {
++    if (!detail || typeof detail !== 'object') {
++      return false;
++    }
++
++    if (detail.prime === true || detail?.channel?.prime === true) {
++      return true;
++    }
++
++    const tokens = [
++      detail.phase,
++      detail?.channel?.phase,
++      detail.state,
++      detail.label,
++      detail.type,
++    ].map((value) => (typeof value === 'string' ? value.toLowerCase() : ''))
++      .filter(Boolean);
++
++    return tokens.some((token) => token.includes('greet') || token.includes('welcome'));
++  } catch {
++    return false;
++  }
++};
++
++export const resolveSuppressionMode = (detail = {}) => {
++  const raw = policyString('voice_runtime.barge_in.suppress_during_tts', POLICY_SUPPRESS_ALL);
++  if (raw === POLICY_SUPPRESS_NONE) {
++    return POLICY_SUPPRESS_NONE;
++  }
++  if (raw === POLICY_SUPPRESS_GREET_ONLY) {
++    return isGreetingDetail(detail) ? POLICY_SUPPRESS_ALL : POLICY_SUPPRESS_NONE;
++  }
++  return POLICY_SUPPRESS_ALL;
++};
++
++export default {
++  POLICY_SUPPRESS_ALL,
++  POLICY_SUPPRESS_NONE,
++  POLICY_SUPPRESS_GREET_ONLY,
++  policyString,
++  policyBoolean,
++  policyAllowLocalVad,
++  isGreetingDetail,
++  resolveSuppressionMode,
++};
