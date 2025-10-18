@@ -1,8 +1,15 @@
 import pytest
 
 from app.flow.trace import (
+    ASR_PARTIAL_TYPE,
+    BARGE_IN_TYPE,
+    BARGE_RESUME_TYPE,
     CONFIRM_CLOSE_TYPE,
     CONFIRM_OPEN_TYPE,
+    LLM_FINAL_TYPE,
+    LLM_START_TYPE,
+    TTS_END_TYPE,
+    TTS_START_TYPE,
     FlowStore,
 )
 
@@ -54,6 +61,142 @@ def test_emit_dedupe_window(flow_env):
     advance(200)  # outside dedupe window
     eid3 = store.emit(session_id, "flow", "session", "session_open", "system")
     assert eid3 != eid1
+
+
+def test_asr_partial_once_per_turn(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-asr"
+
+    meta = {"turn_id": "turn-1"}
+    first = store.emit(
+        session_id,
+        "transition",
+        "turn",
+        ASR_PARTIAL_TYPE,
+        "client",
+        meta=meta,
+    )
+    assert first
+
+    advance(500)
+    second = store.emit(
+        session_id,
+        "transition",
+        "turn",
+        ASR_PARTIAL_TYPE,
+        "client",
+        meta=meta,
+    )
+    assert second == first
+
+    new_meta = {"turn_id": "turn-2"}
+    third = store.emit(
+        session_id,
+        "transition",
+        "turn",
+        ASR_PARTIAL_TYPE,
+        "client",
+        meta=new_meta,
+    )
+    assert third and third != first
+
+
+def test_barge_in_suppressed_while_paused(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-barge"
+
+    first = store.emit(session_id, "transition", "turn", BARGE_IN_TYPE, "client")
+    assert first
+
+    store.emit(session_id, "transition", "turn", "barge_pause", "system")
+
+    advance(2000)
+    second = store.emit(session_id, "transition", "turn", BARGE_IN_TYPE, "client")
+    assert second is None
+
+    snapshot = store.list(session_id)
+    barge_events = [evt for evt in snapshot["events"] if evt["type"] == BARGE_IN_TYPE]
+    assert len(barge_events) == 1
+
+    store.emit(session_id, "transition", "turn", BARGE_RESUME_TYPE, "system")
+    advance(10)
+    third = store.emit(session_id, "transition", "turn", BARGE_IN_TYPE, "client")
+    assert third and third != first
+
+
+def test_tts_start_dedupe_and_forced_close(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-tts"
+    meta = {"turn_id": "turn-tts"}
+
+    start = store.emit(
+        session_id,
+        "flow",
+        "turn",
+        TTS_START_TYPE,
+        "assistant",
+        meta=meta,
+    )
+    assert start
+
+    advance(1000)
+    duplicate = store.emit(
+        session_id,
+        "flow",
+        "turn",
+        TTS_START_TYPE,
+        "assistant",
+        meta=meta,
+    )
+    assert duplicate == start
+
+    advance(121000)
+    snapshot = store.list(session_id)
+    forced = [evt for evt in snapshot["events"] if evt["type"] == TTS_END_TYPE]
+    assert forced
+    assert forced[-1]["meta"].get("__warning") == "forced_close"
+
+    restart = store.emit(
+        session_id,
+        "flow",
+        "turn",
+        TTS_START_TYPE,
+        "assistant",
+        meta=meta,
+    )
+    assert restart and restart != start
+
+
+def test_llm_forced_close(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-llm"
+    meta = {"turn_id": "turn-llm"}
+
+    start = store.emit(
+        session_id,
+        "flow",
+        "turn",
+        LLM_START_TYPE,
+        "assistant",
+        meta=meta,
+    )
+    assert start
+
+    advance(121000)
+    snapshot = store.list(session_id)
+    forced = [evt for evt in snapshot["events"] if evt["type"] == LLM_FINAL_TYPE]
+    assert forced
+    assert forced[-1]["meta"].get("__warning") == "forced_close"
+
+    restart = store.emit(
+        session_id,
+        "flow",
+        "turn",
+        LLM_START_TYPE,
+        "assistant",
+        meta=meta,
+    )
+    assert restart and restart != start
 
 
 def test_add_batch_and_expand(flow_env):

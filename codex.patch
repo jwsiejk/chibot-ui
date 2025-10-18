@@ -1,291 +1,229 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index f5d55c6fb14cdb85d9387631ee4eef247045c555..550a13940ef50214e32c00b54d9835cb1e1013fd 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1707,50 +1707,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     asr_partial_first_emitted = [False]
-     evidence_gate_emitted = [False]
-     last_confident_partial_conf: List[Optional[float]] = [None]
-     current_assistant_turn_ref: List[Optional[Any]] = [None]
-     manual_commit_pending = [False]
-     manual_button_down = [False]
-     manual_turn_active = [False]
-     ptt_down_emitted = [False]
-     # Runtime flags to coordinate commit + VAD gating
-     assistant_speaking = [False]
-     tts_mask_active = [False]
-     tts_mask_mode = ["none"]
-     tts_mask_release_task: List[Optional[asyncio.Task]] = [None]
-     tts_mask_release_deadline = [0.0]
-     pending_confirm_request: List[Optional[Dict[str, Any]]] = [None]
-     asr_ready = [False]
-     local_vad_open = [False]    
-     turn_commit_mode_ref: List[str] = ["vad"]
-     last_ready_signal_after: List[Optional[str]] = [None]
-     active_turn_mode_ref: List[str] = ["vad"]
-     turn_timing: Dict[str, List[float]] = {
-         "start": [0.0],
-         "dg_open": [0.0],
-         "first_partial": [0.0],
-         "final": [0.0],
-+        "tts_end": [0.0],
-     }
-     turn_finish_logged = [False]
-     last_partial_ts: List[float] = [0.0]
+diff --git a/tests/test_flow_store.py b/tests/test_flow_store.py
+index 3272dcbb0344eeed4a3dc0e4aa38e0a884f298db..d7db657bae38ee3b401482b902f107d46927a843 100644
+--- a/tests/test_flow_store.py
++++ b/tests/test_flow_store.py
+@@ -1,30 +1,37 @@
+ import pytest
  
-     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
-     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
+ from app.flow.trace import (
++    ASR_PARTIAL_TYPE,
++    BARGE_IN_TYPE,
++    BARGE_RESUME_TYPE,
+     CONFIRM_CLOSE_TYPE,
+     CONFIRM_OPEN_TYPE,
++    LLM_FINAL_TYPE,
++    LLM_START_TYPE,
++    TTS_END_TYPE,
++    TTS_START_TYPE,
+     FlowStore,
+ )
  
-     # Turn-scoped buffering + state
-     buffered_chunks: Deque[bytes] = deque()
-     sent_any_audio = [False]
-     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
-     no_audio_notified = [False]
-     no_audio_turn_id = [0]
-     try:
-         no_audio_window_s = float(
-             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
-         )
-     except Exception:
-         no_audio_window_s = 10.0
-     if no_audio_window_s < 0:
-         no_audio_window_s = 0.0
-     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
-     asr_ready_evt: asyncio.Event = asyncio.Event()
-     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
-     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-@@ -2515,90 +2516,100 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 decision.metrics,
-                 window,
-             )
-         elif decision.action == "abort" and decision.metrics is not None:
-             _finalize_confirm_abort(
-                 decision.metrics.get("reason") or "partial",
-                 decision.metrics,
-                 window,
-             )
  
-     def _handle_asr_partial_with_flow(ev: Dict[str, Any]) -> None:
-         try:
-             _handle_confirm_partial(ev)
-         except Exception:
-             pass
+ @pytest.fixture
+ def flow_env(monkeypatch):
+     store = FlowStore()
+     store._init()
  
-         last_partial_ts[0] = time.time()
+     clock = {"now": 1000.0}
  
-         raw_conf = ev.get("confidence") if isinstance(ev, dict) else None
-         conf_val: Optional[float]
-         try:
-             conf_val = float(raw_conf) if raw_conf is not None else None
-         except (TypeError, ValueError):
-             conf_val = None
+     def fake_monotonic():
+         return clock["now"]
  
-+        if turn_timing is not None:
-+            with contextlib.suppress(Exception):
-+                holder = turn_timing.setdefault("first_partial", [0.0])
-+                if not holder[0]:
-+                    holder[0] = time.time()
+     monkeypatch.setattr("app.flow.trace.time.monotonic", fake_monotonic)
+ 
+     def advance(ms: int) -> None:
+         clock["now"] += ms / 1000.0
+ 
+     yield store, advance, clock
+ 
+     store._init()
+ 
+ 
+ def test_emit_and_list_basic(flow_env):
+@@ -34,50 +41,186 @@ def test_emit_and_list_basic(flow_env):
+     first_id = store.emit(session_id, "flow", "session", "session_open", "client")
+     assert first_id
+     advance(10)
+     second_id = store.emit(session_id, "transition", "session", "asr_ready", "system")
+     assert second_id and second_id != first_id
+ 
+     data = store.list(session_id, expand="all")
+     events = data["events"]
+     assert [evt["id"] for evt in events] == [first_id, second_id]
+     assert data["next_since_ms"] > events[-1]["t_rel_ms"]
+ 
+ 
+ def test_emit_dedupe_window(flow_env):
+     store, advance, _ = flow_env
+     session_id = "sess-dedupe"
+ 
+     eid1 = store.emit(session_id, "flow", "session", "session_open", "system")
+     advance(50)  # 50 ms < dedupe window
+     eid2 = store.emit(session_id, "flow", "session", "session_open", "system")
+     assert eid1 == eid2
+     advance(200)  # outside dedupe window
+     eid3 = store.emit(session_id, "flow", "session", "session_open", "system")
+     assert eid3 != eid1
+ 
+ 
++def test_asr_partial_once_per_turn(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-asr"
 +
-         if not asr_partial_first_emitted[0]:
-             asr_partial_first_emitted[0] = True
-             meta_conf = conf_val if conf_val is not None else 0.0
-             _emit_transition_event(
-                 "asr_partial_first",
-                 meta={"conf": meta_conf},
-                 phase="asr",
-             )
++    meta = {"turn_id": "turn-1"}
++    first = store.emit(
++        session_id,
++        "transition",
++        "turn",
++        ASR_PARTIAL_TYPE,
++        "client",
++        meta=meta,
++    )
++    assert first
++
++    advance(500)
++    second = store.emit(
++        session_id,
++        "transition",
++        "turn",
++        ASR_PARTIAL_TYPE,
++        "client",
++        meta=meta,
++    )
++    assert second == first
++
++    new_meta = {"turn_id": "turn-2"}
++    third = store.emit(
++        session_id,
++        "transition",
++        "turn",
++        ASR_PARTIAL_TYPE,
++        "client",
++        meta=new_meta,
++    )
++    assert third and third != first
++
++
++def test_barge_in_suppressed_while_paused(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-barge"
++
++    first = store.emit(session_id, "transition", "turn", BARGE_IN_TYPE, "client")
++    assert first
++
++    store.emit(session_id, "transition", "turn", "barge_pause", "system")
++
++    advance(2000)
++    second = store.emit(session_id, "transition", "turn", BARGE_IN_TYPE, "client")
++    assert second is None
++
++    snapshot = store.list(session_id)
++    barge_events = [evt for evt in snapshot["events"] if evt["type"] == BARGE_IN_TYPE]
++    assert len(barge_events) == 1
++
++    store.emit(session_id, "transition", "turn", BARGE_RESUME_TYPE, "system")
++    advance(10)
++    third = store.emit(session_id, "transition", "turn", BARGE_IN_TYPE, "client")
++    assert third and third != first
++
++
++def test_tts_start_dedupe_and_forced_close(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-tts"
++    meta = {"turn_id": "turn-tts"}
++
++    start = store.emit(
++        session_id,
++        "flow",
++        "turn",
++        TTS_START_TYPE,
++        "assistant",
++        meta=meta,
++    )
++    assert start
++
++    advance(1000)
++    duplicate = store.emit(
++        session_id,
++        "flow",
++        "turn",
++        TTS_START_TYPE,
++        "assistant",
++        meta=meta,
++    )
++    assert duplicate == start
++
++    advance(121000)
++    snapshot = store.list(session_id)
++    forced = [evt for evt in snapshot["events"] if evt["type"] == TTS_END_TYPE]
++    assert forced
++    assert forced[-1]["meta"].get("__warning") == "forced_close"
++
++    restart = store.emit(
++        session_id,
++        "flow",
++        "turn",
++        TTS_START_TYPE,
++        "assistant",
++        meta=meta,
++    )
++    assert restart and restart != start
++
++
++def test_llm_forced_close(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-llm"
++    meta = {"turn_id": "turn-llm"}
++
++    start = store.emit(
++        session_id,
++        "flow",
++        "turn",
++        LLM_START_TYPE,
++        "assistant",
++        meta=meta,
++    )
++    assert start
++
++    advance(121000)
++    snapshot = store.list(session_id)
++    forced = [evt for evt in snapshot["events"] if evt["type"] == LLM_FINAL_TYPE]
++    assert forced
++    assert forced[-1]["meta"].get("__warning") == "forced_close"
++
++    restart = store.emit(
++        session_id,
++        "flow",
++        "turn",
++        LLM_START_TYPE,
++        "assistant",
++        meta=meta,
++    )
++    assert restart and restart != start
++
++
+ def test_add_batch_and_expand(flow_env):
+     store, advance, _ = flow_env
+     session_id = "sess-batch"
  
-         if conf_val is not None and conf_val >= confirm_min_conf:
-             last_confident_partial_conf[0] = conf_val
-             _maybe_emit_evidence_gate(conf_val)
+     parent_id = store.emit(session_id, "flow", "turn", "confirm_open", "assistant")
+     advance(5)
+     child_id = store.emit(
+         session_id,
+         "transition",
+         "turn",
+         "asr_partial_first",
+         "client",
+         parent_id=parent_id,
+     )
  
-     def _ensure_confirm_closed(reason: str) -> None:
-         window = confirm_window_ref[0]
-         if not window:
-             return
-         decision = window.cancel(reason, time.time())
-         if decision.action == "abort" and decision.metrics is not None:
-             _finalize_confirm_abort(reason, decision.metrics, window)
-             
-     def _on_assistant_tts_start(turn_id: Any) -> None:
-         assistant_speaking[0] = True
-         mode = (barge_suppress_mode or "none").strip() or "none"
-         mask_engaged = mode != "none"
-         tts_mask_mode[0] = mode
-         if mask_engaged:
-             tts_mask_active[0] = True
-         else:
-             tts_mask_active[0] = False
-         _cancel_tts_mask_release()
-         with contextlib.suppress(Exception):
-             _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode)
-         _ensure_confirm_closed("tts_start")
-         if not manual_button_down[0]:
-             with contextlib.suppress(Exception):
-                 barge.cancel(_send_barge_state)
+     added = store.add_batch(session_id, parent_id, "transcript", ["hello", "world"])
+     assert added is True
  
-     def _on_assistant_tts_end(turn_id: Any) -> None:
-         assistant_speaking[0] = False
-+        if turn_timing is not None:
-+            with contextlib.suppress(Exception):
-+                holder = turn_timing.setdefault("tts_end", [0.0])
-+                holder[0] = time.time()
-         if tts_mask_active[0] and barge_post_tts_hold_ms > 0:
-             delay_ms = barge_post_tts_hold_ms
-             _cancel_tts_mask_release()
-             tts_mask_release_deadline[0] = time.time() + (delay_ms / 1000.0)
-             tts_mask_release_task[0] = asyncio.create_task(
-                 _await_tts_mask_release(delay_ms, turn_id)
-             )
-         elif tts_mask_active[0]:
-             _cancel_tts_mask_release()
-             _mark_tts_mask_off(turn_id, 0)
-         else:
-             _cancel_tts_mask_release()
-             _mark_tts_mask_off(turn_id, 0)
+     snapshot = store.list(session_id, expand="flow")
+     events = snapshot["events"]
+     assert events[0]["id"] == parent_id
+     assert events[0]["batches"][0]["kind"] == "transcript"
+     assert events[0]["batches"][0]["items"] == ["hello", "world"]
+     assert events[0]["children"][0]["id"] == child_id
  
-     def _on_asr_connect_ok() -> None:
-         already_ready = asr_ready[0]
-         asr_ready[0] = True
-         if not already_ready:
-             with contextlib.suppress(Exception):
-                 delta_ms = int(max(0.0, (time.time() - ws_open_ts) * 1000))
-                 _jlog("EVT_ASR_READY", sid=sid, t_ms_since_ws=delta_ms)
-         _maybe_start_pending_confirm()
- 
-     def _on_local_vad_start() -> None:
-         local_vad_open[0] = True
-@@ -2618,50 +2629,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             if ftype == "assistant_audio":
-                 is_last_val = frame.get("is_last")
-                 is_last = False
-                 if isinstance(is_last_val, bool):
-                     is_last = is_last_val
-                 elif isinstance(is_last_val, str):
-                     is_last = is_last_val.strip().lower() in {"1", "true", "yes"}
-                 elif isinstance(is_last_val, (int, float)):
-                     is_last = bool(is_last_val)
-                 if is_last:
-                     _on_assistant_tts_end(turn_id)
-         elif ftype in {
-             "utteranceend",
-             "utterance_end",
-             "tts_end",
-             "tts:stop",
-             "tts_stop",
-         }:
-             _on_assistant_tts_end(turn_id)
- 
-     def _reset_turn_metrics(start_ts: float) -> None:
-         turn_timing["start"][0] = start_ts
-         turn_timing["dg_open"][0] = 0.0
-         turn_timing["first_partial"][0] = 0.0
-         turn_timing["final"][0] = 0.0
-+        turn_timing["tts_end"][0] = 0.0
-         turn_finish_logged[0] = False
-         asr_partial_counter[0] = 0
-         asr_partial_first_emitted[0] = False
-         evidence_gate_emitted[0] = False
-         last_confident_partial_conf[0] = None
-         last_partial_ts[0] = 0.0
- 
-     def _emit_no_audio_alert(reason: str) -> None:
-         if no_audio_notified[0]:
-             return
-         if sent_any_audio[0]:
-             return
-         if assistant_speaking[0] or tts_mask_active[0]:
-             return
-         no_audio_notified[0] = True
-         turn_id = no_audio_turn_id[0] or turn_id_ref[0] or 0
-         since_first_ms = None
-         if mic_first_ts[0]:
-             since_first_ms = int(max(0.0, (time.time() - mic_first_ts[0]) * 1000))
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_no_audio_detected",
-                 sid=sid,
-                 turn_id=turn_id,
-                 reason=reason,
-@@ -2878,60 +2890,80 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             with contextlib.suppress(Exception):
-                 bus.cancel_turn(sid, target_turn)
-                 cancel_reason = "assistant_cancel"
-         last_ready_signal_after[0] = cancel_reason
-         _send_barge_state("ready")
-         if last_ready_signal_after[0]:
-             with contextlib.suppress(Exception):
-                 _jlog(
-                     "EVT_READY_SIGNAL",
-                     sid=sid,
-                     after=last_ready_signal_after[0],
-                     turn=turn_id_ref[0],
-                 )
-             last_ready_signal_after[0] = None
-         _jlog(
-             "turn_committed",
-             sid=sid,
-             mode=mode,
-             manual=(mode == "manual"),
-             auto_commit=(mode == "auto_commit"),
-             turn_id=turn_id_ref[0],
-             ts_ms=int(time.time() * 1000),
-             admin_event="turn_committed",
-             admin_label="turn_committed",
-         )
-+        commit_event_id = ""
-         if post_greet_phase_active[0]:
-             turn_id_hint = _flow_turn_id_hint()
-             if turn_id_hint not in flow_turn_commit_emitted:
-                 flow_turn_commit_emitted.add(turn_id_hint)
-                 flow_turn_abort_emitted.discard(turn_id_hint)
--                _emit_flow_event(
-+                commit_event_id = _emit_flow_event(
-                     "turn_commit",
-                     phase="turn",
-                     meta={"turn_id": turn_id_hint},
-                 )
-+        if not commit_event_id:
-+            parent_event_id = confirm_flow_parent_id[0] or ""
-+        else:
-+            parent_event_id = commit_event_id
-+        if parent_event_id:
-+            tts_end_ts = turn_timing.get("tts_end", [0.0])[0]
-+            first_partial_ts = turn_timing.get("first_partial", [0.0])[0]
-+            if tts_end_ts and first_partial_ts and first_partial_ts >= tts_end_ts:
-+                latency_ms = int(max(0.0, (first_partial_ts - tts_end_ts) * 1000))
-+                _emit_debug_event(
-+                    "latency_tick",
-+                    phase="turn",
-+                    parent_id=parent_event_id,
-+                    meta={
-+                        "from": "tts_end",
-+                        "to": "asr_partial_first",
-+                        "ms": latency_ms,
-+                    },
-+                )
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "EVT_COMMIT",
-                 sid=sid,
-                 turn=turn_id_ref[0],
-                 mode=event_mode,
-                 dual_evidence=bool(dual_evidence),
-                 asr_ready=asr_ready_flag,
-             )
-         if not turn_stream_committed[0]:
-             turn_stream_committed[0] = True
-             asr_direct_stream[0] = True
-             _schedule_asr_stream_activation(mode or "vad")
- 
-     def _cancel_no_audio_watch() -> None:
-         task = no_audio_watch_task[0]
-         if task and not task.done():
-             task.cancel()
-         no_audio_watch_task[0] = None
- 
-     def _schedule_no_audio_watch(turn_id: int) -> None:
-         if no_audio_window_s <= 0:
-             return
-         _cancel_no_audio_watch()
-         no_audio_notified[0] = False
