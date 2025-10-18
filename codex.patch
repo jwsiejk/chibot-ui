@@ -1,148 +1,40 @@
-diff --git a/app/__init__.py b/app/__init__.py
-index d8f2daf4499ed2038bf2e211c2c37fdc40389c1c..98de00a076b6c61dfec02400e6c84994d9c90c35 100644
---- a/app/__init__.py
-+++ b/app/__init__.py
-@@ -23,50 +23,67 @@ def diagnostics():
-     return render_template("diagnostics.html")
- 
- @core_bp.get("/favicon.ico")
- def favicon():
-     # Serve from /static/favicon.ico
-     from flask import current_app, send_file
-     import os as _os
-     return send_file(_os.path.join(current_app.static_folder, "favicon.ico"), mimetype="image/x-icon")
- 
- @core_bp.get("/logs-ui")
- def logs_ui_redirect():
-     # Convenience redirect for the admin log UI
-     from flask import redirect
-     return redirect("/api/v1/admin/logs-ui", code=302)
- 
- @core_bp.get("/admin")
- def admin_console():
-     # Admin-only HTML console
-     from .utils.admin import is_admin_email
-     from .security_state import get_user
-     from flask import abort, render_template as _rt, session as _sess, request as _req
-     email = (_sess.get("user") or {}).get("email") or _sess.get("email") or _req.headers.get("X-User-Email") or (get_user() or "")
-     if not is_admin_email((email or "").strip().lower()):
-         abort(403)
-     return _rt("admin_console.html")
-+
-+
-+@core_bp.get("/admin/flow")
-+def admin_flow_console():
-+    from .utils.admin import is_admin_email
-+    from .security_state import get_user
-+    from flask import abort, render_template as _rt, session as _sess, request as _req
-+
-+    email = (
-+        (_sess.get("user") or {}).get("email")
-+        or _sess.get("email")
-+        or _req.headers.get("X-User-Email")
-+        or (get_user() or "")
-+    )
-+    if not is_admin_email((email or "").strip().lower()):
-+        abort(403)
-+    return _rt("admin_flow.html")
- def create_app():
-     app = Flask(
-         __name__,
-         static_folder="../static",
-         static_url_path="/static",
-         template_folder="../templates",
-     )
-     app.config["JSON_SORT_KEYS"] = False
-     if os.environ.get("CI_FAST"):
-         app.config["TESTING"] = True
- 
-     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
- 
-     # v1-only API + core + health
-     app.register_blueprint(create_v1_blueprint(), url_prefix="/api/v1")
-     app.register_blueprint(core_bp)
-     app.register_blueprint(health_bp)
- 
-     # Ensure CSRF header/cookie attached to responses
-     app.after_request(ensure_csrf_headers)
- 
-     # Middleware
-     app.before_request(csrf_before_request)
-     rate_limit_register(app)
- 
-diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
-index 7545c90c72afe31b68cad09462a7ca9351867ad3..5f677f06ba05cc638379748e55563d234cc17ccf 100644
---- a/app/api_v1/flow.py
-+++ b/app/api_v1/flow.py
-@@ -59,50 +59,63 @@ def _parse_levels(raw: Optional[str]) -> Iterable[str]:
-         piece = part.strip()
-         if not piece:
-             continue
-         if piece not in levels:
-             levels.append(piece)
-     return levels
- 
- 
- def _parse_bool(value: Optional[str], *, default: bool = True) -> bool:
-     if value is None:
-         return default
-     lowered = value.strip().lower()
-     if lowered in {"1", "true", "yes", "on"}:
-         return True
-     if lowered in {"0", "false", "no", "off"}:
-         return False
-     return default
- 
- 
- @bp.get("/flow/catalog")
- def flow_catalog():
-     _require_admin()
-     return jsonify({"catalog": FLOW_EVENT_CATALOG})
- 
- 
-+@bp.get("/flow/sessions")
-+def flow_sessions():
-+    _require_admin()
-+
-+    search_value = _normalize_str(request.args.get("q") or request.args.get("query"))
-+    limit_value = _parse_int(request.args.get("limit"), name="limit", minimum=0)
-+
-+    store = FlowStore()
-+    limit = limit_value if limit_value is not None else 50
-+    sessions = store.sessions(query=search_value, limit=limit)
-+    return jsonify({"sessions": sessions})
-+
-+
- @bp.get("/flow/trace")
- def flow_trace():
-     _require_admin()
- 
-     session_id = _normalize_str(request.args.get("session_id"))
-     if not session_id:
-         abort(400, description="session_id is required")
- 
-     since_value = _parse_int(request.args.get("since_ms"), name="since_ms", minimum=0)
-     limit_value = _parse_int(request.args.get("limit"), name="limit", minimum=1)
-     if limit_value is None:
-         limit_value = 200
-     limit_value = min(limit_value, 1000)
- 
-     levels = _parse_levels(request.args.get("levels"))
-     expand = request.args.get("expand") or "flow"
- 
-     store = FlowStore()
-     payload = store.list(
-         session_id=session_id,
-         since_ms=since_value,
-         limit=limit_value,
-         levels=levels,
-         expand=expand,
-     )
 diff --git a/app/flow/trace.py b/app/flow/trace.py
-index a77af9a3efab3f8418b5e4085ed58f74359b7595..765d46539a9f8719f049524396715c8b0728fa3d 100644
+index 765d46539a9f8719f049524396715c8b0728fa3d..5cb637be30fd7e51b2024d93cbe81928ea2c1174 100644
 --- a/app/flow/trace.py
 +++ b/app/flow/trace.py
-@@ -237,50 +237,93 @@ class FlowStore:
+@@ -206,79 +206,83 @@ class FlowStore:
+             if not bucket:
+                 return False
+             record = bucket.event_index.get(parent_id)
+             if not record:
+                 return False
+             batch_payload = {"kind": kind, "items": items_list}
+             record.batches.append(batch_payload)
+             return True
+ 
+     def list(
+         self,
+         session_id: str,
+         since_ms: Optional[int] = None,
+         limit: int = 200,
+         levels: Iterable[str] = ("flow", "transition"),
+         expand: str = "flow",
+     ) -> Dict[str, Any]:
+         with self._lock:
+             bucket = self._sessions.get(session_id)
+             if not bucket:
+                 return {
+                     "session_id": session_id,
+                     "started_at": None,
+                     "events": [],
+                     "next_since_ms": since_ms or 0,
++                    "hints": [],
+                 }
+             self._inject_safety_events(bucket)
+             levels_set = set(levels)
+             since_value = since_ms or 0
+             expand_policy = self._parse_expand(expand)
+ 
              events: List[Dict[str, Any]] = []
              count = 0
              next_since = since_value
@@ -161,2221 +53,1196 @@ index a77af9a3efab3f8418b5e4085ed58f74359b7595..765d46539a9f8719f049524396715c8b
              if events:
                  next_since += 1
  
++            hints = self._compute_hints(bucket)
++
              return {
                  "session_id": session_id,
                  "started_at": bucket.started_at_iso,
                  "events": events,
                  "next_since_ms": next_since,
++                "hints": hints,
              }
  
-+    def sessions(
-+        self,
-+        *,
-+        query: Optional[str] = None,
-+        limit: Optional[int] = 50,
-+    ) -> List[Dict[str, Any]]:
-+        with self._lock:
-+            needle = (query or "").strip().lower()
-+            filtered: List[Dict[str, Any]] = []
-+            for bucket in self._sessions.values():
-+                if needle and needle not in bucket.session_id.lower():
-+                    continue
+     def sessions(
+         self,
+         *,
+         query: Optional[str] = None,
+         limit: Optional[int] = 50,
+     ) -> List[Dict[str, Any]]:
+         with self._lock:
+             needle = (query or "").strip().lower()
+             filtered: List[Dict[str, Any]] = []
+             for bucket in self._sessions.values():
+                 if needle and needle not in bucket.session_id.lower():
+                     continue
+ 
+                 event_count = len(bucket.events)
+                 last_record = bucket.events[-1] if event_count else None
+                 last_rel_ms = last_record.data.get("t_rel_ms") if last_record else 0
+                 last_type = last_record.data.get("type") if last_record else None
+                 last_phase = last_record.data.get("phase") if last_record else None
+                 last_who = last_record.data.get("who") if last_record else None
+                 last_event_id = last_record.data.get("id") if last_record else None
+ 
+                 filtered.append(
+                     {
+@@ -591,27 +595,219 @@ class FlowStore:
+             return False
+         if mode == "flow":
+             return record.data.get("level") == "flow"
+         if mode == "ids":
+             return record.data.get("id") in expand_policy.get("ids", set())
+         return False
+ 
+     def _build_blurb(
+         self, type_: str, phase: str, who: str, meta: Dict[str, Any]
+     ) -> str:
+         template = BLURBS.get(type_)
+         context = {
+             "turn": self._extract_turn_id(meta) or "",
+             "phase": phase,
+             "src": who,
+         }
+         if template:
+             blurb = template.format(**context)
+         else:
+             blurb = type_.replace("_", " ").strip() or "event"
+         words = _words(blurb)
+         if len(words) <= 12:
+             return " ".join(words)
+         return " ".join(words[:12])
+ 
++    def _compute_hints(self, bucket: SessionBucket) -> List[Dict[str, Any]]:
++        records = list(bucket.events)
++        if not records:
++            return []
 +
-+                event_count = len(bucket.events)
-+                last_record = bucket.events[-1] if event_count else None
-+                last_rel_ms = last_record.data.get("t_rel_ms") if last_record else 0
-+                last_type = last_record.data.get("type") if last_record else None
-+                last_phase = last_record.data.get("phase") if last_record else None
-+                last_who = last_record.data.get("who") if last_record else None
-+                last_event_id = last_record.data.get("id") if last_record else None
++        event_index = bucket.event_index
++        hints: List[Dict[str, Any]] = []
++        seen_keys: Set[Tuple[str, Tuple[str, ...]]] = set()
 +
-+                filtered.append(
-+                    {
-+                        "session_id": bucket.session_id,
-+                        "started_at": bucket.started_at_iso,
-+                        "event_count": event_count,
-+                        "last_event_ms": last_rel_ms or 0,
-+                        "last_type": last_type,
-+                        "last_phase": last_phase,
-+                        "last_who": last_who,
-+                        "last_event_id": last_event_id,
-+                    }
-+                )
++        def _normalize_id(value: Optional[str]) -> Optional[str]:
++            if not value:
++                return None
++            return str(value)
 +
-+            filtered.sort(
-+                key=lambda item: (item["last_event_ms"], item["event_count"], item["session_id"]),
-+                reverse=True,
++        def _numeric(value: Any) -> Optional[float]:
++            if value is None:
++                return None
++            if isinstance(value, (int, float)):
++                return float(value)
++            try:
++                return float(str(value))
++            except (TypeError, ValueError):
++                return None
++
++        def _as_int(value: Any) -> Optional[int]:
++            number = _numeric(value)
++            if number is None:
++                return None
++            return int(number)
++
++        def _add_hint(kind: str, severity: str, text: str, anchors: Iterable[str]) -> None:
++            anchor_list = [anchor for anchor in (_normalize_id(a) for a in anchors) if anchor]
++            if not anchor_list:
++                return
++            key = (kind, tuple(sorted(anchor_list)))
++            if key in seen_keys:
++                return
++            seen_keys.add(key)
++            hint_id = f"{kind}:{'-'.join(sorted(anchor_list))}"
++            hints.append(
++                {
++                    "id": hint_id,
++                    "severity": severity,
++                    "text": text,
++                    "anchors": anchor_list,
++                }
 +            )
 +
-+            if limit is not None and limit >= 0:
-+                return filtered[: limit or 0] if limit == 0 else filtered[:limit]
-+            return filtered
++        last_tts_end: Optional[EventRecord] = None
++        last_asr_error: Optional[EventRecord] = None
 +
-     def get(self, session_id: str, event_id: str) -> Optional[Dict[str, Any]]:
-         with self._lock:
-             bucket = self._sessions.get(session_id)
-             if not bucket:
-                 return None
-             record = bucket.event_index.get(event_id)
-             if not record:
-                 return None
-             expand_policy = {"mode": "all", "ids": set()}
-             return self._format_event(bucket, record, expand_policy)
++        for idx, record in enumerate(records):
++            data = record.data
++            type_ = data.get("type") or ""
++            meta = data.get("meta") or {}
++
++            if type_ == CONFIRM_OPEN_TYPE:
++                start_ms = data.get("t_rel_ms") or 0
++                confirm_id = data.get("id")
++                found_within = False
++                j = idx + 1
++                while j < len(records):
++                    next_record = records[j]
++                    next_type = next_record.data.get("type") or ""
++                    next_ms = next_record.data.get("t_rel_ms") or 0
++                    delta = next_ms - start_ms
++                    if next_type in {CONFIRM_OPEN_TYPE, CONFIRM_CLOSE_TYPE}:
++                        break
++                    if delta > 2000:
++                        break
++                    if next_type == ASR_PARTIAL_TYPE:
++                        if delta <= 1200:
++                            found_within = True
++                        break
++                    j += 1
++                if not found_within:
++                    _add_hint(
++                        "no_asr_after_ready",
++                        "warn",
++                        "No ASR partial within 1200ms after confirm_open.",
++                        [confirm_id],
++                    )
++
++                # evidence gate tracking
++                vad_event: Optional[EventRecord] = None
++                evidence_met = False
++                j = idx + 1
++                while j < len(records):
++                    next_record = records[j]
++                    next_type = next_record.data.get("type") or ""
++                    if next_type == CONFIRM_OPEN_TYPE:
++                        break
++                    if next_type == CONFIRM_CLOSE_TYPE:
++                        break
++                    if next_type == "vad_gate_open" and vad_event is None:
++                        vad_event = next_record
++                    if next_type == "evidence_gate_met" and vad_event is not None:
++                        evidence_met = True
++                        break
++                    j += 1
++                if vad_event is not None and not evidence_met:
++                    _add_hint(
++                        "evidence_never_met",
++                        "warn",
++                        "Dual evidence not met (VAD open but no confident partial).",
++                        [confirm_id, vad_event.data.get("id")],
++                    )
++
++            if type_ == "gate_check":
++                rule = str(meta.get("rule") or "").lower()
++                if rule == "min_tokens":
++                    passed_val = meta.get("passed")
++                    passed = bool(passed_val) if isinstance(passed_val, bool) else str(passed_val).lower() in {"1", "true", "yes"}
++                    if not passed:
++                        parent_id = data.get("parent_id") or data.get("id")
++                        _add_hint(
++                            "commit_blocked_min_tokens",
++                            "warn",
++                            "Gate rejected on min_tokens.",
++                            [parent_id],
++                        )
++
++            if type_ == "tts_end":
++                last_tts_end = record
++
++            if type_ == "vad_gate_open":
++                reason = str(meta.get("reason") or "").lower()
++                if "mask" in reason and last_tts_end is not None:
++                    dt = (data.get("t_rel_ms") or 0) - (last_tts_end.data.get("t_rel_ms") or 0)
++                    if dt <= 3000:
++                        _add_hint(
++                            "post_tts_hold_overlap",
++                            "warn",
++                            "User speech during post-TTS hold; early audio masked.",
++                            [last_tts_end.data.get("id"), data.get("id")],
++                        )
++
++            if type_ == "tts_metrics":
++                first_byte = _numeric(meta.get("first_byte_ms"))
++                if first_byte is not None and first_byte > 600:
++                    parent_id = data.get("parent_id") or data.get("id")
++                    _add_hint(
++                        "tts_slow",
++                        "warn",
++                        "TTS first-byte latency above 600ms.",
++                        [parent_id],
++                    )
++
++            if type_ == "queue_depth":
++                depth = _as_int(meta.get("depth"))
++                watermark = _as_int(meta.get("watermark"))
++                threshold = watermark if watermark is not None else 8
++                if depth is not None and depth >= threshold:
++                    _add_hint(
++                        "queue_pressure",
++                        "warn",
++                        "Mic or TTS queue hit high-water; possible backpressure.",
++                        [data.get("id")],
++                    )
++
++            if type_ == "state_snapshot":
++                queue_val = _as_int(meta.get("queue"))
++                if queue_val is not None and queue_val >= 8:
++                    anchor = data.get("parent_id") or data.get("id")
++                    _add_hint(
++                        "queue_pressure",
++                        "warn",
++                        "Mic or TTS queue hit high-water; possible backpressure.",
++                        [anchor],
++                    )
++
++            if type_ == "asr_error":
++                last_asr_error = record
++            elif type_ == "recover_ok" and last_asr_error is not None:
++                _add_hint(
++                    "asr_recovered",
++                    "info",
++                    "ASR error then recovery succeeded.",
++                    [last_asr_error.data.get("id"), data.get("id")],
++                )
++                last_asr_error = None
++
++        def _event_time(event_id: str) -> int:
++            record = event_index.get(event_id)
++            if not record:
++                return 0
++            value = record.data.get("t_rel_ms")
++            return int(value) if isinstance(value, int) else int(value or 0)
++
++        hints.sort(key=lambda hint: min(_event_time(anchor) for anchor in hint["anchors"]))
++        return hints
++
  
-     # ------------------------------------------------------------------
-     # Internal helpers
-     # ------------------------------------------------------------------
-     def _ensure_bucket(self, session_id: str) -> SessionBucket:
-         bucket = self._sessions.get(session_id)
-         if bucket is None:
-             bucket = SessionBucket(
-                 session_id=session_id,
-                 started_at_iso=_utc_now_iso(),
-                 t0_monotonic=time.monotonic(),
-             )
-             self._sessions[session_id] = bucket
-         return bucket
- 
+ __all__ = ["FlowStore"]
 diff --git a/static/css/admin_flow.css b/static/css/admin_flow.css
-new file mode 100644
-index 0000000000000000000000000000000000000000..537c421eaa7c0dad4f0f73242377497fd3442e23
---- /dev/null
+index 537c421eaa7c0dad4f0f73242377497fd3442e23..1fd9059472a84b881cddae50e15a6b6e974fcf7f 100644
+--- a/static/css/admin_flow.css
 +++ b/static/css/admin_flow.css
-@@ -0,0 +1,590 @@
-+:root {
-+  color-scheme: dark;
-+}
-+
-+body {
-+  margin: 0;
-+  background: #05070c;
-+  color: #e6e9ef;
-+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-+}
-+
-+.flow-app {
-+  min-height: 100vh;
+@@ -262,50 +262,126 @@ body {
+   font-size: 13px;
+   transition: background 0.2s ease, border 0.2s ease;
+ }
+ 
+ .action-btn:hover {
+   background: rgba(122, 160, 255, 0.25);
+   border-color: rgba(122, 160, 255, 0.8);
+ }
+ 
+ .flow-main {
+   display: flex;
+   flex: 1;
+   position: relative;
+   overflow: hidden;
+ }
+ 
+ .timeline-shell {
+   flex: 1;
+   display: flex;
+   flex-direction: column;
+   padding: 24px 32px 80px;
+   gap: 12px;
+   overflow: hidden;
+ }
+ 
++.flow-hint-bar {
 +  display: flex;
-+  flex-direction: column;
-+}
-+
-+.flow-header {
-+  background: linear-gradient(135deg, #101727 0%, #0b101c 100%);
-+  padding: 20px 32px 16px;
-+  border-bottom: 1px solid rgba(122, 160, 255, 0.15);
-+  box-shadow: 0 10px 25px rgba(9, 13, 22, 0.55);
-+  position: sticky;
-+  top: 0;
-+  z-index: 10;
-+}
-+
-+.flow-header-main,
-+.flow-header-secondary {
-+  display: flex;
-+  gap: 24px;
-+  flex-wrap: wrap;
-+  align-items: flex-end;
-+}
-+
-+.flow-header-secondary {
-+  margin-top: 18px;
 +  align-items: center;
-+}
-+
-+.session-picker label {
-+  font-size: 12px;
-+  font-weight: 600;
-+  letter-spacing: 0.04em;
-+  text-transform: uppercase;
-+  color: #9aa4b2;
-+}
-+
-+.session-input {
-+  margin-top: 6px;
-+  display: flex;
-+  align-items: stretch;
-+  gap: 6px;
-+  position: relative;
-+}
-+
-+.session-input input {
-+  background: rgba(11, 16, 26, 0.9);
-+  border: 1px solid rgba(122, 160, 255, 0.25);
-+  border-radius: 12px;
-+  padding: 10px 14px;
-+  color: #f7f9ff;
-+  min-width: 260px;
-+}
-+
-+.session-input input:focus {
-+  outline: none;
-+  border-color: rgba(122, 160, 255, 0.6);
-+  box-shadow: 0 0 0 2px rgba(122, 160, 255, 0.2);
-+}
-+
-+.icon-btn {
-+  appearance: none;
-+  border: 1px solid rgba(122, 160, 255, 0.4);
-+  background: rgba(122, 160, 255, 0.1);
-+  color: #c9d7ff;
-+  border-radius: 12px;
-+  padding: 0 12px;
-+  cursor: pointer;
-+  font-size: 18px;
-+  line-height: 36px;
-+  min-width: 40px;
-+  transition: background 0.2s ease, border 0.2s ease;
-+}
-+
-+.icon-btn:hover {
-+  background: rgba(122, 160, 255, 0.25);
-+  border-color: rgba(122, 160, 255, 0.8);
-+}
-+
-+.session-hint {
-+  font-size: 13px;
-+  color: #8a94a6;
-+  margin-top: 6px;
-+  max-width: 320px;
-+}
-+
-+.session-results {
-+  margin: 10px 0 0;
-+  padding: 0;
-+  list-style: none;
-+  display: flex;
-+  flex-direction: column;
-+  gap: 4px;
-+  max-height: 160px;
-+  overflow-y: auto;
-+}
-+
-+.session-results li {
-+  background: rgba(10, 15, 25, 0.7);
-+  border: 1px solid rgba(122, 160, 255, 0.12);
-+  border-radius: 10px;
-+  padding: 8px 10px;
-+  display: flex;
-+  justify-content: space-between;
-+  gap: 16px;
-+  cursor: pointer;
-+  transition: border 0.2s ease, background 0.2s ease;
-+}
-+
-+.session-results li:hover,
-+.session-results li.active {
-+  border-color: rgba(122, 160, 255, 0.6);
-+  background: rgba(122, 160, 255, 0.12);
-+}
-+
-+.session-results .session-meta {
-+  font-size: 12px;
-+  color: #9aa4b2;
-+  display: flex;
 +  gap: 12px;
++  flex-wrap: wrap;
++  background: rgba(12, 18, 30, 0.85);
++  border: 1px solid rgba(122, 160, 255, 0.18);
++  border-radius: 16px;
++  padding: 12px 16px;
 +}
 +
-+.group-label {
++.flow-hint-bar .hint-label {
 +  font-size: 12px;
 +  font-weight: 600;
-+  letter-spacing: 0.04em;
 +  text-transform: uppercase;
-+  color: #9aa4b2;
-+  display: inline-block;
-+  margin-bottom: 6px;
++  letter-spacing: 0.04em;
++  color: #96a3bc;
 +}
 +
-+.toggle-group {
-+  display: inline-flex;
-+  background: rgba(12, 17, 27, 0.72);
-+  border: 1px solid rgba(122, 160, 255, 0.25);
-+  border-radius: 999px;
-+  padding: 4px;
-+  gap: 6px;
++.hint-badges {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 10px;
 +}
 +
-+.toggle {
++.hint-badge {
 +  appearance: none;
 +  border: none;
-+  background: transparent;
-+  color: #dfe7ff;
 +  border-radius: 999px;
 +  padding: 8px 16px;
 +  font-size: 13px;
-+  cursor: pointer;
-+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
-+}
-+
-+.toggle:hover {
-+  background: rgba(122, 160, 255, 0.18);
-+}
-+
-+.toggle.active {
-+  background: rgba(122, 160, 255, 0.38);
-+  color: #04122b;
 +  font-weight: 600;
-+}
-+
-+.toggle:disabled {
-+  cursor: default;
-+  opacity: 0.7;
-+}
-+
-+.filters {
-+  display: flex;
-+  align-items: center;
-+  gap: 18px;
-+  flex-wrap: wrap;
-+}
-+
-+.filters label {
-+  display: flex;
-+  flex-direction: column;
-+  font-size: 12px;
-+  color: #9aa4b2;
-+  font-weight: 600;
-+  text-transform: uppercase;
-+}
-+
-+.filters input {
-+  margin-top: 6px;
-+  background: rgba(11, 17, 27, 0.85);
-+  border: 1px solid rgba(122, 160, 255, 0.3);
-+  color: #f0f4ff;
-+  border-radius: 10px;
-+  padding: 8px 12px;
-+  min-width: 160px;
-+}
-+
-+.filter-chips {
-+  display: flex;
-+  gap: 8px;
-+  flex-wrap: wrap;
-+  min-height: 28px;
-+}
-+
-+.filter-chip {
-+  background: rgba(122, 160, 255, 0.18);
-+  color: #dfe7ff;
-+  border-radius: 999px;
-+  padding: 6px 12px;
-+  font-size: 12px;
-+  display: inline-flex;
-+  align-items: center;
-+  gap: 6px;
-+}
-+
-+.filter-chip button {
-+  border: none;
-+  background: transparent;
-+  color: inherit;
 +  cursor: pointer;
-+  font-size: 14px;
++  background: rgba(122, 160, 255, 0.9);
++  color: #041022;
++  box-shadow: 0 4px 12px rgba(12, 18, 30, 0.45);
++  transition: transform 0.15s ease, box-shadow 0.2s ease;
 +}
 +
-+.tail {
-+  display: flex;
-+  align-items: center;
-+  gap: 16px;
++.hint-badge:hover {
++  transform: translateY(-1px);
++  box-shadow: 0 8px 20px rgba(122, 160, 255, 0.3);
 +}
 +
-+.tail-state {
++.hint-badge.severity-warn {
++  background: #facc15;
++  color: #261b00;
++}
++
++.hint-badge.severity-info {
++  background: #38bdf8;
++  color: #01131f;
++}
++
++.hint-badge.severity-error {
++  background: #f87171;
++  color: #2f0606;
++}
++
++.hint-empty {
 +  font-size: 13px;
-+  color: #9aa4b2;
++  color: #8c97ad;
 +}
 +
-+.tail-actions .toggle {
-+  font-size: 12px;
-+  padding: 8px 12px;
-+}
-+
-+.flow-actions {
++.timeline-toolbar {
 +  display: flex;
-+  gap: 10px;
-+  flex-wrap: wrap;
-+}
-+
-+.action-btn {
-+  appearance: none;
-+  border: 1px solid rgba(122, 160, 255, 0.4);
-+  background: rgba(122, 160, 255, 0.1);
-+  color: #e6ecff;
-+  padding: 10px 16px;
-+  border-radius: 10px;
-+  cursor: pointer;
-+  font-size: 13px;
-+  transition: background 0.2s ease, border 0.2s ease;
-+}
-+
-+.action-btn:hover {
-+  background: rgba(122, 160, 255, 0.25);
-+  border-color: rgba(122, 160, 255, 0.8);
-+}
-+
-+.flow-main {
-+  display: flex;
-+  flex: 1;
-+  position: relative;
-+  overflow: hidden;
-+}
-+
-+.timeline-shell {
-+  flex: 1;
-+  display: flex;
-+  flex-direction: column;
-+  padding: 24px 32px 80px;
-+  gap: 12px;
-+  overflow: hidden;
-+}
-+
-+.timeline-head {
-+  display: grid;
-+  grid-template-columns: 6px 120px 140px 120px 180px minmax(200px, 1fr) minmax(200px, 1fr);
-+  gap: 16px;
-+  color: #93a3c5;
-+  font-size: 12px;
-+  text-transform: uppercase;
-+  letter-spacing: 0.04em;
-+  padding: 0 12px;
-+}
-+
-+.timeline-body {
-+  flex: 1;
-+  border: 1px solid rgba(122, 160, 255, 0.2);
-+  border-radius: 16px;
-+  background: rgba(9, 12, 21, 0.78);
-+  overflow-y: auto;
-+  position: relative;
-+}
-+
-+.timeline-row,
-+.timeline-bookmark,
-+.timeline-empty,
-+.timeline-group-header {
-+  display: grid;
-+  grid-template-columns: 6px 120px 140px 120px 180px minmax(200px, 1fr) minmax(200px, 1fr);
-+  gap: 16px;
-+  padding: 12px;
-+  border-bottom: 1px solid rgba(122, 160, 255, 0.08);
-+  align-items: flex-start;
-+}
-+
-+.timeline-row:last-child {
-+  border-bottom: none;
-+}
-+
-+.timeline-group-header {
-+  background: rgba(122, 160, 255, 0.12);
-+  font-weight: 600;
-+  color: #bcd1ff;
-+  font-size: 13px;
-+}
-+
-+.timeline-bookmark {
-+  background: rgba(255, 180, 76, 0.1);
-+  color: #ffdd9b;
-+  font-size: 12px;
-+  font-weight: 600;
-+}
-+
-+.timeline-empty {
-+  justify-content: center;
-+  color: #96a3bc;
-+  font-size: 14px;
-+}
-+
-+.timeline-row[data-level="flow"] {
-+  background: rgba(122, 160, 255, 0.06);
-+}
-+
-+.timeline-row[data-highlight="true"] {
-+  box-shadow: inset 0 0 0 1px rgba(255, 214, 112, 0.4);
-+}
-+
-+.timeline-row.pulse {
-+  animation: highlightPulse 1.4s ease;
-+}
-+
-+@keyframes highlightPulse {
-+  0% {
-+    box-shadow: 0 0 0 0 rgba(122, 160, 255, 0.55);
-+  }
-+  60% {
-+    box-shadow: 0 0 0 10px rgba(122, 160, 255, 0);
-+  }
-+  100% {
-+    box-shadow: 0 0 0 0 rgba(122, 160, 255, 0);
-+  }
-+}
-+
-+.timeline-row .rail::before,
-+.timeline-bookmark .rail::before {
-+  content: "";
-+  display: block;
-+  width: 6px;
-+  border-radius: 999px;
-+  height: 100%;
-+  background: var(--rail-color, rgba(122, 160, 255, 0.4));
-+}
-+
-+.timeline-row .time,
-+.timeline-row .phase,
-+.timeline-row .who,
-+.timeline-row .type,
-+.timeline-row .blurb,
-+.timeline-row .meta {
-+  font-size: 13px;
-+  color: #d9e2ff;
-+}
-+
-+.timeline-row .time {
-+  font-variant-numeric: tabular-nums;
-+}
-+
-+.timeline-row .phase {
-+  text-transform: capitalize;
-+  color: #9fb4ff;
-+}
-+
-+.timeline-row .who {
-+  color: #c9d7ff;
-+}
-+
-+.timeline-row .meta {
-+  display: flex;
-+  flex-wrap: wrap;
-+  gap: 6px;
-+}
-+
-+.meta-chip {
-+  border: none;
-+  background: rgba(122, 160, 255, 0.18);
-+  color: #f5f7ff;
-+  border-radius: 999px;
-+  padding: 4px 10px;
-+  font-size: 12px;
-+  cursor: pointer;
-+}
-+
-+.meta-chip:hover {
-+  background: rgba(122, 160, 255, 0.32);
-+}
-+
-+.raw-batch-btn {
-+  border: none;
-+  background: rgba(255, 214, 112, 0.18);
-+  color: #ffdf9e;
-+  border-radius: 8px;
-+  padding: 4px 10px;
-+  cursor: pointer;
-+  font-size: 12px;
-+}
-+
-+.timeline-row .blurb {
-+  line-height: 1.5;
-+}
-+
-+.tree-toggle {
-+  border: none;
-+  background: transparent;
-+  color: inherit;
-+  cursor: pointer;
-+  font-size: 14px;
-+  margin-right: 6px;
-+}
-+
-+.tree-label {
-+  display: inline-flex;
++  justify-content: flex-end;
 +  align-items: center;
-+  gap: 6px;
 +}
 +
-+.tree-indent {
-+  display: inline-block;
-+  width: calc(var(--indent, 0) * 16px);
-+}
-+
-+.flow-drawer {
-+  width: 340px;
-+  border-left: 1px solid rgba(122, 160, 255, 0.2);
-+  background: rgba(12, 16, 28, 0.94);
-+  backdrop-filter: blur(18px);
-+  padding: 24px 20px;
-+  overflow-y: auto;
-+  transform: translateX(100%);
-+  transition: transform 0.3s ease;
-+}
-+
-+.flow-drawer[aria-hidden="false"] {
-+  transform: translateX(0);
-+}
-+
-+.drawer-header {
++.tree-controls {
 +  display: flex;
 +  align-items: center;
-+  justify-content: space-between;
 +  gap: 12px;
 +}
 +
-+.drawer-header h2 {
-+  margin: 0;
-+  font-size: 18px;
-+  color: #ffffff;
-+}
-+
-+.drawer-meta {
-+  margin: 16px 0;
-+  font-size: 13px;
-+  color: #9fb4ff;
-+  display: grid;
-+  gap: 8px;
-+}
-+
-+.drawer-related {
-+  display: flex;
-+  flex-direction: column;
-+  gap: 8px;
-+  margin-bottom: 16px;
-+}
-+
-+.drawer-related button {
-+  appearance: none;
-+  border: 1px solid rgba(122, 160, 255, 0.4);
-+  background: rgba(122, 160, 255, 0.12);
-+  color: #dfe7ff;
-+  border-radius: 8px;
-+  padding: 6px 10px;
-+  text-align: left;
-+  cursor: pointer;
-+  font-size: 12px;
-+}
-+
-+.drawer-related button:hover {
-+  border-color: rgba(122, 160, 255, 0.8);
-+  background: rgba(122, 160, 255, 0.2);
-+}
-+
-+.drawer-json {
-+  background: rgba(6, 9, 15, 0.9);
-+  border-radius: 10px;
-+  border: 1px solid rgba(122, 160, 255, 0.2);
-+  padding: 16px;
-+  font-size: 12px;
-+  line-height: 1.5;
-+  color: #d9e2ff;
-+  max-height: 420px;
-+  overflow: auto;
-+}
-+
-+.popover {
-+  position: fixed;
-+  z-index: 20;
-+  background: rgba(13, 18, 29, 0.98);
-+  border: 1px solid rgba(122, 160, 255, 0.35);
-+  border-radius: 14px;
-+  padding: 16px;
-+  color: #e6ecff;
-+  box-shadow: 0 18px 38px rgba(4, 7, 14, 0.6);
-+  min-width: 220px;
-+  max-width: 360px;
-+  max-height: 320px;
-+  overflow: auto;
-+}
-+
-+.popover h3 {
-+  margin: 0 0 10px;
-+  font-size: 14px;
-+  color: #bcd1ff;
-+}
-+
-+.popover pre {
-+  margin: 0;
-+  font-size: 12px;
-+  white-space: pre-wrap;
-+}
-+
-+@media (max-width: 1100px) {
-+  .timeline-head,
-+  .timeline-row,
-+  .timeline-bookmark,
-+  .timeline-empty,
-+  .timeline-group-header {
-+    grid-template-columns: 4px 90px 110px 100px 160px minmax(180px, 1fr) minmax(160px, 1fr);
-+  }
-+
-+  .flow-drawer {
-+    display: none;
-+  }
-+}
-+
-+@media (max-width: 860px) {
-+  .flow-header {
-+    padding: 16px;
-+  }
-+
-+  .timeline-shell {
-+    padding: 18px 16px 64px;
-+  }
-+
-+  .timeline-head,
-+  .timeline-row,
-+  .timeline-bookmark,
-+  .timeline-empty,
-+  .timeline-group-header {
-+    grid-template-columns: 4px 80px 100px 80px minmax(120px, 1fr) minmax(160px, 1fr);
-+  }
-+
-+  .timeline-head .type,
-+  .timeline-row .type,
-+  .timeline-group-header .type,
-+  .timeline-bookmark .type {
-+    display: none;
-+  }
-+}
+ .timeline-head {
+   display: grid;
+   grid-template-columns: 6px 120px 140px 120px 180px minmax(200px, 1fr) minmax(200px, 1fr);
+   gap: 16px;
+   color: #93a3c5;
+   font-size: 12px;
+   text-transform: uppercase;
+   letter-spacing: 0.04em;
+   padding: 0 12px;
+ }
+ 
+ .timeline-body {
+   flex: 1;
+   border: 1px solid rgba(122, 160, 255, 0.2);
+   border-radius: 16px;
+   background: rgba(9, 12, 21, 0.78);
+   overflow-y: auto;
+   position: relative;
+ }
+ 
+ .timeline-row,
+ .timeline-bookmark,
+ .timeline-empty,
+ .timeline-group-header {
+   display: grid;
 diff --git a/static/js/admin_flow.js b/static/js/admin_flow.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..01cd871834dc64e9becfa39469288ee6b65c5aaa
---- /dev/null
+index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4f6d77d54 100644
+--- a/static/js/admin_flow.js
 +++ b/static/js/admin_flow.js
-@@ -0,0 +1,1305 @@
-+const POLL_MIN_MS = 750;
-+const POLL_MAX_MS = 1000;
-+const MAX_SESSION_RESULTS = 20;
-+const MAX_META_LENGTH = 48;
-+const LEVELS = ["flow", "transition", "debug", "raw"];
-+
-+const PHASE_COLORS = {
-+  session: "#7aa0ff",
-+  turn: "#62ddb8",
-+  guardrail: "#f78ed2",
-+  confirm: "#fbbf24",
-+  nlu: "#c084fc",
-+  nlg: "#f97316",
-+  tts: "#22d3ee",
-+  audio: "#38bdf8",
-+  evidence: "#facc15",
-+  ops: "#f97316",
-+  policy: "#fbbf24",
-+  default: "#717b9b",
-+};
-+
-+const GROUP_LABELS = {
-+  phase: "Phase",
-+  turn: "Turn",
-+  chronological: "Timeline",
-+};
-+
-+const state = {
-+  root: null,
-+  sessionId: "",
-+  sessions: [],
-+  sessionQuery: "",
-+  events: new Map(),
-+  expanded: new Set(),
-+  bookmarks: [],
-+  pollTimer: null,
-+  pollSinceMs: 0,
-+  levels: new Set(["flow", "transition"]),
-+  grouping: "chronological",
-+  live: false,
-+  filterText: "",
-+  filterChips: [],
-+  turnFilter: "",
-+  matchedIds: new Set(),
-+  visibleIds: new Set(),
-+  drawerEventId: null,
-+  lastFetchedAt: null,
-+  loading: false,
-+};
-+
-+const els = {};
-+let sessionsDebounce = null;
-+let popoverNode = null;
-+
-+function init() {
-+  const root = document.getElementById("admin-flow-app");
-+  if (!root) {
-+    return;
-+  }
-+  state.root = root;
-+
-+  els.sessionInput = document.getElementById("flowSessionInput");
-+  els.sessionOptions = document.getElementById("flowSessionOptions");
-+  els.sessionResults = document.getElementById("flowSessionResults");
-+  els.sessionHint = document.getElementById("flowSessionHint");
-+  els.sessionRefresh = document.getElementById("flowSessionRefresh");
-+  els.levelContainer = root.querySelector("[data-ref=\"level-toggles\"]");
-+  els.groupContainer = root.querySelector("[data-ref=\"grouping\"]");
-+  els.filterInput = document.getElementById("flowFilterInput");
-+  els.turnInput = document.getElementById("flowTurnInput");
-+  els.filterChips = document.getElementById("flowFilterChips");
-+  els.tailState = document.getElementById("flowTailState");
-+  els.tailToggle = document.getElementById("flowTailToggle");
-+  els.tailStep = document.getElementById("flowTailStep");
-+  els.timeline = document.getElementById("flowTimeline");
-+  els.exportFull = document.getElementById("flowExportFull");
-+  els.exportRedacted = document.getElementById("flowExportRedacted");
-+  els.copyLink = document.getElementById("flowCopyLink");
-+  els.handoff = document.getElementById("flowHandoff");
-+  els.drawer = document.getElementById("flowDrawer");
-+  els.drawerTitle = document.getElementById("flowDrawerTitle");
-+  els.drawerMeta = document.getElementById("flowDrawerMeta");
-+  els.drawerJson = document.getElementById("flowDrawerJson");
-+  els.drawerRelated = document.getElementById("flowDrawerRelated");
-+  els.drawerCopy = document.getElementById("flowDrawerCopy");
-+  els.drawerClose = document.getElementById("flowDrawerClose");
-+
-+  bindEvents();
-+  hydrateFromLocation();
-+  refreshSessions();
-+  renderSessions();
-+  renderFilters();
-+  renderTail();
-+  renderTimeline();
-+  renderDrawer();
-+
-+  if (state.sessionId) {
-+    fetchTrace({ reset: true });
-+    goLive();
-+  }
-+}
-+
-+document.addEventListener("DOMContentLoaded", init);
-+
-+function bindEvents() {
-+  if (els.sessionInput) {
-+    els.sessionInput.addEventListener("input", onSessionInput);
-+    els.sessionInput.addEventListener("keydown", (ev) => {
-+      if (ev.key === "Enter") {
-+        ev.preventDefault();
-+        const value = ev.currentTarget.value.trim();
-+        if (value) {
-+          selectSession(value);
-+        }
-+      }
-+    });
-+  }
-+
-+  if (els.sessionResults) {
-+    els.sessionResults.addEventListener("click", (ev) => {
-+      const item = ev.target.closest("li[data-session-id]");
-+      if (!item) return;
-+      const sid = item.getAttribute("data-session-id");
-+      if (sid) {
-+        selectSession(sid);
-+      }
-+    });
-+  }
-+
-+  if (els.sessionRefresh) {
-+    els.sessionRefresh.addEventListener("click", () => refreshSessions({ force: true }));
-+  }
-+
-+  if (els.levelContainer) {
-+    els.levelContainer.addEventListener("click", (ev) => {
-+      const btn = ev.target.closest("button[data-level]");
-+      if (!btn || btn.disabled) return;
-+      const level = btn.getAttribute("data-level");
-+      toggleLevel(level);
-+    });
+@@ -24,97 +24,102 @@ const GROUP_LABELS = {
+   turn: "Turn",
+   chronological: "Timeline",
+ };
+ 
+ const state = {
+   root: null,
+   sessionId: "",
+   sessions: [],
+   sessionQuery: "",
+   events: new Map(),
+   expanded: new Set(),
+   bookmarks: [],
+   pollTimer: null,
+   pollSinceMs: 0,
+   levels: new Set(["flow", "transition"]),
+   grouping: "chronological",
+   live: false,
+   filterText: "",
+   filterChips: [],
+   turnFilter: "",
+   matchedIds: new Set(),
+   visibleIds: new Set(),
+   drawerEventId: null,
+   lastFetchedAt: null,
+   loading: false,
++  hints: [],
++  hintMap: new Map(),
+ };
+ 
+ const els = {};
+ let sessionsDebounce = null;
+ let popoverNode = null;
+ 
+ function init() {
+   const root = document.getElementById("admin-flow-app");
+   if (!root) {
+     return;
+   }
+   state.root = root;
+ 
+   els.sessionInput = document.getElementById("flowSessionInput");
+   els.sessionOptions = document.getElementById("flowSessionOptions");
+   els.sessionResults = document.getElementById("flowSessionResults");
+   els.sessionHint = document.getElementById("flowSessionHint");
+   els.sessionRefresh = document.getElementById("flowSessionRefresh");
+   els.levelContainer = root.querySelector("[data-ref=\"level-toggles\"]");
+   els.groupContainer = root.querySelector("[data-ref=\"grouping\"]");
+   els.filterInput = document.getElementById("flowFilterInput");
+   els.turnInput = document.getElementById("flowTurnInput");
+   els.filterChips = document.getElementById("flowFilterChips");
+   els.tailState = document.getElementById("flowTailState");
+   els.tailToggle = document.getElementById("flowTailToggle");
+   els.tailStep = document.getElementById("flowTailStep");
+   els.timeline = document.getElementById("flowTimeline");
+   els.exportFull = document.getElementById("flowExportFull");
+   els.exportRedacted = document.getElementById("flowExportRedacted");
+   els.copyLink = document.getElementById("flowCopyLink");
+   els.handoff = document.getElementById("flowHandoff");
+   els.drawer = document.getElementById("flowDrawer");
+   els.drawerTitle = document.getElementById("flowDrawerTitle");
+   els.drawerMeta = document.getElementById("flowDrawerMeta");
+   els.drawerJson = document.getElementById("flowDrawerJson");
+   els.drawerRelated = document.getElementById("flowDrawerRelated");
+   els.drawerCopy = document.getElementById("flowDrawerCopy");
+   els.drawerClose = document.getElementById("flowDrawerClose");
++  els.hints = document.getElementById("flowHints");
++  els.treeControls = root.querySelector('[data-ref="tree-controls"]');
+ 
+   bindEvents();
+   hydrateFromLocation();
+   refreshSessions();
+   renderSessions();
+   renderFilters();
+   renderTail();
+   renderTimeline();
+   renderDrawer();
++  renderHints();
+ 
+   if (state.sessionId) {
+     fetchTrace({ reset: true });
+     goLive();
+   }
+ }
+ 
+ document.addEventListener("DOMContentLoaded", init);
+ 
+ function bindEvents() {
+   if (els.sessionInput) {
+     els.sessionInput.addEventListener("input", onSessionInput);
+     els.sessionInput.addEventListener("keydown", (ev) => {
+       if (ev.key === "Enter") {
+         ev.preventDefault();
+         const value = ev.currentTarget.value.trim();
+         if (value) {
+           selectSession(value);
+         }
+       }
+     });
+   }
+ 
+   if (els.sessionResults) {
+     els.sessionResults.addEventListener("click", (ev) => {
+@@ -205,50 +210,65 @@ function bindEvents() {
+     els.handoff.addEventListener("click", () => handoffToChatGPT());
+   }
+ 
+   if (els.timeline) {
+     els.timeline.addEventListener("click", onTimelineClick);
+     els.timeline.addEventListener("contextmenu", onTimelineContext);
+   }
+ 
+   if (els.drawerClose) {
+     els.drawerClose.addEventListener("click", () => openDrawer(null));
+   }
+   if (els.drawerCopy) {
+     els.drawerCopy.addEventListener("click", () => copyDrawerJson());
+   }
+   if (els.drawerRelated) {
+     els.drawerRelated.addEventListener("click", (ev) => {
+       const btn = ev.target.closest("button[data-target]");
+       if (!btn) return;
+       const target = btn.getAttribute("data-target");
+       if (target) {
+         focusEvent(target);
+       }
+     });
+   }
+ 
++  if (els.hints) {
++    els.hints.addEventListener("click", onHintClick);
 +  }
 +
-+  if (els.groupContainer) {
-+    els.groupContainer.addEventListener("click", (ev) => {
-+      const btn = ev.target.closest("button[data-group]");
++  if (els.treeControls) {
++    els.treeControls.addEventListener("click", (ev) => {
++      const btn = ev.target.closest("button[data-tree]");
 +      if (!btn) return;
-+      setGrouping(btn.getAttribute("data-group"));
-+    });
-+  }
-+
-+  if (els.filterInput) {
-+    els.filterInput.addEventListener("input", (ev) => {
-+      state.filterText = ev.currentTarget.value.trim();
-+      scheduleRender();
-+    });
-+  }
-+
-+  if (els.turnInput) {
-+    els.turnInput.addEventListener("input", (ev) => {
-+      const value = ev.currentTarget.value;
-+      state.turnFilter = value ? String(value).trim() : "";
-+      scheduleRender();
-+    });
-+  }
-+
-+  if (els.filterChips) {
-+    els.filterChips.addEventListener("click", (ev) => {
-+      const closeBtn = ev.target.closest("button[data-chip-index]");
-+      if (!closeBtn) return;
-+      const idx = Number(closeBtn.getAttribute("data-chip-index"));
-+      if (!Number.isNaN(idx)) {
-+        state.filterChips.splice(idx, 1);
-+        scheduleRender();
++      const mode = btn.getAttribute("data-tree");
++      if (mode) {
++        handleTreeToggle(mode);
 +      }
 +    });
 +  }
 +
-+  if (els.tailToggle) {
-+    els.tailToggle.addEventListener("click", () => {
-+      if (state.live) {
-+        pauseLive();
-+      } else {
-+        goLive(true);
-+      }
-+    });
-+  }
-+
-+  if (els.tailStep) {
-+    els.tailStep.addEventListener("click", () => fetchTrace({ reset: false }));
-+  }
-+
-+  if (els.exportFull) {
-+    els.exportFull.addEventListener("click", () => downloadExport({ redacted: false }));
-+  }
-+
-+  if (els.exportRedacted) {
-+    els.exportRedacted.addEventListener("click", () => downloadExport({ redacted: true }));
-+  }
-+
-+  if (els.copyLink) {
-+    els.copyLink.addEventListener("click", () => copyLink());
-+  }
-+
-+  if (els.handoff) {
-+    els.handoff.addEventListener("click", () => handoffToChatGPT());
-+  }
-+
-+  if (els.timeline) {
-+    els.timeline.addEventListener("click", onTimelineClick);
-+    els.timeline.addEventListener("contextmenu", onTimelineContext);
-+  }
-+
-+  if (els.drawerClose) {
-+    els.drawerClose.addEventListener("click", () => openDrawer(null));
-+  }
-+  if (els.drawerCopy) {
-+    els.drawerCopy.addEventListener("click", () => copyDrawerJson());
-+  }
-+  if (els.drawerRelated) {
-+    els.drawerRelated.addEventListener("click", (ev) => {
-+      const btn = ev.target.closest("button[data-target]");
-+      if (!btn) return;
-+      const target = btn.getAttribute("data-target");
-+      if (target) {
-+        focusEvent(target);
-+      }
-+    });
-+  }
-+
-+  document.addEventListener("click", (ev) => {
-+    if (!popoverNode) return;
-+    if (ev.target.closest(".popover") || ev.target.closest(".raw-batch-btn")) {
-+      return;
-+    }
-+    hidePopover();
-+  });
-+
-+  document.addEventListener("keydown", (ev) => {
-+    if (ev.key === "Escape") {
-+      hidePopover();
-+    }
-+  });
-+}
-+
-+function hydrateFromLocation() {
-+  const url = new URL(window.location.href);
-+  let sessionId = url.searchParams.get("session_id") || "";
-+
-+  const hash = window.location.hash || "";
-+  if (!sessionId && hash.startsWith("#/admin/flow")) {
-+    const qIndex = hash.indexOf("?");
-+    if (qIndex >= 0) {
-+      const hashParams = new URLSearchParams(hash.slice(qIndex + 1));
-+      sessionId = hashParams.get("session_id") || sessionId;
-+      const levels = hashParams.get("levels");
-+      if (levels) {
-+        setLevelsFromString(levels);
-+      }
-+      const group = hashParams.get("group");
-+      if (group) {
-+        state.grouping = group;
-+      }
-+      const filter = hashParams.get("filter");
-+      if (filter) {
-+        state.filterText = filter;
-+        if (els.filterInput) els.filterInput.value = filter;
-+      }
-+      const turn = hashParams.get("turn");
-+      if (turn) {
-+        state.turnFilter = turn;
-+        if (els.turnInput) els.turnInput.value = turn;
-+      }
-+      const chipsParam = hashParams.get("chips");
-+      if (chipsParam) {
-+        state.filterChips = parseChipParam(chipsParam);
-+      }
-+    }
-+  }
-+
-+  const levelsParam = url.searchParams.get("levels");
-+  if (levelsParam) {
-+    setLevelsFromString(levelsParam);
-+  }
-+
-+  const groupParam = url.searchParams.get("group");
-+  if (groupParam) {
-+    state.grouping = groupParam;
-+  }
-+
-+  const filterParam = url.searchParams.get("filter");
-+  if (filterParam) {
-+    state.filterText = filterParam;
-+    if (els.filterInput) els.filterInput.value = filterParam;
-+  }
-+
-+  const turnParam = url.searchParams.get("turn");
-+  if (turnParam) {
-+    state.turnFilter = turnParam;
-+    if (els.turnInput) els.turnInput.value = turnParam;
-+  }
-+
-+  const chipsParam = url.searchParams.get("chips");
-+  if (chipsParam) {
-+    state.filterChips = parseChipParam(chipsParam);
-+  }
-+
-+  if (sessionId) {
-+    state.sessionId = sessionId;
-+    if (els.sessionInput) {
-+      els.sessionInput.value = sessionId;
-+    }
-+  }
-+
-+  reflectLevelButtons();
-+  reflectGroupingButtons();
-+}
-+
-+function setLevelsFromString(raw) {
-+  const allowed = new Set(LEVELS);
-+  const parsed = new Set(["flow"]);
-+  for (const part of String(raw).split(",")) {
-+    const trimmed = part.trim();
-+    if (allowed.has(trimmed)) {
-+      parsed.add(trimmed);
-+    }
-+  }
-+  if (!parsed.has("flow")) parsed.add("flow");
-+  state.levels = parsed;
-+  reflectLevelButtons();
-+}
-+
-+function refreshSessions(opts = {}) {
-+  const { force = false } = opts;
-+  if (sessionsDebounce) {
-+    clearTimeout(sessionsDebounce);
-+    sessionsDebounce = null;
-+  }
-+  sessionsDebounce = setTimeout(async () => {
-+    try {
-+      const params = new URLSearchParams();
-+      if (state.sessionQuery) {
-+        params.set("q", state.sessionQuery);
-+      }
-+      const resp = await fetch(`/api/v1/flow/sessions?${params.toString()}`, {
-+        credentials: "include",
-+      });
-+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-+      const payload = await resp.json();
-+      const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
-+      state.sessions = sessions;
-+      renderSessions();
-+    } catch (err) {
-+      console.warn("[flow] sessions fetch failed", err);
-+      setHint("Failed to load sessions.");
-+    }
-+  }, force ? 0 : 160);
-+}
-+
-+function onSessionInput(ev) {
-+  const value = ev.currentTarget.value.trim();
-+  state.sessionQuery = value;
-+  renderSessions();
-+  refreshSessions();
-+}
-+
-+function renderSessions() {
-+  if (!els.sessionResults) return;
-+  const query = state.sessionQuery.toLowerCase();
-+  const sessions = state.sessions
-+    .filter((item) => {
-+      if (!query) return true;
-+      return item.session_id.toLowerCase().includes(query);
-+    })
-+    .slice(0, MAX_SESSION_RESULTS);
-+
-+  const options = sessions
-+    .map((item) => `<option value="${escapeHtml(item.session_id)}"></option>`) 
-+    .join("");
-+  if (els.sessionOptions) {
-+    els.sessionOptions.innerHTML = options;
-+  }
-+
-+  if (!sessions.length) {
-+    els.sessionResults.innerHTML = "";
+   document.addEventListener("click", (ev) => {
+     if (!popoverNode) return;
+     if (ev.target.closest(".popover") || ev.target.closest(".raw-batch-btn")) {
+       return;
+     }
+     hidePopover();
+   });
+ 
+   document.addEventListener("keydown", (ev) => {
+     if (ev.key === "Escape") {
+       hidePopover();
+     }
+   });
+ }
+ 
+ function hydrateFromLocation() {
+   const url = new URL(window.location.href);
+   let sessionId = url.searchParams.get("session_id") || "";
+ 
+   const hash = window.location.hash || "";
+   if (!sessionId && hash.startsWith("#/admin/flow")) {
+     const qIndex = hash.indexOf("?");
+     if (qIndex >= 0) {
+       const hashParams = new URLSearchParams(hash.slice(qIndex + 1));
+       sessionId = hashParams.get("session_id") || sessionId;
+@@ -393,88 +413,90 @@ function renderSessions() {
+ function renderSessionListItem(item) {
+   const isActive = item.session_id === state.sessionId;
+   const timeText = typeof item.last_event_ms === "number" ? `${item.last_event_ms.toLocaleString()} ms` : "—";
+   const typeText = item.last_type ? item.last_type.replace(/_/g, " ") : "—";
+   return `
+     <li data-session-id="${escapeAttr(item.session_id)}" class="${isActive ? "active" : ""}">
+       <div class="session-id">${escapeHtml(item.session_id)}</div>
+       <div class="session-meta">
+         <span>${escapeHtml(typeText)}</span>
+         <span>${escapeHtml(timeText)}</span>
+         <span>${item.event_count || 0} evts</span>
+       </div>
+     </li>`;
+ }
+ 
+ function selectSession(sessionId) {
+   if (!sessionId) return;
+   state.sessionId = sessionId;
+   state.pollSinceMs = 0;
+   state.events.clear();
+   state.expanded.clear();
+   state.bookmarks = [];
+   state.matchedIds = new Set();
+   state.visibleIds = new Set();
+   state.drawerEventId = null;
++  updateHints([]);
+   if (els.sessionInput) {
+     els.sessionInput.value = sessionId;
+   }
+   setHint(`Session ${sessionId}`);
+   renderSessions();
+   renderTimeline();
+   renderDrawer();
+   fetchTrace({ reset: true }).then(() => {
+     goLive(true);
+   });
+   updateHistory();
+ }
+ 
+ function fetchTrace({ reset }) {
+   if (!state.sessionId) return Promise.resolve();
+   if (state.loading && !reset) return Promise.resolve();
+   if (reset) {
+     state.pollSinceMs = 0;
+   }
+   const params = new URLSearchParams();
+   params.set("session_id", state.sessionId);
+   if (state.pollSinceMs && !reset) {
+     params.set("since_ms", String(state.pollSinceMs));
+   }
+   params.set("expand", "all");
+   const levelsList = Array.from(state.levels);
+   params.set("levels", levelsList.join(","));
+   params.set("limit", "400");
+ 
+   state.loading = true;
+   return fetch(`/api/v1/flow/trace?${params.toString()}`, { credentials: "include" })
+     .then((resp) => {
+       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+       return resp.json();
+     })
+     .then((payload) => {
+       const events = Array.isArray(payload.events) ? payload.events : [];
+       ingestEvents(events);
++      updateHints(payload.hints);
+       const nextSince = payload.next_since_ms;
+       if (typeof nextSince === "number" && nextSince >= 0) {
+         state.pollSinceMs = nextSince;
+       }
+       state.lastFetchedAt = Date.now();
+       renderTimeline();
+       renderDrawer();
+     })
+     .catch((err) => {
+       console.warn("[flow] trace fetch failed", err);
+       setHint("Failed to fetch flow data.");
+     })
+     .finally(() => {
+       state.loading = false;
+     });
+ }
+ 
+ function ingestEvents(events) {
+   const queue = Array.isArray(events) ? [...events] : [];
+   while (queue.length) {
+     const event = queue.shift();
+     if (!event || typeof event !== "object") continue;
+     const { children, ...rest } = event;
+     const childIds = Array.isArray(children) ? children.map((child) => child && child.id).filter(Boolean) : [];
+     const normalized = normalizeEvent(rest, childIds);
+@@ -562,60 +584,130 @@ function sanitizeMeta(meta) {
+ 
+ function scheduleRender() {
+   renderFilters();
+   renderTimeline();
+   renderDrawer();
+   updateHistory();
+ }
+ 
+ function renderFilters() {
+   if (!els.filterChips) return;
+   const chips = state.filterChips
+     .map((chip, idx) => {
+       const text = `${chip.key}:${chip.display}`;
+       return `<span class="filter-chip">${escapeHtml(text)}<button data-chip-index="${idx}" title="Remove">×</button></span>`;
+     })
+     .join("");
+   els.filterChips.innerHTML = chips;
+ }
+ 
+ function renderTail() {
+   if (!els.tailState || !els.tailToggle) return;
+   els.tailState.textContent = state.live ? "Live" : "Paused";
+   els.tailToggle.textContent = state.live ? "Pause" : "Go live";
+ }
+ 
++function renderHints() {
++  if (!els.hints) return;
++  const hints = Array.isArray(state.hints) ? state.hints : [];
++  if (!hints.length) {
++    els.hints.innerHTML = '<span class="hint-empty">No hints yet.</span>';
 +    return;
 +  }
-+
-+  els.sessionResults.innerHTML = sessions
-+    .map((item) => renderSessionListItem(item))
-+    .join("");
-+}
-+
-+function renderSessionListItem(item) {
-+  const isActive = item.session_id === state.sessionId;
-+  const timeText = typeof item.last_event_ms === "number" ? `${item.last_event_ms.toLocaleString()} ms` : "—";
-+  const typeText = item.last_type ? item.last_type.replace(/_/g, " ") : "—";
-+  return `
-+    <li data-session-id="${escapeAttr(item.session_id)}" class="${isActive ? "active" : ""}">
-+      <div class="session-id">${escapeHtml(item.session_id)}</div>
-+      <div class="session-meta">
-+        <span>${escapeHtml(typeText)}</span>
-+        <span>${escapeHtml(timeText)}</span>
-+        <span>${item.event_count || 0} evts</span>
-+      </div>
-+    </li>`;
-+}
-+
-+function selectSession(sessionId) {
-+  if (!sessionId) return;
-+  state.sessionId = sessionId;
-+  state.pollSinceMs = 0;
-+  state.events.clear();
-+  state.expanded.clear();
-+  state.bookmarks = [];
-+  state.matchedIds = new Set();
-+  state.visibleIds = new Set();
-+  state.drawerEventId = null;
-+  if (els.sessionInput) {
-+    els.sessionInput.value = sessionId;
-+  }
-+  setHint(`Session ${sessionId}`);
-+  renderSessions();
-+  renderTimeline();
-+  renderDrawer();
-+  fetchTrace({ reset: true }).then(() => {
-+    goLive(true);
-+  });
-+  updateHistory();
-+}
-+
-+function fetchTrace({ reset }) {
-+  if (!state.sessionId) return Promise.resolve();
-+  if (state.loading && !reset) return Promise.resolve();
-+  if (reset) {
-+    state.pollSinceMs = 0;
-+  }
-+  const params = new URLSearchParams();
-+  params.set("session_id", state.sessionId);
-+  if (state.pollSinceMs && !reset) {
-+    params.set("since_ms", String(state.pollSinceMs));
-+  }
-+  params.set("expand", "all");
-+  const levelsList = Array.from(state.levels);
-+  params.set("levels", levelsList.join(","));
-+  params.set("limit", "400");
-+
-+  state.loading = true;
-+  return fetch(`/api/v1/flow/trace?${params.toString()}`, { credentials: "include" })
-+    .then((resp) => {
-+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-+      return resp.json();
-+    })
-+    .then((payload) => {
-+      const events = Array.isArray(payload.events) ? payload.events : [];
-+      ingestEvents(events);
-+      const nextSince = payload.next_since_ms;
-+      if (typeof nextSince === "number" && nextSince >= 0) {
-+        state.pollSinceMs = nextSince;
-+      }
-+      state.lastFetchedAt = Date.now();
-+      renderTimeline();
-+      renderDrawer();
-+    })
-+    .catch((err) => {
-+      console.warn("[flow] trace fetch failed", err);
-+      setHint("Failed to fetch flow data.");
-+    })
-+    .finally(() => {
-+      state.loading = false;
-+    });
-+}
-+
-+function ingestEvents(events) {
-+  const queue = Array.isArray(events) ? [...events] : [];
-+  while (queue.length) {
-+    const event = queue.shift();
-+    if (!event || typeof event !== "object") continue;
-+    const { children, ...rest } = event;
-+    const childIds = Array.isArray(children) ? children.map((child) => child && child.id).filter(Boolean) : [];
-+    const normalized = normalizeEvent(rest, childIds);
-+    const existing = state.events.get(normalized.id);
-+    if (existing) {
-+      mergeEvent(existing, normalized);
-+      if (childIds.length) {
-+        const merged = new Set([...(existing.childrenIds || []), ...childIds]);
-+        existing.childrenIds = Array.from(merged);
-+      }
-+    } else {
-+      state.events.set(normalized.id, normalized);
-+      if (normalized.parentId) {
-+        state.expanded.add(normalized.parentId);
-+      } else {
-+        state.expanded.add(normalized.id);
-+      }
-+    }
-+    if (Array.isArray(event.children)) {
-+      for (const child of event.children) {
-+        if (!child || typeof child !== "object") continue;
-+        const clone = { ...child, parent_id: event.id };
-+        queue.push(clone);
-+      }
-+    }
-+  }
-+}
-+
-+function normalizeEvent(event, childIds = []) {
-+  const meta = sanitizeMeta(event.meta);
-+  const batches = Array.isArray(event.batches) ? event.batches.map((b) => ({ ...b })) : [];
-+  const parentId = event.parent_id || null;
-+  return {
-+    id: String(event.id),
-+    t_rel_ms: typeof event.t_rel_ms === "number" ? event.t_rel_ms : 0,
-+    level: event.level || "flow",
-+    phase: event.phase || "",
-+    who: event.who || "",
-+    type: event.type || "",
-+    blurb: event.blurb || "",
-+    meta,
-+    batches,
-+    parentId,
-+    childrenIds: childIds,
-+    turnId: meta.turn_id != null ? String(meta.turn_id) : meta.turn != null ? String(meta.turn) : "",
-+    raw: buildRawSnapshot(event, meta, batches),
-+  };
-+}
-+
-+function mergeEvent(existing, incoming) {
-+  existing.t_rel_ms = incoming.t_rel_ms || existing.t_rel_ms;
-+  existing.level = incoming.level || existing.level;
-+  existing.phase = incoming.phase || existing.phase;
-+  existing.who = incoming.who || existing.who;
-+  existing.type = incoming.type || existing.type;
-+  existing.blurb = incoming.blurb || existing.blurb;
-+  existing.meta = { ...existing.meta, ...incoming.meta };
-+  existing.turnId = incoming.turnId || existing.turnId;
-+  existing.parentId = incoming.parentId || existing.parentId;
-+  existing.raw = incoming.raw;
-+  existing.batches = incoming.batches.length ? incoming.batches : existing.batches;
-+  if (incoming.childrenIds && incoming.childrenIds.length) {
-+    const merged = new Set([...(existing.childrenIds || []), ...incoming.childrenIds]);
-+    existing.childrenIds = Array.from(merged);
-+  }
-+}
-+
-+function buildRawSnapshot(event, meta, batches) {
-+  const snapshot = { ...event };
-+  snapshot.meta = meta ? JSON.parse(JSON.stringify(meta)) : {};
-+  snapshot.batches = batches ? JSON.parse(JSON.stringify(batches)) : [];
-+  delete snapshot.children;
-+  delete snapshot.parent_id;
-+  return snapshot;
-+}
-+
-+function sanitizeMeta(meta) {
-+  if (!meta || typeof meta !== "object") return {};
-+  const cleaned = {};
-+  for (const [key, value] of Object.entries(meta)) {
-+    cleaned[key] = value;
-+  }
-+  return cleaned;
-+}
-+
-+function scheduleRender() {
-+  renderFilters();
-+  renderTimeline();
-+  renderDrawer();
-+  updateHistory();
-+}
-+
-+function renderFilters() {
-+  if (!els.filterChips) return;
-+  const chips = state.filterChips
-+    .map((chip, idx) => {
-+      const text = `${chip.key}:${chip.display}`;
-+      return `<span class="filter-chip">${escapeHtml(text)}<button data-chip-index="${idx}" title="Remove">×</button></span>`;
-+    })
-+    .join("");
-+  els.filterChips.innerHTML = chips;
-+}
-+
-+function renderTail() {
-+  if (!els.tailState || !els.tailToggle) return;
-+  els.tailState.textContent = state.live ? "Live" : "Paused";
-+  els.tailToggle.textContent = state.live ? "Pause" : "Go live";
-+}
-+
-+function renderTimeline() {
-+  if (!els.timeline) return;
-+  const { rows } = buildRows();
-+  if (!rows.length) {
-+    els.timeline.innerHTML = `<div class="timeline-empty">${state.sessionId ? "No events yet." : "Select a session to begin."}</div>`;
-+    return;
-+  }
-+  els.timeline.innerHTML = rows.map(renderRow).join("");
-+}
-+
-+function buildRows() {
-+  const visibleSet = computeVisibleIds();
-+  const rows = [];
-+  const grouping = state.grouping || "chronological";
-+  const roots = getRootIds();
-+
-+  if (!roots.length) {
-+    return { rows: [] };
-+  }
-+
-+  if (grouping === "chronological") {
-+    for (const rootId of roots) {
-+      appendTreeRows(rows, rootId, 0, visibleSet);
-+    }
-+    return { rows };
-+  }
-+
-+  const groups = new Map();
-+  for (const rootId of roots) {
-+    const event = state.events.get(rootId);
-+    if (!event) continue;
-+    const key = grouping === "phase" ? (event.phase || "—") : event.turnId || "—";
-+    if (!groups.has(key)) groups.set(key, []);
-+    groups.get(key).push(rootId);
-+  }
-+
-+  const sortedGroups = Array.from(groups.entries()).sort((a, b) => {
-+    if (grouping === "phase") {
-+      return phaseRank(a[0]) - phaseRank(b[0]);
-+    }
-+    if (grouping === "turn") {
-+      const ai = parseInt(a[0], 10);
-+      const bi = parseInt(b[0], 10);
-+      if (Number.isFinite(ai) && Number.isFinite(bi)) {
-+        return ai - bi;
-+      }
-+      return a[0].localeCompare(b[0]);
-+    }
-+    return a[0].localeCompare(b[0]);
-+  });
-+
-+  for (const [label, ids] of sortedGroups) {
-+    rows.push({ kind: "group", label: `${GROUP_LABELS[grouping] || "Group"}: ${label}` });
-+    ids.sort((a, b) => {
-+      const evA = state.events.get(a);
-+      const evB = state.events.get(b);
-+      return (evA?.t_rel_ms || 0) - (evB?.t_rel_ms || 0);
-+    });
-+    for (const id of ids) {
-+      appendTreeRows(rows, id, 0, visibleSet);
-+    }
-+  }
-+
-+  return { rows };
-+}
-+
-+function appendTreeRows(rows, eventId, depth, visibleSet) {
-+  const event = state.events.get(eventId);
-+  if (!event) return;
-+  if (visibleSet.size && !visibleSet.has(eventId)) return;
-+
-+  const bookmarkLabels = state.bookmarks
-+    .filter((bm) => bm.eventId === eventId)
-+    .map((bm) => bm.label);
-+  for (const label of bookmarkLabels) {
-+    rows.push({ kind: "bookmark", label });
-+  }
-+
-+  const childrenIds = (event.childrenIds || []).slice().sort((a, b) => {
-+    const evA = state.events.get(a);
-+    const evB = state.events.get(b);
-+    return (evA?.t_rel_ms || 0) - (evB?.t_rel_ms || 0);
-+  });
-+  const hasChildren = childrenIds.some((id) => !visibleSet.size || visibleSet.has(id));
-+  const expanded = state.expanded.has(eventId);
-+  rows.push({
-+    kind: "event",
-+    event,
-+    depth,
-+    hasChildren,
-+    expanded,
-+    highlight: state.matchedIds.has(eventId),
-+  });
-+  if (!hasChildren || !expanded) {
-+    return;
-+  }
-+  for (const childId of childrenIds) {
-+    appendTreeRows(rows, childId, depth + 1, visibleSet);
-+  }
-+}
-+
-+function renderRow(row) {
-+  if (row.kind === "group") {
-+    return `<div class="timeline-group-header"><div class="rail"></div><div class="time"></div><div class="phase"></div><div class="who"></div><div class="type"></div><div class="blurb">${escapeHtml(row.label)}</div><div class="meta"></div></div>`;
-+  }
-+  if (row.kind === "bookmark") {
-+    return `<div class="timeline-bookmark"><div class="rail" style="--rail-color:#ffb347"></div><div class="time"></div><div class="phase"></div><div class="who"></div><div class="type"></div><div class="blurb">${escapeHtml(row.label)}</div><div class="meta"></div></div>`;
-+  }
-+  const event = row.event;
-+  const indentStyle = `style="--indent:${row.depth}"`;
-+  const toggle = row.hasChildren
-+    ? `<button class="tree-toggle" data-role="toggle" data-event-id="${escapeAttr(event.id)}" aria-expanded="${row.expanded}">${row.expanded ? "▾" : "▸"}</button>`
-+    : "";
-+  const indent = `<span class="tree-indent" ${indentStyle}></span>`;
-+  const time = typeof event.t_rel_ms === "number" ? event.t_rel_ms.toLocaleString() : "";
-+  const phaseColor = resolvePhaseColor(event.phase);
-+  const metaChips = buildMetaChips(event);
-+  const rawButtons = buildBatchButtons(event);
-+  const highlightAttr = row.highlight ? " data-highlight=\"true\"" : "";
-+  const classes = ["timeline-row"];
-+  return `
-+    <div class="${classes.join(" ")}" data-event-id="${escapeAttr(event.id)}" data-level="${escapeAttr(event.level || "")}" ${highlightAttr}>
-+      <div class="rail" style="--rail-color:${phaseColor}"></div>
-+      <div class="time">${escapeHtml(time)}</div>
-+      <div class="phase">${escapeHtml(event.phase || "")}</div>
-+      <div class="who">${escapeHtml(event.who || "")}</div>
-+      <div class="type">${escapeHtml(event.type || "")}</div>
-+      <div class="blurb"><span class="tree-label">${indent}${toggle}${escapeHtml(event.blurb || event.type || "")}</span></div>
-+      <div class="meta">${metaChips}${rawButtons}</div>
-+    </div>`;
-+}
-+
-+function buildMetaChips(event) {
-+  const meta = event.meta || {};
-+  const entries = Object.entries(meta).filter(([key, value]) => value !== null && value !== undefined);
-+  if (!entries.length && !event.turnId) {
-+    return "";
-+  }
-+  const chips = [];
-+  const seen = new Set();
-+  if (event.turnId) {
-+    chips.push(renderMetaChip("turn", event.turnId));
-+    seen.add(`turn:${event.turnId}`);
-+  }
-+  for (const [key, value] of entries) {
-+    let display = formatMetaValue(value);
-+    if (display.length > MAX_META_LENGTH) {
-+      display = `${display.slice(0, MAX_META_LENGTH - 1)}…`;
-+    }
-+    const dedupeKey = `${key}:${display}`;
-+    if (seen.has(dedupeKey)) continue;
-+    seen.add(dedupeKey);
-+    chips.push(renderMetaChip(key, display, value));
-+  }
-+  return chips.join("");
-+}
-+
-+function renderMetaChip(key, display, rawValue) {
-+  const dataValue = rawValue !== undefined ? String(rawValue) : String(display);
-+  return `<button class="meta-chip" data-meta-key="${escapeAttr(key)}" data-meta-value="${escapeAttr(dataValue)}">${escapeHtml(`${key}:${display}`)}</button>`;
-+}
-+
-+function buildBatchButtons(event) {
-+  if (!Array.isArray(event.batches) || !event.batches.length) return "";
-+  return event.batches
-+    .map((batch, idx) => {
-+      const label = batch.kind ? batch.kind : `batch-${idx + 1}`;
-+      return `<button class="raw-batch-btn" data-role="batch" data-event-id="${escapeAttr(event.id)}" data-index="${idx}">View ${escapeHtml(label)}</button>`;
++  els.hints.innerHTML = hints
++    .map((hint) => {
++      const severity = String(hint.severity || "info").toLowerCase();
++      const classes = ["hint-badge", `severity-${escapeAttr(severity)}`];
++      const label = hint.text ? escapeHtml(hint.text) : escapeHtml(hint.id);
++      return `<button type="button" class="${classes.join(" ")}" data-hint-id="${escapeAttr(hint.id)}">${label}</button>`;
 +    })
 +    .join("");
 +}
 +
-+function computeVisibleIds() {
-+  const search = (state.filterText || "").toLowerCase();
-+  const hasChips = state.filterChips.length > 0;
-+  const turn = state.turnFilter ? String(state.turnFilter) : "";
-+  if (!search && !hasChips && !turn) {
-+    state.visibleIds = new Set(state.events.keys());
-+    state.matchedIds = new Set();
-+    return state.visibleIds;
++function updateHints(rawHints) {
++  const normalized = Array.isArray(rawHints)
++    ? rawHints
++        .map((hint) => {
++          if (!hint || typeof hint !== "object") return null;
++          const id = hint.id != null ? String(hint.id) : "";
++          if (!id) return null;
++          const severity = hint.severity != null ? String(hint.severity) : "info";
++          const text = hint.text != null ? String(hint.text) : "";
++          const anchors = Array.isArray(hint.anchors)
++            ? hint.anchors.map((anchor) => String(anchor))
++            : [];
++          return { id, severity, text, anchors };
++        })
++        .filter(Boolean)
++    : [];
++  state.hints = normalized;
++  state.hintMap = new Map(normalized.map((hint) => [hint.id, hint]));
++  renderHints();
++}
++
+ function renderTimeline() {
+   if (!els.timeline) return;
+   const { rows } = buildRows();
+   if (!rows.length) {
+     els.timeline.innerHTML = `<div class="timeline-empty">${state.sessionId ? "No events yet." : "Select a session to begin."}</div>`;
+     return;
+   }
+   els.timeline.innerHTML = rows.map(renderRow).join("");
+ }
+ 
++function onHintClick(ev) {
++  const badge = ev.target.closest("button[data-hint-id]");
++  if (!badge) return;
++  const id = badge.getAttribute("data-hint-id");
++  if (!id) return;
++  const hint = state.hintMap?.get(id);
++  if (!hint || !Array.isArray(hint.anchors) || !hint.anchors.length) return;
++  const targetId = hint.anchors[0];
++  if (targetId) {
++    focusEvent(targetId);
 +  }
-+  const matches = new Set();
-+  const highlight = new Set();
-+  for (const event of state.events.values()) {
-+    if (!event) continue;
-+    let ok = true;
-+    if (search) {
-+      const haystack = [event.type, event.phase, event.who, event.blurb, JSON.stringify(event.meta || {})]
-+        .join(" ")
-+        .toLowerCase();
-+      if (!haystack.includes(search)) {
-+        ok = false;
-+      } else {
-+        highlight.add(event.id);
++}
++
++function handleTreeToggle(mode) {
++  if (!mode) return;
++  if (mode === "collapse") {
++    state.expanded = new Set();
++  } else if (mode === "flow") {
++    const expanded = new Set();
++    for (const event of state.events.values()) {
++      if (!event) continue;
++      if (!event.parentId || event.level === "flow") {
++        expanded.add(event.id);
 +      }
 +    }
-+    if (ok && turn) {
-+      ok = event.turnId === turn;
-+      if (ok) highlight.add(event.id);
-+    }
-+    if (ok && hasChips) {
-+      for (const chip of state.filterChips) {
-+        const value = resolveMetaValue(event, chip.key);
-+        if (value == null) {
-+          ok = false;
-+          break;
-+        }
-+        if (String(value) !== chip.value) {
-+          ok = false;
-+          break;
-+        }
-+      }
-+    }
-+    if (ok) {
-+      matches.add(event.id);
-+    }
++    state.expanded = expanded;
++  } else if (mode === "all") {
++    state.expanded = new Set(state.events.keys());
 +  }
-+  const visible = new Set(matches);
-+  for (const id of matches) {
-+    let cursor = state.events.get(id)?.parentId;
-+    while (cursor) {
-+      visible.add(cursor);
-+      cursor = state.events.get(cursor)?.parentId;
-+    }
-+  }
-+  const stack = Array.from(visible);
-+  while (stack.length) {
-+    const id = stack.pop();
-+    const event = state.events.get(id);
-+    if (!event || !event.childrenIds) continue;
-+    for (const child of event.childrenIds) {
-+      visible.add(child);
-+      stack.push(child);
-+    }
-+  }
-+  state.visibleIds = visible;
-+  state.matchedIds = highlight;
-+  return visible;
-+}
-+
-+function resolveMetaValue(event, key) {
-+  if (key === "turn") {
-+    return event.turnId;
-+  }
-+  return event.meta ? event.meta[key] : undefined;
-+}
-+
-+function getRootIds() {
-+  const roots = [];
-+  for (const event of state.events.values()) {
-+    if (!event) continue;
-+    if (!event.parentId || !state.events.has(event.parentId)) {
-+      roots.push(event.id);
-+    }
-+  }
-+  roots.sort((a, b) => {
-+    const evA = state.events.get(a);
-+    const evB = state.events.get(b);
-+    return (evA?.t_rel_ms || 0) - (evB?.t_rel_ms || 0);
-+  });
-+  return roots;
-+}
-+
-+function resolvePhaseColor(phase) {
-+  if (!phase) return PHASE_COLORS.default;
-+  const key = phase.toLowerCase();
-+  return PHASE_COLORS[key] || PHASE_COLORS.default;
-+}
-+
-+function formatMetaValue(value) {
-+  if (value == null) return "";
-+  if (typeof value === "number") {
-+    if (Math.abs(value) >= 1000) {
-+      return value.toFixed(2);
-+    }
-+    return String(value);
-+  }
-+  if (typeof value === "object") {
-+    try {
-+      return JSON.stringify(value);
-+    } catch {
-+      return String(value);
-+    }
-+  }
-+  return String(value);
-+}
-+
-+function phaseRank(phase) {
-+  const order = ["session", "turn", "nlu", "nlg", "tts", "audio", "confirm", "policy", "guardrail"];
-+  const idx = order.indexOf((phase || "").toLowerCase());
-+  return idx >= 0 ? idx : order.length + 1;
-+}
-+
-+function onTimelineClick(ev) {
-+  const toggleBtn = ev.target.closest("button[data-role=\"toggle\"]");
-+  if (toggleBtn) {
-+    const id = toggleBtn.getAttribute("data-event-id");
-+    if (id) {
-+      if (state.expanded.has(id)) {
-+        state.expanded.delete(id);
-+      } else {
-+        state.expanded.add(id);
-+      }
-+      renderTimeline();
-+    }
-+    return;
-+  }
-+
-+  const batchBtn = ev.target.closest("button[data-role=\"batch\"]");
-+  if (batchBtn) {
-+    const id = batchBtn.getAttribute("data-event-id");
-+    const idx = Number(batchBtn.getAttribute("data-index"));
-+    showBatchPopover(batchBtn, id, idx);
-+    return;
-+  }
-+
-+  const metaChip = ev.target.closest(".meta-chip");
-+  if (metaChip) {
-+    const key = metaChip.getAttribute("data-meta-key");
-+    const value = metaChip.getAttribute("data-meta-value");
-+    if (key && value != null) {
-+      addFilterChip(key, value);
-+    }
-+    return;
-+  }
-+
-+  const row = ev.target.closest(".timeline-row[data-event-id]");
-+  if (!row) return;
-+  const id = row.getAttribute("data-event-id");
-+  openDrawer(id);
-+}
-+
-+function onTimelineContext(ev) {
-+  const row = ev.target.closest(".timeline-row[data-event-id]");
-+  if (!row) return;
-+  ev.preventDefault();
-+  const id = row.getAttribute("data-event-id");
-+  const label = prompt("Add bookmark label:");
-+  if (!label) return;
-+  state.bookmarks.push({ eventId: id, label });
 +  renderTimeline();
 +}
 +
-+function showBatchPopover(anchor, eventId, index) {
-+  hidePopover();
-+  const event = state.events.get(eventId);
-+  if (!event) return;
-+  const batch = event.batches?.[index];
-+  if (!batch) return;
-+  const pop = document.createElement("div");
-+  pop.className = "popover";
-+  const itemsText = JSON.stringify(batch.items, null, 2);
-+  pop.innerHTML = `<h3>${escapeHtml(batch.kind || `Batch ${index + 1}`)}</h3><pre>${escapeHtml(itemsText)}</pre>`;
-+  document.body.appendChild(pop);
-+  const rect = anchor.getBoundingClientRect();
-+  pop.style.top = `${rect.bottom + window.scrollY + 8}px`;
-+  pop.style.left = `${rect.left + window.scrollX}px`;
-+  popoverNode = pop;
-+}
-+
-+function hidePopover() {
-+  if (popoverNode && popoverNode.parentNode) {
-+    popoverNode.parentNode.removeChild(popoverNode);
-+  }
-+  popoverNode = null;
-+}
-+
-+function addFilterChip(key, value) {
-+  const exists = state.filterChips.some((chip) => chip.key === key && chip.value === String(value));
-+  if (exists) return;
-+  state.filterChips.push({ key, value: String(value), display: String(value) });
-+  scheduleRender();
-+}
-+
-+function toggleLevel(level) {
-+  if (!level || level === "flow") return;
-+  if (state.levels.has(level)) {
-+    state.levels.delete(level);
-+  } else {
-+    state.levels.add(level);
-+  }
-+  reflectLevelButtons();
-+  state.events.clear();
-+  state.expanded.clear();
-+  state.matchedIds = new Set();
-+  state.visibleIds = new Set();
-+  state.drawerEventId = null;
-+  renderTimeline();
-+  renderDrawer();
-+  fetchTrace({ reset: true });
-+  updateHistory();
-+}
-+
-+function reflectLevelButtons() {
-+  if (!els.levelContainer) return;
-+  for (const btn of els.levelContainer.querySelectorAll("button[data-level]")) {
-+    const level = btn.getAttribute("data-level");
-+    const active = state.levels.has(level);
-+    btn.classList.toggle("active", active);
-+  }
-+}
-+
-+function setGrouping(group) {
-+  if (!group) return;
-+  if (!GROUP_LABELS[group] && group !== "chronological") return;
-+  state.grouping = group;
-+  reflectGroupingButtons();
-+  renderTimeline();
-+  updateHistory();
-+}
-+
-+function reflectGroupingButtons() {
-+  if (!els.groupContainer) return;
-+  for (const btn of els.groupContainer.querySelectorAll("button[data-group]")) {
-+    const group = btn.getAttribute("data-group");
-+    btn.classList.toggle("active", group === state.grouping);
-+  }
-+}
-+
-+function goLive(immediate = false) {
-+  state.live = true;
-+  renderTail();
-+  if (immediate) {
-+    fetchTrace({ reset: false }).finally(schedulePoll);
-+  } else {
-+    schedulePoll();
-+  }
-+}
-+
-+function pauseLive() {
-+  state.live = false;
-+  if (state.pollTimer) {
-+    clearTimeout(state.pollTimer);
-+    state.pollTimer = null;
-+  }
-+  renderTail();
-+}
-+
-+function schedulePoll() {
-+  if (!state.live) return;
-+  if (state.pollTimer) {
-+    clearTimeout(state.pollTimer);
-+  }
-+  const delay = POLL_MIN_MS + Math.random() * (POLL_MAX_MS - POLL_MIN_MS);
-+  state.pollTimer = setTimeout(() => {
-+    fetchTrace({ reset: false }).finally(() => {
-+      if (state.live) schedulePoll();
-+    });
-+  }, delay);
-+}
-+
-+function downloadExport({ redacted }) {
-+  if (!state.sessionId) {
-+    setHint("Select a session first.");
-+    return;
-+  }
-+  const params = new URLSearchParams();
-+  params.set("session_id", state.sessionId);
-+  params.set("expand", "all");
-+  params.set("levels", Array.from(state.levels).join(","));
-+  params.set("redacted", redacted ? "1" : "0");
-+  fetch(`/api/v1/flow/export.ndjson?${params.toString()}`, { credentials: "include" })
-+    .then((resp) => {
-+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-+      return resp.blob();
-+    })
-+    .then((blob) => {
-+      const href = URL.createObjectURL(blob);
-+      const link = document.createElement("a");
-+      const suffix = redacted ? "redacted" : "full";
-+      link.href = href;
-+      link.download = `flow_${state.sessionId}_${suffix}.ndjson`;
-+      document.body.appendChild(link);
-+      link.click();
-+      requestAnimationFrame(() => {
-+        URL.revokeObjectURL(href);
-+        link.remove();
-+      });
-+    })
-+    .catch((err) => {
-+      console.warn("[flow] export failed", err);
-+      setHint("Export failed.");
-+    });
-+}
-+
-+function copyLink() {
-+  if (!state.sessionId) {
-+    setHint("Select a session to copy.");
-+    return;
-+  }
-+  const params = new URLSearchParams();
-+  params.set("session_id", state.sessionId);
-+  params.set("levels", Array.from(state.levels).join(","));
-+  if (state.grouping && state.grouping !== "chronological") {
-+    params.set("group", state.grouping);
-+  }
-+  if (state.filterText) params.set("filter", state.filterText);
-+  if (state.turnFilter) params.set("turn", state.turnFilter);
-+  if (state.filterChips.length) {
-+    params.set(
-+      "chips",
-+      state.filterChips
-+        .map((chip) => `${encodeURIComponent(chip.key)}:${encodeURIComponent(chip.value)}`)
-+        .join(",")
-+    );
-+  }
-+  const hash = `#/admin/flow${params.toString() ? `?${params.toString()}` : ""}`;
-+  const link = `${window.location.origin}/admin${hash}`;
-+  writeClipboardText(link)
-+    .then(() => setHint("Link copied."))
-+    .catch(() => setHint("Copy failed."));
-+}
-+
-+function handoffToChatGPT() {
-+  if (!state.sessionId) {
-+    setHint("Select a session first.");
-+    return;
-+  }
-+  const summary = buildSessionSummary();
-+  writeClipboardText(summary)
-+    .then(() => setHint("Summary copied for ChatGPT."))
-+    .catch(() => setHint("Could not copy summary."));
-+}
-+
-+function buildSessionSummary() {
-+  const events = Array.from(state.events.values()).sort((a, b) => a.t_rel_ms - b.t_rel_ms);
-+  const head = events.slice(0, 5).map((evt) => `- ${evt.t_rel_ms}ms ${evt.phase} ${evt.type}`);
-+  return `Ask Chip Flow Summary\nSession: ${state.sessionId}\nLevels: ${Array.from(state.levels).join(", ")}\nEvents captured: ${events.length}\nFirst samples:\n${head.join("\n")}`;
-+}
-+
-+function openDrawer(eventId) {
-+  state.drawerEventId = eventId;
-+  renderDrawer();
-+  if (!eventId) return;
-+  const row = els.timeline?.querySelector(`.timeline-row[data-event-id="${cssEscape(eventId)}"]`);
-+  if (row) {
-+    row.scrollIntoView({ behavior: "smooth", block: "center" });
-+    row.classList.add("pulse");
-+    setTimeout(() => row.classList.remove("pulse"), 1400);
-+  }
-+}
-+
-+function renderDrawer() {
-+  if (!els.drawer) return;
-+  const event = state.drawerEventId ? state.events.get(state.drawerEventId) : null;
-+  if (!event) {
-+    els.drawer.setAttribute("aria-hidden", "true");
-+    els.drawerTitle.textContent = "Event";
-+    els.drawerMeta.innerHTML = "";
-+    els.drawerJson.textContent = "";
-+    els.drawerRelated.innerHTML = "";
-+    return;
-+  }
-+  els.drawer.setAttribute("aria-hidden", "false");
-+  els.drawerTitle.textContent = `${event.id} — ${event.type}`;
-+  const metaLines = [
-+    `<div><strong>Time</strong> ${event.t_rel_ms.toLocaleString()} ms</div>`,
-+    `<div><strong>Phase</strong> ${escapeHtml(event.phase || "")}</div>`,
-+    `<div><strong>Who</strong> ${escapeHtml(event.who || "")}</div>`,
-+    `<div><strong>Level</strong> ${escapeHtml(event.level || "")}</div>`,
-+  ];
-+  if (event.turnId) {
-+    metaLines.push(`<div><strong>Turn</strong> ${escapeHtml(event.turnId)}</div>`);
-+  }
-+  els.drawerMeta.innerHTML = metaLines.join("");
-+  els.drawerJson.textContent = JSON.stringify(event.raw, null, 2);
-+  els.drawerRelated.innerHTML = renderRelated(event);
-+}
-+
-+function renderRelated(event) {
-+  const items = [];
-+  if (event.parentId) {
-+    items.push({ label: `Parent ${event.parentId}`, target: event.parentId });
-+  }
-+  if (event.childrenIds && event.childrenIds.length) {
-+    for (const child of event.childrenIds) {
-+      items.push({ label: `Child ${child}`, target: child });
-+    }
-+  }
-+  if (event.turnId) {
-+    const sameTurn = Array.from(state.events.values()).filter((ev) => ev.turnId === event.turnId && ev.id !== event.id);
-+    for (const ev of sameTurn) {
-+      items.push({ label: `Turn ${event.turnId}: ${ev.type}`, target: ev.id });
-+    }
-+  }
-+  const confirmId = event.meta?.confirm_id;
-+  if (confirmId != null) {
-+    const confirmSet = Array.from(state.events.values()).filter(
-+      (ev) => ev.meta?.confirm_id === confirmId && ev.id !== event.id
-+    );
-+    for (const ev of confirmSet) {
-+      items.push({ label: `Confirm ${confirmId}: ${ev.type}`, target: ev.id });
-+    }
-+  }
-+  const uniq = new Map();
-+  for (const item of items) {
-+    if (!uniq.has(item.target)) {
-+      uniq.set(item.target, item);
-+    }
-+  }
-+  if (!uniq.size) {
-+    return '<p class="drawer-empty">No related events.</p>';
-+  }
-+  return Array.from(uniq.values())
-+    .map((item) => `<button type="button" data-target="${escapeAttr(item.target)}">${escapeHtml(item.label)}</button>`)
-+    .join("");
-+}
-+
-+function focusEvent(eventId) {
-+  if (!eventId) return;
-+  let cursor = state.events.get(eventId)?.parentId;
-+  while (cursor) {
-+    state.expanded.add(cursor);
-+    cursor = state.events.get(cursor)?.parentId;
-+  }
-+  openDrawer(eventId);
-+  renderTimeline();
-+}
-+
-+function copyDrawerJson() {
-+  const event = state.drawerEventId ? state.events.get(state.drawerEventId) : null;
-+  if (!event) return;
-+  const text = JSON.stringify(event.raw, null, 2);
-+  writeClipboardText(text)
-+    .then(() => setHint("Event JSON copied."))
-+    .catch(() => setHint("Copy failed."));
-+}
-+
-+function setHint(text) {
-+  if (!els.sessionHint) return;
-+  els.sessionHint.textContent = text;
-+}
-+
-+function updateHistory() {
-+  if (!state.sessionId) return;
-+  const params = new URLSearchParams();
-+  params.set("session_id", state.sessionId);
-+  params.set("levels", Array.from(state.levels).join(","));
-+  if (state.grouping && state.grouping !== "chronological") {
-+    params.set("group", state.grouping);
-+  }
-+  if (state.filterText) params.set("filter", state.filterText);
-+  if (state.turnFilter) params.set("turn", state.turnFilter);
-+  if (state.filterChips.length) {
-+    params.set(
-+      "chips",
-+      state.filterChips.map((chip) => `${encodeURIComponent(chip.key)}:${encodeURIComponent(chip.value)}`).join(",")
-+    );
-+  }
-+  const url = `/admin/flow?${params.toString()}`;
-+  window.history.replaceState({}, "", url);
-+  window.location.hash = `#/admin/flow${params.toString() ? `?${params.toString()}` : ""}`;
-+}
-+
-+function cssEscape(value) {
-+  if (window.CSS?.escape) return window.CSS.escape(value);
-+  return value.replace(/[^a-zA-Z0-9_-]/g, "");
-+}
-+
-+function escapeHtml(value) {
-+  return String(value || "")
-+    .replace(/&/g, "&amp;")
-+    .replace(/</g, "&lt;")
-+    .replace(/>/g, "&gt;")
-+    .replace(/"/g, "&quot;")
-+    .replace(/'/g, "&#39;");
-+}
-+
-+function escapeAttr(value) {
-+  return escapeHtml(value);
-+}
-+
-+function parseChipParam(raw) {
-+  const chips = [];
-+  if (!raw) return chips;
-+  const parts = String(raw).split(",");
-+  for (const part of parts) {
-+    const [rawKey, rawValue] = part.split(":");
-+    if (!rawKey || typeof rawValue === "undefined") continue;
-+    const key = decodeURIComponent(rawKey);
-+    const value = decodeURIComponent(rawValue);
-+    chips.push({ key, value, display: value });
-+  }
-+  return chips;
-+}
-+
-+function writeClipboardText(text) {
-+  try {
-+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-+      return navigator.clipboard.writeText(text);
-+    }
-+  } catch (err) {
-+    console.warn("[flow] clipboard write failed", err);
-+  }
-+  return new Promise((resolve, reject) => {
-+    const area = document.createElement("textarea");
-+    area.value = text;
-+    area.setAttribute("readonly", "true");
-+    area.style.position = "fixed";
-+    area.style.opacity = "0";
-+    document.body.appendChild(area);
-+    area.focus();
-+    area.select();
-+    try {
-+      const ok = document.execCommand("copy");
-+      document.body.removeChild(area);
-+      if (ok) {
-+        resolve();
-+      } else {
-+        reject(new Error("copy command failed"));
+ function buildRows() {
+   const visibleSet = computeVisibleIds();
+   const rows = [];
+   const grouping = state.grouping || "chronological";
+   const roots = getRootIds();
+ 
+   if (!roots.length) {
+     return { rows: [] };
+   }
+ 
+   if (grouping === "chronological") {
+     for (const rootId of roots) {
+       appendTreeRows(rows, rootId, 0, visibleSet);
+     }
+     return { rows };
+   }
+ 
+   const groups = new Map();
+   for (const rootId of roots) {
+     const event = state.events.get(rootId);
+     if (!event) continue;
+     const key = grouping === "phase" ? (event.phase || "—") : event.turnId || "—";
+     if (!groups.has(key)) groups.set(key, []);
+     groups.get(key).push(rootId);
+   }
+@@ -1179,50 +1271,65 @@ function renderRelated(event) {
+     }
+   }
+   const uniq = new Map();
+   for (const item of items) {
+     if (!uniq.has(item.target)) {
+       uniq.set(item.target, item);
+     }
+   }
+   if (!uniq.size) {
+     return '<p class="drawer-empty">No related events.</p>';
+   }
+   return Array.from(uniq.values())
+     .map((item) => `<button type="button" data-target="${escapeAttr(item.target)}">${escapeHtml(item.label)}</button>`)
+     .join("");
+ }
+ 
+ function focusEvent(eventId) {
+   if (!eventId) return;
+   let cursor = state.events.get(eventId)?.parentId;
+   while (cursor) {
+     state.expanded.add(cursor);
+     cursor = state.events.get(cursor)?.parentId;
+   }
+   openDrawer(eventId);
+   renderTimeline();
++  requestAnimationFrame(() => {
++    const selector = `.timeline-row[data-event-id="${cssEscape(eventId)}"]`;
++    const row = els.timeline?.querySelector(selector);
++    if (row) {
++      row.classList.add("pulse");
++      try {
++        row.scrollIntoView({ behavior: "smooth", block: "center" });
++      } catch {
++        row.scrollIntoView({ block: "center" });
 +      }
-+    } catch (err) {
-+      document.body.removeChild(area);
-+      reject(err);
++      setTimeout(() => {
++        row.classList.remove("pulse");
++      }, 1400);
 +    }
 +  });
-+}
-+
-+export {};
-diff --git a/templates/admin_console.html b/templates/admin_console.html
-index 7599c1b05eb8a008eb0c74dacfeebe39344a2f05..6ba5150246a31dbec77a62284e857ba67c10b394 100644
---- a/templates/admin_console.html
-+++ b/templates/admin_console.html
-@@ -8,50 +8,64 @@
- <link href="/static/css/app.css" rel="stylesheet"/>
- <style>
-     .wrap{max-width:1080px;margin:36px auto;padding:0 16px}
-     .tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
-     .tabs button{padding:8px 12px;border-radius:10px;border:1px solid #202533;background:#161a22;color:#e6e9ef;cursor:pointer}
-     .tabs button.active{border-color:#7aa0ff;box-shadow:0 0 0 2px rgba(122,160,255,.15) inset}
-     .panel{display:none;border:1px solid #202533;border-radius:12px;background:#161a22;padding:16px;margin-bottom:16px}
-     .panel.active{display:block}
-     .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
-     label{display:flex;flex-direction:column;font-size:13px;color:#9aa4b2}
-     input,select{margin-top:6px;background:#0f141d;border:1px solid #202533;border-radius:10px;color:#e6e9ef;padding:8px 10px}
-     .row{display:flex;gap:10px;align-items:center}
-     .btn{appearance:none;border-radius:10px;border:1px solid #2b7fcf;background:#5ab0ff;color:#0b111a;font-weight:600;padding:8px 12px;cursor:pointer}
-     .btn.primary:hover{background:#3a99ea}
-     .muted{color:#9aa4b2;font-size:13px}
-     table{width:100%;border-collapse:collapse;background:#101522;border:1px solid #202533;border-radius:12px;overflow:hidden}
-     thead th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#9aa0b2;background:#0e1220}
-     th,td{font-size:13px;border-bottom:1px solid #202533;padding:8px}
-     .back{display:inline-block;margin-bottom:8px;color:#7aa0ff;text-decoration:none}
-     .back:hover{text-decoration:underline}
-   </style>
- <!-- Diagnostics-only stylesheet (scoped to #admin-diagnostics, safe to include) -->
- <link href="/static/css/admin_console.css" rel="stylesheet"/>
- </head>
- <body>
-+<script>
-+  (function () {
-+    try {
-+      const hash = window.location.hash || '';
-+      if (hash.startsWith('#/admin/flow')) {
-+        const suffix = hash.slice('#/admin/flow'.length);
-+        const query = suffix.startsWith('?') ? suffix : suffix ? '?' + suffix.replace(/^\//, '') : '';
-+        window.location.replace('/admin/flow' + query);
-+      }
-+    } catch (err) {
-+      console.warn('[admin] flow redirect failed', err);
-+    }
-+  })();
-+</script>
- <div class="wrap">
- <a class="back" href="/">← Back</a>
- <h1>Ask Chip — Admin</h1>
- <div class="tabs" id="tabs">
- <button class="active" data-tab="ux">User Experience</button>
- <button data-tab="flow">Conversational Flow</button>
- <button data-tab="policy">Policy (Interaction)</button>
- <button data-tab="vendor">Vendor — Streaming ASR (Deepgram) / VAD</button>
- <button data-tab="ptm">PTM / Persona</button>
- <button data-tab="ops">Ops &amp; WS</button>
- <button data-tab="diag">Diagnostics</button>
- </div>
- <!-- UX -->
- <section class="panel active" id="tab-ux">
- <h3>User Experience</h3>
- <div class="grid">
- <label>Theme
-         <select id="theme">
- <option>light</option><option>dark</option><option>system</option>
- </select>
- </label>
- <label>Show instruction strip <input id="show_instruction_strip" type="checkbox"/></label>
- <label>Show state dots <input id="show_state_dots" type="checkbox"/></label>
- <label>Suggestions enabled <input id="suggestions_enabled" type="checkbox"/></label>
- <label>Suggestions — max items <input id="suggestions_max_items" min="0" type="number" value="4"/></label>
+ }
+ 
+ function copyDrawerJson() {
+   const event = state.drawerEventId ? state.events.get(state.drawerEventId) : null;
+   if (!event) return;
+   const text = JSON.stringify(event.raw, null, 2);
+   writeClipboardText(text)
+     .then(() => setHint("Event JSON copied."))
+     .catch(() => setHint("Copy failed."));
+ }
+ 
+ function setHint(text) {
+   if (!els.sessionHint) return;
+   els.sessionHint.textContent = text;
+ }
+ 
+ function updateHistory() {
+   if (!state.sessionId) return;
+   const params = new URLSearchParams();
+   params.set("session_id", state.sessionId);
+   params.set("levels", Array.from(state.levels).join(","));
+   if (state.grouping && state.grouping !== "chronological") {
+     params.set("group", state.grouping);
+   }
+   if (state.filterText) params.set("filter", state.filterText);
 diff --git a/templates/admin_flow.html b/templates/admin_flow.html
-new file mode 100644
-index 0000000000000000000000000000000000000000..23f41c37cbb31b26d5ac28cf92e28361ced5ab30
---- /dev/null
+index 23f41c37cbb31b26d5ac28cf92e28361ced5ab30..edd775496b67a908349bff1ef2db665d3515c17a 100644
+--- a/templates/admin_flow.html
 +++ b/templates/admin_flow.html
-@@ -0,0 +1,103 @@
-+<!doctype html>
-+<html lang="en">
-+<head>
-+  <meta charset="utf-8">
-+  <meta name="viewport" content="width=device-width, initial-scale=1">
-+  <title>Ask Chip — Flow Inspector</title>
-+  <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
-+  <link rel="stylesheet" href="/static/css/app.css">
-+  <link rel="stylesheet" href="/static/css/admin_flow.css">
-+</head>
-+<body>
-+  <div id="admin-flow-app" class="flow-app" data-route="flow">
-+    <header class="flow-header">
-+      <div class="flow-header-main">
-+        <div class="session-picker" data-ref="session-picker">
-+          <label for="flowSessionInput">Session</label>
-+          <div class="session-input">
-+            <input id="flowSessionInput" type="search" placeholder="Search active sessions" autocomplete="off">
-+            <datalist id="flowSessionOptions"></datalist>
-+            <button type="button" id="flowSessionRefresh" class="icon-btn" title="Refresh sessions" aria-label="Refresh sessions">
-+              <span>↻</span>
-+            </button>
-+          </div>
-+          <div class="session-hint" id="flowSessionHint">Select a session to start.</div>
-+          <ul class="session-results" id="flowSessionResults" role="listbox" aria-label="Active sessions"></ul>
+@@ -50,50 +50,64 @@
+           </label>
+           <label class="filter-turn">
+             <span>Turn</span>
+             <input id="flowTurnInput" type="number" min="0" step="1" placeholder="Any">
+           </label>
+           <div class="filter-chips" id="flowFilterChips" aria-live="polite"></div>
+         </div>
+         <div class="tail" data-ref="tail">
+           <div class="tail-state" id="flowTailState" role="status">Paused</div>
+           <div class="tail-actions">
+             <button type="button" id="flowTailToggle" class="toggle">Go live</button>
+             <button type="button" id="flowTailStep" class="toggle" title="Fetch latest once">Refresh</button>
+           </div>
+         </div>
+         <div class="flow-actions" data-ref="actions">
+           <button type="button" id="flowExportFull" class="action-btn">Export NDJSON</button>
+           <button type="button" id="flowExportRedacted" class="action-btn">Export Redacted</button>
+           <button type="button" id="flowCopyLink" class="action-btn">Copy link</button>
+           <button type="button" id="flowHandoff" class="action-btn">Hand off to ChatGPT</button>
+         </div>
+       </div>
+     </header>
+ 
+     <main class="flow-main">
+       <div class="timeline-shell">
++        <div class="flow-hint-bar">
++          <span class="hint-label">Smart hints</span>
++          <div class="hint-badges" id="flowHints" aria-live="polite"></div>
 +        </div>
-+        <div class="level-toggles" data-ref="level-toggles">
-+          <span class="group-label">Levels</span>
-+          <div class="toggle-group">
-+            <button type="button" class="toggle active" data-level="flow" disabled>Flow</button>
-+            <button type="button" class="toggle active" data-level="transition">Transitions</button>
-+            <button type="button" class="toggle" data-level="debug">Debug</button>
-+            <button type="button" class="toggle" data-level="raw">Raw</button>
-+          </div>
-+        </div>
-+        <div class="grouping" data-ref="grouping">
-+          <span class="group-label">Grouping</span>
-+          <div class="toggle-group">
-+            <button type="button" class="toggle" data-group="phase">By Phase</button>
-+            <button type="button" class="toggle" data-group="turn">By Turn</button>
-+            <button type="button" class="toggle active" data-group="chronological">Chronological</button>
++        <div class="timeline-toolbar">
++          <div class="tree-controls" data-ref="tree-controls">
++            <span class="group-label">Tree</span>
++            <div class="toggle-group">
++              <button type="button" class="toggle" data-tree="collapse">Collapse all</button>
++              <button type="button" class="toggle" data-tree="flow">Expand flow</button>
++              <button type="button" class="toggle" data-tree="all">Expand all</button>
++            </div>
 +          </div>
 +        </div>
-+      </div>
-+      <div class="flow-header-secondary">
-+        <div class="filters" data-ref="filters">
-+          <label class="filter-search">
-+            <span>Filter</span>
-+            <input id="flowFilterInput" type="search" placeholder="type, who, phase…" autocomplete="off">
-+          </label>
-+          <label class="filter-turn">
-+            <span>Turn</span>
-+            <input id="flowTurnInput" type="number" min="0" step="1" placeholder="Any">
-+          </label>
-+          <div class="filter-chips" id="flowFilterChips" aria-live="polite"></div>
-+        </div>
-+        <div class="tail" data-ref="tail">
-+          <div class="tail-state" id="flowTailState" role="status">Paused</div>
-+          <div class="tail-actions">
-+            <button type="button" id="flowTailToggle" class="toggle">Go live</button>
-+            <button type="button" id="flowTailStep" class="toggle" title="Fetch latest once">Refresh</button>
-+          </div>
-+        </div>
-+        <div class="flow-actions" data-ref="actions">
-+          <button type="button" id="flowExportFull" class="action-btn">Export NDJSON</button>
-+          <button type="button" id="flowExportRedacted" class="action-btn">Export Redacted</button>
-+          <button type="button" id="flowCopyLink" class="action-btn">Copy link</button>
-+          <button type="button" id="flowHandoff" class="action-btn">Hand off to ChatGPT</button>
-+        </div>
-+      </div>
-+    </header>
+         <div class="timeline-head">
+           <div class="timeline-col rail" aria-hidden="true"></div>
+           <div class="timeline-col time">Time (ms)</div>
+           <div class="timeline-col phase">Phase</div>
+           <div class="timeline-col who">Who</div>
+           <div class="timeline-col type">Type</div>
+           <div class="timeline-col blurb">Blurb</div>
+           <div class="timeline-col meta">Meta</div>
+         </div>
+         <div class="timeline-body" id="flowTimeline" role="treegrid" aria-live="polite"></div>
+       </div>
+       <aside class="flow-drawer" id="flowDrawer" aria-live="polite" aria-hidden="true">
+         <div class="drawer-header">
+           <h2 id="flowDrawerTitle">Event</h2>
+           <div class="drawer-actions">
+             <button type="button" id="flowDrawerCopy" class="icon-btn" title="Copy JSON">⧉</button>
+             <button type="button" id="flowDrawerClose" class="icon-btn" title="Close">✕</button>
+           </div>
+         </div>
+         <div class="drawer-meta" id="flowDrawerMeta"></div>
+         <div class="drawer-related" id="flowDrawerRelated"></div>
+         <pre class="drawer-json" id="flowDrawerJson"></pre>
+       </aside>
+     </main>
+   </div>
+diff --git a/tests/test_flow_store.py b/tests/test_flow_store.py
+index d7db657bae38ee3b401482b902f107d46927a843..34b6130aae865baa7dfab4fc58e99ad53d838756 100644
+--- a/tests/test_flow_store.py
++++ b/tests/test_flow_store.py
+@@ -1,25 +1,27 @@
++from typing import Any, Dict
 +
-+    <main class="flow-main">
-+      <div class="timeline-shell">
-+        <div class="timeline-head">
-+          <div class="timeline-col rail" aria-hidden="true"></div>
-+          <div class="timeline-col time">Time (ms)</div>
-+          <div class="timeline-col phase">Phase</div>
-+          <div class="timeline-col who">Who</div>
-+          <div class="timeline-col type">Type</div>
-+          <div class="timeline-col blurb">Blurb</div>
-+          <div class="timeline-col meta">Meta</div>
-+        </div>
-+        <div class="timeline-body" id="flowTimeline" role="treegrid" aria-live="polite"></div>
-+      </div>
-+      <aside class="flow-drawer" id="flowDrawer" aria-live="polite" aria-hidden="true">
-+        <div class="drawer-header">
-+          <h2 id="flowDrawerTitle">Event</h2>
-+          <div class="drawer-actions">
-+            <button type="button" id="flowDrawerCopy" class="icon-btn" title="Copy JSON">⧉</button>
-+            <button type="button" id="flowDrawerClose" class="icon-btn" title="Close">✕</button>
-+          </div>
-+        </div>
-+        <div class="drawer-meta" id="flowDrawerMeta"></div>
-+        <div class="drawer-related" id="flowDrawerRelated"></div>
-+        <pre class="drawer-json" id="flowDrawerJson"></pre>
-+      </aside>
-+    </main>
-+  </div>
-+
-+  <script type="module" src="/static/js/admin_flow.js"></script>
-+</body>
-+</html>
-diff --git a/tests/test_flow_api.py b/tests/test_flow_api.py
-index ba38e01f0a7f812d7c4fb511be5a1a59b06d41a9..fd3680f7fd18c8a43f246038a6a8ae8f24064182 100644
---- a/tests/test_flow_api.py
-+++ b/tests/test_flow_api.py
-@@ -41,29 +41,53 @@ def test_flow_event_endpoint(admin_env):
-         query_string={"session_id": "sess-event", "id": event_id},
-         headers=admin_env,
-     )
-     assert resp.status_code == 200
-     data = resp.get_json()
-     assert data["id"] == event_id
+ import pytest
+ 
+ from app.flow.trace import (
+     ASR_PARTIAL_TYPE,
+     BARGE_IN_TYPE,
+     BARGE_RESUME_TYPE,
+     CONFIRM_CLOSE_TYPE,
+     CONFIRM_OPEN_TYPE,
+     LLM_FINAL_TYPE,
+     LLM_START_TYPE,
+     TTS_END_TYPE,
+     TTS_START_TYPE,
+     FlowStore,
+ )
  
  
- def test_flow_export_ndjson(admin_env):
+ @pytest.fixture
+ def flow_env(monkeypatch):
      store = FlowStore()
-     store.emit("sess-export", "flow", "session", "session_open", "system")
-     store.emit("sess-export", "transition", "session", "asr_ready", "system")
+     store._init()
  
-     client = flask_app.test_client()
-     resp = client.get(
-         "/api/v1/flow/export.ndjson",
-         query_string={"session_id": "sess-export"},
-         headers=admin_env,
+     clock = {"now": 1000.0}
+ 
+     def fake_monotonic():
+         return clock["now"]
+@@ -177,50 +179,246 @@ def test_llm_forced_close(flow_env):
+         "flow",
+         "turn",
+         LLM_START_TYPE,
+         "assistant",
+         meta=meta,
      )
-     assert resp.status_code == 200
-     assert resp.headers["Content-Type"].startswith("application/x-ndjson")
-     body = resp.data.decode("utf-8").strip().split("\n")
-     assert len(body) >= 2
+     assert start
+ 
+     advance(121000)
+     snapshot = store.list(session_id)
+     forced = [evt for evt in snapshot["events"] if evt["type"] == LLM_FINAL_TYPE]
+     assert forced
+     assert forced[-1]["meta"].get("__warning") == "forced_close"
+ 
+     restart = store.emit(
+         session_id,
+         "flow",
+         "turn",
+         LLM_START_TYPE,
+         "assistant",
+         meta=meta,
+     )
+     assert restart and restart != start
  
  
-+def test_flow_sessions_endpoint(admin_env):
-+    store = FlowStore()
-+    store.emit("sess-a", "flow", "session", "session_open", "system")
-+    store.emit("sess-b", "flow", "session", "session_open", "system")
-+    store.emit("sess-b", "transition", "turn", "turn_start", "system")
-+
-+    client = flask_app.test_client()
-+    resp = client.get("/api/v1/flow/sessions", headers=admin_env)
-+    assert resp.status_code == 200
-+    data = resp.get_json()
-+    assert any(item["session_id"] == "sess-a" for item in data["sessions"])
-+    assert any(item["session_id"] == "sess-b" for item in data["sessions"])
-+
-+    resp_filtered = client.get(
-+        "/api/v1/flow/sessions",
-+        query_string={"q": "sess-b", "limit": "1"},
-+        headers=admin_env,
++def _list_with_hints(store: FlowStore, session_id: str) -> Dict[str, Any]:
++    return store.list(
++        session_id,
++        expand="all",
++        levels=("flow", "transition", "debug"),
 +    )
-+    assert resp_filtered.status_code == 200
-+    filtered = resp_filtered.get_json()
-+    assert len(filtered["sessions"]) == 1
-+    assert filtered["sessions"][0]["session_id"] == "sess-b"
 +
 +
- def test_flow_admin_guard():
-     client = flask_app.test_client()
-     resp = client.get("/api/v1/flow/trace", query_string={"session_id": "nope"})
-     assert resp.status_code == 403
++def test_hint_no_asr_after_ready(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-hint-asr"
++
++    confirm_id = store.emit(
++        session_id,
++        "flow",
++        "turn",
++        CONFIRM_OPEN_TYPE,
++        "system",
++        meta={"turn_id": "1"},
++    )
++    assert confirm_id
++    advance(1300)
++    store.emit(
++        session_id,
++        "flow",
++        "turn",
++        CONFIRM_CLOSE_TYPE,
++        "system",
++        meta={"reason": "timeout"},
++    )
++
++    payload = _list_with_hints(store, session_id)
++    hint_ids = {hint["id"] for hint in payload["hints"]}
++    assert any(hid.startswith("no_asr_after_ready:") for hid in hint_ids)
++
++
++def test_hint_evidence_never_met(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-hint-evidence"
++
++    confirm_id = store.emit(
++        session_id,
++        "flow",
++        "turn",
++        CONFIRM_OPEN_TYPE,
++        "system",
++        meta={"turn_id": "2"},
++    )
++    assert confirm_id
++    advance(50)
++    vad_id = store.emit(
++        session_id,
++        "transition",
++        "mic",
++        "vad_gate_open",
++        "system",
++        meta={"reason": "speech"},
++    )
++    assert vad_id
++    advance(400)
++    store.emit(
++        session_id,
++        "flow",
++        "turn",
++        CONFIRM_CLOSE_TYPE,
++        "system",
++        meta={"reason": "abort"},
++    )
++
++    payload = _list_with_hints(store, session_id)
++    matches = [hint for hint in payload["hints"] if hint["id"].startswith("evidence_never_met:")]
++    assert matches
++    anchors = matches[0]["anchors"]
++    assert confirm_id in anchors and vad_id in anchors
++
++
++def test_hint_commit_blocked_min_tokens(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-hint-gate"
++
++    confirm_id = store.emit(
++        session_id,
++        "flow",
++        "turn",
++        CONFIRM_OPEN_TYPE,
++        "system",
++        meta={"turn_id": "3"},
++    )
++    assert confirm_id
++    advance(100)
++    gate_id = store.emit(
++        session_id,
++        "debug",
++        "turn",
++        "gate_check",
++        "system",
++        meta={"rule": "min_tokens", "value": 1, "threshold": 4, "passed": False},
++        parent_id=confirm_id,
++    )
++    assert gate_id
++
++    payload = _list_with_hints(store, session_id)
++    matches = [hint for hint in payload["hints"] if hint["id"].startswith("commit_blocked_min_tokens:")]
++    assert matches
++    assert confirm_id in matches[0]["anchors"]
++
++
++def test_hint_tts_slow_and_post_hold(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-hint-tts"
++
++    tts_start = store.emit(
++        session_id,
++        "flow",
++        "turn",
++        TTS_START_TYPE,
++        "assistant",
++        meta={"turn_id": "4"},
++    )
++    assert tts_start
++    advance(200)
++    tts_end = store.emit(
++        session_id,
++        "flow",
++        "turn",
++        TTS_END_TYPE,
++        "assistant",
++        meta={"turn_id": "4"},
++    )
++    assert tts_end
++    store.emit(
++        session_id,
++        "debug",
++        "turn",
++        "tts_metrics",
++        "assistant",
++        meta={"first_byte_ms": 800},
++        parent_id=tts_end,
++    )
++    advance(300)
++    vad_id = store.emit(
++        session_id,
++        "transition",
++        "mic",
++        "vad_gate_open",
++        "system",
++        meta={"reason": "tts_mask"},
++    )
++    assert vad_id
++
++    payload = _list_with_hints(store, session_id)
++    hint_ids = {hint["id"] for hint in payload["hints"]}
++    assert any(hid.startswith("tts_slow:") for hid in hint_ids)
++    hold_hints = [hint for hint in payload["hints"] if hint["id"].startswith("post_tts_hold_overlap:")]
++    assert hold_hints
++    assert tts_end in hold_hints[0]["anchors"]
++
++
++def test_hint_asr_recovered_and_queue(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-hint-misc"
++
++    err_id = store.emit(
++        session_id,
++        "transition",
++        "asr",
++        "asr_error",
++        "system",
++        meta={"code": "ws"},
++    )
++    assert err_id
++    advance(200)
++    ok_id = store.emit(
++        session_id,
++        "transition",
++        "asr",
++        "recover_ok",
++        "system",
++        meta={"path": "asr"},
++    )
++    assert ok_id
++    store.emit(
++        session_id,
++        "debug",
++        "mic",
++        "queue_depth",
++        "system",
++        meta={"name": "mic", "depth": 12, "watermark": 10},
++    )
++
++    payload = _list_with_hints(store, session_id)
++    ids = {hint["id"] for hint in payload["hints"]}
++    assert any(hid.startswith("asr_recovered:") for hid in ids)
++    assert any(hid.startswith("queue_pressure:") for hid in ids)
++
++
+ def test_add_batch_and_expand(flow_env):
+     store, advance, _ = flow_env
+     session_id = "sess-batch"
+ 
+     parent_id = store.emit(session_id, "flow", "turn", "confirm_open", "assistant")
+     advance(5)
+     child_id = store.emit(
+         session_id,
+         "transition",
+         "turn",
+         "asr_partial_first",
+         "client",
+         parent_id=parent_id,
+     )
+ 
+     added = store.add_batch(session_id, parent_id, "transcript", ["hello", "world"])
+     assert added is True
+ 
+     snapshot = store.list(session_id, expand="flow")
+     events = snapshot["events"]
+     assert events[0]["id"] == parent_id
+     assert events[0]["batches"][0]["kind"] == "transcript"
+     assert events[0]["batches"][0]["items"] == ["hello", "world"]
+     assert events[0]["children"][0]["id"] == child_id
+ 

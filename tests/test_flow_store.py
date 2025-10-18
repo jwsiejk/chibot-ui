@@ -1,3 +1,5 @@
+from typing import Any, Dict
+
 import pytest
 
 from app.flow.trace import (
@@ -197,6 +199,202 @@ def test_llm_forced_close(flow_env):
         meta=meta,
     )
     assert restart and restart != start
+
+
+def _list_with_hints(store: FlowStore, session_id: str) -> Dict[str, Any]:
+    return store.list(
+        session_id,
+        expand="all",
+        levels=("flow", "transition", "debug"),
+    )
+
+
+def test_hint_no_asr_after_ready(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-hint-asr"
+
+    confirm_id = store.emit(
+        session_id,
+        "flow",
+        "turn",
+        CONFIRM_OPEN_TYPE,
+        "system",
+        meta={"turn_id": "1"},
+    )
+    assert confirm_id
+    advance(1300)
+    store.emit(
+        session_id,
+        "flow",
+        "turn",
+        CONFIRM_CLOSE_TYPE,
+        "system",
+        meta={"reason": "timeout"},
+    )
+
+    payload = _list_with_hints(store, session_id)
+    hint_ids = {hint["id"] for hint in payload["hints"]}
+    assert any(hid.startswith("no_asr_after_ready:") for hid in hint_ids)
+
+
+def test_hint_evidence_never_met(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-hint-evidence"
+
+    confirm_id = store.emit(
+        session_id,
+        "flow",
+        "turn",
+        CONFIRM_OPEN_TYPE,
+        "system",
+        meta={"turn_id": "2"},
+    )
+    assert confirm_id
+    advance(50)
+    vad_id = store.emit(
+        session_id,
+        "transition",
+        "mic",
+        "vad_gate_open",
+        "system",
+        meta={"reason": "speech"},
+    )
+    assert vad_id
+    advance(400)
+    store.emit(
+        session_id,
+        "flow",
+        "turn",
+        CONFIRM_CLOSE_TYPE,
+        "system",
+        meta={"reason": "abort"},
+    )
+
+    payload = _list_with_hints(store, session_id)
+    matches = [hint for hint in payload["hints"] if hint["id"].startswith("evidence_never_met:")]
+    assert matches
+    anchors = matches[0]["anchors"]
+    assert confirm_id in anchors and vad_id in anchors
+
+
+def test_hint_commit_blocked_min_tokens(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-hint-gate"
+
+    confirm_id = store.emit(
+        session_id,
+        "flow",
+        "turn",
+        CONFIRM_OPEN_TYPE,
+        "system",
+        meta={"turn_id": "3"},
+    )
+    assert confirm_id
+    advance(100)
+    gate_id = store.emit(
+        session_id,
+        "debug",
+        "turn",
+        "gate_check",
+        "system",
+        meta={"rule": "min_tokens", "value": 1, "threshold": 4, "passed": False},
+        parent_id=confirm_id,
+    )
+    assert gate_id
+
+    payload = _list_with_hints(store, session_id)
+    matches = [hint for hint in payload["hints"] if hint["id"].startswith("commit_blocked_min_tokens:")]
+    assert matches
+    assert confirm_id in matches[0]["anchors"]
+
+
+def test_hint_tts_slow_and_post_hold(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-hint-tts"
+
+    tts_start = store.emit(
+        session_id,
+        "flow",
+        "turn",
+        TTS_START_TYPE,
+        "assistant",
+        meta={"turn_id": "4"},
+    )
+    assert tts_start
+    advance(200)
+    tts_end = store.emit(
+        session_id,
+        "flow",
+        "turn",
+        TTS_END_TYPE,
+        "assistant",
+        meta={"turn_id": "4"},
+    )
+    assert tts_end
+    store.emit(
+        session_id,
+        "debug",
+        "turn",
+        "tts_metrics",
+        "assistant",
+        meta={"first_byte_ms": 800},
+        parent_id=tts_end,
+    )
+    advance(300)
+    vad_id = store.emit(
+        session_id,
+        "transition",
+        "mic",
+        "vad_gate_open",
+        "system",
+        meta={"reason": "tts_mask"},
+    )
+    assert vad_id
+
+    payload = _list_with_hints(store, session_id)
+    hint_ids = {hint["id"] for hint in payload["hints"]}
+    assert any(hid.startswith("tts_slow:") for hid in hint_ids)
+    hold_hints = [hint for hint in payload["hints"] if hint["id"].startswith("post_tts_hold_overlap:")]
+    assert hold_hints
+    assert tts_end in hold_hints[0]["anchors"]
+
+
+def test_hint_asr_recovered_and_queue(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-hint-misc"
+
+    err_id = store.emit(
+        session_id,
+        "transition",
+        "asr",
+        "asr_error",
+        "system",
+        meta={"code": "ws"},
+    )
+    assert err_id
+    advance(200)
+    ok_id = store.emit(
+        session_id,
+        "transition",
+        "asr",
+        "recover_ok",
+        "system",
+        meta={"path": "asr"},
+    )
+    assert ok_id
+    store.emit(
+        session_id,
+        "debug",
+        "mic",
+        "queue_depth",
+        "system",
+        meta={"name": "mic", "depth": 12, "watermark": 10},
+    )
+
+    payload = _list_with_hints(store, session_id)
+    ids = {hint["id"] for hint in payload["hints"]}
+    assert any(hid.startswith("asr_recovered:") for hid in ids)
+    assert any(hid.startswith("queue_pressure:") for hid in ids)
 
 
 def test_add_batch_and_expand(flow_env):

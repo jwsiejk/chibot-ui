@@ -46,6 +46,8 @@ const state = {
   drawerEventId: null,
   lastFetchedAt: null,
   loading: false,
+  hints: [],
+  hintMap: new Map(),
 };
 
 const els = {};
@@ -84,6 +86,8 @@ function init() {
   els.drawerRelated = document.getElementById("flowDrawerRelated");
   els.drawerCopy = document.getElementById("flowDrawerCopy");
   els.drawerClose = document.getElementById("flowDrawerClose");
+  els.hints = document.getElementById("flowHints");
+  els.treeControls = root.querySelector('[data-ref="tree-controls"]');
 
   bindEvents();
   hydrateFromLocation();
@@ -93,6 +97,7 @@ function init() {
   renderTail();
   renderTimeline();
   renderDrawer();
+  renderHints();
 
   if (state.sessionId) {
     fetchTrace({ reset: true });
@@ -223,6 +228,21 @@ function bindEvents() {
       const target = btn.getAttribute("data-target");
       if (target) {
         focusEvent(target);
+      }
+    });
+  }
+
+  if (els.hints) {
+    els.hints.addEventListener("click", onHintClick);
+  }
+
+  if (els.treeControls) {
+    els.treeControls.addEventListener("click", (ev) => {
+      const btn = ev.target.closest("button[data-tree]");
+      if (!btn) return;
+      const mode = btn.getAttribute("data-tree");
+      if (mode) {
+        handleTreeToggle(mode);
       }
     });
   }
@@ -415,6 +435,7 @@ function selectSession(sessionId) {
   state.matchedIds = new Set();
   state.visibleIds = new Set();
   state.drawerEventId = null;
+  updateHints([]);
   if (els.sessionInput) {
     els.sessionInput.value = sessionId;
   }
@@ -453,6 +474,7 @@ function fetchTrace({ reset }) {
     .then((payload) => {
       const events = Array.isArray(payload.events) ? payload.events : [];
       ingestEvents(events);
+      updateHints(payload.hints);
       const nextSince = payload.next_since_ms;
       if (typeof nextSince === "number" && nextSince >= 0) {
         state.pollSinceMs = nextSince;
@@ -584,6 +606,44 @@ function renderTail() {
   els.tailToggle.textContent = state.live ? "Pause" : "Go live";
 }
 
+function renderHints() {
+  if (!els.hints) return;
+  const hints = Array.isArray(state.hints) ? state.hints : [];
+  if (!hints.length) {
+    els.hints.innerHTML = '<span class="hint-empty">No hints yet.</span>';
+    return;
+  }
+  els.hints.innerHTML = hints
+    .map((hint) => {
+      const severity = String(hint.severity || "info").toLowerCase();
+      const classes = ["hint-badge", `severity-${escapeAttr(severity)}`];
+      const label = hint.text ? escapeHtml(hint.text) : escapeHtml(hint.id);
+      return `<button type="button" class="${classes.join(" ")}" data-hint-id="${escapeAttr(hint.id)}">${label}</button>`;
+    })
+    .join("");
+}
+
+function updateHints(rawHints) {
+  const normalized = Array.isArray(rawHints)
+    ? rawHints
+        .map((hint) => {
+          if (!hint || typeof hint !== "object") return null;
+          const id = hint.id != null ? String(hint.id) : "";
+          if (!id) return null;
+          const severity = hint.severity != null ? String(hint.severity) : "info";
+          const text = hint.text != null ? String(hint.text) : "";
+          const anchors = Array.isArray(hint.anchors)
+            ? hint.anchors.map((anchor) => String(anchor))
+            : [];
+          return { id, severity, text, anchors };
+        })
+        .filter(Boolean)
+    : [];
+  state.hints = normalized;
+  state.hintMap = new Map(normalized.map((hint) => [hint.id, hint]));
+  renderHints();
+}
+
 function renderTimeline() {
   if (!els.timeline) return;
   const { rows } = buildRows();
@@ -592,6 +652,38 @@ function renderTimeline() {
     return;
   }
   els.timeline.innerHTML = rows.map(renderRow).join("");
+}
+
+function onHintClick(ev) {
+  const badge = ev.target.closest("button[data-hint-id]");
+  if (!badge) return;
+  const id = badge.getAttribute("data-hint-id");
+  if (!id) return;
+  const hint = state.hintMap?.get(id);
+  if (!hint || !Array.isArray(hint.anchors) || !hint.anchors.length) return;
+  const targetId = hint.anchors[0];
+  if (targetId) {
+    focusEvent(targetId);
+  }
+}
+
+function handleTreeToggle(mode) {
+  if (!mode) return;
+  if (mode === "collapse") {
+    state.expanded = new Set();
+  } else if (mode === "flow") {
+    const expanded = new Set();
+    for (const event of state.events.values()) {
+      if (!event) continue;
+      if (!event.parentId || event.level === "flow") {
+        expanded.add(event.id);
+      }
+    }
+    state.expanded = expanded;
+  } else if (mode === "all") {
+    state.expanded = new Set(state.events.keys());
+  }
+  renderTimeline();
 }
 
 function buildRows() {
@@ -1201,6 +1293,21 @@ function focusEvent(eventId) {
   }
   openDrawer(eventId);
   renderTimeline();
+  requestAnimationFrame(() => {
+    const selector = `.timeline-row[data-event-id="${cssEscape(eventId)}"]`;
+    const row = els.timeline?.querySelector(selector);
+    if (row) {
+      row.classList.add("pulse");
+      try {
+        row.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch {
+        row.scrollIntoView({ block: "center" });
+      }
+      setTimeout(() => {
+        row.classList.remove("pulse");
+      }, 1400);
+    }
+  });
 }
 
 function copyDrawerJson() {

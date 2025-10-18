@@ -284,6 +284,82 @@ body {
   overflow: hidden;
 }
 
+.flow-hint-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: rgba(12, 18, 30, 0.85);
+  border: 1px solid rgba(122, 160, 255, 0.18);
+  border-radius: 16px;
+  padding: 12px 16px;
+}
+
+.flow-hint-bar .hint-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #96a3bc;
+}
+
+.hint-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.hint-badge {
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(122, 160, 255, 0.9);
+  color: #041022;
+  box-shadow: 0 4px 12px rgba(12, 18, 30, 0.45);
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+.hint-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(122, 160, 255, 0.3);
+}
+
+.hint-badge.severity-warn {
+  background: #facc15;
+  color: #261b00;
+}
+
+.hint-badge.severity-info {
+  background: #38bdf8;
+  color: #01131f;
+}
+
+.hint-badge.severity-error {
+  background: #f87171;
+  color: #2f0606;
+}
+
+.hint-empty {
+  font-size: 13px;
+  color: #8c97ad;
+}
+
+.timeline-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.tree-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .timeline-head {
   display: grid;
   grid-template-columns: 6px 120px 140px 120px 180px minmax(200px, 1fr) minmax(200px, 1fr);

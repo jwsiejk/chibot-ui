@@ -228,6 +228,7 @@ class FlowStore:
                     "started_at": None,
                     "events": [],
                     "next_since_ms": since_ms or 0,
+                    "hints": [],
                 }
             self._inject_safety_events(bucket)
             levels_set = set(levels)
@@ -252,11 +253,14 @@ class FlowStore:
             if events:
                 next_since += 1
 
+            hints = self._compute_hints(bucket)
+
             return {
                 "session_id": session_id,
                 "started_at": bucket.started_at_iso,
                 "events": events,
                 "next_since_ms": next_since,
+                "hints": hints,
             }
 
     def sessions(
@@ -612,6 +616,198 @@ class FlowStore:
         if len(words) <= 12:
             return " ".join(words)
         return " ".join(words[:12])
+
+    def _compute_hints(self, bucket: SessionBucket) -> List[Dict[str, Any]]:
+        records = list(bucket.events)
+        if not records:
+            return []
+
+        event_index = bucket.event_index
+        hints: List[Dict[str, Any]] = []
+        seen_keys: Set[Tuple[str, Tuple[str, ...]]] = set()
+
+        def _normalize_id(value: Optional[str]) -> Optional[str]:
+            if not value:
+                return None
+            return str(value)
+
+        def _numeric(value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            try:
+                return float(str(value))
+            except (TypeError, ValueError):
+                return None
+
+        def _as_int(value: Any) -> Optional[int]:
+            number = _numeric(value)
+            if number is None:
+                return None
+            return int(number)
+
+        def _add_hint(kind: str, severity: str, text: str, anchors: Iterable[str]) -> None:
+            anchor_list = [anchor for anchor in (_normalize_id(a) for a in anchors) if anchor]
+            if not anchor_list:
+                return
+            key = (kind, tuple(sorted(anchor_list)))
+            if key in seen_keys:
+                return
+            seen_keys.add(key)
+            hint_id = f"{kind}:{'-'.join(sorted(anchor_list))}"
+            hints.append(
+                {
+                    "id": hint_id,
+                    "severity": severity,
+                    "text": text,
+                    "anchors": anchor_list,
+                }
+            )
+
+        last_tts_end: Optional[EventRecord] = None
+        last_asr_error: Optional[EventRecord] = None
+
+        for idx, record in enumerate(records):
+            data = record.data
+            type_ = data.get("type") or ""
+            meta = data.get("meta") or {}
+
+            if type_ == CONFIRM_OPEN_TYPE:
+                start_ms = data.get("t_rel_ms") or 0
+                confirm_id = data.get("id")
+                found_within = False
+                j = idx + 1
+                while j < len(records):
+                    next_record = records[j]
+                    next_type = next_record.data.get("type") or ""
+                    next_ms = next_record.data.get("t_rel_ms") or 0
+                    delta = next_ms - start_ms
+                    if next_type in {CONFIRM_OPEN_TYPE, CONFIRM_CLOSE_TYPE}:
+                        break
+                    if delta > 2000:
+                        break
+                    if next_type == ASR_PARTIAL_TYPE:
+                        if delta <= 1200:
+                            found_within = True
+                        break
+                    j += 1
+                if not found_within:
+                    _add_hint(
+                        "no_asr_after_ready",
+                        "warn",
+                        "No ASR partial within 1200ms after confirm_open.",
+                        [confirm_id],
+                    )
+
+                # evidence gate tracking
+                vad_event: Optional[EventRecord] = None
+                evidence_met = False
+                j = idx + 1
+                while j < len(records):
+                    next_record = records[j]
+                    next_type = next_record.data.get("type") or ""
+                    if next_type == CONFIRM_OPEN_TYPE:
+                        break
+                    if next_type == CONFIRM_CLOSE_TYPE:
+                        break
+                    if next_type == "vad_gate_open" and vad_event is None:
+                        vad_event = next_record
+                    if next_type == "evidence_gate_met" and vad_event is not None:
+                        evidence_met = True
+                        break
+                    j += 1
+                if vad_event is not None and not evidence_met:
+                    _add_hint(
+                        "evidence_never_met",
+                        "warn",
+                        "Dual evidence not met (VAD open but no confident partial).",
+                        [confirm_id, vad_event.data.get("id")],
+                    )
+
+            if type_ == "gate_check":
+                rule = str(meta.get("rule") or "").lower()
+                if rule == "min_tokens":
+                    passed_val = meta.get("passed")
+                    passed = bool(passed_val) if isinstance(passed_val, bool) else str(passed_val).lower() in {"1", "true", "yes"}
+                    if not passed:
+                        parent_id = data.get("parent_id") or data.get("id")
+                        _add_hint(
+                            "commit_blocked_min_tokens",
+                            "warn",
+                            "Gate rejected on min_tokens.",
+                            [parent_id],
+                        )
+
+            if type_ == "tts_end":
+                last_tts_end = record
+
+            if type_ == "vad_gate_open":
+                reason = str(meta.get("reason") or "").lower()
+                if "mask" in reason and last_tts_end is not None:
+                    dt = (data.get("t_rel_ms") or 0) - (last_tts_end.data.get("t_rel_ms") or 0)
+                    if dt <= 3000:
+                        _add_hint(
+                            "post_tts_hold_overlap",
+                            "warn",
+                            "User speech during post-TTS hold; early audio masked.",
+                            [last_tts_end.data.get("id"), data.get("id")],
+                        )
+
+            if type_ == "tts_metrics":
+                first_byte = _numeric(meta.get("first_byte_ms"))
+                if first_byte is not None and first_byte > 600:
+                    parent_id = data.get("parent_id") or data.get("id")
+                    _add_hint(
+                        "tts_slow",
+                        "warn",
+                        "TTS first-byte latency above 600ms.",
+                        [parent_id],
+                    )
+
+            if type_ == "queue_depth":
+                depth = _as_int(meta.get("depth"))
+                watermark = _as_int(meta.get("watermark"))
+                threshold = watermark if watermark is not None else 8
+                if depth is not None and depth >= threshold:
+                    _add_hint(
+                        "queue_pressure",
+                        "warn",
+                        "Mic or TTS queue hit high-water; possible backpressure.",
+                        [data.get("id")],
+                    )
+
+            if type_ == "state_snapshot":
+                queue_val = _as_int(meta.get("queue"))
+                if queue_val is not None and queue_val >= 8:
+                    anchor = data.get("parent_id") or data.get("id")
+                    _add_hint(
+                        "queue_pressure",
+                        "warn",
+                        "Mic or TTS queue hit high-water; possible backpressure.",
+                        [anchor],
+                    )
+
+            if type_ == "asr_error":
+                last_asr_error = record
+            elif type_ == "recover_ok" and last_asr_error is not None:
+                _add_hint(
+                    "asr_recovered",
+                    "info",
+                    "ASR error then recovery succeeded.",
+                    [last_asr_error.data.get("id"), data.get("id")],
+                )
+                last_asr_error = None
+
+        def _event_time(event_id: str) -> int:
+            record = event_index.get(event_id)
+            if not record:
+                return 0
+            value = record.data.get("t_rel_ms")
+            return int(value) if isinstance(value, int) else int(value or 0)
+
+        hints.sort(key=lambda hint: min(_event_time(anchor) for anchor in hint["anchors"]))
+        return hints
 
 
 __all__ = ["FlowStore"]
