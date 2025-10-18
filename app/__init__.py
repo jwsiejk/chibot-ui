@@ -45,6 +45,23 @@ def admin_console():
     if not is_admin_email((email or "").strip().lower()):
         abort(403)
     return _rt("admin_console.html")
+
+
+@core_bp.get("/admin/flow")
+def admin_flow_console():
+    from .utils.admin import is_admin_email
+    from .security_state import get_user
+    from flask import abort, render_template as _rt, session as _sess, request as _req
+
+    email = (
+        (_sess.get("user") or {}).get("email")
+        or _sess.get("email")
+        or _req.headers.get("X-User-Email")
+        or (get_user() or "")
+    )
+    if not is_admin_email((email or "").strip().lower()):
+        abort(403)
+    return _rt("admin_flow.html")
 def create_app():
     app = Flask(
         __name__,

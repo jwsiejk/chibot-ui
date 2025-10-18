@@ -63,6 +63,30 @@ def test_flow_export_ndjson(admin_env):
     assert len(body) >= 2
 
 
+def test_flow_sessions_endpoint(admin_env):
+    store = FlowStore()
+    store.emit("sess-a", "flow", "session", "session_open", "system")
+    store.emit("sess-b", "flow", "session", "session_open", "system")
+    store.emit("sess-b", "transition", "turn", "turn_start", "system")
+
+    client = flask_app.test_client()
+    resp = client.get("/api/v1/flow/sessions", headers=admin_env)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert any(item["session_id"] == "sess-a" for item in data["sessions"])
+    assert any(item["session_id"] == "sess-b" for item in data["sessions"])
+
+    resp_filtered = client.get(
+        "/api/v1/flow/sessions",
+        query_string={"q": "sess-b", "limit": "1"},
+        headers=admin_env,
+    )
+    assert resp_filtered.status_code == 200
+    filtered = resp_filtered.get_json()
+    assert len(filtered["sessions"]) == 1
+    assert filtered["sessions"][0]["session_id"] == "sess-b"
+
+
 def test_flow_admin_guard():
     client = flask_app.test_client()
     resp = client.get("/api/v1/flow/trace", query_string={"session_id": "nope"})

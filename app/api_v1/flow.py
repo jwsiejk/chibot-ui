@@ -81,6 +81,19 @@ def flow_catalog():
     return jsonify({"catalog": FLOW_EVENT_CATALOG})
 
 
+@bp.get("/flow/sessions")
+def flow_sessions():
+    _require_admin()
+
+    search_value = _normalize_str(request.args.get("q") or request.args.get("query"))
+    limit_value = _parse_int(request.args.get("limit"), name="limit", minimum=0)
+
+    store = FlowStore()
+    limit = limit_value if limit_value is not None else 50
+    sessions = store.sessions(query=search_value, limit=limit)
+    return jsonify({"sessions": sessions})
+
+
 @bp.get("/flow/trace")
 def flow_trace():
     _require_admin()

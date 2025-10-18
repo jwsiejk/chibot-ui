@@ -259,6 +259,49 @@ class FlowStore:
                 "next_since_ms": next_since,
             }
 
+    def sessions(
+        self,
+        *,
+        query: Optional[str] = None,
+        limit: Optional[int] = 50,
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            needle = (query or "").strip().lower()
+            filtered: List[Dict[str, Any]] = []
+            for bucket in self._sessions.values():
+                if needle and needle not in bucket.session_id.lower():
+                    continue
+
+                event_count = len(bucket.events)
+                last_record = bucket.events[-1] if event_count else None
+                last_rel_ms = last_record.data.get("t_rel_ms") if last_record else 0
+                last_type = last_record.data.get("type") if last_record else None
+                last_phase = last_record.data.get("phase") if last_record else None
+                last_who = last_record.data.get("who") if last_record else None
+                last_event_id = last_record.data.get("id") if last_record else None
+
+                filtered.append(
+                    {
+                        "session_id": bucket.session_id,
+                        "started_at": bucket.started_at_iso,
+                        "event_count": event_count,
+                        "last_event_ms": last_rel_ms or 0,
+                        "last_type": last_type,
+                        "last_phase": last_phase,
+                        "last_who": last_who,
+                        "last_event_id": last_event_id,
+                    }
+                )
+
+            filtered.sort(
+                key=lambda item: (item["last_event_ms"], item["event_count"], item["session_id"]),
+                reverse=True,
+            )
+
+            if limit is not None and limit >= 0:
+                return filtered[: limit or 0] if limit == 0 else filtered[:limit]
+            return filtered
+
     def get(self, session_id: str, event_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             bucket = self._sessions.get(session_id)
