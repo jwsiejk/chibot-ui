@@ -125,7 +125,7 @@ function _updateAssistantPhaseFromDetail(detail = {}) {
       state.assistantReady = true;
       state.lastAssistantReadyAt = _now();
     } else if (phase === 'speaking' || phase === 'tts') {
-      state.assistantPhase = TurnState.Speaking.toLowerCase();
+      state.assistantPhase = 'assistant_speaking';
       state.assistantReady = false;
     } else if (phase === 'thinking') {
       state.assistantPhase = TurnState.Thinking.toLowerCase();

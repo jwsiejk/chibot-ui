@@ -56,7 +56,7 @@ export function updateAssistantPhaseFromDetail(ctx, detail = {}, nowProvider = D
       ctx.assistantReady = true;
       ctx.lastAssistantReadyAt = resolveNow();
     } else if (phase === 'speaking' || phase === 'tts') {
-      ctx.assistantPhase = TurnState.Speaking.toLowerCase();
+      ctx.assistantPhase = 'assistant_speaking';
       ctx.assistantReady = false;
     } else if (phase === 'thinking') {
       ctx.assistantPhase = TurnState.Thinking.toLowerCase();

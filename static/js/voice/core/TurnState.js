@@ -1,8 +1,10 @@
 export const TurnState = Object.freeze({
-  Ready: 'Ready',
-  Speaking: 'Speaking',
-  Decay: 'Decay',
+  Idle: 'Idle',
   Listening: 'Listening',
-  Recording: 'Recording',
+  Confirming: 'Confirming',
+  Committing: 'Committing',
+  AssistantSpeaking: 'AssistantSpeaking',
+  PostTTSHold: 'PostTTSHold',
+  Ready: 'Ready',
   Thinking: 'Thinking',
 });

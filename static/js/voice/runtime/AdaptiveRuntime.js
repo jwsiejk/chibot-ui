@@ -140,6 +140,9 @@ function schedulePostTtsRearm(ctx) {
     ctx.state.vadShouldRearmAfterTts = false;
     ctx.state.vadSuppressedForTts = false;
     clearPostTtsRearm(ctx);
+    if (!ctx.state.manualGate) {
+      markReady(ctx, 'post_tts_release');
+    }
     return;
   }
   clearPostTtsRearm(ctx);
@@ -147,6 +150,7 @@ function schedulePostTtsRearm(ctx) {
   const delay = Math.max(0, Math.min(POST_TTS_HOLD_MAX_MS, holdMs));
   if (delay <= 0) {
     ctx.state.vadShouldRearmAfterTts = false;
+    markReady(ctx, 'post_tts_hold_elapsed');
     rearmLocalVad(ctx);
     return;
   }
@@ -156,12 +160,17 @@ function schedulePostTtsRearm(ctx) {
     ctx.state.ttsRearmTimer = null;
     ctx.state.ttsHoldUntilMs = 0;
     ctx.state.vadShouldRearmAfterTts = false;
+    markReady(ctx, 'post_tts_hold_elapsed');
     rearmLocalVad(ctx);
   }, delay);
 }
 
 function handleTtsPlaybackStarted(ctx, detail) {
   if (!ctx?.state) return;
+  dispatchTurnEvent(ctx, TurnEvent.TtsStarted, {
+    reason: normalizeVadLabel(detail?.state) || 'tts_started',
+    detail,
+  });
   clearPostTtsRearm(ctx);
   ctx.state.ttsSuppressionMode = resolveSuppressionMode(detail);
   if (!policyAllowLocalVad()) {
@@ -190,9 +199,13 @@ function handleTtsPlaybackStarted(ctx, detail) {
 
 function handleTtsPlaybackEnded(ctx) {
   if (!ctx?.state) return;
+  dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason: 'tts_ended' });
   if (!ctx.state.vadShouldRearmAfterTts) {
     ctx.state.vadSuppressedForTts = false;
     clearPostTtsRearm(ctx);
+    if (!ctx.state.manualGate) {
+      markReady(ctx, 'post_tts_release');
+    }
     return;
   }
   schedulePostTtsRearm(ctx);
@@ -521,19 +534,140 @@ const resolveSnrBoost = (ctx, baseSnrDb = 3.5) => {
     return 0;
   }
 };
-const setState = (ctx, stateName, detail) => {
+const TurnEvent = Object.freeze({
+  Reset: 'reset',
+  VadArmed: 'vad_armed',
+  SpeechStart: 'speech_start',
+  SpeechEnd: 'speech_end',
+  CommitStarted: 'commit_started',
+  TurnClosed: 'turn_closed',
+  TtsStarted: 'tts_started',
+  TtsEnded: 'tts_ended',
+  Ready: 'ready',
+});
+
+const applyTurnState = (ctx, stateName, detail = {}) => {
+  if (!ctx?.state) return stateName;
+  const previous = ctx.state.turnState || TurnState.Idle;
+  if (previous === stateName) {
+    return stateName;
+  }
   ctx.state.turnState = stateName;
   const ts = Date.now();
-  const baseDetail = detail && typeof detail === 'object' ? { ...detail } : {};
-  emitVoiceEvent('state', {
+  const reason = typeof detail?.reason === 'string' && detail.reason
+    ? detail.reason
+    : null;
+  const payload = {
     state: stateName,
+    from: previous,
     ts_ms: ts,
     sessionId: ctx.sessionId || null,
-    ...baseDetail,
+  };
+  if (reason) {
+    payload.reason = reason;
+  }
+  if (detail && typeof detail === 'object' && 'detail' in detail) {
+    payload.detail = detail.detail;
+  }
+  emitVoiceEvent('state', payload);
+  voiceLog('info', 'EVT_STATE', {
+    ts_ms: ts,
+    session_id: ctx.sessionId || null,
+    turn_id: ctx.state?.activeTurnId || null,
+    from: previous,
+    to: stateName,
+    reason: reason || null,
   });
   if (stateName === TurnState.Ready) {
     logReadyState(ctx);
   }
+  return stateName;
+};
+
+const dispatchTurnEvent = (ctx, event, detail = {}) => {
+  if (!ctx?.state) {
+    return TurnState.Idle;
+  }
+  const current = ctx.state.turnState || TurnState.Idle;
+  const reason = typeof detail?.reason === 'string' && detail.reason
+    ? detail.reason
+    : event;
+  const payload = { reason };
+  if (detail && typeof detail === 'object' && 'detail' in detail) {
+    payload.detail = detail.detail;
+  }
+  const forceReady = detail?.force === true;
+
+  switch (event) {
+    case TurnEvent.Reset:
+      ctx.state.readyPending = false;
+      return applyTurnState(ctx, TurnState.Idle, payload);
+    case TurnEvent.VadArmed:
+      if ([TurnState.Idle, TurnState.Ready, TurnState.PostTTSHold].includes(current) || detail?.force) {
+        ctx.state.readyPending = false;
+        return applyTurnState(ctx, TurnState.Listening, payload);
+      }
+      return current;
+    case TurnEvent.SpeechStart:
+      if (current === TurnState.AssistantSpeaking) {
+        return current;
+      }
+      ctx.state.readyPending = true;
+      return applyTurnState(ctx, TurnState.Confirming, payload);
+    case TurnEvent.SpeechEnd:
+      if (current === TurnState.Confirming) {
+        ctx.state.readyPending = false;
+        return applyTurnState(ctx, TurnState.Listening, payload);
+      }
+      return current;
+    case TurnEvent.CommitStarted:
+      ctx.state.readyPending = true;
+      return applyTurnState(ctx, TurnState.Committing, payload);
+    case TurnEvent.TurnClosed:
+      if (current === TurnState.Confirming) {
+        ctx.state.readyPending = false;
+        return applyTurnState(ctx, TurnState.Listening, payload);
+      }
+      return current;
+    case TurnEvent.TtsStarted:
+      ctx.state.readyPending = true;
+      return applyTurnState(ctx, TurnState.AssistantSpeaking, payload);
+    case TurnEvent.TtsEnded:
+      if (current === TurnState.PostTTSHold) {
+        ctx.state.readyPending = true;
+        return current;
+      }
+      if (current === TurnState.AssistantSpeaking || current === TurnState.Committing) {
+        ctx.state.readyPending = true;
+        return applyTurnState(ctx, TurnState.PostTTSHold, payload);
+      }
+      return current;
+    case TurnEvent.Ready:
+      if (!ctx.state.readyPending && !forceReady) {
+        return current;
+      }
+      if (current === TurnState.Ready) {
+        return current;
+      }
+      ctx.state.readyPending = false;
+      ctx.state.readyForTurnSeq = ctx.state.turnSeq;
+      return applyTurnState(ctx, TurnState.Ready, payload);
+    default:
+      return current;
+  }
+};
+
+const markReady = (ctx, reason = 'ready', opts = {}) => {
+  const detail = { reason };
+  if (opts && typeof opts === 'object') {
+    if ('detail' in opts) {
+      detail.detail = opts.detail;
+    }
+    if (opts.force === true) {
+      detail.force = true;
+    }
+  }
+  dispatchTurnEvent(ctx, TurnEvent.Ready, detail);
 };
 
 const isTtsMaskActive = (ctx) => {
@@ -586,7 +720,7 @@ const ensureCtx = () => {
     config,
     sessionId,
     state: {
-      turnState: TurnState.Ready, recording: false, vadArmed: false,
+      turnState: TurnState.Idle, recording: false, vadArmed: false,
       vadBoostDb: 0, vadNoiseBaselineDb: null, greetGateActive: false, greetGatePhase: 'idle',
       greetGateWaiters: [], manualBargeInUsed: false,
       bargeConfirmActive: false, bargeConfirmUntil: 0,
@@ -602,6 +736,8 @@ const ensureCtx = () => {
       preCommitASRFeed: false,
       vadMasked: false,
       pendingCommitReason: null,
+      readyPending: false,
+      readyForTurnSeq: 0,
       asr: initAsrState(),
       dualVadCloseTimer: null,
       dualVadLogSnapshot: null,
@@ -693,7 +829,7 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
     ctx.ttsEndedAtMs = nowMs();
     ctx.ttsMask.clear();
     stopMaskLogging(ctx);
-    logReadyState(ctx);
+    markReady(ctx, 'assistant_ready', { detail });
     return true;
   }
 
@@ -1060,6 +1196,7 @@ const openTurn = async (ctx, reason = 'speech_commit') => {
   ctx.state.turnSeq = (ctx.state.turnSeq || 0) + 1;
   const turnId = ctx.state.turnSeq;
   ctx.state.activeTurnId = turnId;
+  dispatchTurnEvent(ctx, TurnEvent.CommitStarted, { reason });
   logPreCommitMode(ctx, 'streaming', { reason: 'turn_open' });
   const ts = Date.now();
   emitVoiceEvent('turn_open', {
@@ -1269,7 +1406,7 @@ function finalizeTurnClose(ctx, reason = 'dual_vad_quiet', resetReason = reason)
   ctx.evidenceGate.reset(resetReason);
   ctx.shadowBuffer.clear();
   ctx.audio.lastTimecode = null;
-  setState(ctx, TurnState.Listening);
+  dispatchTurnEvent(ctx, TurnEvent.TurnClosed, { reason });
 }
 
 function attemptCloseWithReason(ctx, reason = 'dual_vad_quiet', resetReason = reason) {
@@ -1325,6 +1462,10 @@ function shouldCommitTurn(ctx) {
   if (!ctx?.state) return false;
   if (ctx.state.turnOpen) return false;
   if (ctx.state.ttsPlaying || ctx.state.manualGate) return false;
+  const phase = ctx.state.turnState || TurnState.Idle;
+  if (phase === TurnState.AssistantSpeaking || phase === TurnState.PostTTSHold) {
+    return false;
+  }
   if (!dualVadEnabled(ctx)) {
     return true;
   }
@@ -1349,6 +1490,10 @@ function shouldCommitTurn(ctx) {
 
 function maybeCommitSpeech(ctx, reason = 'speech_commit') {
   if (!ctx?.state) return null;
+  const phase = ctx.state.turnState || TurnState.Idle;
+  if (phase === TurnState.AssistantSpeaking || phase === TurnState.PostTTSHold) {
+    return null;
+  }
   if (ctx.state.turnOpen) {
     ctx.state.pendingCommitReason = null;
     return null;
@@ -1453,7 +1598,7 @@ const handleSpeechStart = async (ctx, detail) => {
   clearDualVadTimer(ctx);
   ctx.state.bargeConfirmActive = true;
   ctx.state.bargeConfirmUntil = nowMs() + BARGE_CONFIRM_MS;
-  setState(ctx, TurnState.Recording, { detail });
+  dispatchTurnEvent(ctx, TurnEvent.SpeechStart, { reason: 'speech_start', detail });
   const stats = ctx.shadowBuffer.stats();
   ctx.evidenceGate.start({ startedAt: nowMs(), detail, bufferedMs: stats.durationMs, bufferedBytes: stats.totalBytes });
   emitVoiceEvent('speech_start', detail);
@@ -1475,7 +1620,7 @@ const handleSpeechEnd = async (ctx, detail) => {
   if (attemptCloseWithReason(ctx, 'vad_end', 'vad_end')) {
     return;
   }
-  setState(ctx, TurnState.Listening);
+  dispatchTurnEvent(ctx, TurnEvent.SpeechEnd, { reason: 'speech_end', detail });
   scheduleDualVadTimer(ctx);
 };
 
@@ -1530,7 +1675,7 @@ const ensureVad = (ctx, opts = {}) => {
   ctx.state.vadArmed = true;
   ctx.state.vadSuppressedForTts = false;
   ctx.state.vadShouldRearmAfterTts = false;
-  setState(ctx, TurnState.Listening);
+  dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason: 'vad_armed' });
 };
 
 const teardownVad = (ctx) => {
@@ -1595,7 +1740,7 @@ export function disarmVAD() {
   ctx.state.pttHeld = false;
   ctx.state.hasOpenedTurn = false;
   stopMaskLogging(ctx);
-  setState(ctx, TurnState.Ready);
+  dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: 'manual_disarm' });
 }
 
 export function isRecording() {
@@ -1674,7 +1819,7 @@ export function forceBargeInStart(meta = {}) {
     }).catch(() => {});
   }
 
-  setState(ctx, TurnState.Recording, { reason: 'manual_start' });
+  dispatchTurnEvent(ctx, TurnEvent.SpeechStart, { reason: 'manual_start' });
   emitVoiceEvent('barge_in_start', meta);
 
   const open = openTurn(ctx, 'manual_start');
@@ -1717,7 +1862,9 @@ export function forceBargeInEnd(opts = {}) {
     if (ctx.state.turnOpen) {
       closeTurn(ctx, reason);
     }
-    setState(ctx, TurnState.Listening, { reason });
+    dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason });
+    markReady(ctx, reason, { force: true });
+    dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason, force: true });
   }
 
   if (released) {

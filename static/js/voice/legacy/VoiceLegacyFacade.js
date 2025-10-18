@@ -271,8 +271,8 @@ export function onTtsStart(ctx = {}) {
   const nowFn = resolveNowFn(ctx.now);
   ctxState.ttsPlaying = true;
   ctxState.assistantReady = false;
-  ctxState.assistantPhase = typeof TurnState?.Speaking === 'string'
-    ? TurnState.Speaking.toLowerCase()
+  ctxState.assistantPhase = typeof TurnState?.AssistantSpeaking === 'string'
+    ? 'assistant_speaking'
     : 'speaking';
   ctxState.postTtsHoldUntil = nowFn() + POST_TTS_HOLDOFF_MS;
   if (typeof mask.start === 'function') {
