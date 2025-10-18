@@ -548,6 +548,7 @@ const dispatchTurnEvent = (ctx, event, detail = {}) => {
   if (!ctx?.state) {
     return TurnState.Idle;
   }
+
   const current = ctx.state.turnState || TurnState.Idle;
   const reason = typeof detail?.reason === 'string' && detail.reason
     ? detail.reason
@@ -556,65 +557,80 @@ const dispatchTurnEvent = (ctx, event, detail = {}) => {
   if (detail && typeof detail === 'object' && 'detail' in detail) {
     payload.detail = detail.detail;
   }
-  const forceReady = detail?.force === true;
+
+  const force = detail?.force === true;
+  let next = current;
 
   switch (event) {
     case TurnEvent.Reset:
       ctx.state.readyPending = false;
-      return applyTurnState(ctx, TurnState.Idle, payload);
+      next = TurnState.Idle;
+      break;
     case TurnEvent.VadArmed:
-      if ([TurnState.Idle, TurnState.Ready, TurnState.PostTTSHold].includes(current) || detail?.force) {
+      if (force || [TurnState.Idle, TurnState.Ready, TurnState.PostTTSHold].includes(current)) {
         ctx.state.readyPending = false;
-        return applyTurnState(ctx, TurnState.Listening, payload);
+        next = TurnState.Listening;
       }
-      return current;
+      break;
     case TurnEvent.SpeechStart:
-      if (current === TurnState.AssistantSpeaking) {
-        return current;
+      if (current !== TurnState.AssistantSpeaking || force) {
+        ctx.state.readyPending = true;
+        next = TurnState.Confirming;
       }
-      ctx.state.readyPending = true;
-      return applyTurnState(ctx, TurnState.Confirming, payload);
+      break;
     case TurnEvent.SpeechEnd:
       if (current === TurnState.Confirming) {
         ctx.state.readyPending = false;
-        return applyTurnState(ctx, TurnState.Listening, payload);
+        next = TurnState.Listening;
       }
-      return current;
+      break;
     case TurnEvent.CommitStarted:
       ctx.state.readyPending = true;
-      return applyTurnState(ctx, TurnState.Committing, payload);
+      next = TurnState.Committing;
+      break;
     case TurnEvent.TurnClosed:
       if (current === TurnState.Confirming) {
         ctx.state.readyPending = false;
-        return applyTurnState(ctx, TurnState.Listening, payload);
+        next = TurnState.Listening;
+      } else if (current === TurnState.Committing) {
+        ctx.state.readyPending = true;
       }
-      return current;
+      break;
     case TurnEvent.TtsStarted:
       ctx.state.readyPending = true;
-      return applyTurnState(ctx, TurnState.AssistantSpeaking, payload);
+      next = TurnState.AssistantSpeaking;
+      break;
     case TurnEvent.TtsEnded:
-      if (current === TurnState.PostTTSHold) {
+      if (current === TurnState.AssistantSpeaking || current === TurnState.Committing || force) {
         ctx.state.readyPending = true;
-        return current;
+        next = TurnState.PostTTSHold;
       }
-      if (current === TurnState.AssistantSpeaking || current === TurnState.Committing) {
-        ctx.state.readyPending = true;
-        return applyTurnState(ctx, TurnState.PostTTSHold, payload);
-      }
-      return current;
+      break;
     case TurnEvent.Ready:
-      if (!ctx.state.readyPending && !forceReady) {
-        return current;
+      if (!ctx.state.readyPending && !force) {
+        break;
       }
-      if (current === TurnState.Ready) {
-        return current;
+      if (current === TurnState.AssistantSpeaking && !force) {
+        break;
+      }
+      if (current === TurnState.Ready && ctx.state.readyPending && !force) {
+        ctx.state.readyPending = false;
+        ctx.state.readyForTurnSeq = ctx.state.turnSeq;
+        break;
       }
       ctx.state.readyPending = false;
       ctx.state.readyForTurnSeq = ctx.state.turnSeq;
-      return applyTurnState(ctx, TurnState.Ready, payload);
+      next = TurnState.Ready;
+      break;
     default:
-      return current;
+      break;
   }
+
+  if (next === current) {
+    return current;
+  }
+
+  return applyTurnState(ctx, next, payload);
 };
 
 const markReady = (ctx, reason = 'ready', opts = {}) => {
@@ -1147,6 +1163,19 @@ const scheduleSafetyClose = (ctx) => {
 
 const openTurn = async (ctx, reason = 'speech_commit') => {
   if (ctx.state.turnOpen) return;
+  const phase = ctx.state.turnState || TurnState.Idle;
+  const commitBlocked = [TurnState.AssistantSpeaking, TurnState.PostTTSHold].includes(phase)
+    || (phase !== TurnState.Confirming && reason !== 'manual_start');
+  if (commitBlocked) {
+    voiceLog('info', '[turn] commit_blocked_state', {
+      ts_ms: Date.now(),
+      session_id: ctx.sessionId || null,
+      turn_id: ctx.state?.activeTurnId || null,
+      phase,
+      reason,
+    });
+    return;
+  }
   await ensureTransport(ctx);
   ctx.state.turnOpen = true;
   ctx.state.hasOpenedTurn = true;
@@ -1229,6 +1258,7 @@ const closeTurn = (ctx, reason = 'vad_end') => {
   } catch {}
   scheduleSafetyClose(ctx);
   onTurnClosed(ctx);
+  dispatchTurnEvent(ctx, TurnEvent.TurnClosed, { reason, detail: { stats } });
 };
 
 const median = (values) => {
@@ -1366,7 +1396,6 @@ function finalizeTurnClose(ctx, reason = 'dual_vad_quiet', resetReason = reason)
   ctx.evidenceGate.reset(resetReason);
   ctx.shadowBuffer.clear();
   ctx.audio.lastTimecode = null;
-  dispatchTurnEvent(ctx, TurnEvent.TurnClosed, { reason });
 }
 
 function attemptCloseWithReason(ctx, reason = 'dual_vad_quiet', resetReason = reason) {
@@ -1421,11 +1450,11 @@ function logDualVadDecision(ctx, {
 function shouldCommitTurn(ctx) {
   if (!ctx?.state) return false;
   if (ctx.state.turnOpen) return false;
-  if (ctx.state.ttsPlaying || ctx.state.manualGate) return false;
   const phase = ctx.state.turnState || TurnState.Idle;
-  if (phase === TurnState.AssistantSpeaking || phase === TurnState.PostTTSHold) {
+  if (phase !== TurnState.Confirming) {
     return false;
   }
+  if (ctx.state.ttsPlaying || ctx.state.manualGate) return false;
   if (!dualVadEnabled(ctx)) {
     return true;
   }
@@ -1451,30 +1480,23 @@ function shouldCommitTurn(ctx) {
 function maybeCommitSpeech(ctx, reason = 'speech_commit') {
   if (!ctx?.state) return null;
   const phase = ctx.state.turnState || TurnState.Idle;
-  if (phase === TurnState.AssistantSpeaking || phase === TurnState.PostTTSHold) {
-    return null;
-  }
   if (ctx.state.turnOpen) {
     ctx.state.pendingCommitReason = null;
     return null;
   }
 
-  if (!dualVadEnabled(ctx)) {
-    if (!reason && !ctx.state.pendingCommitReason) {
-      return null;
-    }
+  if ([TurnState.AssistantSpeaking, TurnState.PostTTSHold].includes(phase)) {
     if (reason && !ctx.state.pendingCommitReason) {
       ctx.state.pendingCommitReason = reason;
     }
-    if (!shouldCommitTurn(ctx)) {
-      return null;
-    }
-    const commitReason = reason || ctx.state.pendingCommitReason || 'speech_commit';
-    ctx.state.pendingCommitReason = null;
-    return openTurn(ctx, commitReason);
+    return null;
   }
 
   if (reason && !ctx.state.pendingCommitReason) {
+    ctx.state.pendingCommitReason = reason;
+  }
+
+  if (!ctx.state.pendingCommitReason) {
     ctx.state.pendingCommitReason = reason;
   }
 
@@ -1532,12 +1554,17 @@ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', a
   const score = (w1 * snr01) + (w2 * voiced) + (w3 * asrConf);
   const commitScore = Number.isFinite(evidenceCfg.commit_score) ? evidenceCfg.commit_score : 1.0;
 
+  let commitReason = null;
   if (score >= commitScore) {
-    openTurn(ctx);
+    ctx.evidenceGate.satisfy('score');
+    commitReason = 'evidence_gate_score';
   }
   if (result.shouldCommit) {
     ctx.evidenceGate.satisfy('commit');
-    const pending = maybeCommitSpeech(ctx, 'evidence_gate_commit');
+    commitReason = 'evidence_gate_commit';
+  }
+  if (commitReason) {
+    const pending = maybeCommitSpeech(ctx, commitReason);
     if (pending && typeof pending.then === 'function') {
       pending.catch(() => {});
     }
@@ -1822,7 +1849,7 @@ export function forceBargeInEnd(opts = {}) {
     if (ctx.state.turnOpen) {
       closeTurn(ctx, reason);
     }
-    dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason });
+    dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason, force: true });
     markReady(ctx, reason, { force: true });
     dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason, force: true });
   }
