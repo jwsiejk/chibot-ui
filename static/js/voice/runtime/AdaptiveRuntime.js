@@ -8,6 +8,7 @@ import {
   flushShadowBuffer,
   getConfig,
 } from '../core/index.js';
+import { ensurePolicy, getPolicySync, pget as policyGet, POLICY_NOT_SET } from '../policy/index.js';
 import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
 import { emitVoiceEvent } from '../ui/Events.js';
 import {
@@ -52,6 +53,150 @@ const clampRange = (value, min, max) => {
   const numeric = Number.isFinite(value) ? value : 0;
   return Math.min(max, Math.max(min, numeric));
 };
+
+const POLICY_SUPPRESS_ALL = 'all';
+const POLICY_SUPPRESS_NONE = 'none';
+const POLICY_SUPPRESS_GREET_ONLY = 'greet_only';
+const POST_TTS_HOLD_MAX_MS = 200;
+
+const policyString = (path, fallback) => {
+  const value = policyGet(path, fallback);
+  return typeof value === 'string' ? value.trim().toLowerCase() : fallback;
+};
+
+const policyBoolean = (path, fallback) => {
+  const value = policyGet(path, POLICY_NOT_SET);
+  if (value === POLICY_NOT_SET) {
+    return fallback;
+  }
+  return value === true;
+};
+
+const policyAllowLocalVad = () => policyBoolean('voice_runtime.barge_in.allow_local_vad', true);
+
+const resolveSuppressionMode = (detail = {}) => {
+  const raw = policyString('voice_runtime.barge_in.suppress_during_tts', POLICY_SUPPRESS_ALL);
+  if (raw === POLICY_SUPPRESS_NONE) {
+    return POLICY_SUPPRESS_NONE;
+  }
+  if (raw === POLICY_SUPPRESS_GREET_ONLY) {
+    return isGreetingDetail(detail) ? POLICY_SUPPRESS_ALL : POLICY_SUPPRESS_NONE;
+  }
+  return POLICY_SUPPRESS_ALL;
+};
+
+function isGreetingDetail(detail = {}) {
+  try {
+    if (detail == null || typeof detail !== 'object') {
+      return false;
+    }
+    if (detail.prime === true || detail?.channel?.prime === true) {
+      return true;
+    }
+    const tokens = [detail.phase, detail?.channel?.phase, detail.state, detail.label, detail.type]
+      .map((value) => (typeof value === 'string' ? value.toLowerCase() : ''))
+      .filter(Boolean);
+    return tokens.some((token) => token.includes('greet') || token.includes('welcome'));
+  } catch {
+    return false;
+  }
+}
+
+function clearPostTtsRearm(ctx) {
+  if (!ctx?.state) return;
+  const timer = ctx.state.ttsRearmTimer;
+  if (timer) {
+    try { clearTimeout(timer); } catch {}
+  }
+  ctx.state.ttsRearmTimer = null;
+  ctx.state.ttsHoldUntilMs = 0;
+}
+
+function rearmLocalVad(ctx) {
+  if (!ctx?.state) return;
+  ctx.state.vadSuppressedForTts = false;
+  if (!policyAllowLocalVad()) {
+    ctx.state.vadShouldRearmAfterTts = false;
+    return;
+  }
+  if (ctx.state.manualGate) {
+    return;
+  }
+  if (ctx.state.vadArmed) {
+    return;
+  }
+  try {
+    ensureVad(ctx, {});
+  } catch (err) {
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[voice][vad] rearm failed', err);
+    }
+  }
+}
+
+function schedulePostTtsRearm(ctx) {
+  if (!ctx?.state) return;
+  if (!ctx.state.vadShouldRearmAfterTts || ctx.state.manualGate) {
+    ctx.state.vadShouldRearmAfterTts = false;
+    ctx.state.vadSuppressedForTts = false;
+    clearPostTtsRearm(ctx);
+    return;
+  }
+  clearPostTtsRearm(ctx);
+  const holdMs = resolvePostTtsHoldMs(ctx);
+  const delay = Math.max(0, Math.min(POST_TTS_HOLD_MAX_MS, holdMs));
+  if (delay <= 0) {
+    ctx.state.vadShouldRearmAfterTts = false;
+    rearmLocalVad(ctx);
+    return;
+  }
+  ctx.state.vadSuppressedForTts = true;
+  ctx.state.ttsHoldUntilMs = nowMs() + delay;
+  ctx.state.ttsRearmTimer = setTimeout(() => {
+    ctx.state.ttsRearmTimer = null;
+    ctx.state.ttsHoldUntilMs = 0;
+    ctx.state.vadShouldRearmAfterTts = false;
+    rearmLocalVad(ctx);
+  }, delay);
+}
+
+function handleTtsPlaybackStarted(ctx, detail) {
+  if (!ctx?.state) return;
+  clearPostTtsRearm(ctx);
+  ctx.state.ttsSuppressionMode = resolveSuppressionMode(detail);
+  if (!policyAllowLocalVad()) {
+    if (ctx.state.vadArmed) {
+      teardownVad(ctx);
+      ctx.state.vadRecording = false;
+    }
+    ctx.state.vadShouldRearmAfterTts = false;
+    ctx.state.vadSuppressedForTts = true;
+    return;
+  }
+  if (ctx.state.ttsSuppressionMode === POLICY_SUPPRESS_NONE) {
+    ctx.state.vadShouldRearmAfterTts = false;
+    ctx.state.vadSuppressedForTts = false;
+    return;
+  }
+  const wasArmed = !!ctx.state.vadArmed;
+  ctx.state.vadShouldRearmAfterTts = wasArmed;
+  ctx.state.vadSuppressedForTts = wasArmed;
+  ctx.state.ttsHoldStartedMs = nowMs();
+  if (wasArmed) {
+    teardownVad(ctx);
+    ctx.state.vadRecording = false;
+  }
+}
+
+function handleTtsPlaybackEnded(ctx) {
+  if (!ctx?.state) return;
+  if (!ctx.state.vadShouldRearmAfterTts) {
+    ctx.state.vadSuppressedForTts = false;
+    clearPostTtsRearm(ctx);
+    return;
+  }
+  schedulePostTtsRearm(ctx);
+}
 
 const PRE_ROLL_MS = 550,
   RECORD_TIMESLICE_MS = 150,
@@ -273,6 +418,11 @@ const nowMs = () => {
 };
 
 const resolvePostTtsHoldMs = (ctx) => {
+  const policyHold = policyGet('voice_runtime.barge_in.post_tts_hold_ms', POLICY_NOT_SET);
+  if (policyHold !== POLICY_NOT_SET && Number.isFinite(policyHold)) {
+    const numeric = Math.max(0, Number(policyHold));
+    return Math.min(POST_TTS_HOLD_MAX_MS, numeric);
+  }
   const cfg = ctx?.config?.tts ?? {};
   let value;
   if (Number.isFinite(cfg.mask_decay_ms)) {
@@ -290,7 +440,7 @@ const resolvePostTtsHoldMs = (ctx) => {
   if (value <= 0) {
     return 0;
   }
-  return Math.min(200, value);
+  return Math.min(POST_TTS_HOLD_MAX_MS, value);
 };
 
 const setManualGate = (ctx, active) => {
@@ -300,6 +450,11 @@ const setManualGate = (ctx, active) => {
   ctx.state.manualPttActive = value;
   ctx.state.pendingCommitReason = null;
   clearDualVadTimer(ctx);
+  if (value) {
+    clearPostTtsRearm(ctx);
+    ctx.state.vadShouldRearmAfterTts = false;
+    ctx.state.vadSuppressedForTts = false;
+  }
 };
 
 const logReadyState = (ctx) => {
@@ -396,6 +551,19 @@ const ensureCtx = () => {
     return ctxRef.current;
   }
   const config = getConfig();
+  let policySnapshot = null;
+  try {
+    policySnapshot = getPolicySync();
+  } catch {
+    policySnapshot = null;
+  }
+  ensurePolicy().then((policy) => {
+    try {
+      if (ctxRef.current) {
+        ctxRef.current.policy = policy;
+      }
+    } catch {}
+  }).catch(() => {});
   let sessionId = null;
   try {
     sessionId = getSID();
@@ -439,6 +607,12 @@ const ensureCtx = () => {
       dualVadLogSnapshot: null,
       lastDualVadLogTs: 0,
       lastPreCommitFeedMode: 'shadow_only',
+      ttsRearmTimer: null,
+      ttsHoldUntilMs: 0,
+      vadShouldRearmAfterTts: false,
+      vadSuppressedForTts: false,
+      ttsSuppressionMode: POLICY_SUPPRESS_NONE,
+      ttsHoldStartedMs: 0,
       evidenceGate, shadowBuffer, ttsMask,
     },
     audio: {
@@ -451,6 +625,7 @@ const ensureCtx = () => {
     shadowBuffer,
     ttsMask,
     maskLogTimer: null,
+    policy: policySnapshot,
   };
 
   registerTtsListener(ctx);
@@ -499,6 +674,7 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
     ctx.state.ttsPlaying = true;
     ctx.ttsEndedAtMs = undefined;
     ctx.ttsMask.start();
+    handleTtsPlaybackStarted(ctx, detail);
     startMaskLogging(ctx);
     return true;
   }
@@ -507,6 +683,7 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
     ctx.state.ttsPlaying = false;
     ctx.ttsEndedAtMs = nowMs();
     ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
+    handleTtsPlaybackEnded(ctx);
     startMaskLogging(ctx);
     return true;
   }
@@ -1351,6 +1528,8 @@ const ensureVad = (ctx, opts = {}) => {
   });
   audio.vad.start();
   ctx.state.vadArmed = true;
+  ctx.state.vadSuppressedForTts = false;
+  ctx.state.vadShouldRearmAfterTts = false;
   setState(ctx, TurnState.Listening);
 };
 
@@ -1359,6 +1538,7 @@ const teardownVad = (ctx) => {
   if (audio.vad) { try { audio.vad.stop(); } catch {} }
   audio.vad = null;
   ctx.state.vadArmed = false;
+  ctx.state.vadRecording = false;
 };
 
 const ensureGreetGate = (ctx, active) => {
@@ -1405,6 +1585,9 @@ export async function armVAD(stream = null, opts = {}) {
 
 export function disarmVAD() {
   const ctx = ensureCtx();
+  clearPostTtsRearm(ctx);
+  ctx.state.vadShouldRearmAfterTts = false;
+  ctx.state.vadSuppressedForTts = false;
   teardownVad(ctx); stopRecorder(ctx);
   closeTurn(ctx, 'manual_disarm');
   teardownTransport(ctx);
@@ -1428,6 +1611,9 @@ export function bargeIn() {
   ctx.state.bargeConfirmUntil = 0;
   ctx.state.pendingCommitReason = null;
   clearDualVadTimer(ctx);
+  clearPostTtsRearm(ctx);
+  ctx.state.vadShouldRearmAfterTts = false;
+  ctx.state.vadSuppressedForTts = false;
   try { stopPlayback(); } catch {}
   if (ctx.state.turnOpen) {
     closeTurn(ctx, 'manual_barge_preempt');
@@ -1468,6 +1654,9 @@ export function forceBargeInStart(meta = {}) {
   }
 
   ctx.state.pttHeld = true;
+  clearPostTtsRearm(ctx);
+  ctx.state.vadShouldRearmAfterTts = false;
+  ctx.state.vadSuppressedForTts = false;
   setManualGate(ctx, true);
 
   bargeIn();
@@ -1503,6 +1692,12 @@ export function forceBargeInEnd(opts = {}) {
   ctx.state.pttHeld = stillHeld;
   if (!stillHeld) {
     setManualGate(ctx, false);
+  }
+  if (!stillHeld) {
+    clearPostTtsRearm(ctx);
+    ctx.state.vadShouldRearmAfterTts = false;
+    ctx.state.vadSuppressedForTts = false;
+    rearmLocalVad(ctx);
   }
   ctx.state.ttsPlaying = false;
   ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });

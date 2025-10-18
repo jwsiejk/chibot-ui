@@ -24,6 +24,7 @@ from app.services.streaming_asr.deepgram_client import (
 from app.config import load_settings
 from app.security.ws_token import verify as verify_ws_token
 from app.db import db
+from app.policy.loader import load_policy
 from app.services.greet_idempotency import clear_greet_turn_cache
 from app.metrics import ws_metrics
 
@@ -1353,6 +1354,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     auto_commit_when_ready = True
     ws_configured = False
     try:
+        policy = load_policy()
+    except Exception:
+        policy = {}
+    if isinstance(policy, dict):
+        cfg["interaction_policy"] = policy
+    else:
+        policy = {}
+    try:
         runtime_cfg = db.get_config()
         if isinstance(runtime_cfg, dict):
             manual_feature_enabled = bool(
@@ -1382,6 +1391,32 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             )
     except Exception:
         pass
+    voice_policy = policy.get("voice_runtime") if isinstance(policy, dict) else {}
+    confirm_policy = (
+        voice_policy.get("confirm_window") if isinstance(voice_policy, dict) else {}
+    )
+    confirm_first_policy = (
+        confirm_policy.get("first_turn") if isinstance(confirm_policy, dict) else {}
+    )
+    confirm_warm_policy = (
+        confirm_policy.get("warm_turn") if isinstance(confirm_policy, dict) else {}
+    )
+    snr_policy = voice_policy.get("snr_threshold_db") if isinstance(voice_policy, dict) else {}
+    barge_policy = voice_policy.get("barge_in") if isinstance(voice_policy, dict) else {}
+    auto_commit_policy = (
+        voice_policy.get("auto_commit") if isinstance(voice_policy, dict) else {}
+    )
+
+    if isinstance(auto_commit_policy, dict):
+        enabled_value = auto_commit_policy.get("enabled")
+        if isinstance(enabled_value, bool) and not enabled_value:
+            auto_commit_when_ready = False
+
+    if isinstance(barge_policy, dict):
+        allow_ptt = barge_policy.get("allow_ptt")
+        if isinstance(allow_ptt, bool) and not allow_ptt:
+            manual_feature_enabled = False
+
     cfg["feature_manual_barge_in"] = manual_feature_enabled
     cfg["barge_in_mode_manual"] = manual_mode_manual_only
     cfg["auto_commit_when_ready"] = auto_commit_when_ready
@@ -1666,16 +1701,45 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             return
         if manual_button_down[0] or manual_turn_active[0]:
             return
+        min_ms = confirm_min_ms
+        max_ms_local = confirm_max_ms
+        snr_threshold = confirm_snr_db
+        policy_until_asr_ready = False
+        try:
+            first_turn_active = not completed_llm_turns
+        except Exception:
+            first_turn_active = False
+        policy_source = (
+            confirm_first_policy if first_turn_active else confirm_warm_policy
+        )
+        if isinstance(policy_source, dict):
+            raw_min = policy_source.get("min_ms")
+            if isinstance(raw_min, (int, float)):
+                min_ms = max(0, int(raw_min))
+            raw_max = policy_source.get("max_ms")
+            if isinstance(raw_max, (int, float)):
+                max_ms_local = max(min_ms, int(raw_max))
+            if "until_asr_ready" in policy_source:
+                policy_until_asr_ready = bool(policy_source.get("until_asr_ready"))
+        if isinstance(snr_policy, dict):
+            key = "first_turn" if first_turn_active else "warm_turn"
+            raw_snr = snr_policy.get(key)
+            if isinstance(raw_snr, (int, float)):
+                snr_threshold = float(raw_snr)
         window = ConfirmWindow(
-            min_duration_ms=confirm_min_ms,
-            max_duration_ms=confirm_max_ms,
+            min_duration_ms=min_ms,
+            max_duration_ms=max_ms_local,
             max_gap_ms=confirm_gap_ms,
             min_tokens=confirm_min_tokens,
             min_confidence=confirm_min_conf,
-            snr_threshold_db=confirm_snr_db,
+            snr_threshold_db=snr_threshold,
             snr_slack_db=confirm_snr_slack_db,
             snr_enabled=True,
         )
+        try:
+            window.policy_until_asr_ready = policy_until_asr_ready  # type: ignore[attr-defined]
+        except Exception:
+            pass
         window.start(now_ts)
         confirm_window_ref[0] = window
         local_vad_meta_sent[0] = False
@@ -1684,13 +1748,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             "confirm_start",
             sid=sid,
             turn_id=turn_id_ref[0],
-            min_ms=confirm_min_ms,
-            max_ms=confirm_max_ms,
+            min_ms=min_ms,
+            max_ms=max_ms_local,
             max_gap_ms=confirm_gap_ms,
             min_tokens=confirm_min_tokens,
             min_confidence=confirm_min_conf,
-            snr_threshold_db=confirm_snr_db,
+            snr_threshold_db=snr_threshold,
             snr_slack_db=confirm_snr_slack_db,
+            policy_until_asr_ready=policy_until_asr_ready,
         )
         _schedule_confirm_timeout(window)
 
