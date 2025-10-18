@@ -1,533 +1,534 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 216dbe064a2bf562f66791503af2d46186c91479..561999cca0bf83baf897e97454ab9cf0ec48542f 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -1,47 +1,48 @@
- # app/services/streaming.py — Production-grade assistant framing
- # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
- # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
+diff --git a/app/ws/schema_v1.py b/app/ws/schema_v1.py
+index ec8e1db6d150d7b7bcc7b5389c5879c838caa212..cc279fde2ffd7ec6ad0baae7fc44cf24a9658157 100644
+--- a/app/ws/schema_v1.py
++++ b/app/ws/schema_v1.py
+@@ -3,50 +3,51 @@
+ Deepgram-aligned WS schema (Phase 1 → 2).
  
+ Client -> Server (text JSON):
+  - {"type":"Configure", ...}
+  - {"type":"KeepAlive"}
+  - {"type":"CloseStream"}
+  - {"type":"greet"}                         # WS-only greet alias
+  - {"type":"user_msg","text":"..."}         # WS-only user text turn
+    # (Also accept legacy aliases: "User","UserText","UserMessage","UserUtterance","UserTextMessage")
+ 
+ Client -> Server (binary):
+  - raw Opus frames
+ 
+ Server -> Client:
+  - {"type":"Results","channel":{"alternatives":[{"transcript":"","confidence":0.0}],"is_final":true},"turn_id":N}
+  - {"type":"UtteranceEnd","turn_id":N}
+  - {"type":"KeepAliveAck"}
+  - {"type":"Error","code":"...","message":"..."}
+ """
  from __future__ import annotations
- from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable, Mapping
- import base64
- import hashlib
- import threading, time as _t
- import os
- import re
- import copy
- import random
+ from typing import Any, Dict
  
- from ..security_state import get_profile, get_user
- from ..session_state import (
-     get as get_session_state,
-     note_utterance_end,
-     set_phase,
-     should_emit_phase,
- )
- from .llm.flow_wrapper import make_llm_flow_tracker
-+from .tts.flow_wrapper import make_tts_flow_tracker
- def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
-     # 1) Profile name
+ _ALLOWED_TYPES = {
+     "Configure", "KeepAlive", "CloseStream",
+     "greet", "user_msg", "AudioStart", "AudioStop",
++    "Control",
+     # Legacy aliases
+     "User", "UserText", "UserMessage", "UserUtterance", "UserTextMessage",
+ }
+ 
+ def parse_client_json(text: str) -> Dict[str, Any]:
+     import json
      try:
-         prof = get_profile() or {}
-         name = str(prof.get("name") or "").strip()
-         if name:
-             return name.split()[0]
+         obj = json.loads(text or "{}")
      except Exception:
-         pass
-     # 2) Email to first name
-     email = None
-     try:
-         email = (meta or {}).get("email")
-     except Exception:
-         email = None
-     if not email:
+         raise ValueError("bad_json")
+     t = (obj.get("type") or "").strip()
+     if t not in _ALLOWED_TYPES:
+         raise ValueError("bad_message_type")
+ 
+     if t == "Configure":
+         enc = (obj.get("encoding") or "").lower()
+         if enc and enc not in {"opus", "pcm"}:
+             raise ValueError("bad_encoding")
+         sr = obj.get("sample_rate")
+         if sr is not None and (not isinstance(sr, int) or sr <= 0):
+             raise ValueError("bad_sample_rate")
+         ch = obj.get("channels")
+         if ch is not None and (not isinstance(ch, int) or ch <= 0):
+             raise ValueError("bad_channels")
+     return obj
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 3a7cc27e7fe75080edf3f8baf727c1cc6cec1fe5..3871af2c40b3031c1ba1bb6626cda80f68770862 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -1484,99 +1484,168 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     if isinstance(barge_policy, dict):
+         allow_ptt = barge_policy.get("allow_ptt")
+         if isinstance(allow_ptt, bool) and not allow_ptt:
+             manual_feature_enabled = False
+         allow_local_vad_value = barge_policy.get("allow_local_vad")
+         if isinstance(allow_local_vad_value, bool):
+             local_vad_allowed = allow_local_vad_value
+         require_asr_value = barge_policy.get("require_asr_evidence")
+         if isinstance(require_asr_value, bool):
+             barge_require_asr_evidence = require_asr_value
+         suppress_mode_value = barge_policy.get("suppress_during_tts")
+         if isinstance(suppress_mode_value, str):
+             suppress_mode_value = suppress_mode_value.strip().lower()
+             if suppress_mode_value:
+                 barge_suppress_mode = suppress_mode_value
+         post_hold_value = barge_policy.get("post_tts_hold_ms")
+         if isinstance(post_hold_value, (int, float)):
+             barge_post_tts_hold_ms = max(0, int(post_hold_value))
+ 
+     cfg["feature_manual_barge_in"] = manual_feature_enabled
+     cfg["barge_in_mode_manual"] = manual_mode_manual_only
+     cfg["auto_commit_when_ready"] = auto_commit_when_ready
+     loop = asyncio.get_running_loop()
+     barge = BargeState()
+     last_barge_phase = [None]
++    barge_pause_meta_ref: List[Optional[Dict[str, Any]]] = [None]
++
++    def _emit_transition_event(
++        type_: str,
++        *,
++        meta: Optional[Dict[str, Any]] = None,
++        phase: str = "barge",
++    ) -> None:
++        try:
++            flow_emit(
++                session_id=sid,
++                level="transition",
++                phase=phase,
++                type=type_,
++                who="system",
++                meta=meta,
++            )
++        except Exception:
++            pass
++
++    def _current_tts_active() -> bool:
++        try:
++            current_turn_id = _current_assistant_turn_id(sid)
++        except Exception:
++            current_turn_id = None
++        tts_state, _ = _lookup_tts_state(sid, current_turn_id)
++        return _is_tts_active(tts_state)
++
++    def _set_barge_pause_meta(
++        src: str,
++        *,
++        tts_active: Optional[bool] = None,
++        extra: Optional[Dict[str, Any]] = None,
++    ) -> None:
++        base: Dict[str, Any] = {}
++        existing = barge_pause_meta_ref[0]
++        if isinstance(existing, dict) and existing.get("src") == src:
++            base.update(existing)
++        base["src"] = src
++        if extra:
++            for key, value in extra.items():
++                if key == "src":
++                    continue
++                base[key] = value
++        if tts_active is None:
++            tts_active = _current_tts_active()
++        try:
++            base["tts_active"] = bool(tts_active)
++        except Exception:
++            base["tts_active"] = bool(tts_active)
++        barge_pause_meta_ref[0] = base
+ 
+     def _send_barge_state(phase: str) -> None:
+         if not phase:
+             return
++        prev = last_barge_phase[0]
++        if phase == "paused":
++            pause_meta = dict(barge_pause_meta_ref[0] or {})
++            pause_meta.setdefault("src", "unknown")
++            if "tts_active" not in pause_meta:
++                pause_meta["tts_active"] = _current_tts_active()
++            _emit_transition_event("barge_in", meta=pause_meta)
++        elif prev == "paused":
++            if phase == "assistant_speaking":
++                resume_meta: Dict[str, Any] = {}
++                pause_meta = barge_pause_meta_ref[0] or {}
++                src_val = pause_meta.get("src") if isinstance(pause_meta, dict) else None
++                if src_val:
++                    resume_meta["src"] = src_val
++                resume_meta["tts_active"] = _current_tts_active()
++                _emit_transition_event("barge_resume", meta=resume_meta or None)
++            barge_pause_meta_ref[0] = None
++
+         frame = {"type": "state", "phase": phase}
          try:
-             email = get_user() or None
-         except Exception:
-             email = None
-     if isinstance(email, str) and "@" in email:
-         first = email.split("@",1)[0].split(".")[0].replace("_"," ").replace("-", " ").strip()
-         if first:
-             return first.title()
-     return "there"
-@@ -2961,82 +2962,93 @@ def _tts_text_markers(text: str) -> Dict[str, Any]:
-     if isinstance(text, str):
-         normalized = text
-     else:
-         normalized = str(text or "")
-     try:
-         encoded = normalized.encode("utf-8")
-     except Exception:
-         encoded = str(normalized).encode("utf-8", "ignore")
-     digest = hashlib.sha256(encoded).hexdigest()
-     return {
-         "text_hash": digest[:16],
-         "text_len": len(normalized),
-     }
- 
- 
- def schedule_tts_audio(session_id: str,
-                        text: str,
-                        turn_id: str | None = None,
-                        correlation_user_msg_id: Optional[str] = None,
-                        audio_bytes: Optional[bytes] = None,
-                        chunk_bytes: int = 8192,
-                        delay_ms: int = 0,
-                        on_complete: Optional[Callable[[], None]] = None,
-                        *,
-                        on_post_silence: Optional[Callable[[], None]] = None,
--                       post_silence_origin: Optional[str] = None) -> bool:
-+                       post_silence_origin: Optional[str] = None,
-+                       flow_phase: Optional[str] = None,
-+                       flow_turn_id: Optional[str] = None,
-+                       flow_include_turn_id: bool = True) -> bool:
-     """Synthesize TTS for `text` and stream as WS frames.
-     Emits frames like:
-         {
-           "type": "assistant_audio",
-           "turn_id": <str or null>,
-           "mime": "<audio mime>",
-           "audio_chunks": ["<base64>", ...],
-           "is_last": <bool>
-         }
-     After the final chunk, an explicit:
-         { "type": "UtteranceEnd", "turn_id": <str or null> }
-     is broadcast to mark audio-complete.
-     Non-blocking: runs in a background thread. Returns True if audio streaming
-     was scheduled, False if the request was ignored (e.g., audio disabled).
-     """
-     if not text:
-         return False
-     cfg = db.get_config()
-     feature_audio = bool(cfg.get("feature_audio", True))
- 
-     # Track TTS lifecycle for admin truth
-     tts_tbl = db.memory.setdefault('tts_status', {})
-     sess_tbl = tts_tbl.setdefault(session_id, {})
-     turn_key = str(turn_id) if turn_id is not None else 'greet'
-     state = sess_tbl.setdefault(turn_key, {'started': False, 'first_chunk': False, 'done': False, 'error': None})
- 
-     completion_event: Optional[threading.Event] = None
- 
-     safe_turn_id = str(turn_id) if turn_id is not None else None
-     text_markers = _tts_text_markers(text)
-     audio_override = audio_bytes is not None
-+    phase_for_flow = flow_phase if flow_phase else ("turn" if safe_turn_id is not None else "greet")
-+    meta_turn_id = flow_turn_id if flow_turn_id is not None else safe_turn_id
-+    tracker = make_tts_flow_tracker(
-+        session_id=session_id,
-+        phase=phase_for_flow,
-+        turn_id=meta_turn_id,
-+        include_turn_id=flow_include_turn_id,
-+    )
- 
-     def _log(kind: str, **fields: Any) -> None:
-         payload: Dict[str, Any] = {
-             "session_id": session_id,
-             "sid": session_id,
-         }
-         if safe_turn_id is not None:
-             payload["turn_id"] = safe_turn_id
-         if correlation_user_msg_id:
-             payload["correlation_user_msg_id"] = correlation_user_msg_id
-         payload.update(text_markers)
-         payload["audio_override"] = audio_override
-         payload.update(fields)
-         try:
-             _jlog(kind, **payload)
+             bus.broadcast(sid, frame)
          except Exception:
              pass
  
-     state_snapshot = dict(state)
-     level = "warning" if state_snapshot.get('started') or state_snapshot.get('done') else "info"
-     _log("tts.schedule", level=level, state=state_snapshot, feature_audio=feature_audio)
- 
-     if not feature_audio:
-         return False
- 
-@@ -3094,50 +3106,52 @@ def schedule_tts_audio(session_id: str,
-                 _admin_emit('tts:error', **synth_error_payload)
-             except Exception:
-                 pass
-             _broadcast_admin_ws_event('tts:error', synth_error_payload)
-             return False
-     else:
-         provider_label = "prebaked"
-         _log("tts.provider_selected", provider=provider_label, override=True)
-         _log("tts.synth.start", desired_mime=desired_mime, chunk_bytes=chunk_bytes, override=True)
-         total_audio_bytes = len(audio_payload or b"")
-         state['started'] = True
-         _log(
-             "tts.synth.done",
-             desired_mime=desired_mime,
-             chunk_bytes=chunk_bytes,
-             dur_ms=0,
-             audio_bytes=total_audio_bytes,
-             override=True,
-         )
- 
-     if not audio_payload:
-         state['error'] = 'empty_audio'
-         _log("tts.synth.error", error='empty_audio', override=audio_override)
-         return False
- 
-+    tracker.queue()
-+
-     completion_event = _prepare_tts_completion_event(session_id, turn_key)
- 
-     payload_for_stream = audio_payload
- 
-     def _run():
-         total_audio_bytes = 0
-         chunk_count = 0
-         chunk_bytes_sent = 0
-         canceled = False
-         truncated = False
-         utterance_end_sent = False
-         max_frames = 256  # guardrail
- 
-         def _emit_utterance_end(reason: str) -> None:
-             nonlocal utterance_end_sent
-             if utterance_end_sent:
-                 _log("tts.utterance_end.skip", reason=reason, already_sent=True)
-                 return
-             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
-             end_payload = {
-                 "session_id": session_id,
-                 "turn_id": safe_turn_id,
-                 "reason": reason,
-             }
-             try:
-@@ -3151,50 +3165,52 @@ def schedule_tts_audio(session_id: str,
-             utterance_end_sent = True
- 
-         stream_payload = audio_bytes if audio_override else payload_for_stream
          try:
-             # Small pacing delay if requested
-             if delay_ms and delay_ms > 0:
-                 _t.sleep(max(0, delay_ms) / 1000.0)
- 
-             total_audio_bytes = len(stream_payload or b"")
- 
-             start_payload = {"session_id": session_id, "turn_id": safe_turn_id}
+-            prev = last_barge_phase[0]
+             _emit_barge_admin_events(sid, phase, prev)
+             last_barge_phase[0] = phase
+         except Exception:
+             pass
+         try:
+             if loop.is_closed():
+                 return
+             payload = dict(frame)
              try:
-                 _admin_emit('tts:start', **start_payload)
-             except Exception:
-                 pass
-             _broadcast_admin_ws_event('tts:start', start_payload)
- 
-             start_frame: Dict[str, Any] = {"type": "TTS_START", "turn_id": safe_turn_id}
-             if correlation_user_msg_id:
-                 start_frame["correlation_user_msg_id"] = correlation_user_msg_id
-             try:
-                 bus.broadcast(session_id, start_frame)
-             except Exception:
-                 pass
- 
-+            tracker.start()
-+
-             # Chunk and broadcast
-             mv = memoryview(stream_payload)
-             idx = 0
-             first_sent = False
- 
-             while idx < len(mv):
-                 # stop early if canceled
-                 try:
-                     from ..ws.bus import bus as _bus_ref
-                     if _bus_ref.is_canceled(session_id, safe_turn_id):
-                         canceled = True
-                         _log(
-                             "tts.chunks.cancelled",
-                             chunk_count=chunk_count,
-                             bytes_sent=chunk_bytes_sent,
-                             total_bytes=total_audio_bytes,
-                         )
-                         break
-                 except Exception:
-                     pass
- 
-                 next_idx = idx + int(chunk_bytes)
-                 part = bytes(mv[idx: next_idx])
-                 idx = next_idx
-                 chunk_len = len(part)
-@@ -3259,50 +3275,52 @@ def schedule_tts_audio(session_id: str,
-                 "tts.chunks.summary",
-                 chunk_count=chunk_count,
-                 bytes_sent=chunk_bytes_sent,
-                 total_bytes=total_audio_bytes,
-                 status=status,
-                 max_frames=max_frames,
-             )
-         finally:
-             # Always mark tts done (admin), and always signal UtteranceEnd if we haven't already.
-             done_payload = {
-                 "session_id": session_id,
-                 "turn_id": str(turn_id) if turn_id else None,
-             }
-             try:
-                 _admin_emit('tts:done', **done_payload)
-             except Exception:
-                 pass
-             _broadcast_admin_ws_event('tts:done', done_payload)
- 
-             _emit_utterance_end("finalizer")
-             try:
-                 note_utterance_end(session_id)
-             except Exception:
-                 pass
- 
-+            tracker.end()
-+
-             state['done'] = True
- 
-             if on_complete is not None:
-                 try:
-                     on_complete()
-                 except Exception:
-                     pass
- 
-             if on_post_silence is not None:
-                 try:
-                     nudges.run_after_silence(
-                         session_id,
-                         on_post_silence,
-                         reason=post_silence_origin or "assistant_audio",
-                     )
-                 except Exception:
-                     try:
-                         on_post_silence()
-                     except Exception:
-                         pass
- 
-             try:
-                 if completion_event is not None:
-                     _signal_tts_completion(session_id, turn_key)
-             except Exception:
-@@ -3483,51 +3501,58 @@ def run_ws_greet(session_id: str) -> str:
-         if idle_armed:
-             return
-         idle_armed = True
-         _emit_ready_once()
-         nudges.arm_idle_timers(session_id, reason="greet_idle")
- 
-     audio_scheduled = False
- 
-     # TTS: use first assistant_chunk text if present (feature_audio gating inside schedule_tts_audio)
-     try:
-         text_for_tts = next((fr.get("text") for fr in frames if fr.get("type") == "assistant_chunk"), "")
-         if text_for_tts:
-             # Pass scrubbed text to TTS (extra safety)
-             safe_text = _scrub_debug_stamps(text_for_tts)
-             try:
-                 _jlog(
-                     "tts.pre_schedule",
-                     session_id=session_id,
-                     sid=session_id,
-                     turn_id=tid,
-                     flow="greet",
-                     **_tts_text_markers(safe_text),
+                 running = asyncio.get_running_loop()
+             except RuntimeError:
+                 running = None
+             if running is loop:
+                 asyncio.create_task(_ws_send_json(send, payload))
+             else:
+                 loop.call_soon_threadsafe(
+                     asyncio.create_task, _ws_send_json(send, payload)
                  )
-             except Exception:
-                 pass
--            audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_arm_idle_once)
-+            audio_scheduled = schedule_tts_audio(
-+                session_id,
-+                safe_text,
-+                turn_id=tid,
-+                on_complete=_arm_idle_once,
-+                flow_phase="greet",
-+                flow_include_turn_id=False,
-+            )
-             if not audio_scheduled:
-                 try:
-                     _jlog(
-                         "tts.greet_audio_skipped",
-                         session_id=session_id,
-                         sid=session_id,
-                         turn_id=tid,
-                         flow="greet",
-                         reason="schedule_failed",
-                         **_tts_text_markers(safe_text),
-                     )
-                 except Exception:
-                     pass
-                 _arm_idle_once()
-     except Exception:
-         pass
+         except Exception:
+             pass
  
-     # UI nudges (only emit if the assistant frames didn't already do so)
-     try:
-         if not audio_scheduled:
-             _arm_idle_once()
-         if not suggestions_already_sent:
-             greet_legacy = hygienic_suggestions("")
-             base_suggestions = merge_suggestions(greet_legacy)
-             _log_suggestions_made(
-diff --git a/app/services/tts/__init__.py b/app/services/tts/__init__.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..da1948ef9ce1883337692f288f23303057182552
---- /dev/null
-+++ b/app/services/tts/__init__.py
-@@ -0,0 +1,5 @@
-+"""TTS service utilities."""
+     buf = TurnBuffer()
+     dg: Optional[DeepgramClient] = None
+     rx_task: Optional[asyncio.Task] = None
+     dg_connect_task: Optional[asyncio.Task] = None
+     dg_state: str = "closed"
+     turn_id_ref = [0]
+     pending_final_turns: Deque[int] = deque()
+     completed_llm_turns: Set[int] = set()
+     synthetic_final_turns: Set[int] = set()
+     final_seen = [False]
+     asr_seen_partial = [False]
+     asr_partial_counter = [0]
+     current_assistant_turn_ref: List[Optional[Any]] = [None]
+     manual_commit_pending = [False]
+     manual_button_down = [False]
+     manual_turn_active = [False]
++    ptt_down_emitted = [False]
+     # Runtime flags to coordinate commit + VAD gating
+     assistant_speaking = [False]
+     tts_mask_active = [False]
+     tts_mask_mode = ["none"]
+     tts_mask_release_task: List[Optional[asyncio.Task]] = [None]
+     tts_mask_release_deadline = [0.0]
+     pending_confirm_request: List[Optional[Dict[str, Any]]] = [None]
+     asr_ready = [False]
+     local_vad_open = [False]    
+     turn_commit_mode_ref: List[str] = ["vad"]
+     last_ready_signal_after: List[Optional[str]] = [None]
+     active_turn_mode_ref: List[str] = ["vad"]
+     turn_timing: Dict[str, List[float]] = {
+         "start": [0.0],
+         "dg_open": [0.0],
+         "first_partial": [0.0],
+         "final": [0.0],
+     }
+     turn_finish_logged = [False]
+ 
+     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
+     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
+ 
+     # Turn-scoped buffering + state
+     buffered_chunks: Deque[bytes] = deque()
+@@ -1663,50 +1732,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         try:
+             current = int(turn_id_ref[0] or 0)
+         except Exception:
+             current = 0
+         if current > 0:
+             return current
+         try:
+             seq = int(getattr(buf, "turn_seq", 0))
+         except Exception:
+             seq = 0
+         return seq + 1 if seq >= 0 else 0
+ 
+     def _cancel_confirm_timeout() -> None:
+         task = confirm_timeout_task[0]
+         if task:
+             task.cancel()
+             confirm_timeout_cancelled.append(task)
+         confirm_timeout_task[0] = None
+ 
+     def _emit_local_vad_signal(now_ts: float) -> None:
+         if local_vad_meta_sent[0]:
+             return
+         if _manual_mode_active():
+             return
+         local_vad_meta_sent[0] = True
++        if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
++            _set_barge_pause_meta("client_vad")
+         _on_local_vad_start()
+         if callable(final_guard_local_vad_ref[0]):
+             with contextlib.suppress(Exception):
+                 final_guard_local_vad_ref[0]("start")
+         payload = {
+             "type": "meta",
+             "turn_id": turn_id_ref[0],
+             "meta": {"local_vad": "start", "ts": int(now_ts * 1000)},
+         }
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "local_vad_start",
+                 sid=sid,
+                 turn_id=turn_id_ref[0],
+                 ts_ms=int(now_ts * 1000),
+             )
+         with contextlib.suppress(Exception):
+             bus.broadcast(sid, payload)
+         try:
+             if loop.is_closed():
+                 return
+             try:
+                 running = asyncio.get_running_loop()
+             except RuntimeError:
+                 running = None
+@@ -2952,50 +3023,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                         confirm_ms = 420
+                         try:
+                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
+                         except Exception:
+                             confirm_ms = 420
+                         barge_started = False
+                         should_pause = not (
+                             manual_mode_manual_only and commit_mode == "auto_commit"
+                         )
+                         if should_pause:
+                             active_assistant_turn = current_assistant_turn_ref[0]
+                             tts_state, _tts_key = _lookup_tts_state(
+                                 sid, active_assistant_turn
+                             )
+                             if _is_tts_active(tts_state):
+                                 should_pause = False
+                                 try:
+                                     _jlog(
+                                         "barge_skip_tts_active",
+                                         sid=sid,
+                                         turn_hint=turn_hint,
+                                     )
+                                 except Exception:
+                                     pass
+                         if not manual_turn_active[0] and should_pause:
++                            if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
++                                _set_barge_pause_meta("client_vad")
+                             try:
+                                 barge_started = barge.start(
+                                     confirm_ms=confirm_ms,
+                                     on_commit=_on_barge_commit,
+                                     send_state=_send_barge_state,
+                                     auto_commit=False,
+                                 )
+                             except Exception:
+                                 barge_started = False
+                         turn_id_ref[0] = buf.turn_seq + 1
+                         pending_confirm_request[0] = None
+                         if barge_started:
+                             if manual_mode_manual_only:
+                                 try:
+                                     barge.commit(_send_barge_state)
+                                 except Exception:
+                                     pass
+                             else:
+                                 _start_confirm_window(now)
+                         else:
+                             confirm_window_ref[0] = None
+                             local_vad_meta_sent[0] = False
+                             local_vad_open[0] = False
+                         with contextlib.suppress(Exception):
+                             pending_final_turns.append(turn_id_ref[0])
+@@ -3228,95 +3301,197 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                                 )
+                                             )
+                                             _admin_emit(
+                                                 "greet:resp",
+                                                 label="greet:resp",
+                                                 session_id=sid,
+                                                 turn_id=tid,
+                                                 audio_scheduled=audio_on,
+                                             )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "greet_fail", e.__class__.__name__
+                                             ),
+                                         )
+                                 finally:
+                                     post_greet_phase_active[0] = True
+ 
+                             asyncio.create_task(_bg())
+ 
+                         elif t == "Control":
+                             action_raw = obj.get("action")
+                             action = str(action_raw or "").strip().lower()
++                            meta_payload = obj.get("meta")
++                            if not isinstance(meta_payload, dict):
++                                meta_payload = {}
 +
-+from .flow_wrapper import make_tts_flow_tracker
++                            if action == "ptt_down":
++                                tts_active_now = _current_tts_active()
++                                _emit_transition_event(
++                                    "ptt_down",
++                                    meta={"during_tts": bool(tts_active_now)},
++                                    phase="ptt",
++                                )
++                                _set_barge_pause_meta("ptt", tts_active=tts_active_now)
++                                ptt_down_emitted[0] = True
++                                continue
 +
-+__all__ = ["make_tts_flow_tracker"]
-diff --git a/app/services/tts/flow_wrapper.py b/app/services/tts/flow_wrapper.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..bdb5f710d17a25a10c45df12a7ce9efcbc8d7f05
---- /dev/null
-+++ b/app/services/tts/flow_wrapper.py
-@@ -0,0 +1,149 @@
-+"""Flow trace helpers for TTS playback."""
++                            if action == "ptt_up":
++                                tts_active_now = _current_tts_active()
++                                _emit_transition_event(
++                                    "ptt_up",
++                                    meta={"during_tts": bool(tts_active_now)},
++                                    phase="ptt",
++                                )
++                                ptt_down_emitted[0] = False
++                                continue
 +
-+from __future__ import annotations
++                            if action == "vad_gate_open":
++                                reason_val = meta_payload.get("reason")
++                                if reason_val is None:
++                                    reason_val = obj.get("reason")
++                                if isinstance(reason_val, str):
++                                    reason = reason_val.strip().lower()
++                                elif reason_val is not None:
++                                    reason = str(reason_val).strip().lower()
++                                else:
++                                    reason = ""
++                                if not reason:
++                                    reason = "speech"
++                                rms_val = meta_payload.get("rms")
++                                if rms_val is None:
++                                    rms_val = obj.get("rms")
++                                meta_out: Dict[str, Any] = {"reason": reason}
++                                if rms_val is not None:
++                                    try:
++                                        meta_out["rms"] = float(rms_val)
++                                    except Exception:
++                                        pass
++                                _emit_transition_event(
++                                    "vad_gate_open", meta=meta_out, phase="mic"
++                                )
++                                extra_meta = dict(meta_out)
++                                if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
++                                    _set_barge_pause_meta(
++                                        "client_vad",
++                                        extra=extra_meta,
++                                    )
++                                _on_local_vad_start()
++                                continue
 +
-+from dataclasses import dataclass
-+from typing import Optional, Protocol, runtime_checkable
++                            if action == "vad_gate_close":
++                                reason_val = meta_payload.get("reason")
++                                if reason_val is None:
++                                    reason_val = obj.get("reason")
++                                if isinstance(reason_val, str):
++                                    reason = reason_val.strip().lower()
++                                elif reason_val is not None:
++                                    reason = str(reason_val).strip().lower()
++                                else:
++                                    reason = ""
++                                if not reason:
++                                    reason = "silence"
++                                rms_val = meta_payload.get("rms")
++                                if rms_val is None:
++                                    rms_val = obj.get("rms")
++                                meta_out: Dict[str, Any] = {"reason": reason}
++                                if rms_val is not None:
++                                    try:
++                                        meta_out["rms"] = float(rms_val)
++                                    except Exception:
++                                        pass
++                                _emit_transition_event(
++                                    "vad_gate_close", meta=meta_out, phase="mic"
++                                )
++                                _on_local_vad_stop()
++                                continue
 +
-+from app.flow.emit import emit as flow_emit
-+
-+
-+@runtime_checkable
-+class _Tracker(Protocol):
-+    """Protocol describing the minimal TTS flow tracker."""
-+
-+    def queue(self) -> None:
-+        ...
-+
-+    def start(self) -> None:
-+        ...
-+
-+    def end(self) -> None:
-+        ...
-+
-+
-+class _NullTracker:
-+    """No-op tracker when flow context is unavailable."""
-+
-+    __slots__ = ()
-+
-+    def queue(self) -> None:  # noqa: D401 - trivial
-+        """Ignore queue events."""
-+        return None
-+
-+    def start(self) -> None:  # noqa: D401 - trivial
-+        """Ignore start events."""
-+        return None
-+
-+    def end(self) -> None:  # noqa: D401 - trivial
-+        """Ignore end events."""
-+        return None
-+
-+
-+@dataclass
-+class TTSFlowTracker:
-+    """Emit ``tts_*`` flow events for a single synthesis request."""
-+
-+    session_id: str
-+    phase: str
-+    who: str = "system"
-+    turn_id: Optional[str] = None
-+    include_turn_meta: bool = True
-+
-+    _queued: bool = False
-+    _started: bool = False
-+    _ended: bool = False
-+
-+    def _meta(self) -> Optional[dict[str, object]]:
-+        if not self.include_turn_meta or not self.turn_id:
-+            return None
-+        return {"turn_id": self.turn_id}
-+
-+    def queue(self) -> None:
-+        if self._queued:
-+            return
-+        self._queued = True
-+        try:
-+            flow_emit(
-+                session_id=self.session_id,
-+                level="flow",
-+                phase=self.phase,
-+                type="tts_queue",
-+                who=self.who,
-+                meta=self._meta(),
-+            )
-+        except Exception:
-+            pass
-+
-+    def start(self) -> None:
-+        if self._started:
-+            return
-+        self._started = True
-+        try:
-+            flow_emit(
-+                session_id=self.session_id,
-+                level="flow",
-+                phase=self.phase,
-+                type="tts_start",
-+                who=self.who,
-+                meta=self._meta(),
-+            )
-+        except Exception:
-+            pass
-+
-+    def end(self) -> None:
-+        if self._ended or not self._started:
-+            return
-+        self._ended = True
-+        try:
-+            flow_emit(
-+                session_id=self.session_id,
-+                level="flow",
-+                phase=self.phase,
-+                type="tts_end",
-+                who=self.who,
-+                meta=self._meta(),
-+            )
-+        except Exception:
-+            pass
-+
-+
-+def _normalize_turn_id(turn_id: Optional[object]) -> Optional[str]:
-+    if turn_id in (None, ""):
-+        return None
-+    try:
-+        tid = str(turn_id)
-+    except Exception:
-+        return None
-+    return tid or None
-+
-+
-+def make_tts_flow_tracker(
-+    session_id: Optional[object],
-+    *,
-+    phase: Optional[object],
-+    turn_id: Optional[object] = None,
-+    include_turn_id: bool = True,
-+) -> _Tracker:
-+    """Return a ``TTSFlowTracker`` when flow tracing is available."""
-+
-+    try:
-+        session_str = str(session_id)
-+    except Exception:
-+        return _NullTracker()
-+    if not session_str:
-+        return _NullTracker()
-+    try:
-+        phase_str = str(phase or "").strip()
-+    except Exception:
-+        return _NullTracker()
-+    if not phase_str:
-+        return _NullTracker()
-+    normalized_turn = _normalize_turn_id(turn_id) if include_turn_id else _normalize_turn_id(None)
-+    return TTSFlowTracker(
-+        session_id=session_str,
-+        phase=phase_str,
-+        turn_id=normalized_turn,
-+        include_turn_meta=include_turn_id,
-+    )
-+
+                             if action == "barge_in_start":
+                                 if manual_feature_enabled:
+                                     manual_button_down[0] = True
+                                     manual_turn_active[0] = True
+                                     manual_commit_pending[0] = True
+                                     turn_commit_mode_ref[0] = "manual"
+                                     active_turn_mode_ref[0] = "manual"
+                                     _ensure_confirm_closed("manual_start")
+                                     buffered_bytes = _manual_buffered_bytes()
+                                     _manual_log_event(
+                                         "manual_barge_in_start",
+                                         bytes_buffered=buffered_bytes,
+                                         provider_open=dg_state == "open",
+                                     )
+                                     try:
+                                         current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
+                                     except Exception:
+                                         current_assistant_turn_ref[0] = None
++                                    tts_active_now = _current_tts_active()
++                                    if not ptt_down_emitted[0]:
++                                        _emit_transition_event(
++                                            "ptt_down",
++                                            meta={"during_tts": bool(tts_active_now)},
++                                            phase="ptt",
++                                        )
++                                        ptt_down_emitted[0] = True
++                                    _set_barge_pause_meta("ptt", tts_active=tts_active_now)
+                                     if not barge.is_paused():
+                                         try:
+                                             barge.start(
+                                                 confirm_ms=0,
+                                                 on_commit=_on_barge_commit,
+                                                 send_state=_send_barge_state,
+                                                 auto_commit=False,
+                                             )
+                                         except Exception:
+                                             pass
+                                     try:
+                                         barge.commit(_send_barge_state)
+                                     except Exception:
+                                         manual_commit_pending[0] = False
+                                 continue
+                             if action == "barge_in_end":
+                                 if manual_feature_enabled:
+                                     manual_button_down[0] = False
+                                     manual_turn_active[0] = False
+                                     manual_commit_pending[0] = False
+                                     turn_commit_mode_ref[0] = "vad"
+                                     buffered_bytes = _manual_buffered_bytes()
+                                     _manual_log_event(
+                                         "manual_barge_in_end",
+                                         bytes_buffered=buffered_bytes,
+                                         provider_open=dg_state == "open",
+                                     )
++                                    tts_active_now = _current_tts_active()
++                                    if ptt_down_emitted[0]:
++                                        _emit_transition_event(
++                                            "ptt_up",
++                                            meta={"during_tts": bool(tts_active_now)},
++                                            phase="ptt",
++                                        )
++                                    ptt_down_emitted[0] = False
+                                 continue
+                             continue
+ 
+                         elif t == "Configure":
+                             cfg.update(obj or {})
+                             manual_feature_enabled = bool(
+                                 cfg.get("feature_manual_barge_in", manual_feature_enabled)
+                             )
+                             manual_mode_manual_only = bool(
+                                 cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+                             )
+                             auto_commit_when_ready = bool(
+                                 cfg.get("auto_commit_when_ready", auto_commit_when_ready)
+                             )
+                             ws_configured = True
+                             _jlog(
+                                 "ws_configure",
+                                 sid=sid,
+                                 ts_ms=int(time.time() * 1000),
+                                 barge_in_mode_manual=manual_mode_manual_only,
+                                 feature_manual_barge_in=manual_feature_enabled,
+                                 auto_commit_when_ready=auto_commit_when_ready,
+                             )
+                             if not manual_feature_enabled:
+                                 manual_button_down[0] = False

@@ -1506,10 +1506,79 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     loop = asyncio.get_running_loop()
     barge = BargeState()
     last_barge_phase = [None]
+    barge_pause_meta_ref: List[Optional[Dict[str, Any]]] = [None]
+
+    def _emit_transition_event(
+        type_: str,
+        *,
+        meta: Optional[Dict[str, Any]] = None,
+        phase: str = "barge",
+    ) -> None:
+        try:
+            flow_emit(
+                session_id=sid,
+                level="transition",
+                phase=phase,
+                type=type_,
+                who="system",
+                meta=meta,
+            )
+        except Exception:
+            pass
+
+    def _current_tts_active() -> bool:
+        try:
+            current_turn_id = _current_assistant_turn_id(sid)
+        except Exception:
+            current_turn_id = None
+        tts_state, _ = _lookup_tts_state(sid, current_turn_id)
+        return _is_tts_active(tts_state)
+
+    def _set_barge_pause_meta(
+        src: str,
+        *,
+        tts_active: Optional[bool] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        base: Dict[str, Any] = {}
+        existing = barge_pause_meta_ref[0]
+        if isinstance(existing, dict) and existing.get("src") == src:
+            base.update(existing)
+        base["src"] = src
+        if extra:
+            for key, value in extra.items():
+                if key == "src":
+                    continue
+                base[key] = value
+        if tts_active is None:
+            tts_active = _current_tts_active()
+        try:
+            base["tts_active"] = bool(tts_active)
+        except Exception:
+            base["tts_active"] = bool(tts_active)
+        barge_pause_meta_ref[0] = base
 
     def _send_barge_state(phase: str) -> None:
         if not phase:
             return
+        prev = last_barge_phase[0]
+        if phase == "paused":
+            pause_meta = dict(barge_pause_meta_ref[0] or {})
+            pause_meta.setdefault("src", "unknown")
+            if "tts_active" not in pause_meta:
+                pause_meta["tts_active"] = _current_tts_active()
+            _emit_transition_event("barge_in", meta=pause_meta)
+        elif prev == "paused":
+            if phase == "assistant_speaking":
+                resume_meta: Dict[str, Any] = {}
+                pause_meta = barge_pause_meta_ref[0] or {}
+                src_val = pause_meta.get("src") if isinstance(pause_meta, dict) else None
+                if src_val:
+                    resume_meta["src"] = src_val
+                resume_meta["tts_active"] = _current_tts_active()
+                _emit_transition_event("barge_resume", meta=resume_meta or None)
+            barge_pause_meta_ref[0] = None
+
         frame = {"type": "state", "phase": phase}
         try:
             bus.broadcast(sid, frame)
@@ -1517,7 +1586,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             pass
 
         try:
-            prev = last_barge_phase[0]
             _emit_barge_admin_events(sid, phase, prev)
             last_barge_phase[0] = phase
         except Exception:
@@ -1555,6 +1623,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     manual_commit_pending = [False]
     manual_button_down = [False]
     manual_turn_active = [False]
+    ptt_down_emitted = [False]
     # Runtime flags to coordinate commit + VAD gating
     assistant_speaking = [False]
     tts_mask_active = [False]
@@ -1685,6 +1754,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if _manual_mode_active():
             return
         local_vad_meta_sent[0] = True
+        if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
+            _set_barge_pause_meta("client_vad")
         _on_local_vad_start()
         if callable(final_guard_local_vad_ref[0]):
             with contextlib.suppress(Exception):
@@ -2974,6 +3045,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 except Exception:
                                     pass
                         if not manual_turn_active[0] and should_pause:
+                            if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
+                                _set_barge_pause_meta("client_vad")
                             try:
                                 barge_started = barge.start(
                                     confirm_ms=confirm_ms,
@@ -3250,6 +3323,91 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         elif t == "Control":
                             action_raw = obj.get("action")
                             action = str(action_raw or "").strip().lower()
+                            meta_payload = obj.get("meta")
+                            if not isinstance(meta_payload, dict):
+                                meta_payload = {}
+
+                            if action == "ptt_down":
+                                tts_active_now = _current_tts_active()
+                                _emit_transition_event(
+                                    "ptt_down",
+                                    meta={"during_tts": bool(tts_active_now)},
+                                    phase="ptt",
+                                )
+                                _set_barge_pause_meta("ptt", tts_active=tts_active_now)
+                                ptt_down_emitted[0] = True
+                                continue
+
+                            if action == "ptt_up":
+                                tts_active_now = _current_tts_active()
+                                _emit_transition_event(
+                                    "ptt_up",
+                                    meta={"during_tts": bool(tts_active_now)},
+                                    phase="ptt",
+                                )
+                                ptt_down_emitted[0] = False
+                                continue
+
+                            if action == "vad_gate_open":
+                                reason_val = meta_payload.get("reason")
+                                if reason_val is None:
+                                    reason_val = obj.get("reason")
+                                if isinstance(reason_val, str):
+                                    reason = reason_val.strip().lower()
+                                elif reason_val is not None:
+                                    reason = str(reason_val).strip().lower()
+                                else:
+                                    reason = ""
+                                if not reason:
+                                    reason = "speech"
+                                rms_val = meta_payload.get("rms")
+                                if rms_val is None:
+                                    rms_val = obj.get("rms")
+                                meta_out: Dict[str, Any] = {"reason": reason}
+                                if rms_val is not None:
+                                    try:
+                                        meta_out["rms"] = float(rms_val)
+                                    except Exception:
+                                        pass
+                                _emit_transition_event(
+                                    "vad_gate_open", meta=meta_out, phase="mic"
+                                )
+                                extra_meta = dict(meta_out)
+                                if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
+                                    _set_barge_pause_meta(
+                                        "client_vad",
+                                        extra=extra_meta,
+                                    )
+                                _on_local_vad_start()
+                                continue
+
+                            if action == "vad_gate_close":
+                                reason_val = meta_payload.get("reason")
+                                if reason_val is None:
+                                    reason_val = obj.get("reason")
+                                if isinstance(reason_val, str):
+                                    reason = reason_val.strip().lower()
+                                elif reason_val is not None:
+                                    reason = str(reason_val).strip().lower()
+                                else:
+                                    reason = ""
+                                if not reason:
+                                    reason = "silence"
+                                rms_val = meta_payload.get("rms")
+                                if rms_val is None:
+                                    rms_val = obj.get("rms")
+                                meta_out: Dict[str, Any] = {"reason": reason}
+                                if rms_val is not None:
+                                    try:
+                                        meta_out["rms"] = float(rms_val)
+                                    except Exception:
+                                        pass
+                                _emit_transition_event(
+                                    "vad_gate_close", meta=meta_out, phase="mic"
+                                )
+                                _on_local_vad_stop()
+                                continue
+
                             if action == "barge_in_start":
                                 if manual_feature_enabled:
                                     manual_button_down[0] = True
@@ -3268,6 +3426,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
                                     except Exception:
                                         current_assistant_turn_ref[0] = None
+                                    tts_active_now = _current_tts_active()
+                                    if not ptt_down_emitted[0]:
+                                        _emit_transition_event(
+                                            "ptt_down",
+                                            meta={"during_tts": bool(tts_active_now)},
+                                            phase="ptt",
+                                        )
+                                        ptt_down_emitted[0] = True
+                                    _set_barge_pause_meta("ptt", tts_active=tts_active_now)
                                     if not barge.is_paused():
                                         try:
                                             barge.start(
@@ -3295,6 +3462,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         bytes_buffered=buffered_bytes,
                                         provider_open=dg_state == "open",
                                     )
+                                    tts_active_now = _current_tts_active()
+                                    if ptt_down_emitted[0]:
+                                        _emit_transition_event(
+                                            "ptt_up",
+                                            meta={"during_tts": bool(tts_active_now)},
+                                            phase="ptt",
+                                        )
+                                    ptt_down_emitted[0] = False
                                 continue
                             continue
 
