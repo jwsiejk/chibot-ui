@@ -1,602 +1,653 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 8e9aaaca8ae291eaf82df017e5e94efeb0044476..21979ddaca907d31908344a93c3694e14c803418 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -635,77 +635,82 @@ class DeepgramClient:
-         self._final_event: asyncio.Event = asyncio.Event()
-         self._any_result: bool = False
-         self._drain_event: asyncio.Event = asyncio.Event()
-         self._drain_event.set()
-         self._drain_timeout_s: float = float(
-             os.getenv("DG_CLOSE_DRAIN_TIMEOUT_S", "1.5")
-         )
- 
-         # First-chunk guard & timing
-         self._first_real_sent: bool = False
-         self._bytes_forwarded: int = 0
-         self._min_valid_bytes: int = int(os.getenv("DG_MIN_VALID_BYTES", "64"))
-         self._last_chunk_ts: float = 0.0
-         self._last_transcript: str = ""
- 
-         # Tunables
-         self._linger_ms: int = int(
-             os.getenv("DG_LINGER_MS", "800")
-         )  # slightly longer default
-         self._final_wait_s: float = float(os.getenv("DG_FINAL_WAIT_S", "12"))
- 
-         # Open gate
-         self._open_evt: asyncio.Event = asyncio.Event()
-         self._asr_open_emitted: bool = False
-         self._asr_start_emitted: bool = False
-+        self._asr_connect_emitted: bool = False
-+        self._asr_ready_emitted: bool = False
-+        self._backend_ready_observed: bool = False
-         self._ready_observed: bool = False
-         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
-         self._open_gate_warned: bool = False
- 
-         # Keepalive
-         self._keepalive_task: Optional[asyncio.Task] = None
-         self._keepalive_interval: float = float(
-             os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0")
-         )
- 
-         # Optional JSON logger injected by WS layer (ws_asgi)
-         self._jlog = self._cfg.get("_jlog")
- 
-         # Serialize outbound websocket sends to avoid concurrent writer errors
-         self._send_lock = asyncio.Lock()
- 
-         # Per-turn metrics tracking
-         self._turn_counter: int = 0
-         self._turn_current_id: Optional[int] = None
-         self._turn_active: bool = False
-         self._turn_start_ts: float = 0.0
-         self._turn_first_partial_ts: float = 0.0
-         self._turn_final_ts: float = 0.0
-         self._turn_bytes_baseline: int = 0
-         self._turn_metrics_recorded: bool = False
-         self._turn_saw_1011: bool = False
-         self._turn_last_close_code: Optional[int] = None
-+        self._turn_first_partial_emitted: bool = False
-+        self._turn_final_emitted: bool = False
- 
-     def _diag_payload(self, **extra: Any) -> dict:
-         payload: dict[str, Any] = {"provider": "deepgram"}
-         if self._diag_session_id:
-             payload["session_id"] = self._diag_session_id
-         tag = self._url_tag or self._diag_tag_hint
-         if tag:
-             payload["tag"] = tag
-         payload.update(extra)
-         return payload
- 
-     def _emit_diag(self, label: str, **extra: Any) -> None:
-         hook = self._diag_hook
-         if not callable(hook):
-             return
-         payload = self._diag_payload(**extra)
-         try:
-             hook(label, **payload)
-         except TypeError:
-             try:
-                 hook(label, payload)
-             except Exception:
-                 pass
-         except Exception:
-             pass
-@@ -754,131 +759,155 @@ class DeepgramClient:
-                 if isinstance(closed_attr, bool):
-                     return not closed_attr
-             except Exception:
-                 pass
- 
-         return False
- 
-     def is_open(self) -> bool:
-         """Return True if the underlying websocket appears open."""
-         try:
-             return self._ws_is_open()
-         except Exception:
-             return False
- 
-     def _had_result(self) -> bool:
-         """True if any final result has been observed (event-aware)."""
-         if self._any_result:
-             return True
-         if self._final_event.is_set():
-             self._any_result = True
-             return True
-         return False
- 
-     # -- helpers ---------------------------------------------------------------
- 
--    async def _signal_ready(self) -> None:
-+    async def _signal_ready(self, *, backend_ready: bool = False) -> None:
-         self._ready_observed = True
-         if not self._open_evt.is_set():
-             self._open_evt.set()
-         if not self._asr_open_emitted:
-             self._asr_open_emitted = True
-             try:
-                 await self._ev_queue.put({"type": "asr_open"})
-             except Exception:
-                 pass
-+        if backend_ready:
-+            self._backend_ready_observed = True
-+            if not self._asr_ready_emitted:
-+                try:
-+                    await self._emit_flow_event("asr_ready")
-+                finally:
-+                    self._asr_ready_emitted = True
-         await self._maybe_emit_asr_start()
-         # schedule a flush shortly after ASR open (lets DG finish configure)
-         self._schedule_flush(delay=0.0)
- 
-     async def _maybe_emit_asr_start(self) -> None:
-         if self._asr_start_emitted:
-             return
-         if not self._ready_observed or not self._first_real_sent:
-             return
-         self._asr_start_emitted = True
-         self._emit_diag("asr_open", active=True)
- 
-     async def _publish_provider_event(self, event: str, payload: Any) -> None:
-         data: dict[str, Any] = {"type": "provider_event", "event": event or "unknown"}
-         if payload is not None:
-             data["payload"] = payload
-         try:
-             await self._ev_queue.put(data)
-         except Exception:
-             pass
- 
-+    async def _emit_flow_event(
-+        self, event: str, meta: Optional[dict[str, Any]] = None
-+    ) -> None:
-+        if not event:
-+            return
-+        frame: dict[str, Any] = {"type": event}
-+        if meta is not None:
-+            frame["meta"] = meta
+diff --git a/app/services/llm/__init__.py b/app/services/llm/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..058215a4c2f33f212e62596d42885b0a256cce14
+--- /dev/null
++++ b/app/services/llm/__init__.py
+@@ -0,0 +1,5 @@
++"""LLM service helpers."""
++
++from .flow_wrapper import LLMFlowTracker, make_llm_flow_tracker
++
++__all__ = ["LLMFlowTracker", "make_llm_flow_tracker"]
+diff --git a/app/services/llm/flow_wrapper.py b/app/services/llm/flow_wrapper.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd280898a2265174332ade48781b7a885745acb1
+--- /dev/null
++++ b/app/services/llm/flow_wrapper.py
+@@ -0,0 +1,136 @@
++"""Flow trace helpers for LLM interactions."""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Optional, Protocol, runtime_checkable
++
++from app.flow.emit import emit as flow_emit
++
++
++@runtime_checkable
++class _Tracker(Protocol):
++    def start(self) -> bool:
++        ...
++
++    def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
++        ...
++
++
++class _NullTracker:
++    """No-op tracker used when flow trace context is unavailable."""
++
++    __slots__ = ()
++
++    def start(self) -> bool:  # noqa: D401 - trivial
++        """Pretend to start a span and report no work."""
++        return False
++
++    def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
++        """Ignore completion for missing spans."""
++        return None
++
++
++def _coerce_int(value: Optional[object]) -> Optional[int]:
++    """Best-effort conversion to int, returning ``None`` on failure."""
++
++    if value is None:
++        return None
++    try:
++        return int(value)  # type: ignore[arg-type]
++    except (TypeError, ValueError):
++        return None
++
++
++@dataclass
++class LLMFlowTracker:
++    """Manage ``llm_start``/``llm_final`` flow events for a single turn."""
++
++    session_id: str
++    phase: str
++    turn_id: Optional[str] = None
++    model: Optional[str] = None
++    who: str = "system"
++
++    _started: bool = False
++
++    def start(self) -> bool:
++        """Emit the ``llm_start`` event if possible."""
++
++        if not self.session_id or not self.phase:
++            return False
++        meta: dict[str, object] = {}
++        if self.turn_id:
++            meta["turn_id"] = str(self.turn_id)
++        if self.model:
++            meta["model"] = str(self.model)
 +        try:
-+            await self._ev_queue.put(frame)
++            flow_emit(
++                session_id=self.session_id,
++                level="flow",
++                phase=self.phase,
++                type="llm_start",
++                who=self.who,
++                meta=meta or None,
++            )
++        except Exception:
++            return False
++        self._started = True
++        return True
++
++    def final(
++        self,
++        *,
++        tokens_out: Optional[int] = None,
++        text: Optional[str] = None,
++        chars: Optional[int] = None,
++    ) -> None:
++        """Emit the ``llm_final`` event when output text is ready."""
++
++        if not self._started or not self.session_id or not self.phase:
++            return
++        meta: dict[str, object] = {}
++        if self.turn_id:
++            meta["turn_id"] = str(self.turn_id)
++        token_count = _coerce_int(tokens_out)
++        if token_count is not None and token_count >= 0:
++            meta["tokens_out"] = token_count
++        else:
++            char_count = _coerce_int(chars)
++            if char_count is None:
++                char_count = len(text or "")
++            if char_count < 0:
++                char_count = 0
++            meta["chars"] = char_count
++        try:
++            flow_emit(
++                session_id=self.session_id,
++                level="flow",
++                phase=self.phase,
++                type="llm_final",
++                who=self.who,
++                meta=meta or None,
++            )
 +        except Exception:
 +            pass
++        self._started = False
 +
-     def _cfg_value(self, key: str) -> Optional[str]:
-         cfg: dict[str, Any]
-         if isinstance(self._cfg, dict):
-             cfg = self._cfg
++
++def make_llm_flow_tracker(
++    session_id: Optional[str],
++    *,
++    phase: str,
++    turn_id: Optional[str] = None,
++    model: Optional[str] = None,
++) -> _Tracker:
++    """Return an ``LLMFlowTracker`` when tracing is possible, else a no-op."""
++
++    if not session_id or not phase:
++        return _NullTracker()
++    tracker = LLMFlowTracker(
++        session_id=session_id,
++        phase=phase,
++        turn_id=turn_id,
++        model=model,
++    )
++    return tracker
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index a2cf1752c89fe1afe00bfa5af406a5d302581990..216dbe064a2bf562f66791503af2d46186c91479 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -1,46 +1,47 @@
+ # app/services/streaming.py — Production-grade assistant framing
+ # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
+ # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
+ 
+ from __future__ import annotations
+ from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable, Mapping
+ import base64
+ import hashlib
+ import threading, time as _t
+ import os
+ import re
+ import copy
+ import random
+ 
+ from ..security_state import get_profile, get_user
+ from ..session_state import (
+     get as get_session_state,
+     note_utterance_end,
+     set_phase,
+     should_emit_phase,
+ )
++from .llm.flow_wrapper import make_llm_flow_tracker
+ def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
+     # 1) Profile name
+     try:
+         prof = get_profile() or {}
+         name = str(prof.get("name") or "").strip()
+         if name:
+             return name.split()[0]
+     except Exception:
+         pass
+     # 2) Email to first name
+     email = None
+     try:
+         email = (meta or {}).get("email")
+     except Exception:
+         email = None
+     if not email:
+         try:
+             email = get_user() or None
+         except Exception:
+             email = None
+     if isinstance(email, str) and "@" in email:
+         first = email.split("@",1)[0].split(".")[0].replace("_"," ").replace("-", " ").strip()
+         if first:
+             return first.title()
+     return "there"
+@@ -1020,64 +1021,107 @@ def _format_next_actions(text: str, meta: Optional[Dict[str, Any]]) -> str:
+         return ""
+     trimmed: List[str] = []
+     for item in items[:max_items]:
+         cleaned = _truncate_chars(item, max_chars)
+         trimmed.append(f"• {cleaned}")
+     if verbosity == "brief":
+         return "\n".join(trimmed)
+     return "Next actions:\n" + "\n".join(trimmed)
+ 
+ 
+ def _apply_action_shape(action: str,
+                         text: str,
+                         meta: Optional[Dict[str, Any]]) -> str:
+     if not text:
+         return text
+     normalized = (action or "").strip().lower()
+     if normalized in {"give_brief_answer", "high_level", "clarify"}:
+         return _format_brief_answer(text, meta)
+     if normalized == "offer_steps":
+         return _format_offer_steps(text, meta)
+     if normalized == "summarize_next_actions":
+         return _format_next_actions(text, meta)
+     return text
+ 
+ 
++def _resolve_foundation_model(cfg: Mapping[str, Any] | Dict[str, Any]) -> str:
++    """Derive the foundation model name from config or environment."""
++
++    candidate: Optional[str] = None
++    if isinstance(cfg, Mapping):
++        for key in ("openai_model", "OPENAI_MODEL"):
++            try:
++                value = cfg.get(key)  # type: ignore[arg-type]
++            except Exception:
++                value = None
++            if value:
++                candidate = str(value)
++                break
++    if not candidate:
++        env_model = os.getenv("OPENAI_MODEL")
++        if env_model:
++            candidate = env_model
++    return str(candidate or "gpt-4o-mini")
++
++
++def _resolve_provider_model(provider: Any) -> Optional[str]:
++    """Best effort extraction of a model identifier from a provider."""
++
++    if provider is None:
++        return None
++    try:
++        model_attr = getattr(provider, "model")
++    except Exception:
++        model_attr = None
++    if callable(model_attr):
++        try:
++            model_attr = model_attr()
++        except Exception:
++            model_attr = None
++    if model_attr:
++        return str(model_attr)
++    try:
++        fallback = getattr(provider, "MODEL")
++    except Exception:
++        fallback = None
++    if fallback:
++        try:
++            return str(fallback)
++        except Exception:
++            return None
++    return None
++
++
+ def _call_foundation_llm(messages: List[Dict[str, str]],
+                          cfg: Dict[str, Any],
+                          telemetry: Optional[NluLoggingContext] = None) -> Tuple[str, Dict[str, Any]]:
+     try:
+         client = make_openai_client()
+     except Exception as exc:
+         _note_foundation_failure(exc)
+         raise
+-    model = (
+-        cfg.get("openai_model")
+-        or cfg.get("OPENAI_MODEL")
+-        or os.getenv("OPENAI_MODEL")
+-        or "gpt-4o-mini"
+-    )
++    model = _resolve_foundation_model(cfg)
+     temperature = float(cfg.get("gen_temperature", 0.3))
+     top_p = float(cfg.get("gen_top_p", 1.0))
+     payload = [dict(m) for m in messages]
+     prompt_tokens_estimate = 0
+     for msg in payload:
+         content = msg.get("content")
+         if isinstance(content, str):
+             prompt_tokens_estimate += len(content.split())
+     cache_status = str(cfg.get("foundation_cache_status") or "unknown")
+     tool_allowlist = cfg.get("tool_allowlist")
+     allowlist_payload: Optional[Iterable[str]] = None
+     if isinstance(tool_allowlist, (list, tuple, set)):
+         allowlist_payload = tool_allowlist
+     elif tool_allowlist is not None:
+         allowlist_payload = [str(tool_allowlist)]
+     if telemetry:
+         telemetry.log_llm_request(
+             model=model,
+             temperature=temperature,
+             top_p=top_p,
+             prompt_tokens=prompt_tokens_estimate,
+             cache_status=cache_status,
+             tool_allowlist=allowlist_payload,
+         )
+     resp = client.chat.completions.create(
+@@ -2106,50 +2150,53 @@ def make_assistant_frames(seed_text: str,
+         raise
+     finally:
+         context.log_done()
+ 
+ 
+ def _make_foundation_frames(seed_text: str,
+                             session_id: str,
+                             meta: Dict[str, Any],
+                             cfg: Dict[str, Any],
+                             *,
+                             correlation_user_msg_id: Optional[str],
+                             turn_id: Optional[str] = None,
+                             telemetry: Optional[NluLoggingContext] = None,
+                             force_turn_id: Optional[str] = None,
+                             is_greet: bool,
+                             fallback_line: str,
+                             fallback_on_empty: bool,
+                             fallback_on_error: bool,
+                             fallback_emit_event: bool,
+                             action: Optional[str] = None,
+                             broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
+     if turn_id is None:
+         turn_id = _allocate_turn_id(force_turn_id)
+     turn_id = str(turn_id)
+ 
++    phase_label = "greet" if is_greet else "turn"
++    llm_tracker = make_llm_flow_tracker(None, phase=phase_label)
++
+     if telemetry is None:
+         telemetry = _create_nlu_context(
+             turn_id=turn_id,
+             session_id=session_id,
+             correlation_user_msg_id=correlation_user_msg_id,
+             meta=meta,
+             settings=SETTINGS,
+             cfg=cfg,
+         )
+         telemetry.turn_id = turn_id
+         telemetry.log_start(seed_text, meta=meta)
+     else:
+         telemetry.turn_id = turn_id
+     store = PersonaStore()
+     persona = PersonaManager(store).get_active()
+     dialog_meta = dict(meta or {})
+ 
+     nlu_result = _nlu.infer(seed_text, persona['id'], dialog_meta, store)
+     policy = _nlu.policy.decide(nlu_result, nlu_result.get('tags', {}), persona['id'], store) or {}
+     policy_summary = summarize_policy_metadata(policy)
+     if isinstance(policy, dict):
+         for key in ("confidence_band", "clarify_variant"):
+             value = policy.get(key)
+             existing = meta.get(key) if isinstance(meta, dict) else None
+             chosen = existing or value
+@@ -2246,53 +2293,62 @@ def _make_foundation_frames(seed_text: str,
+         user_text=seed_text,
+         dialog_meta=prompt_meta,
+         examples=examples,
+     )
+ 
+     _log_persona_applied(
+         turn_id,
+         persona_trace,
+         cfg,
+         persona=persona,
+         meta=meta,
+     )
+ 
+     kb_count = 0
+     try:
+         kb_candidates = meta.get('kb_snippets') if isinstance(meta, dict) else None
+         if isinstance(kb_candidates, (list, tuple)):
+             kb_count = len(kb_candidates)
+     except Exception:
+         kb_count = 0
+     telemetry.log_prompt_summary(messages=messages, prompt_hash=prompt_hash, kb_count=kb_count)
+ 
+     use_llm = True
+     llm_info: Dict[str, Any] = {}
+     if use_llm:
++        model_name = _resolve_foundation_model(cfg)
++        llm_tracker = make_llm_flow_tracker(
++            session_id,
++            phase=phase_label,
++            turn_id=turn_id,
++            model=model_name,
++        )
++        llm_tracker.start()
+         try:
+             foundation_result = _call_foundation_with_retry(messages, cfg, telemetry=telemetry)
+         except Exception as exc:
++            llm_tracker.final(text="")
+             telemetry.log_error("foundation_call_error", str(exc))
+             raise
          else:
-             cfg = {}
-         for variant in (key, f"dg_{key}"):
+             _clear_foundation_failure()
+         if isinstance(foundation_result, tuple) and len(foundation_result) == 2:
+             reply, llm_info = foundation_result
+         else:
+             reply = foundation_result
+             llm_info = {}
+     fallback_fired = False
+     fallback_reason: Optional[str] = None
+ 
+     if use_llm:
+         if fallback_on_error and not reply and not fallback_fired:
+             # Foundation path has no explicit error flag; treat empty as error when allowed.
+             reply = fallback_line
+             fallback_fired = True
+             fallback_reason = "empty"
+         elif fallback_on_empty and not (reply or "").strip():
+             reply = fallback_line
+             fallback_fired = True
+             fallback_reason = "empty"
+ 
+     safe_reply = _scrub_debug_stamps(reply)
+ 
+@@ -2324,50 +2380,51 @@ def _make_foundation_frames(seed_text: str,
+                 fallback_reason = "empty"
+         else:
+             safe_reply = _LEGACY_WARMUP_LINE
+ 
+     telemetry.mark_fallback(fallback_fired, fallback_reason)
+ 
+     # Personalize greet: name + dynamic goal ask
+     if is_greet:
+         meta.setdefault("session_id", session_id)
+         meta.setdefault("turn_id", turn_id)
+         safe_reply = _personalize_greet(safe_reply, meta)
+     if use_llm:
+         preview_text = llm_info.get("preview")
+         if not preview_text:
              try:
-                 val = cfg.get(variant)
+                 preview_text = " ".join((safe_reply or "").split()[:8])
              except Exception:
-                 val = None
-             if val not in (None, ""):
-                 try:
-                     return str(val)
-                 except Exception:
-                     continue
-         nested = cfg.get("deepgram") if isinstance(cfg.get("deepgram"), dict) else None
-         if isinstance(nested, dict):
-             try:
-                 val = nested.get(key)
-             except Exception:
-                 val = None
-             if val not in (None, ""):
-                 try:
-                     return str(val)
-                 except Exception:
-                     pass
-         env_val = os.getenv(f"DEEPGRAM_{key.upper()}", "").strip()
-         return env_val or None
+                 preview_text = None
+         telemetry.log_llm_response(
+             output_tokens=llm_info.get("output_tokens"),
+             finish_reason=llm_info.get("finish_reason"),
+             preview=preview_text,
+             fallback_fired=fallback_fired,
+             fallback_reason=fallback_reason,
+         )
++        llm_tracker.final(tokens_out=llm_info.get("output_tokens"), text=safe_reply)
  
-     def _ensure_turn_started(self, ts: Optional[float] = None) -> None:
-         if self._turn_active:
-             return
-         self._turn_active = True
-         self._turn_counter += 1
-         self._turn_current_id = self._turn_counter
-         now = ts or time.time()
-         self._turn_start_ts = now
-         self._turn_first_partial_ts = 0.0
-         self._turn_final_ts = 0.0
-         self._turn_bytes_baseline = self._bytes_forwarded
-         self._turn_metrics_recorded = False
-         self._turn_saw_1011 = False
-         self._turn_last_close_code = None
-+        self._turn_first_partial_emitted = False
-+        self._turn_final_emitted = False
+     policy_chips = _collect_policy_chips(policy)
  
--    def _note_first_partial(self, ts: Optional[float] = None) -> None:
-+    def _note_first_partial(self, ts: Optional[float] = None) -> bool:
-         if not self._turn_active:
-             self._ensure_turn_started(ts)
-         if self._turn_first_partial_ts <= 0.0:
-             self._turn_first_partial_ts = ts or time.time()
-+            return True
-+        return False
+     try:
+         _jlog(
+             "turn_telemetry",
+             sid=session_id,
+             intent=nlu_result.get('intent'),
+             confidence=nlu_result.get('confidence'),
+             teacher_move=policy_action or teacher_move,
+             chips=len(policy_chips),
+             prompt_hash=prompt_hash,
+         )
+     except Exception:
+         pass
  
-     def _note_final_observed(self, ts: Optional[float] = None) -> None:
-         if not self._turn_active:
-             self._ensure_turn_started(ts)
-         self._turn_final_ts = ts or time.time()
- 
-     def _emit_turn_metrics(self) -> None:
-         if self._turn_metrics_recorded:
-             return
-         turn_id = self._turn_current_id
-         if turn_id is None:
-             return
-         final_ts = self._turn_final_ts or time.time()
-         start_ts = self._turn_start_ts
-         first_partial_ms: Optional[int] = None
-         if start_ts and self._turn_first_partial_ts:
-             first_partial_ms = int(max(0.0, (self._turn_first_partial_ts - start_ts) * 1000))
-         final_ms: Optional[int] = None
-         if start_ts:
-             final_ms = int(max(0.0, (final_ts - start_ts) * 1000))
-         bytes_forwarded = max(0, self._bytes_forwarded - self._turn_bytes_baseline)
-         session_id = self._diag_session_id or None
-         if not session_id:
-             sid_candidate = self._sid_for_log()
-             if sid_candidate and sid_candidate != "?":
-@@ -889,50 +918,52 @@ class DeepgramClient:
-             "dg_tier": self._cfg_value("tier"),
-             "first_partial_ms": first_partial_ms,
-             "final_ms": final_ms,
-             "dg_1011": bool(self._turn_saw_1011),
-             "bytes_forwarded": bytes_forwarded,
+     if fallback_fired and fallback_emit_event:
+         fallback_payload: Dict[str, Any] = {
+             "session_id": session_id,
+             "turn_id": turn_id,
+             "reason": fallback_reason or 'unknown',
          }
-         clean_payload = {k: v for k, v in payload.items() if v is not None}
-         record_turn_metrics(turn_id, clean_payload)
-         sid_for_bus = session_id or self._sid_for_log()
-         if sid_for_bus and sid_for_bus != "?":
-             frame = {"type": "asr.metrics", "turn_id": turn_id}
-             frame.update(clean_payload)
+         try:
+             _admin_emit('fallback', **fallback_payload)
+         except Exception:
+@@ -2471,50 +2528,53 @@ def _make_foundation_frames(seed_text: str,
+ 
+ def _make_legacy_frames(seed_text: str,
+                         session_id: str,
+                         meta: Dict[str, Any],
+                         cfg: Dict[str, Any],
+                         *,
+                         correlation_user_msg_id: Optional[str],
+                         turn_id: Optional[str] = None,
+                         telemetry: Optional[NluLoggingContext] = None,
+                         force_turn_id: Optional[str] = None,
+                         is_greet: bool,
+                         fallback_line: str,
+                         fallback_on_empty: bool,
+                         fallback_on_error: bool,
+                         fallback_emit_event: bool,
+                         action: Optional[str] = None,
+                         labels: Optional[Dict[str, Any]] = None,
+                         policy: Optional[Dict[str, Any]] = None,
+                         broadcast_immediately: bool = True) -> Tuple[str, List[Dict]]:
+     persona = _get_persona_for_session(session_id)
+ 
+     if turn_id is None:
+         turn_id = _allocate_turn_id(force_turn_id)
+     turn_id = str(turn_id)
+ 
++    phase_label = "greet" if is_greet else "turn"
++    llm_tracker = make_llm_flow_tracker(None, phase=phase_label)
++
+     persona_trace = {
+         "intensity": (persona or {}).get("intensity") or (persona or {}).get("nebraska_persona_level"),
+         "quote": {
+             "text": "",
+             "quote_id": None,
+             "enabled": _coerce_bool_flag((cfg or {}).get("nebraska_quotes_enabled")) if isinstance(cfg, dict) else None,
+             "picked": False,
+             "candidate_count": 0,
+             "bank": None,
+         },
+         "toggles": {},
+         "guardrail": {},
+     }
+ 
+     if telemetry is None:
+         telemetry = _create_nlu_context(
+             turn_id=turn_id,
+             session_id=session_id,
+             correlation_user_msg_id=correlation_user_msg_id,
+             meta=meta,
+             settings=SETTINGS,
+             cfg=cfg,
+         )
+         telemetry.turn_id = turn_id
+         telemetry.log_start(seed_text, meta=meta)
+@@ -2621,50 +2681,58 @@ def _make_legacy_frames(seed_text: str,
+     except Exception:
+         prompt_hash = None
+     telemetry.log_prompt_summary(messages=None, prompt_hash=prompt_hash, kb_count=len(kb))
+ 
+     reply: str
+     error_note: Optional[str] = None
+     use_llm = True
+ 
+     if use_llm:
+         try:
+             provider = get_provider(cfg)
+         except Exception as e:
+             provider = None
+             error_note = "llm_not_available"
+             provider_error_payload = {
+                 "session_id": session_id,
+                 "error": e.__class__.__name__,
+             }
              try:
-                 stream_bus.broadcast(str(sid_for_bus), frame)
+                 _admin_emit("llm_provider_error", **provider_error_payload)
              except Exception:
                  pass
-         self._turn_metrics_recorded = True
-         self._turn_active = False
-         self._turn_current_id = None
-         self._turn_start_ts = 0.0
-         self._turn_first_partial_ts = 0.0
-         self._turn_final_ts = 0.0
-         self._turn_bytes_baseline = self._bytes_forwarded
-         self._turn_saw_1011 = False
-         self._turn_last_close_code = None
-+        self._turn_first_partial_emitted = False
-+        self._turn_final_emitted = False
+             _broadcast_admin_ws_event("llm_provider_error", provider_error_payload)
+             telemetry.log_error("llm_not_available", str(e))
+         if provider is not None:
++            model_name = _resolve_provider_model(provider)
++            llm_tracker = make_llm_flow_tracker(
++                session_id,
++                phase=phase_label,
++                turn_id=turn_id,
++                model=model_name,
++            )
++            llm_tracker.start()
+             try:
+                 provider_context: Dict[str, Any] = {'kb': kb}
+                 for key in ('confidence_band', 'clarify_variant', 'clarifier_style'):
+                     if isinstance(meta, dict):
+                         value = meta.get(key)
+                     else:
+                         value = None
+                     if value:
+                         provider_context[key] = value
+                 if isinstance(meta, dict):
+                     dialog_subset = {
+                         key: meta.get(key)
+                         for key in ('confidence_band', 'clarify_variant', 'clarifier_style')
+                         if meta.get(key)
+                     }
+                     if dialog_subset:
+                         provider_context['dialog_meta'] = dialog_subset
+                 reply = provider.generate_reply(
+                     prompt,
+                     persona=persona,
+                     teacher_move=teacher_move,
+                     context=provider_context,
+                 )
+             except Exception as e:
+                 error_note = f"llm_error:{e.__class__.__name__}"
+@@ -2728,50 +2796,51 @@ def _make_legacy_frames(seed_text: str,
+                 fallback_reason = "empty"
+         else:
+             safe_reply = _LEGACY_WARMUP_LINE
  
-     def _sid_for_log(self) -> str:
+     telemetry.mark_fallback(fallback_fired, fallback_reason)
+ 
+     # Personalize greet: name + dynamic goal ask
+     if is_greet:
+         meta.setdefault("session_id", session_id)
+         meta.setdefault("turn_id", turn_id)
+         safe_reply = _personalize_greet(safe_reply, meta)
+ 
+     if use_llm:
+         preview = None
          try:
-             for key in ("session_id", "sid"):
-                 if key in self._cfg and self._cfg[key]:
-                     return str(self._cfg[key])
+             preview = " ".join((safe_reply or "").split()[:8])
+         except Exception:
+             preview = None
+         telemetry.log_llm_response(
+             output_tokens=None,
+             finish_reason=error_note,
+             preview=preview,
+             fallback_fired=fallback_fired,
+             fallback_reason=fallback_reason,
+         )
++        llm_tracker.final(text=safe_reply)
+ 
+     if fallback_fired and fallback_emit_event:
+         fallback_payload = {
+             "session_id": session_id,
+             "turn_id": turn_id,
+             "reason": fallback_reason or 'unknown',
+         }
+         try:
+             _admin_emit('fallback', **fallback_payload)
          except Exception:
              pass
-         return "?"
+         _broadcast_admin_ws_event('fallback', fallback_payload)
  
-     async def wait_socket_open(self, timeout: float = 1.5) -> bool:
-         """Micro-wait until the underlying websocket's .open flag is True."""
-         if self._ws_is_open():
-             return True
-         end = time.time() + timeout
-         while time.time() < end:
-             if self._ws_is_open():
-                 return True
-             await asyncio.sleep(0.01)
-         return False
+     _emit_turn_action_metadata(turn_id, meta, is_greet=is_greet, session_id=session_id)
  
-     def _schedule_flush(self, delay: float = 0.0) -> None:
-         if self._flush_task and not self._flush_task.done():
-             return
+     frames: List[Dict] = []
  
-@@ -1139,71 +1170,80 @@ class DeepgramClient:
-         return total_sent, first8_hex
- 
-     # -- lifecycle -------------------------------------------------------------
- 
-     async def connect(self) -> None:
-         global DG_LAST_URL, DG_LAST_CONFIG
-         sid = self._sid_for_log()
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "dg_connect_begin",
-                     sid=sid,
-                     dg_id=self._dg_id,
-                     tag=self._url_tag,
-                     already_open=bool(self._ws),
-                     closing=self._closing,
-                     closed=self._closed,
-                 )
-             except Exception:
-                 pass
-         if self._ws:
-             return
- 
-         self._asr_open_emitted = False
-         self._asr_start_emitted = False
-+        self._asr_connect_emitted = False
-+        self._asr_ready_emitted = False
-+        self._backend_ready_observed = False
-         self._ready_observed = False
-         self._first_real_sent = False
-         self._bytes_forwarded = 0
-         self._turn_active = False
-         self._turn_current_id = None
-         self._turn_start_ts = 0.0
-         self._turn_first_partial_ts = 0.0
-         self._turn_final_ts = 0.0
-         self._turn_bytes_baseline = 0
-         self._turn_metrics_recorded = False
-         self._turn_saw_1011 = False
-         self._turn_last_close_code = None
-+        self._turn_first_partial_emitted = False
-+        self._turn_final_emitted = False
-         try:
-             self._open_evt.clear()
-         except Exception:
-             self._open_evt = asyncio.Event()
-         try:
-             self._final_event.clear()
-         except Exception:
-             self._final_event = asyncio.Event()
- 
-+        if not self._asr_connect_emitted:
-+            await self._emit_flow_event("asr_connect")
-+            self._asr_connect_emitted = True
-+
-         url = _dg_url(self._cfg)
-         self._emit_diag("provider_open", active=True, url=url)
- 
-         containerized = False
-         safe_url = url
-         url_meta: dict[str, Any] = {}
- 
-         try:
-             # Diagnostic: parse params and emit compact JSON log that shows
-             # whether we omitted encoding/sample_rate/channels (containerized) or sent raw.
-             import urllib.parse as _p
- 
-             parts = _p.urlsplit(url)
-             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
-             self._url_tag = q.get("tag") or None
-             transport = (self._cfg or {}).get("_transport", {}) or {}
-             containerized = bool(transport.get("containerized_opus"))
-             url_meta = {
-                 "container": transport.get("container"),
-                 "codec": transport.get("codec"),
-                 "containerized_opus": containerized,
-                 "normalized_pcm": bool(transport.get("normalized_pcm")),
-                 "omitted_params": None,
-                 "raw_params": None,
-             }
-@@ -1308,51 +1348,51 @@ class DeepgramClient:
-                     key_len=key_len,
-                     subprotocols=subprotocols,
-                 )
-             except Exception:
-                 pass
- 
-         start_ts = time.time()
-         elapsed_ms = 0
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "asr_connect_start",
-                     sid=sid,
-                     dg_id=self._dg_id,
-                 )
-             except Exception:
-                 pass
- 
-         try:
-             if DG_TEST_MODE:
-                 self._ws = _FakeWSForTests()
-                 DG_LAST_URL = url
-                 cfg_payload = _initial_config(self._cfg)
-                 DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
-                 self._open_evt.set()
--                await self._signal_ready()
-+                await self._signal_ready(backend_ready=True)
-                 self._logger.info("Deepgram test-mode connect sid=%s", sid)
-                 if callable(self._jlog):
-                     try:
-                         self._jlog(
-                             "dg_open",
-                             sid=sid,
-                             dg_id=self._dg_id,
-                             url=url,
-                             tag=self._url_tag,
-                             test_mode=True,
-                         )
-                     except Exception:
-                         pass
-                     try:
-                         elapsed_ms = int((time.time() - start_ts) * 1000)
-                     except Exception:
-                         elapsed_ms = 0
-                     try:
-                         self._jlog(
-                             "asr_connect_ok",
-                             sid=sid,
-                             dg_id=self._dg_id,
-                             elapsed_ms=elapsed_ms,
-                         )
-                     except Exception:
-@@ -1959,61 +1999,61 @@ class DeepgramClient:
-                         json.loads(raw)
-                         if isinstance(raw, (str, bytes, bytearray))
-                         else raw
-                     )
-                 except Exception:
-                     continue
- 
-                 if not isinstance(msg, dict):
-                     await self._publish_provider_event("invalid_payload", msg)
-                     continue
- 
-                 raw_type = msg.get("type")
-                 evt_type = ""
-                 evt_name = "unknown"
-                 if isinstance(raw_type, str):
-                     evt_name = raw_type
-                     evt_type = raw_type.lower()
-                 elif raw_type is not None:
-                     try:
-                         evt_name = str(raw_type)
-                         evt_type = evt_name.lower()
-                     except Exception:
-                         evt_type = ""
- 
-                 if evt_type in ("metadata", "listening", "connected", "ready"):
--                    await self._signal_ready()
-+                    await self._signal_ready(backend_ready=True)
-                     await self._publish_provider_event(evt_type or evt_name, msg)
-                     continue
- 
-                 if evt_type in (
-                     "results",
-                     "transcript",
-                     "partialtranscript",
-                     "speech.update",
-                 ):
--                    await self._signal_ready()
-+                    await self._signal_ready(backend_ready=True)
-                     await self._publish_provider_event(evt_type or evt_name, msg)
-                     text = ""
-                     is_final = False
- 
-                     # Prefer channel.* first (typical DG shape)
-                     channel = msg.get("channel") or {}
-                     alts = channel.get("alternatives")
-                     confidence = None
-                     token_count = 0
-                     if isinstance(alts, list) and alts:
-                         first_alt = alts[0]
-                         text = (first_alt.get("transcript") or "").strip()
-                         confidence = _safe_float(first_alt.get("confidence"))
-                         words = first_alt.get("words")
-                         if isinstance(words, list):
-                             token_count = len(
-                                 [
-                                     w
-                                     for w in words
-                                     if isinstance(w, dict)
-                                     and (w.get("word") or "").strip()
-                                 ]
-                             )
- 
-                     # Fallback: top-level alternatives (some messages)
-@@ -2068,80 +2108,102 @@ class DeepgramClient:
-                         for key in ("reason", "end_reason", "speech_final_reason"):
-                             val = msg.get(key)
-                             if isinstance(val, str) and val:
-                                 final_reason_detail = val
-                                 break
-                         if evt_type == "utteranceend" or msg.get("utterance_end"):
-                             final_reason = "utterance_end"
-                         if not final_reason and isinstance(final_reason_detail, str):
-                             lowered = final_reason_detail.strip().lower()
-                             if "utterance" in lowered or "endpoint" in lowered:
-                                 final_reason = "utterance_end"
-                         if self._closing and not final_reason:
-                             final_reason = "close_stream"
-                         if not final_reason:
-                             final_reason = "provider_final"
- 
-                     # No usable text in this message; keep listening
-                     if text:
-                         self._last_transcript = text
-                     elif is_final:
-                         text = self._last_transcript or ""
-                     else:
-                         continue
- 
-                     now_ts = time.time()
-+                    first_partial = self._note_first_partial(now_ts)
-                     if is_final:
--                        self._note_first_partial(now_ts)
-                         self._note_final_observed(now_ts)
--                    else:
--                        self._note_first_partial(now_ts)
-+                    if first_partial and not self._turn_first_partial_emitted:
-+                        self._turn_first_partial_emitted = True
-+                        try:
-+                            await self._emit_flow_event(
-+                                "asr_partial_first", meta={"conf": confidence}
-+                            )
-+                        except Exception:
-+                            pass
- 
-                     self._emit_diag(
-                         "asr_final" if is_final else "asr_partial",
-                         text=text,
-                         chars=len(text),
-                         active=True,
-                     )
-                     try:
-                         payload = {
-                             "type": "user_final" if is_final else "user_partial",
-                             "text": text,
-                         }
-                         if is_final:
-                             payload["final_reason"] = final_reason
-                             if final_reason_detail:
-                                 payload["final_reason_detail"] = final_reason_detail
-                         if confidence is not None:
-                             payload["confidence"] = confidence
-                         if token_count:
-                             payload["token_count"] = token_count
-                         await self._ev_queue.put(payload)
-                     except Exception:
-                         pass
- 
-                     if is_final:
-+                        if not self._turn_final_emitted:
-+                            self._turn_final_emitted = True
-+                            turn_id = self._turn_current_id
-+                            if turn_id is None:
-+                                turn_id = self._turn_counter
-+                            try:
-+                                await self._emit_flow_event(
-+                                    "asr_final",
-+                                    meta={
-+                                        "len": len(text),
-+                                        "conf": confidence,
-+                                        "turn_id": turn_id,
-+                                    },
-+                                )
-+                            except Exception:
-+                                pass
-                         self._schedule_auto_close(final_reason or "provider_final")
-                         self._any_result = True
-                         self._final_event.set()
-                         self._emit_turn_metrics()
-                         self._last_transcript = ""
-                         continue
- 
-                 elif evt_type in ("error", "close"):
-                     await self._publish_provider_event(evt_type or evt_name, msg)
-                     self._logger.warning(
-                         "Deepgram error event sid=%s evt_type=%s detail=%s",
-                         sid,
-                         evt_type,
-                         _clip_text(str(msg), 200),
-                     )
-                     self._emit_diag(
-                         "asr_error",
-                         error=msg.get("error") or evt_type,
-                         provider_error=True,
-                         detail=_clip_text(str(msg), 200),
-                     )
-                     try:
-                         await self._ev_queue.put(
-                             {"type": "asr_error", "error": msg.get("error") or evt_type}
-                         )
+     active_teacher_move = teacher_move
+     if _should_force_welcome_move(meta, is_greet=is_greet, intent=(labels or {}).get('intent') if isinstance(labels, dict) else None):
+         active_teacher_move = _WELCOME_MOVE
+     _log_policy_decision(
+         session_id=session_id,
+         turn_id=turn_id,
+         resolved_move=active_teacher_move,
+         normalized_action=normalized_action,

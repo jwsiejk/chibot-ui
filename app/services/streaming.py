@@ -19,6 +19,7 @@ from ..session_state import (
     set_phase,
     should_emit_phase,
 )
+from .llm.flow_wrapper import make_llm_flow_tracker
 def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
     # 1) Profile name
     try:
@@ -1042,6 +1043,54 @@ def _apply_action_shape(action: str,
     return text
 
 
+def _resolve_foundation_model(cfg: Mapping[str, Any] | Dict[str, Any]) -> str:
+    """Derive the foundation model name from config or environment."""
+
+    candidate: Optional[str] = None
+    if isinstance(cfg, Mapping):
+        for key in ("openai_model", "OPENAI_MODEL"):
+            try:
+                value = cfg.get(key)  # type: ignore[arg-type]
+            except Exception:
+                value = None
+            if value:
+                candidate = str(value)
+                break
+    if not candidate:
+        env_model = os.getenv("OPENAI_MODEL")
+        if env_model:
+            candidate = env_model
+    return str(candidate or "gpt-4o-mini")
+
+
+def _resolve_provider_model(provider: Any) -> Optional[str]:
+    """Best effort extraction of a model identifier from a provider."""
+
+    if provider is None:
+        return None
+    try:
+        model_attr = getattr(provider, "model")
+    except Exception:
+        model_attr = None
+    if callable(model_attr):
+        try:
+            model_attr = model_attr()
+        except Exception:
+            model_attr = None
+    if model_attr:
+        return str(model_attr)
+    try:
+        fallback = getattr(provider, "MODEL")
+    except Exception:
+        fallback = None
+    if fallback:
+        try:
+            return str(fallback)
+        except Exception:
+            return None
+    return None
+
+
 def _call_foundation_llm(messages: List[Dict[str, str]],
                          cfg: Dict[str, Any],
                          telemetry: Optional[NluLoggingContext] = None) -> Tuple[str, Dict[str, Any]]:
@@ -1050,12 +1099,7 @@ def _call_foundation_llm(messages: List[Dict[str, str]],
     except Exception as exc:
         _note_foundation_failure(exc)
         raise
-    model = (
-        cfg.get("openai_model")
-        or cfg.get("OPENAI_MODEL")
-        or os.getenv("OPENAI_MODEL")
-        or "gpt-4o-mini"
-    )
+    model = _resolve_foundation_model(cfg)
     temperature = float(cfg.get("gen_temperature", 0.3))
     top_p = float(cfg.get("gen_top_p", 1.0))
     payload = [dict(m) for m in messages]
@@ -2128,6 +2172,9 @@ def _make_foundation_frames(seed_text: str,
         turn_id = _allocate_turn_id(force_turn_id)
     turn_id = str(turn_id)
 
+    phase_label = "greet" if is_greet else "turn"
+    llm_tracker = make_llm_flow_tracker(None, phase=phase_label)
+
     if telemetry is None:
         telemetry = _create_nlu_context(
             turn_id=turn_id,
@@ -2268,9 +2315,18 @@ def _make_foundation_frames(seed_text: str,
     use_llm = True
     llm_info: Dict[str, Any] = {}
     if use_llm:
+        model_name = _resolve_foundation_model(cfg)
+        llm_tracker = make_llm_flow_tracker(
+            session_id,
+            phase=phase_label,
+            turn_id=turn_id,
+            model=model_name,
+        )
+        llm_tracker.start()
         try:
             foundation_result = _call_foundation_with_retry(messages, cfg, telemetry=telemetry)
         except Exception as exc:
+            llm_tracker.final(text="")
             telemetry.log_error("foundation_call_error", str(exc))
             raise
         else:
@@ -2346,6 +2402,7 @@ def _make_foundation_frames(seed_text: str,
             fallback_fired=fallback_fired,
             fallback_reason=fallback_reason,
         )
+        llm_tracker.final(tokens_out=llm_info.get("output_tokens"), text=safe_reply)
 
     policy_chips = _collect_policy_chips(policy)
 
@@ -2492,6 +2549,9 @@ def _make_legacy_frames(seed_text: str,
     if turn_id is None:
         turn_id = _allocate_turn_id(force_turn_id)
     turn_id = str(turn_id)
+
+    phase_label = "greet" if is_greet else "turn"
+    llm_tracker = make_llm_flow_tracker(None, phase=phase_label)
 
     persona_trace = {
         "intensity": (persona or {}).get("intensity") or (persona or {}).get("nebraska_persona_level"),
@@ -2643,6 +2703,14 @@ def _make_legacy_frames(seed_text: str,
             _broadcast_admin_ws_event("llm_provider_error", provider_error_payload)
             telemetry.log_error("llm_not_available", str(e))
         if provider is not None:
+            model_name = _resolve_provider_model(provider)
+            llm_tracker = make_llm_flow_tracker(
+                session_id,
+                phase=phase_label,
+                turn_id=turn_id,
+                model=model_name,
+            )
+            llm_tracker.start()
             try:
                 provider_context: Dict[str, Any] = {'kb': kb}
                 for key in ('confidence_band', 'clarify_variant', 'clarifier_style'):
@@ -2750,6 +2818,7 @@ def _make_legacy_frames(seed_text: str,
             fallback_fired=fallback_fired,
             fallback_reason=fallback_reason,
         )
+        llm_tracker.final(text=safe_reply)
 
     if fallback_fired and fallback_emit_event:
         fallback_payload = {
