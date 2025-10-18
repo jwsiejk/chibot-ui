@@ -16,6 +16,9 @@ class _Tracker(Protocol):
     def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
         ...
 
+    def error(self, code: Optional[object] = None) -> None:
+        ...
+
 
 class _NullTracker:
     """No-op tracker used when flow trace context is unavailable."""
@@ -28,6 +31,10 @@ class _NullTracker:
 
     def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
         """Ignore completion for missing spans."""
+        return None
+
+    def error(self, code: Optional[object] = None) -> None:  # noqa: D401 - trivial
+        """Ignore error notifications when tracing is disabled."""
         return None
 
 
@@ -114,6 +121,29 @@ class LLMFlowTracker:
         except Exception:
             pass
         self._started = False
+
+    def error(self, code: Optional[object] = None) -> None:
+        """Emit an ``llm_error`` transition with the provided code."""
+
+        if not self.session_id or not self.phase:
+            return
+        meta: dict[str, object] = {}
+        if code is not None:
+            try:
+                meta["code"] = str(code)
+            except Exception:
+                meta["code"] = "unknown"
+        try:
+            flow_emit(
+                session_id=self.session_id,
+                level="transition",
+                phase=self.phase,
+                type="llm_error",
+                who=self.who,
+                meta=meta or None,
+            )
+        except Exception:
+            pass
 
 
 def make_llm_flow_tracker(

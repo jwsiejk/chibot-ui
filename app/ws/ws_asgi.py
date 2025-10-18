@@ -715,6 +715,7 @@ async def _pump_dg_to_client(
     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
     on_asr_partial: Optional[Callable[[Dict[str, Any]], None]] = None,
     final_guard_hooks: Optional[Dict[str, Any]] = None,
+    on_transport_error: Optional[Callable[[str], None]] = None,
 ):
     """Relay Deepgram events to client and, on final, kick LLM turn."""
     cfg_ref = getattr(dg, "_cfg", None)
@@ -1116,6 +1117,9 @@ async def _emit_user_final_payload(
     except Exception as e:
         with contextlib.suppress(Exception):
             await _ws_send_json(send, make_error("relay_fail", e.__class__.__name__))
+        if callable(on_transport_error):
+            with contextlib.suppress(Exception):
+                on_transport_error("relay_fail")
     finally:
         task = guard_state.get("task")
         if task and not task.done():
@@ -1526,6 +1530,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         except Exception:
             pass
 
+    def _emit_ws_error(code: Optional[object]) -> None:
+        try:
+            code_str = str(code) if code is not None else "unknown"
+        except Exception:
+            code_str = "unknown"
+        _emit_transition_event(
+            "ws_error",
+            meta={"code": code_str},
+            phase="transport",
+        )
+
     def _current_tts_active() -> bool:
         try:
             current_turn_id = _current_assistant_turn_id(sid)
@@ -1619,6 +1634,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     final_seen = [False]
     asr_seen_partial = [False]
     asr_partial_counter = [0]
+    asr_partial_first_emitted = [False]
+    evidence_gate_emitted = [False]
+    last_confident_partial_conf: List[Optional[float]] = [None]
     current_assistant_turn_ref: List[Optional[Any]] = [None]
     manual_commit_pending = [False]
     manual_button_down = [False]
@@ -1728,6 +1746,33 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     confirm_timeout_cancelled: List[asyncio.Task] = []
     local_vad_meta_sent = [False]
 
+    def _maybe_emit_evidence_gate(confidence: Optional[object] = None) -> None:
+        if evidence_gate_emitted[0]:
+            return
+        candidate = confidence
+        if candidate is None:
+            candidate = last_confident_partial_conf[0]
+        if candidate is None:
+            return
+        try:
+            conf_val = float(candidate)
+        except Exception:
+            return
+        if conf_val < confirm_min_conf:
+            return
+        if not (local_vad_meta_sent[0] or local_vad_open[0]):
+            return
+        evidence_gate_emitted[0] = True
+        _emit_transition_event(
+            "evidence_gate_met",
+            meta={
+                "client_vad": True,
+                "asr_partial": True,
+                "conf": conf_val,
+            },
+            phase="asr",
+        )
+
     def _flow_turn_id_hint() -> int:
         try:
             current = int(turn_id_ref[0] or 0)
@@ -1754,6 +1799,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if _manual_mode_active():
             return
         local_vad_meta_sent[0] = True
+        _maybe_emit_evidence_gate()
         if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
             _set_barge_pause_meta("client_vad")
         _on_local_vad_start()
@@ -2137,6 +2183,32 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 window,
             )
 
+    def _handle_asr_partial_with_flow(ev: Dict[str, Any]) -> None:
+        try:
+            _handle_confirm_partial(ev)
+        except Exception:
+            pass
+
+        raw_conf = ev.get("confidence") if isinstance(ev, dict) else None
+        conf_val: Optional[float]
+        try:
+            conf_val = float(raw_conf) if raw_conf is not None else None
+        except (TypeError, ValueError):
+            conf_val = None
+
+        if not asr_partial_first_emitted[0]:
+            asr_partial_first_emitted[0] = True
+            meta_conf = conf_val if conf_val is not None else 0.0
+            _emit_transition_event(
+                "asr_partial_first",
+                meta={"conf": meta_conf},
+                phase="asr",
+            )
+
+        if conf_val is not None and conf_val >= confirm_min_conf:
+            last_confident_partial_conf[0] = conf_val
+            _maybe_emit_evidence_gate(conf_val)
+
     def _ensure_confirm_closed(reason: str) -> None:
         window = confirm_window_ref[0]
         if not window:
@@ -2189,6 +2261,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     def _on_local_vad_start() -> None:
         local_vad_open[0] = True
+        _maybe_emit_evidence_gate()
 
     def _on_local_vad_stop() -> None:
         local_vad_open[0] = False
@@ -2228,6 +2301,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         turn_timing["final"][0] = 0.0
         turn_finish_logged[0] = False
         asr_partial_counter[0] = 0
+        asr_partial_first_emitted[0] = False
+        evidence_gate_emitted[0] = False
+        last_confident_partial_conf[0] = None
 
     def _emit_no_audio_alert(reason: str) -> None:
         if no_audio_notified[0]:
@@ -2693,11 +2769,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         _flush_buffered_chunks,
                         turn_timing,
                         _log_turn_finish,
-                        _handle_confirm_partial,
+                        _handle_asr_partial_with_flow,
                         final_guard_hooks={
                             "reset_ref": final_guard_reset_ref,
                             "local_vad_ref": final_guard_local_vad_ref,
                         },
+                        on_transport_error=_emit_ws_error,
                     )
                 )
                 _jlog("asr_connect_ok", sid=sid)
@@ -2741,6 +2818,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     await _ws_send_json(
                         send, make_error("asr_connect_fail", type(e).__name__)
                     )
+                _emit_ws_error("asr_connect_fail")
                 with contextlib.suppress(Exception):
                     if _admin_emit:
                         err_msg = f"connect:{type(e).__name__}"
@@ -3315,6 +3393,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                 "greet_fail", e.__class__.__name__
                                             ),
                                         )
+                                    _emit_ws_error("greet_fail")
                                 finally:
                                     post_greet_phase_active[0] = True
 
@@ -3591,6 +3670,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                     "greet_fail", e.__class__.__name__
                                                 ),
                                             )
+                                        _emit_ws_error("greet_fail")
                                     finally:
                                         post_greet_phase_active[0] = True
 
@@ -3611,6 +3691,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 await _ws_send_json(
                                     send, make_error("payload_too_large", "user_text")
                                 )
+                                _emit_ws_error("payload_too_large")
                                 continue
                             corr = obj.get("correlation_user_msg_id") or obj.get(
                                 "userMsgId"
@@ -3671,6 +3752,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                 "user_fail", e.__class__.__name__
                                             ),
                                         )
+                                    _emit_ws_error("user_fail")
 
                             asyncio.create_task(_bg_user())
 
@@ -4051,6 +4133,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                     except ValueError as e:
                         await _ws_send_json(send, make_error("bad_message", str(e)))
+                        _emit_ws_error("bad_message")
                 else:
                     # websocket.receive without text/bytes
                     pass

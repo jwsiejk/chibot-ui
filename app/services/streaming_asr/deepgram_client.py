@@ -12,6 +12,7 @@ from collections import deque
 
 import websockets  # provided by uvicorn[standard]
 
+from app.flow.emit import emit as flow_emit
 from app.ws.bus import bus as stream_bus
 
 from .asr_metrics import record_turn_metrics
@@ -593,6 +594,7 @@ class DeepgramClient:
                 hook_candidate = cfg_hook
         self._diag_hook: Optional[Callable[..., Any]] = hook_candidate
         self._diag_end_emitted: bool = False
+        self._recover_pending: bool = False
         try:
             sid_val = None
             if isinstance(self._cfg, dict):
@@ -715,6 +717,43 @@ class DeepgramClient:
         except Exception:
             pass
 
+    def _emit_transition_event(
+        self,
+        event: str,
+        *,
+        code: Optional[object] = None,
+        path: Optional[object] = None,
+    ) -> None:
+        sid = self._diag_session_id
+        if not sid or not event:
+            return
+        meta: dict[str, object] = {}
+        if code is not None:
+            try:
+                meta["code"] = str(code)
+            except Exception:
+                meta["code"] = "unknown"
+        if path is not None:
+            try:
+                meta["path"] = str(path)
+            except Exception:
+                meta["path"] = "unknown"
+        try:
+            flow_emit(
+                session_id=sid,
+                level="transition",
+                phase="asr",
+                type=event,
+                who="system",
+                meta=meta or None,
+            )
+        except Exception:
+            pass
+
+    def _record_error(self, code: Optional[object]) -> None:
+        self._recover_pending = True
+        self._emit_transition_event("asr_error", code=code)
+
     def _ws_is_open(self, ws: Optional[Any] = None) -> bool:
         """Best-effort detection for whether the websocket is open."""
 
@@ -783,6 +822,9 @@ class DeepgramClient:
 
     async def _signal_ready(self, *, backend_ready: bool = False) -> None:
         self._ready_observed = True
+        if self._recover_pending:
+            self._emit_transition_event("recover_ok", path="asr")
+            self._recover_pending = False
         if not self._open_evt.is_set():
             self._open_evt.set()
         if not self._asr_open_emitted:
@@ -1590,6 +1632,7 @@ class DeepgramClient:
                 url=url,
                 **diag_payload,
             )
+            self._record_error(f"connect:{exc.__class__.__name__}")
             raise
 
     async def close(
@@ -1822,6 +1865,7 @@ class DeepgramClient:
                         error=err_txt,
                         final_timeout=timeout,
                     )
+                    self._record_error(err_txt)
                     try:
                         await self._ev_queue.put({"type": "asr_error", "error": err_txt})
                     except Exception:
@@ -1909,6 +1953,7 @@ class DeepgramClient:
                 wait_timeout=drain_wait_timeout,
                 active=False,
             )
+            self._record_error("drain_timeout")
             raise drain_exc
 
         # -- sending ---------------------------------------------------------------
@@ -2197,15 +2242,17 @@ class DeepgramClient:
                         evt_type,
                         _clip_text(str(msg), 200),
                     )
+                    err_code = msg.get("error") or evt_type
                     self._emit_diag(
                         "asr_error",
-                        error=msg.get("error") or evt_type,
+                        error=err_code,
                         provider_error=True,
                         detail=_clip_text(str(msg), 200),
                     )
+                    self._record_error(err_code)
                     try:
                         await self._ev_queue.put(
-                            {"type": "asr_error", "error": msg.get("error") or evt_type}
+                            {"type": "asr_error", "error": err_code}
                         )
                     except Exception:
                         pass
@@ -2277,6 +2324,7 @@ class DeepgramClient:
                     code=code,
                     reason=reason_txt,
                 )
+                self._record_error(err_txt)
                 try:
                     await self._ev_queue.put(
                         {
@@ -2293,6 +2341,7 @@ class DeepgramClient:
                 error=f"rx:{e.__class__.__name__}",
                 provider_error=True,
             )
+            self._record_error(f"rx:{e.__class__.__name__}")
             try:
                 await self._ev_queue.put(
                     {"type": "asr_error", "error": f"rx:{e.__class__.__name__}"}

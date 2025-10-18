@@ -21,6 +21,9 @@ class _Tracker(Protocol):
     def end(self) -> None:
         ...
 
+    def error(self, code: Optional[object] = None) -> None:
+        ...
+
 
 class _NullTracker:
     """No-op tracker when flow context is unavailable."""
@@ -37,6 +40,10 @@ class _NullTracker:
 
     def end(self) -> None:  # noqa: D401 - trivial
         """Ignore end events."""
+        return None
+
+    def error(self, code: Optional[object] = None) -> None:  # noqa: D401 - trivial
+        """Ignore error events."""
         return None
 
 
@@ -103,6 +110,29 @@ class TTSFlowTracker:
                 type="tts_end",
                 who=self.who,
                 meta=self._meta(),
+            )
+        except Exception:
+            pass
+
+    def error(self, code: Optional[object] = None) -> None:
+        """Emit a ``tts_error`` transition for diagnostics."""
+
+        if not self.session_id or not self.phase:
+            return
+        meta: dict[str, object] = {}
+        if code is not None:
+            try:
+                meta["code"] = str(code)
+            except Exception:
+                meta["code"] = "unknown"
+        try:
+            flow_emit(
+                session_id=self.session_id,
+                level="transition",
+                phase=self.phase,
+                type="tts_error",
+                who=self.who,
+                meta=meta or None,
             )
         except Exception:
             pass

@@ -2327,6 +2327,7 @@ def _make_foundation_frames(seed_text: str,
         try:
             foundation_result = _call_foundation_with_retry(messages, cfg, telemetry=telemetry)
         except Exception as exc:
+            llm_tracker.error(exc.__class__.__name__)
             llm_tracker.final(text="")
             telemetry.log_error("foundation_call_error", str(exc))
             raise
@@ -2736,6 +2737,7 @@ def _make_legacy_frames(seed_text: str,
                     context=provider_context,
                 )
             except Exception as e:
+                llm_tracker.error(e.__class__.__name__)
                 error_note = f"llm_error:{e.__class__.__name__}"
                 reply = _LEGACY_WARMUP_LINE
                 generate_payload = {
@@ -3067,6 +3069,7 @@ def schedule_tts_audio(session_id: str,
         except Exception as e:
             state['error'] = str(e)
             _log("tts.provider.error", error=str(e))
+            tracker.error(e.__class__.__name__)
             error_payload = {
                 "session_id": session_id,
                 "turn_id": safe_turn_id,
@@ -3097,6 +3100,7 @@ def schedule_tts_audio(session_id: str,
         except Exception as e:
             state['error'] = str(e)
             _log("tts.synth.error", error=str(e), override=False)
+            tracker.error(e.__class__.__name__)
             synth_error_payload = {
                 "session_id": session_id,
                 "turn_id": safe_turn_id,
@@ -3126,6 +3130,7 @@ def schedule_tts_audio(session_id: str,
     if not audio_payload:
         state['error'] = 'empty_audio'
         _log("tts.synth.error", error='empty_audio', override=audio_override)
+        tracker.error('empty_audio')
         return False
 
     tracker.queue()
