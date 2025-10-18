@@ -1173,6 +1173,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     flow_session_open_emitted = False
     flow_session_ready_emitted = False
     flow_session_close_emitted = False
+    post_greet_phase_active = [False]
+    flow_turn_commit_emitted: Set[int] = set()
+    flow_turn_abort_emitted: Set[int] = set()
 
     def _emit_flow_event(type_: str,
                          *,
@@ -1656,6 +1659,19 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     confirm_timeout_cancelled: List[asyncio.Task] = []
     local_vad_meta_sent = [False]
 
+    def _flow_turn_id_hint() -> int:
+        try:
+            current = int(turn_id_ref[0] or 0)
+        except Exception:
+            current = 0
+        if current > 0:
+            return current
+        try:
+            seq = int(getattr(buf, "turn_seq", 0))
+        except Exception:
+            seq = 0
+        return seq + 1 if seq >= 0 else 0
+
     def _cancel_confirm_timeout() -> None:
         task = confirm_timeout_task[0]
         if task:
@@ -1743,6 +1759,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         data.setdefault("reason", trigger)
         data.setdefault("snr_enabled", window.snr_enabled)
         _jlog("confirm_commit", sid=sid, **data)
+        if post_greet_phase_active[0]:
+            _emit_flow_event(
+                "confirm_close",
+                phase="turn",
+                meta={"reason": "commit"},
+            )
         _on_local_vad_stop()
         if barge.is_paused():
             try:
@@ -1765,6 +1787,37 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         data = {k: v for k, v in (metrics or {}).items() if v is not None}
         data.setdefault("reason", trigger)
         data.setdefault("snr_enabled", window.snr_enabled)
+        reason_value = str(data.get("reason") or "")
+        reason_lower = reason_value.lower()
+        is_timeout = reason_lower == "timeout"
+        system_abort_reasons = {
+            "tts_start",
+            "manual_start",
+            "close_stream",
+            "cleanup",
+            "shutdown",
+        }
+        if post_greet_phase_active[0]:
+            turn_id_hint = _flow_turn_id_hint()
+            if (
+                not is_timeout
+                and reason_lower not in system_abort_reasons
+                and turn_id_hint not in flow_turn_abort_emitted
+            ):
+                flow_turn_abort_emitted.add(turn_id_hint)
+                flow_turn_commit_emitted.discard(turn_id_hint)
+                abort_reason = reason_value or "abort"
+                _emit_flow_event(
+                    "turn_abort",
+                    phase="turn",
+                    meta={"reason": abort_reason},
+                )
+            close_reason = "timeout" if is_timeout else "abort"
+            _emit_flow_event(
+                "confirm_close",
+                phase="turn",
+                meta={"reason": close_reason},
+            )
         _jlog("confirm_abort", sid=sid, **data)
         _on_local_vad_stop()
         if barge.is_paused():
@@ -1837,6 +1890,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             snr_slack_db=confirm_snr_slack_db,
             policy_until_asr_ready=policy_until_asr_ready,
         )
+        if not post_greet_phase_active[0]:
+            post_greet_phase_active[0] = True
+        if post_greet_phase_active[0]:
+            turn_id_hint = _flow_turn_id_hint()
+            meta: Dict[str, Any] = {"phase": "post_greet", "turn_id": turn_id_hint}
+            _emit_flow_event("confirm_open", phase="turn", meta=meta)
         _schedule_confirm_timeout(window)
 
     def _queue_confirm_request(request: Dict[str, Any]) -> None:
@@ -2352,6 +2411,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             admin_event="turn_committed",
             admin_label="turn_committed",
         )
+        if post_greet_phase_active[0]:
+            turn_id_hint = _flow_turn_id_hint()
+            if turn_id_hint not in flow_turn_commit_emitted:
+                flow_turn_commit_emitted.add(turn_id_hint)
+                flow_turn_abort_emitted.discard(turn_id_hint)
+                _emit_flow_event(
+                    "turn_commit",
+                    phase="turn",
+                    meta={"turn_id": turn_id_hint},
+                )
         with contextlib.suppress(Exception):
             _jlog(
                 "EVT_COMMIT",
@@ -3173,6 +3242,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                 "greet_fail", e.__class__.__name__
                                             ),
                                         )
+                                finally:
+                                    post_greet_phase_active[0] = True
 
                             asyncio.create_task(_bg())
 
@@ -3345,6 +3416,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                     "greet_fail", e.__class__.__name__
                                                 ),
                                             )
+                                    finally:
+                                        post_greet_phase_active[0] = True
 
                                 asyncio.create_task(_bg2())
 

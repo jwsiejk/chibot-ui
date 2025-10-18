@@ -1,67 +1,8 @@
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 9e2da23718dba6842563db0a3c5ae1d434bd9beb..555825199840f278d62c67712881e921867a04ef 100644
+index 555825199840f278d62c67712881e921867a04ef..3a7cc27e7fe75080edf3f8baf727c1cc6cec1fe5 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -2,53 +2,54 @@
- from __future__ import annotations
- import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
- from functools import partial
- from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
- from collections import deque, defaultdict
- from app.services.audio.container_sniffer import (
-     AudioContainerSniffer,
-     coerce_detection_from_meta,
- )
- 
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.config import load_settings
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
--from app.policy.loader import load_policy
-+from app.policy.loader import load_policy, load_policy_layers
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
-+from app.flow.emit import emit as flow_emit
- 
- # NEW: invoke LLM on final transcript
- from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.confirm_window import ConfirmWindow
- from app.ws.bus import bus
- 
- # Optional admin emitter
- try:
-     from app.api_v1.admin import _emit as _admin_emit_base
- except Exception:
-     _admin_emit_base = None
- 
- 
- def _broadcast_admin_frame(event: str, payload: Dict[str, Any]) -> None:
-     """Mirror admin diagnostic breadcrumbs onto the session bus."""
- 
-     try:
-         sid = payload.get("session_id") or payload.get("sid")
-     except Exception:
-         sid = None
- 
-     if not sid:
-         return
-@@ -1147,50 +1148,73 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-     try:
-         _admin_emit and _admin_emit(
+@@ -1151,50 +1151,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
              "ws_handshake_enter",
              path=scope.get("path"),
              raw_query=raw_query,
@@ -84,286 +25,332 @@ index 9e2da23718dba6842563db0a3c5ae1d434bd9beb..555825199840f278d62c67712881e921
      active_ws_closed = False
      _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
  
-+    flow_session_open_emitted = False
-+    flow_session_ready_emitted = False
-+    flow_session_close_emitted = False
-+
-+    def _emit_flow_event(type_: str,
-+                         *,
-+                         phase: str,
-+                         meta: Optional[Dict[str, Any]] = None) -> None:
-+        try:
-+            flow_emit(
-+                session_id=sid,
-+                level="flow",
-+                phase=phase,
-+                type=type_,
-+                who="system",
-+                meta=meta,
-+            )
-+        except Exception:
-+            pass
-+
-+    policy: Dict[str, Any] = {}
-+    policy_version: str = "unknown"
-+
+     flow_session_open_emitted = False
+     flow_session_ready_emitted = False
+     flow_session_close_emitted = False
++    post_greet_phase_active = [False]
++    flow_turn_commit_emitted: Set[int] = set()
++    flow_turn_abort_emitted: Set[int] = set()
+ 
+     def _emit_flow_event(type_: str,
+                          *,
+                          phase: str,
+                          meta: Optional[Dict[str, Any]] = None) -> None:
+         try:
+             flow_emit(
+                 session_id=sid,
+                 level="flow",
+                 phase=phase,
+                 type=type_,
+                 who="system",
+                 meta=meta,
+             )
+         except Exception:
+             pass
+ 
+     policy: Dict[str, Any] = {}
+     policy_version: str = "unknown"
+ 
      # Auth
      require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in (
          "0",
          "false",
          "no",
-     )
-     bearer_only = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0", "false", "no")
-     fail_limit = int(os.getenv("WS_FAIL_LIMIT", "10"))
-     fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC", "60"))
-     client_ip = _client_ip_from_scope(scope)
- 
-     token = None
+@@ -1634,50 +1637,63 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         confirm_gap_ms = 180.0
      try:
-         for _sp in scope.get("subprotocols") or []:
-             if isinstance(_sp, str) and _sp.startswith("bearer."):
-                 token = _sp.split(".", 1)[1].strip()
-                 break
+         confirm_min_tokens = max(1, int(cfg.get("confirm_min_tokens", 2) or 2))
      except Exception:
-         pass
-     if not token:
-         try:
-             hdrs = {
-                 k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])
-             }
-             if "authorization" in hdrs and hdrs["authorization"].lower().startswith(
-@@ -1282,97 +1306,125 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         _jlog(
-             "ws_conn_open",
-             sid=sid,
-             conn_id=conn_id,
-             client_ip=client_ip,
-             path=scope.get("path"),
-             query_string=raw_query,
-         )
-     active_count = await _register_active_ws_entry()
-     if active_count is not None:
-         with contextlib.suppress(Exception):
-             _jlog("ws_conn_active", conn_id=conn_id, sid=sid, active=active_count)
-     with contextlib.suppress(Exception):
-         if _admin_emit:
-             _admin_emit(
-                 "ws_conn_open",
-                 sid=sid,
-                 conn_id=conn_id,
-                 client_ip=client_ip,
-                 path=scope.get("path"),
-                 query_string=raw_query,
-             )
-             if active_count is not None:
-                 _admin_emit("ws_conn_active", conn_id=conn_id, active=active_count)
+         confirm_min_tokens = 2
+     try:
+         confirm_min_conf = float(cfg.get("confirm_min_confidence", 0.5) or 0.5)
+     except Exception:
+         confirm_min_conf = 0.5
+     try:
+         confirm_snr_db = float(cfg.get("confirm_min_snr_db", 8.0) or 8.0)
+     except Exception:
+         confirm_snr_db = 8.0
+     try:
+         confirm_snr_slack_db = float(cfg.get("confirm_snr_slack_db", 0.5) or 0.5)
+     except Exception:
+         confirm_snr_slack_db = 0.5
+     if confirm_snr_slack_db < 0.0:
+         confirm_snr_slack_db = 0.0
  
-+    try:
-+        policy_layers = load_policy_layers(session_id=sid)
-+    except Exception:
-+        policy_layers = None
-+
-+    if isinstance(policy_layers, dict):
-+        candidate_policy = policy_layers.get("effective_policy")
-+        if isinstance(candidate_policy, dict):
-+            policy = candidate_policy
-+        candidate_version = policy_layers.get("policy_version")
-+        if candidate_version is not None:
-+            try:
-+                policy_version = str(candidate_version)
-+            except Exception:
-+                policy_version = "unknown"
-+
-+    if not policy:
+     confirm_window_ref: List[Optional[ConfirmWindow]] = [None]
+     confirm_timeout_task: List[Optional[asyncio.Task]] = [None]
+     confirm_timeout_cancelled: List[asyncio.Task] = []
+     local_vad_meta_sent = [False]
+ 
++    def _flow_turn_id_hint() -> int:
 +        try:
-+            policy = load_policy()
++            current = int(turn_id_ref[0] or 0)
 +        except Exception:
-+            policy = {}
++            current = 0
++        if current > 0:
++            return current
++        try:
++            seq = int(getattr(buf, "turn_seq", 0))
++        except Exception:
++            seq = 0
++        return seq + 1 if seq >= 0 else 0
 +
-+    if not isinstance(policy_version, str) or not policy_version:
-+        policy_version = "unknown"
-+
-+    if not flow_session_open_emitted:
-+        meta = {"policy_version": policy_version}
-+        _emit_flow_event("session_open", phase="session", meta=meta)
-+        flow_session_open_emitted = True
-+
-     with contextlib.suppress(Exception):
-         clear_greet_turn_cache(sid)
+     def _cancel_confirm_timeout() -> None:
+         task = confirm_timeout_task[0]
+         if task:
+             task.cancel()
+             confirm_timeout_cancelled.append(task)
+         confirm_timeout_task[0] = None
  
-     bus_task: Optional[asyncio.Task] = None
- 
-     voice_metrics_registered = False
-     try:
-         voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
-     except Exception:
-         voice_metrics_registered = False
- 
-     async def _ping_loop():
-         try:
-             while True:
-                 await asyncio.sleep(20)
-                 try:
-                     await _ws_send_json(
-                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
-                     )
-                 except Exception:
-                     break
-         except asyncio.CancelledError:
-             pass
- 
-     ping_task = asyncio.create_task(_ping_loop())
- 
-     try:
-         await _ws_send_json(send, {"type": "ready", "session_id": sid})
-     except Exception:
-         with contextlib.suppress(Exception):
-             await send(
-                 {
-                     "type": "websocket.close",
-                     "code": 1011,
-                     "reason": "initial_ready_failed",
-                 }
-             )
-         return
- 
-     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
-     manual_feature_enabled = True
-     manual_mode_manual_only = False
-     auto_commit_when_ready = True
-     ws_configured = False
--    try:
--        policy = load_policy()
--    except Exception:
-+    if not isinstance(policy, dict):
-         policy = {}
-     if isinstance(policy, dict):
-         cfg["interaction_policy"] = policy
+     def _emit_local_vad_signal(now_ts: float) -> None:
+         if local_vad_meta_sent[0]:
+             return
+         if _manual_mode_active():
+             return
+         local_vad_meta_sent[0] = True
+         _on_local_vad_start()
+         if callable(final_guard_local_vad_ref[0]):
+             with contextlib.suppress(Exception):
+                 final_guard_local_vad_ref[0]("start")
+         payload = {
+             "type": "meta",
+             "turn_id": turn_id_ref[0],
+             "meta": {"local_vad": "start", "ts": int(now_ts * 1000)},
+         }
          with contextlib.suppress(Exception):
              _jlog(
-                 "EVT_POLICY_LOAD",
-                 sid=sid,
-                 keys=len(policy.keys()),
-             )
-     else:
-         policy = {}
-     try:
-         runtime_cfg = db.get_config()
-         if isinstance(runtime_cfg, dict):
-             manual_feature_enabled = bool(
-                 runtime_cfg.get("feature_manual_barge_in", manual_feature_enabled)
-             )
-             manual_mode_manual_only = bool(
-                 runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-             )
-             auto_commit_when_ready = bool(
-                 runtime_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-             )
-     except Exception:
-         pass
-@@ -2676,50 +2728,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 if callable(final_guard_reset_ref[0]):
-                     with contextlib.suppress(Exception):
-                         final_guard_reset_ref[0]("flush")
-                 continue
-             break
+                 "local_vad_start",
+@@ -1721,72 +1737,109 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 elif decision.action == "abort":
+                     metrics = decision.metrics or {}
+                     reason = metrics.get("reason") or "timeout"
+                     _finalize_confirm_abort(reason, metrics, window)
+             except asyncio.CancelledError:
+                 return
+ 
+         confirm_timeout_task[0] = asyncio.create_task(_timeout())
+ 
+     def _finalize_confirm_commit(
+         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
+     ) -> None:
+         if confirm_window_ref[0] is not window:
+             return
+         if manual_button_down[0] or manual_turn_active[0]:
+             _cancel_confirm_timeout()
+             confirm_window_ref[0] = None
+             _on_local_vad_stop()
+             return
+         _cancel_confirm_timeout()
+         confirm_window_ref[0] = None
+         data = {k: v for k, v in (metrics or {}).items() if v is not None}
+         data.setdefault("reason", trigger)
+         data.setdefault("snr_enabled", window.snr_enabled)
+         _jlog("confirm_commit", sid=sid, **data)
++        if post_greet_phase_active[0]:
++            _emit_flow_event(
++                "confirm_close",
++                phase="turn",
++                meta={"reason": "commit"},
++            )
+         _on_local_vad_stop()
+         if barge.is_paused():
+             try:
+                 barge.commit(_send_barge_state)
+             except Exception:
+                 pass
+ 
+     def _finalize_confirm_abort(
+         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
+     ) -> None:
+         if confirm_window_ref[0] is not window:
+             return
+         if manual_button_down[0] or manual_turn_active[0]:
+             _cancel_confirm_timeout()
+             confirm_window_ref[0] = None
+             _on_local_vad_stop()
+             return
+         _cancel_confirm_timeout()
+         confirm_window_ref[0] = None
+         data = {k: v for k, v in (metrics or {}).items() if v is not None}
+         data.setdefault("reason", trigger)
+         data.setdefault("snr_enabled", window.snr_enabled)
++        reason_value = str(data.get("reason") or "")
++        reason_lower = reason_value.lower()
++        is_timeout = reason_lower == "timeout"
++        system_abort_reasons = {
++            "tts_start",
++            "manual_start",
++            "close_stream",
++            "cleanup",
++            "shutdown",
++        }
++        if post_greet_phase_active[0]:
++            turn_id_hint = _flow_turn_id_hint()
++            if (
++                not is_timeout
++                and reason_lower not in system_abort_reasons
++                and turn_id_hint not in flow_turn_abort_emitted
++            ):
++                flow_turn_abort_emitted.add(turn_id_hint)
++                flow_turn_commit_emitted.discard(turn_id_hint)
++                abort_reason = reason_value or "abort"
++                _emit_flow_event(
++                    "turn_abort",
++                    phase="turn",
++                    meta={"reason": abort_reason},
++                )
++            close_reason = "timeout" if is_timeout else "abort"
++            _emit_flow_event(
++                "confirm_close",
++                phase="turn",
++                meta={"reason": close_reason},
++            )
+         _jlog("confirm_abort", sid=sid, **data)
+         _on_local_vad_stop()
+         if barge.is_paused():
+             if manual_button_down[0]:
+                 return
+             try:
+                 barge.cancel(_send_barge_state)
+             except Exception:
+                 pass
+ 
          with contextlib.suppress(Exception):
              _jlog(
-                 "ws_flush_done",
+                 "EVT_CONFIRM_ABORT",
                  sid=sid,
-                 queued=initial_queued,
-                 flushed_chunks=flushed_chunks,
-                 flushed_bytes=flushed_bytes,
-                 remaining=len(buffered_chunks),
-             )
-         _maybe_emit_backpressure(len(buffered_chunks))
-         if not buffered_chunks:
-             backpressure_drop_count = 0
-             if dg_state == "open":
-                 asr_direct_stream[0] = True
- 
-         if bus_task is None:
-             bus_task = asyncio.create_task(
-                 _pump_bus_to_client(sid, send, _handle_bus_frame)
+                 turn=turn_id_ref[0],
+                 reason=data.get("reason"),
+                 elapsed_ms=data.get("elapsed_ms"),
+                 snr_db=data.get("snr_db"),
+                 partials=data.get("partial_tokens"),
+                 conf=data.get("partial_confidence"),
              )
  
-+    if not flow_session_ready_emitted:
-+        _emit_flow_event("session_ready", phase="session")
-+        flow_session_ready_emitted = True
-+
-     try:
-         while True:
-             ev = await receive()
-             et = ev.get("type")
+     def _open_confirm_window(
+         now_ts: float,
+         *,
+@@ -1815,50 +1868,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         pending_confirm_request[0] = None
+         local_vad_meta_sent[0] = False
+         _emit_local_vad_signal(now_ts)
+         _jlog(
+             "EVT_CONFIRM_OPEN",
+             sid=sid,
+             turn=turn_id_ref[0],
+             is_first=bool(is_first_turn),
+             min_ms=min_ms,
+             max_ms=max_ms_local,
+             until_asr_ready=policy_until_asr_ready,
+         )
+         _jlog(
+             "confirm_start",
+             sid=sid,
+             turn_id=turn_id_ref[0],
+             min_ms=min_ms,
+             max_ms=max_ms_local,
+             max_gap_ms=confirm_gap_ms,
+             min_tokens=confirm_min_tokens,
+             min_confidence=confirm_min_conf,
+             snr_threshold_db=snr_threshold,
+             snr_slack_db=confirm_snr_slack_db,
+             policy_until_asr_ready=policy_until_asr_ready,
+         )
++        if not post_greet_phase_active[0]:
++            post_greet_phase_active[0] = True
++        if post_greet_phase_active[0]:
++            turn_id_hint = _flow_turn_id_hint()
++            meta: Dict[str, Any] = {"phase": "post_greet", "turn_id": turn_id_hint}
++            _emit_flow_event("confirm_open", phase="turn", meta=meta)
+         _schedule_confirm_timeout(window)
  
-             if et == "websocket.disconnect":
-                 had_disconnect = True
-                 now = time.time()
-                 idle_s = (
-                     max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
+     def _queue_confirm_request(request: Dict[str, Any]) -> None:
+         pending_confirm_request[0] = dict(request)
+ 
+     def _maybe_start_pending_confirm(now_ts: Optional[float] = None) -> None:
+         request = pending_confirm_request[0]
+         if not request:
+             return
+         if request.get("policy_until_asr_ready") and not asr_ready[0]:
+             return
+         if tts_mask_active[0]:
+             return
+         pending_confirm_request[0] = None
+         effective_now = now_ts if now_ts is not None else time.time()
+         _open_confirm_window(
+             effective_now,
+             min_ms=request.get("min_ms", confirm_min_ms),
+             max_ms_local=request.get("max_ms_local", confirm_max_ms),
+             snr_threshold=request.get("snr_threshold", confirm_snr_db),
+             policy_until_asr_ready=bool(request.get("policy_until_asr_ready")),
+             is_first_turn=bool(request.get("is_first_turn")),
+         )
+ 
+     def _cancel_tts_mask_release() -> None:
+@@ -2330,50 +2389,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             with contextlib.suppress(Exception):
+                 bus.cancel_turn(sid, target_turn)
+                 cancel_reason = "assistant_cancel"
+         last_ready_signal_after[0] = cancel_reason
+         _send_barge_state("ready")
+         if last_ready_signal_after[0]:
+             with contextlib.suppress(Exception):
+                 _jlog(
+                     "EVT_READY_SIGNAL",
+                     sid=sid,
+                     after=last_ready_signal_after[0],
+                     turn=turn_id_ref[0],
                  )
-                 with contextlib.suppress(Exception):
-                     _jlog(
-                         "ws_conn_disconnect",
-                         conn_id=conn_id,
-                         sid=sid,
-                         code=ev.get("code"),
-                         reason=ev.get("reason"),
-                         idle_s=idle_s,
-                     )
-                 with contextlib.suppress(Exception):
-                     if _admin_emit:
-                         _admin_emit(
-                             "ws_conn_disconnect",
-                             conn_id=conn_id,
-@@ -3050,54 +3106,72 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                         _jlog(
-                             "ws_audio_provider_connecting",
-                             sid=sid,
-                             queued=len(buffered_chunks),
-                         )
-                     continue
+             last_ready_signal_after[0] = None
+         _jlog(
+             "turn_committed",
+             sid=sid,
+             mode=mode,
+             manual=(mode == "manual"),
+             auto_commit=(mode == "auto_commit"),
+             turn_id=turn_id_ref[0],
+             ts_ms=int(time.time() * 1000),
+             admin_event="turn_committed",
+             admin_label="turn_committed",
+         )
++        if post_greet_phase_active[0]:
++            turn_id_hint = _flow_turn_id_hint()
++            if turn_id_hint not in flow_turn_commit_emitted:
++                flow_turn_commit_emitted.add(turn_id_hint)
++                flow_turn_abort_emitted.discard(turn_id_hint)
++                _emit_flow_event(
++                    "turn_commit",
++                    phase="turn",
++                    meta={"turn_id": turn_id_hint},
++                )
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "EVT_COMMIT",
+                 sid=sid,
+                 turn=turn_id_ref[0],
+                 mode=event_mode,
+                 dual_evidence=bool(dual_evidence),
+                 asr_ready=asr_ready_flag,
+             )
+         if not turn_stream_committed[0]:
+             turn_stream_committed[0] = True
+             asr_direct_stream[0] = True
+             _schedule_asr_stream_activation(mode or "vad")
  
-                 # -------------------- Text / control lane --------------------
-                 if ev.get("text") is not None:
-                     try:
-                         obj = parse_client_json(ev.get("text") or "")
-                         t = obj.get("type")
-                         with contextlib.suppress(Exception):
-                             _jlog("ws_json_recv", sid=sid, type=t)
-                         if _admin_emit:
-                             with contextlib.suppress(Exception):
-                                 _admin_emit("ws_json_recv", sid=sid, type=t)
+     def _cancel_no_audio_watch() -> None:
+         task = no_audio_watch_task[0]
+         if task and not task.done():
+             task.cancel()
+         no_audio_watch_task[0] = None
  
-                         if t == "KeepAlive":
-                             await _ws_send_json(send, make_keepalive_ack())
- 
-                         elif t == "greet":
-                             _jlog("ws_greet_recv", sid=sid)
- 
-                             async def _bg():
-+                                nonlocal flow_session_ready_emitted
-                                 try:
-+                                    if not flow_session_ready_emitted:
-+                                        _emit_flow_event("session_ready", phase="session")
-+                                        flow_session_ready_emitted = True
-+                                    _emit_flow_event("greet_start", phase="greet")
-                                     from app.services.streaming import run_ws_greet
- 
-                                     tid = await asyncio.to_thread(run_ws_greet, sid)
-+                                    tid_meta: Optional[Dict[str, Any]] = None
-+                                    if tid:
-+                                        try:
-+                                            tid_str = str(tid)
-+                                        except Exception:
-+                                            tid_str = ""
-+                                        if tid_str:
-+                                            tid_meta = {"turn_id": tid_str}
-+                                    _emit_flow_event(
-+                                        "assistant_end",
-+                                        phase="greet",
-+                                        meta=tid_meta,
-+                                    )
+     def _schedule_no_audio_watch(turn_id: int) -> None:
+         if no_audio_window_s <= 0:
+             return
+         _cancel_no_audio_watch()
+         no_audio_notified[0] = False
+@@ -3151,50 +3220,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                         meta=tid_meta,
+                                     )
                                      with contextlib.suppress(Exception):
                                          if _admin_emit:
                                              cfg_now = db.get_config()
@@ -387,56 +374,36 @@ index 9e2da23718dba6842563db0a3c5ae1d434bd9beb..555825199840f278d62c67712881e921
                                                  "greet_fail", e.__class__.__name__
                                              ),
                                          )
++                                finally:
++                                    post_greet_phase_active[0] = True
  
                              asyncio.create_task(_bg())
-@@ -3204,54 +3278,72 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                         )
-                                 else:
-                                     _jlog(
-                                         "ws_greet_reset_skip_dup",
-                                         sid=sid,
-                                         greet_seq=greet_seq,
-                                         via="Configure",
-                                     )
-                             if obj.get("greet"):
-                                 if not is_new_greet_seq:
-                                     _jlog(
-                                         "ws_greet_skip_dup",
-                                         sid=sid,
-                                         greet_seq=greet_seq,
-                                         via="Configure",
-                                     )
-                                     continue
-                                 _jlog(
-                                     "ws_greet_recv",
-                                     sid=sid,
-                                     via="Configure",
-                                     greet_seq=greet_seq,
-                                 )
  
-                                 async def _bg2():
-+                                    nonlocal flow_session_ready_emitted
+                         elif t == "Control":
+                             action_raw = obj.get("action")
+                             action = str(action_raw or "").strip().lower()
+                             if action == "barge_in_start":
+                                 if manual_feature_enabled:
+                                     manual_button_down[0] = True
+                                     manual_turn_active[0] = True
+                                     manual_commit_pending[0] = True
+                                     turn_commit_mode_ref[0] = "manual"
+                                     active_turn_mode_ref[0] = "manual"
+                                     _ensure_confirm_closed("manual_start")
+                                     buffered_bytes = _manual_buffered_bytes()
+                                     _manual_log_event(
+                                         "manual_barge_in_start",
+                                         bytes_buffered=buffered_bytes,
+                                         provider_open=dg_state == "open",
+                                     )
                                      try:
-+                                        if not flow_session_ready_emitted:
-+                                            _emit_flow_event("session_ready", phase="session")
-+                                            flow_session_ready_emitted = True
-+                                        _emit_flow_event("greet_start", phase="greet")
-                                         from app.services.streaming import run_ws_greet
- 
-                                         tid = await asyncio.to_thread(run_ws_greet, sid)
-+                                        tid_meta: Optional[Dict[str, Any]] = None
-+                                        if tid:
-+                                            try:
-+                                                tid_str = str(tid)
-+                                            except Exception:
-+                                                tid_str = ""
-+                                            if tid_str:
-+                                                tid_meta = {"turn_id": tid_str}
-+                                        _emit_flow_event(
-+                                            "assistant_end",
-+                                            phase="greet",
-+                                            meta=tid_meta,
-+                                        )
+                                         current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
+                                     except Exception:
+                                         current_assistant_turn_ref[0] = None
+                                     if not barge.is_paused():
+@@ -3323,50 +3394,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                             meta=tid_meta,
+                                         )
                                          with contextlib.suppress(Exception):
                                              if _admin_emit:
                                                  cfg_now = db.get_config()
@@ -460,59 +427,30 @@ index 9e2da23718dba6842563db0a3c5ae1d434bd9beb..555825199840f278d62c67712881e921
                                                      "greet_fail", e.__class__.__name__
                                                  ),
                                              )
++                                    finally:
++                                        post_greet_phase_active[0] = True
  
                                  asyncio.create_task(_bg2())
-@@ -3697,50 +3789,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                             # Send the audio back over WS so the client can play it
-                                             await _ws_send_diagnostic_audio(
-                                                 send, turn_id, mime, data_to_echo
-                                             )
-                                 except Exception as e:
-                                     _jlog(
-                                         "mic_capture_fail",
-                                         sid=sid,
-                                         err=type(e).__name__,
-                                     )
  
-                         else:
-                             # Unknown type already filtered by schema; no-op to future-proof.
-                             pass
- 
-                     except ValueError as e:
-                         await _ws_send_json(send, make_error("bad_message", str(e)))
-                 else:
-                     # websocket.receive without text/bytes
-                     pass
-             else:
-                 # Other ASGI events are ignored
-                 pass
- 
-     finally:
-+        if flow_session_open_emitted and not flow_session_close_emitted:
-+            _emit_flow_event("session_close", phase="session")
-+            flow_session_close_emitted = True
-         _ensure_confirm_closed("shutdown")
-         _cancel_confirm_timeout()
-         with contextlib.suppress(Exception):
-             _cancel_no_audio_watch()
-         _cancel_asr_stream_activation()
-         _cancel_asr_not_ready_timeout()
-         await _remove_active_ws_entry("cleanup")
-         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_conn_cleanup",
-                 conn_id=conn_id,
-                 sid=sid,
-                 duration=duration,
-                 had_disconnect=had_disconnect,
-             )
-         with contextlib.suppress(Exception):
-             if _admin_emit:
-                 _admin_emit(
-                     "ws_conn_cleanup",
-                     conn_id=conn_id,
-                     sid=sid,
-                     duration=duration,
-                     had_disconnect=had_disconnect,
-                 )
+                         elif t in (
+                             "user_msg",
+                             "User",
+                             "UserText",
+                             "UserMessage",
+                             "UserUtterance",
+                             "UserTextMessage",
+                         ):
+                             text = (obj.get("text") or "").strip()
+                             if not text:
+                                 continue
+                             if len(text) > 8000:
+                                 await _ws_send_json(
+                                     send, make_error("payload_too_large", "user_text")
+                                 )
+                                 continue
+                             corr = obj.get("correlation_user_msg_id") or obj.get(
+                                 "userMsgId"
+                             )
+                             _jlog(
+                                 "ws_user_msg_recv",
+                                 sid=sid,
