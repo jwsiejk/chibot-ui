@@ -3,6 +3,9 @@ const POLL_MAX_MS = 1000;
 const MAX_SESSION_RESULTS = 20;
 const MAX_META_LENGTH = 48;
 const LEVELS = ["flow", "transition", "debug", "raw"];
+const FORENSIC_DURATION_MS = 10_000;
+const HANDOFF_PROMPT =
+  "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), smallest viable fix, and validation steps.";
 
 const PHASE_COLORS = {
   session: "#7aa0ff",
@@ -48,6 +51,14 @@ const state = {
   loading: false,
   hints: [],
   hintMap: new Map(),
+  forensicActive: false,
+  forensicTimer: null,
+  forensicTicker: null,
+  forensicPrevLevels: null,
+  forensicPrevExpanded: null,
+  forensicUntil: 0,
+  forensicExpandAll: false,
+  pendingExpandedRestore: null,
 };
 
 const els = {};
@@ -75,6 +86,7 @@ function init() {
   els.tailToggle = document.getElementById("flowTailToggle");
   els.tailStep = document.getElementById("flowTailStep");
   els.timeline = document.getElementById("flowTimeline");
+  els.forensic = document.getElementById("flowForensic");
   els.exportFull = document.getElementById("flowExportFull");
   els.exportRedacted = document.getElementById("flowExportRedacted");
   els.copyLink = document.getElementById("flowCopyLink");
@@ -98,6 +110,7 @@ function init() {
   renderTimeline();
   renderDrawer();
   renderHints();
+  renderForensicButton();
 
   if (state.sessionId) {
     fetchTrace({ reset: true });
@@ -194,6 +207,10 @@ function bindEvents() {
     els.tailStep.addEventListener("click", () => fetchTrace({ reset: false }));
   }
 
+  if (els.forensic) {
+    els.forensic.addEventListener("click", () => toggleForensicMode());
+  }
+
   if (els.exportFull) {
     els.exportFull.addEventListener("click", () => downloadExport({ redacted: false }));
   }
@@ -260,6 +277,123 @@ function bindEvents() {
       hidePopover();
     }
   });
+}
+
+function renderForensicButton() {
+  if (!els.forensic) return;
+  const btn = els.forensic;
+  if (!state.sessionId) {
+    btn.disabled = true;
+    btn.textContent = "Forensic mode";
+    btn.classList.remove("active");
+    return;
+  }
+  btn.disabled = false;
+  if (state.forensicActive) {
+    const remainingMs = Math.max(0, state.forensicUntil - Date.now());
+    const remainingSec = Math.max(0, Math.ceil(remainingMs / 1000));
+    btn.textContent = `Forensic (${remainingSec}s)`;
+    btn.classList.add("active");
+  } else {
+    btn.textContent = "Forensic mode";
+    btn.classList.remove("active");
+  }
+}
+
+function toggleForensicMode() {
+  if (state.forensicActive) {
+    exitForensicMode({ auto: false });
+  } else {
+    enterForensicMode();
+  }
+}
+
+function enterForensicMode() {
+  if (state.forensicActive) return;
+  if (!state.sessionId) {
+    setHint("Select a session first.");
+    return;
+  }
+  state.forensicActive = true;
+  state.forensicPrevLevels = new Set(state.levels);
+  state.forensicPrevExpanded = new Set(state.expanded);
+  state.forensicExpandAll = true;
+  state.pendingExpandedRestore = null;
+  clearForensicTimer();
+  state.forensicUntil = Date.now() + FORENSIC_DURATION_MS;
+  state.forensicTimer = setTimeout(() => exitForensicMode({ auto: true }), FORENSIC_DURATION_MS);
+  startForensicTicker();
+  state.levels = new Set(LEVELS);
+  reflectLevelButtons();
+  setHint("Forensic mode active (10s).");
+  renderForensicButton();
+  reloadAfterLevelChange({ skipHistory: true });
+}
+
+function exitForensicMode(options = {}) {
+  const { auto = false, skipReload = false } = options;
+  if (!state.forensicActive) {
+    renderForensicButton();
+    return;
+  }
+  clearForensicTimer();
+  stopForensicTicker();
+  state.forensicActive = false;
+  state.forensicExpandAll = false;
+  state.forensicUntil = 0;
+
+  const prevLevels = state.forensicPrevLevels ? new Set(state.forensicPrevLevels) : new Set(["flow", "transition"]);
+  if (!prevLevels.has("flow")) {
+    prevLevels.add("flow");
+  }
+  const prevExpanded = state.forensicPrevExpanded ? new Set(state.forensicPrevExpanded) : null;
+  state.forensicPrevLevels = null;
+  state.forensicPrevExpanded = null;
+
+  state.levels = prevLevels;
+  reflectLevelButtons();
+
+  if (skipReload) {
+    state.pendingExpandedRestore = null;
+  } else if (auto) {
+    state.pendingExpandedRestore = null;
+  } else if (prevExpanded && prevExpanded.size) {
+    state.pendingExpandedRestore = new Set(prevExpanded);
+  } else {
+    state.pendingExpandedRestore = null;
+  }
+
+  if (!skipReload) {
+    reloadAfterLevelChange({ skipHistory: true });
+  }
+
+  renderForensicButton();
+  setHint(auto ? "Forensic mode ended." : "Forensic mode off.");
+}
+
+function clearForensicTimer() {
+  if (state.forensicTimer) {
+    clearTimeout(state.forensicTimer);
+    state.forensicTimer = null;
+  }
+}
+
+function startForensicTicker() {
+  stopForensicTicker();
+  state.forensicTicker = setInterval(() => {
+    if (!state.forensicActive) {
+      stopForensicTicker();
+      return;
+    }
+    renderForensicButton();
+  }, 250);
+}
+
+function stopForensicTicker() {
+  if (state.forensicTicker) {
+    clearInterval(state.forensicTicker);
+    state.forensicTicker = null;
+  }
 }
 
 function hydrateFromLocation() {
@@ -427,6 +561,9 @@ function renderSessionListItem(item) {
 
 function selectSession(sessionId) {
   if (!sessionId) return;
+  if (state.forensicActive) {
+    exitForensicMode({ auto: false, skipReload: true });
+  }
   state.sessionId = sessionId;
   state.pollSinceMs = 0;
   state.events.clear();
@@ -436,6 +573,7 @@ function selectSession(sessionId) {
   state.visibleIds = new Set();
   state.drawerEventId = null;
   updateHints([]);
+  renderForensicButton();
   if (els.sessionInput) {
     els.sessionInput.value = sessionId;
   }
@@ -480,6 +618,7 @@ function fetchTrace({ reset }) {
         state.pollSinceMs = nextSince;
       }
       state.lastFetchedAt = Date.now();
+      applyPendingExpandedRestore();
       renderTimeline();
       renderDrawer();
     })
@@ -509,7 +648,12 @@ function ingestEvents(events) {
       }
     } else {
       state.events.set(normalized.id, normalized);
-      if (normalized.parentId) {
+      if (state.forensicActive || state.forensicExpandAll) {
+        state.expanded.add(normalized.id);
+        if (normalized.parentId) {
+          state.expanded.add(normalized.parentId);
+        }
+      } else if (normalized.parentId) {
         state.expanded.add(normalized.parentId);
       } else {
         state.expanded.add(normalized.id);
@@ -521,6 +665,17 @@ function ingestEvents(events) {
         const clone = { ...child, parent_id: event.id };
         queue.push(clone);
       }
+    }
+  }
+}
+
+function applyPendingExpandedRestore() {
+  if (!state.pendingExpandedRestore) return;
+  const restore = state.pendingExpandedRestore;
+  state.pendingExpandedRestore = null;
+  for (const id of restore) {
+    if (state.events.has(id)) {
+      state.expanded.add(id);
     }
   }
 }
@@ -1052,21 +1207,30 @@ function addFilterChip(key, value) {
 
 function toggleLevel(level) {
   if (!level || level === "flow") return;
+  if (state.forensicActive) return;
   if (state.levels.has(level)) {
     state.levels.delete(level);
   } else {
     state.levels.add(level);
   }
   reflectLevelButtons();
+  state.pendingExpandedRestore = null;
+  reloadAfterLevelChange();
+}
+
+function reloadAfterLevelChange(options = {}) {
+  const { skipHistory = false } = options;
   state.events.clear();
-  state.expanded.clear();
+  state.expanded = new Set();
   state.matchedIds = new Set();
   state.visibleIds = new Set();
   state.drawerEventId = null;
   renderTimeline();
   renderDrawer();
   fetchTrace({ reset: true });
-  updateHistory();
+  if (!skipHistory) {
+    updateHistory();
+  }
 }
 
 function reflectLevelButtons() {
@@ -1194,10 +1358,41 @@ function handoffToChatGPT() {
     setHint("Select a session first.");
     return;
   }
-  const summary = buildSessionSummary();
-  writeClipboardText(summary)
-    .then(() => setHint("Summary copied for ChatGPT."))
-    .catch(() => setHint("Could not copy summary."));
+  const payload = {
+    session_id: state.sessionId,
+    levels: Array.from(state.levels),
+    prompt: HANDOFF_PROMPT,
+  };
+  setHint("Preparing hand-off…");
+  fetch("/api/v1/flow/handoff", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+    .then((resp) => {
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return resp.blob();
+    })
+    .then((blob) => {
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const iso = new Date().toISOString().replace(/[:.]/g, "-");
+      const safeSession = state.sessionId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+      link.href = href;
+      link.download = `flow_handoff_${safeSession}_${iso}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      requestAnimationFrame(() => {
+        URL.revokeObjectURL(href);
+        link.remove();
+      });
+      setHint("Hand-off package downloaded.");
+    })
+    .catch((err) => {
+      console.warn("[flow] hand-off failed", err);
+      setHint("Hand-off failed.");
+    });
 }
 
 function buildSessionSummary() {
@@ -1325,6 +1520,7 @@ function setHint(text) {
 }
 
 function updateHistory() {
+  if (state.forensicActive) return;
   if (!state.sessionId) return;
   const params = new URLSearchParams();
   params.set("session_id", state.sessionId);

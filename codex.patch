@@ -1,447 +1,479 @@
-diff --git a/app/flow/trace.py b/app/flow/trace.py
-index 765d46539a9f8719f049524396715c8b0728fa3d..5cb637be30fd7e51b2024d93cbe81928ea2c1174 100644
---- a/app/flow/trace.py
-+++ b/app/flow/trace.py
-@@ -206,79 +206,83 @@ class FlowStore:
-             if not bucket:
-                 return False
-             record = bucket.event_index.get(parent_id)
-             if not record:
-                 return False
-             batch_payload = {"kind": kind, "items": items_list}
-             record.batches.append(batch_payload)
-             return True
+diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
+index 5f677f06ba05cc638379748e55563d234cc17ccf..dc6509a9ea12adf337546229e224d0f4975c97fe 100644
+--- a/app/api_v1/flow.py
++++ b/app/api_v1/flow.py
+@@ -1,29 +1,35 @@
+ from __future__ import annotations
  
-     def list(
-         self,
-         session_id: str,
-         since_ms: Optional[int] = None,
-         limit: int = 200,
-         levels: Iterable[str] = ("flow", "transition"),
-         expand: str = "flow",
-     ) -> Dict[str, Any]:
-         with self._lock:
-             bucket = self._sessions.get(session_id)
-             if not bucket:
-                 return {
-                     "session_id": session_id,
-                     "started_at": None,
-                     "events": [],
-                     "next_since_ms": since_ms or 0,
-+                    "hints": [],
-                 }
-             self._inject_safety_events(bucket)
-             levels_set = set(levels)
-             since_value = since_ms or 0
-             expand_policy = self._parse_expand(expand)
++import copy
++import hashlib
++import io
+ import json
+-from typing import Iterable, List, Optional
++import re
++import zipfile
++from datetime import datetime, timezone
++from typing import Any, Dict, Iterable, Iterator, List, Optional
  
-             events: List[Dict[str, Any]] = []
-             count = 0
-             next_since = since_value
+ from flask import (
+     Blueprint,
+     Response,
+     abort,
+     jsonify,
+     request,
+     session as flask_session,
+     stream_with_context,
+ )
  
-             for record in bucket.events:
-                 if record.data["t_rel_ms"] < since_value:
-                     continue
-                 if levels_set and record.data["level"] not in levels_set:
-                     continue
-                 events.append(self._format_event(bucket, record, expand_policy))
-                 count += 1
-                 next_since = max(next_since, record.data["t_rel_ms"])
-                 if count >= limit:
-                     break
+ from app.flow import FlowStore
+ from app.flow.catalog import FLOW_EVENT_CATALOG
+ from app.security_state import get_user
+ from app.utils.admin import is_admin_email
  
-             if events:
-                 next_since += 1
+ bp = Blueprint("flow", __name__)
  
-+            hints = self._compute_hints(bucket)
-+
-             return {
-                 "session_id": session_id,
-                 "started_at": bucket.started_at_iso,
-                 "events": events,
-                 "next_since_ms": next_since,
-+                "hints": hints,
-             }
  
-     def sessions(
-         self,
-         *,
-         query: Optional[str] = None,
-         limit: Optional[int] = 50,
-     ) -> List[Dict[str, Any]]:
-         with self._lock:
-             needle = (query or "").strip().lower()
-             filtered: List[Dict[str, Any]] = []
-             for bucket in self._sessions.values():
-                 if needle and needle not in bucket.session_id.lower():
-                     continue
+ def _normalize_str(value: Optional[str]) -> Optional[str]:
+     if value is None:
+         return None
+     text = value.strip()
+     return text or None
  
-                 event_count = len(bucket.events)
-                 last_record = bucket.events[-1] if event_count else None
-                 last_rel_ms = last_record.data.get("t_rel_ms") if last_record else 0
-                 last_type = last_record.data.get("type") if last_record else None
-                 last_phase = last_record.data.get("phase") if last_record else None
-                 last_who = last_record.data.get("who") if last_record else None
-                 last_event_id = last_record.data.get("id") if last_record else None
+@@ -53,50 +59,282 @@ def _parse_int(value: Optional[str], *, name: str, minimum: Optional[int] = None
  
-                 filtered.append(
-                     {
-@@ -591,27 +595,219 @@ class FlowStore:
-             return False
-         if mode == "flow":
-             return record.data.get("level") == "flow"
-         if mode == "ids":
-             return record.data.get("id") in expand_policy.get("ids", set())
+ def _parse_levels(raw: Optional[str]) -> Iterable[str]:
+     if raw is None:
+         return ("flow", "transition")
+     levels: List[str] = []
+     for part in raw.split(","):
+         piece = part.strip()
+         if not piece:
+             continue
+         if piece not in levels:
+             levels.append(piece)
+     return levels
+ 
+ 
+ def _parse_bool(value: Optional[str], *, default: bool = True) -> bool:
+     if value is None:
+         return default
+     lowered = value.strip().lower()
+     if lowered in {"1", "true", "yes", "on"}:
+         return True
+     if lowered in {"0", "false", "no", "off"}:
          return False
+     return default
  
-     def _build_blurb(
-         self, type_: str, phase: str, who: str, meta: Dict[str, Any]
-     ) -> str:
-         template = BLURBS.get(type_)
-         context = {
-             "turn": self._extract_turn_id(meta) or "",
-             "phase": phase,
-             "src": who,
-         }
-         if template:
-             blurb = template.format(**context)
-         else:
-             blurb = type_.replace("_", " ").strip() or "event"
-         words = _words(blurb)
-         if len(words) <= 12:
-             return " ".join(words)
-         return " ".join(words[:12])
  
-+    def _compute_hints(self, bucket: SessionBucket) -> List[Dict[str, Any]]:
-+        records = list(bucket.events)
-+        if not records:
-+            return []
++DEFAULT_HANDOFF_PROMPT = (
++    "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), "
++    "smallest viable fix, and validation steps."
++)
 +
-+        event_index = bucket.event_index
-+        hints: List[Dict[str, Any]] = []
-+        seen_keys: Set[Tuple[str, Tuple[str, ...]]] = set()
++_TEXT_EXACT_KEYS = {
++    "text",
++    "text_preview",
++    "user_text",
++    "assistant_text",
++    "tts_text",
++    "raw_text",
++    "message",
++    "body",
++    "delta",
++    "response",
++    "prompt",
++    "content",
++}
++_TEXT_SUFFIXES = ("_text", "_message", "_body", "_delta", "_content")
++_TEXT_SUBSTRINGS = ("transcript", "utterance")
++_DEVICE_KEYWORDS = ("device", "hardware", "microphone", "speaker", "headset")
++_DEVICE_CLASS_MAP = {
++    "iphone": "iphone",
++    "ipad": "ipad",
++    "macbook": "mac",
++    "imac": "mac",
++    "mac": "mac",
++    "pixel": "android",
++    "android": "android",
++    "galaxy": "android",
++    "oneplus": "android",
++    "samsung": "android",
++    "windows": "windows",
++    "surface": "windows",
++    "pc": "windows",
++    "thinkpad": "windows",
++    "linux": "linux",
++}
 +
-+        def _normalize_id(value: Optional[str]) -> Optional[str]:
-+            if not value:
-+                return None
-+            return str(value)
 +
-+        def _numeric(value: Any) -> Optional[float]:
-+            if value is None:
-+                return None
-+            if isinstance(value, (int, float)):
-+                return float(value)
-+            try:
-+                return float(str(value))
-+            except (TypeError, ValueError):
-+                return None
++def _iter_session_events(
++    store: FlowStore,
++    session_id: str,
++    levels: Iterable[str],
++    since_ms: Optional[int] = None,
++) -> Iterator[Dict[str, Any]]:
++    cursor = since_ms if since_ms is not None else 0
++    while True:
++        chunk = store.list(
++            session_id=session_id,
++            since_ms=cursor,
++            limit=500,
++            levels=levels,
++            expand="all",
++        )
++        events = chunk.get("events", [])
++        if not events:
++            break
++        for event in events:
++            if isinstance(event, dict):
++                yield event
++        next_since = chunk.get("next_since_ms")
++        if not isinstance(next_since, int) or next_since <= cursor:
++            break
++        cursor = next_since
 +
-+        def _as_int(value: Any) -> Optional[int]:
-+            number = _numeric(value)
-+            if number is None:
-+                return None
-+            return int(number)
 +
-+        def _add_hint(kind: str, severity: str, text: str, anchors: Iterable[str]) -> None:
-+            anchor_list = [anchor for anchor in (_normalize_id(a) for a in anchors) if anchor]
-+            if not anchor_list:
-+                return
-+            key = (kind, tuple(sorted(anchor_list)))
-+            if key in seen_keys:
-+                return
-+            seen_keys.add(key)
-+            hint_id = f"{kind}:{'-'.join(sorted(anchor_list))}"
-+            hints.append(
-+                {
-+                    "id": hint_id,
-+                    "severity": severity,
-+                    "text": text,
-+                    "anchors": anchor_list,
-+                }
++def _coerce_levels(value: Any) -> List[str]:
++    if value is None:
++        return list(_parse_levels(None))
++    if isinstance(value, str):
++        return list(_parse_levels(value))
++    levels: List[str] = []
++    if isinstance(value, Iterable):
++        for item in value:
++            text = str(item).strip()
++            if not text:
++                continue
++            if text not in levels:
++                levels.append(text)
++    if not levels:
++        return list(_parse_levels(None))
++    if "flow" not in levels:
++        levels.insert(0, "flow")
++    return levels
++
++
++def _should_mask_text(key: str) -> bool:
++    key_lower = key.lower()
++    if key_lower in _TEXT_EXACT_KEYS:
++        return True
++    if key_lower.endswith("_preview"):
++        return True
++    if any(key_lower.endswith(suffix) for suffix in _TEXT_SUFFIXES):
++        return True
++    if any(fragment in key_lower for fragment in _TEXT_SUBSTRINGS):
++        return True
++    if "prompt" in key_lower and "token" not in key_lower:
++        return True
++    return False
++
++
++def _should_classify_device(key: str) -> bool:
++    key_lower = key.lower()
++    return any(fragment in key_lower for fragment in _DEVICE_KEYWORDS)
++
++
++def _mask_text(value: str) -> str:
++    digest = hashlib.sha1(value.encode("utf-8", "ignore")).hexdigest()[:8]
++    return f"[redacted len={len(value)} sha1_8={digest}]"
++
++
++def _classify_device_label(value: str) -> str:
++    cleaned = re.sub(r"[^a-zA-Z0-9]+", " ", value or "").strip().lower()
++    if not cleaned:
++        return ""
++    tokens = [token for token in cleaned.split() if token]
++    for token in tokens:
++        mapped = _DEVICE_CLASS_MAP.get(token)
++        if mapped:
++            return mapped
++    base = tokens[0] if tokens else ""
++    return base[:12] if base else "unknown"
++
++
++def _redact_string(key: str, value: str) -> str:
++    text = value.strip()
++    if not text:
++        return ""
++    key_lower = key.lower()
++    if key_lower in {"sha1", "sha1_8", "md5"}:
++        return text
++    if key_lower in {"bytes", "len", "length"}:
++        return text
++    if _should_classify_device(key_lower):
++        return _classify_device_label(text)
++    if _should_mask_text(key_lower):
++        return _mask_text(text)
++    return text
++
++
++def _redact_node(value: Any, *, key_path: Optional[tuple[str, ...]] = None) -> Any:
++    key_path = key_path or ()
++    if isinstance(value, dict):
++        sanitized: Dict[str, Any] = {}
++        for child_key, child_value in value.items():
++            if child_value is None:
++                continue
++            child_key_str = str(child_key)
++            sanitized[child_key_str] = _redact_node(
++                child_value,
++                key_path=key_path + (child_key_str.lower(),),
 +            )
++        return sanitized
++    if isinstance(value, list):
++        return [
++            _redact_node(item, key_path=key_path)
++            for item in value
++        ]
++    if isinstance(value, str):
++        last_key = key_path[-1] if key_path else ""
++        return _redact_string(last_key, value)
++    return value
 +
-+        last_tts_end: Optional[EventRecord] = None
-+        last_asr_error: Optional[EventRecord] = None
 +
-+        for idx, record in enumerate(records):
-+            data = record.data
-+            type_ = data.get("type") or ""
-+            meta = data.get("meta") or {}
++def _redact_mapping(mapping: Any) -> Dict[str, Any]:
++    if not isinstance(mapping, dict):
++        return {}
++    sanitized: Dict[str, Any] = {}
++    for key, value in mapping.items():
++        if value is None:
++            continue
++        key_str = str(key)
++        sanitized[key_str] = _redact_node(value, key_path=(key_str.lower(),))
++    return sanitized
 +
-+            if type_ == CONFIRM_OPEN_TYPE:
-+                start_ms = data.get("t_rel_ms") or 0
-+                confirm_id = data.get("id")
-+                found_within = False
-+                j = idx + 1
-+                while j < len(records):
-+                    next_record = records[j]
-+                    next_type = next_record.data.get("type") or ""
-+                    next_ms = next_record.data.get("t_rel_ms") or 0
-+                    delta = next_ms - start_ms
-+                    if next_type in {CONFIRM_OPEN_TYPE, CONFIRM_CLOSE_TYPE}:
-+                        break
-+                    if delta > 2000:
-+                        break
-+                    if next_type == ASR_PARTIAL_TYPE:
-+                        if delta <= 1200:
-+                            found_within = True
-+                        break
-+                    j += 1
-+                if not found_within:
-+                    _add_hint(
-+                        "no_asr_after_ready",
-+                        "warn",
-+                        "No ASR partial within 1200ms after confirm_open.",
-+                        [confirm_id],
-+                    )
 +
-+                # evidence gate tracking
-+                vad_event: Optional[EventRecord] = None
-+                evidence_met = False
-+                j = idx + 1
-+                while j < len(records):
-+                    next_record = records[j]
-+                    next_type = next_record.data.get("type") or ""
-+                    if next_type == CONFIRM_OPEN_TYPE:
-+                        break
-+                    if next_type == CONFIRM_CLOSE_TYPE:
-+                        break
-+                    if next_type == "vad_gate_open" and vad_event is None:
-+                        vad_event = next_record
-+                    if next_type == "evidence_gate_met" and vad_event is not None:
-+                        evidence_met = True
-+                        break
-+                    j += 1
-+                if vad_event is not None and not evidence_met:
-+                    _add_hint(
-+                        "evidence_never_met",
-+                        "warn",
-+                        "Dual evidence not met (VAD open but no confident partial).",
-+                        [confirm_id, vad_event.data.get("id")],
-+                    )
++def _classify_payload_category(path_value: Any) -> Optional[str]:
++    if not isinstance(path_value, str):
++        return None
++    lowered = path_value.lower()
++    if "llm" in lowered:
++        return "llm"
++    if "tts" in lowered:
++        return "tts"
++    if "dg" in lowered or "deepgram" in lowered or "asr" in lowered:
++        return "asr"
++    return None
 +
-+            if type_ == "gate_check":
-+                rule = str(meta.get("rule") or "").lower()
-+                if rule == "min_tokens":
-+                    passed_val = meta.get("passed")
-+                    passed = bool(passed_val) if isinstance(passed_val, bool) else str(passed_val).lower() in {"1", "true", "yes"}
-+                    if not passed:
-+                        parent_id = data.get("parent_id") or data.get("id")
-+                        _add_hint(
-+                            "commit_blocked_min_tokens",
-+                            "warn",
-+                            "Gate rejected on min_tokens.",
-+                            [parent_id],
-+                        )
 +
-+            if type_ == "tts_end":
-+                last_tts_end = record
++def _redact_payload_sig_meta(meta: Any) -> Dict[str, Any]:
++    source = meta if isinstance(meta, dict) else {}
++    sanitized: Dict[str, Any] = {}
++    bytes_value = source.get("bytes")
++    try:
++        if bytes_value is not None:
++            sanitized["bytes"] = int(bytes_value)
++    except (TypeError, ValueError):
++        pass
++    sha_value = source.get("sha1_8")
++    if isinstance(sha_value, str) and sha_value:
++        sanitized["sha1_8"] = sha_value[:8]
++    category = _classify_payload_category(source.get("path"))
++    if category:
++        sanitized["category"] = category
++    return sanitized
 +
-+            if type_ == "vad_gate_open":
-+                reason = str(meta.get("reason") or "").lower()
-+                if "mask" in reason and last_tts_end is not None:
-+                    dt = (data.get("t_rel_ms") or 0) - (last_tts_end.data.get("t_rel_ms") or 0)
-+                    if dt <= 3000:
-+                        _add_hint(
-+                            "post_tts_hold_overlap",
-+                            "warn",
-+                            "User speech during post-TTS hold; early audio masked.",
-+                            [last_tts_end.data.get("id"), data.get("id")],
-+                        )
 +
-+            if type_ == "tts_metrics":
-+                first_byte = _numeric(meta.get("first_byte_ms"))
-+                if first_byte is not None and first_byte > 600:
-+                    parent_id = data.get("parent_id") or data.get("id")
-+                    _add_hint(
-+                        "tts_slow",
-+                        "warn",
-+                        "TTS first-byte latency above 600ms.",
-+                        [parent_id],
-+                    )
++def _redact_event(event: Dict[str, Any]) -> Dict[str, Any]:
++    clone = copy.deepcopy(event)
++    original_meta = clone.get("meta")
++    if clone.get("type") == "payload_sig":
++        clone["meta"] = _redact_payload_sig_meta(original_meta)
++    else:
++        clone["meta"] = _redact_mapping(original_meta)
++    if isinstance(clone.get("children"), list):
++        clone["children"] = [
++            _redact_event(child)
++            for child in clone["children"]
++            if isinstance(child, dict)
++        ]
++    if isinstance(clone.get("batches"), list):
++        clone["batches"] = [
++            _redact_node(batch, key_path=("batch",))
++            if isinstance(batch, dict)
++            else batch
++            for batch in clone["batches"]
++        ]
++    return clone
 +
-+            if type_ == "queue_depth":
-+                depth = _as_int(meta.get("depth"))
-+                watermark = _as_int(meta.get("watermark"))
-+                threshold = watermark if watermark is not None else 8
-+                if depth is not None and depth >= threshold:
-+                    _add_hint(
-+                        "queue_pressure",
-+                        "warn",
-+                        "Mic or TTS queue hit high-water; possible backpressure.",
-+                        [data.get("id")],
-+                    )
 +
-+            if type_ == "state_snapshot":
-+                queue_val = _as_int(meta.get("queue"))
-+                if queue_val is not None and queue_val >= 8:
-+                    anchor = data.get("parent_id") or data.get("id")
-+                    _add_hint(
-+                        "queue_pressure",
-+                        "warn",
-+                        "Mic or TTS queue hit high-water; possible backpressure.",
-+                        [anchor],
-+                    )
-+
-+            if type_ == "asr_error":
-+                last_asr_error = record
-+            elif type_ == "recover_ok" and last_asr_error is not None:
-+                _add_hint(
-+                    "asr_recovered",
-+                    "info",
-+                    "ASR error then recovery succeeded.",
-+                    [last_asr_error.data.get("id"), data.get("id")],
-+                )
-+                last_asr_error = None
-+
-+        def _event_time(event_id: str) -> int:
-+            record = event_index.get(event_id)
-+            if not record:
-+                return 0
-+            value = record.data.get("t_rel_ms")
-+            return int(value) if isinstance(value, int) else int(value or 0)
-+
-+        hints.sort(key=lambda hint: min(_event_time(anchor) for anchor in hint["anchors"]))
-+        return hints
-+
+ @bp.get("/flow/catalog")
+ def flow_catalog():
+     _require_admin()
+     return jsonify({"catalog": FLOW_EVENT_CATALOG})
  
- __all__ = ["FlowStore"]
-diff --git a/static/css/admin_flow.css b/static/css/admin_flow.css
-index 537c421eaa7c0dad4f0f73242377497fd3442e23..1fd9059472a84b881cddae50e15a6b6e974fcf7f 100644
---- a/static/css/admin_flow.css
-+++ b/static/css/admin_flow.css
-@@ -262,50 +262,126 @@ body {
-   font-size: 13px;
-   transition: background 0.2s ease, border 0.2s ease;
- }
  
- .action-btn:hover {
-   background: rgba(122, 160, 255, 0.25);
-   border-color: rgba(122, 160, 255, 0.8);
- }
+ @bp.get("/flow/sessions")
+ def flow_sessions():
+     _require_admin()
  
- .flow-main {
-   display: flex;
-   flex: 1;
-   position: relative;
-   overflow: hidden;
- }
+     search_value = _normalize_str(request.args.get("q") or request.args.get("query"))
+     limit_value = _parse_int(request.args.get("limit"), name="limit", minimum=0)
  
- .timeline-shell {
-   flex: 1;
-   display: flex;
-   flex-direction: column;
-   padding: 24px 32px 80px;
-   gap: 12px;
-   overflow: hidden;
- }
+     store = FlowStore()
+     limit = limit_value if limit_value is not None else 50
+     sessions = store.sessions(query=search_value, limit=limit)
+     return jsonify({"sessions": sessions})
  
-+.flow-hint-bar {
-+  display: flex;
-+  align-items: center;
-+  gap: 12px;
-+  flex-wrap: wrap;
-+  background: rgba(12, 18, 30, 0.85);
-+  border: 1px solid rgba(122, 160, 255, 0.18);
-+  border-radius: 16px;
-+  padding: 12px 16px;
-+}
-+
-+.flow-hint-bar .hint-label {
-+  font-size: 12px;
-+  font-weight: 600;
-+  text-transform: uppercase;
-+  letter-spacing: 0.04em;
-+  color: #96a3bc;
-+}
-+
-+.hint-badges {
-+  display: flex;
-+  flex-wrap: wrap;
-+  gap: 10px;
-+}
-+
-+.hint-badge {
-+  appearance: none;
-+  border: none;
-+  border-radius: 999px;
-+  padding: 8px 16px;
-+  font-size: 13px;
-+  font-weight: 600;
-+  cursor: pointer;
-+  background: rgba(122, 160, 255, 0.9);
-+  color: #041022;
-+  box-shadow: 0 4px 12px rgba(12, 18, 30, 0.45);
-+  transition: transform 0.15s ease, box-shadow 0.2s ease;
-+}
-+
-+.hint-badge:hover {
-+  transform: translateY(-1px);
-+  box-shadow: 0 8px 20px rgba(122, 160, 255, 0.3);
-+}
-+
-+.hint-badge.severity-warn {
-+  background: #facc15;
-+  color: #261b00;
-+}
-+
-+.hint-badge.severity-info {
-+  background: #38bdf8;
-+  color: #01131f;
-+}
-+
-+.hint-badge.severity-error {
-+  background: #f87171;
-+  color: #2f0606;
-+}
-+
-+.hint-empty {
-+  font-size: 13px;
-+  color: #8c97ad;
-+}
-+
-+.timeline-toolbar {
-+  display: flex;
-+  justify-content: flex-end;
-+  align-items: center;
-+}
-+
-+.tree-controls {
-+  display: flex;
-+  align-items: center;
-+  gap: 12px;
-+}
-+
- .timeline-head {
-   display: grid;
-   grid-template-columns: 6px 120px 140px 120px 180px minmax(200px, 1fr) minmax(200px, 1fr);
-   gap: 16px;
-   color: #93a3c5;
-   font-size: 12px;
-   text-transform: uppercase;
-   letter-spacing: 0.04em;
-   padding: 0 12px;
- }
  
- .timeline-body {
-   flex: 1;
-   border: 1px solid rgba(122, 160, 255, 0.2);
-   border-radius: 16px;
-   background: rgba(9, 12, 21, 0.78);
-   overflow-y: auto;
-   position: relative;
- }
+ @bp.get("/flow/trace")
+ def flow_trace():
+     _require_admin()
  
- .timeline-row,
- .timeline-bookmark,
- .timeline-empty,
- .timeline-group-header {
-   display: grid;
+     session_id = _normalize_str(request.args.get("session_id"))
+     if not session_id:
+@@ -125,56 +363,101 @@ def flow_trace():
+ @bp.get("/flow/event")
+ def flow_event():
+     _require_admin()
+ 
+     session_id = _normalize_str(request.args.get("session_id"))
+     event_id = _normalize_str(request.args.get("id"))
+     if not session_id or not event_id:
+         abort(400, description="session_id and id are required")
+ 
+     store = FlowStore()
+     event = store.get(session_id, event_id)
+     if not event:
+         abort(404)
+     return jsonify(event)
+ 
+ 
+ @bp.get("/flow/export.ndjson")
+ def flow_export_ndjson():
+     _require_admin()
+ 
+     session_id = _normalize_str(request.args.get("session_id"))
+     if not session_id:
+         abort(400, description="session_id is required")
+ 
+     since_value = _parse_int(request.args.get("since_ms"), name="since_ms", minimum=0)
+-    levels = _parse_levels(request.args.get("levels"))
++    levels = list(_parse_levels(request.args.get("levels")))
+     redacted = _parse_bool(request.args.get("redacted"), default=True)
+ 
+     store = FlowStore()
+ 
+     def _generate() -> Iterable[str]:
+-        cursor = since_value if since_value is not None else 0
+-        while True:
+-            chunk = store.list(
+-                session_id=session_id,
+-                since_ms=cursor,
+-                limit=500,
+-                levels=levels,
+-                expand="all",
+-            )
+-            events = chunk.get("events", [])
+-            if not events:
+-                break
+-            for event in events:
+-                yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+-            next_since = chunk.get("next_since_ms")
+-            if not isinstance(next_since, int) or next_since <= cursor:
+-                break
+-            cursor = next_since
++        for event in _iter_session_events(store, session_id, levels, since_value):
++            payload = _redact_event(event) if redacted else event
++            yield json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+ 
+     response = Response(stream_with_context(_generate()), mimetype="application/x-ndjson")
+     response.headers["X-Flow-Redacted"] = "1" if redacted else "0"
+     return response
+ 
+ 
++@bp.post("/flow/handoff")
++def flow_handoff():
++    _require_admin()
++
++    payload = request.get_json(silent=True) or {}
++    session_id = _normalize_str(payload.get("session_id"))
++    if not session_id:
++        abort(400, description="session_id is required")
++
++    levels = _coerce_levels(payload.get("levels"))
++    prompt_value = payload.get("prompt")
++    prompt_text = _normalize_str(prompt_value) or DEFAULT_HANDOFF_PROMPT
++
++    store = FlowStore()
++    events = list(_iter_session_events(store, session_id, levels, None))
++    redacted_events = [_redact_event(event) for event in events]
++
++    lines = [
++        json.dumps(event, ensure_ascii=False, separators=(",", ":"))
++        for event in redacted_events
++    ]
++    ndjson_text = "\n".join(lines)
++    if ndjson_text:
++        ndjson_text += "\n"
++    ndjson_bytes = ndjson_text.encode("utf-8")
++
++    sha_hex = hashlib.sha1(ndjson_bytes).hexdigest()
++    short_hash = sha_hex[:8]
++    generated_at = datetime.now(timezone.utc).isoformat()
++
++    meta_payload = {
++        "session_id": session_id,
++        "levels": levels,
++        "generated_at": generated_at,
++        "event_count": len(redacted_events),
++        "payload_sig": {"bytes": len(ndjson_bytes), "sha1_8": short_hash},
++    }
++
++    buffer = io.BytesIO()
++    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
++        archive.writestr("flow.ndjson", ndjson_bytes)
++        archive.writestr("prompt.txt", prompt_text)
++        archive.writestr(
++            "meta.json",
++            json.dumps(meta_payload, ensure_ascii=False, indent=2),
++        )
++    buffer.seek(0)
++
++    response = Response(buffer.getvalue(), mimetype="application/zip")
++    safe_session = re.sub(r"[^a-zA-Z0-9_-]+", "_", session_id) or "session"
++    response.headers[
++        "Content-Disposition"
++    ] = f'attachment; filename="flow_handoff_{safe_session}.zip"'
++    response.headers["X-Flow-Redacted"] = "1"
++    response.headers["X-Flow-Payload-Bytes"] = str(len(ndjson_bytes))
++    response.headers["X-Flow-Payload-Sha1"] = short_hash
++    response.headers["Cache-Control"] = "no-store"
++    return response
++
++
+ __all__ = ["bp"]
 diff --git a/static/js/admin_flow.js b/static/js/admin_flow.js
-index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4f6d77d54 100644
+index 87c2e8192965e49702d1286fe7a5acc4f6d77d54..20966a6aaa8a7a40f902e8e73bc7cbba2766861b 100644
 --- a/static/js/admin_flow.js
 +++ b/static/js/admin_flow.js
-@@ -24,97 +24,102 @@ const GROUP_LABELS = {
+@@ -1,125 +1,138 @@
+ const POLL_MIN_MS = 750;
+ const POLL_MAX_MS = 1000;
+ const MAX_SESSION_RESULTS = 20;
+ const MAX_META_LENGTH = 48;
+ const LEVELS = ["flow", "transition", "debug", "raw"];
++const FORENSIC_DURATION_MS = 10_000;
++const HANDOFF_PROMPT =
++  "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), smallest viable fix, and validation steps.";
+ 
+ const PHASE_COLORS = {
+   session: "#7aa0ff",
+   turn: "#62ddb8",
+   guardrail: "#f78ed2",
+   confirm: "#fbbf24",
+   nlu: "#c084fc",
+   nlg: "#f97316",
+   tts: "#22d3ee",
+   audio: "#38bdf8",
+   evidence: "#facc15",
+   ops: "#f97316",
+   policy: "#fbbf24",
+   default: "#717b9b",
+ };
+ 
+ const GROUP_LABELS = {
+   phase: "Phase",
    turn: "Turn",
    chronological: "Timeline",
  };
@@ -467,8 +499,16 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
    drawerEventId: null,
    lastFetchedAt: null,
    loading: false,
-+  hints: [],
-+  hintMap: new Map(),
+   hints: [],
+   hintMap: new Map(),
++  forensicActive: false,
++  forensicTimer: null,
++  forensicTicker: null,
++  forensicPrevLevels: null,
++  forensicPrevExpanded: null,
++  forensicUntil: 0,
++  forensicExpandAll: false,
++  pendingExpandedRestore: null,
  };
  
  const els = {};
@@ -496,6 +536,7 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
    els.tailToggle = document.getElementById("flowTailToggle");
    els.tailStep = document.getElementById("flowTailStep");
    els.timeline = document.getElementById("flowTimeline");
++  els.forensic = document.getElementById("flowForensic");
    els.exportFull = document.getElementById("flowExportFull");
    els.exportRedacted = document.getElementById("flowExportRedacted");
    els.copyLink = document.getElementById("flowCopyLink");
@@ -507,8 +548,8 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
    els.drawerRelated = document.getElementById("flowDrawerRelated");
    els.drawerCopy = document.getElementById("flowDrawerCopy");
    els.drawerClose = document.getElementById("flowDrawerClose");
-+  els.hints = document.getElementById("flowHints");
-+  els.treeControls = root.querySelector('[data-ref="tree-controls"]');
+   els.hints = document.getElementById("flowHints");
+   els.treeControls = root.querySelector('[data-ref="tree-controls"]');
  
    bindEvents();
    hydrateFromLocation();
@@ -518,7 +559,8 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
    renderTail();
    renderTimeline();
    renderDrawer();
-+  renderHints();
+   renderHints();
++  renderForensicButton();
  
    if (state.sessionId) {
      fetchTrace({ reset: true });
@@ -544,7 +586,49 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
  
    if (els.sessionResults) {
      els.sessionResults.addEventListener("click", (ev) => {
-@@ -205,50 +210,65 @@ function bindEvents() {
+@@ -172,50 +185,54 @@ function bindEvents() {
+     els.filterChips.addEventListener("click", (ev) => {
+       const closeBtn = ev.target.closest("button[data-chip-index]");
+       if (!closeBtn) return;
+       const idx = Number(closeBtn.getAttribute("data-chip-index"));
+       if (!Number.isNaN(idx)) {
+         state.filterChips.splice(idx, 1);
+         scheduleRender();
+       }
+     });
+   }
+ 
+   if (els.tailToggle) {
+     els.tailToggle.addEventListener("click", () => {
+       if (state.live) {
+         pauseLive();
+       } else {
+         goLive(true);
+       }
+     });
+   }
+ 
+   if (els.tailStep) {
+     els.tailStep.addEventListener("click", () => fetchTrace({ reset: false }));
+   }
+ 
++  if (els.forensic) {
++    els.forensic.addEventListener("click", () => toggleForensicMode());
++  }
++
+   if (els.exportFull) {
+     els.exportFull.addEventListener("click", () => downloadExport({ redacted: false }));
+   }
+ 
+   if (els.exportRedacted) {
+     els.exportRedacted.addEventListener("click", () => downloadExport({ redacted: true }));
+   }
+ 
+   if (els.copyLink) {
+     els.copyLink.addEventListener("click", () => copyLink());
+   }
+ 
+   if (els.handoff) {
      els.handoff.addEventListener("click", () => handoffToChatGPT());
    }
  
@@ -557,34 +641,17 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
      els.drawerClose.addEventListener("click", () => openDrawer(null));
    }
    if (els.drawerCopy) {
-     els.drawerCopy.addEventListener("click", () => copyDrawerJson());
-   }
-   if (els.drawerRelated) {
-     els.drawerRelated.addEventListener("click", (ev) => {
-       const btn = ev.target.closest("button[data-target]");
+@@ -240,50 +257,167 @@ function bindEvents() {
+     els.treeControls.addEventListener("click", (ev) => {
+       const btn = ev.target.closest("button[data-tree]");
        if (!btn) return;
-       const target = btn.getAttribute("data-target");
-       if (target) {
-         focusEvent(target);
+       const mode = btn.getAttribute("data-tree");
+       if (mode) {
+         handleTreeToggle(mode);
        }
      });
    }
  
-+  if (els.hints) {
-+    els.hints.addEventListener("click", onHintClick);
-+  }
-+
-+  if (els.treeControls) {
-+    els.treeControls.addEventListener("click", (ev) => {
-+      const btn = ev.target.closest("button[data-tree]");
-+      if (!btn) return;
-+      const mode = btn.getAttribute("data-tree");
-+      if (mode) {
-+        handleTreeToggle(mode);
-+      }
-+    });
-+  }
-+
    document.addEventListener("click", (ev) => {
      if (!popoverNode) return;
      if (ev.target.closest(".popover") || ev.target.closest(".raw-batch-btn")) {
@@ -600,6 +667,123 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
    });
  }
  
++function renderForensicButton() {
++  if (!els.forensic) return;
++  const btn = els.forensic;
++  if (!state.sessionId) {
++    btn.disabled = true;
++    btn.textContent = "Forensic mode";
++    btn.classList.remove("active");
++    return;
++  }
++  btn.disabled = false;
++  if (state.forensicActive) {
++    const remainingMs = Math.max(0, state.forensicUntil - Date.now());
++    const remainingSec = Math.max(0, Math.ceil(remainingMs / 1000));
++    btn.textContent = `Forensic (${remainingSec}s)`;
++    btn.classList.add("active");
++  } else {
++    btn.textContent = "Forensic mode";
++    btn.classList.remove("active");
++  }
++}
++
++function toggleForensicMode() {
++  if (state.forensicActive) {
++    exitForensicMode({ auto: false });
++  } else {
++    enterForensicMode();
++  }
++}
++
++function enterForensicMode() {
++  if (state.forensicActive) return;
++  if (!state.sessionId) {
++    setHint("Select a session first.");
++    return;
++  }
++  state.forensicActive = true;
++  state.forensicPrevLevels = new Set(state.levels);
++  state.forensicPrevExpanded = new Set(state.expanded);
++  state.forensicExpandAll = true;
++  state.pendingExpandedRestore = null;
++  clearForensicTimer();
++  state.forensicUntil = Date.now() + FORENSIC_DURATION_MS;
++  state.forensicTimer = setTimeout(() => exitForensicMode({ auto: true }), FORENSIC_DURATION_MS);
++  startForensicTicker();
++  state.levels = new Set(LEVELS);
++  reflectLevelButtons();
++  setHint("Forensic mode active (10s).");
++  renderForensicButton();
++  reloadAfterLevelChange({ skipHistory: true });
++}
++
++function exitForensicMode(options = {}) {
++  const { auto = false, skipReload = false } = options;
++  if (!state.forensicActive) {
++    renderForensicButton();
++    return;
++  }
++  clearForensicTimer();
++  stopForensicTicker();
++  state.forensicActive = false;
++  state.forensicExpandAll = false;
++  state.forensicUntil = 0;
++
++  const prevLevels = state.forensicPrevLevels ? new Set(state.forensicPrevLevels) : new Set(["flow", "transition"]);
++  if (!prevLevels.has("flow")) {
++    prevLevels.add("flow");
++  }
++  const prevExpanded = state.forensicPrevExpanded ? new Set(state.forensicPrevExpanded) : null;
++  state.forensicPrevLevels = null;
++  state.forensicPrevExpanded = null;
++
++  state.levels = prevLevels;
++  reflectLevelButtons();
++
++  if (skipReload) {
++    state.pendingExpandedRestore = null;
++  } else if (auto) {
++    state.pendingExpandedRestore = null;
++  } else if (prevExpanded && prevExpanded.size) {
++    state.pendingExpandedRestore = new Set(prevExpanded);
++  } else {
++    state.pendingExpandedRestore = null;
++  }
++
++  if (!skipReload) {
++    reloadAfterLevelChange({ skipHistory: true });
++  }
++
++  renderForensicButton();
++  setHint(auto ? "Forensic mode ended." : "Forensic mode off.");
++}
++
++function clearForensicTimer() {
++  if (state.forensicTimer) {
++    clearTimeout(state.forensicTimer);
++    state.forensicTimer = null;
++  }
++}
++
++function startForensicTicker() {
++  stopForensicTicker();
++  state.forensicTicker = setInterval(() => {
++    if (!state.forensicActive) {
++      stopForensicTicker();
++      return;
++    }
++    renderForensicButton();
++  }, 250);
++}
++
++function stopForensicTicker() {
++  if (state.forensicTicker) {
++    clearInterval(state.forensicTicker);
++    state.forensicTicker = null;
++  }
++}
++
  function hydrateFromLocation() {
    const url = new URL(window.location.href);
    let sessionId = url.searchParams.get("session_id") || "";
@@ -610,7 +794,30 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
      if (qIndex >= 0) {
        const hashParams = new URLSearchParams(hash.slice(qIndex + 1));
        sessionId = hashParams.get("session_id") || sessionId;
-@@ -393,88 +413,90 @@ function renderSessions() {
+       const levels = hashParams.get("levels");
+       if (levels) {
+         setLevelsFromString(levels);
+       }
+       const group = hashParams.get("group");
+       if (group) {
+         state.grouping = group;
+       }
+       const filter = hashParams.get("filter");
+       if (filter) {
+         state.filterText = filter;
+         if (els.filterInput) els.filterInput.value = filter;
+       }
+       const turn = hashParams.get("turn");
+       if (turn) {
+@@ -405,148 +539,169 @@ function renderSessions() {
+     return;
+   }
+ 
+   els.sessionResults.innerHTML = sessions
+     .map((item) => renderSessionListItem(item))
+     .join("");
+ }
+ 
  function renderSessionListItem(item) {
    const isActive = item.session_id === state.sessionId;
    const timeText = typeof item.last_event_ms === "number" ? `${item.last_event_ms.toLocaleString()} ms` : "—";
@@ -628,6 +835,9 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
  
  function selectSession(sessionId) {
    if (!sessionId) return;
++  if (state.forensicActive) {
++    exitForensicMode({ auto: false, skipReload: true });
++  }
    state.sessionId = sessionId;
    state.pollSinceMs = 0;
    state.events.clear();
@@ -636,7 +846,8 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
    state.matchedIds = new Set();
    state.visibleIds = new Set();
    state.drawerEventId = null;
-+  updateHints([]);
+   updateHints([]);
++  renderForensicButton();
    if (els.sessionInput) {
      els.sessionInput.value = sessionId;
    }
@@ -675,12 +886,13 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
      .then((payload) => {
        const events = Array.isArray(payload.events) ? payload.events : [];
        ingestEvents(events);
-+      updateHints(payload.hints);
+       updateHints(payload.hints);
        const nextSince = payload.next_since_ms;
        if (typeof nextSince === "number" && nextSince >= 0) {
          state.pollSinceMs = nextSince;
        }
        state.lastFetchedAt = Date.now();
++      applyPendingExpandedRestore();
        renderTimeline();
        renderDrawer();
      })
@@ -701,178 +913,249 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
      const { children, ...rest } = event;
      const childIds = Array.isArray(children) ? children.map((child) => child && child.id).filter(Boolean) : [];
      const normalized = normalizeEvent(rest, childIds);
-@@ -562,60 +584,130 @@ function sanitizeMeta(meta) {
+     const existing = state.events.get(normalized.id);
+     if (existing) {
+       mergeEvent(existing, normalized);
+       if (childIds.length) {
+         const merged = new Set([...(existing.childrenIds || []), ...childIds]);
+         existing.childrenIds = Array.from(merged);
+       }
+     } else {
+       state.events.set(normalized.id, normalized);
+-      if (normalized.parentId) {
++      if (state.forensicActive || state.forensicExpandAll) {
++        state.expanded.add(normalized.id);
++        if (normalized.parentId) {
++          state.expanded.add(normalized.parentId);
++        }
++      } else if (normalized.parentId) {
+         state.expanded.add(normalized.parentId);
+       } else {
+         state.expanded.add(normalized.id);
+       }
+     }
+     if (Array.isArray(event.children)) {
+       for (const child of event.children) {
+         if (!child || typeof child !== "object") continue;
+         const clone = { ...child, parent_id: event.id };
+         queue.push(clone);
+       }
+     }
+   }
+ }
  
- function scheduleRender() {
-   renderFilters();
++function applyPendingExpandedRestore() {
++  if (!state.pendingExpandedRestore) return;
++  const restore = state.pendingExpandedRestore;
++  state.pendingExpandedRestore = null;
++  for (const id of restore) {
++    if (state.events.has(id)) {
++      state.expanded.add(id);
++    }
++  }
++}
++
+ function normalizeEvent(event, childIds = []) {
+   const meta = sanitizeMeta(event.meta);
+   const batches = Array.isArray(event.batches) ? event.batches.map((b) => ({ ...b })) : [];
+   const parentId = event.parent_id || null;
+   return {
+     id: String(event.id),
+     t_rel_ms: typeof event.t_rel_ms === "number" ? event.t_rel_ms : 0,
+     level: event.level || "flow",
+     phase: event.phase || "",
+     who: event.who || "",
+     type: event.type || "",
+     blurb: event.blurb || "",
+     meta,
+     batches,
+     parentId,
+     childrenIds: childIds,
+     turnId: meta.turn_id != null ? String(meta.turn_id) : meta.turn != null ? String(meta.turn) : "",
+     raw: buildRawSnapshot(event, meta, batches),
+   };
+ }
+ 
+ function mergeEvent(existing, incoming) {
+   existing.t_rel_ms = incoming.t_rel_ms || existing.t_rel_ms;
+   existing.level = incoming.level || existing.level;
+   existing.phase = incoming.phase || existing.phase;
+@@ -1030,65 +1185,74 @@ function showBatchPopover(anchor, eventId, index) {
+   const itemsText = JSON.stringify(batch.items, null, 2);
+   pop.innerHTML = `<h3>${escapeHtml(batch.kind || `Batch ${index + 1}`)}</h3><pre>${escapeHtml(itemsText)}</pre>`;
+   document.body.appendChild(pop);
+   const rect = anchor.getBoundingClientRect();
+   pop.style.top = `${rect.bottom + window.scrollY + 8}px`;
+   pop.style.left = `${rect.left + window.scrollX}px`;
+   popoverNode = pop;
+ }
+ 
+ function hidePopover() {
+   if (popoverNode && popoverNode.parentNode) {
+     popoverNode.parentNode.removeChild(popoverNode);
+   }
+   popoverNode = null;
+ }
+ 
+ function addFilterChip(key, value) {
+   const exists = state.filterChips.some((chip) => chip.key === key && chip.value === String(value));
+   if (exists) return;
+   state.filterChips.push({ key, value: String(value), display: String(value) });
+   scheduleRender();
+ }
+ 
+ function toggleLevel(level) {
+   if (!level || level === "flow") return;
++  if (state.forensicActive) return;
+   if (state.levels.has(level)) {
+     state.levels.delete(level);
+   } else {
+     state.levels.add(level);
+   }
+   reflectLevelButtons();
++  state.pendingExpandedRestore = null;
++  reloadAfterLevelChange();
++}
++
++function reloadAfterLevelChange(options = {}) {
++  const { skipHistory = false } = options;
+   state.events.clear();
+-  state.expanded.clear();
++  state.expanded = new Set();
+   state.matchedIds = new Set();
+   state.visibleIds = new Set();
+   state.drawerEventId = null;
    renderTimeline();
    renderDrawer();
+   fetchTrace({ reset: true });
+-  updateHistory();
++  if (!skipHistory) {
++    updateHistory();
++  }
+ }
+ 
+ function reflectLevelButtons() {
+   if (!els.levelContainer) return;
+   for (const btn of els.levelContainer.querySelectorAll("button[data-level]")) {
+     const level = btn.getAttribute("data-level");
+     const active = state.levels.has(level);
+     btn.classList.toggle("active", active);
+   }
+ }
+ 
+ function setGrouping(group) {
+   if (!group) return;
+   if (!GROUP_LABELS[group] && group !== "chronological") return;
+   state.grouping = group;
+   reflectGroupingButtons();
+   renderTimeline();
    updateHistory();
  }
  
- function renderFilters() {
-   if (!els.filterChips) return;
-   const chips = state.filterChips
-     .map((chip, idx) => {
-       const text = `${chip.key}:${chip.display}`;
-       return `<span class="filter-chip">${escapeHtml(text)}<button data-chip-index="${idx}" title="Remove">×</button></span>`;
-     })
-     .join("");
-   els.filterChips.innerHTML = chips;
+ function reflectGroupingButtons() {
+   if (!els.groupContainer) return;
+   for (const btn of els.groupContainer.querySelectorAll("button[data-group]")) {
+     const group = btn.getAttribute("data-group");
+     btn.classList.toggle("active", group === state.grouping);
+@@ -1172,54 +1336,85 @@ function copyLink() {
+   if (state.grouping && state.grouping !== "chronological") {
+     params.set("group", state.grouping);
+   }
+   if (state.filterText) params.set("filter", state.filterText);
+   if (state.turnFilter) params.set("turn", state.turnFilter);
+   if (state.filterChips.length) {
+     params.set(
+       "chips",
+       state.filterChips
+         .map((chip) => `${encodeURIComponent(chip.key)}:${encodeURIComponent(chip.value)}`)
+         .join(",")
+     );
+   }
+   const hash = `#/admin/flow${params.toString() ? `?${params.toString()}` : ""}`;
+   const link = `${window.location.origin}/admin${hash}`;
+   writeClipboardText(link)
+     .then(() => setHint("Link copied."))
+     .catch(() => setHint("Copy failed."));
  }
  
- function renderTail() {
-   if (!els.tailState || !els.tailToggle) return;
-   els.tailState.textContent = state.live ? "Live" : "Paused";
-   els.tailToggle.textContent = state.live ? "Pause" : "Go live";
- }
- 
-+function renderHints() {
-+  if (!els.hints) return;
-+  const hints = Array.isArray(state.hints) ? state.hints : [];
-+  if (!hints.length) {
-+    els.hints.innerHTML = '<span class="hint-empty">No hints yet.</span>';
-+    return;
-+  }
-+  els.hints.innerHTML = hints
-+    .map((hint) => {
-+      const severity = String(hint.severity || "info").toLowerCase();
-+      const classes = ["hint-badge", `severity-${escapeAttr(severity)}`];
-+      const label = hint.text ? escapeHtml(hint.text) : escapeHtml(hint.id);
-+      return `<button type="button" class="${classes.join(" ")}" data-hint-id="${escapeAttr(hint.id)}">${label}</button>`;
-+    })
-+    .join("");
-+}
-+
-+function updateHints(rawHints) {
-+  const normalized = Array.isArray(rawHints)
-+    ? rawHints
-+        .map((hint) => {
-+          if (!hint || typeof hint !== "object") return null;
-+          const id = hint.id != null ? String(hint.id) : "";
-+          if (!id) return null;
-+          const severity = hint.severity != null ? String(hint.severity) : "info";
-+          const text = hint.text != null ? String(hint.text) : "";
-+          const anchors = Array.isArray(hint.anchors)
-+            ? hint.anchors.map((anchor) => String(anchor))
-+            : [];
-+          return { id, severity, text, anchors };
-+        })
-+        .filter(Boolean)
-+    : [];
-+  state.hints = normalized;
-+  state.hintMap = new Map(normalized.map((hint) => [hint.id, hint]));
-+  renderHints();
-+}
-+
- function renderTimeline() {
-   if (!els.timeline) return;
-   const { rows } = buildRows();
-   if (!rows.length) {
-     els.timeline.innerHTML = `<div class="timeline-empty">${state.sessionId ? "No events yet." : "Select a session to begin."}</div>`;
+ function handoffToChatGPT() {
+   if (!state.sessionId) {
+     setHint("Select a session first.");
      return;
    }
-   els.timeline.innerHTML = rows.map(renderRow).join("");
+-  const summary = buildSessionSummary();
+-  writeClipboardText(summary)
+-    .then(() => setHint("Summary copied for ChatGPT."))
+-    .catch(() => setHint("Could not copy summary."));
++  const payload = {
++    session_id: state.sessionId,
++    levels: Array.from(state.levels),
++    prompt: HANDOFF_PROMPT,
++  };
++  setHint("Preparing hand-off…");
++  fetch("/api/v1/flow/handoff", {
++    method: "POST",
++    credentials: "include",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify(payload),
++  })
++    .then((resp) => {
++      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
++      return resp.blob();
++    })
++    .then((blob) => {
++      const href = URL.createObjectURL(blob);
++      const link = document.createElement("a");
++      const iso = new Date().toISOString().replace(/[:.]/g, "-");
++      const safeSession = state.sessionId.replace(/[^a-zA-Z0-9_-]+/g, "_");
++      link.href = href;
++      link.download = `flow_handoff_${safeSession}_${iso}.zip`;
++      document.body.appendChild(link);
++      link.click();
++      requestAnimationFrame(() => {
++        URL.revokeObjectURL(href);
++        link.remove();
++      });
++      setHint("Hand-off package downloaded.");
++    })
++    .catch((err) => {
++      console.warn("[flow] hand-off failed", err);
++      setHint("Hand-off failed.");
++    });
  }
  
-+function onHintClick(ev) {
-+  const badge = ev.target.closest("button[data-hint-id]");
-+  if (!badge) return;
-+  const id = badge.getAttribute("data-hint-id");
-+  if (!id) return;
-+  const hint = state.hintMap?.get(id);
-+  if (!hint || !Array.isArray(hint.anchors) || !hint.anchors.length) return;
-+  const targetId = hint.anchors[0];
-+  if (targetId) {
-+    focusEvent(targetId);
-+  }
-+}
-+
-+function handleTreeToggle(mode) {
-+  if (!mode) return;
-+  if (mode === "collapse") {
-+    state.expanded = new Set();
-+  } else if (mode === "flow") {
-+    const expanded = new Set();
-+    for (const event of state.events.values()) {
-+      if (!event) continue;
-+      if (!event.parentId || event.level === "flow") {
-+        expanded.add(event.id);
-+      }
-+    }
-+    state.expanded = expanded;
-+  } else if (mode === "all") {
-+    state.expanded = new Set(state.events.keys());
-+  }
-+  renderTimeline();
-+}
-+
- function buildRows() {
-   const visibleSet = computeVisibleIds();
-   const rows = [];
-   const grouping = state.grouping || "chronological";
-   const roots = getRootIds();
- 
-   if (!roots.length) {
-     return { rows: [] };
-   }
- 
-   if (grouping === "chronological") {
-     for (const rootId of roots) {
-       appendTreeRows(rows, rootId, 0, visibleSet);
-     }
-     return { rows };
-   }
- 
-   const groups = new Map();
-   for (const rootId of roots) {
-     const event = state.events.get(rootId);
-     if (!event) continue;
-     const key = grouping === "phase" ? (event.phase || "—") : event.turnId || "—";
-     if (!groups.has(key)) groups.set(key, []);
-     groups.get(key).push(rootId);
-   }
-@@ -1179,50 +1271,65 @@ function renderRelated(event) {
-     }
-   }
-   const uniq = new Map();
-   for (const item of items) {
-     if (!uniq.has(item.target)) {
-       uniq.set(item.target, item);
-     }
-   }
-   if (!uniq.size) {
-     return '<p class="drawer-empty">No related events.</p>';
-   }
-   return Array.from(uniq.values())
-     .map((item) => `<button type="button" data-target="${escapeAttr(item.target)}">${escapeHtml(item.label)}</button>`)
-     .join("");
+ function buildSessionSummary() {
+   const events = Array.from(state.events.values()).sort((a, b) => a.t_rel_ms - b.t_rel_ms);
+   const head = events.slice(0, 5).map((evt) => `- ${evt.t_rel_ms}ms ${evt.phase} ${evt.type}`);
+   return `Ask Chip Flow Summary\nSession: ${state.sessionId}\nLevels: ${Array.from(state.levels).join(", ")}\nEvents captured: ${events.length}\nFirst samples:\n${head.join("\n")}`;
  }
  
- function focusEvent(eventId) {
+ function openDrawer(eventId) {
+   state.drawerEventId = eventId;
+   renderDrawer();
    if (!eventId) return;
-   let cursor = state.events.get(eventId)?.parentId;
-   while (cursor) {
-     state.expanded.add(cursor);
-     cursor = state.events.get(cursor)?.parentId;
+   const row = els.timeline?.querySelector(`.timeline-row[data-event-id="${cssEscape(eventId)}"]`);
+   if (row) {
+     row.scrollIntoView({ behavior: "smooth", block: "center" });
+     row.classList.add("pulse");
+     setTimeout(() => row.classList.remove("pulse"), 1400);
    }
-   openDrawer(eventId);
-   renderTimeline();
-+  requestAnimationFrame(() => {
-+    const selector = `.timeline-row[data-event-id="${cssEscape(eventId)}"]`;
-+    const row = els.timeline?.querySelector(selector);
-+    if (row) {
-+      row.classList.add("pulse");
-+      try {
-+        row.scrollIntoView({ behavior: "smooth", block: "center" });
-+      } catch {
-+        row.scrollIntoView({ block: "center" });
-+      }
-+      setTimeout(() => {
-+        row.classList.remove("pulse");
-+      }, 1400);
-+    }
-+  });
+ }
+ 
+ function renderDrawer() {
+   if (!els.drawer) return;
+   const event = state.drawerEventId ? state.events.get(state.drawerEventId) : null;
+   if (!event) {
+     els.drawer.setAttribute("aria-hidden", "true");
+@@ -1303,50 +1498,51 @@ function focusEvent(eventId) {
+       } catch {
+         row.scrollIntoView({ block: "center" });
+       }
+       setTimeout(() => {
+         row.classList.remove("pulse");
+       }, 1400);
+     }
+   });
  }
  
  function copyDrawerJson() {
@@ -890,6 +1173,7 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
  }
  
  function updateHistory() {
++  if (state.forensicActive) return;
    if (!state.sessionId) return;
    const params = new URLSearchParams();
    params.set("session_id", state.sessionId);
@@ -898,11 +1182,38 @@ index 01cd871834dc64e9becfa39469288ee6b65c5aaa..87c2e8192965e49702d1286fe7a5acc4
      params.set("group", state.grouping);
    }
    if (state.filterText) params.set("filter", state.filterText);
+   if (state.turnFilter) params.set("turn", state.turnFilter);
+   if (state.filterChips.length) {
+     params.set(
+       "chips",
+       state.filterChips.map((chip) => `${encodeURIComponent(chip.key)}:${encodeURIComponent(chip.value)}`).join(",")
+     );
+   }
+   const url = `/admin/flow?${params.toString()}`;
+   window.history.replaceState({}, "", url);
+   window.location.hash = `#/admin/flow${params.toString() ? `?${params.toString()}` : ""}`;
+ }
+ 
+ function cssEscape(value) {
+   if (window.CSS?.escape) return window.CSS.escape(value);
+   return value.replace(/[^a-zA-Z0-9_-]/g, "");
+ }
+ 
 diff --git a/templates/admin_flow.html b/templates/admin_flow.html
-index 23f41c37cbb31b26d5ac28cf92e28361ced5ab30..edd775496b67a908349bff1ef2db665d3515c17a 100644
+index edd775496b67a908349bff1ef2db665d3515c17a..ca16312d3e8a7a9410204046161bc816ecc61999 100644
 --- a/templates/admin_flow.html
 +++ b/templates/admin_flow.html
-@@ -50,50 +50,64 @@
+@@ -40,50 +40,51 @@
+             <button type="button" class="toggle" data-group="turn">By Turn</button>
+             <button type="button" class="toggle active" data-group="chronological">Chronological</button>
+           </div>
+         </div>
+       </div>
+       <div class="flow-header-secondary">
+         <div class="filters" data-ref="filters">
+           <label class="filter-search">
+             <span>Filter</span>
+             <input id="flowFilterInput" type="search" placeholder="type, who, phase…" autocomplete="off">
            </label>
            <label class="filter-turn">
              <span>Turn</span>
@@ -918,6 +1229,7 @@ index 23f41c37cbb31b26d5ac28cf92e28361ced5ab30..edd775496b67a908349bff1ef2db665d
            </div>
          </div>
          <div class="flow-actions" data-ref="actions">
++          <button type="button" id="flowForensic" class="action-btn">Forensic mode</button>
            <button type="button" id="flowExportFull" class="action-btn">Export NDJSON</button>
            <button type="button" id="flowExportRedacted" class="action-btn">Export Redacted</button>
            <button type="button" id="flowCopyLink" class="action-btn">Copy link</button>
@@ -928,321 +1240,205 @@ index 23f41c37cbb31b26d5ac28cf92e28361ced5ab30..edd775496b67a908349bff1ef2db665d
  
      <main class="flow-main">
        <div class="timeline-shell">
-+        <div class="flow-hint-bar">
-+          <span class="hint-label">Smart hints</span>
-+          <div class="hint-badges" id="flowHints" aria-live="polite"></div>
-+        </div>
-+        <div class="timeline-toolbar">
-+          <div class="tree-controls" data-ref="tree-controls">
-+            <span class="group-label">Tree</span>
-+            <div class="toggle-group">
-+              <button type="button" class="toggle" data-tree="collapse">Collapse all</button>
-+              <button type="button" class="toggle" data-tree="flow">Expand flow</button>
-+              <button type="button" class="toggle" data-tree="all">Expand all</button>
-+            </div>
-+          </div>
-+        </div>
-         <div class="timeline-head">
-           <div class="timeline-col rail" aria-hidden="true"></div>
-           <div class="timeline-col time">Time (ms)</div>
-           <div class="timeline-col phase">Phase</div>
-           <div class="timeline-col who">Who</div>
-           <div class="timeline-col type">Type</div>
-           <div class="timeline-col blurb">Blurb</div>
-           <div class="timeline-col meta">Meta</div>
+         <div class="flow-hint-bar">
+           <span class="hint-label">Smart hints</span>
+           <div class="hint-badges" id="flowHints" aria-live="polite"></div>
          </div>
-         <div class="timeline-body" id="flowTimeline" role="treegrid" aria-live="polite"></div>
-       </div>
-       <aside class="flow-drawer" id="flowDrawer" aria-live="polite" aria-hidden="true">
-         <div class="drawer-header">
-           <h2 id="flowDrawerTitle">Event</h2>
-           <div class="drawer-actions">
-             <button type="button" id="flowDrawerCopy" class="icon-btn" title="Copy JSON">⧉</button>
-             <button type="button" id="flowDrawerClose" class="icon-btn" title="Close">✕</button>
+         <div class="timeline-toolbar">
+           <div class="tree-controls" data-ref="tree-controls">
+             <span class="group-label">Tree</span>
+             <div class="toggle-group">
+               <button type="button" class="toggle" data-tree="collapse">Collapse all</button>
+               <button type="button" class="toggle" data-tree="flow">Expand flow</button>
+               <button type="button" class="toggle" data-tree="all">Expand all</button>
+             </div>
            </div>
          </div>
-         <div class="drawer-meta" id="flowDrawerMeta"></div>
-         <div class="drawer-related" id="flowDrawerRelated"></div>
-         <pre class="drawer-json" id="flowDrawerJson"></pre>
-       </aside>
-     </main>
-   </div>
-diff --git a/tests/test_flow_store.py b/tests/test_flow_store.py
-index d7db657bae38ee3b401482b902f107d46927a843..34b6130aae865baa7dfab4fc58e99ad53d838756 100644
---- a/tests/test_flow_store.py
-+++ b/tests/test_flow_store.py
-@@ -1,25 +1,27 @@
-+from typing import Any, Dict
+         <div class="timeline-head">
+diff --git a/tests/test_flow_api.py b/tests/test_flow_api.py
+index fd3680f7fd18c8a43f246038a6a8ae8f24064182..32373421ffe5ef7c5c1437e5f79de08006b0a53f 100644
+--- a/tests/test_flow_api.py
++++ b/tests/test_flow_api.py
+@@ -1,25 +1,29 @@
++import io
++import json
++import zipfile
 +
  import pytest
  
- from app.flow.trace import (
-     ASR_PARTIAL_TYPE,
-     BARGE_IN_TYPE,
-     BARGE_RESUME_TYPE,
-     CONFIRM_CLOSE_TYPE,
-     CONFIRM_OPEN_TYPE,
-     LLM_FINAL_TYPE,
-     LLM_START_TYPE,
-     TTS_END_TYPE,
-     TTS_START_TYPE,
-     FlowStore,
- )
+ from app.asgi_gateway import app as flask_app
+ from app.flow.trace import FlowStore
+ 
+ 
+ @pytest.fixture(autouse=True)
+ def reset_flow_store():
+     store = FlowStore()
+     store._init()
+     yield
+     store._init()
  
  
  @pytest.fixture
- def flow_env(monkeypatch):
+ def admin_env(monkeypatch):
+     monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
+     return {"X-User-Email": "admin@example.com"}
+ 
+ 
+ def test_flow_trace_endpoint(admin_env):
      store = FlowStore()
-     store._init()
+     event_id = store.emit("sess-api", "flow", "session", "session_open", "system")
+     assert event_id
  
-     clock = {"now": 1000.0}
- 
-     def fake_monotonic():
-         return clock["now"]
-@@ -177,50 +179,246 @@ def test_llm_forced_close(flow_env):
-         "flow",
-         "turn",
-         LLM_START_TYPE,
-         "assistant",
-         meta=meta,
+@@ -41,53 +45,152 @@ def test_flow_event_endpoint(admin_env):
+         query_string={"session_id": "sess-event", "id": event_id},
+         headers=admin_env,
      )
-     assert start
+     assert resp.status_code == 200
+     data = resp.get_json()
+     assert data["id"] == event_id
  
-     advance(121000)
-     snapshot = store.list(session_id)
-     forced = [evt for evt in snapshot["events"] if evt["type"] == LLM_FINAL_TYPE]
-     assert forced
-     assert forced[-1]["meta"].get("__warning") == "forced_close"
  
-     restart = store.emit(
-         session_id,
-         "flow",
-         "turn",
-         LLM_START_TYPE,
-         "assistant",
-         meta=meta,
+ def test_flow_export_ndjson(admin_env):
+     store = FlowStore()
+     store.emit("sess-export", "flow", "session", "session_open", "system")
+     store.emit("sess-export", "transition", "session", "asr_ready", "system")
+ 
+     client = flask_app.test_client()
+     resp = client.get(
+         "/api/v1/flow/export.ndjson",
+         query_string={"session_id": "sess-export"},
+         headers=admin_env,
      )
-     assert restart and restart != start
+     assert resp.status_code == 200
+     assert resp.headers["Content-Type"].startswith("application/x-ndjson")
+     body = resp.data.decode("utf-8").strip().split("\n")
+     assert len(body) >= 2
  
  
-+def _list_with_hints(store: FlowStore, session_id: str) -> Dict[str, Any]:
-+    return store.list(
-+        session_id,
-+        expand="all",
-+        levels=("flow", "transition", "debug"),
-+    )
-+
-+
-+def test_hint_no_asr_after_ready(flow_env):
-+    store, advance, _ = flow_env
-+    session_id = "sess-hint-asr"
-+
-+    confirm_id = store.emit(
-+        session_id,
-+        "flow",
-+        "turn",
-+        CONFIRM_OPEN_TYPE,
-+        "system",
-+        meta={"turn_id": "1"},
-+    )
-+    assert confirm_id
-+    advance(1300)
++def test_flow_export_redaction_masks_sensitive_fields(admin_env):
++    store = FlowStore()
 +    store.emit(
-+        session_id,
++        "sess-redact",
 +        "flow",
-+        "turn",
-+        CONFIRM_CLOSE_TYPE,
++        "session",
++        "session_open",
 +        "system",
-+        meta={"reason": "timeout"},
++        meta={"text": "Hello from user"},
 +    )
-+
-+    payload = _list_with_hints(store, session_id)
-+    hint_ids = {hint["id"] for hint in payload["hints"]}
-+    assert any(hid.startswith("no_asr_after_ready:") for hid in hint_ids)
-+
-+
-+def test_hint_evidence_never_met(flow_env):
-+    store, advance, _ = flow_env
-+    session_id = "sess-hint-evidence"
-+
-+    confirm_id = store.emit(
-+        session_id,
-+        "flow",
-+        "turn",
-+        CONFIRM_OPEN_TYPE,
-+        "system",
-+        meta={"turn_id": "2"},
-+    )
-+    assert confirm_id
-+    advance(50)
-+    vad_id = store.emit(
-+        session_id,
-+        "transition",
-+        "mic",
-+        "vad_gate_open",
-+        "system",
-+        meta={"reason": "speech"},
-+    )
-+    assert vad_id
-+    advance(400)
 +    store.emit(
-+        session_id,
-+        "flow",
-+        "turn",
-+        CONFIRM_CLOSE_TYPE,
-+        "system",
-+        meta={"reason": "abort"},
-+    )
-+
-+    payload = _list_with_hints(store, session_id)
-+    matches = [hint for hint in payload["hints"] if hint["id"].startswith("evidence_never_met:")]
-+    assert matches
-+    anchors = matches[0]["anchors"]
-+    assert confirm_id in anchors and vad_id in anchors
-+
-+
-+def test_hint_commit_blocked_min_tokens(flow_env):
-+    store, advance, _ = flow_env
-+    session_id = "sess-hint-gate"
-+
-+    confirm_id = store.emit(
-+        session_id,
-+        "flow",
-+        "turn",
-+        CONFIRM_OPEN_TYPE,
-+        "system",
-+        meta={"turn_id": "3"},
-+    )
-+    assert confirm_id
-+    advance(100)
-+    gate_id = store.emit(
-+        session_id,
++        "sess-redact",
 +        "debug",
-+        "turn",
-+        "gate_check",
++        "session",
++        "payload_sig",
 +        "system",
-+        meta={"rule": "min_tokens", "value": 1, "threshold": 4, "passed": False},
-+        parent_id=confirm_id,
++        meta={"bytes": 42, "sha1_8": "abcdef12", "path": "llm.prompt", "body": "LLM prompt"},
 +    )
-+    assert gate_id
-+
-+    payload = _list_with_hints(store, session_id)
-+    matches = [hint for hint in payload["hints"] if hint["id"].startswith("commit_blocked_min_tokens:")]
-+    assert matches
-+    assert confirm_id in matches[0]["anchors"]
-+
-+
-+def test_hint_tts_slow_and_post_hold(flow_env):
-+    store, advance, _ = flow_env
-+    session_id = "sess-hint-tts"
-+
-+    tts_start = store.emit(
-+        session_id,
-+        "flow",
-+        "turn",
-+        TTS_START_TYPE,
-+        "assistant",
-+        meta={"turn_id": "4"},
-+    )
-+    assert tts_start
-+    advance(200)
-+    tts_end = store.emit(
-+        session_id,
-+        "flow",
-+        "turn",
-+        TTS_END_TYPE,
-+        "assistant",
-+        meta={"turn_id": "4"},
-+    )
-+    assert tts_end
 +    store.emit(
-+        session_id,
++        "sess-redact",
 +        "debug",
-+        "turn",
-+        "tts_metrics",
-+        "assistant",
-+        meta={"first_byte_ms": 800},
-+        parent_id=tts_end,
-+    )
-+    advance(300)
-+    vad_id = store.emit(
-+        session_id,
-+        "transition",
-+        "mic",
-+        "vad_gate_open",
++        "session",
++        "device_tag",
 +        "system",
-+        meta={"reason": "tts_mask"},
-+    )
-+    assert vad_id
-+
-+    payload = _list_with_hints(store, session_id)
-+    hint_ids = {hint["id"] for hint in payload["hints"]}
-+    assert any(hid.startswith("tts_slow:") for hid in hint_ids)
-+    hold_hints = [hint for hint in payload["hints"] if hint["id"].startswith("post_tts_hold_overlap:")]
-+    assert hold_hints
-+    assert tts_end in hold_hints[0]["anchors"]
-+
-+
-+def test_hint_asr_recovered_and_queue(flow_env):
-+    store, advance, _ = flow_env
-+    session_id = "sess-hint-misc"
-+
-+    err_id = store.emit(
-+        session_id,
-+        "transition",
-+        "asr",
-+        "asr_error",
-+        "system",
-+        meta={"code": "ws"},
-+    )
-+    assert err_id
-+    advance(200)
-+    ok_id = store.emit(
-+        session_id,
-+        "transition",
-+        "asr",
-+        "recover_ok",
-+        "system",
-+        meta={"path": "asr"},
-+    )
-+    assert ok_id
-+    store.emit(
-+        session_id,
-+        "debug",
-+        "mic",
-+        "queue_depth",
-+        "system",
-+        meta={"name": "mic", "depth": 12, "watermark": 10},
++        meta={"device_label": "Jane's MacBook Pro"},
 +    )
 +
-+    payload = _list_with_hints(store, session_id)
-+    ids = {hint["id"] for hint in payload["hints"]}
-+    assert any(hid.startswith("asr_recovered:") for hid in ids)
-+    assert any(hid.startswith("queue_pressure:") for hid in ids)
++    client = flask_app.test_client()
++    resp = client.get(
++        "/api/v1/flow/export.ndjson",
++        query_string={"session_id": "sess-redact", "levels": "flow,debug"},
++        headers=admin_env,
++    )
++    assert resp.status_code == 200
++    lines = [line for line in resp.data.decode("utf-8").split("\n") if line.strip()]
++    assert lines
++    events = [json.loads(line) for line in lines]
++
++    text_meta = next(evt.get("meta", {}) for evt in events if evt.get("meta", {}).get("text"))
++    assert "Hello from user" not in text_meta.get("text", "")
++    assert "[redacted" in text_meta.get("text", "")
++
++    payload_meta = next(evt.get("meta", {}) for evt in events if evt.get("type") == "payload_sig")
++    assert "body" not in payload_meta
++    assert payload_meta.get("bytes") == 42
++    assert payload_meta.get("sha1_8") == "abcdef12"
++    assert payload_meta.get("category") == "llm"
++
++    device_meta = next(evt.get("meta", {}) for evt in events if evt.get("meta", {}).get("device_label"))
++    assert device_meta.get("device_label") in {"mac", "macbook"}
 +
 +
- def test_add_batch_and_expand(flow_env):
-     store, advance, _ = flow_env
-     session_id = "sess-batch"
+ def test_flow_sessions_endpoint(admin_env):
+     store = FlowStore()
+     store.emit("sess-a", "flow", "session", "session_open", "system")
+     store.emit("sess-b", "flow", "session", "session_open", "system")
+     store.emit("sess-b", "transition", "turn", "turn_start", "system")
  
-     parent_id = store.emit(session_id, "flow", "turn", "confirm_open", "assistant")
-     advance(5)
-     child_id = store.emit(
-         session_id,
-         "transition",
-         "turn",
-         "asr_partial_first",
-         "client",
-         parent_id=parent_id,
+     client = flask_app.test_client()
+     resp = client.get("/api/v1/flow/sessions", headers=admin_env)
+     assert resp.status_code == 200
+     data = resp.get_json()
+     assert any(item["session_id"] == "sess-a" for item in data["sessions"])
+     assert any(item["session_id"] == "sess-b" for item in data["sessions"])
+ 
+     resp_filtered = client.get(
+         "/api/v1/flow/sessions",
+         query_string={"q": "sess-b", "limit": "1"},
+         headers=admin_env,
      )
+     assert resp_filtered.status_code == 200
+     filtered = resp_filtered.get_json()
+     assert len(filtered["sessions"]) == 1
+     assert filtered["sessions"][0]["session_id"] == "sess-b"
  
-     added = store.add_batch(session_id, parent_id, "transcript", ["hello", "world"])
-     assert added is True
  
-     snapshot = store.list(session_id, expand="flow")
-     events = snapshot["events"]
-     assert events[0]["id"] == parent_id
-     assert events[0]["batches"][0]["kind"] == "transcript"
-     assert events[0]["batches"][0]["items"] == ["hello", "world"]
-     assert events[0]["children"][0]["id"] == child_id
- 
+ def test_flow_admin_guard():
+     client = flask_app.test_client()
+     resp = client.get("/api/v1/flow/trace", query_string={"session_id": "nope"})
+     assert resp.status_code == 403
++
++
++def test_flow_handoff_returns_redacted_zip(admin_env):
++    store = FlowStore()
++    store.emit(
++        "sess-hand",
++        "flow",
++        "session",
++        "session_open",
++        "system",
++        meta={"text": "Hand-off transcript"},
++    )
++    store.emit(
++        "sess-hand",
++        "debug",
++        "session",
++        "payload_sig",
++        "system",
++        meta={"bytes": 99, "sha1_8": "12345678", "path": "dg.message", "payload": "should hide"},
++    )
++
++    client = flask_app.test_client()
++    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
++    token = csrf_resp.headers.get("X-CSRF-Token")
++    handoff_headers = dict(admin_env)
++    if token:
++        handoff_headers["X-CSRF-Token"] = token
++    resp = client.post(
++        "/api/v1/flow/handoff",
++        json={"session_id": "sess-hand", "levels": ["flow", "debug"], "prompt": "Investigate"},
++        headers=handoff_headers,
++    )
++    assert resp.status_code == 200
++    assert resp.headers["Content-Type"].startswith("application/zip")
++    assert resp.headers["X-Flow-Redacted"] == "1"
++
++    buffer = io.BytesIO(resp.data)
++    with zipfile.ZipFile(buffer) as archive:
++        names = set(archive.namelist())
++        assert {"flow.ndjson", "prompt.txt", "meta.json"}.issubset(names)
++        ndjson_text = archive.read("flow.ndjson").decode("utf-8")
++        assert "Hand-off transcript" not in ndjson_text
++        prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
++        assert prompt_text == "Investigate"
++        meta_payload = json.loads(archive.read("meta.json").decode("utf-8"))
++        assert meta_payload["payload_sig"]["sha1_8"]
++        assert meta_payload["payload_sig"]["bytes"] >= 0
