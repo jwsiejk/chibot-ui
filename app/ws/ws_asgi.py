@@ -1168,6 +1168,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     sid = _get_session_id(scope)
     conn_id = uuid.uuid4().hex
     start_ts = time.time()
+    ws_open_ts = start_ts
     last_msg_ts = start_ts
     had_disconnect = False
     active_ws_registered = False
@@ -1359,6 +1360,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         policy = {}
     if isinstance(policy, dict):
         cfg["interaction_policy"] = policy
+        with contextlib.suppress(Exception):
+            _jlog(
+                "EVT_POLICY_LOAD",
+                sid=sid,
+                keys=len(policy.keys()),
+            )
     else:
         policy = {}
     try:
@@ -1407,15 +1414,42 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         voice_policy.get("auto_commit") if isinstance(voice_policy, dict) else {}
     )
 
+    local_vad_allowed = True
+    barge_require_asr_evidence = False
+    barge_suppress_mode = "none"
+    barge_post_tts_hold_ms = 0
+    auto_commit_requires_dual = False
+    auto_commit_requires_asr_ready = False
+
     if isinstance(auto_commit_policy, dict):
         enabled_value = auto_commit_policy.get("enabled")
         if isinstance(enabled_value, bool) and not enabled_value:
             auto_commit_when_ready = False
+        requires_dual_value = auto_commit_policy.get("requires_dual_evidence")
+        if isinstance(requires_dual_value, bool):
+            auto_commit_requires_dual = requires_dual_value
+        requires_asr_value = auto_commit_policy.get("asr_ready_required")
+        if isinstance(requires_asr_value, bool):
+            auto_commit_requires_asr_ready = requires_asr_value
 
     if isinstance(barge_policy, dict):
         allow_ptt = barge_policy.get("allow_ptt")
         if isinstance(allow_ptt, bool) and not allow_ptt:
             manual_feature_enabled = False
+        allow_local_vad_value = barge_policy.get("allow_local_vad")
+        if isinstance(allow_local_vad_value, bool):
+            local_vad_allowed = allow_local_vad_value
+        require_asr_value = barge_policy.get("require_asr_evidence")
+        if isinstance(require_asr_value, bool):
+            barge_require_asr_evidence = require_asr_value
+        suppress_mode_value = barge_policy.get("suppress_during_tts")
+        if isinstance(suppress_mode_value, str):
+            suppress_mode_value = suppress_mode_value.strip().lower()
+            if suppress_mode_value:
+                barge_suppress_mode = suppress_mode_value
+        post_hold_value = barge_policy.get("post_tts_hold_ms")
+        if isinstance(post_hold_value, (int, float)):
+            barge_post_tts_hold_ms = max(0, int(post_hold_value))
 
     cfg["feature_manual_barge_in"] = manual_feature_enabled
     cfg["barge_in_mode_manual"] = manual_mode_manual_only
@@ -1474,9 +1508,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     manual_turn_active = [False]
     # Runtime flags to coordinate commit + VAD gating
     assistant_speaking = [False]
+    tts_mask_active = [False]
+    tts_mask_mode = ["none"]
+    tts_mask_release_task: List[Optional[asyncio.Task]] = [None]
+    tts_mask_release_deadline = [0.0]
+    pending_confirm_request: List[Optional[Dict[str, Any]]] = [None]
     asr_ready = [False]
     local_vad_open = [False]    
     turn_commit_mode_ref: List[str] = ["vad"]
+    last_ready_signal_after: List[Optional[str]] = [None]
     active_turn_mode_ref: List[str] = ["vad"]
     turn_timing: Dict[str, List[float]] = {
         "start": [0.0],
@@ -1649,6 +1689,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if manual_button_down[0] or manual_turn_active[0]:
             _cancel_confirm_timeout()
             confirm_window_ref[0] = None
+            _on_local_vad_stop()
             return
         _cancel_confirm_timeout()
         confirm_window_ref[0] = None
@@ -1656,6 +1697,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         data.setdefault("reason", trigger)
         data.setdefault("snr_enabled", window.snr_enabled)
         _jlog("confirm_commit", sid=sid, **data)
+        _on_local_vad_stop()
         if barge.is_paused():
             try:
                 barge.commit(_send_barge_state)
@@ -1670,6 +1712,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if manual_button_down[0] or manual_turn_active[0]:
             _cancel_confirm_timeout()
             confirm_window_ref[0] = None
+            _on_local_vad_stop()
             return
         _cancel_confirm_timeout()
         confirm_window_ref[0] = None
@@ -1677,6 +1720,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         data.setdefault("reason", trigger)
         data.setdefault("snr_enabled", window.snr_enabled)
         _jlog("confirm_abort", sid=sid, **data)
+        _on_local_vad_stop()
         if barge.is_paused():
             if manual_button_down[0]:
                 return
@@ -1685,7 +1729,128 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             except Exception:
                 pass
 
+        with contextlib.suppress(Exception):
+            _jlog(
+                "EVT_CONFIRM_ABORT",
+                sid=sid,
+                turn=turn_id_ref[0],
+                reason=data.get("reason"),
+                elapsed_ms=data.get("elapsed_ms"),
+                snr_db=data.get("snr_db"),
+                partials=data.get("partial_tokens"),
+                conf=data.get("partial_confidence"),
+            )
+
+    def _open_confirm_window(
+        now_ts: float,
+        *,
+        min_ms: int,
+        max_ms_local: int,
+        snr_threshold: float,
+        policy_until_asr_ready: bool,
+        is_first_turn: bool,
+    ) -> None:
+        window = ConfirmWindow(
+            min_duration_ms=min_ms,
+            max_duration_ms=max_ms_local,
+            max_gap_ms=confirm_gap_ms,
+            min_tokens=confirm_min_tokens,
+            min_confidence=confirm_min_conf,
+            snr_threshold_db=snr_threshold,
+            snr_slack_db=confirm_snr_slack_db,
+            snr_enabled=True,
+        )
+        try:
+            setattr(window, "policy_until_asr_ready", policy_until_asr_ready)
+        except Exception:
+            pass
+        window.start(now_ts)
+        confirm_window_ref[0] = window
+        pending_confirm_request[0] = None
+        local_vad_meta_sent[0] = False
+        _emit_local_vad_signal(now_ts)
+        _jlog(
+            "EVT_CONFIRM_OPEN",
+            sid=sid,
+            turn=turn_id_ref[0],
+            is_first=bool(is_first_turn),
+            min_ms=min_ms,
+            max_ms=max_ms_local,
+            until_asr_ready=policy_until_asr_ready,
+        )
+        _jlog(
+            "confirm_start",
+            sid=sid,
+            turn_id=turn_id_ref[0],
+            min_ms=min_ms,
+            max_ms=max_ms_local,
+            max_gap_ms=confirm_gap_ms,
+            min_tokens=confirm_min_tokens,
+            min_confidence=confirm_min_conf,
+            snr_threshold_db=snr_threshold,
+            snr_slack_db=confirm_snr_slack_db,
+            policy_until_asr_ready=policy_until_asr_ready,
+        )
+        _schedule_confirm_timeout(window)
+
+    def _queue_confirm_request(request: Dict[str, Any]) -> None:
+        pending_confirm_request[0] = dict(request)
+
+    def _maybe_start_pending_confirm(now_ts: Optional[float] = None) -> None:
+        request = pending_confirm_request[0]
+        if not request:
+            return
+        if request.get("policy_until_asr_ready") and not asr_ready[0]:
+            return
+        if tts_mask_active[0]:
+            return
+        pending_confirm_request[0] = None
+        effective_now = now_ts if now_ts is not None else time.time()
+        _open_confirm_window(
+            effective_now,
+            min_ms=request.get("min_ms", confirm_min_ms),
+            max_ms_local=request.get("max_ms_local", confirm_max_ms),
+            snr_threshold=request.get("snr_threshold", confirm_snr_db),
+            policy_until_asr_ready=bool(request.get("policy_until_asr_ready")),
+            is_first_turn=bool(request.get("is_first_turn")),
+        )
+
+    def _cancel_tts_mask_release() -> None:
+        task = tts_mask_release_task[0]
+        if task and not task.done():
+            task.cancel()
+        tts_mask_release_task[0] = None
+        tts_mask_release_deadline[0] = 0.0
+
+    def _mark_tts_mask_off(turn_id: Any, hold_ms: int) -> None:
+        previously_active = tts_mask_active[0]
+        tts_mask_active[0] = False
+        tts_mask_mode[0] = barge_suppress_mode or "none"
+        tts_mask_release_deadline[0] = 0.0
+        with contextlib.suppress(Exception):
+            _jlog(
+                "EVT_TTS_MASK_OFF",
+                sid=sid,
+                turn_id=turn_id,
+                post_hold_ms=max(0, hold_ms),
+            )
+        if previously_active:
+            _maybe_start_pending_confirm()
+
+    async def _await_tts_mask_release(delay_ms: int, turn_id: Any) -> None:
+        try:
+            await asyncio.sleep(max(0.0, delay_ms / 1000.0))
+            _mark_tts_mask_off(turn_id, delay_ms)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if tts_mask_release_task[0] is asyncio.current_task():
+                tts_mask_release_task[0] = None
+
     def _start_confirm_window(now_ts: float) -> None:
+        if not local_vad_allowed:
+            _jlog("confirm_skip_local_vad_disabled", sid=sid)
+            return
         if _manual_mode_active():
             try:
                 active_turn = bus.current_assistant_turn(sid)
@@ -1726,38 +1891,39 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             raw_snr = snr_policy.get(key)
             if isinstance(raw_snr, (int, float)):
                 snr_threshold = float(raw_snr)
-        window = ConfirmWindow(
-            min_duration_ms=min_ms,
-            max_duration_ms=max_ms_local,
-            max_gap_ms=confirm_gap_ms,
-            min_tokens=confirm_min_tokens,
-            min_confidence=confirm_min_conf,
-            snr_threshold_db=snr_threshold,
-            snr_slack_db=confirm_snr_slack_db,
-            snr_enabled=True,
-        )
-        try:
-            window.policy_until_asr_ready = policy_until_asr_ready  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        window.start(now_ts)
-        confirm_window_ref[0] = window
-        local_vad_meta_sent[0] = False
-        _emit_local_vad_signal(now_ts)
-        _jlog(
-            "confirm_start",
-            sid=sid,
-            turn_id=turn_id_ref[0],
+        request = {
+            "min_ms": min_ms,
+            "max_ms_local": max_ms_local,
+            "snr_threshold": snr_threshold,
+            "policy_until_asr_ready": policy_until_asr_ready,
+            "is_first_turn": first_turn_active,
+        }
+        if policy_until_asr_ready and not asr_ready[0]:
+            _queue_confirm_request(request)
+            _jlog(
+                "confirm_pending_asr_ready",
+                sid=sid,
+                turn=turn_id_ref[0],
+                is_first=bool(first_turn_active),
+            )
+            return
+        if tts_mask_active[0]:
+            _queue_confirm_request(request)
+            _jlog(
+                "confirm_pending_tts",
+                sid=sid,
+                turn=turn_id_ref[0],
+                mode=tts_mask_mode[0],
+            )
+            return
+        _open_confirm_window(
+            now_ts,
             min_ms=min_ms,
-            max_ms=max_ms_local,
-            max_gap_ms=confirm_gap_ms,
-            min_tokens=confirm_min_tokens,
-            min_confidence=confirm_min_conf,
-            snr_threshold_db=snr_threshold,
-            snr_slack_db=confirm_snr_slack_db,
+            max_ms_local=max_ms_local,
+            snr_threshold=snr_threshold,
             policy_until_asr_ready=policy_until_asr_ready,
+            is_first_turn=first_turn_active,
         )
-        _schedule_confirm_timeout(window)
 
     def _handle_confirm_chunk(chunk: bytes, now_ts: float) -> None:
         window = confirm_window_ref[0]
@@ -1805,6 +1971,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             
     def _on_assistant_tts_start(turn_id: Any) -> None:
         assistant_speaking[0] = True
+        mode = (barge_suppress_mode or "none").strip() or "none"
+        mask_engaged = mode != "none"
+        tts_mask_mode[0] = mode
+        if mask_engaged:
+            tts_mask_active[0] = True
+        else:
+            tts_mask_active[0] = False
+        _cancel_tts_mask_release()
+        with contextlib.suppress(Exception):
+            _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode)
         _ensure_confirm_closed("tts_start")
         if not manual_button_down[0]:
             with contextlib.suppress(Exception):
@@ -1812,9 +1988,28 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     def _on_assistant_tts_end(turn_id: Any) -> None:
         assistant_speaking[0] = False
+        if tts_mask_active[0] and barge_post_tts_hold_ms > 0:
+            delay_ms = barge_post_tts_hold_ms
+            _cancel_tts_mask_release()
+            tts_mask_release_deadline[0] = time.time() + (delay_ms / 1000.0)
+            tts_mask_release_task[0] = asyncio.create_task(
+                _await_tts_mask_release(delay_ms, turn_id)
+            )
+        elif tts_mask_active[0]:
+            _cancel_tts_mask_release()
+            _mark_tts_mask_off(turn_id, 0)
+        else:
+            _cancel_tts_mask_release()
+            _mark_tts_mask_off(turn_id, 0)
 
     def _on_asr_connect_ok() -> None:
+        already_ready = asr_ready[0]
         asr_ready[0] = True
+        if not already_ready:
+            with contextlib.suppress(Exception):
+                delta_ms = int(max(0.0, (time.time() - ws_open_ts) * 1000))
+                _jlog("EVT_ASR_READY", sid=sid, t_ms_since_ws=delta_ms)
+        _maybe_start_pending_confirm()
 
     def _on_local_vad_start() -> None:
         local_vad_open[0] = True
@@ -1862,6 +2057,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if no_audio_notified[0]:
             return
         if sent_any_audio[0]:
+            return
+        if assistant_speaking[0] or tts_mask_active[0]:
             return
         no_audio_notified[0] = True
         turn_id = no_audio_turn_id[0] or turn_id_ref[0] or 0
@@ -1938,12 +2135,40 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             return False
         if barge.is_paused():
             return False
+        if assistant_speaking[0] or tts_mask_active[0]:
+            return False
         try:
             active_turn = bus.current_assistant_turn(sid)
         except Exception:
             active_turn = None
         tts_state, _ = _lookup_tts_state(sid, active_turn)
         if _is_tts_active(tts_state):
+            return False
+        return True
+
+    def _has_dual_evidence() -> bool:
+        if manual_button_down[0] or manual_turn_active[0]:
+            return True
+        local_vad_seen = bool(local_vad_meta_sent[0] or local_vad_open[0])
+        if not local_vad_seen:
+            return False
+        return bool(asr_seen_partial[0])
+
+    def _can_auto_commit_now() -> bool:
+        if not auto_commit_when_ready:
+            return False
+        if not _session_ready_for_auto_commit():
+            return False
+        if not asr_ready[0]:
+            return False
+        if auto_commit_requires_asr_ready and not asr_ready[0]:
+            return False
+        if auto_commit_requires_dual and not _has_dual_evidence():
+            return False
+        if barge_require_asr_evidence and not asr_seen_partial[0]:
+            return False
+        local_vad_signal = bool(local_vad_meta_sent[0] or local_vad_open[0])
+        if not local_vad_signal and not sent_any_audio[0]:
             return False
         return True
 
@@ -2039,10 +2264,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     def _on_barge_commit(forced_mode: Optional[str] = None) -> None:
         mode_raw = forced_mode or turn_commit_mode_ref[0]
-        mode = mode_raw or ("manual" if manual_commit_pending[0] else "vad")
+        pending_manual = manual_commit_pending[0]
+        mode = mode_raw or ("manual" if pending_manual else "vad")
         manual_commit_pending[0] = False
         turn_commit_mode_ref[0] = "vad"
         active_turn_mode_ref[0] = mode or "vad"
+        event_mode = "manual" if (mode == "manual" or pending_manual) else "auto"
+        dual_evidence = True if event_mode == "manual" else _has_dual_evidence()
+        asr_ready_flag = bool(asr_ready[0])
         target_turn = current_assistant_turn_ref[0]
         try:
             latest = bus.current_assistant_turn(sid)
@@ -2050,10 +2279,22 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 target_turn = latest
         except Exception:
             pass
+        cancel_reason: Optional[str] = None
         if target_turn:
             with contextlib.suppress(Exception):
                 bus.cancel_turn(sid, target_turn)
+                cancel_reason = "assistant_cancel"
+        last_ready_signal_after[0] = cancel_reason
         _send_barge_state("ready")
+        if last_ready_signal_after[0]:
+            with contextlib.suppress(Exception):
+                _jlog(
+                    "EVT_READY_SIGNAL",
+                    sid=sid,
+                    after=last_ready_signal_after[0],
+                    turn=turn_id_ref[0],
+                )
+            last_ready_signal_after[0] = None
         _jlog(
             "turn_committed",
             sid=sid,
@@ -2065,6 +2306,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             admin_event="turn_committed",
             admin_label="turn_committed",
         )
+        with contextlib.suppress(Exception):
+            _jlog(
+                "EVT_COMMIT",
+                sid=sid,
+                turn=turn_id_ref[0],
+                mode=event_mode,
+                dual_evidence=bool(dual_evidence),
+                asr_ready=asr_ready_flag,
+            )
         if not turn_stream_committed[0]:
             turn_stream_committed[0] = True
             asr_direct_stream[0] = True
@@ -2615,6 +2865,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             except Exception:
                                 barge_started = False
                         turn_id_ref[0] = buf.turn_seq + 1
+                        pending_confirm_request[0] = None
                         if barge_started:
                             if manual_mode_manual_only:
                                 try:
@@ -3378,12 +3629,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             if ws_configured and not turn_stream_committed[0]:
                                 if manual_commit_pending[0] and not assistant_speaking[0]:
                                     _on_barge_commit("manual")
-                                elif (
-                                    auto_commit_when_ready
-                                    and asr_ready[0]
-                                    and (sent_any_audio[0] or local_vad_open[0])
-                                    and not assistant_speaking[0]
-                                ):
+                                elif _can_auto_commit_now():
                                     _on_barge_commit("auto")
 
                             active_turn_mode_ref[0] = "vad"
