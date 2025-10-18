@@ -1,560 +1,671 @@
-diff --git a/app/flow/__init__.py b/app/flow/__init__.py
+diff --git a/app/api_v1/__init__.py b/app/api_v1/__init__.py
+index bf5006d6ad66f4179279c4dacd08e3f60c04908f..e23382589b900fe6ccf340e271981939fd32079a 100644
+--- a/app/api_v1/__init__.py
++++ b/app/api_v1/__init__.py
+@@ -1,25 +1,27 @@
+ from flask import Blueprint
+ from .admin import bp as admin_bp
+ from .auth import bp as auth_bp
+ from .profile import bp as profile_bp
+ from .greet import bp as greet_bp
+ from .chat import bp as chat_bp
+ from .voice import bp as voice_bp
+ from .asr import bp as asr_bp
+ from .diag import bp as diag_bp
+ from .metrics import bp as metrics_bp
+ from .policy import bp as policy_bp
++from .flow import bp as flow_bp
+ 
+ def create_v1_blueprint():
+     bp = Blueprint("api_v1", __name__)
+     bp.register_blueprint(admin_bp, url_prefix="/admin")
+     bp.register_blueprint(auth_bp, url_prefix="/auth")
+     bp.register_blueprint(profile_bp, url_prefix="/profile")
+     bp.register_blueprint(greet_bp, url_prefix="/greet")
+     bp.register_blueprint(chat_bp, url_prefix="/chat")
+     bp.register_blueprint(voice_bp, url_prefix="/voice")
+     bp.register_blueprint(asr_bp)
+     bp.register_blueprint(diag_bp, url_prefix="")
+     bp.register_blueprint(metrics_bp, url_prefix="")
+     bp.register_blueprint(policy_bp, url_prefix="")
++    bp.register_blueprint(flow_bp, url_prefix="")
+     return bp
+diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..64542e1735c6e1224e7223e797b93086c7f6c308
+index 0000000000000000000000000000000000000000..7545c90c72afe31b68cad09462a7ca9351867ad3
 --- /dev/null
-+++ b/app/flow/__init__.py
-@@ -0,0 +1,5 @@
-+"""Flow management package."""
-+
-+from .trace import FlowStore
-+
-+__all__ = ["FlowStore"]
-diff --git a/app/flow/trace.py b/app/flow/trace.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..5bec95c1143beca769aab50d5480f90d7450efc3
---- /dev/null
-+++ b/app/flow/trace.py
-@@ -0,0 +1,543 @@
++++ b/app/api_v1/flow.py
+@@ -0,0 +1,167 @@
 +from __future__ import annotations
 +
-+import threading
-+import time
-+from collections import deque
-+from dataclasses import dataclass, field
-+from datetime import datetime, timezone
-+from typing import Any, Deque, Dict, Iterable, List, Optional, Set, Tuple
++import json
++from typing import Iterable, List, Optional
 +
-+MAX_EVENTS = 5000
-+DEDUP_WINDOW_MS = 100
-+ASR_PARTIAL_TYPE = "asr_partial_first"
-+BARGE_IN_TYPE = "barge_in"
-+BARGE_PAUSE_TYPES = {"barge_pause", "barge_hold"}
-+BARGE_RESUME_TYPE = "barge_resume"
-+TTS_START_TYPE = "tts_start"
-+TTS_END_TYPE = "tts_end"
-+LLM_START_TYPE = "llm_start"
-+LLM_FINAL_TYPE = "llm_final"
-+CONFIRM_OPEN_TYPE = "confirm_open"
-+CONFIRM_CLOSE_TYPE = "confirm_close"
++from flask import (
++    Blueprint,
++    Response,
++    abort,
++    jsonify,
++    request,
++    session as flask_session,
++    stream_with_context,
++)
 +
-+MAX_BATCH_ITEMS = 1000
-+MAX_BATCH_BYTES = 512 * 1024
++from app.flow import FlowStore
++from app.flow.catalog import FLOW_EVENT_CATALOG
++from app.security_state import get_user
++from app.utils.admin import is_admin_email
 +
-+# Simple static blurbs with light interpolation.
-+BLURBS: Dict[str, str] = {
-+    CONFIRM_OPEN_TYPE: "Confirmation started",
-+    CONFIRM_CLOSE_TYPE: "Confirmation closed",
-+    BARGE_IN_TYPE: "Barge-in detected",
-+    TTS_START_TYPE: "Assistant speech started",
-+    TTS_END_TYPE: "Assistant speech ended",
-+    LLM_START_TYPE: "LLM thinking",
-+    LLM_FINAL_TYPE: "LLM response ready",
-+}
++bp = Blueprint("flow", __name__)
 +
 +
-+def _utc_now_iso() -> str:
-+    return datetime.now(timezone.utc).isoformat()
-+
-+
-+def _ensure_meta(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-+    if meta is None:
-+        return {}
-+    if not isinstance(meta, dict):
-+        raise TypeError("meta must be a mapping")
-+    return dict(meta)
-+
-+
-+def _words(text: str) -> List[str]:
-+    return [word for word in text.split() if word]
-+
-+
-+@dataclass
-+class EventRecord:
-+    data: Dict[str, Any]
-+    monotonic_ts: float
-+    children_ids: List[str] = field(default_factory=list)
-+    batches: List[Dict[str, Any]] = field(default_factory=list)
-+
-+    def to_dict(self, children: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-+        payload = dict(self.data)
-+        parent_id = payload.get("parent_id")
-+        if parent_id is None:
-+            payload.pop("parent_id", None)
-+        if children is not None:
-+            if children:
-+                payload["children"] = children
-+        elif self.children_ids:
-+            payload["children"] = list(self.children_ids)
-+        if self.batches:
-+            payload["batches"] = [dict(batch) for batch in self.batches]
-+        return payload
-+
-+
-+@dataclass
-+class SessionBucket:
-+    session_id: str
-+    started_at_iso: str
-+    t0_monotonic: float
-+    seq: int = 1
-+    events: Deque[EventRecord] = field(default_factory=deque)
-+    event_index: Dict[str, EventRecord] = field(default_factory=dict)
-+    dedupe: Dict[Tuple[str, str, Optional[str]], Tuple[float, str]] = field(default_factory=dict)
-+    asr_partial_turns: Dict[str, str] = field(default_factory=dict)
-+    barge_paused: bool = False
-+    open_confirms: Dict[str, EventRecord] = field(default_factory=dict)
-+    open_tts: Dict[str, EventRecord] = field(default_factory=dict)
-+    open_llm: Dict[str, EventRecord] = field(default_factory=dict)
-+    tts_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-+
-+
-+class FlowStore:
-+    """Thread-safe, singleton flow trace store."""
-+
-+    _instance: Optional["FlowStore"] = None
-+    _singleton_lock = threading.Lock()
-+
-+    def __new__(cls) -> "FlowStore":
-+        with cls._singleton_lock:
-+            if cls._instance is None:
-+                cls._instance = super().__new__(cls)
-+                cls._instance._init()
-+        return cls._instance
-+
-+    def _init(self) -> None:
-+        self._lock = threading.RLock()
-+        self._sessions: Dict[str, SessionBucket] = {}
-+
-+    # ------------------------------------------------------------------
-+    # Public API
-+    # ------------------------------------------------------------------
-+    def emit(
-+        self,
-+        session_id: str,
-+        level: str,
-+        phase: str,
-+        type_: str,
-+        who: str,
-+        meta: Optional[Dict[str, Any]] = None,
-+        parent_id: Optional[str] = None,
-+    ) -> Optional[str]:
-+        meta_copy = _ensure_meta(meta)
-+        with self._lock:
-+            bucket = self._ensure_bucket(session_id)
-+            now = time.monotonic()
-+            turn_id = self._extract_turn_id(meta_copy)
-+
-+            suppressed = self._should_suppress(bucket, now, type_, who, turn_id)
-+            if suppressed is not None:
-+                return suppressed
-+
-+            if type_ == BARGE_IN_TYPE and bucket.barge_paused:
-+                return None
-+
-+            if type_ == ASR_PARTIAL_TYPE and turn_id:
-+                if turn_id in bucket.asr_partial_turns:
-+                    return bucket.asr_partial_turns[turn_id]
-+
-+            if type_ == TTS_START_TYPE:
-+                key = turn_id or "__default__"
-+                state = bucket.tts_state.get(key)
-+                if state and state.get("active"):
-+                    return state.get("event_id")
-+
-+            if type_ == TTS_END_TYPE:
-+                key = turn_id or "__default__"
-+                state = bucket.tts_state.get(key)
-+                if state and state.get("ended"):
-+                    return state.get("ended_event_id")
-+
-+            record = self._create_event(
-+                bucket,
-+                now,
-+                level=level,
-+                phase=phase,
-+                type_=type_,
-+                who=who,
-+                meta=meta_copy,
-+                parent_id=parent_id,
-+                is_injection=False,
-+            )
-+
-+            self._update_bucket_state(bucket, record, turn_id)
-+            self._inject_safety_events(bucket)
-+            return record.data["id"]
-+
-+    def add_batch(self, session_id: str, parent_id: str, kind: str, items: Iterable[Any]) -> bool:
-+        items_list = list(items)
-+        if len(items_list) > MAX_BATCH_ITEMS:
-+            raise ValueError("batch too large")
-+        serialized = str(items_list).encode("utf-8")
-+        if len(serialized) > MAX_BATCH_BYTES:
-+            raise ValueError("batch exceeds size limit")
-+
-+        with self._lock:
-+            bucket = self._sessions.get(session_id)
-+            if not bucket:
-+                return False
-+            record = bucket.event_index.get(parent_id)
-+            if not record:
-+                return False
-+            batch_payload = {"kind": kind, "items": items_list}
-+            record.batches.append(batch_payload)
-+            return True
-+
-+    def list(
-+        self,
-+        session_id: str,
-+        since_ms: Optional[int] = None,
-+        limit: int = 200,
-+        levels: Iterable[str] = ("flow", "transition"),
-+        expand: str = "flow",
-+    ) -> Dict[str, Any]:
-+        with self._lock:
-+            bucket = self._sessions.get(session_id)
-+            if not bucket:
-+                return {
-+                    "session_id": session_id,
-+                    "started_at": None,
-+                    "events": [],
-+                    "next_since_ms": since_ms or 0,
-+                }
-+            self._inject_safety_events(bucket)
-+            levels_set = set(levels)
-+            since_value = since_ms or 0
-+            expand_policy = self._parse_expand(expand)
-+
-+            events: List[Dict[str, Any]] = []
-+            count = 0
-+            next_since = since_value
-+
-+            for record in bucket.events:
-+                if record.data["t_rel_ms"] < since_value:
-+                    continue
-+                if levels_set and record.data["level"] not in levels_set:
-+                    continue
-+                events.append(self._format_event(bucket, record, expand_policy))
-+                count += 1
-+                next_since = max(next_since, record.data["t_rel_ms"])
-+                if count >= limit:
-+                    break
-+
-+            if events:
-+                next_since += 1
-+
-+            return {
-+                "session_id": session_id,
-+                "started_at": bucket.started_at_iso,
-+                "events": events,
-+                "next_since_ms": next_since,
-+            }
-+
-+    def get(self, session_id: str, event_id: str) -> Optional[Dict[str, Any]]:
-+        with self._lock:
-+            bucket = self._sessions.get(session_id)
-+            if not bucket:
-+                return None
-+            record = bucket.event_index.get(event_id)
-+            if not record:
-+                return None
-+            expand_policy = {"mode": "all", "ids": set()}
-+            return self._format_event(bucket, record, expand_policy)
-+
-+    # ------------------------------------------------------------------
-+    # Internal helpers
-+    # ------------------------------------------------------------------
-+    def _ensure_bucket(self, session_id: str) -> SessionBucket:
-+        bucket = self._sessions.get(session_id)
-+        if bucket is None:
-+            bucket = SessionBucket(
-+                session_id=session_id,
-+                started_at_iso=_utc_now_iso(),
-+                t0_monotonic=time.monotonic(),
-+            )
-+            self._sessions[session_id] = bucket
-+        return bucket
-+
-+    def _extract_turn_id(self, meta: Dict[str, Any]) -> Optional[str]:
-+        turn_id = meta.get("turn_id") if isinstance(meta, dict) else None
-+        if turn_id is None:
-+            return None
-+        return str(turn_id)
-+
-+    def _should_suppress(
-+        self,
-+        bucket: SessionBucket,
-+        now: float,
-+        type_: str,
-+        who: str,
-+        turn_id: Optional[str],
-+    ) -> Optional[str]:
-+        key = (type_, who, turn_id)
-+        dedupe = bucket.dedupe.get(key)
-+        if dedupe:
-+            prev_time, prev_event_id = dedupe
-+            if (now - prev_time) * 1000 <= DEDUP_WINDOW_MS:
-+                return prev_event_id
-+        # prune stale entries
-+        stale_keys = [
-+            k for k, (ts, _) in bucket.dedupe.items() if (now - ts) * 1000 > DEDUP_WINDOW_MS
-+        ]
-+        for stale_key in stale_keys:
-+            bucket.dedupe.pop(stale_key, None)
++def _normalize_str(value: Optional[str]) -> Optional[str]:
++    if value is None:
 +        return None
++    text = value.strip()
++    return text or None
 +
-+    def _create_event(
-+        self,
-+        bucket: SessionBucket,
-+        now: float,
-+        *,
-+        level: str,
-+        phase: str,
-+        type_: str,
-+        who: str,
-+        meta: Dict[str, Any],
-+        parent_id: Optional[str],
-+        is_injection: bool,
-+    ) -> EventRecord:
-+        event_id = f"e_{bucket.seq:05d}"
-+        bucket.seq += 1
 +
-+        t_rel_ms = int((now - bucket.t0_monotonic) * 1000)
-+        blurb = self._build_blurb(type_, phase, who, meta)
-+        payload: Dict[str, Any] = {
-+            "id": event_id,
-+            "t_rel_ms": t_rel_ms,
-+            "level": level,
-+            "phase": phase,
-+            "type": type_,
-+            "who": who,
-+            "blurb": blurb,
-+            "meta": meta,
-+        }
-+        if parent_id:
-+            payload["parent_id"] = parent_id
++def _require_admin() -> None:
++    email = (
++        (flask_session.get("user") or {}).get("email")
++        or flask_session.get("email")
++        or request.headers.get("X-User-Email")
++        or (get_user() or "")
++    )
++    if not is_admin_email((email or "").strip().lower()):
++        abort(403)
 +
-+        record = EventRecord(data=payload, monotonic_ts=now)
-+        self._append_event(bucket, record)
-+        if parent_id:
-+            parent = bucket.event_index.get(parent_id)
-+            if parent:
-+                parent.children_ids.append(event_id)
-+        if not is_injection:
-+            turn_id = self._extract_turn_id(meta)
-+            key = (type_, who, turn_id)
-+            bucket.dedupe[key] = (now, event_id)
-+        return record
 +
-+    def _append_event(self, bucket: SessionBucket, record: EventRecord) -> None:
-+        if len(bucket.events) >= MAX_EVENTS:
-+            old = bucket.events.popleft()
-+            bucket.event_index.pop(old.data["id"], None)
-+            self._on_event_removed(bucket, old)
-+        bucket.events.append(record)
-+        bucket.event_index[record.data["id"]] = record
++def _parse_int(value: Optional[str], *, name: str, minimum: Optional[int] = None) -> Optional[int]:
++    if value is None:
++        return None
++    try:
++        parsed = int(value)
++    except (TypeError, ValueError):
++        abort(400, description=f"Invalid {name}")
++    if minimum is not None and parsed < minimum:
++        abort(400, description=f"{name} must be >= {minimum}")
++    return parsed
 +
-+    def _on_event_removed(self, bucket: SessionBucket, record: EventRecord) -> None:
-+        event_id = record.data["id"]
-+        meta = record.data.get("meta") or {}
-+        turn_id = self._extract_turn_id(meta)
 +
-+        confirm_key = self._confirm_key(meta)
-+        if confirm_key and bucket.open_confirms.get(confirm_key) == record:
-+            bucket.open_confirms.pop(confirm_key, None)
-+        key = turn_id or "__default__"
-+        if bucket.open_tts.get(key) == record:
-+            bucket.open_tts.pop(key, None)
-+        if bucket.open_llm.get(key) == record:
-+            bucket.open_llm.pop(key, None)
-+        state = bucket.tts_state.get(key)
-+        if state and state.get("event_id") == event_id:
-+            bucket.tts_state.pop(key, None)
++def _parse_levels(raw: Optional[str]) -> Iterable[str]:
++    if raw is None:
++        return ("flow", "transition")
++    levels: List[str] = []
++    for part in raw.split(","):
++        piece = part.strip()
++        if not piece:
++            continue
++        if piece not in levels:
++            levels.append(piece)
++    return levels
 +
-+    def _update_bucket_state(
-+        self, bucket: SessionBucket, record: EventRecord, turn_id: Optional[str]
-+    ) -> None:
-+        type_ = record.data["type"]
-+        meta = record.data.get("meta") or {}
-+        key = turn_id or "__default__"
 +
-+        if type_ in BARGE_PAUSE_TYPES:
-+            bucket.barge_paused = True
-+        elif type_ == BARGE_RESUME_TYPE:
-+            bucket.barge_paused = False
-+
-+        if type_ == ASR_PARTIAL_TYPE and turn_id:
-+            bucket.asr_partial_turns[turn_id] = record.data["id"]
-+
-+        if type_ == CONFIRM_OPEN_TYPE:
-+            bucket.open_confirms[self._confirm_key(meta)] = record
-+        elif type_ == CONFIRM_CLOSE_TYPE:
-+            bucket.open_confirms.pop(self._confirm_key(meta), None)
-+
-+        if type_ == TTS_START_TYPE:
-+            bucket.open_tts[key] = record
-+            bucket.tts_state[key] = {"active": True, "event_id": record.data["id"]}
-+        elif type_ == TTS_END_TYPE:
-+            bucket.open_tts.pop(key, None)
-+            state = bucket.tts_state.setdefault(key, {})
-+            state["active"] = False
-+            state["ended"] = True
-+            state["ended_event_id"] = record.data["id"]
-+
-+        if type_ == LLM_START_TYPE:
-+            bucket.open_llm[key] = record
-+        elif type_ == LLM_FINAL_TYPE:
-+            bucket.open_llm.pop(key, None)
-+
-+    def _confirm_key(self, meta: Dict[str, Any]) -> str:
-+        confirm_id = meta.get("confirm_id") if isinstance(meta, dict) else None
-+        if confirm_id is None:
-+            return "__default__"
-+        return str(confirm_id)
-+
-+    def _inject_safety_events(self, bucket: SessionBucket) -> None:
-+        now = time.monotonic()
-+        # confirm close
-+        confirm_keys = list(bucket.open_confirms.keys())
-+        for key in confirm_keys:
-+            record = bucket.open_confirms.get(key)
-+            if not record:
-+                continue
-+            if (now - record.monotonic_ts) * 1000 <= 4000:
-+                continue
-+            meta = dict(record.data.get("meta") or {})
-+            meta.setdefault("reason", "timeout")
-+            meta.setdefault("__warning", "inferred_close")
-+            injected = self._create_event(
-+                bucket,
-+                now,
-+                level=record.data["level"],
-+                phase=record.data["phase"],
-+                type_=CONFIRM_CLOSE_TYPE,
-+                who="system",
-+                meta=meta,
-+                parent_id=record.data.get("parent_id"),
-+                is_injection=True,
-+            )
-+            bucket.open_confirms.pop(key, None)
-+            self._update_bucket_state(bucket, injected, self._extract_turn_id(meta))
-+
-+        # tts end
-+        tts_keys = list(bucket.open_tts.keys())
-+        for key in tts_keys:
-+            record = bucket.open_tts.get(key)
-+            if not record:
-+                continue
-+            if now - record.monotonic_ts <= 120:
-+                continue
-+            meta = dict(record.data.get("meta") or {})
-+            meta.setdefault("__warning", "forced_close")
-+            injected = self._create_event(
-+                bucket,
-+                now,
-+                level=record.data["level"],
-+                phase=record.data["phase"],
-+                type_=TTS_END_TYPE,
-+                who=record.data.get("who", "system"),
-+                meta=meta,
-+                parent_id=record.data.get("parent_id"),
-+                is_injection=True,
-+            )
-+            bucket.open_tts.pop(key, None)
-+            self._update_bucket_state(bucket, injected, self._extract_turn_id(meta))
-+
-+        # llm final
-+        llm_keys = list(bucket.open_llm.keys())
-+        for key in llm_keys:
-+            record = bucket.open_llm.get(key)
-+            if not record:
-+                continue
-+            if now - record.monotonic_ts <= 120:
-+                continue
-+            meta = dict(record.data.get("meta") or {})
-+            meta.setdefault("__warning", "forced_close")
-+            injected = self._create_event(
-+                bucket,
-+                now,
-+                level=record.data["level"],
-+                phase=record.data["phase"],
-+                type_=LLM_FINAL_TYPE,
-+                who=record.data.get("who", "system"),
-+                meta=meta,
-+                parent_id=record.data.get("parent_id"),
-+                is_injection=True,
-+            )
-+            bucket.open_llm.pop(key, None)
-+            self._update_bucket_state(bucket, injected, self._extract_turn_id(meta))
-+
-+    def _parse_expand(self, expand: str) -> Dict[str, Any]:
-+        expand = expand or "none"
-+        expand = expand.strip()
-+        if expand == "all":
-+            return {"mode": "all", "ids": set()}
-+        if expand == "flow":
-+            return {"mode": "flow", "ids": set()}
-+        if expand == "none":
-+            return {"mode": "none", "ids": set()}
-+        if expand.startswith("ids:"):
-+            ids = {part.strip() for part in expand[4:].split(",") if part.strip()}
-+            return {"mode": "ids", "ids": ids}
-+        return {"mode": "none", "ids": set()}
-+
-+    def _format_event(
-+        self,
-+        bucket: SessionBucket,
-+        record: EventRecord,
-+        expand_policy: Dict[str, Any],
-+        visited: Optional[Set[str]] = None,
-+    ) -> Dict[str, Any]:
-+        visited = visited or set()
-+        event_id = record.data["id"]
-+        if event_id in visited:
-+            return record.to_dict()
-+        visited.add(event_id)
-+
-+        should_expand = self._should_expand_children(record, expand_policy)
-+        if not should_expand or not record.children_ids:
-+            return record.to_dict()
-+
-+        child_dicts: List[Dict[str, Any]] = []
-+        for child_id in record.children_ids:
-+            child = bucket.event_index.get(child_id)
-+            if not child:
-+                continue
-+            child_dicts.append(self._format_event(bucket, child, expand_policy, visited))
-+        return record.to_dict(children=child_dicts)
-+
-+    def _should_expand_children(
-+        self, record: EventRecord, expand_policy: Dict[str, Any]
-+    ) -> bool:
-+        mode = expand_policy.get("mode")
-+        if mode == "all":
-+            return True
-+        if mode == "none":
-+            return False
-+        if mode == "flow":
-+            return record.data.get("level") == "flow"
-+        if mode == "ids":
-+            return record.data.get("id") in expand_policy.get("ids", set())
++def _parse_bool(value: Optional[str], *, default: bool = True) -> bool:
++    if value is None:
++        return default
++    lowered = value.strip().lower()
++    if lowered in {"1", "true", "yes", "on"}:
++        return True
++    if lowered in {"0", "false", "no", "off"}:
 +        return False
-+
-+    def _build_blurb(
-+        self, type_: str, phase: str, who: str, meta: Dict[str, Any]
-+    ) -> str:
-+        template = BLURBS.get(type_)
-+        context = {
-+            "turn": self._extract_turn_id(meta) or "",
-+            "phase": phase,
-+            "src": who,
-+        }
-+        if template:
-+            blurb = template.format(**context)
-+        else:
-+            blurb = type_.replace("_", " ").strip() or "event"
-+        words = _words(blurb)
-+        if len(words) <= 12:
-+            return " ".join(words)
-+        return " ".join(words[:12])
++    return default
 +
 +
-+__all__ = ["FlowStore"]
++@bp.get("/flow/catalog")
++def flow_catalog():
++    _require_admin()
++    return jsonify({"catalog": FLOW_EVENT_CATALOG})
++
++
++@bp.get("/flow/trace")
++def flow_trace():
++    _require_admin()
++
++    session_id = _normalize_str(request.args.get("session_id"))
++    if not session_id:
++        abort(400, description="session_id is required")
++
++    since_value = _parse_int(request.args.get("since_ms"), name="since_ms", minimum=0)
++    limit_value = _parse_int(request.args.get("limit"), name="limit", minimum=1)
++    if limit_value is None:
++        limit_value = 200
++    limit_value = min(limit_value, 1000)
++
++    levels = _parse_levels(request.args.get("levels"))
++    expand = request.args.get("expand") or "flow"
++
++    store = FlowStore()
++    payload = store.list(
++        session_id=session_id,
++        since_ms=since_value,
++        limit=limit_value,
++        levels=levels,
++        expand=expand,
++    )
++    return jsonify(payload)
++
++
++@bp.get("/flow/event")
++def flow_event():
++    _require_admin()
++
++    session_id = _normalize_str(request.args.get("session_id"))
++    event_id = _normalize_str(request.args.get("id"))
++    if not session_id or not event_id:
++        abort(400, description="session_id and id are required")
++
++    store = FlowStore()
++    event = store.get(session_id, event_id)
++    if not event:
++        abort(404)
++    return jsonify(event)
++
++
++@bp.get("/flow/export.ndjson")
++def flow_export_ndjson():
++    _require_admin()
++
++    session_id = _normalize_str(request.args.get("session_id"))
++    if not session_id:
++        abort(400, description="session_id is required")
++
++    since_value = _parse_int(request.args.get("since_ms"), name="since_ms", minimum=0)
++    levels = _parse_levels(request.args.get("levels"))
++    redacted = _parse_bool(request.args.get("redacted"), default=True)
++
++    store = FlowStore()
++
++    def _generate() -> Iterable[str]:
++        cursor = since_value if since_value is not None else 0
++        while True:
++            chunk = store.list(
++                session_id=session_id,
++                since_ms=cursor,
++                limit=500,
++                levels=levels,
++                expand="all",
++            )
++            events = chunk.get("events", [])
++            if not events:
++                break
++            for event in events:
++                yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
++            next_since = chunk.get("next_since_ms")
++            if not isinstance(next_since, int) or next_since <= cursor:
++                break
++            cursor = next_since
++
++    response = Response(stream_with_context(_generate()), mimetype="application/x-ndjson")
++    response.headers["X-Flow-Redacted"] = "1" if redacted else "0"
++    return response
++
++
++__all__ = ["bp"]
+diff --git a/app/flow/__init__.py b/app/flow/__init__.py
+index 64542e1735c6e1224e7223e797b93086c7f6c308..be9a72486fed5aadcd3a712a80d14ce4ddf5d515 100644
+--- a/app/flow/__init__.py
++++ b/app/flow/__init__.py
+@@ -1,5 +1,6 @@
+ """Flow management package."""
+ 
+ from .trace import FlowStore
++from .catalog import FLOW_EVENT_CATALOG, catalog_event_types
+ 
+-__all__ = ["FlowStore"]
++__all__ = ["FlowStore", "FLOW_EVENT_CATALOG", "catalog_event_types"]
+diff --git a/app/flow/catalog.py b/app/flow/catalog.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8c7f46cac808a201bfdcc6d1c325a8c696e41d92
+--- /dev/null
++++ b/app/flow/catalog.py
+@@ -0,0 +1,255 @@
++"""Canonical catalog of flow trace event types and sections."""
++from __future__ import annotations
++
++from typing import Dict, Iterable, List
++
++FlowEvent = Dict[str, object]
++FlowSection = Dict[str, object]
++FlowLevel = Dict[str, object]
++
++
++def _event(type_: str, *, fields: Iterable[str] | None = None, notes: str | None = None) -> FlowEvent:
++    payload: FlowEvent = {"type": type_}
++    if fields:
++        payload["fields"] = list(fields)
++    if notes:
++        payload["notes"] = notes
++    return payload
++
++
++FLOW_EVENT_CATALOG: List[FlowLevel] = [
++    {
++        "level": "flow",
++        "label": "Flow",
++        "description": "Top-level, readable timeline events",
++        "sections": [
++            {
++                "name": "Session/Transport",
++                "events": [
++                    _event("session_open"),
++                    _event("session_ready"),
++                    _event("session_close"),
++                ],
++            },
++            {
++                "name": "Greet/Assistant",
++                "events": [
++                    _event("greet_start"),
++                    _event("tts_queue"),
++                    _event("tts_start"),
++                    _event("tts_end"),
++                    _event("assistant_end"),
++                ],
++            },
++            {
++                "name": "Turn lifecycle",
++                "events": [
++                    _event("confirm_open", fields=["phase", "turn_id"]),
++                    _event("turn_commit", fields=["turn_id"]),
++                    _event("confirm_close", fields=["reason"]),
++                    _event("turn_abort", fields=["reason"]),
++                ],
++            },
++            {
++                "name": "ASR ready path",
++                "events": [
++                    _event("asr_connect"),
++                    _event("asr_ready"),
++                ],
++            },
++            {
++                "name": "LLM",
++                "events": [
++                    _event("llm_start", fields=["model"]),
++                    _event("llm_final", fields=["tokens_out", "chars"]),
++                ],
++            },
++            {
++                "name": "Wrap",
++                "events": [
++                    _event("transcript_saved"),
++                ],
++            },
++        ],
++    },
++    {
++        "level": "transition",
++        "label": "Transition",
++        "description": "Precise edges that belong under a parent flow event",
++        "sections": [
++            {
++                "name": "Barge controller",
++                "events": [
++                    _event("barge_in", fields=["src", "tts_active"]),
++                    _event("barge_resume"),
++                ],
++            },
++            {
++                "name": "Client VAD/PTT",
++                "events": [
++                    _event("ptt_down", fields=["during_tts"]),
++                    _event("ptt_up"),
++                    _event("vad_gate_open", fields=["reason", "rms"]),
++                    _event("vad_gate_close", fields=["reason", "rms"]),
++                ],
++            },
++            {
++                "name": "ASR evidence",
++                "events": [
++                    _event("mic_first_chunk"),
++                    _event("asr_partial_first", fields=["conf"]),
++                    _event("evidence_gate_met", fields=["conf"]),
++                    _event("asr_final", fields=["len", "conf", "turn_id"]),
++                ],
++            },
++            {
++                "name": "Transport",
++                "events": [
++                    _event("ws_error", fields=["code"], notes="Edge only"),
++                ],
++            },
++        ],
++    },
++    {
++        "level": "debug",
++        "label": "Debug",
++        "description": "Optional, high-value diagnostic events",
++        "sections": [
++            {
++                "name": "Policy/Runtime",
++                "events": [
++                    _event("policy_snapshot"),
++                    _event("runtime_flags"),
++                ],
++            },
++            {
++                "name": "Gating/Timers",
++                "events": [
++                    _event("gate_params"),
++                    _event("gate_check", fields=["rule", "value", "threshold", "passed"]),
++                    _event("timer_start", fields=["name", "ms"]),
++                    _event("timer_cancel", fields=["name"]),
++                    _event("timer_fire", fields=["name"]),
++                ],
++            },
++            {
++                "name": "Latencies",
++                "events": [
++                    _event("span_start", fields=["name", "attrs"]),
++                    _event("span_end", fields=["name", "attrs"]),
++                    _event("latency_tick", fields=["from", "to", "ms"]),
++                ],
++            },
++            {
++                "name": "Provider plumbing",
++                "events": [
++                    _event("asr_config"),
++                    _event("asr_close", fields=["code", "reason"]),
++                    _event("tts_event", fields=["op"]),
++                    _event("asr_event", fields=["op"]),
++                ],
++            },
++            {
++                "name": "Queues/Drops",
++                "events": [
++                    _event("queue_depth", fields=["name", "depth", "watermark"]),
++                    _event("frame_drop", fields=["path", "count"]),
++                ],
++            },
++            {
++                "name": "Audio stats",
++                "events": [
++                    _event(
++                        "audio_stats",
++                        fields=[
++                            "rms_avg",
++                            "rms_peak",
++                            "clipped",
++                            "silence_ratio",
++                            "plc_frames",
++                            "sample_rate",
++                            "channels",
++                            "mime",
++                        ],
++                    ),
++                ],
++            },
++            {
++                "name": "LLM meta",
++                "events": [
++                    _event("llm_meta", fields=["model", "cache_hit", "temp", "tools_enabled"]),
++                    _event("llm_tools", fields=["calls", "failures"]),
++                    _event("llm_safety", fields=["blocked", "categories"]),
++                ],
++            },
++            {
++                "name": "Network",
++                "events": [
++                    _event("ws_ping", fields=["rtt_ms", "jitter_ms"]),
++                    _event("clock_skew", fields=["ms"]),
++                ],
++            },
++            {
++                "name": "Payload fingerprints",
++                "events": [
++                    _event("payload_sig", fields=["path", "bytes", "sha1_8"]),
++                ],
++            },
++            {
++                "name": "State snapshot",
++                "events": [
++                    _event(
++                        "state_snapshot",
++                        fields=[
++                            "phase",
++                            "tts_active",
++                            "confirm_open",
++                            "asr_ready",
++                            "last_partial_age_ms",
++                            "queue",
++                        ],
++                    ),
++                ],
++            },
++            {
++                "name": "Recovery",
++                "events": [
++                    _event("recover_ok", fields=["path"]),
++                ],
++            },
++        ],
++    },
++    {
++        "level": "raw",
++        "label": "Raw",
++        "description": "Lossless, batched data arrays",
++        "sections": [
++            {
++                "name": "Raw streaming",
++                "events": [
++                    _event("vad_ticks", fields=["dt_ms", "rms", "gate"]),
++                    _event("audio_chunks", fields=["dt_ms", "bytes", "mime", "containerized"]),
++                    _event("dg_partials", fields=["dt_ms", "len", "conf", "final"]),
++                    _event("dg_events", fields=["op"]),
++                    _event("tts_chunks", fields=["dt_ms", "bytes", "mark"]),
++                    _event("llm_stream", fields=["dt_ms", "bytes"]),
++                    _event("ws_frames", fields=["dt_ms", "dir", "opcode", "len", "dropped"]),
++                ],
++            },
++        ],
++    },
++]
++
++
++def catalog_event_types() -> List[str]:
++    types: List[str] = []
++    for level in FLOW_EVENT_CATALOG:
++        for section in level.get("sections", []):
++            for event in section.get("events", []):
++                type_name = str(event.get("type"))
++                if type_name not in types:
++                    types.append(type_name)
++    return types
++
++
++__all__ = ["FLOW_EVENT_CATALOG", "catalog_event_types"]
+diff --git a/tests/test_flow_api.py b/tests/test_flow_api.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ba38e01f0a7f812d7c4fb511be5a1a59b06d41a9
+--- /dev/null
++++ b/tests/test_flow_api.py
+@@ -0,0 +1,69 @@
++import pytest
++
++from app.asgi_gateway import app as flask_app
++from app.flow.trace import FlowStore
++
++
++@pytest.fixture(autouse=True)
++def reset_flow_store():
++    store = FlowStore()
++    store._init()
++    yield
++    store._init()
++
++
++@pytest.fixture
++def admin_env(monkeypatch):
++    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
++    return {"X-User-Email": "admin@example.com"}
++
++
++def test_flow_trace_endpoint(admin_env):
++    store = FlowStore()
++    event_id = store.emit("sess-api", "flow", "session", "session_open", "system")
++    assert event_id
++
++    client = flask_app.test_client()
++    resp = client.get("/api/v1/flow/trace", query_string={"session_id": "sess-api"}, headers=admin_env)
++    assert resp.status_code == 200
++    data = resp.get_json()
++    assert data["session_id"] == "sess-api"
++    assert any(evt["id"] == event_id for evt in data["events"])
++
++
++def test_flow_event_endpoint(admin_env):
++    store = FlowStore()
++    event_id = store.emit("sess-event", "flow", "session", "session_open", "system")
++
++    client = flask_app.test_client()
++    resp = client.get(
++        "/api/v1/flow/event",
++        query_string={"session_id": "sess-event", "id": event_id},
++        headers=admin_env,
++    )
++    assert resp.status_code == 200
++    data = resp.get_json()
++    assert data["id"] == event_id
++
++
++def test_flow_export_ndjson(admin_env):
++    store = FlowStore()
++    store.emit("sess-export", "flow", "session", "session_open", "system")
++    store.emit("sess-export", "transition", "session", "asr_ready", "system")
++
++    client = flask_app.test_client()
++    resp = client.get(
++        "/api/v1/flow/export.ndjson",
++        query_string={"session_id": "sess-export"},
++        headers=admin_env,
++    )
++    assert resp.status_code == 200
++    assert resp.headers["Content-Type"].startswith("application/x-ndjson")
++    body = resp.data.decode("utf-8").strip().split("\n")
++    assert len(body) >= 2
++
++
++def test_flow_admin_guard():
++    client = flask_app.test_client()
++    resp = client.get("/api/v1/flow/trace", query_string={"session_id": "nope"})
++    assert resp.status_code == 403
+diff --git a/tests/test_flow_store.py b/tests/test_flow_store.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..3272dcbb0344eeed4a3dc0e4aa38e0a884f298db
+--- /dev/null
++++ b/tests/test_flow_store.py
+@@ -0,0 +1,112 @@
++import pytest
++
++from app.flow.trace import (
++    CONFIRM_CLOSE_TYPE,
++    CONFIRM_OPEN_TYPE,
++    FlowStore,
++)
++
++
++@pytest.fixture
++def flow_env(monkeypatch):
++    store = FlowStore()
++    store._init()
++
++    clock = {"now": 1000.0}
++
++    def fake_monotonic():
++        return clock["now"]
++
++    monkeypatch.setattr("app.flow.trace.time.monotonic", fake_monotonic)
++
++    def advance(ms: int) -> None:
++        clock["now"] += ms / 1000.0
++
++    yield store, advance, clock
++
++    store._init()
++
++
++def test_emit_and_list_basic(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-basic"
++
++    first_id = store.emit(session_id, "flow", "session", "session_open", "client")
++    assert first_id
++    advance(10)
++    second_id = store.emit(session_id, "transition", "session", "asr_ready", "system")
++    assert second_id and second_id != first_id
++
++    data = store.list(session_id, expand="all")
++    events = data["events"]
++    assert [evt["id"] for evt in events] == [first_id, second_id]
++    assert data["next_since_ms"] > events[-1]["t_rel_ms"]
++
++
++def test_emit_dedupe_window(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-dedupe"
++
++    eid1 = store.emit(session_id, "flow", "session", "session_open", "system")
++    advance(50)  # 50 ms < dedupe window
++    eid2 = store.emit(session_id, "flow", "session", "session_open", "system")
++    assert eid1 == eid2
++    advance(200)  # outside dedupe window
++    eid3 = store.emit(session_id, "flow", "session", "session_open", "system")
++    assert eid3 != eid1
++
++
++def test_add_batch_and_expand(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-batch"
++
++    parent_id = store.emit(session_id, "flow", "turn", "confirm_open", "assistant")
++    advance(5)
++    child_id = store.emit(
++        session_id,
++        "transition",
++        "turn",
++        "asr_partial_first",
++        "client",
++        parent_id=parent_id,
++    )
++
++    added = store.add_batch(session_id, parent_id, "transcript", ["hello", "world"])
++    assert added is True
++
++    snapshot = store.list(session_id, expand="flow")
++    events = snapshot["events"]
++    assert events[0]["id"] == parent_id
++    assert events[0]["batches"][0]["kind"] == "transcript"
++    assert events[0]["batches"][0]["items"] == ["hello", "world"]
++    assert events[0]["children"][0]["id"] == child_id
++
++
++def test_injected_confirm_close(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-inject"
++
++    store.emit(session_id, "flow", "confirm", CONFIRM_OPEN_TYPE, "assistant", meta={"confirm_id": "1"})
++    advance(4500)
++    data = store.list(session_id)
++    types = [evt["type"] for evt in data["events"]]
++    assert CONFIRM_CLOSE_TYPE in types
++    warning_meta = next(evt["meta"] for evt in data["events"] if evt["type"] == CONFIRM_CLOSE_TYPE)
++    assert warning_meta.get("__warning") == "inferred_close"
++
++
++def test_levels_and_since_filter(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-filters"
++
++    store.emit(session_id, "flow", "session", "session_open", "system")
++    advance(10)
++    store.emit(session_id, "transition", "session", "asr_ready", "system")
++
++    flow_only = store.list(session_id, levels=["flow"])
++    assert len(flow_only["events"]) == 1
++
++    since_data = store.list(session_id, since_ms=5)
++    ids = [evt["type"] for evt in since_data["events"]]
++    assert "asr_ready" in ids
++    assert "session_open" not in ids

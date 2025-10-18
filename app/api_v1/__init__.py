@@ -9,6 +9,7 @@ from .asr import bp as asr_bp
 from .diag import bp as diag_bp
 from .metrics import bp as metrics_bp
 from .policy import bp as policy_bp
+from .flow import bp as flow_bp
 
 def create_v1_blueprint():
     bp = Blueprint("api_v1", __name__)
@@ -22,4 +23,5 @@ def create_v1_blueprint():
     bp.register_blueprint(diag_bp, url_prefix="")
     bp.register_blueprint(metrics_bp, url_prefix="")
     bp.register_blueprint(policy_bp, url_prefix="")
+    bp.register_blueprint(flow_bp, url_prefix="")
     return bp
