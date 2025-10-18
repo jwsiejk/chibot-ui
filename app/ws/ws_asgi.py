@@ -183,10 +183,6 @@ _SETTINGS = load_settings()
 _ADVANCED_LOGGING_ENABLED = bool(
     getattr(_SETTINGS, "advanced_logging_enabled", True)
 )
-try:
-    _jlog("ws_asgi_build", build=WS_ASGI_BUILD, pid=os.getpid())
-except Exception:
-    pass
 
 # ------------------------------ small helpers ------------------------------
 
@@ -235,20 +231,18 @@ def _normalize_admin_event_name(name: str) -> str:
 
 
 def _jlog(event: str, *, admin_event: Optional[str] = None, admin_label: Optional[str] = None, **fields):
-    """Lightweight JSON log (stdout). Keep dependency-free inside WS path."""
+    """Legacy logging hook retained for admin diagnostics; no stdout spam."""
     if not _ADVANCED_LOGGING_ENABLED:
         return
     try:
-        import time as _t, json as _json
-
-        fields.setdefault("event", event)
-        fields.setdefault("ts", _t.time())
-        print(_json.dumps(fields, separators=(",", ":"), ensure_ascii=False))
+        payload = dict(fields)
+        payload.setdefault("event", event)
+        payload.setdefault("ts", time.time())
 
         admin_cb = globals().get("_admin_emit")
         if callable(admin_cb):
-            admin_payload = dict(fields)
-            normalized = _normalize_admin_event_name(admin_event or admin_payload.get("event", event))
+            normalized = _normalize_admin_event_name(admin_event or payload.get("event", event))
+            admin_payload = dict(payload)
             admin_payload["event"] = normalized
             if admin_label is not None:
                 admin_cb(normalized, label=admin_label, **admin_payload)
