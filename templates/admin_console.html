@@ -36,6 +36,7 @@
 <div class="tabs" id="tabs">
 <button class="active" data-tab="ux">User Experience</button>
 <button data-tab="flow">Conversational Flow</button>
+<button data-tab="policy">Policy (Interaction)</button>
 <button data-tab="vendor">Vendor — Streaming ASR (Deepgram) / VAD</button>
 <button data-tab="ptm">PTM / Persona</button>
 <button data-tab="ops">Ops &amp; WS</button>
@@ -111,6 +112,71 @@
     </div>
   </div>
   <div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
+</section>
+<!-- Policy -->
+<section class="panel" id="tab-policy">
+  <h3>Policy (Interaction)</h3>
+  <p class="muted policy-note">Interaction policy governs barge-in, confirm windows, SNR, ASR-ready, and post-TTS hold. Read-only in Phase 3.</p>
+  <div class="policy-header">
+    <div class="policy-chips" id="policy-chip-container"></div>
+    <div class="policy-actions">
+      <button class="btn" id="policy-refresh" type="button">Refresh</button>
+      <button class="btn" id="policy-copy" type="button">Copy JSON</button>
+      <button class="btn" id="policy-download" type="button">Download JSON</button>
+    </div>
+  </div>
+  <div class="policy-status" id="policy-status"></div>
+  <div class="policy-selectors">
+    <label>Session
+      <input id="policy-session-input" list="policy-session-options" placeholder="Paste a session id" />
+      <datalist id="policy-session-options"></datalist>
+    </label>
+    <label>Persona
+      <select id="policy-persona-select">
+        <option value="">Auto (derived)</option>
+      </select>
+    </label>
+    <label>Tenant
+      <select id="policy-tenant-select">
+        <option value="">Auto (derived)</option>
+      </select>
+    </label>
+    <div class="policy-selector-actions">
+      <button class="btn primary" id="policy-apply" type="button">Apply</button>
+      <button class="btn" id="policy-logs" type="button">Link to Logs</button>
+    </div>
+  </div>
+  <div class="policy-empty" id="policy-empty" hidden>No persona/tenant/session overrides detected.</div>
+  <div class="policy-tabs">
+    <div class="policy-subtabs" role="tablist">
+      <button class="policy-subtab active" data-subtab="effective" type="button">Effective Policy</button>
+      <button class="policy-subtab" data-subtab="layers" type="button">Layers</button>
+    </div>
+    <div class="policy-tabpanel active" id="policy-subtab-effective" role="tabpanel">
+      <div class="policy-json-viewer" id="policy-effective-json"></div>
+    </div>
+    <div class="policy-tabpanel" id="policy-subtab-layers" role="tabpanel">
+      <div class="policy-layers-grid">
+        <div class="policy-layer" data-layer="defaults">
+          <div class="policy-layer-head">Defaults</div>
+          <div class="policy-json-viewer" id="policy-layer-defaults"></div>
+        </div>
+        <div class="policy-layer" data-layer="persona">
+          <div class="policy-layer-head">Persona</div>
+          <div class="policy-json-viewer" id="policy-layer-persona"></div>
+        </div>
+        <div class="policy-layer" data-layer="tenant">
+          <div class="policy-layer-head">Tenant</div>
+          <div class="policy-json-viewer" id="policy-layer-tenant"></div>
+        </div>
+        <div class="policy-layer" data-layer="session">
+          <div class="policy-layer-head">Session</div>
+          <div class="policy-json-viewer" id="policy-layer-session"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="policy-toast" id="policy-toast" hidden></div>
 </section>
 <!-- Vendor -->
 <section class="panel" id="tab-vendor">
@@ -196,6 +262,7 @@
 </div>
 <!-- Diagnostics script (no-ops unless #admin-diagnostics exists) -->
 <script src="/static/js/admin_console.js" type="module"></script>
+<script src="/static/js/admin_policy_panel.js" type="module"></script>
 <script>
   // Tabs wiring + deep-link support
   (function(){

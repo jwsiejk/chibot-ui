@@ -1,1009 +1,1616 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 4dfa9ff2e96ee89fdc349a6456a443a3db379f94..02c8eacf250fcfffe19cad36a5115875f876185f 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1146,50 +1146,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+diff --git a/app/api_v1/policy.py b/app/api_v1/policy.py
+index e1d5cc1da9eff8818d888063de226e41936b649d..f1dbd6627269b1e15036c02b2cfe78c37590e69f 100644
+--- a/app/api_v1/policy.py
++++ b/app/api_v1/policy.py
+@@ -1,13 +1,63 @@
+ from __future__ import annotations
  
-     MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
-     MIC_ECHO_WS = _env_truth("MIC_ECHO_WS", False)
+-from flask import Blueprint, jsonify
++from flask import Blueprint, abort, jsonify, request, session as flask_session
  
-     _jlog("mic_capture_cfg", sid="pending", enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
+-from app.policy.loader import load_policy
++from app.admin_log import emit as admin_log_emit
++from app.policy.loader import load_policy, load_policy_layers
++from app.security_state import get_user
++from app.utils.admin import is_admin_email
  
-     raw_query = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+ bp = Blueprint("policy", __name__)
  
-     try:
-         _admin_emit and _admin_emit(
-             "ws_handshake_enter",
-             path=scope.get("path"),
-             raw_query=raw_query,
-         )
-     except Exception:
-         pass
  
-     if scope.get("type") != "websocket":
-         await send({"type": "http.response.start", "status": 404, "headers": []})
-         await send({"type": "http.response.body", "body": b"not found"})
-         return
- 
-     sid = _get_session_id(scope)
-     conn_id = uuid.uuid4().hex
-     start_ts = time.time()
-+    ws_open_ts = start_ts
-     last_msg_ts = start_ts
-     had_disconnect = False
-     active_ws_registered = False
-     active_ws_closed = False
-     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
- 
-     # Auth
-     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in (
-         "0",
-         "false",
-         "no",
-     )
-     bearer_only = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0", "false", "no")
-     fail_limit = int(os.getenv("WS_FAIL_LIMIT", "10"))
-     fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC", "60"))
-     client_ip = _client_ip_from_scope(scope)
- 
-     token = None
-     try:
-         for _sp in scope.get("subprotocols") or []:
-             if isinstance(_sp, str) and _sp.startswith("bearer."):
-                 token = _sp.split(".", 1)[1].strip()
-                 break
-     except Exception:
-         pass
-@@ -1337,107 +1338,140 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-     try:
-         await _ws_send_json(send, {"type": "ready", "session_id": sid})
-     except Exception:
-         with contextlib.suppress(Exception):
-             await send(
-                 {
-                     "type": "websocket.close",
-                     "code": 1011,
-                     "reason": "initial_ready_failed",
-                 }
-             )
-         return
- 
-     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
-     manual_feature_enabled = True
-     manual_mode_manual_only = False
-     auto_commit_when_ready = True
-     ws_configured = False
-     try:
-         policy = load_policy()
-     except Exception:
-         policy = {}
-     if isinstance(policy, dict):
-         cfg["interaction_policy"] = policy
-+        with contextlib.suppress(Exception):
-+            _jlog(
-+                "EVT_POLICY_LOAD",
-+                sid=sid,
-+                keys=len(policy.keys()),
-+            )
-     else:
-         policy = {}
-     try:
-         runtime_cfg = db.get_config()
-         if isinstance(runtime_cfg, dict):
-             manual_feature_enabled = bool(
-                 runtime_cfg.get("feature_manual_barge_in", manual_feature_enabled)
-             )
-             manual_mode_manual_only = bool(
-                 runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-             )
-             auto_commit_when_ready = bool(
-                 runtime_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-             )
-     except Exception:
-         pass
-     try:
-         from app.services import admin_settings as _admin_settings  # type: ignore
- 
-         admin_cfg = _admin_settings.get_settings()
-         if isinstance(admin_cfg, dict):
-             manual_feature_enabled = bool(
-                 admin_cfg.get("feature_manual_barge_in", manual_feature_enabled)
-             )
-             manual_mode_manual_only = bool(
-                 admin_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-             )
-             auto_commit_when_ready = bool(
-                 admin_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-             )
-     except Exception:
-         pass
-     voice_policy = policy.get("voice_runtime") if isinstance(policy, dict) else {}
-     confirm_policy = (
-         voice_policy.get("confirm_window") if isinstance(voice_policy, dict) else {}
-     )
-     confirm_first_policy = (
-         confirm_policy.get("first_turn") if isinstance(confirm_policy, dict) else {}
-     )
-     confirm_warm_policy = (
-         confirm_policy.get("warm_turn") if isinstance(confirm_policy, dict) else {}
-     )
-     snr_policy = voice_policy.get("snr_threshold_db") if isinstance(voice_policy, dict) else {}
-     barge_policy = voice_policy.get("barge_in") if isinstance(voice_policy, dict) else {}
-     auto_commit_policy = (
-         voice_policy.get("auto_commit") if isinstance(voice_policy, dict) else {}
-     )
- 
-+    local_vad_allowed = True
-+    barge_require_asr_evidence = False
-+    barge_suppress_mode = "none"
-+    barge_post_tts_hold_ms = 0
-+    auto_commit_requires_dual = False
-+    auto_commit_requires_asr_ready = False
+ @bp.get("/policy/effective")
+ def get_effective_policy():
+-    policy = load_policy()
+-    return jsonify(policy)
++    def _normalize(value: str | None) -> str | None:
++        if value is None:
++            return None
++        text = value.strip()
++        return text or None
 +
-     if isinstance(auto_commit_policy, dict):
-         enabled_value = auto_commit_policy.get("enabled")
-         if isinstance(enabled_value, bool) and not enabled_value:
-             auto_commit_when_ready = False
-+        requires_dual_value = auto_commit_policy.get("requires_dual_evidence")
-+        if isinstance(requires_dual_value, bool):
-+            auto_commit_requires_dual = requires_dual_value
-+        requires_asr_value = auto_commit_policy.get("asr_ready_required")
-+        if isinstance(requires_asr_value, bool):
-+            auto_commit_requires_asr_ready = requires_asr_value
- 
-     if isinstance(barge_policy, dict):
-         allow_ptt = barge_policy.get("allow_ptt")
-         if isinstance(allow_ptt, bool) and not allow_ptt:
-             manual_feature_enabled = False
-+        allow_local_vad_value = barge_policy.get("allow_local_vad")
-+        if isinstance(allow_local_vad_value, bool):
-+            local_vad_allowed = allow_local_vad_value
-+        require_asr_value = barge_policy.get("require_asr_evidence")
-+        if isinstance(require_asr_value, bool):
-+            barge_require_asr_evidence = require_asr_value
-+        suppress_mode_value = barge_policy.get("suppress_during_tts")
-+        if isinstance(suppress_mode_value, str):
-+            suppress_mode_value = suppress_mode_value.strip().lower()
-+            if suppress_mode_value:
-+                barge_suppress_mode = suppress_mode_value
-+        post_hold_value = barge_policy.get("post_tts_hold_ms")
-+        if isinstance(post_hold_value, (int, float)):
-+            barge_post_tts_hold_ms = max(0, int(post_hold_value))
- 
-     cfg["feature_manual_barge_in"] = manual_feature_enabled
-     cfg["barge_in_mode_manual"] = manual_mode_manual_only
-     cfg["auto_commit_when_ready"] = auto_commit_when_ready
-     loop = asyncio.get_running_loop()
-     barge = BargeState()
-     last_barge_phase = [None]
- 
-     def _send_barge_state(phase: str) -> None:
-         if not phase:
-             return
-         frame = {"type": "state", "phase": phase}
++    def _is_truthy(value: str | None) -> bool:
++        if value is None:
++            return False
++        lowered = value.strip().lower()
++        return lowered in {"1", "true", "yes", "on"}
++
++    session_id = _normalize(request.args.get("session_id"))
++    persona_id = _normalize(request.args.get("persona_id"))
++    tenant_id = _normalize(request.args.get("tenant_id"))
++    wants_refresh = _is_truthy(request.args.get("refresh"))
++
++    inspect_mode = any([session_id, persona_id, tenant_id])
++
++    if not inspect_mode:
++        policy = load_policy(refresh=wants_refresh)
++        return jsonify(policy)
++
++    email = (
++        (flask_session.get("user") or {}).get("email")
++        or flask_session.get("email")
++        or request.headers.get("X-User-Email")
++        or (get_user() or "")
++    )
++    if not is_admin_email((email or "").strip().lower()):
++        abort(403)
++
++    payload = load_policy_layers(
++        session_id=session_id,
++        persona_id=persona_id,
++        tenant_id=tenant_id,
++        refresh=wants_refresh,
++    )
++
++    resolved = payload.get("resolved_context") or {}
++    admin_log_emit(
++        "EVT_POLICY_VIEW",
++        persona_id=resolved.get("persona_id"),
++        tenant_id=resolved.get("tenant_id"),
++        session_id=resolved.get("session_id"),
++        policy_version=payload.get("policy_version"),
++    )
++
++    return jsonify(payload)
+diff --git a/app/db.py b/app/db.py
+index b8b2d7a5a02c0cd7bc76395d71b6e1a445870d1e..ce41883a38ed15051f156ffc689428ce18c48873 100644
+--- a/app/db.py
++++ b/app/db.py
+@@ -58,129 +58,132 @@ class DB:
+                 'show_instruction_strip': True,'show_state_dots': True,'theme':'light',
+                 'suggestions_enabled': True,'suggestions_max_items':4,'suggestions_max_words':7,
+                 'nudges_enabled': True,'nudge_delay_ms':4200,'nudge_backoff_after_ignored':2,
+                 'silence_guard_ms':1800,
+                 'confirm_ms':420,'echo_threshold_boost':1.9,'min_speech_ms':220,'voice_command_hints':True,
+                 'language_lock':'en','max_turn_seconds':90,'normalization_table_version':1,
+                 'nebraska_persona_level':0.13,'nebraska_quotes_enabled':True,
+                 'ws_ping_interval_ms':25000,'ws_idle_timeout_ms':30000,'reconnect_policy':'1_attempt_5s','llm_provider':'auto','openai_model':'gpt-4o-mini','stt_provider':'auto','tts_provider':'auto',
+                 'redact_email_in_logs':True,
+                 'nlu_logging_enabled': True,
+                 'gen_humor': 0.0,
+                 'gen_target_verbosity': 'medium',
+                 'gen_max_sentences': 4,
+                 'gen_top_p': 1.0,
+                 'gen_temperature': 0.3,
+                 'feature_audio': True,
+                 'tts_voice_id': '',
+                 'tts_output_format': 'mp3_44100_128',
+                 'tts_model_id': 'eleven_multilingual_v2',
+                 'feature_manual_barge_in': True,
+                 'barge_in_mode_manual': False,
+                 'auto_commit_when_ready': True,
+                 'planner_high_threshold': 0.75,
+                 'planner_medium_threshold': 0.60,
+             },
+-            'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
++            'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{},'tenants':{}
+         }
++        tenants = self.memory.setdefault('tenants', {})
++        if 'default' not in tenants:
++            tenants['default'] = {'id': 'default', 'name': 'Default Tenant'}
+         self._ensure_config_defaults()
+     def ensure_session(self, sid, email):
          try:
-             bus.broadcast(sid, frame)
+             if persist_enabled():
+                 from .dal import neon_pg
+                 neon_pg.ensure_schema(); neon_pg.upsert_user(email); neon_pg.ensure_session(sid, email)
          except Exception:
              pass
- 
+         session = self.memory['sessions'].setdefault(
+             sid,
+-            {'email':email,'messages':[],'nudges':0,'persona_id':'chip'}
++            {'email':email,'messages':[],'nudges':0,'persona_id':'chip','tenant_id':'default'}
+         )
+         if not isinstance(session.get('goal'), dict):
+             session['goal'] = _empty_session_goal()
+         else:
+             session['goal'] = _normalize_session_goal(session['goal'])
+     def add_message(self, sid, role, text):
          try:
-             prev = last_barge_phase[0]
-             _emit_barge_admin_events(sid, phase, prev)
-             last_barge_phase[0] = phase
+             if persist_enabled():
+                 from .dal import neon_pg
+                 neon_pg.add_message(sid, role, text)
          except Exception:
              pass
+         session = self.memory['sessions'].setdefault(
+             sid,
+-            {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip'}
++            {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip','tenant_id':'default'}
+         )
+         if not isinstance(session.get('goal'), dict):
+             session['goal'] = _empty_session_goal()
+         else:
+             session['goal'] = _normalize_session_goal(session['goal'])
+         self.memory['sessions'][sid]['messages'].append((role,text))
+     def get_transcript(self, sid): return "\n".join([f"{r.upper()}: {t}" for r,t in self.memory['sessions'].get(sid,{'messages':[]})['messages']])
+     def _ensure_config_defaults(self) -> None:
+         configs = self.memory.setdefault('configs', {})
+         if configs.get('planner_high_threshold') is None:
+             configs['planner_high_threshold'] = 0.75
+         if configs.get('planner_medium_threshold') is None:
+             configs['planner_medium_threshold'] = 0.60
+ 
+     def get_config(self, key: Optional[str] = None, default: Any = None):
+         self._ensure_config_defaults()
+         snapshot = copy.deepcopy(self.memory['configs'])
+         if key is None:
+             return snapshot
+         return snapshot.get(key, default)
+     def update_config(self, updates):
+         self.memory['configs'].update(updates)
+         self._ensure_config_defaults()
          try:
-             if loop.is_closed():
-@@ -1452,53 +1486,59 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             if persist_enabled():
+                 from .dal import neon_pg
+                 neon_pg.ensure_schema(); neon_pg.save_config(self.memory['configs'])
+         except Exception:
+             pass
+         return self.get_config()
+     def add_email(self,to,subject,body): self.memory['emails'].append({'to':to,'subject':subject,'body':body,'created_at':time.time()})
+     def list_emails(self): return list(self.memory['emails'])
+     def get_session_goal(self, sid: str) -> Dict[str, Any]:
+         session = self.memory['sessions'].get(sid, {})
+         goal = session.get('goal') if isinstance(session, dict) else None
+         return copy.deepcopy(_normalize_session_goal(goal))
+ 
+     def update_session_goal(self,
+                             sid: Optional[str],
+                             *,
+                             phase: Optional[Any] = None,
+                             depth: Optional[Any] = None,
+                             delivery_pref: Optional[Any] = None,
+                             working_intent: Optional[Any] = None,
+                             entities: Optional[Mapping[str, Any]] = None,
+                             confirmed: Optional[Iterable[Any]] = None) -> Dict[str, Any]:
+         if not sid:
+             return _empty_session_goal()
+         session = self.memory['sessions'].setdefault(
+             sid,
+-            {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip'}
++            {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip','tenant_id':'default'}
+         )
+         if not isinstance(session.get('goal'), dict):
+             session['goal'] = _empty_session_goal()
+         goal = session['goal']
+ 
+         def _store_value(key: str, value: Optional[Any]) -> None:
+             if value is not None:
+                 goal[key] = value
+                 _mark_confirmed(key, value)
+ 
+         def _mark_confirmed(key: str, value: Optional[Any]) -> None:
+             confirmed_list = goal.setdefault('confirmed', [])
+             if not isinstance(confirmed_list, list):
+                 confirmed_list = []
+                 goal['confirmed'] = confirmed_list
+             if value and str(value).strip():
+                 normalized = key.strip()
+                 if normalized and normalized not in confirmed_list:
+                     confirmed_list.append(normalized)
              else:
-                 loop.call_soon_threadsafe(
-                     asyncio.create_task, _ws_send_json(send, payload)
-                 )
-         except Exception:
-             pass
+                 if key in confirmed_list:
+                     confirmed_list.remove(key)
  
-     buf = TurnBuffer()
-     dg: Optional[DeepgramClient] = None
-     rx_task: Optional[asyncio.Task] = None
-     dg_connect_task: Optional[asyncio.Task] = None
-     dg_state: str = "closed"
-     turn_id_ref = [0]
-     pending_final_turns: Deque[int] = deque()
-     completed_llm_turns: Set[int] = set()
-     synthetic_final_turns: Set[int] = set()
-     final_seen = [False]
-     asr_seen_partial = [False]
-     asr_partial_counter = [0]
-     current_assistant_turn_ref: List[Optional[Any]] = [None]
-     manual_commit_pending = [False]
-     manual_button_down = [False]
-     manual_turn_active = [False]
-     # Runtime flags to coordinate commit + VAD gating
-     assistant_speaking = [False]
-+    tts_mask_active = [False]
-+    tts_mask_mode = ["none"]
-+    tts_mask_release_task: List[Optional[asyncio.Task]] = [None]
-+    tts_mask_release_deadline = [0.0]
-+    pending_confirm_request: List[Optional[Dict[str, Any]]] = [None]
-     asr_ready = [False]
-     local_vad_open = [False]    
-     turn_commit_mode_ref: List[str] = ["vad"]
-+    last_ready_signal_after: List[Optional[str]] = [None]
-     active_turn_mode_ref: List[str] = ["vad"]
-     turn_timing: Dict[str, List[float]] = {
-         "start": [0.0],
-         "dg_open": [0.0],
-         "first_partial": [0.0],
-         "final": [0.0],
+         if phase is not None:
+             _store_value('phase', phase)
+diff --git a/app/policy/loader.py b/app/policy/loader.py
+index e178f0bfa9884136323baa498105bab29a8d6a36..f03c9fa9a28d229f9c767b1654b75e16c91b922b 100644
+--- a/app/policy/loader.py
++++ b/app/policy/loader.py
+@@ -1,89 +1,336 @@
+-"""Interaction policy loader.
++"""Interaction policy loader utilities.
+ 
+-Provides the effective voice runtime policy while allowing in-process caching
+-and optional admin overrides sourced from the config store.
++Provides helpers to materialise the voice runtime policy along with the
++per-layer breakdown used by the Admin Policy panel.
+ """
+ 
+ from __future__ import annotations
+ 
+ import copy
+-from typing import Any, Dict, Mapping, MutableMapping
++import hashlib
++import json
++from typing import Any, Dict, Mapping, MutableMapping, Optional
+ 
+ from app.db import db
+ 
+ _DEFAULT_POLICY: Dict[str, Any] = {
+     "voice_runtime": {
+         "confirm_window": {
+             "first_turn": {
+                 "min_ms": 420,
+                 "max_ms": 1200,
+                 "until_asr_ready": True,
+             },
+             "warm_turn": {
+                 "min_ms": 420,
+                 "max_ms": 1020,
+                 "until_asr_ready": False,
+             },
+         },
+         "snr_threshold_db": {
+             "first_turn": 8.0,
+             "warm_turn": 8.0,
+         },
+         "barge_in": {
+             "allow_ptt": True,
+             "allow_local_vad": True,
+             "require_asr_evidence": False,
+             "suppress_during_tts": "all",
+             "post_tts_hold_ms": 200,
+         },
+         "auto_commit": {
+             "enabled": True,
+             "requires_dual_evidence": False,
+             "asr_ready_required": False,
+         },
      }
-     turn_finish_logged = [False]
+ }
  
-     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
-     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
+ _POLICY_CACHE: Dict[str, Any] | None = None
++_GLOBAL_OVERRIDES_CACHE: Dict[str, Any] | None = None
  
-     # Turn-scoped buffering + state
-     buffered_chunks: Deque[bytes] = deque()
-     sent_any_audio = [False]
-     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
-     no_audio_notified = [False]
-     no_audio_turn_id = [0]
+ 
+ def _deep_update(target: MutableMapping[str, Any], source: Mapping[str, Any]) -> None:
+     for key, value in source.items():
+         if isinstance(value, Mapping) and isinstance(target.get(key), MutableMapping):
+             _deep_update(target[key], value)  # type: ignore[index]
+         else:
+             target[key] = copy.deepcopy(value)
+ 
+ 
++def _copy_mapping(value: Mapping[str, Any] | None) -> Dict[str, Any]:
++    if not isinstance(value, Mapping):
++        return {}
++    return copy.deepcopy(dict(value))
++
++
+ def _load_overrides() -> Mapping[str, Any]:
      try:
-         no_audio_window_s = float(
-             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
-         )
+         cfg = db.get_config() or {}
      except Exception:
-         no_audio_window_s = 10.0
-     if no_audio_window_s < 0:
-@@ -1627,264 +1667,421 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 await asyncio.sleep(wait_s)
-                 if confirm_window_ref[0] is not window:
-                     return
-                 decision = window.timeout(time.time())
-                 if decision.action == "commit":
-                     metrics = decision.metrics or {}
-                     reason = metrics.get("reason") or "timeout_commit"
-                     _finalize_confirm_commit(reason, metrics, window)
-                 elif decision.action == "abort":
-                     metrics = decision.metrics or {}
-                     reason = metrics.get("reason") or "timeout"
-                     _finalize_confirm_abort(reason, metrics, window)
-             except asyncio.CancelledError:
-                 return
+         return {}
+     for key in ("interaction_policy_overrides", "interaction_policy"):
+         overrides = cfg.get(key)
+         if isinstance(overrides, Mapping):
+             return overrides
+     return {}
  
-         confirm_timeout_task[0] = asyncio.create_task(_timeout())
  
-     def _finalize_confirm_commit(
-         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
-     ) -> None:
-         if confirm_window_ref[0] is not window:
-             return
-         if manual_button_down[0] or manual_turn_active[0]:
-             _cancel_confirm_timeout()
-             confirm_window_ref[0] = None
-+            _on_local_vad_stop()
-             return
-         _cancel_confirm_timeout()
-         confirm_window_ref[0] = None
-         data = {k: v for k, v in (metrics or {}).items() if v is not None}
-         data.setdefault("reason", trigger)
-         data.setdefault("snr_enabled", window.snr_enabled)
-         _jlog("confirm_commit", sid=sid, **data)
-+        _on_local_vad_stop()
-         if barge.is_paused():
-             try:
-                 barge.commit(_send_barge_state)
-             except Exception:
-                 pass
+-def _build_effective_policy() -> Dict[str, Any]:
+-    policy = copy.deepcopy(_DEFAULT_POLICY)
+-    overrides = _load_overrides()
+-    if overrides:
+-        _deep_update(policy, overrides)
+-    return policy
++def _get_global_overrides(*, refresh: bool = False) -> Dict[str, Any]:
++    global _GLOBAL_OVERRIDES_CACHE
++
++    if refresh or _GLOBAL_OVERRIDES_CACHE is None:
++        _GLOBAL_OVERRIDES_CACHE = _copy_mapping(_load_overrides())
++    return copy.deepcopy(_GLOBAL_OVERRIDES_CACHE)
++
++
++def _normalize_identifier(value: Optional[str]) -> Optional[str]:
++    if value is None:
++        return None
++    try:
++        text = str(value).strip()
++    except Exception:
++        return None
++    if not text:
++        return None
++    lowered = text.lower()
++    if lowered in {"auto", "__auto__", "any"}:
++        return None
++    return text
++
++
++def _fetch_session(session_id: Optional[str]) -> Dict[str, Any]:
++    sid = _normalize_identifier(session_id)
++    if not sid:
++        return {}
++    try:
++        sessions = db.memory.get("sessions", {})
++    except Exception:
++        sessions = {}
++    session = sessions.get(sid)
++    if isinstance(session, Mapping):
++        return copy.deepcopy(dict(session))
++    return {}
++
++
++def _extract_policy_from_mapping(payload: Mapping[str, Any]) -> Dict[str, Any]:
++    for key in (
++        "interaction_policy_overrides",
++        "interaction_policy",
++        "policy_overrides",
++        "policy",
++    ):
++        value = payload.get(key)
++        if isinstance(value, Mapping):
++            return copy.deepcopy(dict(value))
++    return {}
++
++
++def _extract_persona_policy(persona_id: Optional[str]) -> Dict[str, Any]:
++    persona_key = _normalize_identifier(persona_id)
++    if not persona_key:
++        return {}
++    try:
++        personas = db.memory.get("personas", {})
++    except Exception:
++        personas = {}
++    persona = personas.get(persona_key)
++    if not isinstance(persona, Mapping):
++        return {}
++
++    direct = _extract_policy_from_mapping(persona)
++    if direct:
++        return direct
++
++    for variant in ("published", "draft"):
++        pack_info = persona.get(variant)
++        if isinstance(pack_info, Mapping):
++            pack = pack_info.get("pack")
++            if isinstance(pack, Mapping):
++                policy = pack.get("policy")
++                if isinstance(policy, Mapping):
++                    return copy.deepcopy(dict(policy))
++    return {}
++
++
++def _extract_tenant_policy(tenant_id: Optional[str], *, refresh: bool = False) -> Dict[str, Any]:
++    tenant_key = _normalize_identifier(tenant_id)
++    if not tenant_key:
++        return {}
++    try:
++        tenants = db.memory.get("tenants", {})
++    except Exception:
++        tenants = {}
++    tenant = tenants.get(tenant_key)
++    if isinstance(tenant, Mapping):
++        policy = _extract_policy_from_mapping(tenant)
++        if policy:
++            return policy
++    if tenant_key == "default":
++        return _get_global_overrides(refresh=refresh)
++    return {}
++
++
++def _extract_session_policy(session: Mapping[str, Any]) -> Dict[str, Any]:
++    return _extract_policy_from_mapping(session)
++
++
++def _list_personas() -> list[dict[str, str]]:
++    try:
++        personas = db.memory.get("personas", {})
++    except Exception:
++        personas = {}
++    items: list[dict[str, str]] = []
++    if isinstance(personas, Mapping):
++        for pid, payload in personas.items():
++            try:
++                pid_str = str(pid)
++            except Exception:
++                pid_str = pid  # type: ignore[assignment]
++            label = pid_str
++            if isinstance(payload, Mapping):
++                name = payload.get("name")
++                if isinstance(name, str) and name.strip():
++                    label = name.strip()
++                else:
++                    alt = payload.get("id")
++                    if isinstance(alt, str) and alt.strip():
++                        label = alt.strip()
++            items.append({"id": pid_str, "label": label})
++    items.sort(key=lambda item: item["label"].lower())
++    return items
++
++
++def _list_tenants(*, refresh: bool = False) -> list[dict[str, str]]:
++    try:
++        tenants = db.memory.get("tenants", {})
++    except Exception:
++        tenants = {}
++    items: list[dict[str, str]] = []
++    if isinstance(tenants, Mapping):
++        for tid, payload in tenants.items():
++            try:
++                tid_str = str(tid)
++            except Exception:
++                tid_str = tid  # type: ignore[assignment]
++            label = tid_str
++            if isinstance(payload, Mapping):
++                name = payload.get("name")
++                if isinstance(name, str) and name.strip():
++                    label = name.strip()
++            items.append({"id": tid_str, "label": label})
++    # Ensure the default tenant is present when global overrides exist
++    if not any(item["id"] == "default" for item in items):
++        default_policy = _get_global_overrides(refresh=refresh)
++        if default_policy:
++            items.append({"id": "default", "label": "Default Tenant"})
++    items.sort(key=lambda item: item["label"].lower())
++    return items
++
++
++def _compute_policy_version(policy: Mapping[str, Any], context: Mapping[str, Any]) -> str:
++    try:
++        payload = json.dumps(
++            {"policy": policy, "context": context},
++            sort_keys=True,
++            separators=(",", ":"),
++        ).encode("utf-8")
++    except Exception:
++        payload = repr(policy).encode("utf-8", "ignore") + repr(context).encode("utf-8", "ignore")
++    return hashlib.sha1(payload).hexdigest()[:12]
  
-     def _finalize_confirm_abort(
-         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
-     ) -> None:
-         if confirm_window_ref[0] is not window:
-             return
-         if manual_button_down[0] or manual_turn_active[0]:
-             _cancel_confirm_timeout()
-             confirm_window_ref[0] = None
-+            _on_local_vad_stop()
-             return
-         _cancel_confirm_timeout()
-         confirm_window_ref[0] = None
-         data = {k: v for k, v in (metrics or {}).items() if v is not None}
-         data.setdefault("reason", trigger)
-         data.setdefault("snr_enabled", window.snr_enabled)
-         _jlog("confirm_abort", sid=sid, **data)
-+        _on_local_vad_stop()
-         if barge.is_paused():
-             if manual_button_down[0]:
-                 return
-             try:
-                 barge.cancel(_send_barge_state)
-             except Exception:
-                 pass
  
-+        with contextlib.suppress(Exception):
-+            _jlog(
-+                "EVT_CONFIRM_ABORT",
-+                sid=sid,
-+                turn=turn_id_ref[0],
-+                reason=data.get("reason"),
-+                elapsed_ms=data.get("elapsed_ms"),
-+                snr_db=data.get("snr_db"),
-+                partials=data.get("partial_tokens"),
-+                conf=data.get("partial_confidence"),
-+            )
+ def load_policy(*, refresh: bool = False) -> Dict[str, Any]:
+-    """Return the effective interaction policy.
++    """Return the effective interaction policy for runtime usage."""
+ 
+-    The result is cached per-process; callers receive a deep copy to prevent
+-    accidental mutation of the shared cache.
+-    """
++    global _POLICY_CACHE, _GLOBAL_OVERRIDES_CACHE
+ 
+-    global _POLICY_CACHE
++    if refresh:
++        _GLOBAL_OVERRIDES_CACHE = None
+ 
+     if refresh or _POLICY_CACHE is None:
+-        _POLICY_CACHE = _build_effective_policy()
++        base = copy.deepcopy(_DEFAULT_POLICY)
++        overrides = _get_global_overrides(refresh=refresh)
++        if overrides:
++            _deep_update(base, overrides)
++        _POLICY_CACHE = base
+     return copy.deepcopy(_POLICY_CACHE)
 +
-+    def _open_confirm_window(
-+        now_ts: float,
-+        *,
-+        min_ms: int,
-+        max_ms_local: int,
-+        snr_threshold: float,
-+        policy_until_asr_ready: bool,
-+        is_first_turn: bool,
-+    ) -> None:
-+        window = ConfirmWindow(
-+            min_duration_ms=min_ms,
-+            max_duration_ms=max_ms_local,
-+            max_gap_ms=confirm_gap_ms,
-+            min_tokens=confirm_min_tokens,
-+            min_confidence=confirm_min_conf,
-+            snr_threshold_db=snr_threshold,
-+            snr_slack_db=confirm_snr_slack_db,
-+            snr_enabled=True,
-+        )
-+        try:
-+            setattr(window, "policy_until_asr_ready", policy_until_asr_ready)
-+        except Exception:
-+            pass
-+        window.start(now_ts)
-+        confirm_window_ref[0] = window
-+        pending_confirm_request[0] = None
-+        local_vad_meta_sent[0] = False
-+        _emit_local_vad_signal(now_ts)
-+        _jlog(
-+            "EVT_CONFIRM_OPEN",
-+            sid=sid,
-+            turn=turn_id_ref[0],
-+            is_first=bool(is_first_turn),
-+            min_ms=min_ms,
-+            max_ms=max_ms_local,
-+            until_asr_ready=policy_until_asr_ready,
-+        )
-+        _jlog(
-+            "confirm_start",
-+            sid=sid,
-+            turn_id=turn_id_ref[0],
-+            min_ms=min_ms,
-+            max_ms=max_ms_local,
-+            max_gap_ms=confirm_gap_ms,
-+            min_tokens=confirm_min_tokens,
-+            min_confidence=confirm_min_conf,
-+            snr_threshold_db=snr_threshold,
-+            snr_slack_db=confirm_snr_slack_db,
-+            policy_until_asr_ready=policy_until_asr_ready,
-+        )
-+        _schedule_confirm_timeout(window)
 +
-+    def _queue_confirm_request(request: Dict[str, Any]) -> None:
-+        pending_confirm_request[0] = dict(request)
++def load_policy_layers(
++    *,
++    session_id: Optional[str] = None,
++    persona_id: Optional[str] = None,
++    tenant_id: Optional[str] = None,
++    refresh: bool = False,
++) -> Dict[str, Any]:
++    """Return the effective policy plus per-layer breakdown."""
 +
-+    def _maybe_start_pending_confirm(now_ts: Optional[float] = None) -> None:
-+        request = pending_confirm_request[0]
-+        if not request:
-+            return
-+        if request.get("policy_until_asr_ready") and not asr_ready[0]:
-+            return
-+        if tts_mask_active[0]:
-+            return
-+        pending_confirm_request[0] = None
-+        effective_now = now_ts if now_ts is not None else time.time()
-+        _open_confirm_window(
-+            effective_now,
-+            min_ms=request.get("min_ms", confirm_min_ms),
-+            max_ms_local=request.get("max_ms_local", confirm_max_ms),
-+            snr_threshold=request.get("snr_threshold", confirm_snr_db),
-+            policy_until_asr_ready=bool(request.get("policy_until_asr_ready")),
-+            is_first_turn=bool(request.get("is_first_turn")),
-+        )
++    global _POLICY_CACHE, _GLOBAL_OVERRIDES_CACHE
 +
-+    def _cancel_tts_mask_release() -> None:
-+        task = tts_mask_release_task[0]
-+        if task and not task.done():
-+            task.cancel()
-+        tts_mask_release_task[0] = None
-+        tts_mask_release_deadline[0] = 0.0
++    if refresh:
++        _POLICY_CACHE = None
++        _GLOBAL_OVERRIDES_CACHE = None
 +
-+    def _mark_tts_mask_off(turn_id: Any, hold_ms: int) -> None:
-+        previously_active = tts_mask_active[0]
-+        tts_mask_active[0] = False
-+        tts_mask_mode[0] = barge_suppress_mode or "none"
-+        tts_mask_release_deadline[0] = 0.0
-+        with contextlib.suppress(Exception):
-+            _jlog(
-+                "EVT_TTS_MASK_OFF",
-+                sid=sid,
-+                turn_id=turn_id,
-+                post_hold_ms=max(0, hold_ms),
-+            )
-+        if previously_active:
-+            _maybe_start_pending_confirm()
++    defaults = copy.deepcopy(_DEFAULT_POLICY)
++    resolved: Dict[str, str] = {}
++    session_layer: Dict[str, Any] = {}
++    persona_layer: Dict[str, Any] = {}
++    tenant_layer: Dict[str, Any] = {}
 +
-+    async def _await_tts_mask_release(delay_ms: int, turn_id: Any) -> None:
-+        try:
-+            await asyncio.sleep(max(0.0, delay_ms / 1000.0))
-+            _mark_tts_mask_off(turn_id, delay_ms)
-+        except asyncio.CancelledError:
-+            return
-+        finally:
-+            if tts_mask_release_task[0] is asyncio.current_task():
-+                tts_mask_release_task[0] = None
++    session_data = _fetch_session(session_id)
++    if session_data:
++        sid = _normalize_identifier(session_id)
++        if sid:
++            resolved["session_id"] = sid
++        session_layer = _extract_session_policy(session_data)
++        if not persona_id:
++            sess_persona = session_data.get("persona_id")
++            if isinstance(sess_persona, str) and sess_persona.strip():
++                persona_id = sess_persona
++        if not tenant_id:
++            sess_tenant = session_data.get("tenant_id")
++            if isinstance(sess_tenant, str) and sess_tenant.strip():
++                tenant_id = sess_tenant
 +
-     def _start_confirm_window(now_ts: float) -> None:
-+        if not local_vad_allowed:
-+            _jlog("confirm_skip_local_vad_disabled", sid=sid)
-+            return
-         if _manual_mode_active():
-             try:
-                 active_turn = bus.current_assistant_turn(sid)
-             except Exception:
-                 active_turn = None
-             tts_state, _ = _lookup_tts_state(sid, active_turn)
-             if _is_tts_active(tts_state):
-                 _jlog(
-                     "confirm_skip_manual_mode_tts",
-                     sid=sid,
-                     phase=tts_state,
-                 )
-             return
-         if manual_button_down[0] or manual_turn_active[0]:
-             return
-         min_ms = confirm_min_ms
-         max_ms_local = confirm_max_ms
-         snr_threshold = confirm_snr_db
-         policy_until_asr_ready = False
-         try:
-             first_turn_active = not completed_llm_turns
-         except Exception:
-             first_turn_active = False
-         policy_source = (
-             confirm_first_policy if first_turn_active else confirm_warm_policy
-         )
-         if isinstance(policy_source, dict):
-             raw_min = policy_source.get("min_ms")
-             if isinstance(raw_min, (int, float)):
-                 min_ms = max(0, int(raw_min))
-             raw_max = policy_source.get("max_ms")
-             if isinstance(raw_max, (int, float)):
-                 max_ms_local = max(min_ms, int(raw_max))
-             if "until_asr_ready" in policy_source:
-                 policy_until_asr_ready = bool(policy_source.get("until_asr_ready"))
-         if isinstance(snr_policy, dict):
-             key = "first_turn" if first_turn_active else "warm_turn"
-             raw_snr = snr_policy.get(key)
-             if isinstance(raw_snr, (int, float)):
-                 snr_threshold = float(raw_snr)
--        window = ConfirmWindow(
--            min_duration_ms=min_ms,
--            max_duration_ms=max_ms_local,
--            max_gap_ms=confirm_gap_ms,
--            min_tokens=confirm_min_tokens,
--            min_confidence=confirm_min_conf,
--            snr_threshold_db=snr_threshold,
--            snr_slack_db=confirm_snr_slack_db,
--            snr_enabled=True,
--        )
--        try:
--            window.policy_until_asr_ready = policy_until_asr_ready  # type: ignore[attr-defined]
--        except Exception:
--            pass
--        window.start(now_ts)
--        confirm_window_ref[0] = window
--        local_vad_meta_sent[0] = False
--        _emit_local_vad_signal(now_ts)
--        _jlog(
--            "confirm_start",
--            sid=sid,
--            turn_id=turn_id_ref[0],
-+        request = {
-+            "min_ms": min_ms,
-+            "max_ms_local": max_ms_local,
-+            "snr_threshold": snr_threshold,
-+            "policy_until_asr_ready": policy_until_asr_ready,
-+            "is_first_turn": first_turn_active,
++    persona_key = _normalize_identifier(persona_id)
++    if persona_key:
++        resolved["persona_id"] = persona_key
++        persona_layer = _extract_persona_policy(persona_key)
++
++    tenant_key = _normalize_identifier(tenant_id)
++    if tenant_key:
++        resolved["tenant_id"] = tenant_key
++        tenant_layer = _extract_tenant_policy(tenant_key, refresh=refresh)
++    else:
++        fallback = _get_global_overrides(refresh=refresh)
++        if fallback:
++            tenant_layer = fallback
++            resolved["tenant_id"] = "default"
++
++    effective = copy.deepcopy(defaults)
++    if persona_layer:
++        _deep_update(effective, persona_layer)
++    if tenant_layer:
++        _deep_update(effective, tenant_layer)
++    if session_layer:
++        _deep_update(effective, session_layer)
++
++    meta = {
++        "personas": _list_personas(),
++        "tenants": _list_tenants(refresh=refresh),
++    }
++
++    result = {
++        "effective_policy": effective,
++        "layers": {
++            "defaults": defaults,
++            "persona": persona_layer or None,
++            "tenant": tenant_layer or None,
++            "session": session_layer or None,
++        },
++        "resolved_context": resolved,
++        "policy_version": _compute_policy_version(effective, resolved),
++        "meta": meta,
++    }
++    return result
+diff --git a/app/templates/admin_logs.html b/app/templates/admin_logs.html
+index 77705ff0ff6b54314af4254ba7f9e6908861b71a..abc2731303efb3ebe685ee81db96e29197f0d5c1 100644
+--- a/app/templates/admin_logs.html
++++ b/app/templates/admin_logs.html
+@@ -1,12 +1,36 @@
+ <!doctype html>
+ <html><head><meta charset="utf-8"><title>Admin Live Log</title></head>
+ <body>
+   <h1>Admin Live Log</h1>
+   <pre id="out"></pre>
+   <script>
+     const out = document.getElementById('out');
++    const params = new URLSearchParams(window.location.search);
++    const targetSession = params.get('session_id') || params.get('sid') || '';
++    if (targetSession) {
++      out.textContent = `Filtering to session_id=${targetSession}\n`;
++    }
+     const es = new EventSource('/api/v1/admin/logs');
+-    es.addEventListener('heartbeat', e => { out.textContent += e.data + "\n"; });
+-    es.onmessage = e => { out.textContent += e.data + "\n"; };
++    es.addEventListener('heartbeat', e => {
++      if (!targetSession) {
++        out.textContent += e.data + "\n";
++      }
++    });
++    es.onmessage = e => {
++      const raw = e.data || '';
++      try {
++        const payload = JSON.parse(raw);
++        const sid = payload.session_id || payload.sid;
++        if (targetSession && sid !== targetSession) {
++          return;
 +        }
-+        if policy_until_asr_ready and not asr_ready[0]:
-+            _queue_confirm_request(request)
-+            _jlog(
-+                "confirm_pending_asr_ready",
-+                sid=sid,
-+                turn=turn_id_ref[0],
-+                is_first=bool(first_turn_active),
-+            )
-+            return
-+        if tts_mask_active[0]:
-+            _queue_confirm_request(request)
-+            _jlog(
-+                "confirm_pending_tts",
-+                sid=sid,
-+                turn=turn_id_ref[0],
-+                mode=tts_mask_mode[0],
-+            )
-+            return
-+        _open_confirm_window(
-+            now_ts,
-             min_ms=min_ms,
--            max_ms=max_ms_local,
--            max_gap_ms=confirm_gap_ms,
--            min_tokens=confirm_min_tokens,
--            min_confidence=confirm_min_conf,
--            snr_threshold_db=snr_threshold,
--            snr_slack_db=confirm_snr_slack_db,
-+            max_ms_local=max_ms_local,
-+            snr_threshold=snr_threshold,
-             policy_until_asr_ready=policy_until_asr_ready,
-+            is_first_turn=first_turn_active,
-         )
--        _schedule_confirm_timeout(window)
++        out.textContent += JSON.stringify(payload) + "\n";
++      } catch (err) {
++        if (!targetSession) {
++          out.textContent += raw + "\n";
++        }
++      }
++      out.scrollTop = out.scrollHeight;
++    };
+   </script>
+ </body></html>
+diff --git a/static/css/admin_console.css b/static/css/admin_console.css
+index 770e743dd2326d78e88fd9710076606c0109bcaa..063e1fb389ad6f92672044e05821d8eb5e5a96c0 100644
+--- a/static/css/admin_console.css
++++ b/static/css/admin_console.css
+@@ -186,50 +186,243 @@
+ #tab-flow .flow-live-value[data-decision="fail"],
+ #tab-flow .flow-live-value[data-decision="deny"] {
+   color: var(--ac-danger, #ff5a63);
+ }
  
-     def _handle_confirm_chunk(chunk: bytes, now_ts: float) -> None:
-         window = confirm_window_ref[0]
-         if not window:
-             return
-         window.set_snr_enabled(True)
-         decision = window.observe_chunk(chunk, now_ts)
-         if decision.action == "commit" and decision.metrics is not None:
-             _finalize_confirm_commit(
-                 decision.metrics.get("reason") or "chunk", decision.metrics, window
-             )
-         elif decision.action == "abort" and decision.metrics is not None:
-             _finalize_confirm_abort(
-                 decision.metrics.get("reason") or "chunk", decision.metrics, window
-             )
+ #tab-flow .flow-live-value[data-decision="review"],
+ #tab-flow .flow-live-value[data-decision="escalate"] {
+   color: var(--ac-warning, #ffc857);
+ }
  
-     def _handle_confirm_partial(ev: Dict[str, Any]) -> None:
-         window = confirm_window_ref[0]
-         if not window:
-             return
-         now_ts = time.time()
-         decision = window.observe_partial(
-             ev.get("token_count"), ev.get("confidence"), now_ts
-         )
-         if decision.action == "commit" and decision.metrics is not None:
-             _finalize_confirm_commit(
-                 decision.metrics.get("reason") or "partial",
-                 decision.metrics,
-                 window,
-             )
-         elif decision.action == "abort" and decision.metrics is not None:
-             _finalize_confirm_abort(
-                 decision.metrics.get("reason") or "partial",
-                 decision.metrics,
-                 window,
-             )
+ #tab-flow .flow-live-foot {
+   margin-top: 14px;
+   padding-top: 10px;
+   border-top: 1px solid rgba(32, 37, 51, 0.65);
+   font-size: 12px;
+   color: rgba(173, 184, 204, 0.78);
+   display: flex;
+   justify-content: space-between;
+   gap: 12px;
+ }
  
-     def _ensure_confirm_closed(reason: str) -> None:
-         window = confirm_window_ref[0]
-         if not window:
-             return
-         decision = window.cancel(reason, time.time())
-         if decision.action == "abort" and decision.metrics is not None:
-             _finalize_confirm_abort(reason, decision.metrics, window)
-             
-     def _on_assistant_tts_start(turn_id: Any) -> None:
-         assistant_speaking[0] = True
-+        mode = (barge_suppress_mode or "none").strip() or "none"
-+        mask_engaged = mode != "none"
-+        tts_mask_mode[0] = mode
-+        if mask_engaged:
-+            tts_mask_active[0] = True
-+        else:
-+            tts_mask_active[0] = False
-+        _cancel_tts_mask_release()
-+        with contextlib.suppress(Exception):
-+            _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode)
-         _ensure_confirm_closed("tts_start")
-         if not manual_button_down[0]:
-             with contextlib.suppress(Exception):
-                 barge.cancel(_send_barge_state)
+ #tab-flow .flow-live-last {
+   white-space: normal;
+ }
  
-     def _on_assistant_tts_end(turn_id: Any) -> None:
-         assistant_speaking[0] = False
-+        if tts_mask_active[0] and barge_post_tts_hold_ms > 0:
-+            delay_ms = barge_post_tts_hold_ms
-+            _cancel_tts_mask_release()
-+            tts_mask_release_deadline[0] = time.time() + (delay_ms / 1000.0)
-+            tts_mask_release_task[0] = asyncio.create_task(
-+                _await_tts_mask_release(delay_ms, turn_id)
-+            )
-+        elif tts_mask_active[0]:
-+            _cancel_tts_mask_release()
-+            _mark_tts_mask_off(turn_id, 0)
-+        else:
-+            _cancel_tts_mask_release()
-+            _mark_tts_mask_off(turn_id, 0)
- 
-     def _on_asr_connect_ok() -> None:
-+        already_ready = asr_ready[0]
-         asr_ready[0] = True
-+        if not already_ready:
-+            with contextlib.suppress(Exception):
-+                delta_ms = int(max(0.0, (time.time() - ws_open_ts) * 1000))
-+                _jlog("EVT_ASR_READY", sid=sid, t_ms_since_ws=delta_ms)
-+        _maybe_start_pending_confirm()
- 
-     def _on_local_vad_start() -> None:
-         local_vad_open[0] = True
- 
-     def _on_local_vad_stop() -> None:
-         local_vad_open[0] = False
- 
-     def _handle_bus_frame(frame: Dict[str, Any]) -> None:
-         ftype_raw = frame.get("type")
-         ftype = (ftype_raw or "").lower()
-         if not ftype:
-             return
-         turn_id = frame.get("turn_id")
-         if ftype in {"tts_start", "assistant_audio", "tts:start"}:
-             _on_assistant_tts_start(turn_id)
-             if ftype == "assistant_audio":
-                 is_last_val = frame.get("is_last")
-                 is_last = False
-                 if isinstance(is_last_val, bool):
-                     is_last = is_last_val
-                 elif isinstance(is_last_val, str):
-                     is_last = is_last_val.strip().lower() in {"1", "true", "yes"}
-                 elif isinstance(is_last_val, (int, float)):
-                     is_last = bool(is_last_val)
-                 if is_last:
-                     _on_assistant_tts_end(turn_id)
-         elif ftype in {
-             "utteranceend",
-             "utterance_end",
-             "tts_end",
-             "tts:stop",
-             "tts_stop",
-         }:
-             _on_assistant_tts_end(turn_id)
- 
-     def _reset_turn_metrics(start_ts: float) -> None:
-         turn_timing["start"][0] = start_ts
-         turn_timing["dg_open"][0] = 0.0
-         turn_timing["first_partial"][0] = 0.0
-         turn_timing["final"][0] = 0.0
-         turn_finish_logged[0] = False
-         asr_partial_counter[0] = 0
- 
-     def _emit_no_audio_alert(reason: str) -> None:
-         if no_audio_notified[0]:
-             return
-         if sent_any_audio[0]:
-             return
-+        if assistant_speaking[0] or tts_mask_active[0]:
-+            return
-         no_audio_notified[0] = True
-         turn_id = no_audio_turn_id[0] or turn_id_ref[0] or 0
-         since_first_ms = None
-         if mic_first_ts[0]:
-             since_first_ms = int(max(0.0, (time.time() - mic_first_ts[0]) * 1000))
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_no_audio_detected",
-                 sid=sid,
-                 turn_id=turn_id,
-                 reason=reason,
-                 window_s=no_audio_window_s,
-                 mic_chunks=len(mic_chunks),
-                 buffered=len(buffered_chunks),
-                 since_first_ms=since_first_ms,
-             )
-         if _admin_emit:
-             with contextlib.suppress(Exception):
-                 _admin_emit(
-                     "no_audio_detected",
-                     session_id=sid,
-                     turn_id=turn_id,
-                     reason=reason,
-                     window_s=no_audio_window_s,
-                     mic_chunks=len(mic_chunks),
-@@ -1916,59 +2113,87 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                     len(chunk)
-                     for chunk in buf_chunks
-                     if isinstance(chunk, (bytes, bytearray))
-                 )
-         except Exception:
-             pass
-         return total
- 
-     def _manual_mode_active() -> bool:
-         return manual_feature_enabled and manual_mode_manual_only
- 
-     def _manual_log_event(name: str, **fields: Any) -> None:
-         _jlog(
-             name,
-             sid=sid,
-             admin_event=name,
-             admin_label=name,
-             **fields,
-         )
- 
-     def _session_ready_for_auto_commit() -> bool:
-         if manual_button_down[0] or manual_turn_active[0]:
-             return False
-         if barge.is_paused():
-             return False
-+        if assistant_speaking[0] or tts_mask_active[0]:
-+            return False
-         try:
-             active_turn = bus.current_assistant_turn(sid)
-         except Exception:
-             active_turn = None
-         tts_state, _ = _lookup_tts_state(sid, active_turn)
-         if _is_tts_active(tts_state):
-             return False
-         return True
- 
-+    def _has_dual_evidence() -> bool:
-+        if manual_button_down[0] or manual_turn_active[0]:
-+            return True
-+        local_vad_seen = bool(local_vad_meta_sent[0] or local_vad_open[0])
-+        if not local_vad_seen:
-+            return False
-+        return bool(asr_seen_partial[0])
++/* ---------- Policy (Interaction) panel ---------- */
++#tab-policy .policy-note {
++  margin-top: 6px;
++  margin-bottom: 14px;
++}
 +
-+    def _can_auto_commit_now() -> bool:
-+        if not auto_commit_when_ready:
-+            return False
-+        if not _session_ready_for_auto_commit():
-+            return False
-+        if not asr_ready[0]:
-+            return False
-+        if auto_commit_requires_asr_ready and not asr_ready[0]:
-+            return False
-+        if auto_commit_requires_dual and not _has_dual_evidence():
-+            return False
-+        if barge_require_asr_evidence and not asr_seen_partial[0]:
-+            return False
-+        local_vad_signal = bool(local_vad_meta_sent[0] or local_vad_open[0])
-+        if not local_vad_signal and not sent_any_audio[0]:
-+            return False
-+        return True
++#tab-policy .policy-header {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  flex-wrap: wrap;
++  gap: 12px;
++}
 +
-     def _cancel_asr_stream_activation() -> None:
-         task = asr_stream_activation_task[0]
-         if task and not task.done():
-             task.cancel()
-         asr_stream_activation_task[0] = None
++#tab-policy .policy-chips {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 8px;
++}
++
++#tab-policy .policy-chip {
++  display: inline-flex;
++  align-items: center;
++  font-size: 12px;
++  font-weight: 600;
++  padding: 4px 10px;
++  border-radius: 999px;
++  border: 1px solid rgba(90, 176, 255, 0.35);
++  background: rgba(90, 176, 255, 0.12);
++  color: #d9e7ff;
++}
++
++#tab-policy .policy-actions {
++  display: flex;
++  gap: 8px;
++  flex-wrap: wrap;
++}
++
++#tab-policy .policy-status {
++  margin-top: 6px;
++  font-size: 12px;
++  color: rgba(168, 176, 191, 0.85);
++}
++
++#tab-policy .policy-selectors {
++  display: grid;
++  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
++  gap: 12px;
++  margin-top: 16px;
++  align-items: end;
++}
++
++#tab-policy .policy-selector-actions {
++  display: flex;
++  gap: 8px;
++  justify-content: flex-end;
++}
++
++#tab-policy .policy-empty {
++  margin-top: 12px;
++  font-size: 13px;
++  color: rgba(200, 154, 255, 0.85);
++}
++
++#tab-policy .policy-tabs {
++  margin-top: 18px;
++}
++
++#tab-policy .policy-subtabs {
++  display: flex;
++  gap: 8px;
++  flex-wrap: wrap;
++}
++
++#tab-policy .policy-subtab {
++  appearance: none;
++  border: 1px solid rgba(90, 176, 255, 0.25);
++  border-radius: 999px;
++  background: rgba(20, 26, 38, 0.9);
++  color: rgba(214, 226, 245, 0.92);
++  font-size: 12px;
++  font-weight: 600;
++  padding: 6px 14px;
++  cursor: pointer;
++  transition: background 0.12s ease, border-color 0.12s ease;
++}
++
++#tab-policy .policy-subtab.active {
++  border-color: rgba(90, 176, 255, 0.6);
++  background: rgba(90, 176, 255, 0.16);
++  color: #e7f1ff;
++}
++
++#tab-policy .policy-tabpanel {
++  display: none;
++  margin-top: 14px;
++  border: 1px solid rgba(32, 37, 51, 0.7);
++  border-radius: 12px;
++  background: rgba(12, 16, 24, 0.92);
++  padding: 14px;
++}
++
++#tab-policy .policy-tabpanel.active {
++  display: block;
++}
++
++#tab-policy .policy-layers-grid {
++  display: grid;
++  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
++  gap: 16px;
++}
++
++#tab-policy .policy-layer-head {
++  font-size: 13px;
++  font-weight: 600;
++  margin-bottom: 8px;
++  color: rgba(206, 218, 238, 0.9);
++}
++
++#tab-policy .policy-json-viewer {
++  background: rgba(8, 13, 22, 0.88);
++  border: 1px solid rgba(32, 37, 51, 0.8);
++  border-radius: 10px;
++  padding: 10px;
++  max-height: 320px;
++  overflow: auto;
++  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
++  font-size: 12px;
++  line-height: 1.45;
++  color: #d8e0f0;
++}
++
++#tab-policy .policy-json-viewer.policy-json-empty {
++  color: rgba(170, 182, 204, 0.7);
++  font-style: italic;
++}
++
++#tab-policy .policy-json-root {
++  display: flex;
++  flex-direction: column;
++  gap: 4px;
++}
++
++#tab-policy details.policy-json-node {
++  border-left: 1px solid rgba(90, 176, 255, 0.25);
++  margin-left: 6px;
++  padding-left: 8px;
++}
++
++#tab-policy .policy-json-summary {
++  cursor: pointer;
++  color: rgba(202, 214, 236, 0.95);
++  user-select: none;
++}
++
++#tab-policy .policy-json-node.has-diff > summary {
++  color: #ffd280;
++}
++
++#tab-policy .policy-json-leaf {
++  display: flex;
++  gap: 6px;
++  align-items: baseline;
++  padding-left: 6px;
++}
++
++#tab-policy .policy-json-leaf.has-diff {
++  color: #ffd280;
++}
++
++#tab-policy .policy-json-key {
++  color: rgba(165, 196, 255, 0.9);
++}
++
++#tab-policy .policy-json-sep {
++  color: rgba(120, 140, 166, 0.85);
++}
++
++#tab-policy .policy-json-value {
++  color: rgba(232, 236, 245, 0.95);
++}
++
++#tab-policy .policy-toast {
++  margin-top: 12px;
++  padding: 10px 12px;
++  border-radius: 10px;
++  background: rgba(44, 18, 40, 0.9);
++  color: #ffb8d6;
++  border: 1px solid rgba(255, 94, 168, 0.35);
++  font-size: 13px;
++  max-width: 520px;
++}
++
+ /* ---------- Step list ---------- */
+ #admin-diagnostics .diag-steps {
+   list-style: none;
+   margin: 0;
+   padding: 0;
+   display: flex;
+   flex-direction: column;
+   gap: 18px;
+ }
  
-     def _cancel_asr_not_ready_timeout() -> None:
-         task = asr_not_ready_timeout_task[0]
-         if task and not task.done():
-             task.cancel()
-         asr_not_ready_timeout_task[0] = None
+ #admin-diagnostics .diag-step {
+   background: var(--card-bg);
+   border: 1px solid var(--ac-border);
+   border-radius: var(--ac-radius);
+   box-shadow: var(--ac-shadow);
+   padding: 20px 22px;
+   position: relative;
+   transition: border-color 0.18s ease, box-shadow 0.18s ease;
+ }
  
-     def _schedule_asr_not_ready_timeout() -> None:
-         _cancel_asr_not_ready_timeout()
-         wait_s = max(0.0, asr_ready_wait_s)
-         if wait_s <= 0:
-             return
+ #admin-diagnostics .diag-step[data-status="active"] {
+   border-color: rgba(138, 187, 255, 0.9);
+   box-shadow: 0 0 0 1px rgba(138, 187, 255, 0.55), 0 28px 50px -34px rgba(27, 73, 128, 0.85);
+ }
  
-         async def _timer() -> None:
-             try:
-                 await asyncio.sleep(wait_s)
-                 if not asr_ready_evt.is_set():
-                     _jlog("asr_not_ready_timeout", sid=sid, phase="commit")
-             except asyncio.CancelledError:
-                 return
-@@ -2017,76 +2242,101 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 finally:
-                     _cancel_asr_not_ready_timeout()
- 
-             if dg_connect_task is not None and not dg_connect_task.done():
-                 with contextlib.suppress(asyncio.TimeoutError):
-                     await asyncio.wait_for(
-                         dg_connect_task, timeout=asr_ready_wait_s
-                     )
- 
-             await _flush_buffered_chunks()
- 
-             if dg_state == "open" and not buffered_chunks:
-                 asr_direct_stream[0] = True
-         finally:
-             if asr_stream_activation_task[0] is asyncio.current_task():
-                 asr_stream_activation_task[0] = None
- 
-     def _schedule_asr_stream_activation(trigger: str) -> None:
-         _cancel_asr_stream_activation()
-         asr_stream_activation_task[0] = asyncio.create_task(
-             _run_asr_stream_activation(trigger)
-         )
- 
-     def _on_barge_commit(forced_mode: Optional[str] = None) -> None:
-         mode_raw = forced_mode or turn_commit_mode_ref[0]
--        mode = mode_raw or ("manual" if manual_commit_pending[0] else "vad")
-+        pending_manual = manual_commit_pending[0]
-+        mode = mode_raw or ("manual" if pending_manual else "vad")
-         manual_commit_pending[0] = False
-         turn_commit_mode_ref[0] = "vad"
-         active_turn_mode_ref[0] = mode or "vad"
-+        event_mode = "manual" if (mode == "manual" or pending_manual) else "auto"
-+        dual_evidence = True if event_mode == "manual" else _has_dual_evidence()
-+        asr_ready_flag = bool(asr_ready[0])
-         target_turn = current_assistant_turn_ref[0]
-         try:
-             latest = bus.current_assistant_turn(sid)
-             if latest:
-                 target_turn = latest
-         except Exception:
-             pass
-+        cancel_reason: Optional[str] = None
-         if target_turn:
-             with contextlib.suppress(Exception):
-                 bus.cancel_turn(sid, target_turn)
-+                cancel_reason = "assistant_cancel"
-+        last_ready_signal_after[0] = cancel_reason
-         _send_barge_state("ready")
-+        if last_ready_signal_after[0]:
-+            with contextlib.suppress(Exception):
-+                _jlog(
-+                    "EVT_READY_SIGNAL",
-+                    sid=sid,
-+                    after=last_ready_signal_after[0],
-+                    turn=turn_id_ref[0],
-+                )
-+            last_ready_signal_after[0] = None
-         _jlog(
-             "turn_committed",
-             sid=sid,
-             mode=mode,
-             manual=(mode == "manual"),
-             auto_commit=(mode == "auto_commit"),
-             turn_id=turn_id_ref[0],
-             ts_ms=int(time.time() * 1000),
-             admin_event="turn_committed",
-             admin_label="turn_committed",
-         )
-+        with contextlib.suppress(Exception):
-+            _jlog(
-+                "EVT_COMMIT",
-+                sid=sid,
-+                turn=turn_id_ref[0],
-+                mode=event_mode,
-+                dual_evidence=bool(dual_evidence),
-+                asr_ready=asr_ready_flag,
-+            )
-         if not turn_stream_committed[0]:
-             turn_stream_committed[0] = True
-             asr_direct_stream[0] = True
-             _schedule_asr_stream_activation(mode or "vad")
- 
-     def _cancel_no_audio_watch() -> None:
-         task = no_audio_watch_task[0]
-         if task and not task.done():
-             task.cancel()
-         no_audio_watch_task[0] = None
- 
-     def _schedule_no_audio_watch(turn_id: int) -> None:
-         if no_audio_window_s <= 0:
-             return
-         _cancel_no_audio_watch()
-         no_audio_notified[0] = False
-         no_audio_turn_id[0] = turn_id
- 
-         async def _watch() -> None:
-             try:
-                 await asyncio.sleep(no_audio_window_s)
-                 if sent_any_audio[0] or no_audio_notified[0]:
-                     return
-                 _emit_no_audio_alert("timeout")
-             except asyncio.CancelledError:
-@@ -2593,50 +2843,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             active_assistant_turn = current_assistant_turn_ref[0]
-                             tts_state, _tts_key = _lookup_tts_state(
-                                 sid, active_assistant_turn
-                             )
-                             if _is_tts_active(tts_state):
-                                 should_pause = False
-                                 try:
-                                     _jlog(
-                                         "barge_skip_tts_active",
-                                         sid=sid,
-                                         turn_hint=turn_hint,
-                                     )
-                                 except Exception:
-                                     pass
-                         if not manual_turn_active[0] and should_pause:
-                             try:
-                                 barge_started = barge.start(
-                                     confirm_ms=confirm_ms,
-                                     on_commit=_on_barge_commit,
-                                     send_state=_send_barge_state,
-                                     auto_commit=False,
-                                 )
-                             except Exception:
-                                 barge_started = False
-                         turn_id_ref[0] = buf.turn_seq + 1
-+                        pending_confirm_request[0] = None
-                         if barge_started:
-                             if manual_mode_manual_only:
-                                 try:
-                                     barge.commit(_send_barge_state)
-                                 except Exception:
-                                     pass
-                             else:
-                                 _start_confirm_window(now)
-                         else:
-                             confirm_window_ref[0] = None
-                             local_vad_meta_sent[0] = False
-                             local_vad_open[0] = False
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         turn_connect_started[0] = False
-                         turn_stream_committed[0] = False
-                         asr_direct_stream[0] = False
-                         _cancel_asr_stream_activation()
-                         _cancel_asr_not_ready_timeout()
-                         # reset mic capture
-@@ -3356,56 +3607,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                     elapsed = time.time() - mic_first_ts[0]
-                                 should_emit = (not assistant_speaking[0]) and (
-                                     no_audio_window_s <= 0
-                                     or (
-                                         elapsed is not None
-                                         and elapsed >= no_audio_window_s
-                                     )
-                                 )
-                                 if should_emit:
-                                     _emit_no_audio_alert("close_stream")
- 
-                             if synthetic_emitted:
-                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
-                                 final_seen[0] = False
- 
-                             if barge.is_paused():
-                                 _ensure_confirm_closed("cleanup")
-                                 if not manual_button_down[0]:
-                                     with contextlib.suppress(Exception):
-                                         barge.cancel(_send_barge_state)
-                                 await asyncio.sleep(0)
- 
-                             if ws_configured and not turn_stream_committed[0]:
-                                 if manual_commit_pending[0] and not assistant_speaking[0]:
-                                     _on_barge_commit("manual")
--                                elif (
--                                    auto_commit_when_ready
--                                    and asr_ready[0]
--                                    and (sent_any_audio[0] or local_vad_open[0])
--                                    and not assistant_speaking[0]
--                                ):
-+                                elif _can_auto_commit_now():
-                                     _on_barge_commit("auto")
- 
-                             active_turn_mode_ref[0] = "vad"
-                             turn_commit_mode_ref[0] = "vad"
- 
-                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
- 
-                             _jlog(
-                                 "mic_capture_block_enter",
-                                 sid=sid,
-                                 turn_id=turn_id,
-                                 mic_chunks=len(mic_chunks),
-                             )
-                             if MIC_CAPTURE:
-                                 try:
-                                     raw = b"".join(mic_chunks)
-                                     _jlog(
-                                         "mic_capture_summary",
-                                         sid=sid,
-                                         turn_id=turn_id,
-                                         bytes=len(raw),
-                                         chunks=len(mic_chunks),
-                                         container=transport.get("container"),
-                                         codec=transport.get("codec"),
-                                         containerized_opus=transport.get(
+diff --git a/static/js/admin_policy_panel.js b/static/js/admin_policy_panel.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..1f588058177521252bcfd81a34eeffa4150b5c17
+--- /dev/null
++++ b/static/js/admin_policy_panel.js
+@@ -0,0 +1,525 @@
++const SUBTAB_DEFAULT = 'effective';
++const AUTO_LABEL = 'Auto (derived)';
++
++const state = {
++  initialized: false,
++  sessionId: '',
++  personaId: '',
++  tenantId: 'default',
++  data: null,
++  sessions: [],
++  meta: { personas: [], tenants: [] },
++  activeSubtab: SUBTAB_DEFAULT,
++  loading: false,
++  toastTimer: null,
++};
++
++function $(root, selector) {
++  return root ? root.querySelector(selector) : null;
++}
++
++function createChip(label, value) {
++  const chip = document.createElement('span');
++  chip.className = 'policy-chip';
++  chip.textContent = value ? `${label}: ${value}` : label;
++  return chip;
++}
++
++function showToast(root, message) {
++  const toast = $(root, '#policy-toast');
++  if (!toast) return;
++  toast.textContent = message;
++  toast.hidden = false;
++  if (state.toastTimer) {
++    clearTimeout(state.toastTimer);
++  }
++  state.toastTimer = setTimeout(() => {
++    toast.hidden = true;
++    state.toastTimer = null;
++  }, 4000);
++}
++
++function setLoading(root, isLoading) {
++  state.loading = !!isLoading;
++  if (root) {
++    root.dataset.loading = state.loading ? '1' : '0';
++  }
++  const status = $(root, '#policy-status');
++  if (status && state.loading) {
++    status.textContent = 'Loading…';
++  }
++}
++
++function formatValue(value) {
++  if (value === null) return 'null';
++  if (typeof value === 'string') return value;
++  if (typeof value === 'number' || typeof value === 'boolean') {
++    return String(value);
++  }
++  try {
++    return JSON.stringify(value);
++  } catch (err) {
++    return String(value);
++  }
++}
++
++function hasDiffForPath(diffs, path) {
++  if (!diffs || !diffs.size || !path) {
++    return false;
++  }
++  for (const diffPath of diffs) {
++    if (diffPath === path) return true;
++    if (diffPath.startsWith(path + '.')) return true;
++  }
++  return false;
++}
++
++function renderJsonViewer(container, data, options = {}) {
++  if (!container) return;
++  container.classList.remove('policy-json-empty');
++  container.innerHTML = '';
++  if (!data || typeof data !== 'object' || Array.isArray(data) && !data.length || !Object.keys(data).length) {
++    container.classList.add('policy-json-empty');
++    container.textContent = '—';
++    return;
++  }
++  const { diffs, expandDepth = 2 } = options;
++
++  function renderNode(key, value, path, depth) {
++    const isObject = value && typeof value === 'object';
++    if (isObject) {
++      const details = document.createElement('details');
++      details.className = 'policy-json-node';
++      if (depth < expandDepth) {
++        details.open = true;
++      }
++      if (hasDiffForPath(diffs, path)) {
++        details.classList.add('has-diff');
++      }
++      const summary = document.createElement('summary');
++      summary.className = 'policy-json-summary';
++      const keySpan = document.createElement('span');
++      keySpan.className = 'policy-json-key';
++      keySpan.textContent = key;
++      summary.appendChild(keySpan);
++      details.appendChild(summary);
++      const body = document.createElement('div');
++      body.className = 'policy-json-children';
++      if (Array.isArray(value)) {
++        value.forEach((child, index) => {
++          const childPath = path ? `${path}.${index}` : String(index);
++          const label = `[${index}]`;
++          body.appendChild(renderNode(label, child, childPath, depth + 1));
++        });
++        if (!value.length) {
++          const empty = document.createElement('div');
++          empty.className = 'policy-json-leaf';
++          empty.textContent = '(empty array)';
++          body.appendChild(empty);
++        }
++      } else {
++        const entries = Object.entries(value);
++        if (!entries.length) {
++          const empty = document.createElement('div');
++          empty.className = 'policy-json-leaf';
++          empty.textContent = '(empty object)';
++          body.appendChild(empty);
++        }
++        for (const [childKey, childValue] of entries) {
++          const childPath = path ? `${path}.${childKey}` : childKey;
++          body.appendChild(renderNode(childKey, childValue, childPath, depth + 1));
++        }
++      }
++      details.appendChild(body);
++      return details;
++    }
++
++    const row = document.createElement('div');
++    row.className = 'policy-json-leaf';
++    if (hasDiffForPath(diffs, path)) {
++      row.classList.add('has-diff');
++    }
++    const keySpan = document.createElement('span');
++    keySpan.className = 'policy-json-key';
++    keySpan.textContent = key;
++    row.appendChild(keySpan);
++    const sep = document.createElement('span');
++    sep.className = 'policy-json-sep';
++    sep.textContent = ':';
++    row.appendChild(sep);
++    const valueSpan = document.createElement('span');
++    valueSpan.className = 'policy-json-value';
++    valueSpan.textContent = formatValue(value);
++    row.appendChild(valueSpan);
++    return row;
++  }
++
++  const root = document.createElement('div');
++  root.className = 'policy-json-root';
++  const entries = Array.isArray(data) ? data.entries() : Object.entries(data);
++  if (Array.isArray(data)) {
++    data.forEach((child, index) => {
++      const node = renderNode(`[${index}]`, child, String(index), 0);
++      root.appendChild(node);
++    });
++  } else {
++    for (const [key, value] of entries) {
++      const node = renderNode(key, value, key, 0);
++      root.appendChild(node);
++    }
++  }
++  container.appendChild(root);
++}
++
++function collectDiffPaths(base, override, prefix = '') {
++  const diffs = new Set();
++  if (!override || typeof override !== 'object') {
++    return diffs;
++  }
++  const isArray = Array.isArray(override);
++  if (isArray) {
++    override.forEach((value, index) => {
++      const nextPath = prefix ? `${prefix}.${index}` : String(index);
++      const baseValue = Array.isArray(base) ? base[index] : undefined;
++      if (value && typeof value === 'object') {
++        if (!(baseValue && typeof baseValue === 'object')) {
++          diffs.add(nextPath);
++        }
++        collectDiffPaths(baseValue, value, nextPath).forEach((p) => diffs.add(p));
++      } else {
++        diffs.add(nextPath);
++      }
++    });
++    return diffs;
++  }
++  Object.keys(override).forEach((key) => {
++    const nextPath = prefix ? `${prefix}.${key}` : key;
++    const value = override[key];
++    const baseValue = base && typeof base === 'object' ? base[key] : undefined;
++    if (value && typeof value === 'object') {
++      if (!(baseValue && typeof baseValue === 'object')) {
++        diffs.add(nextPath);
++      }
++      collectDiffPaths(baseValue, value, nextPath).forEach((p) => diffs.add(p));
++    } else {
++      diffs.add(nextPath);
++    }
++  });
++  return diffs;
++}
++
++function renderChips(root, payload) {
++  const container = $(root, '#policy-chip-container');
++  if (!container) return;
++  container.innerHTML = '';
++  const resolved = payload?.resolved_context || {};
++  const chips = [];
++  if (resolved.persona_id) {
++    chips.push(createChip('Persona', resolved.persona_id));
++  }
++  if (resolved.tenant_id) {
++    chips.push(createChip('Tenant', resolved.tenant_id));
++  }
++  if (resolved.session_id) {
++    chips.push(createChip('Session', resolved.session_id));
++  }
++  if (payload?.policy_version) {
++    chips.push(createChip('Version', payload.policy_version));
++  }
++  if (!chips.length) {
++    const chip = document.createElement('span');
++    chip.className = 'policy-chip';
++    chip.textContent = 'Defaults only';
++    chips.push(chip);
++  }
++  chips.forEach((chip) => container.appendChild(chip));
++}
++
++function renderStatus(root, payload) {
++  const status = $(root, '#policy-status');
++  if (!status) return;
++  if (!payload) {
++    status.textContent = '';
++    return;
++  }
++  const resolved = payload.resolved_context || {};
++  const parts = [];
++  if (resolved.session_id) parts.push(`Session ${resolved.session_id}`);
++  if (resolved.persona_id) parts.push(`Persona ${resolved.persona_id}`);
++  if (resolved.tenant_id) parts.push(`Tenant ${resolved.tenant_id}`);
++  const context = parts.length ? parts.join(' · ') : 'Defaults';
++  status.textContent = `${context} • Fetched ${new Date().toLocaleTimeString()}`;
++}
++
++function renderPolicy(root, payload) {
++  if (!payload) return;
++  const effective = payload.effective_policy || {};
++  const defaults = payload.layers?.defaults || {};
++  const personaLayer = payload.layers?.persona || {};
++  const tenantLayer = payload.layers?.tenant || {};
++  const sessionLayer = payload.layers?.session || {};
++
++  const diffPersona = collectDiffPaths(defaults, personaLayer);
++  const diffTenant = collectDiffPaths(defaults, tenantLayer);
++  const diffSession = collectDiffPaths(defaults, sessionLayer);
++
++  renderJsonViewer($(root, '#policy-effective-json'), effective, { expandDepth: 3 });
++  renderJsonViewer($(root, '#policy-layer-defaults'), defaults, { expandDepth: 2 });
++  renderJsonViewer($(root, '#policy-layer-persona'), personaLayer, {
++    diffs: diffPersona,
++    expandDepth: 2,
++  });
++  renderJsonViewer($(root, '#policy-layer-tenant'), tenantLayer, {
++    diffs: diffTenant,
++    expandDepth: 2,
++  });
++  renderJsonViewer($(root, '#policy-layer-session'), sessionLayer, {
++    diffs: diffSession,
++    expandDepth: 2,
++  });
++
++  const emptyNotice = $(root, '#policy-empty');
++  const hasPersona = personaLayer && Object.keys(personaLayer).length;
++  const hasTenant = tenantLayer && Object.keys(tenantLayer).length;
++  const hasSession = sessionLayer && Object.keys(sessionLayer).length;
++  if (emptyNotice) {
++    emptyNotice.hidden = !!(hasPersona || hasTenant || hasSession);
++  }
++}
++
++function syncOptions(select, options) {
++  if (!select) return;
++  const current = select.value;
++  Array.from(select.querySelectorAll('option[data-dynamic="1"]')).forEach((opt) => opt.remove());
++  options.forEach((opt) => {
++    const optionEl = document.createElement('option');
++    optionEl.value = opt.id;
++    optionEl.textContent = opt.label || opt.id;
++    optionEl.dataset.dynamic = '1';
++    select.appendChild(optionEl);
++  });
++  if (current) {
++    const hasMatch = Array.from(select.options).some((opt) => opt.value === current);
++    if (hasMatch) {
++      select.value = current;
++    }
++  }
++}
++
++function syncMeta(root, payload) {
++  state.meta.personas = Array.isArray(payload?.meta?.personas) ? payload.meta.personas : [];
++  state.meta.tenants = Array.isArray(payload?.meta?.tenants) ? payload.meta.tenants : [];
++  const personaSelect = $(root, '#policy-persona-select');
++  const tenantSelect = $(root, '#policy-tenant-select');
++  if (personaSelect) {
++    const auto = personaSelect.querySelector('option[value=""]');
++    if (auto) auto.textContent = AUTO_LABEL;
++    syncOptions(personaSelect, state.meta.personas);
++    personaSelect.value = state.personaId || '';
++  }
++  if (tenantSelect) {
++    const auto = tenantSelect.querySelector('option[value=""]');
++    if (auto) auto.textContent = AUTO_LABEL;
++    syncOptions(tenantSelect, state.meta.tenants);
++    if (state.tenantId && tenantSelect.value !== state.tenantId) {
++      tenantSelect.value = state.tenantId;
++    }
++  }
++}
++
++async function loadSessionsList(root) {
++  try {
++    const resp = await fetch('/api/v1/admin/sessions', { credentials: 'include' });
++    if (!resp.ok) return;
++    const payload = await resp.json();
++    const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
++    state.sessions = sessions;
++    const dataList = $(root, '#policy-session-options');
++    if (dataList) {
++      dataList.innerHTML = '';
++      sessions.forEach((session) => {
++        const option = document.createElement('option');
++        const sessionId = (session?.id || '').toString();
++        option.value = sessionId;
++        const persona = session?.persona_id ? ` · persona=${session.persona_id}` : '';
++        const tenant = session?.tenant_id ? ` · tenant=${session.tenant_id}` : '';
++        option.label = `${sessionId}${persona}${tenant}`;
++        dataList.appendChild(option);
++      });
++    }
++  } catch (err) {
++    // ignore list errors
++  }
++}
++
++function getQueryParams() {
++  const params = new URLSearchParams();
++  if (state.sessionId) params.set('session_id', state.sessionId);
++  if (state.personaId) params.set('persona_id', state.personaId);
++  if (state.tenantId) params.set('tenant_id', state.tenantId);
++  if (!params.has('session_id') && !params.has('persona_id') && !params.has('tenant_id')) {
++    params.set('tenant_id', 'default');
++  }
++  return params;
++}
++
++async function fetchPolicy(root, { forceRefresh = false } = {}) {
++  setLoading(root, true);
++  try {
++    const params = getQueryParams();
++    if (forceRefresh) {
++      params.set('refresh', '1');
++    }
++    const url = `/api/v1/policy/effective?${params.toString()}`;
++    const resp = await fetch(url, {
++      method: 'GET',
++      credentials: 'include',
++      headers: { Accept: 'application/json' },
++    });
++    if (!resp.ok) {
++      throw new Error(`HTTP ${resp.status}`);
++    }
++    const payload = await resp.json();
++    state.data = payload;
++    const resolved = payload?.resolved_context || {};
++    if (resolved.persona_id) {
++      state.personaId = resolved.persona_id;
++    }
++    if (resolved.tenant_id) {
++      state.tenantId = resolved.tenant_id;
++    }
++    renderChips(root, payload);
++    renderStatus(root, payload);
++    syncMeta(root, payload);
++    renderPolicy(root, payload);
++  } catch (err) {
++    showToast(root, `Failed to load policy: ${err?.message || err}`);
++  } finally {
++    setLoading(root, false);
++  }
++}
++
++function handleApply(root) {
++  const sessionInput = $(root, '#policy-session-input');
++  const personaSelect = $(root, '#policy-persona-select');
++  const tenantSelect = $(root, '#policy-tenant-select');
++  state.sessionId = sessionInput ? sessionInput.value.trim() : '';
++  state.personaId = personaSelect ? personaSelect.value : '';
++  state.tenantId = tenantSelect ? tenantSelect.value : '';
++  if (!state.sessionId && !state.personaId && !state.tenantId) {
++    state.tenantId = 'default';
++    if (tenantSelect) tenantSelect.value = 'default';
++  }
++  fetchPolicy(root);
++}
++
++function handleRefresh(root) {
++  fetchPolicy(root, { forceRefresh: true });
++}
++
++function handleCopy(root) {
++  if (!state.data?.effective_policy) {
++    showToast(root, 'Nothing to copy yet.');
++    return;
++  }
++  const json = JSON.stringify(state.data.effective_policy, null, 2);
++  if (navigator?.clipboard?.writeText) {
++    navigator.clipboard.writeText(json).then(() => {
++      showToast(root, 'Effective policy copied to clipboard.');
++    }).catch(() => {
++      showToast(root, 'Clipboard copy failed.');
++    });
++  } else {
++    try {
++      const temp = document.createElement('textarea');
++      temp.value = json;
++      document.body.appendChild(temp);
++      temp.select();
++      document.execCommand('copy');
++      document.body.removeChild(temp);
++      showToast(root, 'Effective policy copied to clipboard.');
++    } catch (err) {
++      showToast(root, 'Clipboard copy failed.');
++    }
++  }
++}
++
++function handleDownload(root) {
++  if (!state.data?.effective_policy) {
++    showToast(root, 'Nothing to download yet.');
++    return;
++  }
++  const blob = new Blob([JSON.stringify(state.data.effective_policy, null, 2)], {
++    type: 'application/json',
++  });
++  const url = URL.createObjectURL(blob);
++  const a = document.createElement('a');
++  a.href = url;
++  a.download = 'interaction_policy.json';
++  document.body.appendChild(a);
++  a.click();
++  setTimeout(() => {
++    URL.revokeObjectURL(url);
++    a.remove();
++  }, 0);
++}
++
++function handleLogs(root) {
++  const resolved = state.data?.resolved_context || {};
++  const sid = resolved.session_id || state.sessionId;
++  if (!sid) {
++    showToast(root, 'Select a session id to open logs.');
++    return;
++  }
++  const url = `/api/v1/admin/logs-ui?session_id=${encodeURIComponent(sid)}`;
++  window.open(url, '_blank', 'noopener');
++}
++
++function switchSubtab(root, target) {
++  if (!root || !target) return;
++  const buttons = root.querySelectorAll('.policy-subtab');
++  const panels = root.querySelectorAll('.policy-tabpanel');
++  buttons.forEach((btn) => {
++    btn.classList.toggle('active', btn.dataset.subtab === target);
++  });
++  panels.forEach((panel) => {
++    panel.classList.toggle('active', panel.id === `policy-subtab-${target}`);
++  });
++  state.activeSubtab = target;
++}
++
++function bindEvents(root) {
++  const applyBtn = $(root, '#policy-apply');
++  const refreshBtn = $(root, '#policy-refresh');
++  const copyBtn = $(root, '#policy-copy');
++  const downloadBtn = $(root, '#policy-download');
++  const logsBtn = $(root, '#policy-logs');
++  const subtabButtons = root ? root.querySelectorAll('.policy-subtab') : [];
++
++  if (applyBtn) applyBtn.addEventListener('click', () => handleApply(root));
++  if (refreshBtn) refreshBtn.addEventListener('click', () => handleRefresh(root));
++  if (copyBtn) copyBtn.addEventListener('click', () => handleCopy(root));
++  if (downloadBtn) downloadBtn.addEventListener('click', () => handleDownload(root));
++  if (logsBtn) logsBtn.addEventListener('click', () => handleLogs(root));
++  subtabButtons.forEach((button) => {
++    button.addEventListener('click', () => {
++      switchSubtab(root, button.dataset.subtab || SUBTAB_DEFAULT);
++    });
++  });
++}
++
++function initializePanel() {
++  const root = document.getElementById('tab-policy');
++  if (!root || state.initialized) return;
++  state.initialized = true;
++  bindEvents(root);
++  loadSessionsList(root);
++  // Ensure selects start with default tenant option if available.
++  const tenantSelect = $(root, '#policy-tenant-select');
++  if (tenantSelect) {
++    tenantSelect.value = state.tenantId;
++  }
++  fetchPolicy(root);
++}
++
++document.addEventListener('DOMContentLoaded', initializePanel);
+diff --git a/templates/admin_console.html b/templates/admin_console.html
+index 97101a876b8922bfcae4fcc9178b449b6d1d8e45..7599c1b05eb8a008eb0c74dacfeebe39344a2f05 100644
+--- a/templates/admin_console.html
++++ b/templates/admin_console.html
+@@ -14,50 +14,51 @@
+     .panel{display:none;border:1px solid #202533;border-radius:12px;background:#161a22;padding:16px;margin-bottom:16px}
+     .panel.active{display:block}
+     .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+     label{display:flex;flex-direction:column;font-size:13px;color:#9aa4b2}
+     input,select{margin-top:6px;background:#0f141d;border:1px solid #202533;border-radius:10px;color:#e6e9ef;padding:8px 10px}
+     .row{display:flex;gap:10px;align-items:center}
+     .btn{appearance:none;border-radius:10px;border:1px solid #2b7fcf;background:#5ab0ff;color:#0b111a;font-weight:600;padding:8px 12px;cursor:pointer}
+     .btn.primary:hover{background:#3a99ea}
+     .muted{color:#9aa4b2;font-size:13px}
+     table{width:100%;border-collapse:collapse;background:#101522;border:1px solid #202533;border-radius:12px;overflow:hidden}
+     thead th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#9aa0b2;background:#0e1220}
+     th,td{font-size:13px;border-bottom:1px solid #202533;padding:8px}
+     .back{display:inline-block;margin-bottom:8px;color:#7aa0ff;text-decoration:none}
+     .back:hover{text-decoration:underline}
+   </style>
+ <!-- Diagnostics-only stylesheet (scoped to #admin-diagnostics, safe to include) -->
+ <link href="/static/css/admin_console.css" rel="stylesheet"/>
+ </head>
+ <body>
+ <div class="wrap">
+ <a class="back" href="/">← Back</a>
+ <h1>Ask Chip — Admin</h1>
+ <div class="tabs" id="tabs">
+ <button class="active" data-tab="ux">User Experience</button>
+ <button data-tab="flow">Conversational Flow</button>
++<button data-tab="policy">Policy (Interaction)</button>
+ <button data-tab="vendor">Vendor — Streaming ASR (Deepgram) / VAD</button>
+ <button data-tab="ptm">PTM / Persona</button>
+ <button data-tab="ops">Ops &amp; WS</button>
+ <button data-tab="diag">Diagnostics</button>
+ </div>
+ <!-- UX -->
+ <section class="panel active" id="tab-ux">
+ <h3>User Experience</h3>
+ <div class="grid">
+ <label>Theme
+         <select id="theme">
+ <option>light</option><option>dark</option><option>system</option>
+ </select>
+ </label>
+ <label>Show instruction strip <input id="show_instruction_strip" type="checkbox"/></label>
+ <label>Show state dots <input id="show_state_dots" type="checkbox"/></label>
+ <label>Suggestions enabled <input id="suggestions_enabled" type="checkbox"/></label>
+ <label>Suggestions — max items <input id="suggestions_max_items" min="0" type="number" value="4"/></label>
+ <label>Suggestions — max words <input id="suggestions_max_words" min="1" type="number" value="7"/></label>
+ <label>Nudge delay (ms) <input id="nudge_delay_ms" type="number" value="4200"/></label>
+ <label>Nudge backoff after ignored <input id="nudge_backoff_after_ignored" type="number" value="2"/></label>
+ <label>WS ping interval (ms) <input id="ws_ping_interval_ms" type="number" value="15000"/></label>
+ <label>WS idle timeout (ms) <input id="ws_idle_timeout_ms" type="number" value="60000"/></label>
+ </div>
+ <div class="actions" style="margin-top:10px"><button class="btn primary" id="save-ux">Save</button></div>
+@@ -90,50 +91,115 @@
+       <dl class="flow-live-list">
+         <div class="flow-live-row">
+           <dt>Intent</dt>
+           <dd class="flow-live-value" id="nlu-intent" data-empty="true">—</dd>
+         </div>
+         <div class="flow-live-row" id="flow-live-guardrail">
+           <dt>Guardrail</dt>
+           <dd class="flow-live-value" id="nlu-guardrail" data-empty="true">—</dd>
+         </div>
+         <div class="flow-live-row">
+           <dt>Teacher move</dt>
+           <dd class="flow-live-value" id="nlu-move" data-empty="true">—</dd>
+         </div>
+         <div class="flow-live-row">
+           <dt>Tool plan</dt>
+           <dd class="flow-live-value" id="nlu-toolplan" data-empty="true">—</dd>
+         </div>
+       </dl>
+       <div class="flow-live-foot">
+         <span class="flow-live-last" id="nlu-last-event">Waiting for policy signal…</span>
+       </div>
+     </div>
+   </div>
+   <div class="actions"><button class="btn primary" id="save-flow">Save</button></div>
+ </section>
++<!-- Policy -->
++<section class="panel" id="tab-policy">
++  <h3>Policy (Interaction)</h3>
++  <p class="muted policy-note">Interaction policy governs barge-in, confirm windows, SNR, ASR-ready, and post-TTS hold. Read-only in Phase 3.</p>
++  <div class="policy-header">
++    <div class="policy-chips" id="policy-chip-container"></div>
++    <div class="policy-actions">
++      <button class="btn" id="policy-refresh" type="button">Refresh</button>
++      <button class="btn" id="policy-copy" type="button">Copy JSON</button>
++      <button class="btn" id="policy-download" type="button">Download JSON</button>
++    </div>
++  </div>
++  <div class="policy-status" id="policy-status"></div>
++  <div class="policy-selectors">
++    <label>Session
++      <input id="policy-session-input" list="policy-session-options" placeholder="Paste a session id" />
++      <datalist id="policy-session-options"></datalist>
++    </label>
++    <label>Persona
++      <select id="policy-persona-select">
++        <option value="">Auto (derived)</option>
++      </select>
++    </label>
++    <label>Tenant
++      <select id="policy-tenant-select">
++        <option value="">Auto (derived)</option>
++      </select>
++    </label>
++    <div class="policy-selector-actions">
++      <button class="btn primary" id="policy-apply" type="button">Apply</button>
++      <button class="btn" id="policy-logs" type="button">Link to Logs</button>
++    </div>
++  </div>
++  <div class="policy-empty" id="policy-empty" hidden>No persona/tenant/session overrides detected.</div>
++  <div class="policy-tabs">
++    <div class="policy-subtabs" role="tablist">
++      <button class="policy-subtab active" data-subtab="effective" type="button">Effective Policy</button>
++      <button class="policy-subtab" data-subtab="layers" type="button">Layers</button>
++    </div>
++    <div class="policy-tabpanel active" id="policy-subtab-effective" role="tabpanel">
++      <div class="policy-json-viewer" id="policy-effective-json"></div>
++    </div>
++    <div class="policy-tabpanel" id="policy-subtab-layers" role="tabpanel">
++      <div class="policy-layers-grid">
++        <div class="policy-layer" data-layer="defaults">
++          <div class="policy-layer-head">Defaults</div>
++          <div class="policy-json-viewer" id="policy-layer-defaults"></div>
++        </div>
++        <div class="policy-layer" data-layer="persona">
++          <div class="policy-layer-head">Persona</div>
++          <div class="policy-json-viewer" id="policy-layer-persona"></div>
++        </div>
++        <div class="policy-layer" data-layer="tenant">
++          <div class="policy-layer-head">Tenant</div>
++          <div class="policy-json-viewer" id="policy-layer-tenant"></div>
++        </div>
++        <div class="policy-layer" data-layer="session">
++          <div class="policy-layer-head">Session</div>
++          <div class="policy-json-viewer" id="policy-layer-session"></div>
++        </div>
++      </div>
++    </div>
++  </div>
++  <div class="policy-toast" id="policy-toast" hidden></div>
++</section>
+ <!-- Vendor -->
+ <section class="panel" id="tab-vendor">
+ <h3>Vendor — Streaming ASR / VAD</h3>
+ <div class="grid">
+ <label>Deepgram model <input id="dg_model" value="nova-2-general"/></label>
+ <label>Interim results <input checked="" id="dg_partials" type="checkbox"/></label>
+ <label>VAD confirm (ms) <input id="vad_confirm_ms" type="number" value="420"/></label>
+ <label>Echo threshold boost <input id="echo_threshold_boost" type="number" value="12"/></label>
+ </div>
+ <div class="actions"><button class="btn primary" id="save-vendor">Save</button></div>
+ </section>
+ <!-- PTM -->
+ <section class="panel" id="tab-ptm">
+ <h3>PTM Personality (NLP / NLU / NLG)</h3>
+ <div class="grid">
+ <label>OpenAI model <input id="openai_model" value="gpt-4o-mini"/></label>
+ <label>Temperature <input id="gen_temperature" max="2" min="0" step="0.05" type="number" value="0.3"/></label>
+ <label>Top-p <input id="gen_top_p" max="1" min="0" step="0.05" type="number" value="1.0"/></label>
+ <label>Max sentences <input id="gen_max_sentences" min="1" type="number" value="4"/></label>
+ <label>Target verbosity <select id="gen_target_verbosity">
+ <option>short</option><option selected="">medium</option><option>long</option></select>
+ </label>
+ <label>Persona intensity (Nebraska %) <input id="nebraska_persona" max="1" min="0" step="0.01" type="number" value="0.13"/></label>
+ <label>Use persona quotes <input checked="" id="nebraska_quotes_enabled" type="checkbox"/></label>
+ <label>NLU: intent classification <input checked="" id="nlu_intent" type="checkbox"/></label>
+@@ -174,50 +240,51 @@
+ <span class="muted">Source: /api/v1/admin/diagnostics/streaming_status</span>
+ </div>
+ <div class="grid" style="margin-top:10px">
+ <label>partials <input id="stream-partials" readonly="" value="0"/></label>
+ <label>finals <input id="stream-finals" readonly="" value="0"/></label>
+ <label>provider_errors <input id="stream-errors" readonly="" value="0"/></label>
+ <label>breaker_open <input id="stream-breaker" readonly="" value="false"/></label>
+ </div>
+ <h3 style="margin-top:18px">Full System Test</h3>
+ <div class="row">
+ <button class="btn primary" id="run-diag-full">Run full system test</button>
+ <span class="muted" id="diag-full-status">idle</span>
+ </div>
+ <div style="margin-top:10px">
+ <table>
+ <thead><tr><th>Check</th><th>OK</th><th>Details</th></tr></thead>
+ <tbody id="diag-full-body"></tbody>
+ </table>
+ </div>
+ <!-- Diagnostics (script-driven) -->
+ <div id="admin-diagnostics"></div>
+ </section>
+ </div>
+ <!-- Diagnostics script (no-ops unless #admin-diagnostics exists) -->
+ <script src="/static/js/admin_console.js" type="module"></script>
++<script src="/static/js/admin_policy_panel.js" type="module"></script>
+ <script>
+   // Tabs wiring + deep-link support
+   (function(){
+     const tabs = document.getElementById('tabs');
+     if(!tabs) return;
+     const btns = Array.from(tabs.querySelectorAll('button[data-tab]'));
+     const panels = Array.from(document.querySelectorAll('.panel'));
+     function activate(name){
+       btns.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+       panels.forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
+     }
+     btns.forEach(b => b.addEventListener('click', () => activate(b.dataset.tab)));
+     const want = new URLSearchParams(location.search).get('tab') || 'ux';
+     activate(want);
+   })();
+ </script>
+ <!-- Lightweight poller for Streaming status -->
+ <script>
+   (function(){
+     async function fetchJSON(url){
+       const r = await fetch(url, { credentials: 'same-origin' });
+       if (!r.ok) throw new Error('HTTP '+r.status);
+       return await r.json();
+     }
+     async function loadStreamingStatus(){

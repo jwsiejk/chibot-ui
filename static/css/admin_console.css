@@ -208,6 +208,199 @@
   white-space: normal;
 }
 
+/* ---------- Policy (Interaction) panel ---------- */
+#tab-policy .policy-note {
+  margin-top: 6px;
+  margin-bottom: 14px;
+}
+
+#tab-policy .policy-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+#tab-policy .policy-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#tab-policy .policy-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(90, 176, 255, 0.35);
+  background: rgba(90, 176, 255, 0.12);
+  color: #d9e7ff;
+}
+
+#tab-policy .policy-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#tab-policy .policy-status {
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(168, 176, 191, 0.85);
+}
+
+#tab-policy .policy-selectors {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+  align-items: end;
+}
+
+#tab-policy .policy-selector-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+#tab-policy .policy-empty {
+  margin-top: 12px;
+  font-size: 13px;
+  color: rgba(200, 154, 255, 0.85);
+}
+
+#tab-policy .policy-tabs {
+  margin-top: 18px;
+}
+
+#tab-policy .policy-subtabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#tab-policy .policy-subtab {
+  appearance: none;
+  border: 1px solid rgba(90, 176, 255, 0.25);
+  border-radius: 999px;
+  background: rgba(20, 26, 38, 0.9);
+  color: rgba(214, 226, 245, 0.92);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+#tab-policy .policy-subtab.active {
+  border-color: rgba(90, 176, 255, 0.6);
+  background: rgba(90, 176, 255, 0.16);
+  color: #e7f1ff;
+}
+
+#tab-policy .policy-tabpanel {
+  display: none;
+  margin-top: 14px;
+  border: 1px solid rgba(32, 37, 51, 0.7);
+  border-radius: 12px;
+  background: rgba(12, 16, 24, 0.92);
+  padding: 14px;
+}
+
+#tab-policy .policy-tabpanel.active {
+  display: block;
+}
+
+#tab-policy .policy-layers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+#tab-policy .policy-layer-head {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: rgba(206, 218, 238, 0.9);
+}
+
+#tab-policy .policy-json-viewer {
+  background: rgba(8, 13, 22, 0.88);
+  border: 1px solid rgba(32, 37, 51, 0.8);
+  border-radius: 10px;
+  padding: 10px;
+  max-height: 320px;
+  overflow: auto;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #d8e0f0;
+}
+
+#tab-policy .policy-json-viewer.policy-json-empty {
+  color: rgba(170, 182, 204, 0.7);
+  font-style: italic;
+}
+
+#tab-policy .policy-json-root {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#tab-policy details.policy-json-node {
+  border-left: 1px solid rgba(90, 176, 255, 0.25);
+  margin-left: 6px;
+  padding-left: 8px;
+}
+
+#tab-policy .policy-json-summary {
+  cursor: pointer;
+  color: rgba(202, 214, 236, 0.95);
+  user-select: none;
+}
+
+#tab-policy .policy-json-node.has-diff > summary {
+  color: #ffd280;
+}
+
+#tab-policy .policy-json-leaf {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding-left: 6px;
+}
+
+#tab-policy .policy-json-leaf.has-diff {
+  color: #ffd280;
+}
+
+#tab-policy .policy-json-key {
+  color: rgba(165, 196, 255, 0.9);
+}
+
+#tab-policy .policy-json-sep {
+  color: rgba(120, 140, 166, 0.85);
+}
+
+#tab-policy .policy-json-value {
+  color: rgba(232, 236, 245, 0.95);
+}
+
+#tab-policy .policy-toast {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(44, 18, 40, 0.9);
+  color: #ffb8d6;
+  border: 1px solid rgba(255, 94, 168, 0.35);
+  font-size: 13px;
+  max-width: 520px;
+}
+
 /* ---------- Step list ---------- */
 #admin-diagnostics .diag-steps {
   list-style: none;

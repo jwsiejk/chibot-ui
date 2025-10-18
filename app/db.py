@@ -80,8 +80,11 @@ class DB:
                 'planner_high_threshold': 0.75,
                 'planner_medium_threshold': 0.60,
             },
-            'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{}
+            'users':{},'profiles':{},'sessions':{},'emails':[],'logs':[],'layouts':{},'personas':{},'tenants':{}
         }
+        tenants = self.memory.setdefault('tenants', {})
+        if 'default' not in tenants:
+            tenants['default'] = {'id': 'default', 'name': 'Default Tenant'}
         self._ensure_config_defaults()
     def ensure_session(self, sid, email):
         try:
@@ -92,7 +95,7 @@ class DB:
             pass
         session = self.memory['sessions'].setdefault(
             sid,
-            {'email':email,'messages':[],'nudges':0,'persona_id':'chip'}
+            {'email':email,'messages':[],'nudges':0,'persona_id':'chip','tenant_id':'default'}
         )
         if not isinstance(session.get('goal'), dict):
             session['goal'] = _empty_session_goal()
@@ -107,7 +110,7 @@ class DB:
             pass
         session = self.memory['sessions'].setdefault(
             sid,
-            {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip'}
+            {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip','tenant_id':'default'}
         )
         if not isinstance(session.get('goal'), dict):
             session['goal'] = _empty_session_goal()
@@ -158,7 +161,7 @@ class DB:
             return _empty_session_goal()
         session = self.memory['sessions'].setdefault(
             sid,
-            {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip'}
+            {'email':'user@example.com','messages':[],'nudges':0,'persona_id':'chip','tenant_id':'default'}
         )
         if not isinstance(session.get('goal'), dict):
             session['goal'] = _empty_session_goal()
