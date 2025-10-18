@@ -1,16 +1,18 @@
 diff --git a/app/services/llm/flow_wrapper.py b/app/services/llm/flow_wrapper.py
-index dd280898a2265174332ade48781b7a885745acb1..f12f58c13982b29f3749f0f64a2aa952b71a828d 100644
+index f12f58c13982b29f3749f0f64a2aa952b71a828d..d710de251f37623a91cbedb263f32716fd247867 100644
 --- a/app/services/llm/flow_wrapper.py
 +++ b/app/services/llm/flow_wrapper.py
-@@ -1,57 +1,64 @@
+@@ -1,33 +1,34 @@
  """Flow trace helpers for LLM interactions."""
  
  from __future__ import annotations
  
++import time
  from dataclasses import dataclass
  from typing import Optional, Protocol, runtime_checkable
  
- from app.flow.emit import emit as flow_emit
+-from app.flow.emit import emit as flow_emit
++from app.flow.emit import add_batch, emit as flow_emit
  
  
  @runtime_checkable
@@ -21,9 +23,9 @@ index dd280898a2265174332ade48781b7a885745acb1..f12f58c13982b29f3749f0f64a2aa952
      def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
          ...
  
-+    def error(self, code: Optional[object] = None) -> None:
-+        ...
-+
+     def error(self, code: Optional[object] = None) -> None:
+         ...
+ 
  
  class _NullTracker:
      """No-op tracker used when flow trace context is unavailable."""
@@ -36,12 +38,9 @@ index dd280898a2265174332ade48781b7a885745acb1..f12f58c13982b29f3749f0f64a2aa952
  
      def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
          """Ignore completion for missing spans."""
+@@ -38,129 +39,176 @@ class _NullTracker:
          return None
  
-+    def error(self, code: Optional[object] = None) -> None:  # noqa: D401 - trivial
-+        """Ignore error notifications when tracing is disabled."""
-+        return None
-+
  
  def _coerce_int(value: Optional[object]) -> Optional[int]:
      """Best-effort conversion to int, returning ``None`` on failure."""
@@ -65,9 +64,48 @@ index dd280898a2265174332ade48781b7a885745acb1..f12f58c13982b29f3749f0f64a2aa952
      who: str = "system"
  
      _started: bool = False
++    _start_event_id: Optional[str] = None
++    _start_monotonic: Optional[float] = None
  
      def start(self) -> bool:
-@@ -93,44 +100,67 @@ class LLMFlowTracker:
+         """Emit the ``llm_start`` event if possible."""
+ 
+         if not self.session_id or not self.phase:
+             return False
+         meta: dict[str, object] = {}
+         if self.turn_id:
+             meta["turn_id"] = str(self.turn_id)
+         if self.model:
+             meta["model"] = str(self.model)
+         try:
+-            flow_emit(
++            event_id = flow_emit(
+                 session_id=self.session_id,
+                 level="flow",
+                 phase=self.phase,
+                 type="llm_start",
+                 who=self.who,
+                 meta=meta or None,
+             )
+         except Exception:
+             return False
+         self._started = True
++        self._start_event_id = event_id or None
++        self._start_monotonic = time.monotonic()
+         return True
+ 
+     def final(
+         self,
+         *,
+         tokens_out: Optional[int] = None,
+         text: Optional[str] = None,
+         chars: Optional[int] = None,
+     ) -> None:
+         """Emit the ``llm_final`` event when output text is ready."""
+ 
+         if not self._started or not self.session_id or not self.phase:
+             return
+         meta: dict[str, object] = {}
          if self.turn_id:
              meta["turn_id"] = str(self.turn_id)
          token_count = _coerce_int(tokens_out)
@@ -89,33 +127,78 @@ index dd280898a2265174332ade48781b7a885745acb1..f12f58c13982b29f3749f0f64a2aa952
                  who=self.who,
                  meta=meta or None,
              )
++            if self._start_event_id:
++                stream_items = []
++                now = time.monotonic()
++                if self._start_monotonic:
++                    dt_ms = int(max(0.0, (now - self._start_monotonic) * 1000))
++                else:
++                    dt_ms = 0
++                bytes_len = 0
++                if text:
++                    try:
++                        bytes_len = len((text or "").encode("utf-8"))
++                    except Exception:
++                        bytes_len = len(text or "")
++                stream_items.append({"dt_ms": dt_ms, "bytes": bytes_len})
++                try:
++                    add_batch(self._start_event_id, "llm_stream", stream_items)
++                except Exception:
++                    pass
          except Exception:
              pass
          self._started = False
++        self._start_event_id = None
++        self._start_monotonic = None
  
-+    def error(self, code: Optional[object] = None) -> None:
-+        """Emit an ``llm_error`` transition with the provided code."""
-+
-+        if not self.session_id or not self.phase:
-+            return
-+        meta: dict[str, object] = {}
-+        if code is not None:
-+            try:
-+                meta["code"] = str(code)
-+            except Exception:
-+                meta["code"] = "unknown"
-+        try:
-+            flow_emit(
-+                session_id=self.session_id,
-+                level="transition",
-+                phase=self.phase,
-+                type="llm_error",
-+                who=self.who,
-+                meta=meta or None,
-+            )
-+        except Exception:
-+            pass
-+
+-    def error(self, code: Optional[object] = None) -> None:
++    def error(
++        self,
++        code: Optional[object] = None,
++        *,
++        state: Optional[dict[str, object]] = None,
++    ) -> None:
+         """Emit an ``llm_error`` transition with the provided code."""
+ 
+         if not self.session_id or not self.phase:
+             return
+         meta: dict[str, object] = {}
+         if code is not None:
+             try:
+                 meta["code"] = str(code)
+             except Exception:
+                 meta["code"] = "unknown"
+         try:
+-            flow_emit(
++            event_id = flow_emit(
+                 session_id=self.session_id,
+                 level="transition",
+                 phase=self.phase,
+                 type="llm_error",
+                 who=self.who,
+                 meta=meta or None,
+             )
++            if state:
++                cleaned = {
++                    key: value
++                    for key, value in state.items()
++                    if value is not None
++                }
++                try:
++                    flow_emit(
++                        session_id=self.session_id,
++                        level="debug",
++                        phase=self.phase,
++                        type="state_snapshot",
++                        who=self.who,
++                        meta=cleaned or None,
++                        parent_id=event_id or None,
++                    )
++                except Exception:
++                    pass
+         except Exception:
+             pass
+ 
  
  def make_llm_flow_tracker(
      session_id: Optional[str],
@@ -136,10 +219,13 @@ index dd280898a2265174332ade48781b7a885745acb1..f12f58c13982b29f3749f0f64a2aa952
      )
      return tracker
 diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 561999cca0bf83baf897e97454ab9cf0ec48542f..0d5345ec9c2f0fac442e686d7700ada04c71ebba 100644
+index 0d5345ec9c2f0fac442e686d7700ada04c71ebba..7af6ac6d5307941a2b0a6dbf7d75e5f698f1b62c 100644
 --- a/app/services/streaming.py
 +++ b/app/services/streaming.py
-@@ -2305,50 +2305,51 @@ def _make_foundation_frames(seed_text: str,
+@@ -2302,54 +2302,64 @@ def _make_foundation_frames(seed_text: str,
+         cfg,
+         persona=persona,
+         meta=meta,
      )
  
      kb_count = 0
@@ -162,10 +248,21 @@ index 561999cca0bf83baf897e97454ab9cf0ec48542f..0d5345ec9c2f0fac442e686d7700ada0
              model=model_name,
          )
          llm_tracker.start()
++
++        def _llm_state_snapshot() -> Dict[str, Any]:
++            return {
++                "phase": phase_label,
++                "tts_active": None,
++                "confirm_open": None,
++                "asr_ready": None,
++                "last_partial_age_ms": None,
++                "queue": None,
++            }
          try:
              foundation_result = _call_foundation_with_retry(messages, cfg, telemetry=telemetry)
          except Exception as exc:
-+            llm_tracker.error(exc.__class__.__name__)
+-            llm_tracker.error(exc.__class__.__name__)
++            llm_tracker.error(exc.__class__.__name__, state=_llm_state_snapshot())
              llm_tracker.final(text="")
              telemetry.log_error("foundation_call_error", str(exc))
              raise
@@ -191,8 +288,42 @@ index 561999cca0bf83baf897e97454ab9cf0ec48542f..0d5345ec9c2f0fac442e686d7700ada0
              fallback_reason = "empty"
  
      safe_reply = _scrub_debug_stamps(reply)
-@@ -2714,50 +2715,51 @@ def _make_legacy_frames(seed_text: str,
+@@ -2691,75 +2701,85 @@ def _make_legacy_frames(seed_text: str,
+     if use_llm:
+         try:
+             provider = get_provider(cfg)
+         except Exception as e:
+             provider = None
+             error_note = "llm_not_available"
+             provider_error_payload = {
+                 "session_id": session_id,
+                 "error": e.__class__.__name__,
+             }
+             try:
+                 _admin_emit("llm_provider_error", **provider_error_payload)
+             except Exception:
+                 pass
+             _broadcast_admin_ws_event("llm_provider_error", provider_error_payload)
+             telemetry.log_error("llm_not_available", str(e))
+         if provider is not None:
+             model_name = _resolve_provider_model(provider)
+             llm_tracker = make_llm_flow_tracker(
+                 session_id,
+                 phase=phase_label,
+                 turn_id=turn_id,
+                 model=model_name,
+             )
              llm_tracker.start()
++
++            def _llm_state_snapshot() -> Dict[str, Any]:
++                return {
++                    "phase": phase_label,
++                    "tts_active": None,
++                    "confirm_open": None,
++                    "asr_ready": None,
++                    "last_partial_age_ms": None,
++                    "queue": None,
++                }
              try:
                  provider_context: Dict[str, Any] = {'kb': kb}
                  for key in ('confidence_band', 'clarify_variant', 'clarifier_style'):
@@ -217,7 +348,8 @@ index 561999cca0bf83baf897e97454ab9cf0ec48542f..0d5345ec9c2f0fac442e686d7700ada0
                      context=provider_context,
                  )
              except Exception as e:
-+                llm_tracker.error(e.__class__.__name__)
+-                llm_tracker.error(e.__class__.__name__)
++                llm_tracker.error(e.__class__.__name__, state=_llm_state_snapshot())
                  error_note = f"llm_error:{e.__class__.__name__}"
                  reply = _LEGACY_WARMUP_LINE
                  generate_payload = {
@@ -243,7 +375,56 @@ index 561999cca0bf83baf897e97454ab9cf0ec48542f..0d5345ec9c2f0fac442e686d7700ada0
          if fallback_on_error and error_note:
              reply = fallback_line
              fallback_fired = True
-@@ -3045,109 +3047,112 @@ def schedule_tts_audio(session_id: str,
+@@ -3008,151 +3028,163 @@ def schedule_tts_audio(session_id: str,
+     if not text:
+         return False
+     cfg = db.get_config()
+     feature_audio = bool(cfg.get("feature_audio", True))
+ 
+     # Track TTS lifecycle for admin truth
+     tts_tbl = db.memory.setdefault('tts_status', {})
+     sess_tbl = tts_tbl.setdefault(session_id, {})
+     turn_key = str(turn_id) if turn_id is not None else 'greet'
+     state = sess_tbl.setdefault(turn_key, {'started': False, 'first_chunk': False, 'done': False, 'error': None})
+ 
+     completion_event: Optional[threading.Event] = None
+ 
+     safe_turn_id = str(turn_id) if turn_id is not None else None
+     text_markers = _tts_text_markers(text)
+     audio_override = audio_bytes is not None
+     phase_for_flow = flow_phase if flow_phase else ("turn" if safe_turn_id is not None else "greet")
+     meta_turn_id = flow_turn_id if flow_turn_id is not None else safe_turn_id
+     tracker = make_tts_flow_tracker(
+         session_id=session_id,
+         phase=phase_for_flow,
+         turn_id=meta_turn_id,
+         include_turn_id=flow_include_turn_id,
+     )
+ 
++    def _tts_state_snapshot() -> Dict[str, Any]:
++        return {
++            "phase": phase_for_flow,
++            "tts_active": bool(state.get('started')),
++            "confirm_open": None,
++            "asr_ready": None,
++            "last_partial_age_ms": None,
++            "queue": None,
++        }
++
+     def _log(kind: str, **fields: Any) -> None:
+         payload: Dict[str, Any] = {
+             "session_id": session_id,
+             "sid": session_id,
+         }
+         if safe_turn_id is not None:
+             payload["turn_id"] = safe_turn_id
+         if correlation_user_msg_id:
+             payload["correlation_user_msg_id"] = correlation_user_msg_id
+         payload.update(text_markers)
+         payload["audio_override"] = audio_override
+         payload.update(fields)
+         try:
+             _jlog(kind, **payload)
          except Exception:
              pass
  
@@ -259,6 +440,8 @@ index 561999cca0bf83baf897e97454ab9cf0ec48542f..0d5345ec9c2f0fac442e686d7700ada0
      audio_payload = audio_bytes
      provider_label: Optional[str] = None
  
++    synth_duration_ms = 0
++
      if audio_payload is None:
          try:
              from app.services.tts_provider import get_tts_provider
@@ -269,7 +452,8 @@ index 561999cca0bf83baf897e97454ab9cf0ec48542f..0d5345ec9c2f0fac442e686d7700ada0
          except Exception as e:
              state['error'] = str(e)
              _log("tts.provider.error", error=str(e))
-+            tracker.error(e.__class__.__name__)
+-            tracker.error(e.__class__.__name__)
++            tracker.error(e.__class__.__name__, state=_tts_state_snapshot())
              error_payload = {
                  "session_id": session_id,
                  "turn_id": safe_turn_id,
@@ -300,7 +484,8 @@ index 561999cca0bf83baf897e97454ab9cf0ec48542f..0d5345ec9c2f0fac442e686d7700ada0
          except Exception as e:
              state['error'] = str(e)
              _log("tts.synth.error", error=str(e), override=False)
-+            tracker.error(e.__class__.__name__)
+-            tracker.error(e.__class__.__name__)
++            tracker.error(e.__class__.__name__, state=_tts_state_snapshot())
              synth_error_payload = {
                  "session_id": session_id,
                  "turn_id": safe_turn_id,
@@ -330,7 +515,8 @@ index 561999cca0bf83baf897e97454ab9cf0ec48542f..0d5345ec9c2f0fac442e686d7700ada0
      if not audio_payload:
          state['error'] = 'empty_audio'
          _log("tts.synth.error", error='empty_audio', override=audio_override)
-+        tracker.error('empty_audio')
+-        tracker.error('empty_audio')
++        tracker.error('empty_audio', state=_tts_state_snapshot())
          return False
  
      tracker.queue()
@@ -356,547 +542,217 @@ index 561999cca0bf83baf897e97454ab9cf0ec48542f..0d5345ec9c2f0fac442e686d7700ada0
              _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
              end_payload = {
                  "session_id": session_id,
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 21979ddaca907d31908344a93c3694e14c803418..8c1f2159e4e2c23fdae5fb5bfc49264b2b2a400a 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -1,39 +1,40 @@
- from __future__ import annotations
+@@ -3176,50 +3208,54 @@ def schedule_tts_audio(session_id: str,
+                 _t.sleep(max(0, delay_ms) / 1000.0)
  
- import asyncio
- import json
- import logging
- import os
- import re
- import time
- import warnings
- from typing import AsyncGenerator, Optional, Any, Deque, Tuple, Callable
- from collections import deque
+             total_audio_bytes = len(stream_payload or b"")
  
- import websockets  # provided by uvicorn[standard]
- 
-+from app.flow.emit import emit as flow_emit
- from app.ws.bus import bus as stream_bus
- 
- from .asr_metrics import record_turn_metrics
- 
- try:
-     from app.admin_log import emit as _admin_emit
- except Exception:  # pragma: no cover - extremely defensive
- 
-     def _admin_emit(*a, **k):  # type: ignore[empty-body]
-         pass
- 
- try:
-     from websockets import exceptions as _ws_exceptions  # type: ignore[attr-defined]
- except Exception:  # pragma: no cover - extremely defensive
-     _ws_exceptions = None  # type: ignore[assignment]
- else:
-     _invalid_types = []
-     with warnings.catch_warnings():
-         warnings.simplefilter("ignore", DeprecationWarning)
-         for _name in ("InvalidStatus", "InvalidStatusCode"):
-             _cls = getattr(_ws_exceptions, _name, None)
-             if isinstance(_cls, type):
-                 _invalid_types.append(_cls)
-     _INVALID_STATUS_TYPES = tuple(_invalid_types)
- if "_INVALID_STATUS_TYPES" not in globals():
-@@ -571,50 +572,51 @@ class DeepgramClient:
-         self,
-         _cfg: Optional[dict] = None,
-         diag_hook: Optional[Callable[..., Any]] = None,
-     ) -> None:
-         self._cfg = _cfg or {}
-         self._ws = None  # type: ignore
-         self._rx_task: Optional[asyncio.Task] = None
-         self._ev_queue: asyncio.Queue = asyncio.Queue()
-         self._closed = False
-         self._closing = False
-         self._url_tag: Optional[str] = None
-         self._dg_id: int = id(self)
- 
-         hook_candidate: Optional[Callable[..., Any]] = None
-         if callable(diag_hook):
-             hook_candidate = diag_hook
-         else:
+             start_payload = {"session_id": session_id, "turn_id": safe_turn_id}
              try:
-                 cfg_hook = self._cfg.get("_diag_hook") if isinstance(self._cfg, dict) else None
-             except Exception:
-                 cfg_hook = None
-             if callable(cfg_hook):
-                 hook_candidate = cfg_hook
-         self._diag_hook: Optional[Callable[..., Any]] = hook_candidate
-         self._diag_end_emitted: bool = False
-+        self._recover_pending: bool = False
-         try:
-             sid_val = None
-             if isinstance(self._cfg, dict):
-                 sid_val = self._cfg.get("session_id") or self._cfg.get("sid")
-             self._diag_session_id: Optional[str] = str(sid_val) if sid_val else None
-         except Exception:
-             self._diag_session_id = None
-         try:
-             tag_hint = None
-             if isinstance(self._cfg, dict):
-                 for key in ("_url_tag", "dg_url_tag", "url_tag"):
-                     val = self._cfg.get(key)
-                     if val:
-                         tag_hint = str(val)
-                         break
-             self._diag_tag_hint: Optional[str] = tag_hint
-         except Exception:
-             self._diag_tag_hint = None
- 
-         try:
-             raw_logging_enabled = None
-             if isinstance(self._cfg, dict):
-                 raw_logging_enabled = self._cfg.get("advanced_logging_enabled")
-         except Exception:
-             raw_logging_enabled = None
-@@ -693,50 +695,87 @@ class DeepgramClient:
-     def _diag_payload(self, **extra: Any) -> dict:
-         payload: dict[str, Any] = {"provider": "deepgram"}
-         if self._diag_session_id:
-             payload["session_id"] = self._diag_session_id
-         tag = self._url_tag or self._diag_tag_hint
-         if tag:
-             payload["tag"] = tag
-         payload.update(extra)
-         return payload
- 
-     def _emit_diag(self, label: str, **extra: Any) -> None:
-         hook = self._diag_hook
-         if not callable(hook):
-             return
-         payload = self._diag_payload(**extra)
-         try:
-             hook(label, **payload)
-         except TypeError:
-             try:
-                 hook(label, payload)
+                 _admin_emit('tts:start', **start_payload)
              except Exception:
                  pass
-         except Exception:
-             pass
+             _broadcast_admin_ws_event('tts:start', start_payload)
  
-+    def _emit_transition_event(
-+        self,
-+        event: str,
-+        *,
-+        code: Optional[object] = None,
-+        path: Optional[object] = None,
-+    ) -> None:
-+        sid = self._diag_session_id
-+        if not sid or not event:
-+            return
-+        meta: dict[str, object] = {}
-+        if code is not None:
-+            try:
-+                meta["code"] = str(code)
-+            except Exception:
-+                meta["code"] = "unknown"
-+        if path is not None:
-+            try:
-+                meta["path"] = str(path)
-+            except Exception:
-+                meta["path"] = "unknown"
-+        try:
-+            flow_emit(
-+                session_id=sid,
-+                level="transition",
-+                phase="asr",
-+                type=event,
-+                who="system",
-+                meta=meta or None,
-+            )
-+        except Exception:
-+            pass
-+
-+    def _record_error(self, code: Optional[object]) -> None:
-+        self._recover_pending = True
-+        self._emit_transition_event("asr_error", code=code)
-+
-     def _ws_is_open(self, ws: Optional[Any] = None) -> bool:
-         """Best-effort detection for whether the websocket is open."""
- 
-         target = ws if ws is not None else self._ws
-         if not target:
-             return False
- 
-         try:
-             open_attr = getattr(target, "open", None)
-             if open_attr:
-                 return True
-         except Exception:
-             pass
- 
-         proto_mod = _WEBSOCKETS_PROTOCOL
-         state = None
-         if proto_mod is not None:
+             start_frame: Dict[str, Any] = {"type": "TTS_START", "turn_id": safe_turn_id}
+             if correlation_user_msg_id:
+                 start_frame["correlation_user_msg_id"] = correlation_user_msg_id
              try:
-                 state = getattr(target, "state", None)
-             except Exception:
-                 state = None
-             if state is not None:
-                 try:
-                     open_state = getattr(proto_mod, "OPEN", None)
-                     if open_state is not None and state == open_state:
-@@ -761,50 +800,53 @@ class DeepgramClient:
+                 bus.broadcast(session_id, start_frame)
              except Exception:
                  pass
  
-         return False
+             tracker.start()
  
-     def is_open(self) -> bool:
-         """Return True if the underlying websocket appears open."""
-         try:
-             return self._ws_is_open()
-         except Exception:
-             return False
+             # Chunk and broadcast
+             mv = memoryview(stream_payload)
+             idx = 0
+             first_sent = False
++            first_chunk_ts: Optional[float] = None
++            last_chunk_ts: Optional[float] = None
++            prev_chunk_ts: Optional[float] = stream_start_ts
++            chunk_items: List[Dict[str, Any]] = []
  
-     def _had_result(self) -> bool:
-         """True if any final result has been observed (event-aware)."""
-         if self._any_result:
-             return True
-         if self._final_event.is_set():
-             self._any_result = True
-             return True
-         return False
- 
-     # -- helpers ---------------------------------------------------------------
- 
-     async def _signal_ready(self, *, backend_ready: bool = False) -> None:
-         self._ready_observed = True
-+        if self._recover_pending:
-+            self._emit_transition_event("recover_ok", path="asr")
-+            self._recover_pending = False
-         if not self._open_evt.is_set():
-             self._open_evt.set()
-         if not self._asr_open_emitted:
-             self._asr_open_emitted = True
-             try:
-                 await self._ev_queue.put({"type": "asr_open"})
-             except Exception:
-                 pass
-         if backend_ready:
-             self._backend_ready_observed = True
-             if not self._asr_ready_emitted:
+             while idx < len(mv):
+                 # stop early if canceled
                  try:
-                     await self._emit_flow_event("asr_ready")
-                 finally:
-                     self._asr_ready_emitted = True
-         await self._maybe_emit_asr_start()
-         # schedule a flush shortly after ASR open (lets DG finish configure)
-         self._schedule_flush(delay=0.0)
- 
-     async def _maybe_emit_asr_start(self) -> None:
-         if self._asr_start_emitted:
-             return
-         if not self._ready_observed or not self._first_real_sent:
-             return
-         self._asr_start_emitted = True
-@@ -1568,50 +1610,51 @@ class DeepgramClient:
-                     elapsed_ms = 0
-                 payload = {
-                     "sid": sid,
-                     "dg_id": self._dg_id,
-                     "elapsed_ms": elapsed_ms,
-                     "code": exc.__class__.__name__,
-                 }
-                 for key, value in diag_extra.items():
-                     if value is not None:
-                         payload[key] = value
-                 try:
-                     self._jlog("asr_connect_err", **payload)
-                 except Exception:
-                     pass
- 
-             diag_payload = {
-                 key: value for key, value in diag_extra.items() if value is not None
-             }
-             self._emit_diag(
-                 "asr_error",
-                 error=f"connect:{exc.__class__.__name__}",
-                 detail=_clip_text(str(exc), 200),
-                 url=url,
-                 **diag_payload,
-             )
-+            self._record_error(f"connect:{exc.__class__.__name__}")
-             raise
- 
-     async def close(
-         self,
-         wait_for_final: bool = True,
-         timeout: Optional[float] = None,
-         linger_ms: Optional[int] = None,
-     ) -> None:
-         """Graceful shutdown:
-         1) Drain queued audio (budget-based retry) BEFORE CloseStream
-         2) Send CloseStream
-         3) Optionally wait for final
-         4) Close socket
-         """
-         if self._closed:
-             if not self._diag_end_emitted:
-                 self._emit_diag("end", active=False, had_result=self._had_result())
-                 self._diag_end_emitted = True
-             return
-         if self._closing:
-             return
-         self._closing = True
-         sid = self._sid_for_log()
-         current_task = asyncio.current_task()
-         if self._auto_close_task and self._auto_close_task is not current_task:
-@@ -1800,50 +1843,51 @@ class DeepgramClient:
-                                 self._jlog(
-                                     "dg_send_close_stream",
-                                     sid=sid,
-                                     dg_id=self._dg_id,
-                                     tag=self._url_tag,
-                                     queued=len(self._tx_queue),
-                                 )
-                             except Exception:
-                                 pass
-                         await ws.send(json.dumps({"type": "CloseStream"}))
-             except Exception:
-                 pass
- 
-             if wait_for_final:
-                 if timeout is None:
-                     timeout = self._final_wait_s
-                 try:
-                     await asyncio.wait_for(self._final_event.wait(), timeout=timeout)
-                 except asyncio.TimeoutError:
-                     err_txt = f"final_timeout:{timeout}s"
-                     self._emit_diag(
-                         "asr_error",
-                         error=err_txt,
-                         final_timeout=timeout,
-                     )
-+                    self._record_error(err_txt)
-                     try:
-                         await self._ev_queue.put({"type": "asr_error", "error": err_txt})
-                     except Exception:
-                         pass
- 
-             try:
-                 ws = self._ws
-                 if ws and (self._ws_is_open(ws) or not hasattr(ws, "open")):
-                     await ws.close()
-             finally:
-                 self._ws = None
- 
-             try:
-                 task = self._rx_task
-                 self._rx_task = None
-                 if task:
-                     try:
-                         task.cancel()
-                     except Exception:
-                         pass
-             finally:
-                 self._closed = True
-                 self._closing = False
-                 await self._stop_keepalive()
- 
-@@ -1887,50 +1931,51 @@ class DeepgramClient:
-                     queued_bytes=dropped_bytes,
-                     wait_timeout=drain_wait_timeout,
-                 )
-         finally:
-             if not self._diag_end_emitted:
-                 self._emit_diag(
-                     "end",
-                     active=False,
-                     had_result=self._had_result(),
-                     drain_failed=drain_failed,
-                     queued_chunks=dropped_chunks,
-                     queued_bytes=dropped_bytes,
-                     wait_timeout=drain_wait_timeout,
-                 )
-                 self._diag_end_emitted = True
- 
-         if drain_exc:
-             self._emit_diag(
-                 "asr_error",
-                 error="drain_timeout",
-                 queued_chunks=dropped_chunks,
-                 queued_bytes=dropped_bytes,
-                 wait_timeout=drain_wait_timeout,
-                 active=False,
-             )
-+            self._record_error("drain_timeout")
-             raise drain_exc
- 
-         # -- sending ---------------------------------------------------------------
- 
-     async def send(self, chunk: bytes) -> None:
-         if not isinstance(chunk, (bytes, bytearray)):
-             raise TypeError("chunk must be bytes")
-         if not chunk:
-             return
- 
-         sid = self._sid_for_log()
-         payload = bytes(chunk)
-         self._tx_queue.append(payload)
-         if self._drain_event.is_set():
-             self._drain_event.clear()
-         if callable(self._jlog):
-             try:
-                 self._jlog(
-                     "dg_tx_enqueue",
-                     sid=sid,
-                     dg_id=self._dg_id,
-                     tag=self._url_tag,
-                     bytes=len(payload),
-                     queued=len(self._tx_queue),
-                 )
-@@ -2175,59 +2220,61 @@ class DeepgramClient:
-                                 await self._emit_flow_event(
-                                     "asr_final",
-                                     meta={
-                                         "len": len(text),
-                                         "conf": confidence,
-                                         "turn_id": turn_id,
-                                     },
-                                 )
-                             except Exception:
-                                 pass
-                         self._schedule_auto_close(final_reason or "provider_final")
-                         self._any_result = True
-                         self._final_event.set()
-                         self._emit_turn_metrics()
-                         self._last_transcript = ""
-                         continue
- 
-                 elif evt_type in ("error", "close"):
-                     await self._publish_provider_event(evt_type or evt_name, msg)
-                     self._logger.warning(
-                         "Deepgram error event sid=%s evt_type=%s detail=%s",
-                         sid,
-                         evt_type,
-                         _clip_text(str(msg), 200),
-                     )
-+                    err_code = msg.get("error") or evt_type
-                     self._emit_diag(
-                         "asr_error",
--                        error=msg.get("error") or evt_type,
-+                        error=err_code,
-                         provider_error=True,
-                         detail=_clip_text(str(msg), 200),
-                     )
-+                    self._record_error(err_code)
-                     try:
-                         await self._ev_queue.put(
--                            {"type": "asr_error", "error": msg.get("error") or evt_type}
-+                            {"type": "asr_error", "error": err_code}
+                     from ..ws.bus import bus as _bus_ref
+                     if _bus_ref.is_canceled(session_id, safe_turn_id):
+                         canceled = True
+                         _log(
+                             "tts.chunks.cancelled",
+                             chunk_count=chunk_count,
+                             bytes_sent=chunk_bytes_sent,
+                             total_bytes=total_audio_bytes,
                          )
-                     except Exception:
-                         pass
- 
-                 else:
-                     await self._publish_provider_event(evt_type or evt_name, msg)
-                     continue
- 
-         except asyncio.CancelledError:
-             return
-         except websockets.ConnectionClosed as e:
-             code = getattr(e, "code", None)
-             reason_raw = getattr(e, "reason", "")
-             try:
-                 reason_txt = str(reason_raw or "")
-             except Exception:
-                 reason_txt = ""
-             if isinstance(code, int):
-                 self._turn_last_close_code = code
-             else:
-                 self._turn_last_close_code = None
-             if (
-                 code == 1011
-                 and self._turn_current_id is not None
-                 and not self._turn_metrics_recorded
-@@ -2255,66 +2302,68 @@ class DeepgramClient:
-                 log_kwargs,
-             )
-             await self._publish_provider_event(
-                 "connection_closed",
-                 {"code": code, "reason": reason_txt, "timeout": timeout_flag},
-             )
-             if timeout_flag or code == 1011:
-                 self._emit_diag(
-                     "asr_timeout",
-                     provider_error=False,
-                     code=code,
-                     reason=reason_txt,
-                     active=False,
-                 )
-                 self._final_event.set()
-                 return
-             if not self._had_result():
-                 err_txt = f"recv_closed:{code}:{reason_txt}"
-                 self._emit_diag(
-                     "asr_error",
-                     error=err_txt,
-                     provider_error=True,
-                     code=code,
-                     reason=reason_txt,
-                 )
-+                self._record_error(err_txt)
-                 try:
-                     await self._ev_queue.put(
-                         {
-                             "type": "asr_error",
-                             "error": err_txt,
-                         }
-                     )
+                         break
                  except Exception:
                      pass
-         except Exception as e:
-             self._logger.exception("Deepgram rx loop error sid=%s", sid)
-             self._emit_diag(
-                 "asr_error",
-                 error=f"rx:{e.__class__.__name__}",
-                 provider_error=True,
+ 
+                 next_idx = idx + int(chunk_bytes)
+                 part = bytes(mv[idx: next_idx])
+                 idx = next_idx
+                 chunk_len = len(part)
+ 
+                 try:
+                     b64 = base64.b64encode(part).decode("ascii")
+                     fr = {
+@@ -3237,94 +3273,139 @@ def schedule_tts_audio(session_id: str,
+                     if not first_sent:
+                         first_sent = True
+                         state['first_chunk'] = True
+                         try:
+                             nudges.cancel_idle_timers(
+                                 session_id,
+                                 source="assistant_audio_start",
+                                 mark=False,
+                             )
+                         except Exception:
+                             pass
+                         try:
+                             _admin_emit('tts:first_chunk', session_id=session_id, turn_id=str(turn_id) if turn_id else None)
+                         except Exception:
+                             pass
+                         _broadcast_admin_ws_event(
+                             'tts:first_chunk',
+                             {
+                                 "session_id": session_id,
+                                 "turn_id": str(turn_id) if turn_id else None,
+                             },
+                         )
+ 
+                     chunk_count += 1
+                     chunk_bytes_sent += chunk_len
++                    chunk_sent_ts = _t.time()
++                    base_ts = first_chunk_ts if first_chunk_ts is not None else stream_start_ts
++                    if base_ts is None:
++                        dt_ms = 0
++                    elif first_chunk_ts is None:
++                        dt_ms = int(max(0.0, (chunk_sent_ts - base_ts) * 1000))
++                    else:
++                        prev = prev_chunk_ts if prev_chunk_ts is not None else first_chunk_ts
++                        dt_ms = int(max(0.0, (chunk_sent_ts - (prev or chunk_sent_ts)) * 1000))
++                    mark: Optional[str] = None
++                    if first_chunk_ts is None:
++                        mark = "first"
++                        first_chunk_ts = chunk_sent_ts
++                    is_last = idx >= len(mv)
++                    if is_last:
++                        if mark:
++                            mark = f"{mark},last" if mark != "last" else "last"
++                        else:
++                            mark = "last"
++                    item: Dict[str, Any] = {"dt_ms": dt_ms, "bytes": chunk_len}
++                    if mark:
++                        item["mark"] = mark
++                    chunk_items.append(item)
++                    prev_chunk_ts = chunk_sent_ts
++                    last_chunk_ts = chunk_sent_ts
+                     if chunk_count >= max_frames:
+                         # Safety cut: end stream explicitly if we truncated
+                         truncated = True
+                         _log(
+                             "tts.chunks.truncated",
+                             chunk_count=chunk_count,
+                             bytes_sent=chunk_bytes_sent,
+                             total_bytes=total_audio_bytes,
+                             max_frames=max_frames,
+                         )
+                         _emit_utterance_end("truncated_guard")
+                         break
+                 except Exception:
+                     # If a single chunk fails, try to continue; we'll still emit UtteranceEnd.
+                     pass
+ 
+             status = "canceled" if canceled else ("truncated" if truncated else "complete")
+             _log(
+                 "tts.chunks.summary",
+                 chunk_count=chunk_count,
+                 bytes_sent=chunk_bytes_sent,
+                 total_bytes=total_audio_bytes,
+                 status=status,
+                 max_frames=max_frames,
              )
-+            self._record_error(f"rx:{e.__class__.__name__}")
+         finally:
+             # Always mark tts done (admin), and always signal UtteranceEnd if we haven't already.
+             done_payload = {
+                 "session_id": session_id,
+                 "turn_id": str(turn_id) if turn_id else None,
+             }
              try:
-                 await self._ev_queue.put(
-                     {"type": "asr_error", "error": f"rx:{e.__class__.__name__}"}
-                 )
+                 _admin_emit('tts:done', **done_payload)
+             except Exception:
+                 pass
+             _broadcast_admin_ws_event('tts:done', done_payload)
+ 
+             _emit_utterance_end("finalizer")
+             try:
+                 note_utterance_end(session_id)
              except Exception:
                  pass
  
-     # -- keepalive -------------------------------------------------------------
+-            tracker.end()
++            stream_end_ts = _t.time()
++            metrics_payload: Dict[str, Any] = {
++                "text_chars": len(text or ""),
++                "synth_ms": synth_duration_ms,
++            }
++            if provider_label:
++                metrics_payload["voice"] = provider_label
++            if first_chunk_ts is not None and stream_start_ts is not None:
++                metrics_payload["first_byte_ms"] = int(
++                    max(0.0, (first_chunk_ts - stream_start_ts) * 1000)
++                )
++            if first_chunk_ts is not None and last_chunk_ts is not None:
++                metrics_payload["stream_ms"] = int(
++                    max(0.0, (last_chunk_ts - first_chunk_ts) * 1000)
++                )
++            if stream_start_ts is not None:
++                metrics_payload["total_ms"] = int(
++                    max(0.0, (stream_end_ts - stream_start_ts) * 1000)
++                )
++
++            tracker.end(metrics=metrics_payload, chunks=chunk_items)
  
-     async def _keepalive_loop(self) -> None:
-         """Send KeepAlive frames immediately and then periodically."""
-         sid = self._sid_for_log()
-         try:
-             while True:
-                 if self._closed:
-                     break
-                 ws = self._ws
-                 if not ws:
-                     break
-                 if getattr(ws, "closed", False) or getattr(ws, "closing", False):
-                     break
-                 if not self._ws_is_open(ws):
-                     break
+             state['done'] = True
  
+             if on_complete is not None:
                  try:
+                     on_complete()
+                 except Exception:
+                     pass
+ 
+             if on_post_silence is not None:
+                 try:
+                     nudges.run_after_silence(
+                         session_id,
+                         on_post_silence,
+                         reason=post_silence_origin or "assistant_audio",
+                     )
+                 except Exception:
+                     try:
+                         on_post_silence()
+                     except Exception:
+                         pass
+ 
+             try:
+                 if completion_event is not None:
+                     _signal_tts_completion(session_id, turn_key)
 diff --git a/app/services/tts/flow_wrapper.py b/app/services/tts/flow_wrapper.py
-index bdb5f710d17a25a10c45df12a7ce9efcbc8d7f05..84160d6f4e4e45c326e19bea901d2bd5b9f9e804 100644
+index 84160d6f4e4e45c326e19bea901d2bd5b9f9e804..cb79879f9eec6062230077b2451224d3bde39a58 100644
 --- a/app/services/tts/flow_wrapper.py
 +++ b/app/services/tts/flow_wrapper.py
-@@ -1,66 +1,73 @@
+@@ -1,33 +1,33 @@
  """Flow trace helpers for TTS playback."""
  
  from __future__ import annotations
  
  from dataclasses import dataclass
- from typing import Optional, Protocol, runtime_checkable
+-from typing import Optional, Protocol, runtime_checkable
++from typing import Iterable, Optional, Protocol, runtime_checkable
  
- from app.flow.emit import emit as flow_emit
+-from app.flow.emit import emit as flow_emit
++from app.flow.emit import add_batch, emit as flow_emit
  
  
  @runtime_checkable
@@ -912,9 +768,9 @@ index bdb5f710d17a25a10c45df12a7ce9efcbc8d7f05..84160d6f4e4e45c326e19bea901d2bd5
      def end(self) -> None:
          ...
  
-+    def error(self, code: Optional[object] = None) -> None:
-+        ...
-+
+     def error(self, code: Optional[object] = None) -> None:
+         ...
+ 
  
  class _NullTracker:
      """No-op tracker when flow context is unavailable."""
@@ -922,10 +778,7 @@ index bdb5f710d17a25a10c45df12a7ce9efcbc8d7f05..84160d6f4e4e45c326e19bea901d2bd5
      __slots__ = ()
  
      def queue(self) -> None:  # noqa: D401 - trivial
-         """Ignore queue events."""
-         return None
- 
-     def start(self) -> None:  # noqa: D401 - trivial
+@@ -38,124 +38,188 @@ class _NullTracker:
          """Ignore start events."""
          return None
  
@@ -933,10 +786,10 @@ index bdb5f710d17a25a10c45df12a7ce9efcbc8d7f05..84160d6f4e4e45c326e19bea901d2bd5
          """Ignore end events."""
          return None
  
-+    def error(self, code: Optional[object] = None) -> None:  # noqa: D401 - trivial
-+        """Ignore error events."""
-+        return None
-+
+     def error(self, code: Optional[object] = None) -> None:  # noqa: D401 - trivial
+         """Ignore error events."""
+         return None
+ 
  
  @dataclass
  class TTSFlowTracker:
@@ -951,33 +804,81 @@ index bdb5f710d17a25a10c45df12a7ce9efcbc8d7f05..84160d6f4e4e45c326e19bea901d2bd5
      _queued: bool = False
      _started: bool = False
      _ended: bool = False
++    _start_event_id: Optional[str] = None
  
      def _meta(self) -> Optional[dict[str, object]]:
          if not self.include_turn_meta or not self.turn_id:
              return None
          return {"turn_id": self.turn_id}
  
++    def _emit_debug(
++        self,
++        type_: str,
++        *,
++        parent_id: Optional[str],
++        meta: Optional[dict[str, object]] = None,
++    ) -> None:
++        if not parent_id:
++            return
++        try:
++            flow_emit(
++                session_id=self.session_id,
++                level="debug",
++                phase=self.phase,
++                type=type_,
++                who=self.who,
++                meta=meta,
++                parent_id=parent_id,
++            )
++        except Exception:
++            pass
++
      def queue(self) -> None:
          if self._queued:
              return
          self._queued = True
          try:
-@@ -85,50 +92,73 @@ class TTSFlowTracker:
+             flow_emit(
+                 session_id=self.session_id,
                  level="flow",
                  phase=self.phase,
-                 type="tts_start",
+                 type="tts_queue",
                  who=self.who,
                  meta=self._meta(),
              )
          except Exception:
              pass
  
-     def end(self) -> None:
+     def start(self) -> None:
+         if self._started:
+             return
+         self._started = True
+         try:
+-            flow_emit(
++            event_id = flow_emit(
+                 session_id=self.session_id,
+                 level="flow",
+                 phase=self.phase,
+                 type="tts_start",
+                 who=self.who,
+                 meta=self._meta(),
+             )
++            self._start_event_id = event_id or None
+         except Exception:
+             pass
+ 
+-    def end(self) -> None:
++    def end(
++        self,
++        metrics: Optional[dict[str, object]] = None,
++        chunks: Optional[Iterable[dict[str, object]]] = None,
++    ) -> None:
          if self._ended or not self._started:
              return
          self._ended = True
          try:
-             flow_emit(
+-            flow_emit(
++            event_id = flow_emit(
                  session_id=self.session_id,
                  level="flow",
                  phase=self.phase,
@@ -985,32 +886,71 @@ index bdb5f710d17a25a10c45df12a7ce9efcbc8d7f05..84160d6f4e4e45c326e19bea901d2bd5
                  who=self.who,
                  meta=self._meta(),
              )
++            if metrics:
++                cleaned = {
++                    key: value
++                    for key, value in metrics.items()
++                    if value is not None
++                }
++                self._emit_debug(
++                    "tts_metrics",
++                    parent_id=event_id or None,
++                    meta=cleaned or None,
++                )
++            if chunks and self._start_event_id:
++                items = [dict(item) for item in chunks]
++                if items:
++                    try:
++                        add_batch(self._start_event_id, "tts_chunks", items)
++                    except Exception:
++                        pass
+         except Exception:
+             pass
+-
+-    def error(self, code: Optional[object] = None) -> None:
++        finally:
++            self._start_event_id = None
++
++    def error(
++        self,
++        code: Optional[object] = None,
++        *,
++        state: Optional[dict[str, object]] = None,
++    ) -> None:
+         """Emit a ``tts_error`` transition for diagnostics."""
+ 
+         if not self.session_id or not self.phase:
+             return
+         meta: dict[str, object] = {}
+         if code is not None:
+             try:
+                 meta["code"] = str(code)
+             except Exception:
+                 meta["code"] = "unknown"
+         try:
+-            flow_emit(
++            event_id = flow_emit(
+                 session_id=self.session_id,
+                 level="transition",
+                 phase=self.phase,
+                 type="tts_error",
+                 who=self.who,
+                 meta=meta or None,
+             )
++            if state:
++                cleaned = {
++                    key: value
++                    for key, value in state.items()
++                    if value is not None
++                }
++                self._emit_debug(
++                    "state_snapshot",
++                    parent_id=event_id or None,
++                    meta=cleaned or None,
++                )
          except Exception:
              pass
  
-+    def error(self, code: Optional[object] = None) -> None:
-+        """Emit a ``tts_error`` transition for diagnostics."""
-+
-+        if not self.session_id or not self.phase:
-+            return
-+        meta: dict[str, object] = {}
-+        if code is not None:
-+            try:
-+                meta["code"] = str(code)
-+            except Exception:
-+                meta["code"] = "unknown"
-+        try:
-+            flow_emit(
-+                session_id=self.session_id,
-+                level="transition",
-+                phase=self.phase,
-+                type="tts_error",
-+                who=self.who,
-+                meta=meta or None,
-+            )
-+        except Exception:
-+            pass
-+
  
  def _normalize_turn_id(turn_id: Optional[object]) -> Optional[str]:
      if turn_id in (None, ""):
@@ -1033,120 +973,277 @@ index bdb5f710d17a25a10c45df12a7ce9efcbc8d7f05..84160d6f4e4e45c326e19bea901d2bd5
  
      try:
          session_str = str(session_id)
-     except Exception:
-         return _NullTracker()
-     if not session_str:
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4edeab9be 100644
+index 9b2405690ef191746e71db7cd6c625a4edeab9be..f5d55c6fb14cdb85d9387631ee4eef247045c555 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -693,50 +693,51 @@ async def _pump_bus_to_client(
-                 )
-             except Exception:
-                 await asyncio.sleep(0.01)
-     except asyncio.CancelledError:
-         pass
-     finally:
-         with contextlib.suppress(Exception):
-             if hasattr(bus, "unsubscribe"):
-                 bus.unsubscribe(sid, q)
+@@ -1,55 +1,55 @@
+ # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
+ from __future__ import annotations
+-import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
++import asyncio, os, contextlib, time, io, struct, base64, uuid, copy, audioop
+ from functools import partial
+ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
+ from collections import deque, defaultdict
+ from app.services.audio.container_sniffer import (
+     AudioContainerSniffer,
+     coerce_detection_from_meta,
+ )
  
- async def _pump_dg_to_client(
-     dg: DeepgramClient,
-     send,
-     turn_id_ref,
-     final_seen,
-     pending_final_turns,
-     synthetic_final_turns,
-     completed_llm_turns,
-     sid: str,
-     asr_ready_evt: Optional[asyncio.Event] = None,
-     on_asr_open_flush: Optional[Callable[[], Awaitable[None]]] = None,
-     turn_timing: Optional[Dict[str, List[float]]] = None,
-     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
-     on_asr_partial: Optional[Callable[[Dict[str, Any]], None]] = None,
-     final_guard_hooks: Optional[Dict[str, Any]] = None,
-+    on_transport_error: Optional[Callable[[str], None]] = None,
- ):
-     """Relay Deepgram events to client and, on final, kick LLM turn."""
-     cfg_ref = getattr(dg, "_cfg", None)
-     if not isinstance(cfg_ref, dict):
-         cfg_ref = getattr(dg, "cfg", {}) or {}
-     else:
-         cfg_ref = cfg_ref or {}
-     try:
-         guard_env_raw = os.getenv("WS_FINAL_GUARD_MS", "1500")
-         guard_env_ms = int(guard_env_raw)
-     except Exception:
-         guard_env_ms = 1500
-     guard_env_ms = max(0, guard_env_ms)
-     try:
-         effective_guard = int(str(cfg_ref.get("_effective_utterance_end_ms") or 0))
-     except Exception:
-         effective_guard = 0
-     guard_ms = max(guard_env_ms, max(0, effective_guard))
-     guard_state: Dict[str, Any] = {
-         "guard_ms": guard_ms,
-         "pending": None,
-         "pending_ts": 0.0,
-         "task": None,
-         "last_audio_ts": 0.0,
-         "local_vad_event": asyncio.Event(),
-@@ -1094,50 +1095,53 @@ async def _emit_user_final_payload(
-                     with contextlib.suppress(Exception):
-                         first_holder = turn_timing.setdefault("first_partial", [0.0])
-                         if not first_holder[0]:
-                             first_holder[0] = time.time()
-                 _schedule_guarded_final(turn_id_for_event, text)
-                 continue
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.config import load_settings
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.policy.loader import load_policy, load_policy_layers
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
+-from app.flow.emit import emit as flow_emit
++from app.flow.emit import add_batch, emit as flow_emit
  
-             if et == "asr_error":
-                 err = _clip_text(str(ev.get("error") or "unknown"), 160)
-                 _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
-                 with contextlib.suppress(Exception):
-                     if _admin_emit:
-                         _admin_emit(
-                             "asr:error",
-                             session_id=sid,
-                             turn_id=turn_id_ref[0],
-                             msg=err,
-                             error=err,
-                         )
-                 await _ws_send_json(send, make_error("asr_error", err))
-     except asyncio.CancelledError:
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.confirm_window import ConfirmWindow
+ from app.ws.bus import bus
+ 
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit_base
+ except Exception:
+     _admin_emit_base = None
+ 
+ 
+ def _broadcast_admin_frame(event: str, payload: Dict[str, Any]) -> None:
+     """Mirror admin diagnostic breadcrumbs onto the session bus."""
+ 
+     try:
+         sid = payload.get("session_id") or payload.get("sid")
+     except Exception:
+         sid = None
+ 
+     if not sid:
          return
-     except Exception as e:
-         with contextlib.suppress(Exception):
-             await _ws_send_json(send, make_error("relay_fail", e.__class__.__name__))
-+        if callable(on_transport_error):
-+            with contextlib.suppress(Exception):
-+                on_transport_error("relay_fail")
-     finally:
-         task = guard_state.get("task")
-         if task and not task.done():
-             task.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await task
-         if isinstance(reset_ref, list) and reset_ref:
-             reset_ref[0] = None
-         if isinstance(vad_ref, list) and vad_ref:
-             vad_ref[0] = None
+@@ -1159,65 +1159,95 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     except Exception:
+         pass
  
- async def _ws_chat_asgi_impl(scope, receive, send):
-     # Session-scoped transport flags for ASR
-     transport = {
-         "protocol": "websocket",
-         "container": None,
-         "codec": None,
-         "containerized_opus": False,
-         "features": [],
-     }
-     sniffer = AudioContainerSniffer()
-     audio_sig_logged = False
+     if scope.get("type") != "websocket":
+         await send({"type": "http.response.start", "status": 404, "headers": []})
+         await send({"type": "http.response.body", "body": b"not found"})
+         return
  
-     MIC_CAPTURE = _env_truth("MIC_CAPTURE", False)
-     MIC_ECHO_WS = _env_truth("MIC_ECHO_WS", False)
-@@ -1504,50 +1508,61 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     sid = _get_session_id(scope)
+     conn_id = uuid.uuid4().hex
+     start_ts = time.time()
+     ws_open_ts = start_ts
+     last_msg_ts = start_ts
+     had_disconnect = False
+     active_ws_registered = False
+     active_ws_closed = False
+     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
+ 
+     flow_session_open_emitted = False
+     flow_session_ready_emitted = False
+     flow_session_close_emitted = False
+     post_greet_phase_active = [False]
+     flow_turn_commit_emitted: Set[int] = set()
+     flow_turn_abort_emitted: Set[int] = set()
+ 
+-    def _emit_flow_event(type_: str,
+-                         *,
+-                         phase: str,
+-                         meta: Optional[Dict[str, Any]] = None) -> None:
++    def _emit_flow_event(
++        type_: str,
++        *,
++        phase: str,
++        meta: Optional[Dict[str, Any]] = None,
++    ) -> str:
+         try:
+-            flow_emit(
+-                session_id=sid,
+-                level="flow",
+-                phase=phase,
+-                type=type_,
+-                who="system",
+-                meta=meta,
++            return (
++                flow_emit(
++                    session_id=sid,
++                    level="flow",
++                    phase=phase,
++                    type=type_,
++                    who="system",
++                    meta=meta,
++                )
++                or ""
+             )
+         except Exception:
+-            pass
++            return ""
++
++    def _emit_debug_event(
++        type_: str,
++        *,
++        phase: str,
++        parent_id: Optional[str],
++        meta: Optional[Dict[str, Any]] = None,
++    ) -> str:
++        if not parent_id:
++            return ""
++        try:
++            return (
++                flow_emit(
++                    session_id=sid,
++                    level="debug",
++                    phase=phase,
++                    type=type_,
++                    who="system",
++                    meta=meta,
++                    parent_id=parent_id,
++                )
++                or ""
++            )
++        except Exception:
++            return ""
+ 
+     policy: Dict[str, Any] = {}
+     policy_version: str = "unknown"
+ 
+     # Auth
+     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in (
+         "0",
+         "false",
+         "no",
+     )
+     bearer_only = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0", "false", "no")
+     fail_limit = int(os.getenv("WS_FAIL_LIMIT", "10"))
+     fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC", "60"))
+     client_ip = _client_ip_from_scope(scope)
+ 
+     token = None
+     try:
+         for _sp in scope.get("subprotocols") or []:
+             if isinstance(_sp, str) and _sp.startswith("bearer."):
+                 token = _sp.split(".", 1)[1].strip()
+                 break
+     except Exception:
+         pass
+     if not token:
+         try:
+@@ -1340,52 +1370,85 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     except Exception:
+         policy_layers = None
+ 
+     if isinstance(policy_layers, dict):
+         candidate_policy = policy_layers.get("effective_policy")
+         if isinstance(candidate_policy, dict):
+             policy = candidate_policy
+         candidate_version = policy_layers.get("policy_version")
+         if candidate_version is not None:
+             try:
+                 policy_version = str(candidate_version)
+             except Exception:
+                 policy_version = "unknown"
+ 
+     if not policy:
+         try:
+             policy = load_policy()
+         except Exception:
+             policy = {}
+ 
+     if not isinstance(policy_version, str) or not policy_version:
+         policy_version = "unknown"
+ 
+     if not flow_session_open_emitted:
+         meta = {"policy_version": policy_version}
+-        _emit_flow_event("session_open", phase="session", meta=meta)
++        session_event_id = _emit_flow_event("session_open", phase="session", meta=meta)
+         flow_session_open_emitted = True
++        if session_event_id:
++            policy_meta: Dict[str, Any] = {"policy_version": policy_version}
++            if isinstance(policy, dict):
++                try:
++                    policy_meta["policy"] = copy.deepcopy(policy)
++                except Exception:
++                    try:
++                        policy_meta["policy"] = dict(policy)
++                    except Exception:
++                        policy_meta["policy"] = {}
++            _emit_debug_event(
++                "policy_snapshot",
++                phase="session",
++                parent_id=session_event_id,
++                meta=policy_meta,
++            )
++            runtime_meta = {
++                "manual_feature_enabled": bool(manual_feature_enabled),
++                "manual_mode_manual_only": bool(manual_mode_manual_only),
++                "auto_commit_when_ready": bool(auto_commit_when_ready),
++                "local_vad_allowed": bool(local_vad_allowed),
++                "barge_require_asr_evidence": bool(barge_require_asr_evidence),
++                "barge_suppress_mode": barge_suppress_mode or "none",
++                "barge_post_tts_hold_ms": int(barge_post_tts_hold_ms),
++                "auto_commit_requires_dual": bool(auto_commit_requires_dual),
++                "auto_commit_requires_asr_ready": bool(auto_commit_requires_asr_ready),
++            }
++            _emit_debug_event(
++                "runtime_flags",
++                phase="session",
++                parent_id=session_event_id,
++                meta=runtime_meta,
++            )
+ 
+     with contextlib.suppress(Exception):
+         clear_greet_turn_cache(sid)
+ 
+     bus_task: Optional[asyncio.Task] = None
+ 
+     voice_metrics_registered = False
+     try:
+         voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
+     except Exception:
+         voice_metrics_registered = False
+ 
+     async def _ping_loop():
+         try:
+             while True:
+                 await asyncio.sleep(20)
+                 try:
+                     await _ws_send_json(
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
+                     )
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
+ 
+@@ -1495,73 +1558,80 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         require_asr_value = barge_policy.get("require_asr_evidence")
+         if isinstance(require_asr_value, bool):
+             barge_require_asr_evidence = require_asr_value
+         suppress_mode_value = barge_policy.get("suppress_during_tts")
+         if isinstance(suppress_mode_value, str):
+             suppress_mode_value = suppress_mode_value.strip().lower()
+             if suppress_mode_value:
+                 barge_suppress_mode = suppress_mode_value
+         post_hold_value = barge_policy.get("post_tts_hold_ms")
+         if isinstance(post_hold_value, (int, float)):
+             barge_post_tts_hold_ms = max(0, int(post_hold_value))
+ 
+     cfg["feature_manual_barge_in"] = manual_feature_enabled
      cfg["barge_in_mode_manual"] = manual_mode_manual_only
      cfg["auto_commit_when_ready"] = auto_commit_when_ready
      loop = asyncio.get_running_loop()
@@ -1159,30 +1256,47 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
          *,
          meta: Optional[Dict[str, Any]] = None,
          phase: str = "barge",
-     ) -> None:
+-    ) -> None:
++    ) -> str:
          try:
-             flow_emit(
-                 session_id=sid,
-                 level="transition",
-                 phase=phase,
-                 type=type_,
-                 who="system",
-                 meta=meta,
+-            flow_emit(
+-                session_id=sid,
+-                level="transition",
+-                phase=phase,
+-                type=type_,
+-                who="system",
+-                meta=meta,
++            return (
++                flow_emit(
++                    session_id=sid,
++                    level="transition",
++                    phase=phase,
++                    type=type_,
++                    who="system",
++                    meta=meta,
++                )
++                or ""
              )
          except Exception:
-             pass
+-            pass
++            return ""
  
-+    def _emit_ws_error(code: Optional[object]) -> None:
+     def _emit_ws_error(code: Optional[object]) -> None:
+         try:
+             code_str = str(code) if code is not None else "unknown"
+         except Exception:
+             code_str = "unknown"
+-        _emit_transition_event(
++        event_id = _emit_transition_event(
+             "ws_error",
+             meta={"code": code_str},
+             phase="transport",
+         )
 +        try:
-+            code_str = str(code) if code is not None else "unknown"
-+        except Exception:
-+            code_str = "unknown"
-+        _emit_transition_event(
-+            "ws_error",
-+            meta={"code": code_str},
-+            phase="transport",
-+        )
-+
++            _emit_state_snapshot(event_id, "transport")
++        except NameError:
++            pass
+ 
      def _current_tts_active() -> bool:
          try:
              current_turn_id = _current_assistant_turn_id(sid)
@@ -1207,36 +1321,8 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
                  if key == "src":
                      continue
                  base[key] = value
-         if tts_active is None:
-@@ -1597,50 +1612,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             try:
-                 running = asyncio.get_running_loop()
-             except RuntimeError:
-                 running = None
-             if running is loop:
-                 asyncio.create_task(_ws_send_json(send, payload))
-             else:
-                 loop.call_soon_threadsafe(
-                     asyncio.create_task, _ws_send_json(send, payload)
-                 )
-         except Exception:
-             pass
- 
-     buf = TurnBuffer()
-     dg: Optional[DeepgramClient] = None
-     rx_task: Optional[asyncio.Task] = None
-     dg_connect_task: Optional[asyncio.Task] = None
-     dg_state: str = "closed"
-     turn_id_ref = [0]
-     pending_final_turns: Deque[int] = deque()
-     completed_llm_turns: Set[int] = set()
-     synthetic_final_turns: Set[int] = set()
-     final_seen = [False]
-     asr_seen_partial = [False]
-     asr_partial_counter = [0]
-+    asr_partial_first_emitted = [False]
-+    evidence_gate_emitted = [False]
-+    last_confident_partial_conf: List[Optional[float]] = [None]
+@@ -1639,50 +1709,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     last_confident_partial_conf: List[Optional[float]] = [None]
      current_assistant_turn_ref: List[Optional[Any]] = [None]
      manual_commit_pending = [False]
      manual_button_down = [False]
@@ -1261,8 +1347,35 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
          "final": [0.0],
      }
      turn_finish_logged = [False]
++    last_partial_ts: List[float] = [0.0]
  
-@@ -1706,76 +1724,104 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
+     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
+ 
+     # Turn-scoped buffering + state
+     buffered_chunks: Deque[bytes] = deque()
+     sent_any_audio = [False]
+     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
+     no_audio_notified = [False]
+     no_audio_turn_id = [0]
+     try:
+         no_audio_window_s = float(
+             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
+         )
+     except Exception:
+         no_audio_window_s = 10.0
+     if no_audio_window_s < 0:
+         no_audio_window_s = 0.0
+     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
+     asr_ready_evt: asyncio.Event = asyncio.Event()
+     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
+     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
+     ws_frames_in = 0
+     ws_bytes_in = 0
+     backpressure_drop_count = 0
+@@ -1722,97 +1793,303 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         confirm_gap_ms = float(cfg.get("confirm_max_gap_ms", 180.0) or 180.0)
+     except Exception:
          confirm_gap_ms = 180.0
      try:
          confirm_min_tokens = max(1, int(cfg.get("confirm_min_tokens", 2) or 2))
@@ -1286,35 +1399,231 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
      confirm_window_ref: List[Optional[ConfirmWindow]] = [None]
      confirm_timeout_task: List[Optional[asyncio.Task]] = [None]
      confirm_timeout_cancelled: List[asyncio.Task] = []
-     local_vad_meta_sent = [False]
- 
-+    def _maybe_emit_evidence_gate(confidence: Optional[object] = None) -> None:
-+        if evidence_gate_emitted[0]:
++    confirm_flow_parent_id: List[Optional[str]] = [None]
++    confirm_debug_state: List[Dict[str, Any]] = [
++        {
++            "parent_id": "",
++            "opened_at": 0.0,
++            "last_vad_ts": None,
++            "last_audio_ts": None,
++            "last_partial_ts": None,
++            "vad_ticks": [],
++            "audio_chunks": [],
++            "dg_partials": [],
++        }
++    ]
++
++    def _reset_confirm_debug(parent_id: Optional[str]) -> None:
++        opened_at = time.time() if parent_id else 0.0
++        confirm_debug_state[0] = {
++            "parent_id": parent_id or "",
++            "opened_at": opened_at,
++            "last_vad_ts": None,
++            "last_audio_ts": None,
++            "last_partial_ts": None,
++            "vad_ticks": [],
++            "audio_chunks": [],
++            "dg_partials": [],
++        }
++
++    def _flush_confirm_debug_batches() -> None:
++        state = confirm_debug_state[0]
++        parent_id = state.get("parent_id") or ""
++        if parent_id:
++            for kind in ("vad_ticks", "audio_chunks", "dg_partials"):
++                items = state.get(kind) or []
++                if items:
++                    try:
++                        add_batch(parent_id, kind, list(items))
++                    except Exception:
++                        pass
++        _reset_confirm_debug(None)
++        confirm_flow_parent_id[0] = None
++
++    def _record_confirm_chunk(now_ts: float, chunk: bytes) -> None:
++        state = confirm_debug_state[0]
++        parent_id = state.get("parent_id") or ""
++        if not parent_id:
 +            return
-+        candidate = confidence
-+        if candidate is None:
-+            candidate = last_confident_partial_conf[0]
-+        if candidate is None:
-+            return
++        opened_at = float(state.get("opened_at") or 0.0)
++        last_audio = state.get("last_audio_ts")
++        base = last_audio if last_audio else opened_at
++        if base:
++            dt_ms = int(max(0.0, (now_ts - base) * 1000))
++        else:
++            dt_ms = 0
++        state["last_audio_ts"] = now_ts
++        mime_value = transport.get("codec") or transport.get("container") or "unknown"
++        state["audio_chunks"].append({
++            "dt_ms": dt_ms,
++            "bytes": len(chunk or b""),
++            "mime": mime_value,
++        })
++        rms_val = None
 +        try:
-+            conf_val = float(candidate)
++            if chunk:
++                rms_val = audioop.rms(chunk, 2)
 +        except Exception:
-+            return
-+        if conf_val < confirm_min_conf:
-+            return
-+        if not (local_vad_meta_sent[0] or local_vad_open[0]):
-+            return
-+        evidence_gate_emitted[0] = True
-+        _emit_transition_event(
-+            "evidence_gate_met",
-+            meta={
-+                "client_vad": True,
-+                "asr_partial": True,
-+                "conf": conf_val,
-+            },
-+            phase="asr",
++            rms_val = None
++        last_vad = state.get("last_vad_ts")
++        vad_base = last_vad if last_vad else opened_at
++        if vad_base:
++            vad_dt = int(max(0.0, (now_ts - vad_base) * 1000))
++        else:
++            vad_dt = 0
++        state["last_vad_ts"] = now_ts
++        state["vad_ticks"].append(
++            {"dt_ms": vad_dt, "rms": rms_val, "gate": bool(local_vad_open[0])}
 +        )
 +
++    def _record_confirm_partial(
++        now_ts: float, chars: int, conf: Optional[float]
++    ) -> None:
++        state = confirm_debug_state[0]
++        parent_id = state.get("parent_id") or ""
++        if not parent_id:
++            return
++        opened_at = float(state.get("opened_at") or 0.0)
++        last_partial = state.get("last_partial_ts")
++        base = last_partial if last_partial else opened_at
++        if base:
++            dt_ms = int(max(0.0, (now_ts - base) * 1000))
++        else:
++            dt_ms = 0
++        state["last_partial_ts"] = now_ts
++        state["dg_partials"].append(
++            {
++                "dt_ms": dt_ms,
++                "chars": int(chars),
++                "conf": conf,
++                "final": False,
++            }
++        )
++
++    def _build_state_snapshot_meta(
++        phase_label: str, *, queue_override: Optional[int] = None
++    ) -> Dict[str, Any]:
++        now_ts = time.time()
++        last_age = None
++        if last_partial_ts[0]:
++            last_age = int(max(0.0, (now_ts - last_partial_ts[0]) * 1000))
++        queue_len = queue_override if queue_override is not None else len(buffered_chunks)
++        return {
++            "phase": phase_label,
++            "tts_active": bool(assistant_speaking[0] or tts_mask_active[0]),
++            "confirm_open": bool(confirm_window_ref[0]),
++            "asr_ready": bool(asr_ready[0]),
++            "last_partial_age_ms": last_age,
++            "queue": queue_len,
++        }
++
++    def _emit_state_snapshot(
++        parent_id: Optional[str],
++        phase_label: str,
++        *,
++        queue_override: Optional[int] = None,
++    ) -> None:
++        if not parent_id:
++            return
++        meta = _build_state_snapshot_meta(phase_label, queue_override=queue_override)
++        _emit_debug_event(
++            "state_snapshot",
++            phase=phase_label,
++            parent_id=parent_id,
++            meta=meta,
++        )
++
++    def _emit_gate_checks(
++        window: ConfirmWindow,
++        metrics: Dict[str, Any],
++        parent_id: str,
++        reason_lower: str,
++    ) -> None:
++        if not parent_id:
++            return
++        checks: List[Dict[str, Any]] = []
++        partial_conf = metrics.get("partial_confidence")
++        if partial_conf is not None and partial_conf < window.min_confidence:
++            checks.append(
++                {
++                    "rule": "min_confidence",
++                    "value": float(partial_conf),
++                    "threshold": float(window.min_confidence),
++                    "passed": False,
++                }
++            )
++        partial_tokens = metrics.get("partial_tokens")
++        if partial_tokens is not None and partial_tokens < window.min_tokens:
++            checks.append(
++                {
++                    "rule": "min_tokens",
++                    "value": int(partial_tokens),
++                    "threshold": int(window.min_tokens),
++                    "passed": False,
++                }
++            )
++        gap_ms = metrics.get("gap_ms")
++        if gap_ms is not None and reason_lower == "gap":
++            checks.append(
++                {
++                    "rule": "max_gap_ms",
++                    "value": float(gap_ms),
++                    "threshold": float(window.max_gap_ms),
++                    "passed": False,
++                }
++            )
++        snr_db = metrics.get("snr_db")
++        snr_floor = metrics.get("snr_floor_db")
++        if (
++            window.snr_enabled
++            and snr_db is not None
++            and snr_floor is not None
++            and snr_db < snr_floor
++        ):
++            checks.append(
++                {
++                    "rule": "snr_db",
++                    "value": float(snr_db),
++                    "threshold": float(snr_floor),
++                    "passed": False,
++                }
++            )
++        for payload in checks:
++            _emit_debug_event(
++                "gate_check",
++                phase="turn",
++                parent_id=parent_id,
++                meta=payload,
++            )
+     local_vad_meta_sent = [False]
+ 
+     def _maybe_emit_evidence_gate(confidence: Optional[object] = None) -> None:
+         if evidence_gate_emitted[0]:
+             return
+         candidate = confidence
+         if candidate is None:
+             candidate = last_confident_partial_conf[0]
+         if candidate is None:
+             return
+         try:
+             conf_val = float(candidate)
+         except Exception:
+             return
+         if conf_val < confirm_min_conf:
+             return
+         if not (local_vad_meta_sent[0] or local_vad_open[0]):
+             return
+         evidence_gate_emitted[0] = True
+         _emit_transition_event(
+             "evidence_gate_met",
+             meta={
+                 "client_vad": True,
+                 "asr_partial": True,
+                 "conf": conf_val,
+             },
+             phase="asr",
+         )
+ 
      def _flow_turn_id_hint() -> int:
          try:
              current = int(turn_id_ref[0] or 0)
@@ -1331,8 +1640,20 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
      def _cancel_confirm_timeout() -> None:
          task = confirm_timeout_task[0]
          if task:
-             task.cancel()
-             confirm_timeout_cancelled.append(task)
+-            task.cancel()
+-            confirm_timeout_cancelled.append(task)
++            if not task.done():
++                task.cancel()
++                confirm_timeout_cancelled.append(task)
++                if confirm_flow_parent_id[0]:
++                    _emit_debug_event(
++                        "timer_cancel",
++                        phase="turn",
++                        parent_id=confirm_flow_parent_id[0],
++                        meta={"name": "confirm_timeout"},
++                    )
++            else:
++                confirm_timeout_cancelled.append(task)
          confirm_timeout_task[0] = None
  
      def _emit_local_vad_signal(now_ts: float) -> None:
@@ -1341,7 +1662,7 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
          if _manual_mode_active():
              return
          local_vad_meta_sent[0] = True
-+        _maybe_emit_evidence_gate()
+         _maybe_emit_evidence_gate()
          if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
              _set_barge_pause_meta("client_vad")
          _on_local_vad_start()
@@ -1358,16 +1679,284 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
                  "local_vad_start",
                  sid=sid,
                  turn_id=turn_id_ref[0],
-                 ts_ms=int(now_ts * 1000),
-             )
-         with contextlib.suppress(Exception):
-             bus.broadcast(sid, payload)
-         try:
+@@ -1824,139 +2101,165 @@ async def _ws_chat_asgi_impl(scope, receive, send):
              if loop.is_closed():
                  return
              try:
                  running = asyncio.get_running_loop()
-@@ -2115,50 +2161,76 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             except RuntimeError:
+                 running = None
+             if running is loop:
+                 asyncio.create_task(_ws_send_json(send, payload))
+             else:
+                 loop.call_soon_threadsafe(
+                     asyncio.create_task, _ws_send_json(send, payload)
+                 )
+         except Exception:
+             pass
+ 
+     def _schedule_confirm_timeout(window: ConfirmWindow) -> None:
+         _cancel_confirm_timeout()
+ 
+         wait_s = max(0.0, window.max_duration_ms / 1000.0)
+ 
+         async def _timeout() -> None:
+             try:
+                 await asyncio.sleep(wait_s)
+                 if confirm_window_ref[0] is not window:
+                     return
++                if confirm_flow_parent_id[0]:
++                    _emit_debug_event(
++                        "timer_fire",
++                        phase="turn",
++                        parent_id=confirm_flow_parent_id[0],
++                        meta={"name": "confirm_timeout"},
++                    )
+                 decision = window.timeout(time.time())
+                 if decision.action == "commit":
+                     metrics = decision.metrics or {}
+                     reason = metrics.get("reason") or "timeout_commit"
+                     _finalize_confirm_commit(reason, metrics, window)
+                 elif decision.action == "abort":
+                     metrics = decision.metrics or {}
+                     reason = metrics.get("reason") or "timeout"
+                     _finalize_confirm_abort(reason, metrics, window)
+             except asyncio.CancelledError:
+                 return
++            finally:
++                confirm_timeout_task[0] = None
+ 
+         confirm_timeout_task[0] = asyncio.create_task(_timeout())
++        if confirm_flow_parent_id[0] and wait_s > 0:
++            _emit_debug_event(
++                "timer_start",
++                phase="turn",
++                parent_id=confirm_flow_parent_id[0],
++                meta={"name": "confirm_timeout", "ms": int(window.max_duration_ms)},
++            )
+ 
+     def _finalize_confirm_commit(
+         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
+     ) -> None:
+         if confirm_window_ref[0] is not window:
+             return
+         if manual_button_down[0] or manual_turn_active[0]:
+             _cancel_confirm_timeout()
+             confirm_window_ref[0] = None
++            _reset_confirm_debug(None)
++            confirm_flow_parent_id[0] = None
+             _on_local_vad_stop()
+             return
+         _cancel_confirm_timeout()
+         confirm_window_ref[0] = None
+         data = {k: v for k, v in (metrics or {}).items() if v is not None}
+         data.setdefault("reason", trigger)
+         data.setdefault("snr_enabled", window.snr_enabled)
+         _jlog("confirm_commit", sid=sid, **data)
+         if post_greet_phase_active[0]:
+             _emit_flow_event(
+                 "confirm_close",
+                 phase="turn",
+                 meta={"reason": "commit"},
+             )
++        _flush_confirm_debug_batches()
+         _on_local_vad_stop()
+         if barge.is_paused():
+             try:
+                 barge.commit(_send_barge_state)
+             except Exception:
+                 pass
+ 
+     def _finalize_confirm_abort(
+         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
+     ) -> None:
+         if confirm_window_ref[0] is not window:
+             return
+         if manual_button_down[0] or manual_turn_active[0]:
+             _cancel_confirm_timeout()
+             confirm_window_ref[0] = None
++            _reset_confirm_debug(None)
++            confirm_flow_parent_id[0] = None
+             _on_local_vad_stop()
+             return
+         _cancel_confirm_timeout()
+         confirm_window_ref[0] = None
+         data = {k: v for k, v in (metrics or {}).items() if v is not None}
+         data.setdefault("reason", trigger)
+         data.setdefault("snr_enabled", window.snr_enabled)
+         reason_value = str(data.get("reason") or "")
+         reason_lower = reason_value.lower()
+         is_timeout = reason_lower == "timeout"
+         system_abort_reasons = {
+             "tts_start",
+             "manual_start",
+             "close_stream",
+             "cleanup",
+             "shutdown",
+         }
+         if post_greet_phase_active[0]:
+             turn_id_hint = _flow_turn_id_hint()
+             if (
+                 not is_timeout
+                 and reason_lower not in system_abort_reasons
+                 and turn_id_hint not in flow_turn_abort_emitted
+             ):
+                 flow_turn_abort_emitted.add(turn_id_hint)
+                 flow_turn_commit_emitted.discard(turn_id_hint)
+                 abort_reason = reason_value or "abort"
+                 _emit_flow_event(
+                     "turn_abort",
+                     phase="turn",
+                     meta={"reason": abort_reason},
+                 )
+             close_reason = "timeout" if is_timeout else "abort"
+-            _emit_flow_event(
++            confirm_close_event_id = _emit_flow_event(
+                 "confirm_close",
+                 phase="turn",
+                 meta={"reason": close_reason},
+             )
++        else:
++            confirm_close_event_id = ""
++        if confirm_close_event_id:
++            _emit_gate_checks(window, data, confirm_close_event_id, reason_lower)
++        _flush_confirm_debug_batches()
+         _jlog("confirm_abort", sid=sid, **data)
+         _on_local_vad_stop()
+         if barge.is_paused():
+             if manual_button_down[0]:
+                 return
+             try:
+                 barge.cancel(_send_barge_state)
+             except Exception:
+                 pass
+ 
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "EVT_CONFIRM_ABORT",
+                 sid=sid,
+                 turn=turn_id_ref[0],
+                 reason=data.get("reason"),
+                 elapsed_ms=data.get("elapsed_ms"),
+                 snr_db=data.get("snr_db"),
+                 partials=data.get("partial_tokens"),
+                 conf=data.get("partial_confidence"),
+             )
+ 
+     def _open_confirm_window(
+         now_ts: float,
+         *,
+@@ -1990,51 +2293,75 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             sid=sid,
+             turn=turn_id_ref[0],
+             is_first=bool(is_first_turn),
+             min_ms=min_ms,
+             max_ms=max_ms_local,
+             until_asr_ready=policy_until_asr_ready,
+         )
+         _jlog(
+             "confirm_start",
+             sid=sid,
+             turn_id=turn_id_ref[0],
+             min_ms=min_ms,
+             max_ms=max_ms_local,
+             max_gap_ms=confirm_gap_ms,
+             min_tokens=confirm_min_tokens,
+             min_confidence=confirm_min_conf,
+             snr_threshold_db=snr_threshold,
+             snr_slack_db=confirm_snr_slack_db,
+             policy_until_asr_ready=policy_until_asr_ready,
+         )
+         if not post_greet_phase_active[0]:
+             post_greet_phase_active[0] = True
+         if post_greet_phase_active[0]:
+             turn_id_hint = _flow_turn_id_hint()
+             meta: Dict[str, Any] = {"phase": "post_greet", "turn_id": turn_id_hint}
+-            _emit_flow_event("confirm_open", phase="turn", meta=meta)
++            confirm_event_id = _emit_flow_event("confirm_open", phase="turn", meta=meta)
++        else:
++            confirm_event_id = ""
++        confirm_flow_parent_id[0] = confirm_event_id or None
++        if confirm_event_id:
++            gate_meta = {
++                "min_ms": int(min_ms),
++                "max_ms": int(max_ms_local),
++                "max_gap_ms": float(confirm_gap_ms),
++                "min_tokens": int(confirm_min_tokens),
++                "min_conf": float(confirm_min_conf),
++                "snr_threshold": float(snr_threshold),
++                "snr_slack": float(confirm_snr_slack_db),
++                "policy_until_asr_ready": bool(policy_until_asr_ready),
++                "is_first_turn": bool(is_first_turn),
++            }
++            _emit_debug_event(
++                "gate_params",
++                phase="turn",
++                parent_id=confirm_event_id,
++                meta=gate_meta,
++            )
++            _reset_confirm_debug(confirm_event_id)
++        else:
++            _reset_confirm_debug(None)
+         _schedule_confirm_timeout(window)
+ 
+     def _queue_confirm_request(request: Dict[str, Any]) -> None:
+         pending_confirm_request[0] = dict(request)
+ 
+     def _maybe_start_pending_confirm(now_ts: Optional[float] = None) -> None:
+         request = pending_confirm_request[0]
+         if not request:
+             return
+         if request.get("policy_until_asr_ready") and not asr_ready[0]:
+             return
+         if tts_mask_active[0]:
+             return
+         pending_confirm_request[0] = None
+         effective_now = now_ts if now_ts is not None else time.time()
+         _open_confirm_window(
+             effective_now,
+             min_ms=request.get("min_ms", confirm_min_ms),
+             max_ms_local=request.get("max_ms_local", confirm_max_ms),
+             snr_threshold=request.get("snr_threshold", confirm_snr_db),
+             policy_until_asr_ready=bool(request.get("policy_until_asr_ready")),
+             is_first_turn=bool(request.get("is_first_turn")),
+         )
+ 
+     def _cancel_tts_mask_release() -> None:
+@@ -2129,88 +2456,102 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 is_first=bool(first_turn_active),
+             )
+             return
+         if tts_mask_active[0]:
+             _queue_confirm_request(request)
+             _jlog(
+                 "confirm_pending_tts",
+                 sid=sid,
+                 turn=turn_id_ref[0],
+                 mode=tts_mask_mode[0],
+             )
+             return
+         _open_confirm_window(
+             now_ts,
+             min_ms=min_ms,
+             max_ms_local=max_ms_local,
+             snr_threshold=snr_threshold,
+             policy_until_asr_ready=policy_until_asr_ready,
+             is_first_turn=first_turn_active,
+         )
+ 
+     def _handle_confirm_chunk(chunk: bytes, now_ts: float) -> None:
+         window = confirm_window_ref[0]
+         if not window:
+             return
++        _record_confirm_chunk(now_ts, chunk)
+         window.set_snr_enabled(True)
+         decision = window.observe_chunk(chunk, now_ts)
+         if decision.action == "commit" and decision.metrics is not None:
+             _finalize_confirm_commit(
+                 decision.metrics.get("reason") or "chunk", decision.metrics, window
+             )
+         elif decision.action == "abort" and decision.metrics is not None:
              _finalize_confirm_abort(
                  decision.metrics.get("reason") or "chunk", decision.metrics, window
              )
@@ -1377,8 +1966,20 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
          if not window:
              return
          now_ts = time.time()
++        raw_conf = ev.get("confidence") if isinstance(ev, dict) else None
++        try:
++            conf_val = float(raw_conf) if raw_conf is not None else None
++        except (TypeError, ValueError):
++            conf_val = None
++        text_preview = ev.get("text") if isinstance(ev, dict) else ""
++        try:
++            char_count = len(text_preview or "")
++        except Exception:
++            char_count = 0
++        _record_confirm_partial(now_ts, char_count, conf_val)
          decision = window.observe_partial(
-             ev.get("token_count"), ev.get("confidence"), now_ts
+-            ev.get("token_count"), ev.get("confidence"), now_ts
++            ev.get("token_count"), conf_val, now_ts
          )
          if decision.action == "commit" and decision.metrics is not None:
              _finalize_confirm_commit(
@@ -1393,101 +1994,40 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
                  window,
              )
  
-+    def _handle_asr_partial_with_flow(ev: Dict[str, Any]) -> None:
-+        try:
-+            _handle_confirm_partial(ev)
-+        except Exception:
-+            pass
+     def _handle_asr_partial_with_flow(ev: Dict[str, Any]) -> None:
+         try:
+             _handle_confirm_partial(ev)
+         except Exception:
+             pass
+ 
++        last_partial_ts[0] = time.time()
 +
-+        raw_conf = ev.get("confidence") if isinstance(ev, dict) else None
-+        conf_val: Optional[float]
-+        try:
-+            conf_val = float(raw_conf) if raw_conf is not None else None
-+        except (TypeError, ValueError):
-+            conf_val = None
-+
-+        if not asr_partial_first_emitted[0]:
-+            asr_partial_first_emitted[0] = True
-+            meta_conf = conf_val if conf_val is not None else 0.0
-+            _emit_transition_event(
-+                "asr_partial_first",
-+                meta={"conf": meta_conf},
-+                phase="asr",
-+            )
-+
-+        if conf_val is not None and conf_val >= confirm_min_conf:
-+            last_confident_partial_conf[0] = conf_val
-+            _maybe_emit_evidence_gate(conf_val)
-+
+         raw_conf = ev.get("confidence") if isinstance(ev, dict) else None
+         conf_val: Optional[float]
+         try:
+             conf_val = float(raw_conf) if raw_conf is not None else None
+         except (TypeError, ValueError):
+             conf_val = None
+ 
+         if not asr_partial_first_emitted[0]:
+             asr_partial_first_emitted[0] = True
+             meta_conf = conf_val if conf_val is not None else 0.0
+             _emit_transition_event(
+                 "asr_partial_first",
+                 meta={"conf": meta_conf},
+                 phase="asr",
+             )
+ 
+         if conf_val is not None and conf_val >= confirm_min_conf:
+             last_confident_partial_conf[0] = conf_val
+             _maybe_emit_evidence_gate(conf_val)
+ 
      def _ensure_confirm_closed(reason: str) -> None:
          window = confirm_window_ref[0]
          if not window:
              return
          decision = window.cancel(reason, time.time())
-         if decision.action == "abort" and decision.metrics is not None:
-             _finalize_confirm_abort(reason, decision.metrics, window)
-             
-     def _on_assistant_tts_start(turn_id: Any) -> None:
-         assistant_speaking[0] = True
-         mode = (barge_suppress_mode or "none").strip() or "none"
-         mask_engaged = mode != "none"
-         tts_mask_mode[0] = mode
-         if mask_engaged:
-             tts_mask_active[0] = True
-         else:
-             tts_mask_active[0] = False
-         _cancel_tts_mask_release()
-         with contextlib.suppress(Exception):
-             _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode)
-         _ensure_confirm_closed("tts_start")
-         if not manual_button_down[0]:
-             with contextlib.suppress(Exception):
-                 barge.cancel(_send_barge_state)
- 
-@@ -2167,89 +2239,93 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         if tts_mask_active[0] and barge_post_tts_hold_ms > 0:
-             delay_ms = barge_post_tts_hold_ms
-             _cancel_tts_mask_release()
-             tts_mask_release_deadline[0] = time.time() + (delay_ms / 1000.0)
-             tts_mask_release_task[0] = asyncio.create_task(
-                 _await_tts_mask_release(delay_ms, turn_id)
-             )
-         elif tts_mask_active[0]:
-             _cancel_tts_mask_release()
-             _mark_tts_mask_off(turn_id, 0)
-         else:
-             _cancel_tts_mask_release()
-             _mark_tts_mask_off(turn_id, 0)
- 
-     def _on_asr_connect_ok() -> None:
-         already_ready = asr_ready[0]
-         asr_ready[0] = True
-         if not already_ready:
-             with contextlib.suppress(Exception):
-                 delta_ms = int(max(0.0, (time.time() - ws_open_ts) * 1000))
-                 _jlog("EVT_ASR_READY", sid=sid, t_ms_since_ws=delta_ms)
-         _maybe_start_pending_confirm()
- 
-     def _on_local_vad_start() -> None:
-         local_vad_open[0] = True
-+        _maybe_emit_evidence_gate()
- 
-     def _on_local_vad_stop() -> None:
-         local_vad_open[0] = False
- 
-     def _handle_bus_frame(frame: Dict[str, Any]) -> None:
-         ftype_raw = frame.get("type")
-         ftype = (ftype_raw or "").lower()
-         if not ftype:
-             return
-         turn_id = frame.get("turn_id")
-         if ftype in {"tts_start", "assistant_audio", "tts:start"}:
-             _on_assistant_tts_start(turn_id)
-             if ftype == "assistant_audio":
-                 is_last_val = frame.get("is_last")
-                 is_last = False
-                 if isinstance(is_last_val, bool):
-                     is_last = is_last_val
+@@ -2282,50 +2623,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                  elif isinstance(is_last_val, str):
                      is_last = is_last_val.strip().lower() in {"1", "true", "yes"}
                  elif isinstance(is_last_val, (int, float)):
@@ -1510,9 +2050,10 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
          turn_timing["final"][0] = 0.0
          turn_finish_logged[0] = False
          asr_partial_counter[0] = 0
-+        asr_partial_first_emitted[0] = False
-+        evidence_gate_emitted[0] = False
-+        last_confident_partial_conf[0] = None
+         asr_partial_first_emitted[0] = False
+         evidence_gate_emitted[0] = False
+         last_confident_partial_conf[0] = None
++        last_partial_ts[0] = 0.0
  
      def _emit_no_audio_alert(reason: str) -> None:
          if no_audio_notified[0]:
@@ -1538,334 +2079,3 @@ index 3871af2c40b3031c1ba1bb6626cda80f68770862..9b2405690ef191746e71db7cd6c625a4
                  since_first_ms=since_first_ms,
              )
          if _admin_emit:
-@@ -2671,98 +2747,100 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                         except Exception:
-                             pass
- 
-                 cfg["_diag_hook"] = _diag_hook
-                 _jlog("asr_connect_begin", sid=sid, transport=transport)
-                 client = DeepgramClient(cfg)
-                 dg = client
-                 await client.connect()
-                 dg_state = "open"
-                 connect_result["ok"] = True
-                 turn_id_ref[0] = buf.turn_seq + 1
-                 rx_task = asyncio.create_task(
-                     _pump_dg_to_client(
-                         client,
-                         send,
-                         turn_id_ref,
-                         final_seen,
-                         pending_final_turns,
-                         synthetic_final_turns,
-                         completed_llm_turns,
-                         sid,
-                         asr_ready_evt,
-                         _flush_buffered_chunks,
-                         turn_timing,
-                         _log_turn_finish,
--                        _handle_confirm_partial,
-+                        _handle_asr_partial_with_flow,
-                         final_guard_hooks={
-                             "reset_ref": final_guard_reset_ref,
-                             "local_vad_ref": final_guard_local_vad_ref,
-                         },
-+                        on_transport_error=_emit_ws_error,
-                     )
-                 )
-                 _jlog("asr_connect_ok", sid=sid)
-                 _on_asr_connect_ok()
-                 _cancel_asr_not_ready_timeout()
- 
-                 queued_chunks = len(buffered_chunks)
-                 queued_bytes = 0
-                 try:
-                     queued_bytes = sum(
-                         len(chunk)
-                         for chunk in buffered_chunks
-                         if isinstance(chunk, (bytes, bytearray))
-                     )
-                 except Exception:
-                     queued_bytes = 0
- 
-                 with contextlib.suppress(Exception):
-                     if not asr_ready_evt.is_set():
-                         asr_ready_evt.set()
- 
-                 _jlog(
-                     "flush_on_open",
-                     sid=sid,
-                     queued_chunks=queued_chunks,
-                     queued_bytes=queued_bytes,
-                 )
- 
-                 await _flush_buffered_chunks()
- 
-                 if dg_state == "open" and not buffered_chunks:
-                     asr_direct_stream[0] = True
-             except Exception as e:
-                 dg_state = "closed"
-                 dg = None
-                 asr_direct_stream[0] = False
-                 asr_ready[0] = False                
-                 _cancel_asr_not_ready_timeout()
-                 _jlog("asr_connect_fail", sid=sid, err=type(e).__name__)
-                 with contextlib.suppress(Exception):
-                     await _ws_send_json(
-                         send, make_error("asr_connect_fail", type(e).__name__)
-                     )
-+                _emit_ws_error("asr_connect_fail")
-                 with contextlib.suppress(Exception):
-                     if _admin_emit:
-                         err_msg = f"connect:{type(e).__name__}"
-                         _admin_emit(
-                             "asr:error",
-                             session_id=sid,
-                             turn_id=turn_id_ref[0],
-                             msg=err_msg,
-                             error=err_msg,
-                         )
-             finally:
-                 dg_connect_task = None
- 
-         dg_connect_task = asyncio.create_task(_connect())
-         with contextlib.suppress(Exception):
-             await dg_connect_task
-         return connect_result["ok"]
- 
-     def _dg_client_ready(client: Optional[DeepgramClient]) -> bool:
-         """Return True if the Deepgram client reports an open websocket."""
-         if client is None:
-             return False
-         try:
-             is_open = getattr(client, "is_open", None)
-             if callable(is_open) and is_open():
-@@ -3293,50 +3371,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                         meta=tid_meta,
-                                     )
-                                     with contextlib.suppress(Exception):
-                                         if _admin_emit:
-                                             cfg_now = db.get_config()
-                                             audio_on = bool(
-                                                 (cfg_now or {}).get(
-                                                     "feature_audio", True
-                                                 )
-                                             )
-                                             _admin_emit(
-                                                 "greet:resp",
-                                                 label="greet:resp",
-                                                 session_id=sid,
-                                                 turn_id=tid,
-                                                 audio_scheduled=audio_on,
-                                             )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "greet_fail", e.__class__.__name__
-                                             ),
-                                         )
-+                                    _emit_ws_error("greet_fail")
-                                 finally:
-                                     post_greet_phase_active[0] = True
- 
-                             asyncio.create_task(_bg())
- 
-                         elif t == "Control":
-                             action_raw = obj.get("action")
-                             action = str(action_raw or "").strip().lower()
-                             meta_payload = obj.get("meta")
-                             if not isinstance(meta_payload, dict):
-                                 meta_payload = {}
- 
-                             if action == "ptt_down":
-                                 tts_active_now = _current_tts_active()
-                                 _emit_transition_event(
-                                     "ptt_down",
-                                     meta={"during_tts": bool(tts_active_now)},
-                                     phase="ptt",
-                                 )
-                                 _set_barge_pause_meta("ptt", tts_active=tts_active_now)
-                                 ptt_down_emitted[0] = True
-                                 continue
- 
-                             if action == "ptt_up":
-                                 tts_active_now = _current_tts_active()
-@@ -3569,70 +3648,72 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                             meta=tid_meta,
-                                         )
-                                         with contextlib.suppress(Exception):
-                                             if _admin_emit:
-                                                 cfg_now = db.get_config()
-                                                 audio_on = bool(
-                                                     (cfg_now or {}).get(
-                                                         "feature_audio", True
-                                                     )
-                                                 )
-                                                 _admin_emit(
-                                                     "greet:resp",
-                                                     label="greet:resp",
-                                                     session_id=sid,
-                                                     turn_id=tid,
-                                                     audio_scheduled=audio_on,
-                                                 )
-                                     except Exception as e:
-                                         with contextlib.suppress(Exception):
-                                             await _ws_send_json(
-                                                 send,
-                                                 make_error(
-                                                     "greet_fail", e.__class__.__name__
-                                                 ),
-                                             )
-+                                        _emit_ws_error("greet_fail")
-                                     finally:
-                                         post_greet_phase_active[0] = True
- 
-                                 asyncio.create_task(_bg2())
- 
-                         elif t in (
-                             "user_msg",
-                             "User",
-                             "UserText",
-                             "UserMessage",
-                             "UserUtterance",
-                             "UserTextMessage",
-                         ):
-                             text = (obj.get("text") or "").strip()
-                             if not text:
-                                 continue
-                             if len(text) > 8000:
-                                 await _ws_send_json(
-                                     send, make_error("payload_too_large", "user_text")
-                                 )
-+                                _emit_ws_error("payload_too_large")
-                                 continue
-                             corr = obj.get("correlation_user_msg_id") or obj.get(
-                                 "userMsgId"
-                             )
-                             _jlog(
-                                 "ws_user_msg_recv",
-                                 sid=sid,
-                                 text_len=len(text),
-                                 corr=bool(corr),
-                             )
- 
-                             dialog_nlu_pre: Dict[str, Any] = {}
-                             universal_pre: Dict[str, Any] = {}
-                             try:
-                                 prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(
-                                     text, {"source": "user_ws", "channel": "ws"}
-                                 )
-                                 if isinstance(dialog_nlu_raw, dict):
-                                     dialog_nlu_pre = dict(dialog_nlu_raw)
-                                 if isinstance(prepared_meta, dict):
-                                     raw_universal = prepared_meta.get("universal") or {}
-                                     if isinstance(raw_universal, dict):
-                                         universal_pre = _ensure_universal_fields(raw_universal)
-                             except Exception:
-                                 dialog_nlu_pre = {}
-@@ -3649,50 +3730,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             if dialog_nlu_pre or universal_pre:
-                                 meta_overrides = {}
-                                 if dialog_nlu_pre:
-                                     meta_overrides["nlu"] = dict(dialog_nlu_pre)
-                                     meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
-                                 if universal_pre:
-                                     meta_overrides["universal"] = dict(universal_pre)
- 
-                             async def _bg_user():
-                                 try:
-                                     await asyncio.to_thread(
-                                         run_ws_user_turn,
-                                         sid,
-                                         text,
-                                         corr,
-                                         meta_overrides=meta_overrides,
-                                     )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "user_fail", e.__class__.__name__
-                                             ),
-                                         )
-+                                    _emit_ws_error("user_fail")
- 
-                             asyncio.create_task(_bg_user())
- 
-                         elif t == "CloseStream":
-                             _jlog("ws_close_stream", sid=sid)
-                             manual_turn_active[0] = False
-                             manual_button_down[0] = False
-                             turn_stream_committed[0] = False
-                             _cancel_asr_stream_activation()
-                             _cancel_asr_not_ready_timeout()
- 
-                             # Always define this first so later 'if synthetic_emitted' is safe
-                             synthetic_emitted = False
- 
-                             if callable(final_guard_local_vad_ref[0]):
-                                 with contextlib.suppress(Exception):
-                                     final_guard_local_vad_ref[0]("stop")
-                             _on_local_vad_stop()                                    
- 
-                             _ensure_confirm_closed("close_stream")
- 
-                             if buf.is_empty():
-                                 # Empty turn closure; synthesize ids + reset final tracking.
-                                 turn_id_ref[0] = buf.turn_seq + 1
-                                 final_seen[0] = False
-@@ -4029,50 +4111,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                             sid=sid,
-                                             turn_id=turn_id,
-                                             path=out_path,
-                                             bytes=len(raw),
-                                             mime=mime,
-                                         )
- 
-                                         if MIC_ECHO_WS:
-                                             # Send the audio back over WS so the client can play it
-                                             await _ws_send_diagnostic_audio(
-                                                 send, turn_id, mime, data_to_echo
-                                             )
-                                 except Exception as e:
-                                     _jlog(
-                                         "mic_capture_fail",
-                                         sid=sid,
-                                         err=type(e).__name__,
-                                     )
- 
-                         else:
-                             # Unknown type already filtered by schema; no-op to future-proof.
-                             pass
- 
-                     except ValueError as e:
-                         await _ws_send_json(send, make_error("bad_message", str(e)))
-+                        _emit_ws_error("bad_message")
-                 else:
-                     # websocket.receive without text/bytes
-                     pass
-             else:
-                 # Other ASGI events are ignored
-                 pass
- 
-     finally:
-         if flow_session_open_emitted and not flow_session_close_emitted:
-             _emit_flow_event("session_close", phase="session")
-             flow_session_close_emitted = True
-         _ensure_confirm_closed("shutdown")
-         _cancel_confirm_timeout()
-         with contextlib.suppress(Exception):
-             _cancel_no_audio_watch()
-         _cancel_asr_stream_activation()
-         _cancel_asr_not_ready_timeout()
-         await _remove_active_ws_entry("cleanup")
-         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_conn_cleanup",
-                 conn_id=conn_id,
-                 sid=sid,
-                 duration=duration,

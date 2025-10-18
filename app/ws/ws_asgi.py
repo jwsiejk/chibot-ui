@@ -1,6 +1,6 @@
 # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
-import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
+import asyncio, os, contextlib, time, io, struct, base64, uuid, copy, audioop
 from functools import partial
 from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
 from collections import deque, defaultdict
@@ -27,7 +27,7 @@ from app.db import db
 from app.policy.loader import load_policy, load_policy_layers
 from app.services.greet_idempotency import clear_greet_turn_cache
 from app.metrics import ws_metrics
-from app.flow.emit import emit as flow_emit
+from app.flow.emit import add_batch, emit as flow_emit
 
 # NEW: invoke LLM on final transcript
 from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
@@ -1181,21 +1181,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     flow_turn_commit_emitted: Set[int] = set()
     flow_turn_abort_emitted: Set[int] = set()
 
-    def _emit_flow_event(type_: str,
-                         *,
-                         phase: str,
-                         meta: Optional[Dict[str, Any]] = None) -> None:
+    def _emit_flow_event(
+        type_: str,
+        *,
+        phase: str,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> str:
         try:
-            flow_emit(
-                session_id=sid,
-                level="flow",
-                phase=phase,
-                type=type_,
-                who="system",
-                meta=meta,
+            return (
+                flow_emit(
+                    session_id=sid,
+                    level="flow",
+                    phase=phase,
+                    type=type_,
+                    who="system",
+                    meta=meta,
+                )
+                or ""
             )
         except Exception:
-            pass
+            return ""
+
+    def _emit_debug_event(
+        type_: str,
+        *,
+        phase: str,
+        parent_id: Optional[str],
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        if not parent_id:
+            return ""
+        try:
+            return (
+                flow_emit(
+                    session_id=sid,
+                    level="debug",
+                    phase=phase,
+                    type=type_,
+                    who="system",
+                    meta=meta,
+                    parent_id=parent_id,
+                )
+                or ""
+            )
+        except Exception:
+            return ""
 
     policy: Dict[str, Any] = {}
     policy_version: str = "unknown"
@@ -1362,8 +1392,41 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     if not flow_session_open_emitted:
         meta = {"policy_version": policy_version}
-        _emit_flow_event("session_open", phase="session", meta=meta)
+        session_event_id = _emit_flow_event("session_open", phase="session", meta=meta)
         flow_session_open_emitted = True
+        if session_event_id:
+            policy_meta: Dict[str, Any] = {"policy_version": policy_version}
+            if isinstance(policy, dict):
+                try:
+                    policy_meta["policy"] = copy.deepcopy(policy)
+                except Exception:
+                    try:
+                        policy_meta["policy"] = dict(policy)
+                    except Exception:
+                        policy_meta["policy"] = {}
+            _emit_debug_event(
+                "policy_snapshot",
+                phase="session",
+                parent_id=session_event_id,
+                meta=policy_meta,
+            )
+            runtime_meta = {
+                "manual_feature_enabled": bool(manual_feature_enabled),
+                "manual_mode_manual_only": bool(manual_mode_manual_only),
+                "auto_commit_when_ready": bool(auto_commit_when_ready),
+                "local_vad_allowed": bool(local_vad_allowed),
+                "barge_require_asr_evidence": bool(barge_require_asr_evidence),
+                "barge_suppress_mode": barge_suppress_mode or "none",
+                "barge_post_tts_hold_ms": int(barge_post_tts_hold_ms),
+                "auto_commit_requires_dual": bool(auto_commit_requires_dual),
+                "auto_commit_requires_asr_ready": bool(auto_commit_requires_asr_ready),
+            }
+            _emit_debug_event(
+                "runtime_flags",
+                phase="session",
+                parent_id=session_event_id,
+                meta=runtime_meta,
+            )
 
     with contextlib.suppress(Exception):
         clear_greet_turn_cache(sid)
@@ -1517,29 +1580,36 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         *,
         meta: Optional[Dict[str, Any]] = None,
         phase: str = "barge",
-    ) -> None:
+    ) -> str:
         try:
-            flow_emit(
-                session_id=sid,
-                level="transition",
-                phase=phase,
-                type=type_,
-                who="system",
-                meta=meta,
+            return (
+                flow_emit(
+                    session_id=sid,
+                    level="transition",
+                    phase=phase,
+                    type=type_,
+                    who="system",
+                    meta=meta,
+                )
+                or ""
             )
         except Exception:
-            pass
+            return ""
 
     def _emit_ws_error(code: Optional[object]) -> None:
         try:
             code_str = str(code) if code is not None else "unknown"
         except Exception:
             code_str = "unknown"
-        _emit_transition_event(
+        event_id = _emit_transition_event(
             "ws_error",
             meta={"code": code_str},
             phase="transport",
         )
+        try:
+            _emit_state_snapshot(event_id, "transport")
+        except NameError:
+            pass
 
     def _current_tts_active() -> bool:
         try:
@@ -1661,6 +1731,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         "final": [0.0],
     }
     turn_finish_logged = [False]
+    last_partial_ts: List[float] = [0.0]
 
     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
@@ -1744,6 +1815,202 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     confirm_window_ref: List[Optional[ConfirmWindow]] = [None]
     confirm_timeout_task: List[Optional[asyncio.Task]] = [None]
     confirm_timeout_cancelled: List[asyncio.Task] = []
+    confirm_flow_parent_id: List[Optional[str]] = [None]
+    confirm_debug_state: List[Dict[str, Any]] = [
+        {
+            "parent_id": "",
+            "opened_at": 0.0,
+            "last_vad_ts": None,
+            "last_audio_ts": None,
+            "last_partial_ts": None,
+            "vad_ticks": [],
+            "audio_chunks": [],
+            "dg_partials": [],
+        }
+    ]
+
+    def _reset_confirm_debug(parent_id: Optional[str]) -> None:
+        opened_at = time.time() if parent_id else 0.0
+        confirm_debug_state[0] = {
+            "parent_id": parent_id or "",
+            "opened_at": opened_at,
+            "last_vad_ts": None,
+            "last_audio_ts": None,
+            "last_partial_ts": None,
+            "vad_ticks": [],
+            "audio_chunks": [],
+            "dg_partials": [],
+        }
+
+    def _flush_confirm_debug_batches() -> None:
+        state = confirm_debug_state[0]
+        parent_id = state.get("parent_id") or ""
+        if parent_id:
+            for kind in ("vad_ticks", "audio_chunks", "dg_partials"):
+                items = state.get(kind) or []
+                if items:
+                    try:
+                        add_batch(parent_id, kind, list(items))
+                    except Exception:
+                        pass
+        _reset_confirm_debug(None)
+        confirm_flow_parent_id[0] = None
+
+    def _record_confirm_chunk(now_ts: float, chunk: bytes) -> None:
+        state = confirm_debug_state[0]
+        parent_id = state.get("parent_id") or ""
+        if not parent_id:
+            return
+        opened_at = float(state.get("opened_at") or 0.0)
+        last_audio = state.get("last_audio_ts")
+        base = last_audio if last_audio else opened_at
+        if base:
+            dt_ms = int(max(0.0, (now_ts - base) * 1000))
+        else:
+            dt_ms = 0
+        state["last_audio_ts"] = now_ts
+        mime_value = transport.get("codec") or transport.get("container") or "unknown"
+        state["audio_chunks"].append({
+            "dt_ms": dt_ms,
+            "bytes": len(chunk or b""),
+            "mime": mime_value,
+        })
+        rms_val = None
+        try:
+            if chunk:
+                rms_val = audioop.rms(chunk, 2)
+        except Exception:
+            rms_val = None
+        last_vad = state.get("last_vad_ts")
+        vad_base = last_vad if last_vad else opened_at
+        if vad_base:
+            vad_dt = int(max(0.0, (now_ts - vad_base) * 1000))
+        else:
+            vad_dt = 0
+        state["last_vad_ts"] = now_ts
+        state["vad_ticks"].append(
+            {"dt_ms": vad_dt, "rms": rms_val, "gate": bool(local_vad_open[0])}
+        )
+
+    def _record_confirm_partial(
+        now_ts: float, chars: int, conf: Optional[float]
+    ) -> None:
+        state = confirm_debug_state[0]
+        parent_id = state.get("parent_id") or ""
+        if not parent_id:
+            return
+        opened_at = float(state.get("opened_at") or 0.0)
+        last_partial = state.get("last_partial_ts")
+        base = last_partial if last_partial else opened_at
+        if base:
+            dt_ms = int(max(0.0, (now_ts - base) * 1000))
+        else:
+            dt_ms = 0
+        state["last_partial_ts"] = now_ts
+        state["dg_partials"].append(
+            {
+                "dt_ms": dt_ms,
+                "chars": int(chars),
+                "conf": conf,
+                "final": False,
+            }
+        )
+
+    def _build_state_snapshot_meta(
+        phase_label: str, *, queue_override: Optional[int] = None
+    ) -> Dict[str, Any]:
+        now_ts = time.time()
+        last_age = None
+        if last_partial_ts[0]:
+            last_age = int(max(0.0, (now_ts - last_partial_ts[0]) * 1000))
+        queue_len = queue_override if queue_override is not None else len(buffered_chunks)
+        return {
+            "phase": phase_label,
+            "tts_active": bool(assistant_speaking[0] or tts_mask_active[0]),
+            "confirm_open": bool(confirm_window_ref[0]),
+            "asr_ready": bool(asr_ready[0]),
+            "last_partial_age_ms": last_age,
+            "queue": queue_len,
+        }
+
+    def _emit_state_snapshot(
+        parent_id: Optional[str],
+        phase_label: str,
+        *,
+        queue_override: Optional[int] = None,
+    ) -> None:
+        if not parent_id:
+            return
+        meta = _build_state_snapshot_meta(phase_label, queue_override=queue_override)
+        _emit_debug_event(
+            "state_snapshot",
+            phase=phase_label,
+            parent_id=parent_id,
+            meta=meta,
+        )
+
+    def _emit_gate_checks(
+        window: ConfirmWindow,
+        metrics: Dict[str, Any],
+        parent_id: str,
+        reason_lower: str,
+    ) -> None:
+        if not parent_id:
+            return
+        checks: List[Dict[str, Any]] = []
+        partial_conf = metrics.get("partial_confidence")
+        if partial_conf is not None and partial_conf < window.min_confidence:
+            checks.append(
+                {
+                    "rule": "min_confidence",
+                    "value": float(partial_conf),
+                    "threshold": float(window.min_confidence),
+                    "passed": False,
+                }
+            )
+        partial_tokens = metrics.get("partial_tokens")
+        if partial_tokens is not None and partial_tokens < window.min_tokens:
+            checks.append(
+                {
+                    "rule": "min_tokens",
+                    "value": int(partial_tokens),
+                    "threshold": int(window.min_tokens),
+                    "passed": False,
+                }
+            )
+        gap_ms = metrics.get("gap_ms")
+        if gap_ms is not None and reason_lower == "gap":
+            checks.append(
+                {
+                    "rule": "max_gap_ms",
+                    "value": float(gap_ms),
+                    "threshold": float(window.max_gap_ms),
+                    "passed": False,
+                }
+            )
+        snr_db = metrics.get("snr_db")
+        snr_floor = metrics.get("snr_floor_db")
+        if (
+            window.snr_enabled
+            and snr_db is not None
+            and snr_floor is not None
+            and snr_db < snr_floor
+        ):
+            checks.append(
+                {
+                    "rule": "snr_db",
+                    "value": float(snr_db),
+                    "threshold": float(snr_floor),
+                    "passed": False,
+                }
+            )
+        for payload in checks:
+            _emit_debug_event(
+                "gate_check",
+                phase="turn",
+                parent_id=parent_id,
+                meta=payload,
+            )
     local_vad_meta_sent = [False]
 
     def _maybe_emit_evidence_gate(confidence: Optional[object] = None) -> None:
@@ -1789,8 +2056,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     def _cancel_confirm_timeout() -> None:
         task = confirm_timeout_task[0]
         if task:
-            task.cancel()
-            confirm_timeout_cancelled.append(task)
+            if not task.done():
+                task.cancel()
+                confirm_timeout_cancelled.append(task)
+                if confirm_flow_parent_id[0]:
+                    _emit_debug_event(
+                        "timer_cancel",
+                        phase="turn",
+                        parent_id=confirm_flow_parent_id[0],
+                        meta={"name": "confirm_timeout"},
+                    )
+            else:
+                confirm_timeout_cancelled.append(task)
         confirm_timeout_task[0] = None
 
     def _emit_local_vad_signal(now_ts: float) -> None:
@@ -1846,6 +2123,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 await asyncio.sleep(wait_s)
                 if confirm_window_ref[0] is not window:
                     return
+                if confirm_flow_parent_id[0]:
+                    _emit_debug_event(
+                        "timer_fire",
+                        phase="turn",
+                        parent_id=confirm_flow_parent_id[0],
+                        meta={"name": "confirm_timeout"},
+                    )
                 decision = window.timeout(time.time())
                 if decision.action == "commit":
                     metrics = decision.metrics or {}
@@ -1857,8 +2141,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     _finalize_confirm_abort(reason, metrics, window)
             except asyncio.CancelledError:
                 return
+            finally:
+                confirm_timeout_task[0] = None
 
         confirm_timeout_task[0] = asyncio.create_task(_timeout())
+        if confirm_flow_parent_id[0] and wait_s > 0:
+            _emit_debug_event(
+                "timer_start",
+                phase="turn",
+                parent_id=confirm_flow_parent_id[0],
+                meta={"name": "confirm_timeout", "ms": int(window.max_duration_ms)},
+            )
 
     def _finalize_confirm_commit(
         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
@@ -1868,6 +2161,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if manual_button_down[0] or manual_turn_active[0]:
             _cancel_confirm_timeout()
             confirm_window_ref[0] = None
+            _reset_confirm_debug(None)
+            confirm_flow_parent_id[0] = None
             _on_local_vad_stop()
             return
         _cancel_confirm_timeout()
@@ -1882,6 +2177,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 phase="turn",
                 meta={"reason": "commit"},
             )
+        _flush_confirm_debug_batches()
         _on_local_vad_stop()
         if barge.is_paused():
             try:
@@ -1897,6 +2193,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if manual_button_down[0] or manual_turn_active[0]:
             _cancel_confirm_timeout()
             confirm_window_ref[0] = None
+            _reset_confirm_debug(None)
+            confirm_flow_parent_id[0] = None
             _on_local_vad_stop()
             return
         _cancel_confirm_timeout()
@@ -1930,11 +2228,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     meta={"reason": abort_reason},
                 )
             close_reason = "timeout" if is_timeout else "abort"
-            _emit_flow_event(
+            confirm_close_event_id = _emit_flow_event(
                 "confirm_close",
                 phase="turn",
                 meta={"reason": close_reason},
             )
+        else:
+            confirm_close_event_id = ""
+        if confirm_close_event_id:
+            _emit_gate_checks(window, data, confirm_close_event_id, reason_lower)
+        _flush_confirm_debug_batches()
         _jlog("confirm_abort", sid=sid, **data)
         _on_local_vad_stop()
         if barge.is_paused():
@@ -2012,7 +2315,31 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if post_greet_phase_active[0]:
             turn_id_hint = _flow_turn_id_hint()
             meta: Dict[str, Any] = {"phase": "post_greet", "turn_id": turn_id_hint}
-            _emit_flow_event("confirm_open", phase="turn", meta=meta)
+            confirm_event_id = _emit_flow_event("confirm_open", phase="turn", meta=meta)
+        else:
+            confirm_event_id = ""
+        confirm_flow_parent_id[0] = confirm_event_id or None
+        if confirm_event_id:
+            gate_meta = {
+                "min_ms": int(min_ms),
+                "max_ms": int(max_ms_local),
+                "max_gap_ms": float(confirm_gap_ms),
+                "min_tokens": int(confirm_min_tokens),
+                "min_conf": float(confirm_min_conf),
+                "snr_threshold": float(snr_threshold),
+                "snr_slack": float(confirm_snr_slack_db),
+                "policy_until_asr_ready": bool(policy_until_asr_ready),
+                "is_first_turn": bool(is_first_turn),
+            }
+            _emit_debug_event(
+                "gate_params",
+                phase="turn",
+                parent_id=confirm_event_id,
+                meta=gate_meta,
+            )
+            _reset_confirm_debug(confirm_event_id)
+        else:
+            _reset_confirm_debug(None)
         _schedule_confirm_timeout(window)
 
     def _queue_confirm_request(request: Dict[str, Any]) -> None:
@@ -2151,6 +2478,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         window = confirm_window_ref[0]
         if not window:
             return
+        _record_confirm_chunk(now_ts, chunk)
         window.set_snr_enabled(True)
         decision = window.observe_chunk(chunk, now_ts)
         if decision.action == "commit" and decision.metrics is not None:
@@ -2167,8 +2495,19 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if not window:
             return
         now_ts = time.time()
+        raw_conf = ev.get("confidence") if isinstance(ev, dict) else None
+        try:
+            conf_val = float(raw_conf) if raw_conf is not None else None
+        except (TypeError, ValueError):
+            conf_val = None
+        text_preview = ev.get("text") if isinstance(ev, dict) else ""
+        try:
+            char_count = len(text_preview or "")
+        except Exception:
+            char_count = 0
+        _record_confirm_partial(now_ts, char_count, conf_val)
         decision = window.observe_partial(
-            ev.get("token_count"), ev.get("confidence"), now_ts
+            ev.get("token_count"), conf_val, now_ts
         )
         if decision.action == "commit" and decision.metrics is not None:
             _finalize_confirm_commit(
@@ -2188,6 +2527,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             _handle_confirm_partial(ev)
         except Exception:
             pass
+
+        last_partial_ts[0] = time.time()
 
         raw_conf = ev.get("confidence") if isinstance(ev, dict) else None
         conf_val: Optional[float]
@@ -2304,6 +2645,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         asr_partial_first_emitted[0] = False
         evidence_gate_emitted[0] = False
         last_confident_partial_conf[0] = None
+        last_partial_ts[0] = 0.0
 
     def _emit_no_audio_alert(reason: str) -> None:
         if no_audio_notified[0]:

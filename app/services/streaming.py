@@ -2324,10 +2324,20 @@ def _make_foundation_frames(seed_text: str,
             model=model_name,
         )
         llm_tracker.start()
+
+        def _llm_state_snapshot() -> Dict[str, Any]:
+            return {
+                "phase": phase_label,
+                "tts_active": None,
+                "confirm_open": None,
+                "asr_ready": None,
+                "last_partial_age_ms": None,
+                "queue": None,
+            }
         try:
             foundation_result = _call_foundation_with_retry(messages, cfg, telemetry=telemetry)
         except Exception as exc:
-            llm_tracker.error(exc.__class__.__name__)
+            llm_tracker.error(exc.__class__.__name__, state=_llm_state_snapshot())
             llm_tracker.final(text="")
             telemetry.log_error("foundation_call_error", str(exc))
             raise
@@ -2713,6 +2723,16 @@ def _make_legacy_frames(seed_text: str,
                 model=model_name,
             )
             llm_tracker.start()
+
+            def _llm_state_snapshot() -> Dict[str, Any]:
+                return {
+                    "phase": phase_label,
+                    "tts_active": None,
+                    "confirm_open": None,
+                    "asr_ready": None,
+                    "last_partial_age_ms": None,
+                    "queue": None,
+                }
             try:
                 provider_context: Dict[str, Any] = {'kb': kb}
                 for key in ('confidence_band', 'clarify_variant', 'clarifier_style'):
@@ -2737,7 +2757,7 @@ def _make_legacy_frames(seed_text: str,
                     context=provider_context,
                 )
             except Exception as e:
-                llm_tracker.error(e.__class__.__name__)
+                llm_tracker.error(e.__class__.__name__, state=_llm_state_snapshot())
                 error_note = f"llm_error:{e.__class__.__name__}"
                 reply = _LEGACY_WARMUP_LINE
                 generate_payload = {
@@ -3030,6 +3050,16 @@ def schedule_tts_audio(session_id: str,
         include_turn_id=flow_include_turn_id,
     )
 
+    def _tts_state_snapshot() -> Dict[str, Any]:
+        return {
+            "phase": phase_for_flow,
+            "tts_active": bool(state.get('started')),
+            "confirm_open": None,
+            "asr_ready": None,
+            "last_partial_age_ms": None,
+            "queue": None,
+        }
+
     def _log(kind: str, **fields: Any) -> None:
         payload: Dict[str, Any] = {
             "session_id": session_id,
@@ -3059,6 +3089,8 @@ def schedule_tts_audio(session_id: str,
     audio_payload = audio_bytes
     provider_label: Optional[str] = None
 
+    synth_duration_ms = 0
+
     if audio_payload is None:
         try:
             from app.services.tts_provider import get_tts_provider
@@ -3069,7 +3101,7 @@ def schedule_tts_audio(session_id: str,
         except Exception as e:
             state['error'] = str(e)
             _log("tts.provider.error", error=str(e))
-            tracker.error(e.__class__.__name__)
+            tracker.error(e.__class__.__name__, state=_tts_state_snapshot())
             error_payload = {
                 "session_id": session_id,
                 "turn_id": safe_turn_id,
@@ -3100,7 +3132,7 @@ def schedule_tts_audio(session_id: str,
         except Exception as e:
             state['error'] = str(e)
             _log("tts.synth.error", error=str(e), override=False)
-            tracker.error(e.__class__.__name__)
+            tracker.error(e.__class__.__name__, state=_tts_state_snapshot())
             synth_error_payload = {
                 "session_id": session_id,
                 "turn_id": safe_turn_id,
@@ -3130,7 +3162,7 @@ def schedule_tts_audio(session_id: str,
     if not audio_payload:
         state['error'] = 'empty_audio'
         _log("tts.synth.error", error='empty_audio', override=audio_override)
-        tracker.error('empty_audio')
+        tracker.error('empty_audio', state=_tts_state_snapshot())
         return False
 
     tracker.queue()
@@ -3198,6 +3230,10 @@ def schedule_tts_audio(session_id: str,
             mv = memoryview(stream_payload)
             idx = 0
             first_sent = False
+            first_chunk_ts: Optional[float] = None
+            last_chunk_ts: Optional[float] = None
+            prev_chunk_ts: Optional[float] = stream_start_ts
+            chunk_items: List[Dict[str, Any]] = []
 
             while idx < len(mv):
                 # stop early if canceled
@@ -3259,6 +3295,31 @@ def schedule_tts_audio(session_id: str,
 
                     chunk_count += 1
                     chunk_bytes_sent += chunk_len
+                    chunk_sent_ts = _t.time()
+                    base_ts = first_chunk_ts if first_chunk_ts is not None else stream_start_ts
+                    if base_ts is None:
+                        dt_ms = 0
+                    elif first_chunk_ts is None:
+                        dt_ms = int(max(0.0, (chunk_sent_ts - base_ts) * 1000))
+                    else:
+                        prev = prev_chunk_ts if prev_chunk_ts is not None else first_chunk_ts
+                        dt_ms = int(max(0.0, (chunk_sent_ts - (prev or chunk_sent_ts)) * 1000))
+                    mark: Optional[str] = None
+                    if first_chunk_ts is None:
+                        mark = "first"
+                        first_chunk_ts = chunk_sent_ts
+                    is_last = idx >= len(mv)
+                    if is_last:
+                        if mark:
+                            mark = f"{mark},last" if mark != "last" else "last"
+                        else:
+                            mark = "last"
+                    item: Dict[str, Any] = {"dt_ms": dt_ms, "bytes": chunk_len}
+                    if mark:
+                        item["mark"] = mark
+                    chunk_items.append(item)
+                    prev_chunk_ts = chunk_sent_ts
+                    last_chunk_ts = chunk_sent_ts
                     if chunk_count >= max_frames:
                         # Safety cut: end stream explicitly if we truncated
                         truncated = True
@@ -3302,7 +3363,27 @@ def schedule_tts_audio(session_id: str,
             except Exception:
                 pass
 
-            tracker.end()
+            stream_end_ts = _t.time()
+            metrics_payload: Dict[str, Any] = {
+                "text_chars": len(text or ""),
+                "synth_ms": synth_duration_ms,
+            }
+            if provider_label:
+                metrics_payload["voice"] = provider_label
+            if first_chunk_ts is not None and stream_start_ts is not None:
+                metrics_payload["first_byte_ms"] = int(
+                    max(0.0, (first_chunk_ts - stream_start_ts) * 1000)
+                )
+            if first_chunk_ts is not None and last_chunk_ts is not None:
+                metrics_payload["stream_ms"] = int(
+                    max(0.0, (last_chunk_ts - first_chunk_ts) * 1000)
+                )
+            if stream_start_ts is not None:
+                metrics_payload["total_ms"] = int(
+                    max(0.0, (stream_end_ts - stream_start_ts) * 1000)
+                )
+
+            tracker.end(metrics=metrics_payload, chunks=chunk_items)
 
             state['done'] = True
 

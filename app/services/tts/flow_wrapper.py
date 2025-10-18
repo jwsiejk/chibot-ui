@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Protocol, runtime_checkable
+from typing import Iterable, Optional, Protocol, runtime_checkable
 
-from app.flow.emit import emit as flow_emit
+from app.flow.emit import add_batch, emit as flow_emit
 
 
 @runtime_checkable
@@ -60,11 +60,34 @@ class TTSFlowTracker:
     _queued: bool = False
     _started: bool = False
     _ended: bool = False
+    _start_event_id: Optional[str] = None
 
     def _meta(self) -> Optional[dict[str, object]]:
         if not self.include_turn_meta or not self.turn_id:
             return None
         return {"turn_id": self.turn_id}
+
+    def _emit_debug(
+        self,
+        type_: str,
+        *,
+        parent_id: Optional[str],
+        meta: Optional[dict[str, object]] = None,
+    ) -> None:
+        if not parent_id:
+            return
+        try:
+            flow_emit(
+                session_id=self.session_id,
+                level="debug",
+                phase=self.phase,
+                type=type_,
+                who=self.who,
+                meta=meta,
+                parent_id=parent_id,
+            )
+        except Exception:
+            pass
 
     def queue(self) -> None:
         if self._queued:
@@ -87,7 +110,7 @@ class TTSFlowTracker:
             return
         self._started = True
         try:
-            flow_emit(
+            event_id = flow_emit(
                 session_id=self.session_id,
                 level="flow",
                 phase=self.phase,
@@ -95,15 +118,20 @@ class TTSFlowTracker:
                 who=self.who,
                 meta=self._meta(),
             )
+            self._start_event_id = event_id or None
         except Exception:
             pass
 
-    def end(self) -> None:
+    def end(
+        self,
+        metrics: Optional[dict[str, object]] = None,
+        chunks: Optional[Iterable[dict[str, object]]] = None,
+    ) -> None:
         if self._ended or not self._started:
             return
         self._ended = True
         try:
-            flow_emit(
+            event_id = flow_emit(
                 session_id=self.session_id,
                 level="flow",
                 phase=self.phase,
@@ -111,10 +139,35 @@ class TTSFlowTracker:
                 who=self.who,
                 meta=self._meta(),
             )
+            if metrics:
+                cleaned = {
+                    key: value
+                    for key, value in metrics.items()
+                    if value is not None
+                }
+                self._emit_debug(
+                    "tts_metrics",
+                    parent_id=event_id or None,
+                    meta=cleaned or None,
+                )
+            if chunks and self._start_event_id:
+                items = [dict(item) for item in chunks]
+                if items:
+                    try:
+                        add_batch(self._start_event_id, "tts_chunks", items)
+                    except Exception:
+                        pass
         except Exception:
             pass
+        finally:
+            self._start_event_id = None
 
-    def error(self, code: Optional[object] = None) -> None:
+    def error(
+        self,
+        code: Optional[object] = None,
+        *,
+        state: Optional[dict[str, object]] = None,
+    ) -> None:
         """Emit a ``tts_error`` transition for diagnostics."""
 
         if not self.session_id or not self.phase:
@@ -126,7 +179,7 @@ class TTSFlowTracker:
             except Exception:
                 meta["code"] = "unknown"
         try:
-            flow_emit(
+            event_id = flow_emit(
                 session_id=self.session_id,
                 level="transition",
                 phase=self.phase,
@@ -134,6 +187,17 @@ class TTSFlowTracker:
                 who=self.who,
                 meta=meta or None,
             )
+            if state:
+                cleaned = {
+                    key: value
+                    for key, value in state.items()
+                    if value is not None
+                }
+                self._emit_debug(
+                    "state_snapshot",
+                    parent_id=event_id or None,
+                    meta=cleaned or None,
+                )
         except Exception:
             pass
 

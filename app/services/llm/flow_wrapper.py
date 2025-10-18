@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Optional, Protocol, runtime_checkable
 
-from app.flow.emit import emit as flow_emit
+from app.flow.emit import add_batch, emit as flow_emit
 
 
 @runtime_checkable
@@ -60,6 +61,8 @@ class LLMFlowTracker:
     who: str = "system"
 
     _started: bool = False
+    _start_event_id: Optional[str] = None
+    _start_monotonic: Optional[float] = None
 
     def start(self) -> bool:
         """Emit the ``llm_start`` event if possible."""
@@ -72,7 +75,7 @@ class LLMFlowTracker:
         if self.model:
             meta["model"] = str(self.model)
         try:
-            flow_emit(
+            event_id = flow_emit(
                 session_id=self.session_id,
                 level="flow",
                 phase=self.phase,
@@ -83,6 +86,8 @@ class LLMFlowTracker:
         except Exception:
             return False
         self._started = True
+        self._start_event_id = event_id or None
+        self._start_monotonic = time.monotonic()
         return True
 
     def final(
@@ -118,11 +123,36 @@ class LLMFlowTracker:
                 who=self.who,
                 meta=meta or None,
             )
+            if self._start_event_id:
+                stream_items = []
+                now = time.monotonic()
+                if self._start_monotonic:
+                    dt_ms = int(max(0.0, (now - self._start_monotonic) * 1000))
+                else:
+                    dt_ms = 0
+                bytes_len = 0
+                if text:
+                    try:
+                        bytes_len = len((text or "").encode("utf-8"))
+                    except Exception:
+                        bytes_len = len(text or "")
+                stream_items.append({"dt_ms": dt_ms, "bytes": bytes_len})
+                try:
+                    add_batch(self._start_event_id, "llm_stream", stream_items)
+                except Exception:
+                    pass
         except Exception:
             pass
         self._started = False
+        self._start_event_id = None
+        self._start_monotonic = None
 
-    def error(self, code: Optional[object] = None) -> None:
+    def error(
+        self,
+        code: Optional[object] = None,
+        *,
+        state: Optional[dict[str, object]] = None,
+    ) -> None:
         """Emit an ``llm_error`` transition with the provided code."""
 
         if not self.session_id or not self.phase:
@@ -134,7 +164,7 @@ class LLMFlowTracker:
             except Exception:
                 meta["code"] = "unknown"
         try:
-            flow_emit(
+            event_id = flow_emit(
                 session_id=self.session_id,
                 level="transition",
                 phase=self.phase,
@@ -142,6 +172,24 @@ class LLMFlowTracker:
                 who=self.who,
                 meta=meta or None,
             )
+            if state:
+                cleaned = {
+                    key: value
+                    for key, value in state.items()
+                    if value is not None
+                }
+                try:
+                    flow_emit(
+                        session_id=self.session_id,
+                        level="debug",
+                        phase=self.phase,
+                        type="state_snapshot",
+                        who=self.who,
+                        meta=cleaned or None,
+                        parent_id=event_id or None,
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
 
