@@ -945,10 +945,7 @@ class DeepgramClient:
             try:
                 await self._flush_tx()
             except Exception:
-                self._logger.debug(
-                    "Deepgram flush_tx raised; will retry on next trigger",
-                    exc_info=True,
-                )
+                pass
 
         self._flush_task = asyncio.create_task(_runner())
 
@@ -994,13 +991,6 @@ class DeepgramClient:
         ws_open_flag = self._ws_is_open()
         open_evt_set = self._open_evt.is_set()
 
-        self._logger.debug(
-            "Deepgram flush enter sid=%s queued=%s ws_open=%s open_evt=%s",
-            sid,
-            queued_at_start,
-            ws_open_flag,
-            open_evt_set,
-        )
         if callable(self._jlog):
             try:
                 self._jlog(
@@ -1035,12 +1025,6 @@ class DeepgramClient:
                     )
                 except Exception:
                     pass
-            self._logger.debug(
-                "Deepgram flush exit sid=%s queued=%s sent_bytes=%s",
-                sid,
-                len(self._tx_queue),
-                0,
-            )
             return 0, None
         # Wait until socket open — don't raise; just give it a short chance
         await self.wait_socket_open(
@@ -1063,13 +1047,6 @@ class DeepgramClient:
                     )
                 except Exception:
                     pass
-            self._logger.debug(
-                "Deepgram flush exit sid=%s queued=%s sent_bytes=%s ws_open=%s",
-                sid,
-                len(self._tx_queue),
-                0,
-                False,
-            )
             return 0, None
         # Ensure we've passed the ready/open gate
         if not self._open_evt.is_set():
@@ -1100,12 +1077,6 @@ class DeepgramClient:
                 and (not self._first_real_sent)
                 and len(data) < self._min_valid_bytes
             ):
-                self._logger.debug(
-                    "Deepgram drop small queued chunk sid=%s bytes=%s min_bytes=%s",
-                    sid,
-                    len(data),
-                    self._min_valid_bytes,
-                )
                 self._tx_queue.popleft()
                 continue
             try:
@@ -1121,12 +1092,6 @@ class DeepgramClient:
                 sent_chunks += 1
                 if first_chunk is None:
                     first_chunk = data
-                self._logger.debug(
-                    "Deepgram sent chunk (flush) sid=%s bytes=%s queued=%s",
-                    sid,
-                    len(data),
-                    len(self._tx_queue),
-                )
                 if callable(self._jlog):
                     try:
                         self._jlog(
@@ -1141,14 +1106,9 @@ class DeepgramClient:
                     except Exception:
                         pass
                 await self._maybe_emit_asr_start()
-            except Exception as e:
+            except Exception:
                 # Transient send issue; stop and retry on next trigger
-                self._logger.debug(
-                    "Deepgram deferred send sid=%s err=%s queued=%s",
-                    sid,
-                    type(e).__name__,
-                    len(self._tx_queue),
-                )
+                pass
                 break
         if not self._tx_queue and not self._drain_event.is_set():
             self._drain_event.set()
@@ -1176,15 +1136,6 @@ class DeepgramClient:
                 )
             except Exception:
                 pass
-        self._logger.debug(
-            "Deepgram flush exit sid=%s queued=%s sent_bytes=%s sent_chunks=%s ws_open=%s open_evt=%s",
-            sid,
-            len(self._tx_queue),
-            total_sent,
-            sent_chunks,
-            ws_open_after,
-            open_evt_after,
-        )
         return total_sent, first8_hex
 
     # -- lifecycle -------------------------------------------------------------
@@ -1206,7 +1157,6 @@ class DeepgramClient:
             except Exception:
                 pass
         if self._ws:
-            self._logger.debug("Deepgram connect skipped sid=%s already has websocket", sid)
             return
 
         self._asr_open_emitted = False
@@ -2146,13 +2096,6 @@ class DeepgramClient:
                     else:
                         self._note_first_partial(now_ts)
 
-                    self._logger.debug(
-                        "Deepgram transcript sid=%s is_final=%s chars=%s preview=%s",
-                        sid,
-                        is_final,
-                        len(text),
-                        _clip_text(text),
-                    )
                     self._emit_diag(
                         "asr_final" if is_final else "asr_partial",
                         text=text,
@@ -2207,11 +2150,6 @@ class DeepgramClient:
 
                 else:
                     await self._publish_provider_event(evt_type or evt_name, msg)
-                    self._logger.debug(
-                        "Deepgram unhandled event sid=%s evt_type=%s",
-                        sid,
-                        evt_type or "unknown",
-                    )
                     continue
 
         except asyncio.CancelledError:
@@ -2320,11 +2258,6 @@ class DeepgramClient:
                 try:
                     async with self._send_lock:
                         await ws.send(json.dumps({"type": "KeepAlive"}))
-                    self._logger.debug(
-                        "Deepgram keepalive sid=%s interval=%s",
-                        sid,
-                        self._keepalive_interval,
-                    )
                 except websockets.ConnectionClosed as exc:
                     self._logger.warning("Deepgram keepalive closed sid=%s err=%s", sid, exc)
                     break
