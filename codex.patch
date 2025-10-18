@@ -1,329 +1,518 @@
-diff --git a/app/flow/emit.py b/app/flow/emit.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..b7623b3f9865c463c05542bb67ed8b8ce96546af
---- /dev/null
-+++ b/app/flow/emit.py
-@@ -0,0 +1,41 @@
-+"""Convenience shim for emitting flow events without importing FlowStore."""
-+
-+from __future__ import annotations
-+
-+from typing import Any, Iterable, Optional
-+
-+from app.flow.trace import FlowStore as _FS
-+
-+
-+def emit(
-+    session_id: str,
-+    level: str,
-+    phase: str,
-+    type: str,
-+    who: str,
-+    meta: Optional[dict[str, Any]] = None,
-+    parent_id: Optional[str] = None,
-+) -> str:
-+    """Emit a flow event via the shared FlowStore.
-+
-+    FlowStore.emit occasionally returns ``None`` (for suppressed events). The
-+    shim normalizes that to an empty string to maintain a ``str`` return type.
-+    """
-+
-+    store = _FS.instance()
-+    return store.emit(
-+        session_id=session_id,
-+        level=level,
-+        phase=phase,
-+        type_=type,
-+        who=who,
-+        meta=meta,
-+        parent_id=parent_id,
-+    ) or ""
-+
-+
-+def add_batch(parent_id: str, kind: str, items: Iterable[Any]) -> None:
-+    """Attach a batch payload to an existing event via the FlowStore."""
-+
-+    store = _FS.instance()
-+    store.add_batch_for_event(parent_id, kind, items)
-diff --git a/app/flow/trace.py b/app/flow/trace.py
-index 5bec95c1143beca769aab50d5480f90d7450efc3..a77af9a3efab3f8418b5e4085ed58f74359b7595 100644
---- a/app/flow/trace.py
-+++ b/app/flow/trace.py
-@@ -74,60 +74,66 @@ class EventRecord:
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 9e2da23718dba6842563db0a3c5ae1d434bd9beb..555825199840f278d62c67712881e921867a04ef 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -2,53 +2,54 @@
+ from __future__ import annotations
+ import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
+ from functools import partial
+ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
+ from collections import deque, defaultdict
+ from app.services.audio.container_sniffer import (
+     AudioContainerSniffer,
+     coerce_detection_from_meta,
+ )
+ 
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.config import load_settings
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+-from app.policy.loader import load_policy
++from app.policy.loader import load_policy, load_policy_layers
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
++from app.flow.emit import emit as flow_emit
+ 
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.confirm_window import ConfirmWindow
+ from app.ws.bus import bus
+ 
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit_base
+ except Exception:
+     _admin_emit_base = None
  
  
- @dataclass
- class SessionBucket:
-     session_id: str
-     started_at_iso: str
-     t0_monotonic: float
-     seq: int = 1
-     events: Deque[EventRecord] = field(default_factory=deque)
-     event_index: Dict[str, EventRecord] = field(default_factory=dict)
-     dedupe: Dict[Tuple[str, str, Optional[str]], Tuple[float, str]] = field(default_factory=dict)
-     asr_partial_turns: Dict[str, str] = field(default_factory=dict)
-     barge_paused: bool = False
-     open_confirms: Dict[str, EventRecord] = field(default_factory=dict)
-     open_tts: Dict[str, EventRecord] = field(default_factory=dict)
-     open_llm: Dict[str, EventRecord] = field(default_factory=dict)
-     tts_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+ def _broadcast_admin_frame(event: str, payload: Dict[str, Any]) -> None:
+     """Mirror admin diagnostic breadcrumbs onto the session bus."""
  
+     try:
+         sid = payload.get("session_id") or payload.get("sid")
+     except Exception:
+         sid = None
  
- class FlowStore:
-     """Thread-safe, singleton flow trace store."""
+     if not sid:
+         return
+@@ -1147,50 +1148,73 @@ async def _ws_chat_asgi_impl(scope, receive, send):
  
-     _instance: Optional["FlowStore"] = None
-     _singleton_lock = threading.Lock()
+     try:
+         _admin_emit and _admin_emit(
+             "ws_handshake_enter",
+             path=scope.get("path"),
+             raw_query=raw_query,
+         )
+     except Exception:
+         pass
  
-+    @classmethod
-+    def instance(cls) -> "FlowStore":
-+        """Return the singleton FlowStore instance."""
-+        return cls()
+     if scope.get("type") != "websocket":
+         await send({"type": "http.response.start", "status": 404, "headers": []})
+         await send({"type": "http.response.body", "body": b"not found"})
+         return
+ 
+     sid = _get_session_id(scope)
+     conn_id = uuid.uuid4().hex
+     start_ts = time.time()
+     ws_open_ts = start_ts
+     last_msg_ts = start_ts
+     had_disconnect = False
+     active_ws_registered = False
+     active_ws_closed = False
+     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
+ 
++    flow_session_open_emitted = False
++    flow_session_ready_emitted = False
++    flow_session_close_emitted = False
 +
-     def __new__(cls) -> "FlowStore":
-         with cls._singleton_lock:
-             if cls._instance is None:
-                 cls._instance = super().__new__(cls)
-                 cls._instance._init()
-         return cls._instance
++    def _emit_flow_event(type_: str,
++                         *,
++                         phase: str,
++                         meta: Optional[Dict[str, Any]] = None) -> None:
++        try:
++            flow_emit(
++                session_id=sid,
++                level="flow",
++                phase=phase,
++                type=type_,
++                who="system",
++                meta=meta,
++            )
++        except Exception:
++            pass
++
++    policy: Dict[str, Any] = {}
++    policy_version: str = "unknown"
++
+     # Auth
+     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in (
+         "0",
+         "false",
+         "no",
+     )
+     bearer_only = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0", "false", "no")
+     fail_limit = int(os.getenv("WS_FAIL_LIMIT", "10"))
+     fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC", "60"))
+     client_ip = _client_ip_from_scope(scope)
  
-     def _init(self) -> None:
-         self._lock = threading.RLock()
-         self._sessions: Dict[str, SessionBucket] = {}
-+        self._event_sessions: Dict[str, str] = {}
+     token = None
+     try:
+         for _sp in scope.get("subprotocols") or []:
+             if isinstance(_sp, str) and _sp.startswith("bearer."):
+                 token = _sp.split(".", 1)[1].strip()
+                 break
+     except Exception:
+         pass
+     if not token:
+         try:
+             hdrs = {
+                 k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])
+             }
+             if "authorization" in hdrs and hdrs["authorization"].lower().startswith(
+@@ -1282,97 +1306,125 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         _jlog(
+             "ws_conn_open",
+             sid=sid,
+             conn_id=conn_id,
+             client_ip=client_ip,
+             path=scope.get("path"),
+             query_string=raw_query,
+         )
+     active_count = await _register_active_ws_entry()
+     if active_count is not None:
+         with contextlib.suppress(Exception):
+             _jlog("ws_conn_active", conn_id=conn_id, sid=sid, active=active_count)
+     with contextlib.suppress(Exception):
+         if _admin_emit:
+             _admin_emit(
+                 "ws_conn_open",
+                 sid=sid,
+                 conn_id=conn_id,
+                 client_ip=client_ip,
+                 path=scope.get("path"),
+                 query_string=raw_query,
+             )
+             if active_count is not None:
+                 _admin_emit("ws_conn_active", conn_id=conn_id, active=active_count)
  
-     # ------------------------------------------------------------------
-     # Public API
-     # ------------------------------------------------------------------
-     def emit(
-         self,
-         session_id: str,
-         level: str,
-         phase: str,
-         type_: str,
-         who: str,
-         meta: Optional[Dict[str, Any]] = None,
-         parent_id: Optional[str] = None,
-     ) -> Optional[str]:
-         meta_copy = _ensure_meta(meta)
-         with self._lock:
-             bucket = self._ensure_bucket(session_id)
-             now = time.monotonic()
-             turn_id = self._extract_turn_id(meta_copy)
++    try:
++        policy_layers = load_policy_layers(session_id=sid)
++    except Exception:
++        policy_layers = None
++
++    if isinstance(policy_layers, dict):
++        candidate_policy = policy_layers.get("effective_policy")
++        if isinstance(candidate_policy, dict):
++            policy = candidate_policy
++        candidate_version = policy_layers.get("policy_version")
++        if candidate_version is not None:
++            try:
++                policy_version = str(candidate_version)
++            except Exception:
++                policy_version = "unknown"
++
++    if not policy:
++        try:
++            policy = load_policy()
++        except Exception:
++            policy = {}
++
++    if not isinstance(policy_version, str) or not policy_version:
++        policy_version = "unknown"
++
++    if not flow_session_open_emitted:
++        meta = {"policy_version": policy_version}
++        _emit_flow_event("session_open", phase="session", meta=meta)
++        flow_session_open_emitted = True
++
+     with contextlib.suppress(Exception):
+         clear_greet_turn_cache(sid)
  
-             suppressed = self._should_suppress(bucket, now, type_, who, turn_id)
-             if suppressed is not None:
-                 return suppressed
+     bus_task: Optional[asyncio.Task] = None
  
-             if type_ == BARGE_IN_TYPE and bucket.barge_paused:
-@@ -162,50 +168,72 @@ class FlowStore:
+     voice_metrics_registered = False
+     try:
+         voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
+     except Exception:
+         voice_metrics_registered = False
+ 
+     async def _ping_loop():
+         try:
+             while True:
+                 await asyncio.sleep(20)
+                 try:
+                     await _ws_send_json(
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
+                     )
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
+ 
+     ping_task = asyncio.create_task(_ping_loop())
+ 
+     try:
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
+     except Exception:
+         with contextlib.suppress(Exception):
+             await send(
+                 {
+                     "type": "websocket.close",
+                     "code": 1011,
+                     "reason": "initial_ready_failed",
+                 }
+             )
+         return
+ 
+     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
+     manual_feature_enabled = True
+     manual_mode_manual_only = False
+     auto_commit_when_ready = True
+     ws_configured = False
+-    try:
+-        policy = load_policy()
+-    except Exception:
++    if not isinstance(policy, dict):
+         policy = {}
+     if isinstance(policy, dict):
+         cfg["interaction_policy"] = policy
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "EVT_POLICY_LOAD",
+                 sid=sid,
+                 keys=len(policy.keys()),
+             )
+     else:
+         policy = {}
+     try:
+         runtime_cfg = db.get_config()
+         if isinstance(runtime_cfg, dict):
+             manual_feature_enabled = bool(
+                 runtime_cfg.get("feature_manual_barge_in", manual_feature_enabled)
+             )
+             manual_mode_manual_only = bool(
+                 runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+             )
+             auto_commit_when_ready = bool(
+                 runtime_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
+             )
+     except Exception:
+         pass
+@@ -2676,50 +2728,54 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 if callable(final_guard_reset_ref[0]):
+                     with contextlib.suppress(Exception):
+                         final_guard_reset_ref[0]("flush")
+                 continue
+             break
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "ws_flush_done",
+                 sid=sid,
+                 queued=initial_queued,
+                 flushed_chunks=flushed_chunks,
+                 flushed_bytes=flushed_bytes,
+                 remaining=len(buffered_chunks),
+             )
+         _maybe_emit_backpressure(len(buffered_chunks))
+         if not buffered_chunks:
+             backpressure_drop_count = 0
+             if dg_state == "open":
+                 asr_direct_stream[0] = True
+ 
+         if bus_task is None:
+             bus_task = asyncio.create_task(
+                 _pump_bus_to_client(sid, send, _handle_bus_frame)
              )
  
-             self._update_bucket_state(bucket, record, turn_id)
-             self._inject_safety_events(bucket)
-             return record.data["id"]
++    if not flow_session_ready_emitted:
++        _emit_flow_event("session_ready", phase="session")
++        flow_session_ready_emitted = True
++
+     try:
+         while True:
+             ev = await receive()
+             et = ev.get("type")
  
-     def add_batch(self, session_id: str, parent_id: str, kind: str, items: Iterable[Any]) -> bool:
-         items_list = list(items)
-         if len(items_list) > MAX_BATCH_ITEMS:
-             raise ValueError("batch too large")
-         serialized = str(items_list).encode("utf-8")
-         if len(serialized) > MAX_BATCH_BYTES:
-             raise ValueError("batch exceeds size limit")
+             if et == "websocket.disconnect":
+                 had_disconnect = True
+                 now = time.time()
+                 idle_s = (
+                     max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
+                 )
+                 with contextlib.suppress(Exception):
+                     _jlog(
+                         "ws_conn_disconnect",
+                         conn_id=conn_id,
+                         sid=sid,
+                         code=ev.get("code"),
+                         reason=ev.get("reason"),
+                         idle_s=idle_s,
+                     )
+                 with contextlib.suppress(Exception):
+                     if _admin_emit:
+                         _admin_emit(
+                             "ws_conn_disconnect",
+                             conn_id=conn_id,
+@@ -3050,54 +3106,72 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                         _jlog(
+                             "ws_audio_provider_connecting",
+                             sid=sid,
+                             queued=len(buffered_chunks),
+                         )
+                     continue
  
-         with self._lock:
-             bucket = self._sessions.get(session_id)
-             if not bucket:
-                 return False
-             record = bucket.event_index.get(parent_id)
-             if not record:
-                 return False
-             batch_payload = {"kind": kind, "items": items_list}
-             record.batches.append(batch_payload)
-             return True
+                 # -------------------- Text / control lane --------------------
+                 if ev.get("text") is not None:
+                     try:
+                         obj = parse_client_json(ev.get("text") or "")
+                         t = obj.get("type")
+                         with contextlib.suppress(Exception):
+                             _jlog("ws_json_recv", sid=sid, type=t)
+                         if _admin_emit:
+                             with contextlib.suppress(Exception):
+                                 _admin_emit("ws_json_recv", sid=sid, type=t)
  
-+    def add_batch_for_event(self, parent_id: str, kind: str, items: Iterable[Any]) -> bool:
-+        items_list = list(items)
-+        if len(items_list) > MAX_BATCH_ITEMS:
-+            raise ValueError("batch too large")
-+        serialized = str(items_list).encode("utf-8")
-+        if len(serialized) > MAX_BATCH_BYTES:
-+            raise ValueError("batch exceeds size limit")
-+
-+        with self._lock:
-+            session_id = self._event_sessions.get(parent_id)
-+            if session_id is None:
-+                return False
-+            bucket = self._sessions.get(session_id)
-+            if not bucket:
-+                return False
-+            record = bucket.event_index.get(parent_id)
-+            if not record:
-+                return False
-+            batch_payload = {"kind": kind, "items": items_list}
-+            record.batches.append(batch_payload)
-+            return True
-+
-     def list(
-         self,
-         session_id: str,
-         since_ms: Optional[int] = None,
-         limit: int = 200,
-         levels: Iterable[str] = ("flow", "transition"),
-         expand: str = "flow",
-     ) -> Dict[str, Any]:
-         with self._lock:
-             bucket = self._sessions.get(session_id)
-             if not bucket:
-                 return {
-                     "session_id": session_id,
-                     "started_at": None,
-                     "events": [],
-                     "next_since_ms": since_ms or 0,
-                 }
-             self._inject_safety_events(bucket)
-             levels_set = set(levels)
-             since_value = since_ms or 0
-             expand_policy = self._parse_expand(expand)
+                         if t == "KeepAlive":
+                             await _ws_send_json(send, make_keepalive_ack())
  
-             events: List[Dict[str, Any]] = []
-             count = 0
-             next_since = since_value
-@@ -303,65 +331,68 @@ class FlowStore:
-         t_rel_ms = int((now - bucket.t0_monotonic) * 1000)
-         blurb = self._build_blurb(type_, phase, who, meta)
-         payload: Dict[str, Any] = {
-             "id": event_id,
-             "t_rel_ms": t_rel_ms,
-             "level": level,
-             "phase": phase,
-             "type": type_,
-             "who": who,
-             "blurb": blurb,
-             "meta": meta,
-         }
-         if parent_id:
-             payload["parent_id"] = parent_id
+                         elif t == "greet":
+                             _jlog("ws_greet_recv", sid=sid)
  
-         record = EventRecord(data=payload, monotonic_ts=now)
-         self._append_event(bucket, record)
-         if parent_id:
-             parent = bucket.event_index.get(parent_id)
-             if parent:
-                 parent.children_ids.append(event_id)
-         if not is_injection:
-             turn_id = self._extract_turn_id(meta)
-             key = (type_, who, turn_id)
-             bucket.dedupe[key] = (now, event_id)
-+        self._event_sessions[event_id] = bucket.session_id
-         return record
+                             async def _bg():
++                                nonlocal flow_session_ready_emitted
+                                 try:
++                                    if not flow_session_ready_emitted:
++                                        _emit_flow_event("session_ready", phase="session")
++                                        flow_session_ready_emitted = True
++                                    _emit_flow_event("greet_start", phase="greet")
+                                     from app.services.streaming import run_ws_greet
  
-     def _append_event(self, bucket: SessionBucket, record: EventRecord) -> None:
-         if len(bucket.events) >= MAX_EVENTS:
-             old = bucket.events.popleft()
-             bucket.event_index.pop(old.data["id"], None)
-             self._on_event_removed(bucket, old)
-         bucket.events.append(record)
-         bucket.event_index[record.data["id"]] = record
+                                     tid = await asyncio.to_thread(run_ws_greet, sid)
++                                    tid_meta: Optional[Dict[str, Any]] = None
++                                    if tid:
++                                        try:
++                                            tid_str = str(tid)
++                                        except Exception:
++                                            tid_str = ""
++                                        if tid_str:
++                                            tid_meta = {"turn_id": tid_str}
++                                    _emit_flow_event(
++                                        "assistant_end",
++                                        phase="greet",
++                                        meta=tid_meta,
++                                    )
+                                     with contextlib.suppress(Exception):
+                                         if _admin_emit:
+                                             cfg_now = db.get_config()
+                                             audio_on = bool(
+                                                 (cfg_now or {}).get(
+                                                     "feature_audio", True
+                                                 )
+                                             )
+                                             _admin_emit(
+                                                 "greet:resp",
+                                                 label="greet:resp",
+                                                 session_id=sid,
+                                                 turn_id=tid,
+                                                 audio_scheduled=audio_on,
+                                             )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "greet_fail", e.__class__.__name__
+                                             ),
+                                         )
  
-     def _on_event_removed(self, bucket: SessionBucket, record: EventRecord) -> None:
-         event_id = record.data["id"]
-         meta = record.data.get("meta") or {}
-         turn_id = self._extract_turn_id(meta)
+                             asyncio.create_task(_bg())
+@@ -3204,54 +3278,72 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                         )
+                                 else:
+                                     _jlog(
+                                         "ws_greet_reset_skip_dup",
+                                         sid=sid,
+                                         greet_seq=greet_seq,
+                                         via="Configure",
+                                     )
+                             if obj.get("greet"):
+                                 if not is_new_greet_seq:
+                                     _jlog(
+                                         "ws_greet_skip_dup",
+                                         sid=sid,
+                                         greet_seq=greet_seq,
+                                         via="Configure",
+                                     )
+                                     continue
+                                 _jlog(
+                                     "ws_greet_recv",
+                                     sid=sid,
+                                     via="Configure",
+                                     greet_seq=greet_seq,
+                                 )
  
-+        self._event_sessions.pop(event_id, None)
-+
-         confirm_key = self._confirm_key(meta)
-         if confirm_key and bucket.open_confirms.get(confirm_key) == record:
-             bucket.open_confirms.pop(confirm_key, None)
-         key = turn_id or "__default__"
-         if bucket.open_tts.get(key) == record:
-             bucket.open_tts.pop(key, None)
-         if bucket.open_llm.get(key) == record:
-             bucket.open_llm.pop(key, None)
-         state = bucket.tts_state.get(key)
-         if state and state.get("event_id") == event_id:
-             bucket.tts_state.pop(key, None)
+                                 async def _bg2():
++                                    nonlocal flow_session_ready_emitted
+                                     try:
++                                        if not flow_session_ready_emitted:
++                                            _emit_flow_event("session_ready", phase="session")
++                                            flow_session_ready_emitted = True
++                                        _emit_flow_event("greet_start", phase="greet")
+                                         from app.services.streaming import run_ws_greet
  
-     def _update_bucket_state(
-         self, bucket: SessionBucket, record: EventRecord, turn_id: Optional[str]
-     ) -> None:
-         type_ = record.data["type"]
-         meta = record.data.get("meta") or {}
-         key = turn_id or "__default__"
+                                         tid = await asyncio.to_thread(run_ws_greet, sid)
++                                        tid_meta: Optional[Dict[str, Any]] = None
++                                        if tid:
++                                            try:
++                                                tid_str = str(tid)
++                                            except Exception:
++                                                tid_str = ""
++                                            if tid_str:
++                                                tid_meta = {"turn_id": tid_str}
++                                        _emit_flow_event(
++                                            "assistant_end",
++                                            phase="greet",
++                                            meta=tid_meta,
++                                        )
+                                         with contextlib.suppress(Exception):
+                                             if _admin_emit:
+                                                 cfg_now = db.get_config()
+                                                 audio_on = bool(
+                                                     (cfg_now or {}).get(
+                                                         "feature_audio", True
+                                                     )
+                                                 )
+                                                 _admin_emit(
+                                                     "greet:resp",
+                                                     label="greet:resp",
+                                                     session_id=sid,
+                                                     turn_id=tid,
+                                                     audio_scheduled=audio_on,
+                                                 )
+                                     except Exception as e:
+                                         with contextlib.suppress(Exception):
+                                             await _ws_send_json(
+                                                 send,
+                                                 make_error(
+                                                     "greet_fail", e.__class__.__name__
+                                                 ),
+                                             )
  
-         if type_ in BARGE_PAUSE_TYPES:
-             bucket.barge_paused = True
-         elif type_ == BARGE_RESUME_TYPE:
-             bucket.barge_paused = False
+                                 asyncio.create_task(_bg2())
+@@ -3697,50 +3789,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                             # Send the audio back over WS so the client can play it
+                                             await _ws_send_diagnostic_audio(
+                                                 send, turn_id, mime, data_to_echo
+                                             )
+                                 except Exception as e:
+                                     _jlog(
+                                         "mic_capture_fail",
+                                         sid=sid,
+                                         err=type(e).__name__,
+                                     )
  
-         if type_ == ASR_PARTIAL_TYPE and turn_id:
-diff --git a/tests/test_flow_emit.py b/tests/test_flow_emit.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..9777982d54590b9a92e632784a7ec9bebebefeb8
---- /dev/null
-+++ b/tests/test_flow_emit.py
-@@ -0,0 +1,63 @@
-+import pytest
-+
-+from app.flow.emit import add_batch, emit
-+from app.flow.trace import FlowStore
-+
-+
-+@pytest.fixture
-+def flow_env(monkeypatch):
-+    store = FlowStore.instance()
-+    store._init()
-+
-+    clock = {"now": 1000.0}
-+
-+    def fake_monotonic():
-+        return clock["now"]
-+
-+    monkeypatch.setattr("app.flow.trace.time.monotonic", fake_monotonic)
-+
-+    def advance(ms: int) -> None:
-+        clock["now"] += ms / 1000.0
-+
-+    yield store, advance
-+
-+    store._init()
-+
-+
-+def test_emit_shim(flow_env):
-+    store, advance = flow_env
-+    session_id = "shim-session"
-+
-+    first_id = emit(session_id, "flow", "session", "session_open", "client")
-+    assert first_id
-+    advance(10)
-+    second_id = emit(session_id, "transition", "session", "asr_ready", "system")
-+    assert second_id and second_id != first_id
-+
-+    snapshot = store.list(session_id, expand="all")
-+    assert [evt["id"] for evt in snapshot["events"]] == [first_id, second_id]
-+
-+
-+def test_add_batch_shim(flow_env):
-+    store, _ = flow_env
-+    session_id = "shim-batch"
-+
-+    parent_id = emit(session_id, "flow", "turn", "confirm_open", "assistant")
-+    child_id = emit(
-+        session_id,
-+        "transition",
-+        "turn",
-+        "asr_partial_first",
-+        "client",
-+        parent_id=parent_id,
-+    )
-+    assert child_id
-+
-+    add_batch(parent_id, "transcript", ["hello", "world"])
-+
-+    snapshot = store.list(session_id, expand="flow")
-+    events = snapshot["events"]
-+    assert events[0]["id"] == parent_id
-+    assert events[0]["batches"][0]["kind"] == "transcript"
-+    assert events[0]["batches"][0]["items"] == ["hello", "world"]
-+    assert events[0]["children"][0]["id"] == child_id
+                         else:
+                             # Unknown type already filtered by schema; no-op to future-proof.
+                             pass
+ 
+                     except ValueError as e:
+                         await _ws_send_json(send, make_error("bad_message", str(e)))
+                 else:
+                     # websocket.receive without text/bytes
+                     pass
+             else:
+                 # Other ASGI events are ignored
+                 pass
+ 
+     finally:
++        if flow_session_open_emitted and not flow_session_close_emitted:
++            _emit_flow_event("session_close", phase="session")
++            flow_session_close_emitted = True
+         _ensure_confirm_closed("shutdown")
+         _cancel_confirm_timeout()
+         with contextlib.suppress(Exception):
+             _cancel_no_audio_watch()
+         _cancel_asr_stream_activation()
+         _cancel_asr_not_ready_timeout()
+         await _remove_active_ws_entry("cleanup")
+         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
+         with contextlib.suppress(Exception):
+             _jlog(
+                 "ws_conn_cleanup",
+                 conn_id=conn_id,
+                 sid=sid,
+                 duration=duration,
+                 had_disconnect=had_disconnect,
+             )
+         with contextlib.suppress(Exception):
+             if _admin_emit:
+                 _admin_emit(
+                     "ws_conn_cleanup",
+                     conn_id=conn_id,
+                     sid=sid,
+                     duration=duration,
+                     had_disconnect=had_disconnect,
+                 )

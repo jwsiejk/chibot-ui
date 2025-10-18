@@ -24,9 +24,10 @@ from app.services.streaming_asr.deepgram_client import (
 from app.config import load_settings
 from app.security.ws_token import verify as verify_ws_token
 from app.db import db
-from app.policy.loader import load_policy
+from app.policy.loader import load_policy, load_policy_layers
 from app.services.greet_idempotency import clear_greet_turn_cache
 from app.metrics import ws_metrics
+from app.flow.emit import emit as flow_emit
 
 # NEW: invoke LLM on final transcript
 from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
@@ -1169,6 +1170,29 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     active_ws_closed = False
     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
 
+    flow_session_open_emitted = False
+    flow_session_ready_emitted = False
+    flow_session_close_emitted = False
+
+    def _emit_flow_event(type_: str,
+                         *,
+                         phase: str,
+                         meta: Optional[Dict[str, Any]] = None) -> None:
+        try:
+            flow_emit(
+                session_id=sid,
+                level="flow",
+                phase=phase,
+                type=type_,
+                who="system",
+                meta=meta,
+            )
+        except Exception:
+            pass
+
+    policy: Dict[str, Any] = {}
+    policy_version: str = "unknown"
+
     # Auth
     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in (
         "0",
@@ -1304,6 +1328,36 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             if active_count is not None:
                 _admin_emit("ws_conn_active", conn_id=conn_id, active=active_count)
 
+    try:
+        policy_layers = load_policy_layers(session_id=sid)
+    except Exception:
+        policy_layers = None
+
+    if isinstance(policy_layers, dict):
+        candidate_policy = policy_layers.get("effective_policy")
+        if isinstance(candidate_policy, dict):
+            policy = candidate_policy
+        candidate_version = policy_layers.get("policy_version")
+        if candidate_version is not None:
+            try:
+                policy_version = str(candidate_version)
+            except Exception:
+                policy_version = "unknown"
+
+    if not policy:
+        try:
+            policy = load_policy()
+        except Exception:
+            policy = {}
+
+    if not isinstance(policy_version, str) or not policy_version:
+        policy_version = "unknown"
+
+    if not flow_session_open_emitted:
+        meta = {"policy_version": policy_version}
+        _emit_flow_event("session_open", phase="session", meta=meta)
+        flow_session_open_emitted = True
+
     with contextlib.suppress(Exception):
         clear_greet_turn_cache(sid)
 
@@ -1348,9 +1402,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     manual_mode_manual_only = False
     auto_commit_when_ready = True
     ws_configured = False
-    try:
-        policy = load_policy()
-    except Exception:
+    if not isinstance(policy, dict):
         policy = {}
     if isinstance(policy, dict):
         cfg["interaction_policy"] = policy
@@ -2698,6 +2750,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 _pump_bus_to_client(sid, send, _handle_bus_frame)
             )
 
+    if not flow_session_ready_emitted:
+        _emit_flow_event("session_ready", phase="session")
+        flow_session_ready_emitted = True
+
     try:
         while True:
             ev = await receive()
@@ -3072,10 +3128,28 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             _jlog("ws_greet_recv", sid=sid)
 
                             async def _bg():
+                                nonlocal flow_session_ready_emitted
                                 try:
+                                    if not flow_session_ready_emitted:
+                                        _emit_flow_event("session_ready", phase="session")
+                                        flow_session_ready_emitted = True
+                                    _emit_flow_event("greet_start", phase="greet")
                                     from app.services.streaming import run_ws_greet
 
                                     tid = await asyncio.to_thread(run_ws_greet, sid)
+                                    tid_meta: Optional[Dict[str, Any]] = None
+                                    if tid:
+                                        try:
+                                            tid_str = str(tid)
+                                        except Exception:
+                                            tid_str = ""
+                                        if tid_str:
+                                            tid_meta = {"turn_id": tid_str}
+                                    _emit_flow_event(
+                                        "assistant_end",
+                                        phase="greet",
+                                        meta=tid_meta,
+                                    )
                                     with contextlib.suppress(Exception):
                                         if _admin_emit:
                                             cfg_now = db.get_config()
@@ -3226,10 +3300,28 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 )
 
                                 async def _bg2():
+                                    nonlocal flow_session_ready_emitted
                                     try:
+                                        if not flow_session_ready_emitted:
+                                            _emit_flow_event("session_ready", phase="session")
+                                            flow_session_ready_emitted = True
+                                        _emit_flow_event("greet_start", phase="greet")
                                         from app.services.streaming import run_ws_greet
 
                                         tid = await asyncio.to_thread(run_ws_greet, sid)
+                                        tid_meta: Optional[Dict[str, Any]] = None
+                                        if tid:
+                                            try:
+                                                tid_str = str(tid)
+                                            except Exception:
+                                                tid_str = ""
+                                            if tid_str:
+                                                tid_meta = {"turn_id": tid_str}
+                                        _emit_flow_event(
+                                            "assistant_end",
+                                            phase="greet",
+                                            meta=tid_meta,
+                                        )
                                         with contextlib.suppress(Exception):
                                             if _admin_emit:
                                                 cfg_now = db.get_config()
@@ -3719,6 +3811,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 pass
 
     finally:
+        if flow_session_open_emitted and not flow_session_close_emitted:
+            _emit_flow_event("session_close", phase="session")
+            flow_session_close_emitted = True
         _ensure_confirm_closed("shutdown")
         _cancel_confirm_timeout()
         with contextlib.suppress(Exception):
