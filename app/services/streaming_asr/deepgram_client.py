@@ -657,6 +657,9 @@ class DeepgramClient:
         self._open_evt: asyncio.Event = asyncio.Event()
         self._asr_open_emitted: bool = False
         self._asr_start_emitted: bool = False
+        self._asr_connect_emitted: bool = False
+        self._asr_ready_emitted: bool = False
+        self._backend_ready_observed: bool = False
         self._ready_observed: bool = False
         self._open_wait_s: float = float(os.getenv("DG_OPEN_WAIT_S", "3.0"))
         self._open_gate_warned: bool = False
@@ -684,6 +687,8 @@ class DeepgramClient:
         self._turn_metrics_recorded: bool = False
         self._turn_saw_1011: bool = False
         self._turn_last_close_code: Optional[int] = None
+        self._turn_first_partial_emitted: bool = False
+        self._turn_final_emitted: bool = False
 
     def _diag_payload(self, **extra: Any) -> dict:
         payload: dict[str, Any] = {"provider": "deepgram"}
@@ -776,7 +781,7 @@ class DeepgramClient:
 
     # -- helpers ---------------------------------------------------------------
 
-    async def _signal_ready(self) -> None:
+    async def _signal_ready(self, *, backend_ready: bool = False) -> None:
         self._ready_observed = True
         if not self._open_evt.is_set():
             self._open_evt.set()
@@ -786,6 +791,13 @@ class DeepgramClient:
                 await self._ev_queue.put({"type": "asr_open"})
             except Exception:
                 pass
+        if backend_ready:
+            self._backend_ready_observed = True
+            if not self._asr_ready_emitted:
+                try:
+                    await self._emit_flow_event("asr_ready")
+                finally:
+                    self._asr_ready_emitted = True
         await self._maybe_emit_asr_start()
         # schedule a flush shortly after ASR open (lets DG finish configure)
         self._schedule_flush(delay=0.0)
@@ -804,6 +816,19 @@ class DeepgramClient:
             data["payload"] = payload
         try:
             await self._ev_queue.put(data)
+        except Exception:
+            pass
+
+    async def _emit_flow_event(
+        self, event: str, meta: Optional[dict[str, Any]] = None
+    ) -> None:
+        if not event:
+            return
+        frame: dict[str, Any] = {"type": event}
+        if meta is not None:
+            frame["meta"] = meta
+        try:
+            await self._ev_queue.put(frame)
         except Exception:
             pass
 
@@ -851,12 +876,16 @@ class DeepgramClient:
         self._turn_metrics_recorded = False
         self._turn_saw_1011 = False
         self._turn_last_close_code = None
+        self._turn_first_partial_emitted = False
+        self._turn_final_emitted = False
 
-    def _note_first_partial(self, ts: Optional[float] = None) -> None:
+    def _note_first_partial(self, ts: Optional[float] = None) -> bool:
         if not self._turn_active:
             self._ensure_turn_started(ts)
         if self._turn_first_partial_ts <= 0.0:
             self._turn_first_partial_ts = ts or time.time()
+            return True
+        return False
 
     def _note_final_observed(self, ts: Optional[float] = None) -> None:
         if not self._turn_active:
@@ -911,6 +940,8 @@ class DeepgramClient:
         self._turn_bytes_baseline = self._bytes_forwarded
         self._turn_saw_1011 = False
         self._turn_last_close_code = None
+        self._turn_first_partial_emitted = False
+        self._turn_final_emitted = False
 
     def _sid_for_log(self) -> str:
         try:
@@ -1161,6 +1192,9 @@ class DeepgramClient:
 
         self._asr_open_emitted = False
         self._asr_start_emitted = False
+        self._asr_connect_emitted = False
+        self._asr_ready_emitted = False
+        self._backend_ready_observed = False
         self._ready_observed = False
         self._first_real_sent = False
         self._bytes_forwarded = 0
@@ -1173,6 +1207,8 @@ class DeepgramClient:
         self._turn_metrics_recorded = False
         self._turn_saw_1011 = False
         self._turn_last_close_code = None
+        self._turn_first_partial_emitted = False
+        self._turn_final_emitted = False
         try:
             self._open_evt.clear()
         except Exception:
@@ -1181,6 +1217,10 @@ class DeepgramClient:
             self._final_event.clear()
         except Exception:
             self._final_event = asyncio.Event()
+
+        if not self._asr_connect_emitted:
+            await self._emit_flow_event("asr_connect")
+            self._asr_connect_emitted = True
 
         url = _dg_url(self._cfg)
         self._emit_diag("provider_open", active=True, url=url)
@@ -1330,7 +1370,7 @@ class DeepgramClient:
                 cfg_payload = _initial_config(self._cfg)
                 DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
                 self._open_evt.set()
-                await self._signal_ready()
+                await self._signal_ready(backend_ready=True)
                 self._logger.info("Deepgram test-mode connect sid=%s", sid)
                 if callable(self._jlog):
                     try:
@@ -1981,7 +2021,7 @@ class DeepgramClient:
                         evt_type = ""
 
                 if evt_type in ("metadata", "listening", "connected", "ready"):
-                    await self._signal_ready()
+                    await self._signal_ready(backend_ready=True)
                     await self._publish_provider_event(evt_type or evt_name, msg)
                     continue
 
@@ -1991,7 +2031,7 @@ class DeepgramClient:
                     "partialtranscript",
                     "speech.update",
                 ):
-                    await self._signal_ready()
+                    await self._signal_ready(backend_ready=True)
                     await self._publish_provider_event(evt_type or evt_name, msg)
                     text = ""
                     is_final = False
@@ -2090,11 +2130,17 @@ class DeepgramClient:
                         continue
 
                     now_ts = time.time()
+                    first_partial = self._note_first_partial(now_ts)
                     if is_final:
-                        self._note_first_partial(now_ts)
                         self._note_final_observed(now_ts)
-                    else:
-                        self._note_first_partial(now_ts)
+                    if first_partial and not self._turn_first_partial_emitted:
+                        self._turn_first_partial_emitted = True
+                        try:
+                            await self._emit_flow_event(
+                                "asr_partial_first", meta={"conf": confidence}
+                            )
+                        except Exception:
+                            pass
 
                     self._emit_diag(
                         "asr_final" if is_final else "asr_partial",
@@ -2120,6 +2166,22 @@ class DeepgramClient:
                         pass
 
                     if is_final:
+                        if not self._turn_final_emitted:
+                            self._turn_final_emitted = True
+                            turn_id = self._turn_current_id
+                            if turn_id is None:
+                                turn_id = self._turn_counter
+                            try:
+                                await self._emit_flow_event(
+                                    "asr_final",
+                                    meta={
+                                        "len": len(text),
+                                        "conf": confidence,
+                                        "turn_id": turn_id,
+                                    },
+                                )
+                            except Exception:
+                                pass
                         self._schedule_auto_close(final_reason or "provider_final")
                         self._any_result = True
                         self._final_event.set()
