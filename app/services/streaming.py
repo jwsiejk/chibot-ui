@@ -20,6 +20,7 @@ from ..session_state import (
     should_emit_phase,
 )
 from .llm.flow_wrapper import make_llm_flow_tracker
+from .tts.flow_wrapper import make_tts_flow_tracker
 def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
     # 1) Profile name
     try:
@@ -2983,7 +2984,10 @@ def schedule_tts_audio(session_id: str,
                        on_complete: Optional[Callable[[], None]] = None,
                        *,
                        on_post_silence: Optional[Callable[[], None]] = None,
-                       post_silence_origin: Optional[str] = None) -> bool:
+                       post_silence_origin: Optional[str] = None,
+                       flow_phase: Optional[str] = None,
+                       flow_turn_id: Optional[str] = None,
+                       flow_include_turn_id: bool = True) -> bool:
     """Synthesize TTS for `text` and stream as WS frames.
     Emits frames like:
         {
@@ -3015,6 +3019,14 @@ def schedule_tts_audio(session_id: str,
     safe_turn_id = str(turn_id) if turn_id is not None else None
     text_markers = _tts_text_markers(text)
     audio_override = audio_bytes is not None
+    phase_for_flow = flow_phase if flow_phase else ("turn" if safe_turn_id is not None else "greet")
+    meta_turn_id = flow_turn_id if flow_turn_id is not None else safe_turn_id
+    tracker = make_tts_flow_tracker(
+        session_id=session_id,
+        phase=phase_for_flow,
+        turn_id=meta_turn_id,
+        include_turn_id=flow_include_turn_id,
+    )
 
     def _log(kind: str, **fields: Any) -> None:
         payload: Dict[str, Any] = {
@@ -3116,6 +3128,8 @@ def schedule_tts_audio(session_id: str,
         _log("tts.synth.error", error='empty_audio', override=audio_override)
         return False
 
+    tracker.queue()
+
     completion_event = _prepare_tts_completion_event(session_id, turn_key)
 
     payload_for_stream = audio_payload
@@ -3172,6 +3186,8 @@ def schedule_tts_audio(session_id: str,
                 bus.broadcast(session_id, start_frame)
             except Exception:
                 pass
+
+            tracker.start()
 
             # Chunk and broadcast
             mv = memoryview(stream_payload)
@@ -3280,6 +3296,8 @@ def schedule_tts_audio(session_id: str,
                 note_utterance_end(session_id)
             except Exception:
                 pass
+
+            tracker.end()
 
             state['done'] = True
 
@@ -3505,7 +3523,14 @@ def run_ws_greet(session_id: str) -> str:
                 )
             except Exception:
                 pass
-            audio_scheduled = schedule_tts_audio(session_id, safe_text, turn_id=tid, on_complete=_arm_idle_once)
+            audio_scheduled = schedule_tts_audio(
+                session_id,
+                safe_text,
+                turn_id=tid,
+                on_complete=_arm_idle_once,
+                flow_phase="greet",
+                flow_include_turn_id=False,
+            )
             if not audio_scheduled:
                 try:
                     _jlog(
