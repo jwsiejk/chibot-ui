@@ -1602,7 +1602,29 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     try:
         await _ws_send_json(send, {"type": "ready", "session_id": sid})
-    except Exception:
+    except Exception as ex:
+        detail = str(ex).strip() or "initial ready failed"
+        with contextlib.suppress(Exception):
+            flow_emit(
+                session_id=sid,
+                type="ws_error",
+                phase="transport",
+                who="server",
+                meta={
+                    "where": "initial_ready",
+                    "cause": ex.__class__.__name__,
+                    "msg": str(ex)[:300],
+                },
+            )
+        with contextlib.suppress(Exception):
+            await _ws_send_json(
+                send,
+                {
+                    "type": "Error",
+                    "code": "INITIAL_READY_FAILED",
+                    "detail": detail[:200],
+                },
+            )
         with contextlib.suppress(Exception):
             await _safe_close(1011, "initial_ready_failed")
         return
@@ -4906,7 +4928,30 @@ async def ws_chat(websocket):
 
     try:
         await websocket.send_text(_dumps({"type": "ready", "session_id": sid}))
-    except Exception:
+    except Exception as ex:
+        detail = str(ex).strip() or "initial ready failed"
+        with contextlib.suppress(Exception):
+            flow_emit(
+                session_id=sid,
+                type="ws_error",
+                phase="transport",
+                who="server",
+                meta={
+                    "where": "initial_ready",
+                    "cause": ex.__class__.__name__,
+                    "msg": str(ex)[:300],
+                },
+            )
+        with contextlib.suppress(Exception):
+            await websocket.send_text(
+                _dumps(
+                    {
+                        "type": "Error",
+                        "code": "INITIAL_READY_FAILED",
+                        "detail": detail[:200],
+                    }
+                )
+            )
         with contextlib.suppress(Exception):
             await websocket.close(code=1011, reason="initial_ready_failed")
             await asyncio.sleep(0.05)
