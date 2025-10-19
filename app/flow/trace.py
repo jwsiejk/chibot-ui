@@ -28,6 +28,7 @@ CONFIRM_CLOSE_TYPE = "confirm_close"
 
 MAX_BATCH_ITEMS = 1000
 MAX_BATCH_BYTES = 512 * 1024
+FLOW_DROPPED_TYPE = "flow_dropped"
 
 # Simple static blurbs with light interpolation.
 BLURBS: Dict[str, str] = {
@@ -94,6 +95,7 @@ class SessionBucket:
     open_tts: Dict[str, EventRecord] = field(default_factory=dict)
     open_llm: Dict[str, EventRecord] = field(default_factory=dict)
     tts_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    drop_buffer: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -193,9 +195,27 @@ class FlowStore:
     def add_batch(self, session_id: str, parent_id: str, kind: str, items: Iterable[Any]) -> bool:
         items_list = list(items)
         if len(items_list) > MAX_BATCH_ITEMS:
+            with self._lock:
+                bucket = self._sessions.get(session_id)
+                if bucket:
+                    self._record_drop_notice(
+                        bucket,
+                        reason="batch_items",
+                        meta={"parent_id": parent_id, "count": len(items_list)},
+                    )
+                    self._flush_drop_notices(bucket)
             raise ValueError("batch too large")
         serialized = str(items_list).encode("utf-8")
         if len(serialized) > MAX_BATCH_BYTES:
+            with self._lock:
+                bucket = self._sessions.get(session_id)
+                if bucket:
+                    self._record_drop_notice(
+                        bucket,
+                        reason="batch_bytes",
+                        meta={"parent_id": parent_id, "bytes": len(serialized)},
+                    )
+                    self._flush_drop_notices(bucket)
             raise ValueError("batch exceeds size limit")
 
         with self._lock:
@@ -212,9 +232,31 @@ class FlowStore:
     def add_batch_for_event(self, parent_id: str, kind: str, items: Iterable[Any]) -> bool:
         items_list = list(items)
         if len(items_list) > MAX_BATCH_ITEMS:
+            with self._lock:
+                session_id = self._event_sessions.get(parent_id)
+                if session_id:
+                    bucket = self._sessions.get(session_id)
+                    if bucket:
+                        self._record_drop_notice(
+                            bucket,
+                            reason="batch_items",
+                            meta={"parent_id": parent_id, "count": len(items_list)},
+                        )
+                        self._flush_drop_notices(bucket)
             raise ValueError("batch too large")
         serialized = str(items_list).encode("utf-8")
         if len(serialized) > MAX_BATCH_BYTES:
+            with self._lock:
+                session_id = self._event_sessions.get(parent_id)
+                if session_id:
+                    bucket = self._sessions.get(session_id)
+                    if bucket:
+                        self._record_drop_notice(
+                            bucket,
+                            reason="batch_bytes",
+                            meta={"parent_id": parent_id, "bytes": len(serialized)},
+                        )
+                        self._flush_drop_notices(bucket)
             raise ValueError("batch exceeds size limit")
 
         with self._lock:
@@ -475,7 +517,7 @@ class FlowStore:
             payload["parent_id"] = parent_id
 
         record = EventRecord(data=payload, monotonic_ts=now)
-        self._append_event(bucket, record)
+        self._append_event(bucket, record, record_drop=not is_injection)
         if parent_id:
             parent = bucket.event_index.get(parent_id)
             if parent:
@@ -485,15 +527,81 @@ class FlowStore:
             key = (type_, who, turn_id)
             bucket.dedupe[key] = (now, event_id)
         self._event_sessions[event_id] = bucket.session_id
+        if not is_injection:
+            self._flush_drop_notices(bucket)
         return record
 
-    def _append_event(self, bucket: SessionBucket, record: EventRecord) -> None:
+    def _append_event(
+        self, bucket: SessionBucket, record: EventRecord, *, record_drop: bool = True
+    ) -> None:
         if len(bucket.events) >= MAX_EVENTS:
             old = bucket.events.popleft()
             bucket.event_index.pop(old.data["id"], None)
+            if record_drop:
+                self._record_drop_notice(
+                    bucket,
+                    reason="event_limit",
+                    meta={
+                        "event_id": old.data.get("id"),
+                        "event_type": old.data.get("type"),
+                    },
+                )
             self._on_event_removed(bucket, old)
         bucket.events.append(record)
         bucket.event_index[record.data["id"]] = record
+
+    def _record_drop_notice(
+        self, bucket: SessionBucket, *, reason: str, meta: Optional[Dict[str, Any]] = None
+    ) -> None:
+        payload: Dict[str, Any] = {"reason": reason, "count": 1}
+        if meta:
+            payload.update(meta)
+        bucket.drop_buffer.append(payload)
+
+    def _flush_drop_notices(self, bucket: SessionBucket) -> None:
+        if not bucket.drop_buffer:
+            return
+        notices = bucket.drop_buffer
+        bucket.drop_buffer = []
+        aggregated: Dict[str, Dict[str, Any]] = {}
+        for notice in notices:
+            reason = str(notice.get("reason") or "unknown")
+            entry = aggregated.setdefault(reason, {"count": 0})
+            entry["count"] += int(notice.get("count") or 1)
+            if "event_id" in notice:
+                entry["last_event_id"] = notice["event_id"]
+            if "event_type" in notice:
+                entry.setdefault("event_types", set()).add(str(notice["event_type"]))
+            if "bytes" in notice:
+                entry["bytes"] = max(entry.get("bytes", 0), int(notice["bytes"]))
+            if "parent_id" in notice:
+                entry.setdefault("parent_ids", set()).add(str(notice["parent_id"]))
+        now = time.monotonic()
+        for reason, meta in aggregated.items():
+            payload: Dict[str, Any] = {
+                "__warning": FLOW_DROPPED_TYPE,
+                "reason": reason,
+                "count": meta.get("count", 1),
+            }
+            if "last_event_id" in meta:
+                payload["last_event_id"] = meta["last_event_id"]
+            if "bytes" in meta:
+                payload["bytes"] = meta["bytes"]
+            if "event_types" in meta:
+                payload["event_types"] = sorted(meta["event_types"])
+            if "parent_ids" in meta:
+                payload["parent_ids"] = sorted(meta["parent_ids"])
+            self._create_event(
+                bucket,
+                now,
+                level="flow",
+                phase="session",
+                type_=FLOW_DROPPED_TYPE,
+                who="system",
+                meta=payload,
+                parent_id=None,
+                is_injection=True,
+            )
 
     def _on_event_removed(self, bucket: SessionBucket, record: EventRecord) -> None:
         event_id = record.data["id"]

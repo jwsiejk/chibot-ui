@@ -1,14 +1,15 @@
 diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
-index da05f5cd637cd5657bf4763cf8c8792ce87ac3bf..74a5529af455fee353a911a8b6f4fc7401dc8db4 100644
+index 74a5529af455fee353a911a8b6f4fc7401dc8db4..fd267ef45df5b8142857792bb9ed4ac61d8cf3fb 100644
 --- a/app/api_v1/flow.py
 +++ b/app/api_v1/flow.py
-@@ -1,51 +1,56 @@
+@@ -1,31 +1,32 @@
  from __future__ import annotations
  
  import copy
  import gzip
  import hashlib
  import io
++import ipaddress
  import json
  import re
  import zipfile
@@ -16,8 +17,7 @@ index da05f5cd637cd5657bf4763cf8c8792ce87ac3bf..74a5529af455fee353a911a8b6f4fc74
  import threading
  import time
  from collections import deque
--from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional
-+from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Tuple
+ from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Tuple
  
  from flask import (
      Blueprint,
@@ -30,37 +30,400 @@ index da05f5cd637cd5657bf4763cf8c8792ce87ac3bf..74a5529af455fee353a911a8b6f4fc74
  )
  
  from app.flow import FlowStore
-+from app.flow.trace import (
-+    assemble_ws_frames,
-+    slice_client_console_for_session,
-+    slice_server_log_for_session,
-+)
- from app.flow.catalog import FLOW_EVENT_CATALOG
- from app.security_state import get_user
- from app.utils.admin import is_admin_email
+ from app.flow.trace import (
+     assemble_ws_frames,
+     slice_client_console_for_session,
+     slice_server_log_for_session,
+ )
+@@ -73,90 +74,103 @@ def _parse_int(value: Optional[str], *, name: str, minimum: Optional[int] = None
  
- bp = Blueprint("flow", __name__)
+ def _parse_levels(raw: Optional[str]) -> Iterable[str]:
+     if raw is None:
+         return ("flow", "transition")
+     levels: List[str] = []
+     for part in raw.split(","):
+         piece = part.strip()
+         if not piece:
+             continue
+         if piece not in levels:
+             levels.append(piece)
+     return levels
  
- _CLIENT_BREADCRUMB_WINDOW_SEC = 60.0
- _CLIENT_BREADCRUMB_LIMIT = 30
- _CLIENT_BREADCRUMB_LOCK = threading.Lock()
- _CLIENT_BREADCRUMB_HITS: Dict[str, Deque[float]] = {}
  
- 
- def _normalize_str(value: Optional[str]) -> Optional[str]:
+ def _parse_bool(value: Optional[str], *, default: bool = True) -> bool:
      if value is None:
-         return None
-     text = value.strip()
-     return text or None
+         return default
+     lowered = value.strip().lower()
+     if lowered in {"1", "true", "yes", "on"}:
+         return True
+     if lowered in {"0", "false", "no", "off"}:
+         return False
+     return default
  
  
- def _require_admin() -> None:
-     email = (
-         (flask_session.get("user") or {}).get("email")
-         or flask_session.get("email")
-         or request.headers.get("X-User-Email")
-         or (get_user() or "")
-@@ -590,132 +595,187 @@ def flow_handoff():
++def _too_large_response() -> Response:
++    response = jsonify({"error": "export_too_large"})
++    response.status_code = 413
++    return response
++
++
+ DEFAULT_HANDOFF_PROMPT = (
+     "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), "
+     "smallest viable fix, and validation steps."
+ )
+ 
+ _TEXT_EXACT_KEYS = {
+     "text",
+     "text_preview",
+     "user_text",
+     "assistant_text",
+     "tts_text",
+     "raw_text",
+     "message",
+     "body",
+     "delta",
+     "response",
+     "prompt",
+     "content",
+ }
+ _TEXT_SUFFIXES = ("_text", "_message", "_body", "_delta", "_content")
+ _TEXT_SUBSTRINGS = ("transcript", "utterance")
+ _DEVICE_KEYWORDS = ("device", "hardware", "microphone", "speaker", "headset")
+ _DEVICE_CLASS_MAP = {
+     "iphone": "iphone",
+     "ipad": "ipad",
+     "macbook": "mac",
+     "imac": "mac",
+     "mac": "mac",
+     "pixel": "android",
+     "android": "android",
+     "galaxy": "android",
+     "oneplus": "android",
+     "samsung": "android",
+     "windows": "windows",
+     "surface": "windows",
+     "pc": "windows",
+     "thinkpad": "windows",
+     "linux": "linux",
+ }
+ 
++_EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
++_GENERIC_TOKEN_PATTERN = re.compile(
++    r"(?i)\b(?:bearer|token|secret|key|api[_-]?key|authorization)[\s:=]+([A-Za-z0-9._-]{12,})"
++)
++_OPENAI_TOKEN_PATTERN = re.compile(r"\bsk-[A-Za-z0-9]{8,}\b")
++_IPV4_PATTERN = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
++
+ 
+ def _iter_session_events(
+     store: FlowStore,
+     session_id: str,
+     levels: Iterable[str],
+     since_ms: Optional[int] = None,
+ ) -> Iterator[Dict[str, Any]]:
+     cursor = since_ms if since_ms is not None else 0
+     while True:
+         chunk = store.list(
+             session_id=session_id,
+             since_ms=cursor,
+             limit=500,
+             levels=levels,
+             expand="all",
+         )
+         events = chunk.get("events", [])
+         if not events:
+             break
+         for event in events:
+             if isinstance(event, dict):
+                 yield event
+         next_since = chunk.get("next_since_ms")
+         if not isinstance(next_since, int) or next_since <= cursor:
+             break
+@@ -318,50 +332,140 @@ def _redact_payload_sig_meta(meta: Any) -> Dict[str, Any]:
+ 
+ 
+ def _redact_event(event: Dict[str, Any]) -> Dict[str, Any]:
+     clone = copy.deepcopy(event)
+     original_meta = clone.get("meta")
+     if clone.get("type") == "payload_sig":
+         clone["meta"] = _redact_payload_sig_meta(original_meta)
+     else:
+         clone["meta"] = _redact_mapping(original_meta)
+     if isinstance(clone.get("children"), list):
+         clone["children"] = [
+             _redact_event(child)
+             for child in clone["children"]
+             if isinstance(child, dict)
+         ]
+     if isinstance(clone.get("batches"), list):
+         clone["batches"] = [
+             _redact_node(batch, key_path=("batch",))
+             if isinstance(batch, dict)
+             else batch
+             for batch in clone["batches"]
+         ]
+     return clone
+ 
+ 
++def _hash_token_value(value: str, prefix: str) -> str:
++    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:10]
++    return f"[{prefix}:{digest}]"
++
++
++def _scrub_text(text: str) -> str:
++    if not text:
++        return text
++
++    def _email_repl(match: re.Match[str]) -> str:
++        return _hash_token_value(match.group(0).lower(), "email")
++
++    text = _EMAIL_PATTERN.sub(_email_repl, text)
++
++    def _token_repl(match: re.Match[str]) -> str:
++        token = match.group(1)
++        hashed = _hash_token_value(token, "token")
++        return match.group(0).replace(token, hashed)
++
++    text = _GENERIC_TOKEN_PATTERN.sub(_token_repl, text)
++
++    def _openai_repl(match: re.Match[str]) -> str:
++        token = match.group(0)
++        return _hash_token_value(token, "token")
++
++    text = _OPENAI_TOKEN_PATTERN.sub(_openai_repl, text)
++
++    def _ip_repl(match: re.Match[str]) -> str:
++        value = match.group(0)
++        try:
++            ip_obj = ipaddress.ip_address(value)
++        except ValueError:
++            return value
++        if getattr(ip_obj, "version", None) == 4:
++            if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_unspecified:
++                return value
++            return _hash_token_value(value, "ip")
++        return value
++
++    text = _IPV4_PATTERN.sub(_ip_repl, text)
++    return text
++
++
++def _scrub_node(value: Any) -> Any:
++    if isinstance(value, dict):
++        sanitized: Dict[str, Any] = {}
++        for key, child in value.items():
++            try:
++                key_str = str(key)
++            except Exception:
++                key_str = repr(key)
++            sanitized[key_str] = _scrub_node(child)
++        return sanitized
++    if isinstance(value, list):
++        return [_scrub_node(item) for item in value]
++    if isinstance(value, tuple):
++        return tuple(_scrub_node(item) for item in value)
++    if isinstance(value, str):
++        return _scrub_text(value)
++    return value
++
++
++def _scrub_event(event: Dict[str, Any]) -> Dict[str, Any]:
++    clone = copy.deepcopy(event)
++    for key, value in list(clone.items()):
++        if isinstance(value, dict):
++            clone[key] = _scrub_node(value)
++        elif isinstance(value, list):
++            clone[key] = [_scrub_node(item) for item in value]
++        elif isinstance(value, tuple):
++            clone[key] = tuple(_scrub_node(item) for item in value)
++        elif isinstance(value, str):
++            clone[key] = _scrub_text(value)
++    return clone
++
++
++def _scrub_gzip_bytes(data: Optional[bytes]) -> Optional[bytes]:
++    if not data:
++        return data
++    try:
++        text = gzip.decompress(data).decode("utf-8")
++    except (OSError, EOFError, UnicodeDecodeError):
++        return data
++    sanitized = _scrub_text(text)
++    buffer = io.BytesIO()
++    with gzip.GzipFile(fileobj=buffer, mode="wb") as gz_handle:
++        gz_handle.write(sanitized.encode("utf-8"))
++    return buffer.getvalue()
++
++
+ @bp.post("/flow/breadcrumb")
+ def flow_breadcrumb():
+     payload = request.get_json(silent=True) or {}
+ 
+     session_id = _normalize_str(
+         payload.get("session_id") or payload.get("sid")
+     )
+     meta_payload = payload.get("meta")
+     if not session_id and isinstance(meta_payload, dict):
+         session_id = _normalize_str(
+             meta_payload.get("session_id") or meta_payload.get("sid")
+         )
+     if not session_id:
+         abort(400, description="session_id is required")
+ 
+     event_name = _normalize_str(payload.get("event"))
+     if not event_name:
+         abort(400, description="event is required")
+ 
+     if meta_payload is None:
+         meta: Dict[str, Any] = {}
+     elif isinstance(meta_payload, dict):
+         meta = dict(meta_payload)
+     else:
+         abort(400, description="meta must be an object")
+@@ -447,60 +551,65 @@ def flow_event():
+     _require_admin()
+ 
+     session_id = _normalize_str(request.args.get("session_id"))
+     event_id = _normalize_str(request.args.get("id"))
+     if not session_id or not event_id:
+         abort(400, description="session_id and id are required")
+ 
+     store = FlowStore()
+     event = store.get(session_id, event_id)
+     if not event:
+         abort(404)
+     return jsonify(event)
+ 
+ 
+ @bp.get("/flow/export.ndjson")
+ def flow_export_ndjson():
+     _require_admin()
+ 
+     session_id = _normalize_str(request.args.get("session_id"))
+     if not session_id:
+         abort(400, description="session_id is required")
+ 
+     since_value = _parse_int(request.args.get("since_ms"), name="since_ms", minimum=0)
+     levels = list(_parse_levels(request.args.get("levels")))
+     redacted = _parse_bool(request.args.get("redacted"), default=True)
++    scrub_requested = _parse_bool(request.args.get("pii_scrub"), default=False)
+ 
+     store = FlowStore()
+ 
+     def _generate() -> Iterable[str]:
+         for event in _iter_session_events(store, session_id, levels, since_value):
+-            payload = _redact_event(event) if redacted else event
++            payload = _redact_event(event) if redacted else copy.deepcopy(event)
++            if scrub_requested:
++                payload = _scrub_event(payload)
+             yield json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+ 
+     response = Response(stream_with_context(_generate()), mimetype="application/x-ndjson")
+     response.headers["X-Flow-Redacted"] = "1" if redacted else "0"
++    if scrub_requested:
++        response.headers["X-Flow-PII-Scrubbed"] = "1"
+     return response
+ 
+ 
+ @bp.route("/flow/handoff", methods=["GET", "POST"])
+ def flow_handoff():
+     _require_admin()
+ 
+     payload: Dict[str, Any] = {}
+     query_args = request.args or {}
+ 
+     if request.method == "POST":
+         raw_payload = request.get_json(silent=True)
+         if isinstance(raw_payload, dict):
+             payload = raw_payload
+         else:
+             payload = {}
+ 
+     def _payload_value(key: str) -> Any:
+         if request.method != "POST":
+             return None
+         return payload.get(key)
+ 
+     session_id = _normalize_str(
+         _payload_value("session_id") or query_args.get("session_id")
+     )
+@@ -529,180 +638,203 @@ def flow_handoff():
+         if isinstance(mode_payload, str):
+             mode_candidate = mode_payload
+     options_mode = raw_options.get("mode") if raw_options else None
+     if isinstance(options_mode, str):
+         mode_candidate = options_mode
+     if mode_candidate is None:
+         query_mode = query_args.get("mode")
+         if isinstance(query_mode, str):
+             mode_candidate = query_mode
+     mode_text = _normalize_str(mode_candidate) or "redacted"
+     mode = mode_text.lower()
+     if mode not in {"redacted", "full"}:
+         mode = "redacted"
+     is_full = mode == "full"
+ 
+     include_options = raw_options.get("include") if raw_options else {}
+     if not isinstance(include_options, dict):
+         include_options = {}
+     privacy_options = raw_options.get("privacy") if raw_options else {}
+     if not isinstance(privacy_options, dict):
+         privacy_options = {}
+     limits_options = raw_options.get("limits") if raw_options else {}
+     if not isinstance(limits_options, dict):
+         limits_options = {}
+ 
++    raw_pii_scrub = privacy_options.get("pii_scrub")
++    if isinstance(raw_pii_scrub, str):
++        pii_scrub_requested = raw_pii_scrub.strip().lower() in {"1", "true", "yes", "on"}
++    else:
++        pii_scrub_requested = bool(raw_pii_scrub)
++
+     max_bytes: Optional[int] = None
+     if "max_bytes" in limits_options:
+         try:
+             max_bytes = int(limits_options.get("max_bytes"))
+         except (TypeError, ValueError):
+             abort(400, description="limits.max_bytes must be an integer")
+         if max_bytes < 0:
+             abort(400, description="limits.max_bytes must be >= 0")
+ 
+     store = FlowStore()
+     snapshot = store.snapshot(session_id=session_id, levels=levels, expand="all")
+     events = snapshot.events
+     event_count = len(events)
+ 
+     generated_at = datetime.now(timezone.utc).isoformat()
+ 
+     def _to_ndjson_bytes(items: Iterable[Dict[str, Any]]) -> bytes:
+         lines = [
+             json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+             for item in items
+         ]
+         ndjson_text = "\n".join(lines)
+         if ndjson_text:
+             ndjson_text += "\n"
+         return ndjson_text.encode("utf-8")
+ 
+     if not is_full:
+         redacted_events = [_redact_event(event) for event in events]
++        if pii_scrub_requested:
++            redacted_events = [_scrub_event(event) for event in redacted_events]
+         ndjson_bytes = _to_ndjson_bytes(redacted_events)
+         payload_sha = hashlib.sha1(ndjson_bytes).hexdigest()
+         meta_payload = {
+             "session_id": session_id,
+             "levels": levels,
+             "generated_at": generated_at,
+             "event_count": len(redacted_events),
+             "payload_sig": {"bytes": len(ndjson_bytes), "sha1_8": payload_sha[:8]},
+             "mode": mode,
+         }
++        if pii_scrub_requested:
++            meta_payload["privacy"] = {"pii_scrub": True}
+ 
+         buffer = io.BytesIO()
+         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
              archive.writestr("flow.ndjson", ndjson_bytes)
              archive.writestr("prompt.txt", prompt_text)
              archive.writestr(
@@ -68,8 +431,14 @@ index da05f5cd637cd5657bf4763cf8c8792ce87ac3bf..74a5529af455fee353a911a8b6f4fc74
                  json.dumps(meta_payload, ensure_ascii=False, indent=2),
              )
          zip_bytes = buffer.getvalue()
++        if max_bytes is not None and len(zip_bytes) > max_bytes:
++            return _too_large_response()
      else:
-         event_bytes = _to_ndjson_bytes(events)
+-        event_bytes = _to_ndjson_bytes(events)
++        export_events = [copy.deepcopy(event) for event in events]
++        if pii_scrub_requested:
++            export_events = [_scrub_event(event) for event in export_events]
++        event_bytes = _to_ndjson_bytes(export_events)
          gzip_buffer = io.BytesIO()
          with gzip.GzipFile(fileobj=gzip_buffer, mode="wb") as gz_handle:
              gz_handle.write(event_bytes)
@@ -86,15 +455,10 @@ index da05f5cd637cd5657bf4763cf8c8792ce87ac3bf..74a5529af455fee353a911a8b6f4fc74
  
          prompt_bytes = prompt_text.encode("utf-8")
  
--        include_meta = {
--            str(key): value
--            for key, value in include_options.items()
--            if isinstance(value, bool)
--        }
-+        include_ws_requested = bool(include_options.get("ws"))
-+        include_logs_requested = bool(include_options.get("logs"))
-+
-+        include_meta: Dict[str, Any] = {}
+         include_ws_requested = bool(include_options.get("ws"))
+         include_logs_requested = bool(include_options.get("logs"))
+ 
+         include_meta: Dict[str, Any] = {}
          privacy_meta: Dict[str, Any] = {}
          for key, value in privacy_options.items():
              key_str = str(key)
@@ -102,6 +466,8 @@ index da05f5cd637cd5657bf4763cf8c8792ce87ac3bf..74a5529af455fee353a911a8b6f4fc74
                  privacy_meta[key_str] = value
              elif isinstance(value, str):
                  privacy_meta[key_str] = value.strip() or value
++        if pii_scrub_requested and "pii_scrub" not in privacy_meta:
++            privacy_meta["pii_scrub"] = True
          limits_meta: Dict[str, Any] = {}
          if max_bytes is not None:
              limits_meta["max_bytes"] = max_bytes
@@ -126,50 +492,56 @@ index da05f5cd637cd5657bf4763cf8c8792ce87ac3bf..74a5529af455fee353a911a8b6f4fc74
                  entry["description"] = description
              return entry
  
-+        optional_files: List[Tuple[str, bytes, Optional[str], Optional[str]]] = []
-+
-+        ws_bytes = None
-+        if include_ws_requested:
-+            ws_bytes = assemble_ws_frames(session_id)
-+            if ws_bytes:
-+                optional_files.append(
-+                    (
-+                        "ws/frames.ndjson.gz",
-+                        ws_bytes,
-+                        "application/x-ndjson+gzip",
-+                        "Sampled WebSocket frames",
-+                    )
-+                )
-+
-+        client_log_bytes = None
-+        server_log_bytes = None
-+        if include_logs_requested:
-+            client_log_bytes = slice_client_console_for_session(session_id)
-+            if client_log_bytes:
-+                optional_files.append(
-+                    (
-+                        "client/console.log.gz",
-+                        client_log_bytes,
-+                        "text/plain+gzip",
-+                        "Client console events",
-+                    )
-+                )
-+            server_log_bytes = slice_server_log_for_session(session_id)
-+            if server_log_bytes:
-+                optional_files.append(
-+                    (
-+                        "server/server.log.gz",
-+                        server_log_bytes,
-+                        "text/plain+gzip",
-+                        "Server admin log slice",
-+                    )
-+                )
-+
-+        if include_ws_requested:
-+            include_meta["ws"] = bool(ws_bytes)
-+        if include_logs_requested:
-+            include_meta["logs"] = bool(client_log_bytes or server_log_bytes)
-+
+         optional_files: List[Tuple[str, bytes, Optional[str], Optional[str]]] = []
+ 
+         ws_bytes = None
+         if include_ws_requested:
+             ws_bytes = assemble_ws_frames(session_id)
++            if ws_bytes and pii_scrub_requested:
++                ws_bytes = _scrub_gzip_bytes(ws_bytes)
+             if ws_bytes:
+                 optional_files.append(
+                     (
+                         "ws/frames.ndjson.gz",
+                         ws_bytes,
+                         "application/x-ndjson+gzip",
+                         "Sampled WebSocket frames",
+                     )
+                 )
+ 
+         client_log_bytes = None
+         server_log_bytes = None
+         if include_logs_requested:
+             client_log_bytes = slice_client_console_for_session(session_id)
++            if client_log_bytes and pii_scrub_requested:
++                client_log_bytes = _scrub_gzip_bytes(client_log_bytes)
+             if client_log_bytes:
+                 optional_files.append(
+                     (
+                         "client/console.log.gz",
+                         client_log_bytes,
+                         "text/plain+gzip",
+                         "Client console events",
+                     )
+                 )
+             server_log_bytes = slice_server_log_for_session(session_id)
++            if server_log_bytes and pii_scrub_requested:
++                server_log_bytes = _scrub_gzip_bytes(server_log_bytes)
+             if server_log_bytes:
+                 optional_files.append(
+                     (
+                         "server/server.log.gz",
+                         server_log_bytes,
+                         "text/plain+gzip",
+                         "Server admin log slice",
+                     )
+                 )
+ 
+         if include_ws_requested:
+             include_meta["ws"] = bool(ws_bytes)
+         if include_logs_requested:
+             include_meta["logs"] = bool(client_log_bytes or server_log_bytes)
+ 
          manifest_files = [
              _manifest_entry(
                  "prompt.txt",
@@ -180,38 +552,7 @@ index da05f5cd637cd5657bf4763cf8c8792ce87ac3bf..74a5529af455fee353a911a8b6f4fc74
              _manifest_entry(
                  "events/flow.ndjson.gz",
                  events_gz_bytes,
-                 content_type="application/x-ndjson+gzip",
-                 description="Session events (gzipped NDJSON)",
-             ),
-             _manifest_entry(
-                 "config/config.json",
-                 config_bytes,
-                 content_type="application/json",
-                 description="Session configuration snapshot",
-             ),
-         ]
- 
-+        for path, data, content_type, description in optional_files:
-+            manifest_files.append(
-+                _manifest_entry(
-+                    path,
-+                    data,
-+                    content_type=content_type,
-+                    description=description,
-+                )
-+            )
-+
-         manifest_meta: Dict[str, Any] = {"mode": mode, "redacted": False}
-         if include_meta:
-             manifest_meta["include"] = include_meta
-         if privacy_meta:
-             manifest_meta["privacy"] = privacy_meta
-         if limits_meta:
-             manifest_meta["limits"] = limits_meta
-         if snapshot.started_at_iso:
-             manifest_meta["session_started_at"] = snapshot.started_at_iso
- 
-         manifest_payload = {
+@@ -741,41 +873,43 @@ def flow_handoff():
              "schema_version": "1.0",
              "exported_at": generated_at,
              "session_id": session_id,
@@ -232,12 +573,13 @@ index da05f5cd637cd5657bf4763cf8c8792ce87ac3bf..74a5529af455fee353a911a8b6f4fc74
              archive.writestr("manifest.json", manifest_bytes)
              archive.writestr("events/flow.ndjson.gz", events_gz_bytes)
              archive.writestr("config/config.json", config_bytes)
-+            for path, data, _, _ in optional_files:
-+                archive.writestr(path, data)
+             for path, data, _, _ in optional_files:
+                 archive.writestr(path, data)
          zip_bytes = buffer.getvalue()
  
      if max_bytes is not None and len(zip_bytes) > max_bytes:
-         abort(413, description="export exceeds requested size limit")
+-        abort(413, description="export exceeds requested size limit")
++        return _too_large_response()
  
      response = Response(zip_bytes, mimetype="application/zip")
      safe_session = re.sub(r"[^a-zA-Z0-9_-]+", "_", session_id) or "session"
@@ -248,31 +590,27 @@ index da05f5cd637cd5657bf4763cf8c8792ce87ac3bf..74a5529af455fee353a911a8b6f4fc74
      response.headers["X-Flow-Payload-Bytes"] = str(len(zip_bytes))
      response.headers["X-Flow-Payload-Sha1"] = hashlib.sha1(zip_bytes).hexdigest()
      response.headers["X-Flow-Mode"] = mode
++    if pii_scrub_requested:
++        response.headers["X-Flow-PII-Scrubbed"] = "1"
      response.headers["Cache-Control"] = "no-store"
      return response
  
  
  __all__ = ["bp"]
 diff --git a/app/flow/trace.py b/app/flow/trace.py
-index dfda374a85e288663f08648e30878c186a1a07d8..045af981bf533f42bfc89d5379e58a91cfe8f31a 100644
+index 045af981bf533f42bfc89d5379e58a91cfe8f31a..1ddb78a2f0776574e4547f72af6eb72f3c1764cc 100644
 --- a/app/flow/trace.py
 +++ b/app/flow/trace.py
-@@ -1,34 +1,39 @@
- from __future__ import annotations
- 
- import copy
-+import gzip
-+import io
-+import json
+@@ -6,50 +6,51 @@ import io
+ import json
  import threading
  import time
  from collections import deque
  from dataclasses import dataclass, field
  from datetime import datetime, timezone
--from typing import Any, Deque, Dict, Iterable, List, Optional, Set, Tuple
-+from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Set, Tuple
-+
-+from app.admin_log import get_admin_log_history
+ from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+ 
+ from app.admin_log import get_admin_log_history
  
  MAX_EVENTS = 5000
  DEDUP_WINDOW_MS = 100
@@ -289,6 +627,7 @@ index dfda374a85e288663f08648e30878c186a1a07d8..045af981bf533f42bfc89d5379e58a91
  
  MAX_BATCH_ITEMS = 1000
  MAX_BATCH_BYTES = 512 * 1024
++FLOW_DROPPED_TYPE = "flow_dropped"
  
  # Simple static blurbs with light interpolation.
  BLURBS: Dict[str, str] = {
@@ -298,938 +637,707 @@ index dfda374a85e288663f08648e30878c186a1a07d8..045af981bf533f42bfc89d5379e58a91
      TTS_START_TYPE: "Assistant speech started",
      TTS_END_TYPE: "Assistant speech ended",
      LLM_START_TYPE: "LLM thinking",
-@@ -867,26 +872,191 @@ class FlowStore:
-                         [anchor],
-                     )
+     LLM_FINAL_TYPE: "LLM response ready",
+ }
  
-             if type_ == "asr_error":
-                 last_asr_error = record
-             elif type_ == "recover_ok" and last_asr_error is not None:
-                 _add_hint(
-                     "asr_recovered",
-                     "info",
-                     "ASR error then recovery succeeded.",
-                     [last_asr_error.data.get("id"), data.get("id")],
-                 )
-                 last_asr_error = None
  
-         def _event_time(event_id: str) -> int:
-             record = event_index.get(event_id)
+ def _utc_now_iso() -> str:
+     return datetime.now(timezone.utc).isoformat()
+ 
+ 
+ def _ensure_meta(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+     if meta is None:
+         return {}
+     if not isinstance(meta, dict):
+         raise TypeError("meta must be a mapping")
+     return dict(meta)
+ 
+ 
+@@ -72,50 +73,51 @@ class EventRecord:
+         if children is not None:
+             if children:
+                 payload["children"] = children
+         elif self.children_ids:
+             payload["children"] = list(self.children_ids)
+         if self.batches:
+             payload["batches"] = [dict(batch) for batch in self.batches]
+         return payload
+ 
+ 
+ @dataclass
+ class SessionBucket:
+     session_id: str
+     started_at_iso: str
+     t0_monotonic: float
+     seq: int = 1
+     events: Deque[EventRecord] = field(default_factory=deque)
+     event_index: Dict[str, EventRecord] = field(default_factory=dict)
+     dedupe: Dict[Tuple[str, str, Optional[str]], Tuple[float, str]] = field(default_factory=dict)
+     asr_partial_turns: Dict[str, str] = field(default_factory=dict)
+     barge_paused: bool = False
+     open_confirms: Dict[str, EventRecord] = field(default_factory=dict)
+     open_tts: Dict[str, EventRecord] = field(default_factory=dict)
+     open_llm: Dict[str, EventRecord] = field(default_factory=dict)
+     tts_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
++    drop_buffer: List[Dict[str, Any]] = field(default_factory=list)
+ 
+ 
+ @dataclass
+ class FlowSessionSnapshot:
+     session_id: str
+     started_at_iso: Optional[str]
+     levels: List[str]
+     events: List[Dict[str, Any]]
+     config: Optional[Dict[str, Any]]
+ 
+     @property
+     def event_count(self) -> int:
+         return len(self.events)
+ 
+ 
+ class FlowStore:
+     """Thread-safe, singleton flow trace store."""
+ 
+     _instance: Optional["FlowStore"] = None
+     _singleton_lock = threading.Lock()
+ 
+     @classmethod
+     def instance(cls) -> "FlowStore":
+         """Return the singleton FlowStore instance."""
+         return cls()
+@@ -171,72 +173,112 @@ class FlowStore:
+             if type_ == TTS_END_TYPE:
+                 key = turn_id or "__default__"
+                 state = bucket.tts_state.get(key)
+                 if state and state.get("ended"):
+                     return state.get("ended_event_id")
+ 
+             record = self._create_event(
+                 bucket,
+                 now,
+                 level=level,
+                 phase=phase,
+                 type_=type_,
+                 who=who,
+                 meta=meta_copy,
+                 parent_id=parent_id,
+                 is_injection=False,
+             )
+ 
+             self._update_bucket_state(bucket, record, turn_id)
+             self._inject_safety_events(bucket)
+             return record.data["id"]
+ 
+     def add_batch(self, session_id: str, parent_id: str, kind: str, items: Iterable[Any]) -> bool:
+         items_list = list(items)
+         if len(items_list) > MAX_BATCH_ITEMS:
++            with self._lock:
++                bucket = self._sessions.get(session_id)
++                if bucket:
++                    self._record_drop_notice(
++                        bucket,
++                        reason="batch_items",
++                        meta={"parent_id": parent_id, "count": len(items_list)},
++                    )
++                    self._flush_drop_notices(bucket)
+             raise ValueError("batch too large")
+         serialized = str(items_list).encode("utf-8")
+         if len(serialized) > MAX_BATCH_BYTES:
++            with self._lock:
++                bucket = self._sessions.get(session_id)
++                if bucket:
++                    self._record_drop_notice(
++                        bucket,
++                        reason="batch_bytes",
++                        meta={"parent_id": parent_id, "bytes": len(serialized)},
++                    )
++                    self._flush_drop_notices(bucket)
+             raise ValueError("batch exceeds size limit")
+ 
+         with self._lock:
+             bucket = self._sessions.get(session_id)
+             if not bucket:
+                 return False
+             record = bucket.event_index.get(parent_id)
              if not record:
-                 return 0
-             value = record.data.get("t_rel_ms")
-             return int(value) if isinstance(value, int) else int(value or 0)
+                 return False
+             batch_payload = {"kind": kind, "items": items_list}
+             record.batches.append(batch_payload)
+             return True
  
-         hints.sort(key=lambda hint: min(_event_time(anchor) for anchor in hint["anchors"]))
-         return hints
+     def add_batch_for_event(self, parent_id: str, kind: str, items: Iterable[Any]) -> bool:
+         items_list = list(items)
+         if len(items_list) > MAX_BATCH_ITEMS:
++            with self._lock:
++                session_id = self._event_sessions.get(parent_id)
++                if session_id:
++                    bucket = self._sessions.get(session_id)
++                    if bucket:
++                        self._record_drop_notice(
++                            bucket,
++                            reason="batch_items",
++                            meta={"parent_id": parent_id, "count": len(items_list)},
++                        )
++                        self._flush_drop_notices(bucket)
+             raise ValueError("batch too large")
+         serialized = str(items_list).encode("utf-8")
+         if len(serialized) > MAX_BATCH_BYTES:
++            with self._lock:
++                session_id = self._event_sessions.get(parent_id)
++                if session_id:
++                    bucket = self._sessions.get(session_id)
++                    if bucket:
++                        self._record_drop_notice(
++                            bucket,
++                            reason="batch_bytes",
++                            meta={"parent_id": parent_id, "bytes": len(serialized)},
++                        )
++                        self._flush_drop_notices(bucket)
+             raise ValueError("batch exceeds size limit")
  
+         with self._lock:
+             session_id = self._event_sessions.get(parent_id)
+             if session_id is None:
+                 return False
+             bucket = self._sessions.get(session_id)
+             if not bucket:
+                 return False
+             record = bucket.event_index.get(parent_id)
+             if not record:
+                 return False
+             batch_payload = {"kind": kind, "items": items_list}
+             record.batches.append(batch_payload)
+             return True
  
--__all__ = ["FlowStore"]
-+def _normalize_session_id(value: Any) -> str:
-+    try:
-+        text = str(value).strip()
-+    except Exception:
-+        return ""
-+    return text
-+
-+
-+def _coerce_json_value(value: Any) -> Any:
-+    if value is None:
-+        return None
-+    if isinstance(value, (str, int, float, bool)):
-+        return value
-+    if isinstance(value, Mapping):
-+        sanitized: Dict[str, Any] = {}
-+        for key, child in value.items():
-+            try:
-+                key_str = str(key)
-+            except Exception:
-+                key_str = repr(key)
-+            sanitized[key_str] = _coerce_json_value(child)
-+        return sanitized
-+    if isinstance(value, (list, tuple, set)):
-+        return [_coerce_json_value(item) for item in value]
-+    return str(value)
-+
-+
-+def _strip_none(mapping: Dict[str, Any]) -> Dict[str, Any]:
-+    return {key: value for key, value in mapping.items() if value is not None}
-+
-+
-+def _gzip_ndjson(records: Iterable[Dict[str, Any]]) -> Optional[bytes]:
-+    lines: List[str] = []
-+    for record in records:
-+        sanitized = _coerce_json_value(record)
-+        if isinstance(sanitized, dict):
-+            payload = _strip_none(sanitized)
-+        else:
-+            payload = {"value": sanitized}
-+        if not payload:
-+            continue
-+        try:
-+            line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-+        except TypeError:
-+            line = json.dumps(_coerce_json_value(payload), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-+        lines.append(line)
-+    if not lines:
-+        return None
-+    text = "\n".join(lines) + "\n"
-+    buffer = io.BytesIO()
-+    with gzip.GzipFile(fileobj=buffer, mode="wb") as gz_handle:
-+        gz_handle.write(text.encode("utf-8"))
-+    return buffer.getvalue()
-+
-+
-+def assemble_ws_frames(session_id: str) -> Optional[bytes]:
-+    store = FlowStore()
-+    sid = _normalize_session_id(session_id)
-+    if not sid:
-+        return None
-+
-+    with store._lock:
-+        bucket = store._sessions.get(sid)
-+        if not bucket:
-+            return None
-+        events = [copy.deepcopy(record.data) for record in bucket.events]
-+
-+    frame_entries: List[Dict[str, Any]] = []
-+    for event in events:
-+        type_value = str(event.get("type") or "")
-+        if type_value not in {"ws_frame_in", "ws_frame_out"}:
-+            continue
-+        meta = event.get("meta") if isinstance(event.get("meta"), Mapping) else {}
-+        entry: Dict[str, Any] = {
-+            "id": event.get("id"),
-+            "t_rel_ms": event.get("t_rel_ms"),
-+            "level": event.get("level"),
-+            "phase": event.get("phase"),
-+            "who": event.get("who"),
-+            "type": type_value,
-+            "direction": "out" if type_value == "ws_frame_out" else "in",
-+        }
+     def snapshot(
+         self,
+         session_id: str,
+         *,
+         levels: Iterable[str] = ("flow", "transition"),
+         expand: str = "all",
+     ) -> FlowSessionSnapshot:
+         sanitized_levels: List[str] = []
+         seen: Set[str] = set()
+@@ -453,70 +495,136 @@ class FlowStore:
+         type_: str,
+         who: str,
+         meta: Dict[str, Any],
+         parent_id: Optional[str],
+         is_injection: bool,
+     ) -> EventRecord:
+         event_id = f"e_{bucket.seq:05d}"
+         bucket.seq += 1
+ 
+         t_rel_ms = int((now - bucket.t0_monotonic) * 1000)
+         blurb = self._build_blurb(type_, phase, who, meta)
+         payload: Dict[str, Any] = {
+             "id": event_id,
+             "t_rel_ms": t_rel_ms,
+             "level": level,
+             "phase": phase,
+             "type": type_,
+             "who": who,
+             "blurb": blurb,
+             "meta": meta,
+         }
+         if parent_id:
+             payload["parent_id"] = parent_id
+ 
+         record = EventRecord(data=payload, monotonic_ts=now)
+-        self._append_event(bucket, record)
++        self._append_event(bucket, record, record_drop=not is_injection)
+         if parent_id:
+             parent = bucket.event_index.get(parent_id)
+             if parent:
+                 parent.children_ids.append(event_id)
+         if not is_injection:
+             turn_id = self._extract_turn_id(meta)
+             key = (type_, who, turn_id)
+             bucket.dedupe[key] = (now, event_id)
+         self._event_sessions[event_id] = bucket.session_id
++        if not is_injection:
++            self._flush_drop_notices(bucket)
+         return record
+ 
+-    def _append_event(self, bucket: SessionBucket, record: EventRecord) -> None:
++    def _append_event(
++        self, bucket: SessionBucket, record: EventRecord, *, record_drop: bool = True
++    ) -> None:
+         if len(bucket.events) >= MAX_EVENTS:
+             old = bucket.events.popleft()
+             bucket.event_index.pop(old.data["id"], None)
++            if record_drop:
++                self._record_drop_notice(
++                    bucket,
++                    reason="event_limit",
++                    meta={
++                        "event_id": old.data.get("id"),
++                        "event_type": old.data.get("type"),
++                    },
++                )
+             self._on_event_removed(bucket, old)
+         bucket.events.append(record)
+         bucket.event_index[record.data["id"]] = record
+ 
++    def _record_drop_notice(
++        self, bucket: SessionBucket, *, reason: str, meta: Optional[Dict[str, Any]] = None
++    ) -> None:
++        payload: Dict[str, Any] = {"reason": reason, "count": 1}
 +        if meta:
-+            entry["meta"] = _coerce_json_value(dict(meta))
-+            route = meta.get("route")
-+            if route is not None:
-+                entry.setdefault("route", route)
-+            opcode = meta.get("type")
-+            if opcode is not None:
-+                entry.setdefault("opcode", opcode)
-+            bytes_len = meta.get("bytes")
-+            if bytes_len is not None:
-+                entry.setdefault("bytes", bytes_len)
-+            dropped = meta.get("dropped")
-+            if dropped is not None:
-+                entry.setdefault("dropped", dropped)
-+        frame_entries.append(_strip_none(entry))
++            payload.update(meta)
++        bucket.drop_buffer.append(payload)
 +
-+    return _gzip_ndjson(frame_entries)
++    def _flush_drop_notices(self, bucket: SessionBucket) -> None:
++        if not bucket.drop_buffer:
++            return
++        notices = bucket.drop_buffer
++        bucket.drop_buffer = []
++        aggregated: Dict[str, Dict[str, Any]] = {}
++        for notice in notices:
++            reason = str(notice.get("reason") or "unknown")
++            entry = aggregated.setdefault(reason, {"count": 0})
++            entry["count"] += int(notice.get("count") or 1)
++            if "event_id" in notice:
++                entry["last_event_id"] = notice["event_id"]
++            if "event_type" in notice:
++                entry.setdefault("event_types", set()).add(str(notice["event_type"]))
++            if "bytes" in notice:
++                entry["bytes"] = max(entry.get("bytes", 0), int(notice["bytes"]))
++            if "parent_id" in notice:
++                entry.setdefault("parent_ids", set()).add(str(notice["parent_id"]))
++        now = time.monotonic()
++        for reason, meta in aggregated.items():
++            payload: Dict[str, Any] = {
++                "__warning": FLOW_DROPPED_TYPE,
++                "reason": reason,
++                "count": meta.get("count", 1),
++            }
++            if "last_event_id" in meta:
++                payload["last_event_id"] = meta["last_event_id"]
++            if "bytes" in meta:
++                payload["bytes"] = meta["bytes"]
++            if "event_types" in meta:
++                payload["event_types"] = sorted(meta["event_types"])
++            if "parent_ids" in meta:
++                payload["parent_ids"] = sorted(meta["parent_ids"])
++            self._create_event(
++                bucket,
++                now,
++                level="flow",
++                phase="session",
++                type_=FLOW_DROPPED_TYPE,
++                who="system",
++                meta=payload,
++                parent_id=None,
++                is_injection=True,
++            )
 +
+     def _on_event_removed(self, bucket: SessionBucket, record: EventRecord) -> None:
+         event_id = record.data["id"]
+         meta = record.data.get("meta") or {}
+         turn_id = self._extract_turn_id(meta)
+ 
+         self._event_sessions.pop(event_id, None)
+ 
+         confirm_key = self._confirm_key(meta)
+         if confirm_key and bucket.open_confirms.get(confirm_key) == record:
+             bucket.open_confirms.pop(confirm_key, None)
+         key = turn_id or "__default__"
+         if bucket.open_tts.get(key) == record:
+             bucket.open_tts.pop(key, None)
+         if bucket.open_llm.get(key) == record:
+             bucket.open_llm.pop(key, None)
+         state = bucket.tts_state.get(key)
+         if state and state.get("event_id") == event_id:
+             bucket.tts_state.pop(key, None)
+ 
+     def _update_bucket_state(
+         self, bucket: SessionBucket, record: EventRecord, turn_id: Optional[str]
+     ) -> None:
+         type_ = record.data["type"]
+         meta = record.data.get("meta") or {}
+         key = turn_id or "__default__"
+diff --git a/docs/flow_handoff.md b/docs/flow_handoff.md
+index 63aaf92a2f444eec1f9b98950c09ed28f27b5098..e9896a59c7a54d5a060900c7b32f09c83d0abd3d 100644
+--- a/docs/flow_handoff.md
++++ b/docs/flow_handoff.md
+@@ -1,33 +1,44 @@
+ # Flow hand-off validation
+ 
+-The flow hand-off ZIP bundles the redacted transcript (`flow.ndjson`), the
+-prompt, supplemental metadata, and a `manifest.json` file that records the
+-SHA-1 fingerprints for every payload. Although the production API does not yet
+-embed this manifest, you can validate an export locally with the helper script
+-added for Phase 0.
++The flow hand-off ZIP bundles the transcript payload (`flow.ndjson` or
++`events/flow.ndjson.gz`), the prompt, supplemental metadata, and a
++`manifest.json` file that records the SHA-1 fingerprints for every artifact.
++When `privacy.pii_scrub` is enabled the export pipeline hashes obvious PII
++tokens (email addresses, API keys, external IPv4s) before the files are added
++to the archive. The response exposes the `X-Flow-PII-Scrubbed` header so you can
++confirm the option that was applied.
 +
-+def slice_client_console_for_session(session_id: str) -> Optional[bytes]:
-+    store = FlowStore()
-+    sid = _normalize_session_id(session_id)
-+    if not sid:
-+        return None
++If the optional `limits.max_bytes` guard is supplied the server enforces the cap
++and returns `413` with `{"error": "export_too_large"}` when the assembled ZIP
++would exceed the limit. This keeps bulk exports from starving the service and
++gives operators quick feedback when they need to tighten the include set.
+ 
+ ## Prerequisites
+ 
+ The validator understands JSON Schema draft 7. It will use the `jsonschema`
+ package when available, but also ships with a lightweight fallback so the script
+ works even in constrained environments.
+ 
+ ```bash
+ pip install jsonschema
+ ```
+ 
+ ## Running the validator
+ 
+ Pass the ZIP archive and the JSON Schema to the validation script:
+ 
+ ```bash
+ python tools/validate_flow_zip.py tools/example_flow.zip tools/flow_manifest.schema.json
+ ```
+ 
+ The script checks that the manifest satisfies the schema and that the SHA-1
+ values listed for each file match the actual archive contents. A successful run
+-prints `OK`.
++prints `OK`. Because the manifest lists the `include`, `privacy`, and `limits`
++blocks verbatim you can verify that UI toggles (logs, WS frames, PII scrub,
++max-bytes) were captured accurately.
+ 
+ The `tools/example_flow.zip` fixture mirrors the structure produced by the
+ `/api/v1/flow/handoff` endpoint and can be used as a smoke test for future
+-changes to the schema or validator.
++changes to the schema or validator. Refer to `docs/flow_logging.md` for an
++overview of the logging taxonomy and the **`flow_dropped`** breadcrumb that now
++appears whenever FlowStore trims old events.
+diff --git a/docs/flow_logging.md b/docs/flow_logging.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..f9887e3464fd2a8222d8e4348d7c4ec650650986
+--- /dev/null
++++ b/docs/flow_logging.md
+@@ -0,0 +1,75 @@
++# Flow logging backbone
 +
-+    with store._lock:
-+        bucket = store._sessions.get(sid)
-+        if not bucket:
-+            return None
-+        events = [copy.deepcopy(record.data) for record in bucket.events]
++The flow logging backbone collects a normalized view of every live session. It
++is designed to make both export-time diagnostics and real-time debugging feel
++predictable, even as the system grows new surfaces. This document describes the
++core building blocks that power the `/api/v1/flow/*` endpoints and the tooling
++layer that sits on top of them.
 +
-+    console_entries: List[Dict[str, Any]] = []
-+    for event in events:
-+        type_value = str(event.get("type") or "")
-+        if not type_value.startswith("client_"):
-+            continue
-+        meta = event.get("meta") if isinstance(event.get("meta"), Mapping) else {}
-+        entry: Dict[str, Any] = {
-+            "id": event.get("id"),
-+            "t_rel_ms": event.get("t_rel_ms"),
-+            "level": event.get("level"),
-+            "phase": event.get("phase"),
-+            "who": event.get("who"),
-+            "type": type_value,
-+        }
-+        if meta:
-+            entry["meta"] = _coerce_json_value(dict(meta))
-+        console_entries.append(_strip_none(entry))
++## Event taxonomy
 +
-+    return _gzip_ndjson(console_entries)
++Flow events are stored in a single append-only timeline. Each event records the
++`level`, `phase`, `type`, `who`, and `meta` payload that describe the state
++transition. The following taxonomy keeps the surface area predictable:
 +
++| Level        | Example types                                             | Notes |
++| ------------ | --------------------------------------------------------- | ----- |
++| `flow`       | `session_open`, `session_config`, `greet_end`, `diag_latency` | Primary turn/summary events that drive diagnostics. |
++| `transition` | `asr_partial_first`, `tts_start`, `llm_start`              | Short-lived instrumentation for turn-by-turn tracing. |
++| `debug`      | `client_console_error`, `ws_frame_out`, `payload_sig`, **`flow_dropped`** | Verbose breadcrumbs and health signals surfaced in exports. |
 +
-+def slice_server_log_for_session(session_id: str) -> Optional[bytes]:
-+    sid = _normalize_session_id(session_id)
-+    if not sid:
-+        return None
++The **`flow_dropped`** breadcrumb is emitted automatically whenever FlowStore
++has to discard data. This happens when either the in-memory event deque reaches
++its cap or when an attached batch payload exceeds the configured limits. The
++breadcrumb includes contextual metadata (`reason`, `count`, `bytes`, and related
++IDs) so that long-running sessions never truncate silently.
 +
-+    try:
-+        history = get_admin_log_history()
-+    except Exception:
-+        history = []
++## Canonical session markers
 +
-+    log_entries: List[Dict[str, Any]] = []
-+    for item in history:
-+        if not isinstance(item, Mapping):
-+            continue
-+        item_sid = _normalize_session_id(item.get("session_id") or item.get("sid"))
-+        if not item_sid or item_sid != sid:
-+            continue
-+        payload = _coerce_json_value(dict(item)) if isinstance(item, dict) else _coerce_json_value(item)
-+        if isinstance(payload, dict):
-+            payload["session_id"] = sid
-+            payload["sid"] = sid
-+            log_entries.append(_strip_none(payload))
++Certain event types double as invariants for downstream tooling:
 +
-+    return _gzip_ndjson(log_entries)
++- `session_config` — captured once per session and exported verbatim as
++  `config/config.json` in hand-off bundles.
++- `greet_end` — signals that the greeting turn completed successfully and is
++  used by dashboards that track activation rate.
++- `diag_latency` — emitted by the backend whenever a diagnostic latency sample
++  is recorded, keeping the timeline grounded with server-side numbers.
++- `asr_partial_first` — only emitted once per turn, enforcing the ASR invariant
++  that partial hypotheses are deduplicated.
 +
++The FlowStore helper methods (`snapshot`, `list`, `sessions`) always operate on
++materialized `EventRecord` objects, so any UI or automation that inspects the
++stream can count on these anchors existing when the corresponding subsystem ran.
 +
-+__all__ = [
-+    "FlowStore",
-+    "assemble_ws_frames",
-+    "slice_client_console_for_session",
-+    "slice_server_log_for_session",
-+]
-diff --git a/static/js/admin_flow.js b/static/js/admin_flow.js
-index b743f0c50469cac8795a5798054b1c50991e6456..5d7d9fa982b5feba3f883a409ce176bad7f1a9e4 100644
---- a/static/js/admin_flow.js
-+++ b/static/js/admin_flow.js
-@@ -1,33 +1,34 @@
- const POLL_MIN_MS = 750;
- const POLL_MAX_MS = 1000;
- const MAX_SESSION_RESULTS = 20;
- const MAX_META_LENGTH = 48;
- const LEVELS = ["flow", "transition", "debug", "raw"];
- const FORENSIC_DURATION_MS = 10_000;
- const HANDOFF_PROMPT =
-   "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), smallest viable fix, and validation steps.";
-+const HANDOFF_STORAGE_KEY = "askchip.flow.handoffOptions";
- 
- const defaultFetchImpl =
-   typeof fetch === "function"
-     ? (...args) => fetch(...args)
-     : () => Promise.reject(new Error("fetch not available"));
- let fetchImpl = defaultFetchImpl;
- 
- const PHASE_COLORS = {
-   session: "#7aa0ff",
-   turn: "#62ddb8",
-   guardrail: "#f78ed2",
-   confirm: "#fbbf24",
-   nlu: "#c084fc",
-   nlg: "#f97316",
-   tts: "#22d3ee",
-   audio: "#38bdf8",
-   evidence: "#facc15",
-   ops: "#f97316",
-   policy: "#fbbf24",
-   default: "#717b9b",
- };
- 
- const GROUP_LABELS = {
-   phase: "Phase",
-   turn: "Turn",
-@@ -43,92 +44,107 @@ const state = {
-   expanded: new Set(),
-   bookmarks: [],
-   pollTimer: null,
-   pollSinceMs: 0,
-   levels: new Set(["flow", "transition"]),
-   grouping: "chronological",
-   live: false,
-   filterText: "",
-   filterChips: [],
-   turnFilter: "",
-   matchedIds: new Set(),
-   visibleIds: new Set(),
-   drawerEventId: null,
-   lastFetchedAt: null,
-   loading: false,
-   hints: [],
-   hintMap: new Map(),
-   forensicActive: false,
-   forensicTimer: null,
-   forensicTicker: null,
-   forensicPrevLevels: null,
-   forensicPrevExpanded: null,
-   forensicUntil: 0,
-   forensicExpandAll: false,
-   pendingExpandedRestore: null,
-+  handoffOptions: {
-+    mode: "redacted",
-+    includeWs: false,
-+    includeLogs: false,
-+    piiScrub: false,
-+    redaction: "minimal",
-+    maxSizeMb: "",
-+  },
- };
- 
- const els = {};
- let sessionsDebounce = null;
- let popoverNode = null;
- 
- function init() {
-   const root = document.getElementById("admin-flow-app");
-   if (!root) {
-     return;
-   }
-   state.root = root;
- 
-   els.sessionInput = document.getElementById("flowSessionInput");
-   els.sessionOptions = document.getElementById("flowSessionOptions");
-   els.sessionResults = document.getElementById("flowSessionResults");
-   els.sessionHint = document.getElementById("flowSessionHint");
-   els.sessionRefresh = document.getElementById("flowSessionRefresh");
-   els.levelContainer = root.querySelector("[data-ref=\"level-toggles\"]");
-   els.groupContainer = root.querySelector("[data-ref=\"grouping\"]");
-   els.filterInput = document.getElementById("flowFilterInput");
-   els.turnInput = document.getElementById("flowTurnInput");
-   els.filterChips = document.getElementById("flowFilterChips");
-   els.tailState = document.getElementById("flowTailState");
-   els.tailToggle = document.getElementById("flowTailToggle");
-   els.tailStep = document.getElementById("flowTailStep");
-   els.timeline = document.getElementById("flowTimeline");
-   els.forensic = document.getElementById("flowForensic");
-   els.exportFull = document.getElementById("flowExportFull");
-   els.exportRedacted = document.getElementById("flowExportRedacted");
-   els.copyLink = document.getElementById("flowCopyLink");
-   els.handoff = document.getElementById("flowHandoff");
-   els.drawer = document.getElementById("flowDrawer");
-   els.drawerTitle = document.getElementById("flowDrawerTitle");
-   els.drawerMeta = document.getElementById("flowDrawerMeta");
-   els.drawerJson = document.getElementById("flowDrawerJson");
-   els.drawerRelated = document.getElementById("flowDrawerRelated");
-   els.drawerCopy = document.getElementById("flowDrawerCopy");
-   els.drawerClose = document.getElementById("flowDrawerClose");
-   els.hints = document.getElementById("flowHints");
-   els.treeControls = root.querySelector('[data-ref="tree-controls"]');
--
-+  els.handoffMode = document.getElementById("flowHandoffMode");
-+  els.handoffIncludeWs = document.getElementById("flowHandoffIncludeWs");
-+  els.handoffIncludeLogs = document.getElementById("flowHandoffIncludeLogs");
-+  els.handoffPiiScrub = document.getElementById("flowHandoffPiiScrub");
-+  els.handoffRedaction = document.getElementById("flowHandoffRedaction");
-+  els.handoffMaxSize = document.getElementById("flowHandoffMaxSize");
++## Client breadcrumbs
 +
-+  loadHandoffOptions();
-   bindEvents();
-   hydrateFromLocation();
-   refreshSessions();
-   renderSessions();
-   renderFilters();
-   renderTail();
-   renderTimeline();
-   renderDrawer();
-   renderHints();
-   renderForensicButton();
- 
-   if (state.sessionId) {
-     fetchTrace({ reset: true });
-     goLive();
-   }
- }
- 
- document.addEventListener("DOMContentLoaded", init);
- 
- function bindEvents() {
-   if (els.sessionInput) {
-     els.sessionInput.addEventListener("input", onSessionInput);
-     els.sessionInput.addEventListener("keydown", (ev) => {
-       if (ev.key === "Enter") {
-         ev.preventDefault();
-@@ -207,50 +223,92 @@ function bindEvents() {
-         goLive(true);
-       }
-     });
-   }
- 
-   if (els.tailStep) {
-     els.tailStep.addEventListener("click", () => fetchTrace({ reset: false }));
-   }
- 
-   if (els.forensic) {
-     els.forensic.addEventListener("click", () => toggleForensicMode());
-   }
- 
-   if (els.exportFull) {
-     els.exportFull.addEventListener("click", () => downloadExport({ redacted: false }));
-   }
- 
-   if (els.exportRedacted) {
-     els.exportRedacted.addEventListener("click", () => downloadExport({ redacted: true }));
-   }
- 
-   if (els.copyLink) {
-     els.copyLink.addEventListener("click", () => copyLink());
-   }
- 
-+  if (els.handoffMode) {
-+    els.handoffMode.addEventListener("change", (ev) => {
-+      const value = ev.currentTarget?.value === "full" ? "full" : "redacted";
-+      state.handoffOptions.mode = value;
-+      persistHandoffOptions();
-+    });
-+  }
-+  if (els.handoffIncludeWs) {
-+    els.handoffIncludeWs.addEventListener("change", (ev) => {
-+      state.handoffOptions.includeWs = Boolean(ev.currentTarget?.checked);
-+      persistHandoffOptions();
-+    });
-+  }
-+  if (els.handoffIncludeLogs) {
-+    els.handoffIncludeLogs.addEventListener("change", (ev) => {
-+      state.handoffOptions.includeLogs = Boolean(ev.currentTarget?.checked);
-+      persistHandoffOptions();
-+    });
-+  }
-+  if (els.handoffPiiScrub) {
-+    els.handoffPiiScrub.addEventListener("change", (ev) => {
-+      state.handoffOptions.piiScrub = Boolean(ev.currentTarget?.checked);
-+      persistHandoffOptions();
-+    });
-+  }
-+  if (els.handoffRedaction) {
-+    els.handoffRedaction.addEventListener("change", (ev) => {
-+      const value = ev.currentTarget?.value === "strict" ? "strict" : "minimal";
-+      state.handoffOptions.redaction = value;
-+      persistHandoffOptions();
-+    });
-+  }
-+  if (els.handoffMaxSize) {
-+    const handleMaxSize = () => {
-+      const raw = (els.handoffMaxSize.value || "").trim();
-+      state.handoffOptions.maxSizeMb = raw;
-+      persistHandoffOptions();
-+    };
-+    els.handoffMaxSize.addEventListener("input", handleMaxSize);
-+    els.handoffMaxSize.addEventListener("change", handleMaxSize);
-+  }
++Browser clients emit breadcrumbs via `POST /api/v1/flow/breadcrumb`. FlowStore
++rate-limits breadcrumbs per session (`30` per minute) and normalizes the payload
++so each breadcrumb lands under the `client_*` namespace. The UI surfaces the
++following hints so operators can filter the noise:
 +
-   if (els.handoff) {
-     els.handoff.addEventListener("click", () => handoffToChatGPT());
-   }
- 
-   if (els.timeline) {
-     els.timeline.addEventListener("click", onTimelineClick);
-     els.timeline.addEventListener("contextmenu", onTimelineContext);
-   }
- 
-   if (els.drawerClose) {
-     els.drawerClose.addEventListener("click", () => openDrawer(null));
-   }
-   if (els.drawerCopy) {
-     els.drawerCopy.addEventListener("click", () => copyDrawerJson());
-   }
-   if (els.drawerRelated) {
-     els.drawerRelated.addEventListener("click", (ev) => {
-       const btn = ev.target.closest("button[data-target]");
-       if (!btn) return;
-       const target = btn.getAttribute("data-target");
-       if (target) {
-         focusEvent(target);
-       }
-     });
-   }
-@@ -1342,80 +1400,121 @@ function copyLink() {
-   if (state.grouping && state.grouping !== "chronological") {
-     params.set("group", state.grouping);
-   }
-   if (state.filterText) params.set("filter", state.filterText);
-   if (state.turnFilter) params.set("turn", state.turnFilter);
-   if (state.filterChips.length) {
-     params.set(
-       "chips",
-       state.filterChips
-         .map((chip) => `${encodeURIComponent(chip.key)}:${encodeURIComponent(chip.value)}`)
-         .join(",")
-     );
-   }
-   const hash = `#/admin/flow${params.toString() ? `?${params.toString()}` : ""}`;
-   const link = `${window.location.origin}/admin${hash}`;
-   writeClipboardText(link)
-     .then(() => setHint("Link copied."))
-     .catch(() => setHint("Copy failed."));
- }
- 
- function handoffToChatGPT() {
-   if (!state.sessionId) {
-     setHint("Select a session first.");
-     return;
-   }
-+  syncHandoffOptionsFromDom();
-+  persistHandoffOptions();
++- A “Client” toggle controls whether `debug` → `client_*` events are displayed.
++- Rate-limit hit breadcrumbs include a `__warning` field so repeated bursts are
++  obvious in both the live trace and exported logs.
++- When exports are requested with `privacy.pii_scrub = true`, the client log
++  artifacts are scrubbed (emails hashed, tokens summarized, external IPv4
++  addresses replaced with hashed placeholders) before they are archived.
 +
-+  const opts = state.handoffOptions;
-+  const includeOptions = {
-+    ws: Boolean(opts.includeWs),
-+    logs: Boolean(opts.includeLogs),
-+  };
-+  const privacyOptions = {
-+    redaction: opts.redaction === "strict" ? "strict" : "minimal",
-+  };
-+  if (opts.piiScrub) {
-+    privacyOptions.pii_scrub = true;
-+  }
-+  const limitsOptions = {};
-+  const maxSize = Number.parseFloat(opts.maxSizeMb);
-+  if (Number.isFinite(maxSize) && maxSize > 0) {
-+    limitsOptions.max_bytes = Math.round(maxSize * 1024 * 1024);
-+  }
++## UI controls and export knobs
 +
-+  const optionsPayload = {
-+    mode: opts.mode === "full" ? "full" : "redacted",
-+    include: includeOptions,
-+    privacy: privacyOptions,
-+  };
-+  if (Object.keys(limitsOptions).length) {
-+    optionsPayload.limits = limitsOptions;
-+  }
++The flow inspector exposes a set of controls that map directly onto the export
++options:
 +
-   const payload = {
-     session_id: state.sessionId,
-     levels: Array.from(state.levels),
-     prompt: HANDOFF_PROMPT,
-+    mode: optionsPayload.mode,
-+    options: optionsPayload,
-   };
++- **Levels filter** — controls which `levels` array is sent to `/flow/handoff`
++  and `/flow/export.ndjson`.
++- **Privacy guard** — toggles `privacy.pii_scrub`, enabling the export-time
++  scrubbing described above. The UI reflects the state via the `X-Flow-PII-Scrubbed`
++  response header so operators know what was delivered.
++- **Include logs / WebSocket frames** — drives the `options.include.logs` and
++  `options.include.ws` switches.
++- **Payload cap** — surfaces the `limits.max_bytes` control; exceeding the limit
++  now returns a `413` with `{"error": "export_too_large"}` so the operator can
++  re-export with a larger cap.
 +
-   setHint("Preparing hand-off…");
-   fetchImpl("/api/v1/flow/handoff", {
-     method: "POST",
-     credentials: "include",
-     headers: { "Content-Type": "application/json" },
-     body: JSON.stringify(payload),
-   })
-     .then((resp) => {
-       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
--      return resp.blob();
-+      const sizeHeader = resp.headers.get("X-Flow-Payload-Bytes");
-+      const hashHeader = resp.headers.get("X-Flow-Payload-Sha1");
-+      return resp
-+        .blob()
-+        .then((blob) => ({ blob, sizeHeader, hashHeader }));
-     })
--    .then((blob) => {
-+    .then(({ blob, sizeHeader, hashHeader }) => {
-       const href = URL.createObjectURL(blob);
-       const link = document.createElement("a");
-       const iso = new Date().toISOString().replace(/[:.]/g, "-");
-       const safeSession = state.sessionId.replace(/[^a-zA-Z0-9_-]+/g, "_");
-       link.href = href;
-       link.download = `flow_handoff_${safeSession}_${iso}.zip`;
-       document.body.appendChild(link);
-       link.click();
-       requestAnimationFrame(() => {
-         URL.revokeObjectURL(href);
-         link.remove();
-       });
--      setHint("Hand-off package downloaded.");
-+      const sizeText = formatBytes(sizeHeader);
-+      const hashPreview = hashHeader ? String(hashHeader).slice(0, 8) : "";
-+      const parts = ["Hand-off package downloaded."];
-+      if (sizeText) parts.push(`Size ${sizeText}`);
-+      if (hashPreview) parts.push(`sha1 ${hashPreview}`);
-+      setHint(parts.join(" · "));
-     })
-     .catch((err) => {
-       console.warn("[flow] hand-off failed", err);
-       setHint("Hand-off failed.");
-     });
- }
- 
- function buildSessionSummary() {
-   const events = Array.from(state.events.values()).sort((a, b) => a.t_rel_ms - b.t_rel_ms);
-   const head = events.slice(0, 5).map((evt) => `- ${evt.t_rel_ms}ms ${evt.phase} ${evt.type}`);
-   return `Ask Chip Flow Summary\nSession: ${state.sessionId}\nLevels: ${Array.from(state.levels).join(", ")}\nEvents captured: ${events.length}\nFirst samples:\n${head.join("\n")}`;
- }
- 
- function openDrawer(eventId) {
-   state.drawerEventId = eventId;
-   renderDrawer();
-   if (!eventId) return;
-   const row = els.timeline?.querySelector(`.timeline-row[data-event-id="${cssEscape(eventId)}"]`);
-   if (row) {
-     row.scrollIntoView({ behavior: "smooth", block: "center" });
-     row.classList.add("pulse");
-     setTimeout(() => row.classList.remove("pulse"), 1400);
-   }
- }
- 
-@@ -1503,50 +1602,147 @@ function focusEvent(eventId) {
-         row.scrollIntoView({ behavior: "smooth", block: "center" });
-       } catch {
-         row.scrollIntoView({ block: "center" });
-       }
-       setTimeout(() => {
-         row.classList.remove("pulse");
-       }, 1400);
-     }
-   });
- }
- 
- function copyDrawerJson() {
-   const event = state.drawerEventId ? state.events.get(state.drawerEventId) : null;
-   if (!event) return;
-   const text = JSON.stringify(event.raw, null, 2);
-   writeClipboardText(text)
-     .then(() => setHint("Event JSON copied."))
-     .catch(() => setHint("Copy failed."));
- }
- 
- function setHint(text) {
-   if (!els.sessionHint) return;
-   els.sessionHint.textContent = text;
- }
- 
-+function getDefaultHandoffOptions() {
-+  return {
-+    mode: "redacted",
-+    includeWs: false,
-+    includeLogs: false,
-+    piiScrub: false,
-+    redaction: "minimal",
-+    maxSizeMb: "",
-+  };
++Understanding these levers makes it possible to reproduce production issues in a
++few clicks while keeping the exported artefacts free of accidental PII.
+diff --git a/e2e/flow_export.spec.ts b/e2e/flow_export.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..8d96baf308e5d1bd4338d658c2893eb670c9f5e4
+--- /dev/null
++++ b/e2e/flow_export.spec.ts
+@@ -0,0 +1,189 @@
++import { test, expect, APIRequestContext } from '@playwright/test';
++import { gunzipSync, inflateRawSync } from 'node:zlib';
++
++interface ZipEntry {
++  name: string;
++  compression: number;
++  compressedSize: number;
++  data: Buffer;
 +}
 +
-+function loadHandoffOptions() {
-+  state.handoffOptions = getDefaultHandoffOptions();
-+  try {
-+    const raw = window.localStorage?.getItem(HANDOFF_STORAGE_KEY);
-+    if (raw) {
-+      const parsed = JSON.parse(raw);
-+      if (parsed && typeof parsed === "object") {
-+        state.handoffOptions = {
-+          ...state.handoffOptions,
-+          ...parsed,
-+        };
-+      }
++const ZIP_CENTRAL_DIR_SIGNATURE = 0x02014b50;
++const ZIP_LOCAL_FILE_SIGNATURE = 0x04034b50;
++const ZIP_END_CENTRAL_DIR_SIGNATURE = 0x06054b50;
++
++function readUInt32LE(buffer: Buffer, offset: number): number {
++  return buffer.readUInt32LE(offset);
++}
++
++function readUInt16LE(buffer: Buffer, offset: number): number {
++  return buffer.readUInt16LE(offset);
++}
++
++function findEndOfCentralDirectory(buffer: Buffer): number {
++  for (let offset = buffer.length - 22; offset >= 0; offset--) {
++    if (readUInt32LE(buffer, offset) === ZIP_END_CENTRAL_DIR_SIGNATURE) {
++      return offset;
 +    }
-+  } catch (err) {
-+    console.warn("[flow] failed to load hand-off options", err);
 +  }
-+  applyHandoffOptions();
++  throw new Error('ZIP end of central directory not found');
 +}
 +
-+function applyHandoffOptions() {
-+  const opts = state.handoffOptions;
-+  if (els.handoffMode) {
-+    els.handoffMode.value = opts.mode === "full" ? "full" : "redacted";
++function parseZipEntries(buffer: Buffer): Map<string, Buffer> {
++  const eocdOffset = findEndOfCentralDirectory(buffer);
++  const totalEntries = readUInt16LE(buffer, eocdOffset + 10);
++  const centralDirectoryOffset = readUInt32LE(buffer, eocdOffset + 16);
++
++  let cursor = centralDirectoryOffset;
++  const entries: ZipEntry[] = [];
++
++  for (let index = 0; index < totalEntries; index++) {
++    const signature = readUInt32LE(buffer, cursor);
++    if (signature !== ZIP_CENTRAL_DIR_SIGNATURE) {
++      throw new Error('Invalid central directory signature');
++    }
++
++    const compression = readUInt16LE(buffer, cursor + 10);
++    const compressedSize = readUInt32LE(buffer, cursor + 20);
++    const nameLength = readUInt16LE(buffer, cursor + 28);
++    const extraLength = readUInt16LE(buffer, cursor + 30);
++    const commentLength = readUInt16LE(buffer, cursor + 32);
++    const localHeaderOffset = readUInt32LE(buffer, cursor + 42);
++    const name = buffer.toString('utf-8', cursor + 46, cursor + 46 + nameLength);
++
++    const entryData = extractLocalFile(buffer, localHeaderOffset, compression, compressedSize);
++    entries.push({
++      name,
++      compression,
++      compressedSize,
++      data: entryData,
++    });
++
++    cursor += 46 + nameLength + extraLength + commentLength;
 +  }
-+  if (els.handoffIncludeWs) {
-+    els.handoffIncludeWs.checked = Boolean(opts.includeWs);
++
++  const files = new Map<string, Buffer>();
++  for (const entry of entries) {
++    files.set(entry.name, entry.data);
 +  }
-+  if (els.handoffIncludeLogs) {
-+    els.handoffIncludeLogs.checked = Boolean(opts.includeLogs);
-+  }
-+  if (els.handoffPiiScrub) {
-+    els.handoffPiiScrub.checked = Boolean(opts.piiScrub);
-+  }
-+  if (els.handoffRedaction) {
-+    els.handoffRedaction.value = opts.redaction === "strict" ? "strict" : "minimal";
-+  }
-+  if (els.handoffMaxSize) {
-+    els.handoffMaxSize.value = opts.maxSizeMb ? String(opts.maxSizeMb) : "";
-+  }
++  return files;
 +}
 +
-+function persistHandoffOptions() {
-+  try {
-+    window.localStorage?.setItem(
-+      HANDOFF_STORAGE_KEY,
-+      JSON.stringify(state.handoffOptions)
-+    );
-+  } catch (err) {
-+    console.warn("[flow] failed to persist hand-off options", err);
++function extractLocalFile(
++  buffer: Buffer,
++  offset: number,
++  compression: number,
++  compressedSize: number,
++): Buffer {
++  const signature = readUInt32LE(buffer, offset);
++  if (signature !== ZIP_LOCAL_FILE_SIGNATURE) {
++    throw new Error('Invalid local file header');
 +  }
++  const nameLength = readUInt16LE(buffer, offset + 26);
++  const extraLength = readUInt16LE(buffer, offset + 28);
++  const dataStart = offset + 30 + nameLength + extraLength;
++  const dataEnd = dataStart + compressedSize;
++  const slice = buffer.slice(dataStart, dataEnd);
++  if (compression === 0) {
++    return slice;
++  }
++  if (compression === 8) {
++    return inflateRawSync(slice);
++  }
++  throw new Error(`Unsupported compression method ${compression}`);
 +}
 +
-+function syncHandoffOptionsFromDom() {
-+  if (els.handoffMode) {
-+    state.handoffOptions.mode = els.handoffMode.value === "full" ? "full" : "redacted";
++async function adminHeaders(request: APIRequestContext): Promise<Record<string, string>> {
++  const baseHeaders: Record<string, string> = { 'X-User-Email': 'admin@example.com' };
++  const csrfResp = await request.get('/api/v1/csrf', { headers: baseHeaders });
++  expect(csrfResp.ok()).toBeTruthy();
++  const token =
++    csrfResp.headers()['x-csrf-token'] ||
++    (await csrfResp.json().catch(() => ({ csrf: undefined }))).csrf;
++  if (token) {
++    baseHeaders['X-CSRF-Token'] = String(token);
 +  }
-+  if (els.handoffIncludeWs) {
-+    state.handoffOptions.includeWs = Boolean(els.handoffIncludeWs.checked);
-+  }
-+  if (els.handoffIncludeLogs) {
-+    state.handoffOptions.includeLogs = Boolean(els.handoffIncludeLogs.checked);
-+  }
-+  if (els.handoffPiiScrub) {
-+    state.handoffOptions.piiScrub = Boolean(els.handoffPiiScrub.checked);
-+  }
-+  if (els.handoffRedaction) {
-+    state.handoffOptions.redaction = els.handoffRedaction.value === "strict" ? "strict" : "minimal";
-+  }
-+  if (els.handoffMaxSize) {
-+    state.handoffOptions.maxSizeMb = (els.handoffMaxSize.value || "").trim();
-+  }
++  return baseHeaders;
 +}
 +
-+function formatBytes(valueLike) {
-+  if (valueLike === null || typeof valueLike === "undefined" || valueLike === "") {
-+    return "";
-+  }
-+  const value = Number(valueLike);
-+  if (!Number.isFinite(value) || value < 0) return "";
-+  if (value < 1024) return `${Math.round(value)} B`;
-+  const kb = value / 1024;
-+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-+  const mb = kb / 1024;
-+  return `${mb.toFixed(1)} MB`;
++async function seedBreadcrumb(
++  request: APIRequestContext,
++  headers: Record<string, string>,
++  sessionId: string,
++) {
++  const payload = {
++    session_id: sessionId,
++    event: 'console',
++    meta: {
++      details: 'Contact support at hi@example.com with token sk-playwrightTOKEN123 and IP 198.51.100.77',
++    },
++  };
++  const resp = await request.post('/api/v1/flow/breadcrumb', { headers, data: payload });
++  expect(resp.status()).toBe(204);
 +}
 +
- function updateHistory() {
-   if (state.forensicActive) return;
-   if (!state.sessionId) return;
-   const params = new URLSearchParams();
-   params.set("session_id", state.sessionId);
-   params.set("levels", Array.from(state.levels).join(","));
-   if (state.grouping && state.grouping !== "chronological") {
-     params.set("group", state.grouping);
-   }
-   if (state.filterText) params.set("filter", state.filterText);
-   if (state.turnFilter) params.set("turn", state.turnFilter);
-   if (state.filterChips.length) {
-     params.set(
-       "chips",
-       state.filterChips.map((chip) => `${encodeURIComponent(chip.key)}:${encodeURIComponent(chip.value)}`).join(",")
-     );
-   }
-   const url = `/admin/flow?${params.toString()}`;
-   window.history.replaceState({}, "", url);
-   window.location.hash = `#/admin/flow${params.toString() ? `?${params.toString()}` : ""}`;
- }
- 
- function cssEscape(value) {
-   if (window.CSS?.escape) return window.CSS.escape(value);
-   return value.replace(/[^a-zA-Z0-9_-]/g, "");
-diff --git a/templates/admin_flow.html b/templates/admin_flow.html
-index ca16312d3e8a7a9410204046161bc816ecc61999..699f05d9d72ceda54c13bb0e9b89062c39cb2056 100644
---- a/templates/admin_flow.html
-+++ b/templates/admin_flow.html
-@@ -45,50 +45,82 @@
-       <div class="flow-header-secondary">
-         <div class="filters" data-ref="filters">
-           <label class="filter-search">
-             <span>Filter</span>
-             <input id="flowFilterInput" type="search" placeholder="type, who, phase…" autocomplete="off">
-           </label>
-           <label class="filter-turn">
-             <span>Turn</span>
-             <input id="flowTurnInput" type="number" min="0" step="1" placeholder="Any">
-           </label>
-           <div class="filter-chips" id="flowFilterChips" aria-live="polite"></div>
-         </div>
-         <div class="tail" data-ref="tail">
-           <div class="tail-state" id="flowTailState" role="status">Paused</div>
-           <div class="tail-actions">
-             <button type="button" id="flowTailToggle" class="toggle">Go live</button>
-             <button type="button" id="flowTailStep" class="toggle" title="Fetch latest once">Refresh</button>
-           </div>
-         </div>
-         <div class="flow-actions" data-ref="actions">
-           <button type="button" id="flowForensic" class="action-btn">Forensic mode</button>
-           <button type="button" id="flowExportFull" class="action-btn">Export NDJSON</button>
-           <button type="button" id="flowExportRedacted" class="action-btn">Export Redacted</button>
-           <button type="button" id="flowCopyLink" class="action-btn">Copy link</button>
-           <button type="button" id="flowHandoff" class="action-btn">Hand off to ChatGPT</button>
-+          <div class="handoff-options" id="flowHandoffOptions" aria-label="Hand-off options">
-+            <label class="handoff-option">
-+              <span>Mode</span>
-+              <select id="flowHandoffMode">
-+                <option value="redacted">Redacted</option>
-+                <option value="full">Full</option>
-+              </select>
-+            </label>
-+            <label class="handoff-option checkbox">
-+              <input type="checkbox" id="flowHandoffIncludeWs">
-+              <span>Include WS frames</span>
-+            </label>
-+            <label class="handoff-option checkbox">
-+              <input type="checkbox" id="flowHandoffIncludeLogs">
-+              <span>Include logs</span>
-+            </label>
-+            <label class="handoff-option checkbox">
-+              <input type="checkbox" id="flowHandoffPiiScrub">
-+              <span>Scrub PII</span>
-+            </label>
-+            <label class="handoff-option">
-+              <span>Redaction</span>
-+              <select id="flowHandoffRedaction">
-+                <option value="minimal">Minimal</option>
-+                <option value="strict">Strict</option>
-+              </select>
-+            </label>
-+            <label class="handoff-option">
-+              <span>Max size (MB)</span>
-+              <input type="number" id="flowHandoffMaxSize" min="1" step="1" placeholder="Auto">
-+            </label>
-+          </div>
-         </div>
-       </div>
-     </header>
- 
-     <main class="flow-main">
-       <div class="timeline-shell">
-         <div class="flow-hint-bar">
-           <span class="hint-label">Smart hints</span>
-           <div class="hint-badges" id="flowHints" aria-live="polite"></div>
-         </div>
-         <div class="timeline-toolbar">
-           <div class="tree-controls" data-ref="tree-controls">
-             <span class="group-label">Tree</span>
-             <div class="toggle-group">
-               <button type="button" class="toggle" data-tree="collapse">Collapse all</button>
-               <button type="button" class="toggle" data-tree="flow">Expand flow</button>
-               <button type="button" class="toggle" data-tree="all">Expand all</button>
-             </div>
-           </div>
-         </div>
-         <div class="timeline-head">
-           <div class="timeline-col rail" aria-hidden="true"></div>
-           <div class="timeline-col time">Time (ms)</div>
-           <div class="timeline-col phase">Phase</div>
-           <div class="timeline-col who">Who</div>
-diff --git a/tests/test_flow_api.py b/tests/test_flow_api.py
-index 6332c2bfa6f52b8cd3edda98289e176e0dc10500..23f83cfe873daa38c11251f3424bb1f4733f5447 100644
---- a/tests/test_flow_api.py
-+++ b/tests/test_flow_api.py
-@@ -1,46 +1,49 @@
- import gzip
- import hashlib
- import io
- import json
- import zipfile
- 
- import pytest
- 
- from app.api_v1 import flow as flow_api
- from app.asgi_gateway import app as flask_app
- from app.flow.trace import FlowStore
-+from app.admin_log import clear_admin_log_history_for_tests, emit as admin_log_emit
- 
- 
- @pytest.fixture(autouse=True)
- def reset_flow_store():
-     store = FlowStore()
-     store._init()
-     flow_api._CLIENT_BREADCRUMB_HITS.clear()
-+    clear_admin_log_history_for_tests()
-     yield
-     store._init()
-     flow_api._CLIENT_BREADCRUMB_HITS.clear()
-+    clear_admin_log_history_for_tests()
- 
- 
- @pytest.fixture
- def admin_env(monkeypatch):
-     monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
-     return {"X-User-Email": "admin@example.com"}
- 
- 
- @pytest.fixture
- def flow_clock(monkeypatch):
-     clock = {"now": 1000.0}
- 
-     def fake_monotonic():
-         return clock["now"]
- 
-     monkeypatch.setattr("app.flow.trace.time.monotonic", fake_monotonic)
- 
-     def advance(ms: int) -> None:
-         clock["now"] += ms / 1000.0
- 
-     return advance
- 
- 
- def _csrf_headers(client):
-     resp = client.get("/api/v1/csrf")
-@@ -333,75 +336,154 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
-     resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
-     assert resp.status_code == 200
-     assert resp.headers["Content-Type"].startswith("application/zip")
-     assert resp.headers["X-Flow-Redacted"] == "0"
-     assert resp.headers["X-Flow-Mode"] == "full"
-     assert resp.headers["X-Flow-Payload-Bytes"] == str(len(resp.data))
-     assert resp.headers["X-Flow-Payload-Sha1"] == hashlib.sha1(resp.data).hexdigest()
- 
-     with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
-         names = set(archive.namelist())
-         assert {
-             "prompt.txt",
-             "manifest.json",
-             "events/flow.ndjson.gz",
-             "config/config.json",
-         } <= names
- 
-         prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
-         assert prompt_text == "Investigate deeply"
- 
-         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
-         assert manifest["schema_version"] == "1.0"
-         assert manifest["session_id"] == "sess-full"
-         assert manifest["meta"]["mode"] == "full"
-         assert manifest["meta"]["redacted"] is False
--        assert manifest["meta"]["include"]["ws"] is True
--        assert manifest["meta"]["include"]["logs"] is False
-+        assert manifest["meta"]["include"]["ws"] is False
-+        assert "logs" not in manifest["meta"]["include"]
-         assert manifest["meta"]["privacy"]["pii_scrub"] is True
-         assert manifest["meta"]["privacy"]["redaction"] == "minimal"
-         assert manifest["meta"]["limits"]["max_bytes"] == 5_000_000
-         assert manifest["event_count"] >= 2
- 
-         files_meta = {entry["path"]: entry for entry in manifest["files"]}
-         for path, entry in files_meta.items():
-             data = archive.read(path)
-             assert entry["bytes"] == len(data)
-             assert entry["sha1"] == hashlib.sha1(data).hexdigest()
-             assert entry["sha1_first8"] == entry["sha1"][:8]
- 
-         events_text = gzip.decompress(archive.read("events/flow.ndjson.gz")).decode("utf-8")
-         assert "Full transcript event" in events_text
-         assert "keep" in events_text
- 
-         config_payload = json.loads(
-             archive.read("config/config.json").decode("utf-8")
-         )
-         assert config_payload["foo"] == "bar"
-         assert config_payload["nested"]["value"] == 1
- 
- 
-+def test_flow_handoff_includes_optional_artifacts(admin_env):
++test.describe('flow export handoff', () => {
++  test('redacted and full exports honor options', async ({ request }) => {
++    const headers = await adminHeaders(request);
++    const sessionId = `e2e-flow-${Date.now()}`;
++
++    await seedBreadcrumb(request, headers, sessionId);
++
++    const redactedResp = await request.post('/api/v1/flow/handoff', {
++      headers,
++      data: {
++        session_id: sessionId,
++        levels: ['debug'],
++        options: {
++          privacy: { pii_scrub: true },
++        },
++      },
++    });
++    expect(redactedResp.status()).toBe(200);
++    expect(redactedResp.headers()['x-flow-pii-scrubbed']).toBe('1');
++
++    const redactedZip = parseZipEntries(Buffer.from(await redactedResp.body()));
++    expect(redactedZip.has('flow.ndjson')).toBeTruthy();
++    expect(redactedZip.has('meta.json')).toBeTruthy();
++    const redactedNdjson = redactedZip.get('flow.ndjson')!.toString('utf-8');
++    expect(redactedNdjson).not.toContain('hi@example.com');
++    expect(redactedNdjson).toContain('[email:');
++    expect(redactedNdjson).toContain('[token:');
++
++    const fullResp = await request.post('/api/v1/flow/handoff', {
++      headers,
++      data: {
++        session_id: sessionId,
++        levels: ['debug'],
++        options: {
++          mode: 'full',
++          include: { logs: true },
++          privacy: { pii_scrub: true },
++          limits: { max_bytes: 5_000_000 },
++        },
++      },
++    });
++
++    expect(fullResp.status()).toBe(200);
++    expect(fullResp.headers()['x-flow-mode']).toBe('full');
++    expect(fullResp.headers()['x-flow-pii-scrubbed']).toBe('1');
++
++    const fullZip = parseZipEntries(Buffer.from(await fullResp.body()));
++    expect(fullZip.has('manifest.json')).toBeTruthy();
++    expect(fullZip.has('events/flow.ndjson.gz')).toBeTruthy();
++    expect(fullZip.has('client/console.log.gz')).toBeTruthy();
++
++    const manifest = JSON.parse(fullZip.get('manifest.json')!.toString('utf-8'));
++    expect(manifest.meta.include.logs).toBe(true);
++    expect(manifest.meta.privacy.pii_scrub).toBe(true);
++
++    const eventsText = gunzipSync(fullZip.get('events/flow.ndjson.gz')!).toString('utf-8');
++    expect(eventsText).not.toContain('hi@example.com');
++    expect(eventsText).toContain('[email:');
++    expect(eventsText).toContain('[token:');
++
++    const clientLogText = gunzipSync(fullZip.get('client/console.log.gz')!).toString('utf-8');
++    expect(clientLogText).not.toContain('198.51.100.77');
++    expect(clientLogText).toContain('[ip:');
++  });
++});
+diff --git a/tests/test_flow_handoff_options.py b/tests/test_flow_handoff_options.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..debf0cbe893e23cc57a1f4934b88682b94972803
+--- /dev/null
++++ b/tests/test_flow_handoff_options.py
+@@ -0,0 +1,167 @@
++import gzip
++import io
++import json
++import zipfile
++
++import pytest
++
++from app.asgi_gateway import app as flask_app
++from app.flow import FlowStore
++from app.admin_log import admin_log_emit, clear_admin_log_history_for_tests
++
++
++@pytest.fixture(autouse=True)
++def _reset_flow_store():
 +    store = FlowStore()
-+    session_id = "sess-optional"
++    store._init()
++    clear_admin_log_history_for_tests()
++    yield
++    store._init()
++    clear_admin_log_history_for_tests()
 +
-+    store.emit(session_id, "flow", "session", "session_open", "system")
-+    store.emit(
-+        session_id,
-+        "debug",
-+        "session",
-+        "ws_frame_in",
-+        "system",
-+        meta={"type": "text", "bytes": 12, "route": "client"},
-+    )
-+    store.emit(
-+        session_id,
-+        "debug",
-+        "session",
-+        "ws_frame_out",
-+        "system",
-+        meta={"type": "binary", "bytes": 18, "route": "bus"},
-+    )
-+    store.emit(
-+        session_id,
-+        "debug",
-+        "client",
-+        "client_ws_error",
-+        "client",
-+        meta={"code": 4400},
-+    )
 +
-+    admin_log_emit("ws_conn_open", sid=session_id, session_id=session_id, message="open")
++@pytest.fixture
++def admin_env(monkeypatch):
++    monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
++    return {"X-User-Email": "admin@example.com"}
++
++
++def _decode_gzip_bytes(data: bytes) -> str:
++    return gzip.decompress(data).decode("utf-8")
++
++
++def test_flow_handoff_pii_scrub_redacted(admin_env):
++    store = FlowStore()
++    session_id = "sess-pii-redacted"
++    store.emit(
++        session_id,
++        "flow",
++        "session",
++        "session_open",
++        "client",
++        meta={"notes": "Email hi@example.com token sk-secretVALUE123 and ip 203.0.113.25"},
++    )
 +
 +    client = flask_app.test_client()
 +    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
@@ -1240,66 +1348,197 @@ index 6332c2bfa6f52b8cd3edda98289e176e0dc10500..23f83cfe873daa38c11251f3424bb1f4
 +
 +    body = {
 +        "session_id": session_id,
-+        "levels": ["flow", "debug"],
-+        "prompt": "Diag",
-+        "mode": "full",
++        "prompt": "Investigate",
++        "options": {"privacy": {"pii_scrub": True}},
++    }
++
++    resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
++    assert resp.status_code == 200
++    assert resp.headers.get("X-Flow-PII-Scrubbed") == "1"
++
++    with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
++        ndjson = archive.read("flow.ndjson").decode("utf-8")
++        assert "hi@example.com" not in ndjson
++        assert "sk-secretVALUE123" not in ndjson
++        assert "203.0.113.25" not in ndjson
++        assert "[email:" in ndjson
++        assert "[token:" in ndjson
++        meta_payload = json.loads(archive.read("meta.json").decode("utf-8"))
++        assert meta_payload["privacy"]["pii_scrub"] is True
++
++
++def test_flow_handoff_pii_scrub_full_includes_logs(admin_env):
++    store = FlowStore()
++    session_id = "sess-pii-full"
++    store.emit(
++        session_id,
++        "flow",
++        "session",
++        "session_config",
++        "system",
++        meta={"config": {"agent": "alpha"}},
++    )
++    store.emit(
++        session_id,
++        "flow",
++        "turn",
++        "assistant_speak",
++        "assistant",
++        meta={"notes": "Token sk-newtokenVALUE999"},
++    )
++    store.emit(
++        session_id,
++        "debug",
++        "client",
++        "client_console_error",
++        "client",
++        meta={"details": "External IP 198.51.100.44"},
++    )
++
++    admin_log_emit(
++        {
++            "event": "diag_latency",
++            "session_id": session_id,
++            "message": "diag External IP 198.51.100.22",
++        }
++    )
++
++    client = flask_app.test_client()
++    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
++    token = csrf_resp.headers.get("X-CSRF-Token")
++    headers = dict(admin_env)
++    if token:
++        headers["X-CSRF-Token"] = token
++
++    body = {
++        "session_id": session_id,
 +        "options": {
 +            "mode": "full",
-+            "include": {"ws": True, "logs": True},
-+            "privacy": {"pii_scrub": False, "redaction": "minimal"},
++            "include": {"logs": True},
++            "privacy": {"pii_scrub": True},
 +        },
 +    }
 +
 +    resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
 +    assert resp.status_code == 200
++    assert resp.headers.get("X-Flow-PII-Scrubbed") == "1"
 +
 +    with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
-+        names = set(archive.namelist())
-+        assert "ws/frames.ndjson.gz" in names
-+        assert "client/console.log.gz" in names
-+        assert "server/server.log.gz" in names
++        events_payload = archive.read("events/flow.ndjson.gz")
++        events_text = _decode_gzip_bytes(events_payload)
++        assert "sk-newtokenVALUE999" not in events_text
++        assert "198.51.100.44" not in events_text
++        assert "[token:" in events_text
 +
-+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
-+        include_meta = manifest.get("meta", {}).get("include", {})
-+        assert include_meta.get("ws") is True
-+        assert include_meta.get("logs") is True
++        client_log = archive.read("client/console.log.gz")
++        client_text = _decode_gzip_bytes(client_log)
++        assert "198.51.100.44" not in client_text
++        assert "[ip:" in client_text
 +
-+        frames_payload = gzip.decompress(archive.read("ws/frames.ndjson.gz")).decode("utf-8").strip()
-+        frame_entries = [json.loads(line) for line in frames_payload.split("\n") if line.strip()]
-+        assert any(frame.get("direction") == "in" for frame in frame_entries)
-+        assert any(frame.get("direction") == "out" for frame in frame_entries)
-+
-+        client_payload = gzip.decompress(archive.read("client/console.log.gz")).decode("utf-8").strip()
-+        client_entries = [json.loads(line) for line in client_payload.split("\n") if line.strip()]
-+        assert any(entry.get("type") == "client_ws_error" for entry in client_entries)
-+
-+        server_payload = gzip.decompress(archive.read("server/server.log.gz")).decode("utf-8").strip()
-+        server_entries = [json.loads(line) for line in server_payload.split("\n") if line.strip()]
-+        assert any(entry.get("event") == "ws_conn_open" for entry in server_entries)
++        server_log = archive.read("server/server.log.gz")
++        server_text = _decode_gzip_bytes(server_log)
++        assert "198.51.100.22" not in server_text
++        assert "[ip:" in server_text
 +
 +
- def test_flow_trace_happy_path_integration(admin_env, flow_clock):
-     store = FlowStore()
-     session_id = "sess-happy"
- 
-     store.emit(session_id, "flow", "session", "session_open", "system")
-     flow_clock(50)
-     confirm_id = store.emit(
-         session_id,
-         "flow",
-         "turn",
-         "confirm_open",
-         "assistant",
-         meta={"turn_id": "1"},
-     )
-     flow_clock(200)
-     store.emit(
-         session_id,
-         "transition",
-         "turn",
-         "asr_partial_first",
-         "client",
-         meta={"turn_id": "1"},
-         parent_id=confirm_id,
-     )
-     flow_clock(150)
++def test_flow_handoff_respects_max_bytes(admin_env):
++    store = FlowStore()
++    session_id = "sess-max"
++    store.emit(session_id, "flow", "session", "session_open", "system")
++
++    client = flask_app.test_client()
++    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
++    token = csrf_resp.headers.get("X-CSRF-Token")
++    headers = dict(admin_env)
++    if token:
++        headers["X-CSRF-Token"] = token
++
++    body = {
++        "session_id": session_id,
++        "options": {"mode": "full", "limits": {"max_bytes": 10}},
++    }
++
++    resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
++    assert resp.status_code == 413
++    payload = resp.get_json()
++    assert payload == {"error": "export_too_large"}
+diff --git a/tests/test_logging_backbone.py b/tests/test_logging_backbone.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f2404cda4986c1193ce6dead96d8b982f45967c1
+--- /dev/null
++++ b/tests/test_logging_backbone.py
+@@ -0,0 +1,74 @@
++import pytest
++
++from app.flow import FlowStore
++from app.flow.trace import FLOW_DROPPED_TYPE, MAX_BATCH_BYTES
++
++
++@pytest.fixture(autouse=True)
++def _reset_flow_store():
++    store = FlowStore()
++    store._init()
++    yield
++    store._init()
++
++
++def test_logging_backbone_core_events_present():
++    store = FlowStore()
++    session_id = "sess-core"
++    config_payload = {"agent": "alpha", "language": "en"}
++    store.emit(
++        session_id,
++        "flow",
++        "session",
++        "session_config",
++        "system",
++        meta={"config": config_payload},
++    )
++    store.emit(session_id, "flow", "session", "greet_end", "system", meta={"turn_id": "turn-1"})
++    store.emit(session_id, "flow", "session", "diag_latency", "system", meta={"latency_ms": 42})
++
++    snapshot = store.snapshot(session_id, expand="all")
++    types = [event["type"] for event in snapshot.events]
++    assert "session_config" in types
++    assert "greet_end" in types
++    assert "diag_latency" in types
++    assert snapshot.config == config_payload
++
++
++def test_logging_backbone_emits_flow_dropped_when_capacity_hit(monkeypatch):
++    store = FlowStore()
++    session_id = "sess-drop"
++    monkeypatch.setattr("app.flow.trace.MAX_EVENTS", 3, raising=False)
++
++    for idx in range(5):
++        store.emit(
++            session_id,
++            "flow",
++            "session",
++            f"event_{idx}",
++            "system",
++            meta={"seq": idx},
++        )
++
++    snapshot = store.snapshot(session_id, expand="all")
++    drop_events = [evt for evt in snapshot.events if evt["type"] == FLOW_DROPPED_TYPE]
++    assert drop_events, "expected flow_dropped breadcrumb when session truncated"
++    last_meta = drop_events[-1]["meta"]
++    assert last_meta["reason"] == "event_limit"
++    assert last_meta["count"] >= 1
++
++
++def test_logging_backbone_batch_drop_event():
++    store = FlowStore()
++    session_id = "sess-batch"
++    parent_id = store.emit(session_id, "flow", "session", "session_open", "system")
++    assert parent_id
++
++    large_item = "x" * (MAX_BATCH_BYTES // 2)
++    with pytest.raises(ValueError):
++        store.add_batch(session_id, parent_id, "chunks", [large_item, large_item, large_item])
++
++    snapshot = store.snapshot(session_id, expand="all")
++    drop_events = [evt for evt in snapshot.events if evt["type"] == FLOW_DROPPED_TYPE]
++    assert drop_events
++    assert any(event["meta"].get("reason") == "batch_bytes" for event in drop_events)

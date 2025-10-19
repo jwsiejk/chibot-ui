@@ -4,6 +4,7 @@ import copy
 import gzip
 import hashlib
 import io
+import ipaddress
 import json
 import re
 import zipfile
@@ -95,6 +96,12 @@ def _parse_bool(value: Optional[str], *, default: bool = True) -> bool:
     return default
 
 
+def _too_large_response() -> Response:
+    response = jsonify({"error": "export_too_large"})
+    response.status_code = 413
+    return response
+
+
 DEFAULT_HANDOFF_PROMPT = (
     "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), "
     "smallest viable fix, and validation steps."
@@ -134,6 +141,13 @@ _DEVICE_CLASS_MAP = {
     "thinkpad": "windows",
     "linux": "linux",
 }
+
+_EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_GENERIC_TOKEN_PATTERN = re.compile(
+    r"(?i)\b(?:bearer|token|secret|key|api[_-]?key|authorization)[\s:=]+([A-Za-z0-9._-]{12,})"
+)
+_OPENAI_TOKEN_PATTERN = re.compile(r"\bsk-[A-Za-z0-9]{8,}\b")
+_IPV4_PATTERN = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 
 def _iter_session_events(
@@ -340,6 +354,96 @@ def _redact_event(event: Dict[str, Any]) -> Dict[str, Any]:
     return clone
 
 
+def _hash_token_value(value: str, prefix: str) -> str:
+    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:10]
+    return f"[{prefix}:{digest}]"
+
+
+def _scrub_text(text: str) -> str:
+    if not text:
+        return text
+
+    def _email_repl(match: re.Match[str]) -> str:
+        return _hash_token_value(match.group(0).lower(), "email")
+
+    text = _EMAIL_PATTERN.sub(_email_repl, text)
+
+    def _token_repl(match: re.Match[str]) -> str:
+        token = match.group(1)
+        hashed = _hash_token_value(token, "token")
+        return match.group(0).replace(token, hashed)
+
+    text = _GENERIC_TOKEN_PATTERN.sub(_token_repl, text)
+
+    def _openai_repl(match: re.Match[str]) -> str:
+        token = match.group(0)
+        return _hash_token_value(token, "token")
+
+    text = _OPENAI_TOKEN_PATTERN.sub(_openai_repl, text)
+
+    def _ip_repl(match: re.Match[str]) -> str:
+        value = match.group(0)
+        try:
+            ip_obj = ipaddress.ip_address(value)
+        except ValueError:
+            return value
+        if getattr(ip_obj, "version", None) == 4:
+            if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_unspecified:
+                return value
+            return _hash_token_value(value, "ip")
+        return value
+
+    text = _IPV4_PATTERN.sub(_ip_repl, text)
+    return text
+
+
+def _scrub_node(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: Dict[str, Any] = {}
+        for key, child in value.items():
+            try:
+                key_str = str(key)
+            except Exception:
+                key_str = repr(key)
+            sanitized[key_str] = _scrub_node(child)
+        return sanitized
+    if isinstance(value, list):
+        return [_scrub_node(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_node(item) for item in value)
+    if isinstance(value, str):
+        return _scrub_text(value)
+    return value
+
+
+def _scrub_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    clone = copy.deepcopy(event)
+    for key, value in list(clone.items()):
+        if isinstance(value, dict):
+            clone[key] = _scrub_node(value)
+        elif isinstance(value, list):
+            clone[key] = [_scrub_node(item) for item in value]
+        elif isinstance(value, tuple):
+            clone[key] = tuple(_scrub_node(item) for item in value)
+        elif isinstance(value, str):
+            clone[key] = _scrub_text(value)
+    return clone
+
+
+def _scrub_gzip_bytes(data: Optional[bytes]) -> Optional[bytes]:
+    if not data:
+        return data
+    try:
+        text = gzip.decompress(data).decode("utf-8")
+    except (OSError, EOFError, UnicodeDecodeError):
+        return data
+    sanitized = _scrub_text(text)
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode="wb") as gz_handle:
+        gz_handle.write(sanitized.encode("utf-8"))
+    return buffer.getvalue()
+
+
 @bp.post("/flow/breadcrumb")
 def flow_breadcrumb():
     payload = request.get_json(silent=True) or {}
@@ -469,16 +573,21 @@ def flow_export_ndjson():
     since_value = _parse_int(request.args.get("since_ms"), name="since_ms", minimum=0)
     levels = list(_parse_levels(request.args.get("levels")))
     redacted = _parse_bool(request.args.get("redacted"), default=True)
+    scrub_requested = _parse_bool(request.args.get("pii_scrub"), default=False)
 
     store = FlowStore()
 
     def _generate() -> Iterable[str]:
         for event in _iter_session_events(store, session_id, levels, since_value):
-            payload = _redact_event(event) if redacted else event
+            payload = _redact_event(event) if redacted else copy.deepcopy(event)
+            if scrub_requested:
+                payload = _scrub_event(payload)
             yield json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
 
     response = Response(stream_with_context(_generate()), mimetype="application/x-ndjson")
     response.headers["X-Flow-Redacted"] = "1" if redacted else "0"
+    if scrub_requested:
+        response.headers["X-Flow-PII-Scrubbed"] = "1"
     return response
 
 
@@ -551,6 +660,12 @@ def flow_handoff():
     if not isinstance(limits_options, dict):
         limits_options = {}
 
+    raw_pii_scrub = privacy_options.get("pii_scrub")
+    if isinstance(raw_pii_scrub, str):
+        pii_scrub_requested = raw_pii_scrub.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        pii_scrub_requested = bool(raw_pii_scrub)
+
     max_bytes: Optional[int] = None
     if "max_bytes" in limits_options:
         try:
@@ -579,6 +694,8 @@ def flow_handoff():
 
     if not is_full:
         redacted_events = [_redact_event(event) for event in events]
+        if pii_scrub_requested:
+            redacted_events = [_scrub_event(event) for event in redacted_events]
         ndjson_bytes = _to_ndjson_bytes(redacted_events)
         payload_sha = hashlib.sha1(ndjson_bytes).hexdigest()
         meta_payload = {
@@ -589,6 +706,8 @@ def flow_handoff():
             "payload_sig": {"bytes": len(ndjson_bytes), "sha1_8": payload_sha[:8]},
             "mode": mode,
         }
+        if pii_scrub_requested:
+            meta_payload["privacy"] = {"pii_scrub": True}
 
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -599,8 +718,13 @@ def flow_handoff():
                 json.dumps(meta_payload, ensure_ascii=False, indent=2),
             )
         zip_bytes = buffer.getvalue()
+        if max_bytes is not None and len(zip_bytes) > max_bytes:
+            return _too_large_response()
     else:
-        event_bytes = _to_ndjson_bytes(events)
+        export_events = [copy.deepcopy(event) for event in events]
+        if pii_scrub_requested:
+            export_events = [_scrub_event(event) for event in export_events]
+        event_bytes = _to_ndjson_bytes(export_events)
         gzip_buffer = io.BytesIO()
         with gzip.GzipFile(fileobj=gzip_buffer, mode="wb") as gz_handle:
             gz_handle.write(event_bytes)
@@ -628,6 +752,8 @@ def flow_handoff():
                 privacy_meta[key_str] = value
             elif isinstance(value, str):
                 privacy_meta[key_str] = value.strip() or value
+        if pii_scrub_requested and "pii_scrub" not in privacy_meta:
+            privacy_meta["pii_scrub"] = True
         limits_meta: Dict[str, Any] = {}
         if max_bytes is not None:
             limits_meta["max_bytes"] = max_bytes
@@ -657,6 +783,8 @@ def flow_handoff():
         ws_bytes = None
         if include_ws_requested:
             ws_bytes = assemble_ws_frames(session_id)
+            if ws_bytes and pii_scrub_requested:
+                ws_bytes = _scrub_gzip_bytes(ws_bytes)
             if ws_bytes:
                 optional_files.append(
                     (
@@ -671,6 +799,8 @@ def flow_handoff():
         server_log_bytes = None
         if include_logs_requested:
             client_log_bytes = slice_client_console_for_session(session_id)
+            if client_log_bytes and pii_scrub_requested:
+                client_log_bytes = _scrub_gzip_bytes(client_log_bytes)
             if client_log_bytes:
                 optional_files.append(
                     (
@@ -681,6 +811,8 @@ def flow_handoff():
                     )
                 )
             server_log_bytes = slice_server_log_for_session(session_id)
+            if server_log_bytes and pii_scrub_requested:
+                server_log_bytes = _scrub_gzip_bytes(server_log_bytes)
             if server_log_bytes:
                 optional_files.append(
                     (
@@ -763,7 +895,7 @@ def flow_handoff():
         zip_bytes = buffer.getvalue()
 
     if max_bytes is not None and len(zip_bytes) > max_bytes:
-        abort(413, description="export exceeds requested size limit")
+        return _too_large_response()
 
     response = Response(zip_bytes, mimetype="application/zip")
     safe_session = re.sub(r"[^a-zA-Z0-9_-]+", "_", session_id) or "session"
@@ -774,6 +906,8 @@ def flow_handoff():
     response.headers["X-Flow-Payload-Bytes"] = str(len(zip_bytes))
     response.headers["X-Flow-Payload-Sha1"] = hashlib.sha1(zip_bytes).hexdigest()
     response.headers["X-Flow-Mode"] = mode
+    if pii_scrub_requested:
+        response.headers["X-Flow-PII-Scrubbed"] = "1"
     response.headers["Cache-Control"] = "no-store"
     return response
 

@@ -1,10 +1,17 @@
 # Flow hand-off validation
 
-The flow hand-off ZIP bundles the redacted transcript (`flow.ndjson`), the
-prompt, supplemental metadata, and a `manifest.json` file that records the
-SHA-1 fingerprints for every payload. Although the production API does not yet
-embed this manifest, you can validate an export locally with the helper script
-added for Phase 0.
+The flow hand-off ZIP bundles the transcript payload (`flow.ndjson` or
+`events/flow.ndjson.gz`), the prompt, supplemental metadata, and a
+`manifest.json` file that records the SHA-1 fingerprints for every artifact.
+When `privacy.pii_scrub` is enabled the export pipeline hashes obvious PII
+tokens (email addresses, API keys, external IPv4s) before the files are added
+to the archive. The response exposes the `X-Flow-PII-Scrubbed` header so you can
+confirm the option that was applied.
+
+If the optional `limits.max_bytes` guard is supplied the server enforces the cap
+and returns `413` with `{"error": "export_too_large"}` when the assembled ZIP
+would exceed the limit. This keeps bulk exports from starving the service and
+gives operators quick feedback when they need to tighten the include set.
 
 ## Prerequisites
 
@@ -26,8 +33,12 @@ python tools/validate_flow_zip.py tools/example_flow.zip tools/flow_manifest.sch
 
 The script checks that the manifest satisfies the schema and that the SHA-1
 values listed for each file match the actual archive contents. A successful run
-prints `OK`.
+prints `OK`. Because the manifest lists the `include`, `privacy`, and `limits`
+blocks verbatim you can verify that UI toggles (logs, WS frames, PII scrub,
+max-bytes) were captured accurately.
 
 The `tools/example_flow.zip` fixture mirrors the structure produced by the
 `/api/v1/flow/handoff` endpoint and can be used as a smoke test for future
-changes to the schema or validator.
+changes to the schema or validator. Refer to `docs/flow_logging.md` for an
+overview of the logging taxonomy and the **`flow_dropped`** breadcrumb that now
+appears whenever FlowStore trims old events.
