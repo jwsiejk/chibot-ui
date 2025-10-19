@@ -321,22 +321,38 @@ function wireWSEventsOnce(){
   if (window.__askchip_ws_wired) return;
   window.__askchip_ws_wired = true;
 
+  const normalizeCloseCode = (detail = {}) => {
+    if (!detail || typeof detail !== 'object') return null;
+    const raw = detail.code;
+    if (Number.isFinite(raw)) return raw;
+    if (typeof raw === 'string' && raw.trim()) {
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  };
+
   const describeWsClose = (detail = {}) => {
-    const reason = typeof detail.reason === 'string' ? detail.reason.trim() : '';
+    const reason = typeof detail?.reason === 'string' ? detail.reason.trim() : '';
     if (reason) return reason;
-    const code = detail.code;
+    if (detail?.wasClean === true) return 'clean close';
+    const code = normalizeCloseCode(detail);
     if (code === 1000 || code === 1001) return 'normal closure';
     if (code === 1006) return 'network disconnect';
     if (code === 1012) return 'service restart';
     if (code === 1013) return 'service overload';
     if (code === 1014) return 'bad gateway';
     if (code === 1015) return 'TLS handshake failure';
-    return 'unknown reason';
+    return code != null ? `code ${code}` : 'unknown reason';
   };
 
   const isExpectedAbnormalClose = (detail = {}) => {
     if (!detail || typeof detail !== 'object') return false;
-    if (detail.code === 1006) return true;
+    if (detail.wasClean === true) return true;
+    if (detail.reconnectScheduled) return true;
+    const code = normalizeCloseCode(detail);
+    if (code === 1006) return true;
+    if (code === 1012 || code === 1013) return true;
     return false;
   };
 
@@ -409,10 +425,11 @@ function wireWSEventsOnce(){
   logWsListenerAttach('askchip-ws-close', 'bootstrap-wire');
   window.addEventListener('askchip-ws-close', (ev) => {
     const detail = ev.detail || {};
-    const normal = detail.code === 1000 || detail.code === 1001;
+    const code = normalizeCloseCode(detail);
+    const normal = code === 1000 || code === 1001;
     const expectedAbnormal = !normal && isExpectedAbnormalClose(detail);
     const reason = describeWsClose(detail);
-    const payload = { ...detail, reason };
+    const payload = { ...detail, code, reason };
 
     const logLevel = normal || expectedAbnormal ? 'info' : 'warn';
     _console(logLevel, '[WS close]', payload);

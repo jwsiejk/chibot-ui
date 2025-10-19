@@ -1,8 +1,8 @@
 diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index 6c59505bd56b5f293018fb782730c9e10fdb1316..68842462a4da262ab76e77c493df2e0ebfbfc158 100644
+index 68842462a4da262ab76e77c493df2e0ebfbfc158..46ddf821223e173e15d48ff36ca157ad8f936e67 100644
 --- a/static/js/bootstrap.js
 +++ b/static/js/bootstrap.js
-@@ -299,50 +299,69 @@ function _startTtsRearmTimer(delayMs = TTS_REARM_DELAY_MS, trigger = 'UtteranceE
+@@ -299,66 +299,82 @@ function _startTtsRearmTimer(delayMs = TTS_REARM_DELAY_MS, trigger = 'UtteranceE
    _ttsRearmTimer = setTimeout(() => {
      _ttsRearmTimer = null;
      if (_ttsHoldActive) return;
@@ -28,25 +28,45 @@ index 6c59505bd56b5f293018fb782730c9e10fdb1316..68842462a4da262ab76e77c493df2e0e
    if (window.__askchip_ws_wired) return;
    window.__askchip_ws_wired = true;
  
-+  const describeWsClose = (detail = {}) => {
-+    const reason = typeof detail.reason === 'string' ? detail.reason.trim() : '';
-+    if (reason) return reason;
-+    const code = detail.code;
-+    if (code === 1000 || code === 1001) return 'normal closure';
-+    if (code === 1006) return 'network disconnect';
-+    if (code === 1012) return 'service restart';
-+    if (code === 1013) return 'service overload';
-+    if (code === 1014) return 'bad gateway';
-+    if (code === 1015) return 'TLS handshake failure';
-+    return 'unknown reason';
++  const normalizeCloseCode = (detail = {}) => {
++    if (!detail || typeof detail !== 'object') return null;
++    const raw = detail.code;
++    if (Number.isFinite(raw)) return raw;
++    if (typeof raw === 'string' && raw.trim()) {
++      const parsed = Number.parseInt(raw, 10);
++      return Number.isFinite(parsed) ? parsed : null;
++    }
++    return null;
 +  };
 +
-+  const isExpectedAbnormalClose = (detail = {}) => {
-+    if (!detail || typeof detail !== 'object') return false;
-+    if (detail.code === 1006) return true;
-+    return false;
-+  };
-+
+   const describeWsClose = (detail = {}) => {
+-    const reason = typeof detail.reason === 'string' ? detail.reason.trim() : '';
++    const reason = typeof detail?.reason === 'string' ? detail.reason.trim() : '';
+     if (reason) return reason;
+-    const code = detail.code;
++    if (detail?.wasClean === true) return 'clean close';
++    const code = normalizeCloseCode(detail);
+     if (code === 1000 || code === 1001) return 'normal closure';
+     if (code === 1006) return 'network disconnect';
+     if (code === 1012) return 'service restart';
+     if (code === 1013) return 'service overload';
+     if (code === 1014) return 'bad gateway';
+     if (code === 1015) return 'TLS handshake failure';
+-    return 'unknown reason';
++    return code != null ? `code ${code}` : 'unknown reason';
+   };
+ 
+   const isExpectedAbnormalClose = (detail = {}) => {
+     if (!detail || typeof detail !== 'object') return false;
+-    if (detail.code === 1006) return true;
++    if (detail.wasClean === true) return true;
++    if (detail.reconnectScheduled) return true;
++    const code = normalizeCloseCode(detail);
++    if (code === 1006) return true;
++    if (code === 1012 || code === 1013) return true;
+     return false;
+   };
+ 
    // Log first few frames to verify payload shape
    let seen = 0;
    const loggedTypes = new Set();
@@ -69,10 +89,8 @@ index 6c59505bd56b5f293018fb782730c9e10fdb1316..68842462a4da262ab76e77c493df2e0e
            try { _console('warn', '[bootstrap] VAD disarm failed during TTS', err); } catch {}
          }
        } else if (!_ttsActiveTurnId && frameTurnId) {
-         _ttsActiveTurnId = frameTurnId;
-       }
-       _setVoiceMask(true);      
-@@ -369,58 +388,56 @@ function wireWSEventsOnce(){
+@@ -387,54 +403,55 @@ function wireWSEventsOnce(){
+     // Lightweight state dot hints (no UI regressions)
      if (t === 'assistant_audio') setDot('speaking');
      if (t === 'assistant_audio') _manualPhaseChanged('speaking');
      if (t === 'UtteranceEnd')    setDot('ready');
@@ -97,19 +115,16 @@ index 6c59505bd56b5f293018fb782730c9e10fdb1316..68842462a4da262ab76e77c493df2e0e
    logWsListenerAttach('askchip-ws-close', 'bootstrap-wire');
    window.addEventListener('askchip-ws-close', (ev) => {
      const detail = ev.detail || {};
-     const normal = detail.code === 1000 || detail.code === 1001;
--    const reason = detail.reason || (normal ? 'normal closure' : '');
-+    const expectedAbnormal = !normal && isExpectedAbnormalClose(detail);
-+    const reason = describeWsClose(detail);
-     const payload = { ...detail, reason };
+-    const normal = detail.code === 1000 || detail.code === 1001;
++    const code = normalizeCloseCode(detail);
++    const normal = code === 1000 || code === 1001;
+     const expectedAbnormal = !normal && isExpectedAbnormalClose(detail);
+     const reason = describeWsClose(detail);
+-    const payload = { ...detail, reason };
++    const payload = { ...detail, code, reason };
  
--    if (normal) {
--      _console('info', '[WS close]', payload);
--    } else {
--      _console('warn', '[WS close]', payload);
--    }
-+    const logLevel = normal || expectedAbnormal ? 'info' : 'warn';
-+    _console(logLevel, '[WS close]', payload);
+     const logLevel = normal || expectedAbnormal ? 'info' : 'warn';
+     _console(logLevel, '[WS close]', payload);
      // When WS closes, disable Send/End and re-enable Start
      _disableButtons();
      const sb = $('#startButton');
@@ -132,69 +147,3 @@ index 6c59505bd56b5f293018fb782730c9e10fdb1316..68842462a4da262ab76e77c493df2e0e
          try { _console('log', '[bootstrap] suppressed local barge_in during TTS'); } catch {}
          return;
        }
-     }    
-     if (name === 'turn_open' || name === 'turn_close') {
-       _console('info', `askchip-voice ${name}
-diff --git a/static/js/ws.js b/static/js/ws.js
-index 9b7b8311cf342a3bcdd758107597797d2aa72a4e..527525b8e230f7dc4fb75e1b62243a55e988b0c8 100644
---- a/static/js/ws.js
-+++ b/static/js/ws.js
-@@ -500,51 +500,57 @@ export function openWS(options = {}){
-       _resetKeepaliveState(true);
-       _reconnecting = false;
-       _backoff = 500; // successful open → reset backoff
-       try { window.dispatchEvent(new CustomEvent('askchip-ws-open')); } catch {}
-     };
- 
-     ws.onclose = (e) => {
-       const sessionActive = !!(window && window.__askchip_session_started);
-       const shouldReconnect = __WS_RECONNECT_ENABLED && sessionActive;
- 
-       _stopKeepAlive();
- 
-       if (!shouldReconnect) {
-         try { window.__askchip_session_started = false; } catch {}
-       } else {
-         // If we closed before receiving server "ready", a transient connect race happened.
-         if (!_gotReady){
-           _scheduleReconnect();
-         } else {
-           // If already "ready", only reconnect if session is active
-           _scheduleReconnect();
-         }
-       }
- 
-       try {
--        window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
-+        const detail = {
-+          code: e.code,
-+          reason: e.reason,
-+          wasClean: typeof e.wasClean === 'boolean' ? e.wasClean : undefined,
-+          reconnectScheduled: shouldReconnect,
-+        };
-+        window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail }));
-       } catch {}
-       if (!shouldReconnect) {
-         return;
-       }
-     };
- 
-     ws.onerror = (e) => _console('warn', '[ws] error', e);
- 
-     ws.onmessage = (ev) => {
-       try{
-         if (typeof ev.data === 'string'){
-           const obj = JSON.parse(ev.data);
-           const t = obj && obj.type;
- 
-           if (t === 'Result' || t === 'Results') {
-             const channel = obj && obj.channel;
-             const alternatives = channel && channel.alternatives;
-             const transcript = alternatives && alternatives[0] && alternatives[0].transcript;
-             const isFinal =
-               (channel && typeof channel.is_final === 'boolean' && channel.is_final) ||
-               (typeof obj.final === 'boolean' && obj.final) ||
-               false;
-             const chars = typeof transcript === 'string' ? transcript.length : 0;
-             const kind = isFinal ? 'final' : 'partial';
-             _wsLog('info', `ASR result (${kind})`, {
