@@ -183,6 +183,51 @@ def _safe_float(val):
         return None
 
 
+def _coerce_speech_ms(source: Any) -> Optional[int]:
+    """Best-effort conversion of Deepgram speech metadata to milliseconds."""
+    if not isinstance(source, dict):
+        return None
+
+    for key in ("duration_ms", "durationMs", "speech_ms"):
+        val = source.get(key)
+        if val is None:
+            continue
+        try:
+            ms_val = int(max(0.0, float(val)))
+        except (TypeError, ValueError):
+            continue
+        else:
+            return ms_val
+
+    duration_val = source.get("duration")
+    if duration_val is None:
+        end_val = source.get("end")
+        start_val = (
+            source.get("start")
+            if source.get("start") is not None
+            else source.get("begin")
+        )
+        if start_val is None:
+            start_val = source.get("offset")
+        if end_val is not None and start_val is not None:
+            try:
+                duration_val = float(end_val) - float(start_val)
+            except Exception:
+                duration_val = None
+    if duration_val is not None:
+        try:
+            dur_float = float(duration_val)
+        except (TypeError, ValueError):
+            dur_float = None
+        if dur_float is not None and dur_float >= 0.0:
+            # Assume seconds unless clearly in milliseconds already
+            if dur_float >= 50.0:
+                return int(dur_float)
+            return int(dur_float * 1000.0)
+
+    return None
+
+
 _flag_raw = os.getenv("DG_CONTAINERIZED_INCLUDE_ENCODING", "")
 _CONTAINER_ENCODING_FLAG = _flag_raw.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -692,6 +737,10 @@ class DeepgramClient:
         self._turn_first_partial_emitted: bool = False
         self._turn_final_emitted: bool = False
 
+        # Deepgram feature toggles
+        self._desired_vad_state: bool = True
+        self._vad_events_enabled: bool = True
+
     def _diag_payload(self, **extra: Any) -> dict:
         payload: dict[str, Any] = {"provider": "deepgram"}
         if self._diag_session_id:
@@ -852,6 +901,51 @@ class DeepgramClient:
         self._asr_start_emitted = True
         self._emit_diag("asr_open", active=True)
 
+    async def _apply_vad_state(self) -> None:
+        desired = bool(self._desired_vad_state)
+        if self._vad_events_enabled == desired:
+            return
+        ws = self._ws
+        if not ws or not self._ws_is_open(ws):
+            return
+        sid = self._sid_for_log()
+        payload = {"type": "Configure", "features": {"vad_events": desired}}
+        try:
+            async with self._send_lock:
+                await ws.send(json.dumps(payload))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - network safeguards
+            self._logger.warning(
+                "Deepgram vad configure failed sid=%s enabled=%s err=%s",
+                sid,
+                desired,
+                exc,
+            )
+            if callable(self._jlog):
+                try:
+                    self._jlog(
+                        "dg_vad_config_error",
+                        sid=sid,
+                        dg_id=self._dg_id,
+                        enabled=desired,
+                        err=exc.__class__.__name__,
+                    )
+                except Exception:
+                    pass
+        else:
+            self._vad_events_enabled = desired
+            if callable(self._jlog):
+                try:
+                    self._jlog(
+                        "dg_vad_config",
+                        sid=sid,
+                        dg_id=self._dg_id,
+                        enabled=desired,
+                    )
+                except Exception:
+                    pass
+
     async def _publish_provider_event(self, event: str, payload: Any) -> None:
         data: dict[str, Any] = {"type": "provider_event", "event": event or "unknown"}
         if payload is not None:
@@ -860,6 +954,13 @@ class DeepgramClient:
             await self._ev_queue.put(data)
         except Exception:
             pass
+
+    async def set_vad_events_enabled(self, enabled: bool) -> None:
+        """Request Deepgram to enable or disable vad_events."""
+        self._desired_vad_state = bool(enabled)
+        if not self.is_open():
+            return
+        await self._apply_vad_state()
 
     async def _emit_flow_event(
         self, event: str, meta: Optional[dict[str, Any]] = None
@@ -1420,6 +1521,13 @@ class DeepgramClient:
                 DG_LAST_URL = url
                 cfg_payload = _initial_config(self._cfg)
                 DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
+                features = cfg_payload.get("features")
+                if isinstance(features, dict):
+                    self._vad_events_enabled = bool(features.get("vad_events", True))
+                else:
+                    self._vad_events_enabled = True
+                if self._desired_vad_state != self._vad_events_enabled:
+                    self._vad_events_enabled = self._desired_vad_state
                 self._open_evt.set()
                 await self._signal_ready(backend_ready=True)
                 self._logger.info("Deepgram test-mode connect sid=%s", sid)
@@ -1487,6 +1595,16 @@ class DeepgramClient:
             DG_LAST_CONFIG = _diagnostic_config(cfg_payload, self._cfg)
             async with self._send_lock:
                 await self._ws.send(json.dumps(cfg_payload))
+            features = cfg_payload.get("features")
+            if isinstance(features, dict):
+                self._vad_events_enabled = bool(features.get("vad_events", True))
+            else:
+                self._vad_events_enabled = True
+            if self._desired_vad_state != self._vad_events_enabled:
+                try:
+                    await self._apply_vad_state()
+                except Exception:
+                    pass
             if callable(self._jlog):
                 try:
                     self._jlog(
@@ -2095,6 +2213,8 @@ class DeepgramClient:
                     alts = channel.get("alternatives")
                     confidence = None
                     token_count = 0
+                    speech_ms_val: Optional[int] = None
+                    speech_container: Any = None
                     if isinstance(alts, list) and alts:
                         first_alt = alts[0]
                         text = (first_alt.get("transcript") or "").strip()
@@ -2109,6 +2229,7 @@ class DeepgramClient:
                                     and (w.get("word") or "").strip()
                                 ]
                             )
+                        speech_container = first_alt.get("speech")
 
                     # Fallback: top-level alternatives (some messages)
                     if not text:
@@ -2129,6 +2250,8 @@ class DeepgramClient:
                                             and (w.get("word") or "").strip()
                                         ]
                                     )
+                            if not speech_container:
+                                speech_container = first_alt.get("speech")
 
                     # Fallback: top-level transcript (some messages)
                     if not text and isinstance(msg.get("transcript"), str):
@@ -2141,6 +2264,18 @@ class DeepgramClient:
 
                     if not token_count and text:
                         token_count = len([tok for tok in text.split() if tok])
+
+                    if not isinstance(speech_container, dict):
+                        alt_speech = channel.get("speech") if isinstance(channel, dict) else None
+                        if isinstance(alt_speech, dict):
+                            speech_container = alt_speech
+                    if not isinstance(speech_container, dict):
+                        top_level_speech = msg.get("speech")
+                        if isinstance(top_level_speech, dict):
+                            speech_container = top_level_speech
+                        elif isinstance(top_level_speech, list) and top_level_speech:
+                            speech_container = top_level_speech[-1]
+                    speech_ms_val = _coerce_speech_ms(speech_container)
 
                     # Finalness can be on channel or top-level, or implied by event type
                     is_final = (
@@ -2215,6 +2350,8 @@ class DeepgramClient:
                             payload["confidence"] = confidence
                         if token_count:
                             payload["token_count"] = token_count
+                        if speech_ms_val is not None:
+                            payload["speech_ms"] = speech_ms_val
                         await self._ev_queue.put(payload)
                     except Exception:
                         pass

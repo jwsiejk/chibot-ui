@@ -1967,6 +1967,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     asr_partial_first_emitted = [False]
     evidence_gate_emitted = [False]
     last_confident_partial_conf: List[Optional[float]] = [None]
+    last_partial_conf: List[Optional[float]] = [None]
+    last_partial_speech_ms: List[int] = [0]
     current_assistant_turn_ref: List[Optional[Any]] = [None]
     manual_commit_pending = [False]
     manual_button_down = [False]
@@ -1980,6 +1982,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     tts_mask_release_task: List[Optional[asyncio.Task]] = [None]
     tts_mask_release_deadline = [0.0]
     tts_last_end_ts = [0.0]
+    vad_desired_state: List[bool] = [True]
+    vad_last_reason: List[str] = ["idle"]
+    vad_apply_task: List[Optional[asyncio.Task]] = [None]
 
     def _decide_barge_attempt(source: str) -> Tuple[bool, str, str, str]:
         src = "ptt" if str(source).lower() == "ptt" else "vad"
@@ -2108,7 +2113,32 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         confirm_min_conf = float(cfg.get("confirm_min_confidence", 0.5) or 0.5)
     except Exception:
         confirm_min_conf = 0.5
-    confirm_min_conf = max(0.6, confirm_min_conf)
+    idle_conf_env = (os.getenv("ASR_IDLE_MIN_PARTIAL_CONF", "") or "").strip()
+    if idle_conf_env:
+        try:
+            idle_min_partial_conf = float(idle_conf_env)
+        except Exception:
+            idle_min_partial_conf = 0.6
+    else:
+        try:
+            idle_min_partial_conf = float(cfg.get("asr_idle_min_conf", 0.6) or 0.6)
+        except Exception:
+            idle_min_partial_conf = 0.6
+    idle_min_partial_conf = max(0.0, idle_min_partial_conf)
+    idle_speech_env = (os.getenv("ASR_IDLE_MIN_SPEECH_MS", "") or "").strip()
+    if idle_speech_env:
+        try:
+            idle_min_speech_ms = int(float(idle_speech_env))
+        except Exception:
+            idle_min_speech_ms = 300
+    else:
+        try:
+            idle_min_speech_ms = int(cfg.get("asr_idle_min_speech_ms", 300) or 300)
+        except Exception:
+            idle_min_speech_ms = 300
+    idle_min_speech_ms = max(0, idle_min_speech_ms)
+    idle_evidence_required = idle_min_partial_conf > 0.0 or idle_min_speech_ms > 0
+    confirm_min_conf = max(0.6, confirm_min_conf, idle_min_partial_conf)
     try:
         confirm_snr_db = float(cfg.get("confirm_min_snr_db", 8.0) or 8.0)
     except Exception:
@@ -2347,6 +2377,21 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             },
             phase="asr",
         )
+
+    def _idle_evidence_ready() -> bool:
+        if not idle_evidence_required:
+            return True
+        if turn_commit_mode_ref[0] != "vad":
+            return True
+        if idle_min_partial_conf > 0.0:
+            conf_val = last_partial_conf[0]
+            if conf_val is None or conf_val < idle_min_partial_conf:
+                return False
+        if idle_min_speech_ms > 0:
+            speech_val = last_partial_speech_ms[0] if last_partial_speech_ms[0] else 0
+            if speech_val < idle_min_speech_ms:
+                return False
+        return True
 
     def _flow_turn_id_hint() -> int:
         try:
@@ -2673,6 +2718,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             return
         if tts_mask_active[0]:
             return
+        if idle_evidence_required and turn_commit_mode_ref[0] == "vad" and not _idle_evidence_ready():
+            return
         pending_confirm_request[0] = None
         effective_now = now_ts if now_ts is not None else time.time()
         _open_confirm_window(
@@ -2705,6 +2752,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             )
         if previously_active:
             _maybe_start_pending_confirm()
+        _schedule_vad_state(True, "idle")
 
     async def _await_tts_mask_release(delay_ms: int, turn_id: Any) -> None:
         try:
@@ -2785,6 +2833,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 mode=tts_mask_mode[0],
             )
             return
+        if idle_evidence_required and turn_commit_mode_ref[0] == "vad" and not _idle_evidence_ready():
+            _queue_confirm_request(request)
+            _jlog(
+                "confirm_pending_idle_evidence",
+                sid=sid,
+                turn=turn_id_ref[0],
+                conf=last_partial_conf[0],
+                speech_ms=last_partial_speech_ms[0],
+                min_conf=idle_min_partial_conf,
+                min_speech_ms=idle_min_speech_ms,
+            )
+            return
         _open_confirm_window(
             now_ts,
             min_ms=min_ms,
@@ -2859,6 +2919,25 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             conf_val = float(raw_conf) if raw_conf is not None else None
         except (TypeError, ValueError):
             conf_val = None
+        last_partial_conf[0] = conf_val
+
+        speech_ms_val: Optional[int] = None
+        if isinstance(ev, dict):
+            raw_speech = ev.get("speech_ms")
+            if raw_speech is not None:
+                try:
+                    speech_ms_val = int(float(raw_speech))
+                except (TypeError, ValueError):
+                    speech_ms_val = None
+        if speech_ms_val is not None and speech_ms_val >= 0:
+            last_partial_speech_ms[0] = speech_ms_val
+            if turn_timing is not None:
+                with contextlib.suppress(Exception):
+                    holder = turn_timing.setdefault("voiced_ms", [0])
+                    if not holder:
+                        turn_timing["voiced_ms"] = [speech_ms_val]
+                    elif speech_ms_val > holder[0]:
+                        holder[0] = speech_ms_val
 
         if turn_timing is not None:
             with contextlib.suppress(Exception):
@@ -2879,6 +2958,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             last_confident_partial_conf[0] = conf_val
             _maybe_emit_evidence_gate(conf_val)
 
+        if pending_confirm_request[0] and idle_evidence_required and turn_commit_mode_ref[0] == "vad":
+            _maybe_start_pending_confirm(time.time())
+
     def _ensure_confirm_closed(reason: str) -> None:
         window = confirm_window_ref[0]
         if not window:
@@ -2886,6 +2968,47 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         decision = window.cancel(reason, time.time())
         if decision.action == "abort" and decision.metrics is not None:
             _finalize_confirm_abort(reason, decision.metrics, window)
+
+    def _schedule_vad_state(enabled: bool, reason: str, *, force: bool = False) -> None:
+        desired = bool(enabled)
+        reason_norm = reason if reason in {"tts", "hold", "idle"} else (
+            "idle" if desired else "tts"
+        )
+        if not force and vad_desired_state[0] == desired and vad_last_reason[0] == reason_norm:
+            return
+        vad_desired_state[0] = desired
+        vad_last_reason[0] = reason_norm
+        _jlog("asr_vad_state", sid=sid, enabled=desired, reason=reason_norm)
+
+        async def _apply() -> None:
+            try:
+                if dg is not None:
+                    await dg.set_vad_events_enabled(desired)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _jlog(
+                    "asr_vad_toggle_error",
+                    sid=sid,
+                    enabled=desired,
+                    reason=reason_norm,
+                    err=exc.__class__.__name__,
+                )
+
+        task = vad_apply_task[0]
+        if task and not task.done():
+            task.cancel()
+        if loop.is_closed():
+            vad_apply_task[0] = None
+            return
+        new_task = asyncio.create_task(_apply())
+        vad_apply_task[0] = new_task
+
+        def _clear(done: asyncio.Task) -> None:
+            if vad_apply_task[0] is done:
+                vad_apply_task[0] = None
+
+        new_task.add_done_callback(_clear)
             
     def _on_assistant_tts_start(turn_id: Any) -> None:
         assistant_speaking[0] = True
@@ -2899,6 +3022,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         _cancel_tts_mask_release()
         with contextlib.suppress(Exception):
             _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode)
+        _schedule_vad_state(False, "tts")
         _ensure_confirm_closed("tts_start")
         if not manual_button_down[0]:
             with contextlib.suppress(Exception):
@@ -2921,6 +3045,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             tts_mask_release_task[0] = asyncio.create_task(
                 _await_tts_mask_release(delay_ms, turn_id)
             )
+            _schedule_vad_state(False, "hold", force=True)
         elif tts_mask_active[0]:
             _cancel_tts_mask_release()
             _mark_tts_mask_off(turn_id, 0)
@@ -2978,6 +3103,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         sent_any_audio[0] = False
         final_seen[0] = False
         asr_seen_partial[0] = False
+        last_partial_conf[0] = None
+        last_partial_speech_ms[0] = 0
         turn_connect_started[0] = False
         turn_stream_committed[0] = False
         asr_direct_stream[0] = False
@@ -3521,6 +3648,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 _jlog("asr_connect_begin", sid=sid, transport=transport)
                 client = DeepgramClient(cfg)
                 dg = client
+                try:
+                    await client.set_vad_events_enabled(vad_desired_state[0])
+                except Exception:
+                    pass
                 await client.connect()
                 dg_state = "open"
                 connect_result["ok"] = True
@@ -3949,6 +4080,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         )
                         turn_id_ref[0] = buf.turn_seq + 1
                         pending_confirm_request[0] = None
+                        last_partial_conf[0] = None
+                        last_partial_speech_ms[0] = 0
                         if barge_started:
                             if manual_mode_manual_only:
                                 try:
@@ -5116,6 +5249,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             _cancel_no_audio_watch()
         _cancel_asr_stream_activation()
         _cancel_asr_not_ready_timeout()
+        task = vad_apply_task[0]
+        if task:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                task.cancel()
+                await task
         await _remove_active_ws_entry("cleanup")
         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
         with contextlib.suppress(Exception):
