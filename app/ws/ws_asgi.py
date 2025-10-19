@@ -1972,12 +1972,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     manual_button_down = [False]
     manual_turn_active = [False]
     ptt_down_emitted = [False]
+    ptt_turn_preopened = [False]
     # Runtime flags to coordinate commit + VAD gating
     assistant_speaking = [False]
     tts_mask_active = [False]
     tts_mask_mode = ["none"]
     tts_mask_release_task: List[Optional[asyncio.Task]] = [None]
     tts_mask_release_deadline = [0.0]
+    tts_last_end_ts = [0.0]
 
     def _decide_barge_attempt(source: str) -> Tuple[bool, str, str, str]:
         src = "ptt" if str(source).lower() == "ptt" else "vad"
@@ -1987,10 +1989,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             current_turn_id = None
         tts_state, _ = _lookup_tts_state(sid, current_turn_id)
         tts_active_now = _is_tts_active(tts_state)
-        post_hold_active = bool(tts_mask_active[0]) and not tts_active_now
+        now_ts = time.time()
+        hold_active = False
+        post_hold_ms = 0
+        try:
+            post_hold_ms = int(barge_post_tts_hold_ms)
+        except Exception:
+            post_hold_ms = 0
+        post_hold_ms = max(0, post_hold_ms)
+        last_end = tts_last_end_ts[0]
+        if (not tts_active_now) and last_end and post_hold_ms > 0:
+            hold_active = now_ts < (last_end + (post_hold_ms / 1000.0))
         if tts_active_now:
             tts_phase = "TTS_ACTIVE"
-        elif post_hold_active:
+        elif hold_active:
             tts_phase = "POST_TTS_HOLD"
         else:
             tts_phase = "IDLE"
@@ -1999,16 +2011,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         reason = "ok"
         suppress_mode = (barge_suppress_mode or "none").strip() or "none"
         if src == "vad":
-            if not local_vad_allowed:
+            if tts_active_now:
+                allowed = False
+                reason = "tts_active"
+            elif hold_active:
+                allowed = False
+                reason = "post_tts_hold"
+            elif not local_vad_allowed:
                 allowed = False
                 reason = "local_vad_disabled"
-            elif suppress_mode == "all":
-                if tts_active_now:
-                    allowed = False
-                    reason = "tts_active"
-                elif post_hold_active:
-                    allowed = False
-                    reason = "post_tts_hold"
+            elif suppress_mode == "all" and tts_mask_active[0]:
+                allowed = False
+                reason = "tts_mask"
         else:
             if not manual_feature_enabled:
                 allowed = False
@@ -2892,10 +2906,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     def _on_assistant_tts_end(turn_id: Any) -> None:
         assistant_speaking[0] = False
+        now_ts = time.time()
         if turn_timing is not None:
             with contextlib.suppress(Exception):
                 holder = turn_timing.setdefault("tts_end", [0.0])
-                holder[0] = time.time()
+                holder[0] = now_ts
+        tts_last_end_ts[0] = now_ts
         if turn_id in (None, "", "greet"):
             _maybe_emit_greet_end(via="tts_end")
         if tts_mask_active[0] and barge_post_tts_hold_ms > 0:
@@ -2927,6 +2943,65 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     def _on_local_vad_stop() -> None:
         local_vad_open[0] = False
+
+    def _open_turn_for_ptt(now_ts: float, *, pause_tts: bool = False) -> None:
+        manual_button_down[0] = True
+        _ensure_confirm_closed("ptt_start")
+        if pause_tts:
+            try:
+                barge.start(
+                    confirm_ms=0,
+                    on_commit=_on_barge_commit,
+                    send_state=_send_barge_state,
+                    auto_commit=False,
+                )
+            except Exception:
+                pass
+        if manual_turn_active[0] or ptt_turn_preopened[0]:
+            manual_turn_active[0] = True
+            return
+        try:
+            current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
+        except Exception:
+            current_assistant_turn_ref[0] = None
+        manual_turn_active[0] = True
+        manual_commit_pending[0] = True
+        active_turn_mode_ref[0] = "manual"
+        turn_commit_mode_ref[0] = "manual"
+        turn_id = buf.turn_seq + 1
+        turn_id_ref[0] = turn_id
+        pending_confirm_request[0] = None
+        confirm_window_ref[0] = None
+        local_vad_meta_sent[0] = False
+        local_vad_open[0] = False
+        buffered_chunks.clear()
+        sent_any_audio[0] = False
+        final_seen[0] = False
+        asr_seen_partial[0] = False
+        turn_connect_started[0] = False
+        turn_stream_committed[0] = False
+        asr_direct_stream[0] = False
+        _cancel_asr_stream_activation()
+        _cancel_asr_not_ready_timeout()
+        mic_chunks.clear()
+        mic_first_ts[0] = now_ts
+        mic_last_ts[0] = now_ts
+        _reset_turn_metrics(now_ts)
+        _schedule_no_audio_watch(turn_id)
+        with contextlib.suppress(Exception):
+            pending_final_turns.append(turn_id)
+            completed_llm_turns.discard(turn_id)
+        with contextlib.suppress(Exception):
+            _jlog(
+                "turn_start",
+                sid=sid,
+                turn_id=turn_id,
+                first_bytes=0,
+                commit_mode="manual",
+                auto_commit=False,
+                ts_ms=int(time.time() * 1000),
+            )
+        ptt_turn_preopened[0] = True
 
     def _handle_bus_frame(frame: Dict[str, Any]) -> None:
         ftype_raw = frame.get("type")
@@ -3749,8 +3824,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             )
                     raw_chunk = chunk
 
-                    new_turn = buf.is_empty()
-                    turn_hint = turn_id_ref[0] or (buf.turn_seq + (1 if new_turn else 0))
+                    preopened_turn = ptt_turn_preopened[0]
+                    new_turn = buf.is_empty() and not preopened_turn
+                    if turn_id_ref[0]:
+                        turn_hint = turn_id_ref[0]
+                    else:
+                        turn_hint = buf.turn_seq + (1 if (new_turn or preopened_turn) else 0)
                     if chunk:
                         _jlog(
                             "ws_audio_chunk",
@@ -3915,6 +3994,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 _on_barge_commit("auto")
                             except Exception:
                                 pass
+                    elif preopened_turn:
+                        ptt_turn_preopened[0] = False
                     # Detect container early using raw bytes
 
                     # Detect container early
@@ -4184,6 +4265,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                 reason=allow_reason,
                                             )
                                     continue
+                                now_ts = time.time()
                                 tts_active_now = allow_state == "TTS_ACTIVE"
                                 _emit_transition_event(
                                     "ptt_down",
@@ -4191,6 +4273,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     phase="ptt",
                                 )
                                 _set_barge_pause_meta("ptt", tts_active=tts_active_now)
+                                _open_turn_for_ptt(now_ts, pause_tts=tts_active_now)
                                 ptt_down_emitted[0] = True
                                 continue
 
@@ -4353,6 +4436,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     manual_button_down[0] = False
                                     manual_turn_active[0] = False
                                     manual_commit_pending[0] = False
+                                    ptt_turn_preopened[0] = False
                                     turn_commit_mode_ref[0] = "vad"
                                     buffered_bytes = _manual_buffered_bytes()
                                     _manual_log_event(
@@ -4421,6 +4505,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     manual_button_down[0] = False
                                     manual_turn_active[0] = False
                                     manual_commit_pending[0] = False
+                                    ptt_turn_preopened[0] = False
                                 greet_seq_raw = obj.get("greet_seq")
                                 greet_seq: Optional[int] = None
                                 is_new_greet_seq = True
@@ -4623,6 +4708,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             _jlog("ws_close_stream", sid=sid)
                             manual_turn_active[0] = False
                             manual_button_down[0] = False
+                            ptt_turn_preopened[0] = False
                             turn_stream_committed[0] = False
                             _cancel_asr_stream_activation()
                             _cancel_asr_not_ready_timeout()
