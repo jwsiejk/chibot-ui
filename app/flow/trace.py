@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import copy
+import gzip
+import io
+import json
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Deque, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+
+from app.admin_log import get_admin_log_history
 
 MAX_EVENTS = 5000
 DEDUP_WINDOW_MS = 100
@@ -889,4 +894,169 @@ class FlowStore:
         return hints
 
 
-__all__ = ["FlowStore"]
+def _normalize_session_id(value: Any) -> str:
+    try:
+        text = str(value).strip()
+    except Exception:
+        return ""
+    return text
+
+
+def _coerce_json_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        sanitized: Dict[str, Any] = {}
+        for key, child in value.items():
+            try:
+                key_str = str(key)
+            except Exception:
+                key_str = repr(key)
+            sanitized[key_str] = _coerce_json_value(child)
+        return sanitized
+    if isinstance(value, (list, tuple, set)):
+        return [_coerce_json_value(item) for item in value]
+    return str(value)
+
+
+def _strip_none(mapping: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in mapping.items() if value is not None}
+
+
+def _gzip_ndjson(records: Iterable[Dict[str, Any]]) -> Optional[bytes]:
+    lines: List[str] = []
+    for record in records:
+        sanitized = _coerce_json_value(record)
+        if isinstance(sanitized, dict):
+            payload = _strip_none(sanitized)
+        else:
+            payload = {"value": sanitized}
+        if not payload:
+            continue
+        try:
+            line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        except TypeError:
+            line = json.dumps(_coerce_json_value(payload), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        lines.append(line)
+    if not lines:
+        return None
+    text = "\n".join(lines) + "\n"
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode="wb") as gz_handle:
+        gz_handle.write(text.encode("utf-8"))
+    return buffer.getvalue()
+
+
+def assemble_ws_frames(session_id: str) -> Optional[bytes]:
+    store = FlowStore()
+    sid = _normalize_session_id(session_id)
+    if not sid:
+        return None
+
+    with store._lock:
+        bucket = store._sessions.get(sid)
+        if not bucket:
+            return None
+        events = [copy.deepcopy(record.data) for record in bucket.events]
+
+    frame_entries: List[Dict[str, Any]] = []
+    for event in events:
+        type_value = str(event.get("type") or "")
+        if type_value not in {"ws_frame_in", "ws_frame_out"}:
+            continue
+        meta = event.get("meta") if isinstance(event.get("meta"), Mapping) else {}
+        entry: Dict[str, Any] = {
+            "id": event.get("id"),
+            "t_rel_ms": event.get("t_rel_ms"),
+            "level": event.get("level"),
+            "phase": event.get("phase"),
+            "who": event.get("who"),
+            "type": type_value,
+            "direction": "out" if type_value == "ws_frame_out" else "in",
+        }
+        if meta:
+            entry["meta"] = _coerce_json_value(dict(meta))
+            route = meta.get("route")
+            if route is not None:
+                entry.setdefault("route", route)
+            opcode = meta.get("type")
+            if opcode is not None:
+                entry.setdefault("opcode", opcode)
+            bytes_len = meta.get("bytes")
+            if bytes_len is not None:
+                entry.setdefault("bytes", bytes_len)
+            dropped = meta.get("dropped")
+            if dropped is not None:
+                entry.setdefault("dropped", dropped)
+        frame_entries.append(_strip_none(entry))
+
+    return _gzip_ndjson(frame_entries)
+
+
+def slice_client_console_for_session(session_id: str) -> Optional[bytes]:
+    store = FlowStore()
+    sid = _normalize_session_id(session_id)
+    if not sid:
+        return None
+
+    with store._lock:
+        bucket = store._sessions.get(sid)
+        if not bucket:
+            return None
+        events = [copy.deepcopy(record.data) for record in bucket.events]
+
+    console_entries: List[Dict[str, Any]] = []
+    for event in events:
+        type_value = str(event.get("type") or "")
+        if not type_value.startswith("client_"):
+            continue
+        meta = event.get("meta") if isinstance(event.get("meta"), Mapping) else {}
+        entry: Dict[str, Any] = {
+            "id": event.get("id"),
+            "t_rel_ms": event.get("t_rel_ms"),
+            "level": event.get("level"),
+            "phase": event.get("phase"),
+            "who": event.get("who"),
+            "type": type_value,
+        }
+        if meta:
+            entry["meta"] = _coerce_json_value(dict(meta))
+        console_entries.append(_strip_none(entry))
+
+    return _gzip_ndjson(console_entries)
+
+
+def slice_server_log_for_session(session_id: str) -> Optional[bytes]:
+    sid = _normalize_session_id(session_id)
+    if not sid:
+        return None
+
+    try:
+        history = get_admin_log_history()
+    except Exception:
+        history = []
+
+    log_entries: List[Dict[str, Any]] = []
+    for item in history:
+        if not isinstance(item, Mapping):
+            continue
+        item_sid = _normalize_session_id(item.get("session_id") or item.get("sid"))
+        if not item_sid or item_sid != sid:
+            continue
+        payload = _coerce_json_value(dict(item)) if isinstance(item, dict) else _coerce_json_value(item)
+        if isinstance(payload, dict):
+            payload["session_id"] = sid
+            payload["sid"] = sid
+            log_entries.append(_strip_none(payload))
+
+    return _gzip_ndjson(log_entries)
+
+
+__all__ = [
+    "FlowStore",
+    "assemble_ws_frames",
+    "slice_client_console_for_session",
+    "slice_server_log_for_session",
+]

@@ -6,6 +6,7 @@ const LEVELS = ["flow", "transition", "debug", "raw"];
 const FORENSIC_DURATION_MS = 10_000;
 const HANDOFF_PROMPT =
   "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), smallest viable fix, and validation steps.";
+const HANDOFF_STORAGE_KEY = "askchip.flow.handoffOptions";
 
 const defaultFetchImpl =
   typeof fetch === "function"
@@ -65,6 +66,14 @@ const state = {
   forensicUntil: 0,
   forensicExpandAll: false,
   pendingExpandedRestore: null,
+  handoffOptions: {
+    mode: "redacted",
+    includeWs: false,
+    includeLogs: false,
+    piiScrub: false,
+    redaction: "minimal",
+    maxSizeMb: "",
+  },
 };
 
 const els = {};
@@ -106,7 +115,14 @@ function init() {
   els.drawerClose = document.getElementById("flowDrawerClose");
   els.hints = document.getElementById("flowHints");
   els.treeControls = root.querySelector('[data-ref="tree-controls"]');
+  els.handoffMode = document.getElementById("flowHandoffMode");
+  els.handoffIncludeWs = document.getElementById("flowHandoffIncludeWs");
+  els.handoffIncludeLogs = document.getElementById("flowHandoffIncludeLogs");
+  els.handoffPiiScrub = document.getElementById("flowHandoffPiiScrub");
+  els.handoffRedaction = document.getElementById("flowHandoffRedaction");
+  els.handoffMaxSize = document.getElementById("flowHandoffMaxSize");
 
+  loadHandoffOptions();
   bindEvents();
   hydrateFromLocation();
   refreshSessions();
@@ -227,6 +243,48 @@ function bindEvents() {
 
   if (els.copyLink) {
     els.copyLink.addEventListener("click", () => copyLink());
+  }
+
+  if (els.handoffMode) {
+    els.handoffMode.addEventListener("change", (ev) => {
+      const value = ev.currentTarget?.value === "full" ? "full" : "redacted";
+      state.handoffOptions.mode = value;
+      persistHandoffOptions();
+    });
+  }
+  if (els.handoffIncludeWs) {
+    els.handoffIncludeWs.addEventListener("change", (ev) => {
+      state.handoffOptions.includeWs = Boolean(ev.currentTarget?.checked);
+      persistHandoffOptions();
+    });
+  }
+  if (els.handoffIncludeLogs) {
+    els.handoffIncludeLogs.addEventListener("change", (ev) => {
+      state.handoffOptions.includeLogs = Boolean(ev.currentTarget?.checked);
+      persistHandoffOptions();
+    });
+  }
+  if (els.handoffPiiScrub) {
+    els.handoffPiiScrub.addEventListener("change", (ev) => {
+      state.handoffOptions.piiScrub = Boolean(ev.currentTarget?.checked);
+      persistHandoffOptions();
+    });
+  }
+  if (els.handoffRedaction) {
+    els.handoffRedaction.addEventListener("change", (ev) => {
+      const value = ev.currentTarget?.value === "strict" ? "strict" : "minimal";
+      state.handoffOptions.redaction = value;
+      persistHandoffOptions();
+    });
+  }
+  if (els.handoffMaxSize) {
+    const handleMaxSize = () => {
+      const raw = (els.handoffMaxSize.value || "").trim();
+      state.handoffOptions.maxSizeMb = raw;
+      persistHandoffOptions();
+    };
+    els.handoffMaxSize.addEventListener("input", handleMaxSize);
+    els.handoffMaxSize.addEventListener("change", handleMaxSize);
   }
 
   if (els.handoff) {
@@ -1364,11 +1422,43 @@ function handoffToChatGPT() {
     setHint("Select a session first.");
     return;
   }
+  syncHandoffOptionsFromDom();
+  persistHandoffOptions();
+
+  const opts = state.handoffOptions;
+  const includeOptions = {
+    ws: Boolean(opts.includeWs),
+    logs: Boolean(opts.includeLogs),
+  };
+  const privacyOptions = {
+    redaction: opts.redaction === "strict" ? "strict" : "minimal",
+  };
+  if (opts.piiScrub) {
+    privacyOptions.pii_scrub = true;
+  }
+  const limitsOptions = {};
+  const maxSize = Number.parseFloat(opts.maxSizeMb);
+  if (Number.isFinite(maxSize) && maxSize > 0) {
+    limitsOptions.max_bytes = Math.round(maxSize * 1024 * 1024);
+  }
+
+  const optionsPayload = {
+    mode: opts.mode === "full" ? "full" : "redacted",
+    include: includeOptions,
+    privacy: privacyOptions,
+  };
+  if (Object.keys(limitsOptions).length) {
+    optionsPayload.limits = limitsOptions;
+  }
+
   const payload = {
     session_id: state.sessionId,
     levels: Array.from(state.levels),
     prompt: HANDOFF_PROMPT,
+    mode: optionsPayload.mode,
+    options: optionsPayload,
   };
+
   setHint("Preparing hand-off…");
   fetchImpl("/api/v1/flow/handoff", {
     method: "POST",
@@ -1378,9 +1468,13 @@ function handoffToChatGPT() {
   })
     .then((resp) => {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      return resp.blob();
+      const sizeHeader = resp.headers.get("X-Flow-Payload-Bytes");
+      const hashHeader = resp.headers.get("X-Flow-Payload-Sha1");
+      return resp
+        .blob()
+        .then((blob) => ({ blob, sizeHeader, hashHeader }));
     })
-    .then((blob) => {
+    .then(({ blob, sizeHeader, hashHeader }) => {
       const href = URL.createObjectURL(blob);
       const link = document.createElement("a");
       const iso = new Date().toISOString().replace(/[:.]/g, "-");
@@ -1393,7 +1487,12 @@ function handoffToChatGPT() {
         URL.revokeObjectURL(href);
         link.remove();
       });
-      setHint("Hand-off package downloaded.");
+      const sizeText = formatBytes(sizeHeader);
+      const hashPreview = hashHeader ? String(hashHeader).slice(0, 8) : "";
+      const parts = ["Hand-off package downloaded."];
+      if (sizeText) parts.push(`Size ${sizeText}`);
+      if (hashPreview) parts.push(`sha1 ${hashPreview}`);
+      setHint(parts.join(" · "));
     })
     .catch((err) => {
       console.warn("[flow] hand-off failed", err);
@@ -1523,6 +1622,103 @@ function copyDrawerJson() {
 function setHint(text) {
   if (!els.sessionHint) return;
   els.sessionHint.textContent = text;
+}
+
+function getDefaultHandoffOptions() {
+  return {
+    mode: "redacted",
+    includeWs: false,
+    includeLogs: false,
+    piiScrub: false,
+    redaction: "minimal",
+    maxSizeMb: "",
+  };
+}
+
+function loadHandoffOptions() {
+  state.handoffOptions = getDefaultHandoffOptions();
+  try {
+    const raw = window.localStorage?.getItem(HANDOFF_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        state.handoffOptions = {
+          ...state.handoffOptions,
+          ...parsed,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("[flow] failed to load hand-off options", err);
+  }
+  applyHandoffOptions();
+}
+
+function applyHandoffOptions() {
+  const opts = state.handoffOptions;
+  if (els.handoffMode) {
+    els.handoffMode.value = opts.mode === "full" ? "full" : "redacted";
+  }
+  if (els.handoffIncludeWs) {
+    els.handoffIncludeWs.checked = Boolean(opts.includeWs);
+  }
+  if (els.handoffIncludeLogs) {
+    els.handoffIncludeLogs.checked = Boolean(opts.includeLogs);
+  }
+  if (els.handoffPiiScrub) {
+    els.handoffPiiScrub.checked = Boolean(opts.piiScrub);
+  }
+  if (els.handoffRedaction) {
+    els.handoffRedaction.value = opts.redaction === "strict" ? "strict" : "minimal";
+  }
+  if (els.handoffMaxSize) {
+    els.handoffMaxSize.value = opts.maxSizeMb ? String(opts.maxSizeMb) : "";
+  }
+}
+
+function persistHandoffOptions() {
+  try {
+    window.localStorage?.setItem(
+      HANDOFF_STORAGE_KEY,
+      JSON.stringify(state.handoffOptions)
+    );
+  } catch (err) {
+    console.warn("[flow] failed to persist hand-off options", err);
+  }
+}
+
+function syncHandoffOptionsFromDom() {
+  if (els.handoffMode) {
+    state.handoffOptions.mode = els.handoffMode.value === "full" ? "full" : "redacted";
+  }
+  if (els.handoffIncludeWs) {
+    state.handoffOptions.includeWs = Boolean(els.handoffIncludeWs.checked);
+  }
+  if (els.handoffIncludeLogs) {
+    state.handoffOptions.includeLogs = Boolean(els.handoffIncludeLogs.checked);
+  }
+  if (els.handoffPiiScrub) {
+    state.handoffOptions.piiScrub = Boolean(els.handoffPiiScrub.checked);
+  }
+  if (els.handoffRedaction) {
+    state.handoffOptions.redaction = els.handoffRedaction.value === "strict" ? "strict" : "minimal";
+  }
+  if (els.handoffMaxSize) {
+    state.handoffOptions.maxSizeMb = (els.handoffMaxSize.value || "").trim();
+  }
+}
+
+function formatBytes(valueLike) {
+  if (valueLike === null || typeof valueLike === "undefined" || valueLike === "") {
+    return "";
+  }
+  const value = Number(valueLike);
+  if (!Number.isFinite(value) || value < 0) return "";
+  if (value < 1024) return `${Math.round(value)} B`;
+  const kb = value / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(1)} MB`;
 }
 
 function updateHistory() {

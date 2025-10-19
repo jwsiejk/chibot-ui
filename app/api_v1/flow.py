@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import threading
 import time
 from collections import deque
-from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from flask import (
     Blueprint,
@@ -24,6 +24,11 @@ from flask import (
 )
 
 from app.flow import FlowStore
+from app.flow.trace import (
+    assemble_ws_frames,
+    slice_client_console_for_session,
+    slice_server_log_for_session,
+)
 from app.flow.catalog import FLOW_EVENT_CATALOG
 from app.security_state import get_user
 from app.utils.admin import is_admin_email
@@ -612,11 +617,10 @@ def flow_handoff():
 
         prompt_bytes = prompt_text.encode("utf-8")
 
-        include_meta = {
-            str(key): value
-            for key, value in include_options.items()
-            if isinstance(value, bool)
-        }
+        include_ws_requested = bool(include_options.get("ws"))
+        include_logs_requested = bool(include_options.get("logs"))
+
+        include_meta: Dict[str, Any] = {}
         privacy_meta: Dict[str, Any] = {}
         for key, value in privacy_options.items():
             key_str = str(key)
@@ -648,6 +652,50 @@ def flow_handoff():
                 entry["description"] = description
             return entry
 
+        optional_files: List[Tuple[str, bytes, Optional[str], Optional[str]]] = []
+
+        ws_bytes = None
+        if include_ws_requested:
+            ws_bytes = assemble_ws_frames(session_id)
+            if ws_bytes:
+                optional_files.append(
+                    (
+                        "ws/frames.ndjson.gz",
+                        ws_bytes,
+                        "application/x-ndjson+gzip",
+                        "Sampled WebSocket frames",
+                    )
+                )
+
+        client_log_bytes = None
+        server_log_bytes = None
+        if include_logs_requested:
+            client_log_bytes = slice_client_console_for_session(session_id)
+            if client_log_bytes:
+                optional_files.append(
+                    (
+                        "client/console.log.gz",
+                        client_log_bytes,
+                        "text/plain+gzip",
+                        "Client console events",
+                    )
+                )
+            server_log_bytes = slice_server_log_for_session(session_id)
+            if server_log_bytes:
+                optional_files.append(
+                    (
+                        "server/server.log.gz",
+                        server_log_bytes,
+                        "text/plain+gzip",
+                        "Server admin log slice",
+                    )
+                )
+
+        if include_ws_requested:
+            include_meta["ws"] = bool(ws_bytes)
+        if include_logs_requested:
+            include_meta["logs"] = bool(client_log_bytes or server_log_bytes)
+
         manifest_files = [
             _manifest_entry(
                 "prompt.txt",
@@ -668,6 +716,16 @@ def flow_handoff():
                 description="Session configuration snapshot",
             ),
         ]
+
+        for path, data, content_type, description in optional_files:
+            manifest_files.append(
+                _manifest_entry(
+                    path,
+                    data,
+                    content_type=content_type,
+                    description=description,
+                )
+            )
 
         manifest_meta: Dict[str, Any] = {"mode": mode, "redacted": False}
         if include_meta:
@@ -700,6 +758,8 @@ def flow_handoff():
             archive.writestr("manifest.json", manifest_bytes)
             archive.writestr("events/flow.ndjson.gz", events_gz_bytes)
             archive.writestr("config/config.json", config_bytes)
+            for path, data, _, _ in optional_files:
+                archive.writestr(path, data)
         zip_bytes = buffer.getvalue()
 
     if max_bytes is not None and len(zip_bytes) > max_bytes:

@@ -67,6 +67,38 @@
           <button type="button" id="flowExportRedacted" class="action-btn">Export Redacted</button>
           <button type="button" id="flowCopyLink" class="action-btn">Copy link</button>
           <button type="button" id="flowHandoff" class="action-btn">Hand off to ChatGPT</button>
+          <div class="handoff-options" id="flowHandoffOptions" aria-label="Hand-off options">
+            <label class="handoff-option">
+              <span>Mode</span>
+              <select id="flowHandoffMode">
+                <option value="redacted">Redacted</option>
+                <option value="full">Full</option>
+              </select>
+            </label>
+            <label class="handoff-option checkbox">
+              <input type="checkbox" id="flowHandoffIncludeWs">
+              <span>Include WS frames</span>
+            </label>
+            <label class="handoff-option checkbox">
+              <input type="checkbox" id="flowHandoffIncludeLogs">
+              <span>Include logs</span>
+            </label>
+            <label class="handoff-option checkbox">
+              <input type="checkbox" id="flowHandoffPiiScrub">
+              <span>Scrub PII</span>
+            </label>
+            <label class="handoff-option">
+              <span>Redaction</span>
+              <select id="flowHandoffRedaction">
+                <option value="minimal">Minimal</option>
+                <option value="strict">Strict</option>
+              </select>
+            </label>
+            <label class="handoff-option">
+              <span>Max size (MB)</span>
+              <input type="number" id="flowHandoffMaxSize" min="1" step="1" placeholder="Auto">
+            </label>
+          </div>
         </div>
       </div>
     </header>

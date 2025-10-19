@@ -9,6 +9,7 @@ import pytest
 from app.api_v1 import flow as flow_api
 from app.asgi_gateway import app as flask_app
 from app.flow.trace import FlowStore
+from app.admin_log import clear_admin_log_history_for_tests, emit as admin_log_emit
 
 
 @pytest.fixture(autouse=True)
@@ -16,9 +17,11 @@ def reset_flow_store():
     store = FlowStore()
     store._init()
     flow_api._CLIENT_BREADCRUMB_HITS.clear()
+    clear_admin_log_history_for_tests()
     yield
     store._init()
     flow_api._CLIENT_BREADCRUMB_HITS.clear()
+    clear_admin_log_history_for_tests()
 
 
 @pytest.fixture
@@ -355,8 +358,8 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
         assert manifest["session_id"] == "sess-full"
         assert manifest["meta"]["mode"] == "full"
         assert manifest["meta"]["redacted"] is False
-        assert manifest["meta"]["include"]["ws"] is True
-        assert manifest["meta"]["include"]["logs"] is False
+        assert manifest["meta"]["include"]["ws"] is False
+        assert "logs" not in manifest["meta"]["include"]
         assert manifest["meta"]["privacy"]["pii_scrub"] is True
         assert manifest["meta"]["privacy"]["redaction"] == "minimal"
         assert manifest["meta"]["limits"]["max_bytes"] == 5_000_000
@@ -378,6 +381,85 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
         )
         assert config_payload["foo"] == "bar"
         assert config_payload["nested"]["value"] == 1
+
+
+def test_flow_handoff_includes_optional_artifacts(admin_env):
+    store = FlowStore()
+    session_id = "sess-optional"
+
+    store.emit(session_id, "flow", "session", "session_open", "system")
+    store.emit(
+        session_id,
+        "debug",
+        "session",
+        "ws_frame_in",
+        "system",
+        meta={"type": "text", "bytes": 12, "route": "client"},
+    )
+    store.emit(
+        session_id,
+        "debug",
+        "session",
+        "ws_frame_out",
+        "system",
+        meta={"type": "binary", "bytes": 18, "route": "bus"},
+    )
+    store.emit(
+        session_id,
+        "debug",
+        "client",
+        "client_ws_error",
+        "client",
+        meta={"code": 4400},
+    )
+
+    admin_log_emit("ws_conn_open", sid=session_id, session_id=session_id, message="open")
+
+    client = flask_app.test_client()
+    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
+    token = csrf_resp.headers.get("X-CSRF-Token")
+    headers = dict(admin_env)
+    if token:
+        headers["X-CSRF-Token"] = token
+
+    body = {
+        "session_id": session_id,
+        "levels": ["flow", "debug"],
+        "prompt": "Diag",
+        "mode": "full",
+        "options": {
+            "mode": "full",
+            "include": {"ws": True, "logs": True},
+            "privacy": {"pii_scrub": False, "redaction": "minimal"},
+        },
+    }
+
+    resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
+    assert resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
+        names = set(archive.namelist())
+        assert "ws/frames.ndjson.gz" in names
+        assert "client/console.log.gz" in names
+        assert "server/server.log.gz" in names
+
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        include_meta = manifest.get("meta", {}).get("include", {})
+        assert include_meta.get("ws") is True
+        assert include_meta.get("logs") is True
+
+        frames_payload = gzip.decompress(archive.read("ws/frames.ndjson.gz")).decode("utf-8").strip()
+        frame_entries = [json.loads(line) for line in frames_payload.split("\n") if line.strip()]
+        assert any(frame.get("direction") == "in" for frame in frame_entries)
+        assert any(frame.get("direction") == "out" for frame in frame_entries)
+
+        client_payload = gzip.decompress(archive.read("client/console.log.gz")).decode("utf-8").strip()
+        client_entries = [json.loads(line) for line in client_payload.split("\n") if line.strip()]
+        assert any(entry.get("type") == "client_ws_error" for entry in client_entries)
+
+        server_payload = gzip.decompress(archive.read("server/server.log.gz")).decode("utf-8").strip()
+        server_entries = [json.loads(line) for line in server_payload.split("\n") if line.strip()]
+        assert any(entry.get("event") == "ws_conn_open" for entry in server_entries)
 
 
 def test_flow_trace_happy_path_integration(admin_env, flow_clock):
