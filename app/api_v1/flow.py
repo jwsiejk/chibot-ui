@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import threading
 import time
 from collections import deque
-from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Deque, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
 
 from flask import (
     Blueprint,
@@ -102,10 +102,89 @@ def _too_large_response() -> Response:
     return response
 
 
+def _extract_policy_snapshot(config_payload: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(config_payload, Mapping):
+        return None
+
+    interaction_policy = config_payload.get("interaction_policy")
+    if not isinstance(interaction_policy, Mapping):
+        return None
+
+    voice_runtime = interaction_policy.get("voice_runtime")
+    if not isinstance(voice_runtime, Mapping):
+        return None
+
+    barge_policy = voice_runtime.get("barge_in")
+    if not isinstance(barge_policy, Mapping):
+        return None
+
+    suppress_raw = barge_policy.get("suppress_during_tts")
+    if isinstance(suppress_raw, str):
+        suppress_value: Optional[str] = suppress_raw
+    elif suppress_raw is None:
+        suppress_value = None
+    else:
+        try:
+            suppress_value = str(suppress_raw)
+        except Exception:
+            suppress_value = None
+
+    hold_raw = barge_policy.get("post_tts_hold_ms")
+    hold_value: Optional[int]
+    if isinstance(hold_raw, bool):
+        hold_value = int(hold_raw)
+    elif isinstance(hold_raw, (int, float)):
+        try:
+            hold_value = int(hold_raw)
+        except Exception:
+            hold_value = None
+    elif isinstance(hold_raw, str):
+        text = hold_raw.strip()
+        if text:
+            try:
+                hold_value = int(float(text))
+            except Exception:
+                hold_value = None
+        else:
+            hold_value = None
+    else:
+        hold_value = None
+
+    allow_raw = barge_policy.get("allow_ptt")
+    allow_value: Optional[bool]
+    if isinstance(allow_raw, bool):
+        allow_value = allow_raw
+    elif isinstance(allow_raw, (int, float)):
+        allow_value = bool(allow_raw)
+    elif isinstance(allow_raw, str):
+        lowered = allow_raw.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            allow_value = True
+        elif lowered in {"0", "false", "no", "off"}:
+            allow_value = False
+        else:
+            allow_value = None
+    else:
+        allow_value = None
+
+    snapshot = {
+        "suppress_during_tts": suppress_value,
+        "post_tts_hold_ms": hold_value,
+        "allow_ptt": allow_value,
+    }
+
+    if not any(value is not None for value in snapshot.values()):
+        return None
+
+    return {"voice_runtime": {"barge_in": snapshot}}
+
+
 DEFAULT_HANDOFF_PROMPT = (
     "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), "
     "smallest viable fix, and validation steps."
 )
+
+_HANDOFF_TELEMETRY_SCHEMAS = ["barge_decision.v1"]
 
 _TEXT_EXACT_KEYS = {
     "text",
@@ -731,6 +810,7 @@ def flow_handoff():
         events_gz_bytes = gzip_buffer.getvalue()
 
         config_payload = snapshot.config if isinstance(snapshot.config, dict) else {}
+        policy_snapshot = _extract_policy_snapshot(config_payload)
         try:
             config_text = json.dumps(
                 config_payload, ensure_ascii=False, indent=2, sort_keys=True
@@ -877,8 +957,12 @@ def flow_handoff():
             "event_count": event_count,
             "files": manifest_files,
         }
+        if _HANDOFF_TELEMETRY_SCHEMAS:
+            manifest_payload["telemetry_schemas"] = list(_HANDOFF_TELEMETRY_SCHEMAS)
         if manifest_meta:
             manifest_payload["meta"] = manifest_meta
+        if policy_snapshot:
+            manifest_payload["policy_snapshot"] = policy_snapshot
 
         manifest_bytes = json.dumps(
             manifest_payload, ensure_ascii=False, indent=2

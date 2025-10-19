@@ -71,6 +71,8 @@ def _coerce_event(payload: Mapping[str, Any]) -> HistoryItem:
     data["event"] = event_name
     data.setdefault("kind", event_name)
 
+    preserve_text = event_name == "barge_decision"
+
     version = data.get("v")
     try:
         data["v"] = int(version)
@@ -103,12 +105,12 @@ def _coerce_event(payload: Mapping[str, Any]) -> HistoryItem:
     else:
         data.pop("turn_id", None)
 
-    if "text_preview" in data:
+    if "text_preview" in data and not preserve_text:
         data["text_preview"] = _clip_preview(data["text_preview"])
 
     if "text" in data:
         text_val = data["text"]
-        if isinstance(text_val, str):
+        if isinstance(text_val, str) and not preserve_text:
             data["text"] = text_val[:4096]
 
     payload_section = data.get("payload")

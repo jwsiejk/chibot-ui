@@ -303,7 +303,22 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
         "session",
         "session_config",
         "system",
-        meta={"config": {"foo": "bar", "nested": {"value": 1}}},
+        meta={
+            "config": {
+                "foo": "bar",
+                "nested": {"value": 1},
+                "interaction_policy": {
+                    "voice_runtime": {
+                        "barge_in": {
+                            "suppress_during_tts": "partial",
+                            "post_tts_hold_ms": 150,
+                            "allow_ptt": False,
+                            "extra": "ignored",
+                        }
+                    }
+                },
+            }
+        },
     )
     store.emit(
         "sess-full",
@@ -358,6 +373,16 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
         assert manifest["session_id"] == "sess-full"
         assert manifest["meta"]["mode"] == "full"
         assert manifest["meta"]["redacted"] is False
+        assert manifest["telemetry_schemas"] == ["barge_decision.v1"]
+        assert manifest["policy_snapshot"] == {
+            "voice_runtime": {
+                "barge_in": {
+                    "suppress_during_tts": "partial",
+                    "post_tts_hold_ms": 150,
+                    "allow_ptt": False,
+                }
+            }
+        }
         assert manifest["meta"]["include"]["ws"] is False
         assert "logs" not in manifest["meta"]["include"]
         assert manifest["meta"]["privacy"]["pii_scrub"] is True

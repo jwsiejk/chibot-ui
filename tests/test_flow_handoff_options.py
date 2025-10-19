@@ -144,6 +144,48 @@ def test_flow_handoff_pii_scrub_full_includes_logs(admin_env):
         assert "[ip:" in server_text
 
 
+def test_flow_handoff_includes_full_barge_decision_logs(admin_env):
+    store = FlowStore()
+    session_id = "sess-barge-log"
+    store.emit(session_id, "flow", "session", "session_open", "system")
+
+    long_text = "decide-" * 1200
+    admin_log_emit(
+        {
+            "event": "barge_decision",
+            "session_id": session_id,
+            "text": long_text,
+            "text_preview": long_text,
+        }
+    )
+
+    client = flask_app.test_client()
+    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
+    token = csrf_resp.headers.get("X-CSRF-Token")
+    headers = dict(admin_env)
+    if token:
+        headers["X-CSRF-Token"] = token
+
+    body = {
+        "session_id": session_id,
+        "options": {"mode": "full", "include": {"logs": True}},
+    }
+
+    resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
+    assert resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
+        server_log = archive.read("server/server.log.gz")
+        server_text = _decode_gzip_bytes(server_log)
+        records = [json.loads(line) for line in server_text.strip().splitlines() if line.strip()]
+
+    barge_records = [record for record in records if record.get("event") == "barge_decision"]
+    assert barge_records, "expected barge_decision event in server log"
+    payload = barge_records[0]
+    assert payload.get("text") == long_text
+    assert payload.get("text_preview") == long_text
+
+
 def test_flow_handoff_respects_max_bytes(admin_env):
     store = FlowStore()
     session_id = "sess-max"
