@@ -1188,6 +1188,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     flow_session_close_emitted = False
     flow_session_config_emitted = False
     session_flow_event_id: List[Optional[str]] = [None]
+    ws_transport_parent_id: List[Optional[str]] = [None]
     post_greet_phase_active = [False]
     flow_turn_commit_emitted: Set[int] = set()
     flow_turn_abort_emitted: Set[int] = set()
@@ -1239,6 +1240,25 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             )
         except Exception:
             return ""
+
+    def _ensure_ws_parent_id() -> Optional[str]:
+        if ws_transport_parent_id[0] is None:
+            try:
+                ws_transport_parent_id[0] = (
+                    flow_emit(
+                        session_id=sid,
+                        type="ws_frames",
+                        phase="transport",
+                        who="server",
+                        meta={"dir": "pump_start"},
+                    )
+                    or None
+                )
+            except Exception:
+                ws_transport_parent_id[0] = None
+            if ws_transport_parent_id[0] is None and session_flow_event_id[0]:
+                ws_transport_parent_id[0] = session_flow_event_id[0]
+        return ws_transport_parent_id[0]
 
     policy: Dict[str, Any] = {}
     policy_version: str = "unknown"
@@ -1452,20 +1472,19 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 meta=runtime_meta,
             )
 
-    if ws_transport_parent_id[0] is None:
-        transport_meta = {
-            "path": str(scope.get("path") or ""),
-            "client_ip": client_ip,
-        }
-        transport_event_id = _emit_flow_event(
-            "ws_transport",
-            phase="session",
-            meta=transport_meta,
-        )
-        if transport_event_id:
-            ws_transport_parent_id[0] = transport_event_id
-        elif session_flow_event_id[0]:
-            ws_transport_parent_id[0] = session_flow_event_id[0]
+    transport_meta = {
+        "path": str(scope.get("path") or ""),
+        "client_ip": client_ip,
+    }
+    transport_event_id = _emit_flow_event(
+        "ws_transport",
+        phase="session",
+        meta=transport_meta,
+    )
+    if transport_event_id:
+        ws_transport_parent_id[0] = transport_event_id
+    elif session_flow_event_id[0]:
+        ws_transport_parent_id[0] = session_flow_event_id[0]
 
     _raw_send = send
 
@@ -1494,11 +1513,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     payload_bytes = 0
             ws_frames_out += 1
             ws_bytes_out += payload_bytes
-            if ws_transport_parent_id[0] and ws_frames_out % _WS_FRAME_SAMPLE == 0:
+            parent_id = _ensure_ws_parent_id()
+            if parent_id and ws_frames_out % _WS_FRAME_SAMPLE == 0:
                 _emit_debug_event(
                     "ws_frame_out",
                     phase="session",
-                    parent_id=ws_transport_parent_id[0],
+                    parent_id=parent_id,
                     meta={
                         "type": frame_kind,
                         "bytes": payload_bytes,
@@ -1508,6 +1528,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         await _raw_send(message)
 
     send = _send_instrumented
+
+    async def _safe_close(code: int, reason: str) -> None:
+        try:
+            flow_emit(
+                session_id=sid,
+                type="ws_close",
+                phase="transport",
+                who="server",
+                meta={"code": code, "reason": reason},
+            )
+        except Exception:
+            pass
+        try:
+            await send({"type": "websocket.close", "code": code, "reason": reason})
+        except Exception:
+            pass
+
+    async def _handle_startup_failure(ex: Exception) -> None:
+        if isinstance(ex, asyncio.CancelledError):
+            raise
+        try:
+            flow_emit(
+                session_id=sid,
+                type="ws_error",
+                phase="transport",
+                who="server",
+                meta={
+                    "where": "_ws_chat_asgi_impl",
+                    "message": str(ex)[:500],
+                },
+            )
+        except Exception:
+            pass
+        try:
+            await _ws_send_json(
+                send,
+                {
+                    "type": "Error",
+                    "code": "WS_INIT_FAILED",
+                    "message": "server error during WS init",
+                },
+            )
+        except Exception:
+            pass
+        await _safe_close(1011, "server error")
 
     with contextlib.suppress(Exception):
         clear_greet_turn_cache(sid)
@@ -1539,17 +1604,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         await _ws_send_json(send, {"type": "ready", "session_id": sid})
     except Exception:
         with contextlib.suppress(Exception):
-            await send(
-                {
-                    "type": "websocket.close",
-                    "code": 1011,
-                    "reason": "initial_ready_failed",
-                }
-            )
+            await _safe_close(1011, "initial_ready_failed")
         return
 
     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
     ws_configured = False
+    configure_ack_sent = False
     if not isinstance(policy, dict):
         policy = {}
     if isinstance(policy, dict):
@@ -1908,7 +1968,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     ws_frames_out = 0
     ws_bytes_out = 0
     _WS_FRAME_SAMPLE = 20
-    ws_transport_parent_id: List[Optional[str]] = [None]
     backpressure_drop_count = 0
     backpressure_last_emit = 0.0
     backpressure_last_queue_len = 0
@@ -3427,11 +3486,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 if _admin_emit:
                     with contextlib.suppress(Exception):
                         _admin_emit("ws_backpressure", **payload)
-                if ws_transport_parent_id[0]:
+                parent_id = _ensure_ws_parent_id()
+                if parent_id:
                     _emit_debug_event(
                         "ws_backpressure",
                         phase="session",
-                        parent_id=ws_transport_parent_id[0],
+                        parent_id=parent_id,
                         meta={
                             "queue_len": queue_len,
                             "dropped": backpressure_drop_count,
@@ -3578,11 +3638,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     frames_in=ws_frames_in,
                                     bytes_total=ws_bytes_in,
                                 )
-                        if ws_transport_parent_id[0]:
+                        parent_id = _ensure_ws_parent_id()
+                        if parent_id:
                             _emit_debug_event(
                                 "ws_frame_in",
                                 phase="session",
-                                parent_id=ws_transport_parent_id[0],
+                                parent_id=parent_id,
                                 meta={
                                     "type": "binary",
                                     "bytes": len(chunk or b""),
@@ -3900,7 +3961,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 _admin_emit("ws_json_recv", sid=sid, type=t)
 
                         ws_text_frames_in += 1
-                        if ws_transport_parent_id[0] and ws_text_frames_in % _WS_FRAME_SAMPLE == 0:
+                        parent_id = _ensure_ws_parent_id()
+                        if parent_id and ws_text_frames_in % _WS_FRAME_SAMPLE == 0:
                             payload_bytes = 0
                             try:
                                 payload_bytes = len((ev.get("text") or "").encode("utf-8"))
@@ -3909,7 +3971,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             _emit_debug_event(
                                 "ws_frame_in",
                                 phase="session",
-                                parent_id=ws_transport_parent_id[0],
+                                parent_id=parent_id,
                                 meta={
                                     "type": "text",
                                     "bytes": payload_bytes,
@@ -4139,138 +4201,172 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             continue
 
                         elif t == "Configure":
-                            cfg.update(obj or {})
-                            manual_feature_enabled = bool(
-                                cfg.get("feature_manual_barge_in", manual_feature_enabled)
-                            )
-                            manual_mode_manual_only = bool(
-                                cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-                            )
-                            auto_commit_when_ready = bool(
-                                cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-                            )
-                            ws_configured = True
-                            _jlog(
-                                "ws_configure",
-                                sid=sid,
-                                ts_ms=int(time.time() * 1000),
-                                barge_in_mode_manual=manual_mode_manual_only,
-                                feature_manual_barge_in=manual_feature_enabled,
-                                auto_commit_when_ready=auto_commit_when_ready,
-                            )
-                            if not manual_feature_enabled:
-                                manual_button_down[0] = False
-                                manual_turn_active[0] = False
-                                manual_commit_pending[0] = False
-                            greet_seq_raw = obj.get("greet_seq")
-                            greet_seq: Optional[int] = None
-                            is_new_greet_seq = True
-                            if greet_seq_raw is not None:
-                                try:
-                                    greet_seq = int(greet_seq_raw)
-                                except Exception:
-                                    greet_seq = None
-                            if greet_seq is not None and (obj.get("greet") or obj.get("reset")):
-                                try:
-                                    is_new_greet_seq = await _greet_seq_mark_if_new(sid, greet_seq)
-                                except Exception:
-                                    is_new_greet_seq = True
-                            if obj.get("reset"):
-                                if is_new_greet_seq:
-                                    with contextlib.suppress(Exception):
-                                        clear_greet_turn_cache(sid)
-                                    with contextlib.suppress(Exception):
-                                        _admin_emit and _admin_emit(
-                                            "greet:reset",
-                                            route="/ws/v1/chat",
-                                            label="greet:reset",
-                                            session_id=sid,
-                                            greet_seq=greet_seq,
-                                        )
-                                else:
-                                    _jlog(
-                                        "ws_greet_reset_skip_dup",
-                                        sid=sid,
-                                        greet_seq=greet_seq,
-                                        via="Configure",
-                                    )
-                            if obj.get("greet"):
-                                if not is_new_greet_seq:
-                                    _jlog(
-                                        "ws_greet_skip_dup",
-                                        sid=sid,
-                                        greet_seq=greet_seq,
-                                        via="Configure",
-                                    )
-                                    continue
-                                _jlog(
-                                    "ws_greet_recv",
-                                    sid=sid,
-                                    via="Configure",
-                                    greet_seq=greet_seq,
+                            try:
+                                cfg.update(obj or {})
+                                manual_feature_enabled = bool(
+                                    cfg.get("feature_manual_barge_in", manual_feature_enabled)
                                 )
-
-                                async def _bg2():
-                                    nonlocal greet_end_pending, greet_end_emitted
+                                manual_mode_manual_only = bool(
+                                    cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+                                )
+                                auto_commit_when_ready = bool(
+                                    cfg.get("auto_commit_when_ready", auto_commit_when_ready)
+                                )
+                                ws_configured = True
+                                _jlog(
+                                    "ws_configure",
+                                    sid=sid,
+                                    ts_ms=int(time.time() * 1000),
+                                    barge_in_mode_manual=manual_mode_manual_only,
+                                    feature_manual_barge_in=manual_feature_enabled,
+                                    auto_commit_when_ready=auto_commit_when_ready,
+                                )
+                                if not configure_ack_sent:
+                                    greet_flag = bool(cfg.get("greet"))
+                                    reset_val = cfg.get("reset", 0)
                                     try:
-                                        _ensure_session_ready_emitted()
-                                        _emit_flow_event("greet_start", phase="greet")
-                                        greet_end_pending = True
-                                        greet_end_emitted = False
-                                        from app.services.streaming import run_ws_greet
-
-                                        tid = await asyncio.to_thread(run_ws_greet, sid)
-                                        tid_meta: Optional[Dict[str, Any]] = None
-                                        if tid:
-                                            try:
-                                                tid_str = str(tid)
-                                            except Exception:
-                                                tid_str = ""
-                                            if tid_str:
-                                                tid_meta = {"turn_id": tid_str}
-                                        _emit_flow_event(
-                                            "assistant_end",
-                                            phase="greet",
-                                            meta=tid_meta,
+                                        flow_emit(
+                                            session_id=sid,
+                                            type="session_ready",
+                                            phase="ws",
+                                            who="server",
+                                            meta={
+                                                "greet": greet_flag,
+                                                "reset": reset_val,
+                                            },
                                         )
-                                        tts_state, _tts_key = _lookup_tts_state(sid, None)
-                                        emit_now = False
-                                        if not tts_state:
-                                            emit_now = True
-                                        elif isinstance(tts_state, dict):
-                                            if tts_state.get("done") or tts_state.get("error"):
-                                                emit_now = True
-                                        if emit_now:
-                                            _maybe_emit_greet_end(via="no_tts")
+                                    except Exception:
+                                        pass
+                                    await _ws_send_json(
+                                        send,
+                                        {
+                                            "type": "ConfigureAck",
+                                            "ok": True,
+                                            "greet": greet_flag,
+                                        },
+                                    )
+                                    configure_ack_sent = True
+                                if not manual_feature_enabled:
+                                    manual_button_down[0] = False
+                                    manual_turn_active[0] = False
+                                    manual_commit_pending[0] = False
+                                greet_seq_raw = obj.get("greet_seq")
+                                greet_seq: Optional[int] = None
+                                is_new_greet_seq = True
+                                if greet_seq_raw is not None:
+                                    try:
+                                        greet_seq = int(greet_seq_raw)
+                                    except Exception:
+                                        greet_seq = None
+                                if greet_seq is not None and (
+                                    obj.get("greet") or obj.get("reset")
+                                ):
+                                    try:
+                                        is_new_greet_seq = await _greet_seq_mark_if_new(
+                                            sid, greet_seq
+                                        )
+                                    except Exception:
+                                        is_new_greet_seq = True
+                                if obj.get("reset"):
+                                    if is_new_greet_seq:
                                         with contextlib.suppress(Exception):
-                                            if _admin_emit:
-                                                cfg_now = db.get_config()
-                                                audio_on = bool(
-                                                    (cfg_now or {}).get(
-                                                        "feature_audio", True
-                                                    )
-                                                )
-                                                _admin_emit(
-                                                    "greet:resp",
-                                                    label="greet:resp",
-                                                    session_id=sid,
-                                                    turn_id=tid,
-                                                    audio_scheduled=audio_on,
-                                                )
-                                    except Exception as e:
-                                        greet_end_pending = False
+                                            clear_greet_turn_cache(sid)
                                         with contextlib.suppress(Exception):
-                                            await _ws_send_json(
-                                                send,
-                                                make_error(
-                                                    "greet_fail", e.__class__.__name__
-                                                ),
+                                            _admin_emit and _admin_emit(
+                                                "greet:reset",
+                                                route="/ws/v1/chat",
+                                                label="greet:reset",
+                                                session_id=sid,
+                                                greet_seq=greet_seq,
                                             )
-                                        _emit_ws_error("greet_fail")
-                                    finally:
-                                        post_greet_phase_active[0] = True
+                                    else:
+                                        _jlog(
+                                            "ws_greet_reset_skip_dup",
+                                            sid=sid,
+                                            greet_seq=greet_seq,
+                                            via="Configure",
+                                        )
+                                if obj.get("greet"):
+                                    if not is_new_greet_seq:
+                                        _jlog(
+                                            "ws_greet_skip_dup",
+                                            sid=sid,
+                                            greet_seq=greet_seq,
+                                            via="Configure",
+                                        )
+                                        continue
+                                    _jlog(
+                                        "ws_greet_recv",
+                                        sid=sid,
+                                        via="Configure",
+                                        greet_seq=greet_seq,
+                                    )
 
-                                asyncio.create_task(_bg2())
+                                    async def _bg2():
+                                        nonlocal greet_end_pending, greet_end_emitted
+                                        try:
+                                            _ensure_session_ready_emitted()
+                                            _emit_flow_event("greet_start", phase="greet")
+                                            greet_end_pending = True
+                                            greet_end_emitted = False
+                                            from app.services.streaming import run_ws_greet
+
+                                            tid = await asyncio.to_thread(run_ws_greet, sid)
+                                            tid_meta: Optional[Dict[str, Any]] = None
+                                            if tid:
+                                                try:
+                                                    tid_str = str(tid)
+                                                except Exception:
+                                                    tid_str = ""
+                                                if tid_str:
+                                                    tid_meta = {"turn_id": tid_str}
+                                            _emit_flow_event(
+                                                "assistant_end",
+                                                phase="greet",
+                                                meta=tid_meta,
+                                            )
+                                            tts_state, _tts_key = _lookup_tts_state(sid, None)
+                                            emit_now = False
+                                            if not tts_state:
+                                                emit_now = True
+                                            elif isinstance(tts_state, dict):
+                                                if tts_state.get("done") or tts_state.get("error"):
+                                                    emit_now = True
+                                            if emit_now:
+                                                _maybe_emit_greet_end(via="no_tts")
+                                            with contextlib.suppress(Exception):
+                                                if _admin_emit:
+                                                    cfg_now = db.get_config()
+                                                    audio_on = bool(
+                                                        (cfg_now or {}).get(
+                                                            "feature_audio", True
+                                                        )
+                                                    )
+                                                    _admin_emit(
+                                                        "greet:resp",
+                                                        label="greet:resp",
+                                                        session_id=sid,
+                                                        turn_id=tid,
+                                                        audio_scheduled=audio_on,
+                                                    )
+                                        except Exception as e:
+                                            greet_end_pending = False
+                                            with contextlib.suppress(Exception):
+                                                await _ws_send_json(
+                                                    send,
+                                                    make_error(
+                                                        "greet_fail",
+                                                        e.__class__.__name__,
+                                                    ),
+                                                )
+                                            _emit_ws_error("greet_fail")
+                                        finally:
+                                            post_greet_phase_active[0] = True
+
+                                    asyncio.create_task(_bg2())
+                            except Exception as ex:
+                                await _handle_startup_failure(ex)
+                                return
 
                         elif t in (
                             "user_msg",
@@ -4789,9 +4885,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 await task
         confirm_timeout_cancelled.clear()
         with contextlib.suppress(Exception):
-            await send(
-                {"type": "websocket.close", "code": 1000, "reason": "normal_shutdown"}
-            )
+            await _safe_close(1000, "normal_shutdown")
 
 
 # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
