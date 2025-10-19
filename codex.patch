@@ -1,149 +1,234 @@
-diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index 68842462a4da262ab76e77c493df2e0ebfbfc158..46ddf821223e173e15d48ff36ca157ad8f936e67 100644
---- a/static/js/bootstrap.js
-+++ b/static/js/bootstrap.js
-@@ -299,66 +299,82 @@ function _startTtsRearmTimer(delayMs = TTS_REARM_DELAY_MS, trigger = 'UtteranceE
-   _ttsRearmTimer = setTimeout(() => {
-     _ttsRearmTimer = null;
-     if (_ttsHoldActive) return;
-     try {
-       _console('log', `[bootstrap] VAD re-arming after TTS (trigger=${trigger})`);
-     } catch {}
-     armVAD(_lastMicStream ?? undefined)
-       .then(() => {
-         _ensureVoiceCtxLoaded();
-         try { _console('log', '[bootstrap] VAD armed — ready for user audio'); } catch {}
-       })
-       .catch((err) => {
-         try { _console('warn', '[bootstrap] VAD re-arm failed after TTS', err); } catch {}
-       });
-   }, waitMs);
- }
- 
- function _scheduleVadRearmAfterTts(trigger = 'UtteranceEnd') {
-   _startTtsRearmTimer(TTS_REARM_DELAY_MS, trigger);
- }
- 
- function wireWSEventsOnce(){
-   if (window.__askchip_ws_wired) return;
-   window.__askchip_ws_wired = true;
- 
-+  const normalizeCloseCode = (detail = {}) => {
-+    if (!detail || typeof detail !== 'object') return null;
-+    const raw = detail.code;
-+    if (Number.isFinite(raw)) return raw;
-+    if (typeof raw === 'string' && raw.trim()) {
-+      const parsed = Number.parseInt(raw, 10);
-+      return Number.isFinite(parsed) ? parsed : null;
-+    }
-+    return null;
-+  };
+diff --git a/tools/validate_flow_zip.py b/tools/validate_flow_zip.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ee1f8171ecaacc1016429d42a3a37fa180e7a06c
+--- /dev/null
++++ b/tools/validate_flow_zip.py
+@@ -0,0 +1,228 @@
++#!/usr/bin/env python3
++"""Validate a flow handoff ZIP file against the manifest schema."""
 +
-   const describeWsClose = (detail = {}) => {
--    const reason = typeof detail.reason === 'string' ? detail.reason.trim() : '';
-+    const reason = typeof detail?.reason === 'string' ? detail.reason.trim() : '';
-     if (reason) return reason;
--    const code = detail.code;
-+    if (detail?.wasClean === true) return 'clean close';
-+    const code = normalizeCloseCode(detail);
-     if (code === 1000 || code === 1001) return 'normal closure';
-     if (code === 1006) return 'network disconnect';
-     if (code === 1012) return 'service restart';
-     if (code === 1013) return 'service overload';
-     if (code === 1014) return 'bad gateway';
-     if (code === 1015) return 'TLS handshake failure';
--    return 'unknown reason';
-+    return code != null ? `code ${code}` : 'unknown reason';
-   };
- 
-   const isExpectedAbnormalClose = (detail = {}) => {
-     if (!detail || typeof detail !== 'object') return false;
--    if (detail.code === 1006) return true;
-+    if (detail.wasClean === true) return true;
-+    if (detail.reconnectScheduled) return true;
-+    const code = normalizeCloseCode(detail);
-+    if (code === 1006) return true;
-+    if (code === 1012 || code === 1013) return true;
-     return false;
-   };
- 
-   // Log first few frames to verify payload shape
-   let seen = 0;
-   const loggedTypes = new Set();
-   logWsListenerAttach('askchip-ws', 'bootstrap-wire');
-   window.addEventListener('askchip-ws', (ev) => {
-     const d = ev.detail || {};
-     const t = d.type || '';
-     const normalizedType = typeof t === 'string' ? t : '';
-     const frameTurnId = d && d.turn_id != null ? String(d.turn_id) : null;
- 
-     if (normalizedType === 'TTS_START' || normalizedType === 'assistant_audio' || normalizedType === 'tts:start') {
-       if (!_ttsHoldActive) {
-         _ttsHoldActive = true;
-         _ttsActiveTurnId = frameTurnId;
-         _cancelTtsRearmTimer();
-         try {
-           disarmVAD();
-           _console('log', '[bootstrap] VAD disarmed while TTS is active');
-         } catch (err) {
-           try { _console('warn', '[bootstrap] VAD disarm failed during TTS', err); } catch {}
-         }
-       } else if (!_ttsActiveTurnId && frameTurnId) {
-@@ -387,54 +403,55 @@ function wireWSEventsOnce(){
-     // Lightweight state dot hints (no UI regressions)
-     if (t === 'assistant_audio') setDot('speaking');
-     if (t === 'assistant_audio') _manualPhaseChanged('speaking');
-     if (t === 'UtteranceEnd')    setDot('ready');
-     if (t === 'UtteranceEnd')    _manualPhaseChanged('ready');
-     if (t === 'ready')           _manualPhaseChanged('ready');
-     if (t === 'state' && d.phase) {
-       if (d.phase === 'ready')    setDot('ready');
-       if (d.phase === 'thinking') setDot('thinking');
-       if (d.phase === 'speaking') setDot('speaking');
-       if (d.phase === 'listening')setDot('listening');
-       _manualPhaseChanged(String(d.phase));
-     }
- 
-     // De-dupe assistant text frames so greet can't double-render
-     if (_isAssistantTextFrame(d)) {
-       if (!_dedupeAssistant(d)) return; // swallow duplicate
-     }
- 
-     try { App.handleAssistantFrame(d); } catch (e) { _console('warn', 'App.handleAssistantFrame error', e); }
-   });
- 
-   logWsListenerAttach('askchip-ws-close', 'bootstrap-wire');
-   window.addEventListener('askchip-ws-close', (ev) => {
-     const detail = ev.detail || {};
--    const normal = detail.code === 1000 || detail.code === 1001;
-+    const code = normalizeCloseCode(detail);
-+    const normal = code === 1000 || code === 1001;
-     const expectedAbnormal = !normal && isExpectedAbnormalClose(detail);
-     const reason = describeWsClose(detail);
--    const payload = { ...detail, reason };
-+    const payload = { ...detail, code, reason };
- 
-     const logLevel = normal || expectedAbnormal ? 'info' : 'warn';
-     _console(logLevel, '[WS close]', payload);
-     // When WS closes, disable Send/End and re-enable Start
-     _disableButtons();
-     const sb = $('#startButton');
-     if (sb) sb.disabled = false;
-     setDot('ready');
-   });
- }
- 
- function wireVoiceEventsOnce(){
-   if (window.__askchip_voice_wired) return;
-   window.__askchip_voice_wired = true;
- 
-   window.addEventListener('askchip-voice', (ev) => {
-     const detail = ev?.detail || {};
-     const name = detail.name || detail.event;
-     if (name === 'barge_in') {
-       const reason = typeof detail.reason === 'string' ? detail.reason.toLowerCase() : '';
-       const manual = detail.manual === true || reason === 'manual';
-       if (_ttsHoldActive && !manual) {
-         try { _console('log', '[bootstrap] suppressed local barge_in during TTS'); } catch {}
-         return;
-       }
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import re
++import zipfile
++from datetime import datetime
++from pathlib import Path
++from typing import Any, Dict, Iterable, Tuple
++
++try:  # pragma: no cover - optional dependency
++    import jsonschema  # type: ignore
++except ImportError:  # pragma: no cover - optional dependency
++    jsonschema = None
++
++
++class SchemaValidationError(ValueError):
++    """Raised when the manifest fails schema validation."""
++
++
++def _load_json(path: Path) -> Any:
++    with path.open("r", encoding="utf-8") as handle:
++        return json.load(handle)
++
++
++def _read_zip_manifest(archive: zipfile.ZipFile) -> Dict[str, Any]:
++    try:
++        manifest_bytes = archive.read("manifest.json")
++    except KeyError as exc:
++        raise SystemExit("manifest.json not found in archive") from exc
++
++    try:
++        return json.loads(manifest_bytes.decode("utf-8"))
++    except json.JSONDecodeError as exc:
++        raise SystemExit(f"manifest.json is not valid JSON: {exc}") from exc
++
++
++def _format_path(path: Tuple[Any, ...]) -> str:
++    return " / ".join(str(part) for part in path) or "<root>"
++
++
++def _fallback_validate(instance: Any, schema: Dict[str, Any], path: Tuple[Any, ...] = ()) -> None:
++    schema_type = schema.get("type")
++    if schema_type:
++        if schema_type == "object" and not isinstance(instance, dict):
++            raise SchemaValidationError(f"{_format_path(path)}: expected object")
++        if schema_type == "array" and not isinstance(instance, list):
++            raise SchemaValidationError(f"{_format_path(path)}: expected array")
++        if schema_type == "string" and not isinstance(instance, str):
++            raise SchemaValidationError(f"{_format_path(path)}: expected string")
++        if schema_type == "integer" and not isinstance(instance, int):
++            raise SchemaValidationError(f"{_format_path(path)}: expected integer")
++
++    if schema_type == "object":
++        required = schema.get("required", [])
++        for key in required:
++            if key not in instance:
++                raise SchemaValidationError(
++                    f"{_format_path(path)}: missing required property '{key}'"
++                )
++
++        properties = schema.get("properties", {})
++        additional = schema.get("additionalProperties", True)
++        for key, value in instance.items():
++            if key in properties:
++                _fallback_validate(value, properties[key], path + (key,))
++            else:
++                if additional is False:
++                    raise SchemaValidationError(
++                        f"{_format_path(path + (key,))}: unexpected property"
++                    )
++                if isinstance(additional, dict):
++                    _fallback_validate(value, additional, path + (key,))
++
++    if schema_type == "array":
++        min_items = schema.get("minItems")
++        if min_items is not None and len(instance) < min_items:
++            raise SchemaValidationError(
++                f"{_format_path(path)}: expected at least {min_items} item(s)"
++            )
++        if schema.get("uniqueItems"):
++            seen = set()
++            for idx, item in enumerate(instance):
++                marker = json.dumps(item, sort_keys=True)
++                if marker in seen:
++                    raise SchemaValidationError(
++                        f"{_format_path(path + (idx,))}: duplicate array item"
++                    )
++                seen.add(marker)
++        items_schema = schema.get("items")
++        if isinstance(items_schema, dict):
++            for index, value in enumerate(instance):
++                _fallback_validate(value, items_schema, path + (index,))
++
++    if schema_type == "string":
++        min_length = schema.get("minLength")
++        if min_length is not None and len(instance) < min_length:
++            raise SchemaValidationError(
++                f"{_format_path(path)}: expected minimum length {min_length}"
++            )
++        max_length = schema.get("maxLength")
++        if max_length is not None and len(instance) > max_length:
++            raise SchemaValidationError(
++                f"{_format_path(path)}: expected maximum length {max_length}"
++            )
++        pattern = schema.get("pattern")
++        if pattern and not re.fullmatch(pattern, instance):
++            raise SchemaValidationError(
++                f"{_format_path(path)}: value '{instance}' does not match pattern"
++            )
++        fmt = schema.get("format")
++        if fmt == "date-time":
++            try:
++                datetime.fromisoformat(instance.replace("Z", "+00:00"))
++            except ValueError as exc:
++                raise SchemaValidationError(
++                    f"{_format_path(path)}: invalid date-time '{instance}'"
++                ) from exc
++
++    if schema_type == "integer":
++        minimum = schema.get("minimum")
++        if minimum is not None and instance < minimum:
++            raise SchemaValidationError(
++                f"{_format_path(path)}: expected value >= {minimum}"
++            )
++
++
++def _validate_schema(manifest: Dict[str, Any], schema: Dict[str, Any]) -> None:
++    if jsonschema is not None:  # pragma: no cover - prefer library when available
++        validator = jsonschema.Draft7Validator(schema)
++        errors = sorted(validator.iter_errors(manifest), key=lambda e: e.path)
++        if errors:
++            lines = [f"Schema validation failed ({len(errors)} error(s)):"]
++            for error in errors:
++                location = _format_path(tuple(error.path))
++                lines.append(f" - {location}: {error.message}")
++            raise SystemExit("\n".join(lines))
++        return
++
++    try:
++        _fallback_validate(manifest, schema)
++    except SchemaValidationError as exc:
++        raise SystemExit(f"Schema validation failed: {exc}") from exc
++
++
++def _iter_non_manifest_files(namelist: Iterable[str]) -> Iterable[str]:
++    for name in namelist:
++        if name.endswith("/"):
++            continue
++        if name == "manifest.json":
++            continue
++        yield name
++
++
++def _verify_files(manifest: Dict[str, Any], archive: zipfile.ZipFile) -> None:
++    declared = {}
++    for entry in manifest.get("files", []):
++        if not isinstance(entry, dict):
++            raise SystemExit("Manifest 'files' entries must be objects")
++        path = entry.get("path")
++        if not isinstance(path, str):
++            raise SystemExit("Manifest file path must be a string")
++        if path in declared:
++            raise SystemExit(f"Duplicate manifest entry for {path}")
++        declared[path] = entry
++
++        try:
++            data = archive.read(path)
++        except KeyError as exc:
++            raise SystemExit(f"File listed in manifest is missing from archive: {path}") from exc
++
++        size = len(data)
++        digest = hashlib.sha1(data).hexdigest()
++
++        if size != entry.get("bytes"):
++            raise SystemExit(
++                f"Byte size mismatch for {path}: manifest={entry.get('bytes')} actual={size}"
++            )
++        if digest != entry.get("sha1"):
++            raise SystemExit(
++                f"SHA-1 mismatch for {path}: manifest={entry.get('sha1')} actual={digest}"
++            )
++
++        short = entry.get("sha1_first8")
++        if short is not None and digest[:8] != short:
++            raise SystemExit(
++                f"sha1_first8 mismatch for {path}: manifest={short} actual={digest[:8]}"
++            )
++
++    archive_files = set(_iter_non_manifest_files(archive.namelist()))
++    missing_from_manifest = sorted(archive_files - set(declared))
++    if missing_from_manifest:
++        joined = ", ".join(missing_from_manifest)
++        raise SystemExit(f"Archive contains files not listed in manifest: {joined}")
++
++
++def parse_args(argv: Iterable[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("zip_path", type=Path, help="Path to the exported flow ZIP")
++    parser.add_argument("schema_path", type=Path, help="Path to the manifest JSON Schema")
++    return parser.parse_args(argv)
++
++
++def main(argv: Iterable[str] | None = None) -> int:
++    args = parse_args(argv)
++
++    if not args.zip_path.is_file():
++        raise SystemExit(f"ZIP not found: {args.zip_path}")
++    if not args.schema_path.is_file():
++        raise SystemExit(f"Schema not found: {args.schema_path}")
++
++    schema = _load_json(args.schema_path)
++
++    with zipfile.ZipFile(args.zip_path) as archive:
++        manifest = _read_zip_manifest(archive)
++        _validate_schema(manifest, schema)
++        _verify_files(manifest, archive)
++
++    print("OK")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
