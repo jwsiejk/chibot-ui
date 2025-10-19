@@ -1,113 +1,181 @@
+diff --git a/static/js/voice/core/HysteresisVAD.js b/static/js/voice/core/HysteresisVAD.js
+index c8dc94a1be18c5690dfd01a248006acd4c367269..8a27e3ec2b766aae596559250d22982c920487e0 100644
+--- a/static/js/voice/core/HysteresisVAD.js
++++ b/static/js/voice/core/HysteresisVAD.js
+@@ -1,51 +1,86 @@
+-const clampThreshold = (value, fallback) => {
+-  const num = Number.isFinite(value) ? Math.floor(value) : fallback;
+-  return Math.max(1, num);
++const clampNumber = (value, fallback, { min = Number.NEGATIVE_INFINITY, max = Number.POSITIVE_INFINITY } = {}) => {
++  const numeric = Number.isFinite(value) ? Number(value) : fallback;
++  if (!Number.isFinite(numeric)) return fallback;
++  return Math.min(max, Math.max(min, numeric));
+ };
+ 
++const clampDb = (value, fallback) => {
++  if (!Number.isFinite(value)) return fallback;
++  return Number(value);
++};
++
++const DEFAULT_FRAME_MS = 30;
++const DEFAULT_OPEN_DB = -40;
++const DEFAULT_CLOSE_DB = -46;
++const DEFAULT_MIN_OPEN_MS = 200;
++const MIN_OPEN_MS = 180;
++
+ export class HysteresisVAD {
+-  constructor({ enter = 3, exit = 4 } = {}) {
+-    this.enter = clampThreshold(enter, 3);
+-    this.exit = clampThreshold(exit, 4);
+-    this._state = 'silence';
+-    this._speechStreak = 0;
+-    this._silenceStreak = 0;
++  constructor({
++    openDb = DEFAULT_OPEN_DB,
++    closeDb = DEFAULT_CLOSE_DB,
++    minOpenMs = DEFAULT_MIN_OPEN_MS,
++    frameMs = DEFAULT_FRAME_MS,
++    prerollMs = 160,
++  } = {}) {
++    const frame = clampNumber(frameMs, DEFAULT_FRAME_MS, { min: 1 });
++    this.frameMs = frame;
++
++    const coercedOpen = clampDb(openDb, DEFAULT_OPEN_DB);
++    const coercedClose = clampDb(closeDb, DEFAULT_CLOSE_DB);
++    this.openDb = coercedOpen;
++    this.closeDb = coercedClose <= coercedOpen ? coercedClose : coercedOpen - 1;
++
++    const requestedMinOpen = clampNumber(minOpenMs, DEFAULT_MIN_OPEN_MS, { min: MIN_OPEN_MS });
++    this.minOpenMs = Math.max(MIN_OPEN_MS, requestedMinOpen);
++
++    this.prerollMs = clampNumber(prerollMs, 160, { min: 0 });
++
++    this.reset();
+   }
+ 
+   reset() {
+     this._state = 'silence';
+-    this._speechStreak = 0;
+-    this._silenceStreak = 0;
++    this._riseAccumMs = 0;
++    this._openElapsedMs = 0;
+   }
+ 
+-  push(isSpeech) {
+-    const speech = !!isSpeech;
+-    if (speech) {
+-      this._speechStreak += 1;
+-      this._silenceStreak = 0;
+-      if (this._state === 'speech') {
++  get state() {
++    return this._state;
++  }
++
++  push(levelDb, deltaMs = this.frameMs) {
++    const db = Number.isFinite(levelDb) ? Number(levelDb) : Number.NEGATIVE_INFINITY;
++    const step = clampNumber(deltaMs, this.frameMs, { min: 0 });
++
++    if (this._state === 'speech') {
++      this._openElapsedMs += step;
++      if (this._openElapsedMs < this.minOpenMs) {
+         return 'speech';
+       }
+-      if (this._speechStreak >= this.enter) {
++      if (db <= this.closeDb) {
++        this.reset();
++        return 'silence';
++      }
++      return 'speech';
++    }
++
++    if (db >= this.openDb) {
++      this._riseAccumMs += step;
++      if (this._riseAccumMs >= this.minOpenMs) {
+         this._state = 'speech';
+-        this._speechStreak = this.enter;
++        this._openElapsedMs = 0;
++        this._riseAccumMs = this.minOpenMs;
+         return 'speech';
+       }
+       this._state = 'hold';
+       return 'hold';
+     }
+ 
+-    this._silenceStreak += 1;
+-    this._speechStreak = 0;
+-    if (this._state === 'silence') {
+-      return 'silence';
+-    }
+-    if (this._silenceStreak >= this.exit) {
++    this._riseAccumMs = 0;
++    if (this._state !== 'silence') {
+       this._state = 'silence';
+-      this._silenceStreak = this.exit;
+-      return 'silence';
+     }
+-    this._state = 'hold';
+-    return 'hold';
++    return 'silence';
+   }
+ }
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index 5fc05c0bcd6ff96b204a0ca4cba62c08c6c7ffba..c0bd11a1a873683bd48d6d34d4c0a03432574c91 100644
+index c0bd11a1a873683bd48d6d34d4c0a03432574c91..11d9a15362541b56a6e44318c856873b0386aeb2 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -763,109 +763,104 @@ const emitClientAudioHeartbeat = (ctx, turnId) => {
-     try { detail.volume = Number.isFinite(audioEl.volume) ? audioEl.volume : null; } catch {}
-     try {
-       const rawSinkId = audioEl.sinkId;
-       if (typeof rawSinkId === 'string' && rawSinkId) {
-         detail.sinkId = rawSinkId;
-       } else if (rawSinkId != null && rawSinkId !== '') {
-         detail.sinkId = String(rawSinkId);
-       }
-     } catch {}
+@@ -366,52 +366,50 @@ function handleTtsPlaybackEnded(ctx) {
+       ? ctx.state.ttsSuppressionMode
+       : POLICY_SUPPRESS_NONE;
+   const ttsHoldMs = resolvePostTtsHoldMs(ctx);
+   voiceLog('info', '[tts] playback_end', {
+     ts_ms: Date.now(),
+     session_id: ctx?.sessionId || null,
+     turn_id: ctx?.state?.activeTurnId || null,
+     suppress_mode: ttsSuppressionMode,
+     post_tts_hold_ms: Number.isFinite(ttsHoldMs) ? Math.max(0, Math.round(ttsHoldMs)) : 0,
+   });
+   const shouldRearm = ctx.state.vadShouldRearmAfterTts || ctx.state.pendingVadOpts != null;
+   if (!shouldRearm) {
+     ctx.state.vadSuppressedForTts = false;
+     clearPostTtsRearm(ctx);
+     if (!ctx.state.manualGate) {
+       markReady(ctx, 'post_tts_release');
+     }
+     releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
+     return;
    }
-   emitClientAudioEvent(ctx, 'client_audio_heartbeat', detail, turnId);
- };
+   ctx.state.vadShouldRearmAfterTts = true;
+   schedulePostTtsRearm(ctx);
+ }
  
- const schedulePlaybackHeartbeat = (ctx, turnId) => {
-   if (!ctx?.state) return;
-   if (ctx.state.ttsHeartbeatTimer) {
-     try { clearTimeout(ctx.state.ttsHeartbeatTimer); } catch {}
-     ctx.state.ttsHeartbeatTimer = null;
-   }
-   ctx.state.ttsHeartbeatTimer = setTimeout(() => {
-     ctx.state.ttsHeartbeatTimer = null;
-     emitClientAudioHeartbeat(ctx, turnId);
-   }, CLIENT_AUDIO_HEARTBEAT_DELAY_MS);
- };
+ const PRE_ROLL_MS = 550,
+-  PRE_ROLL_DISCARD_MS = 120,
+-  RECORD_TIMESLICE_MS = 160,
+   SAFETY_CLOSE_DELAY_MS = 2200,
+   EVIDENCE_MIN_SPEECH_MS = 480,
+   EVIDENCE_MIN_BYTES = 8 * 1024,
+   MIN_VALID_BLOB_BYTES = 1,
+   BARGE_CONFIRM_MS = 420,
+   DUAL_VAD_SILENCE_DEBOUNCE_MS = 300,
+   MIN_TURN_OPEN_MS = 600;
  
--const resumeAudioContextForTts = (ctx, turnId) => {
-+const resumeAudioContextForTts = async (ctx, turnId) => {
-   const audioCtx = ctx?.audio?.context;
-   if (!audioCtx || typeof audioCtx.resume !== 'function') {
-     const state = typeof audioCtx?.state === 'string' ? audioCtx.state : 'unavailable';
-     emitClientAudioContextState(ctx, { state, error: 'audio_context_unavailable' }, turnId);
--    return Promise.resolve();
-+    return;
-   }
--  return (async () => {
--    let error = null;
--    try {
--      await audioCtx.resume();
--    } catch (err) {
--      error = err;
--    }
-+  try {
-+    await audioCtx.resume();
-+  } catch (err) {
-     const state = typeof audioCtx.state === 'string' ? audioCtx.state : 'unknown';
--    const detail = { state };
--    if (error) {
--      detail.error = error?.message || String(error || 'unknown_error');
--    }
--    emitClientAudioContextState(ctx, detail, turnId);
--  })();
-+    const message = err?.message || String(err || 'unknown_error');
-+    emitClientAudioContextState(ctx, { state, error: message }, turnId);
-+    return;
-+  }
-+  const state = typeof audioCtx.state === 'string' ? audioCtx.state : 'unknown';
-+  emitClientAudioContextState(ctx, { state }, turnId);
- };
+ const ctxRef = { current: null };
+ const MIC_AUDIO_CTX_HOOK_KEY = '__flowBreadcrumbMicCtx';
+ let lastPttDownAtMs = 0;
  
- const attemptAudioPlay = (ctx, turnId) => {
-   const audioEl = getPlaybackElement(ctx);
-   if (!audioEl) {
-     emitClientAudioEvent(ctx, 'client_audio_play_error', { message: 'audio_element_unavailable' }, turnId);
--    return;
-+    return Promise.resolve();
-   }
-   rememberPlaybackElement(audioEl, ctx);
-   let playResult;
+ const attachMicAudioCtxBreadcrumb = (ctx, origin = 'mic_capture') => {
+   if (!ctx || typeof ctx !== 'object') return;
    try {
-     playResult = audioEl.play();
-   } catch (err) {
-     const message = err?.message || String(err || 'unknown_error');
-     emitClientAudioEvent(ctx, 'client_audio_play_error', { message }, turnId);
--    return;
-+    return Promise.resolve();
-   }
-   if (playResult && typeof playResult.then === 'function') {
--    playResult
-+    return playResult
-       .then(() => {
-         emitClientAudioEvent(ctx, 'client_audio_play_ok', {}, turnId);
-       })
-       .catch((err) => {
-         const message = err?.message || String(err || 'unknown_error');
-         emitClientAudioEvent(ctx, 'client_audio_play_error', { message }, turnId);
-       });
--  } else {
--    emitClientAudioEvent(ctx, 'client_audio_play_ok', {}, turnId);
-   }
-+  emitClientAudioEvent(ctx, 'client_audio_play_ok', {}, turnId);
-+  return Promise.resolve();
- };
+     if (ctx[MIC_AUDIO_CTX_HOOK_KEY]) {
+       return;
+     }
+     Object.defineProperty(ctx, MIC_AUDIO_CTX_HOOK_KEY, {
+       value: true,
+       enumerable: false,
+       configurable: true,
+     });
  
--const handleClientTtsStartTelemetry = (ctx, frame) => {
-+const handleClientTtsStartTelemetry = async (ctx, frame) => {
-   ensurePlaybackElementTracker();
-   const turnId = frame?.turn_id != null ? frame.turn_id : null;
-   schedulePlaybackHeartbeat(ctx, turnId);
--  resumeAudioContextForTts(ctx, turnId).finally(() => {
--    attemptAudioPlay(ctx, turnId);
--  });
-+  await resumeAudioContextForTts(ctx, turnId);
-+  await attemptAudioPlay(ctx, turnId);
- };
- 
+     const emit = () => {
+@@ -844,50 +842,55 @@ const handleClientTtsStartTelemetry = async (ctx, frame) => {
  const logPreCommitMode = (ctx, mode, extra = {}) => {
    if (!ctx?.state) return;
    const normalized = typeof mode === 'string' && mode ? mode : 'shadow_only';
@@ -131,61 +199,215 @@ index 5fc05c0bcd6ff96b204a0ca4cba62c08c6c7ffba..c0bd11a1a873683bd48d6d34d4c0a034
  const MIC_GATE_TTS_REASON = 'tts_active';
  const HPF_CUTOFF_HZ = 100;
  const HPF_DEFAULT_Q = 0.707;
-@@ -1427,51 +1422,56 @@ function shouldCloseTurn(ctx) {
-   }
-   const debounceReached = Number.isFinite(silentSince) && silentSince >= DUAL_VAD_SILENCE_DEBOUNCE_MS;
-   if (debounceReached) {
-     return true;
-   }
-   return quietMs > quietCloseMs(ctx);
- }
+ const RMS_IDLE_SAMPLE_MS = 250;
+ const RMS_IDLE_LOG_INTERVAL_MS = 2000;
++const HYSTERESIS_OPEN_DB = -40;
++const HYSTERESIS_CLOSE_DB = -46;
++const HYSTERESIS_MIN_OPEN_MS = 200;
++const RECORD_TIMESLICE_MS = 180;
++const PRE_ROLL_DISCARD_MS = Math.max(120, Math.min(200, RECORD_TIMESLICE_MS));
+ const VAD_NOISE_SAMPLE_MS = 320;
+ const VAD_NOISE_SAMPLE_STEP_MS = 40;
+ const VAD_NOISE_DEADBAND_DB = 0.35;
+ const VAD_NOISE_DELTA_LIMIT_DB = 1.75;
+ const VAD_NOISE_SMOOTHING = 0.25;
+ const VAD_BASE_START_DB_OFFSET = 9;
+ const VAD_BASE_STOP_DB_OFFSET = 5;
  
- const frameIndicatesAsrResult = (frame) => {
-   const type = normalizeVadLabel(frame?.type);
-   const event = normalizeVadLabel(frame?.event);
-   return type === 'result' || type === 'results' || event === 'result' || event === 'results';
+ const updateVadBoost = (ctx, boostDb) => {
+   if (!ctx?.state) return;
+   const clamped = clampRange(boostDb, -3, 3);
+   ctx.state.vadBoostDb = clamped;
+   if (ctx?.audio?.vad?.opts) {
+     ctx.audio.vad.opts.startDbOffset = VAD_BASE_START_DB_OFFSET + clamped;
+     ctx.audio.vad.opts.stopDbOffset = VAD_BASE_STOP_DB_OFFSET + clamped;
+   }
  };
  
- function handleWsFrame(ctx, frame) {
-   if (!ctx?.state) return;
-   const type = normalizeVadLabel(frame?.type);
-   const event = normalizeVadLabel(frame?.event);
- 
-   if (
-     type === 'tts:start'
-     || event === 'tts:start'
-     || type === 'tts_start'
-     || event === 'tts_start'
-   ) {
--    try { handleClientTtsStartTelemetry(ctx, frame); } catch {}
-+    try {
-+      const maybePromise = handleClientTtsStartTelemetry(ctx, frame);
-+      if (maybePromise && typeof maybePromise.catch === 'function') {
-+        maybePromise.catch(() => {});
-+      }
-+    } catch {}
-   }
- 
-   if (type === 'state') {
-     if (applyTtsState(ctx, frame?.phase, frame)) {
-       return;
+ const nowMs = () => {
+   try {
+     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+       return performance.now();
      }
+   } catch {}
+   return Date.now();
+@@ -2165,102 +2168,132 @@ const handleSpeechStart = async (ctx, detail) => {
+   const commitAttempt = maybeCommitSpeech(ctx);
+   if (commitAttempt && typeof commitAttempt.then === 'function') {
+     commitAttempt.catch(() => {});
    }
+ };
  
-   if (type === 'barge_in' || event === 'barge_in') {
-     applyTtsState(ctx, frame?.phase || 'paused', frame);
+ const handleSpeechEnd = async (ctx, detail) => {
+   if (ctx.state.manualGate) {
      return;
    }
- 
-   if (type === 'barge_resume' || event === 'barge_resume') {
-     applyTtsState(ctx, frame?.phase || 'assistant_speaking', frame);
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
+   emitVoiceEvent('speech_end', detail);
+   await evaluateEvidenceGate(ctx, { detail, vadState: 'silence', asrCue: { type: 'vad_end' } });
+   if (attemptCloseWithReason(ctx, 'vad_end', 'vad_end')) {
      return;
    }
+   dispatchTurnEvent(ctx, TurnEvent.SpeechEnd, { reason: 'speech_end', detail });
+   scheduleDualVadTimer(ctx);
+ };
  
-   if (frameIndicatesAsrResult(frame)) {
-     const confidence = extractAsrConfidence(frame);
-     onAsrPartial(ctx, { confidence });
-     if (dualVadEnabled(ctx) && Number.isFinite(confidence) && confidence >= commitConfidenceThreshold(ctx)) {
-       if (!ctx.state.pendingCommitReason) {
-         ctx.state.pendingCommitReason = 'asr_confidence';
+ const ensureVad = (ctx, opts = {}) => {
+   const { audio } = ctx;
+   if (audio.vad) return;
+   const echoStateFn = () => isTtsMaskActive(ctx);
++  const minSpeechMs = Math.max(
++    HYSTERESIS_MIN_OPEN_MS,
++    Number.isFinite(opts.minSpeechMs) ? Number(opts.minSpeechMs) : HYSTERESIS_MIN_OPEN_MS,
++  );
++  const minSilenceMs = Math.max(
++    HYSTERESIS_MIN_OPEN_MS,
++    Number.isFinite(opts.minSilenceMs) ? Number(opts.minSilenceMs) : 300,
++  );
++  const minStartDb = Number.isFinite(opts.minStartDb)
++    ? Math.max(HYSTERESIS_OPEN_DB, Number(opts.minStartDb))
++    : HYSTERESIS_OPEN_DB;
++  const minStopDb = Number.isFinite(opts.minStopDb)
++    ? Math.max(HYSTERESIS_CLOSE_DB, Number(opts.minStopDb))
++    : HYSTERESIS_CLOSE_DB;
++
+   audio.vad = new VAD(audio.analyser, {
+     startDbOffset: VAD_BASE_START_DB_OFFSET + ctx.state.vadBoostDb,
+     stopDbOffset: VAD_BASE_STOP_DB_OFFSET + ctx.state.vadBoostDb,
+     echoStateFn,
+-    minSpeechMs: Math.max(160, opts.minSpeechMs ?? 200),
+-    minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
++    minSpeechMs,
++    minSilenceMs,
++    minStartDb,
++    minStopDb,
+     gateFn: () => !isTtsMaskActive(ctx),
+   }, {
+     onSpeechStart: (detail) => {
+       const masked = ctx.state.manualGate || ctx.state.ttsPlaying || isTtsMaskActive(ctx);
+       if (masked) {
+         ctx.state.vadMasked = true;
+         ctx.state.vadRecording = false;
+         ctx.state.preCommitASRFeed = false;
+         ctx.evidenceGate.reset('tts_mask_block');
+         logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_block' });
+         return;
        }
+       ctx.state.vadMasked = false;
+       ctx.state.vadRecording = true;
+       ctx.state.preCommitASRFeed = true;
+       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'asr_priming', {
+         reason: 'speech_start',
+       });
+       handleSpeechStart(ctx, detail);
+     },
+     onSpeechEnd: (detail) => {
+       ctx.state.vadRecording = false;
+       if (!ctx.state.turnOpen) {
+         ctx.state.preCommitASRFeed = false;
+       }
+       if (ctx.state.vadMasked) {
+         ctx.state.vadMasked = false;
+         ctx.evidenceGate.reset('tts_mask_block');
+         logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_release' });
+         return;
+       }
+       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'shadow_only', {
+         reason: 'speech_end',
+       });
+       handleSpeechEnd(ctx, detail);
+     },
+   });
+   audio.vad.start();
+   ctx.state.vadArmed = true;
+   ctx.state.vadSuppressedForTts = false;
+   ctx.state.vadShouldRearmAfterTts = false;
+   try {
+     ctx.state.lastVadOpts = { ...opts };
+   } catch {
+     ctx.state.lastVadOpts = opts;
+   }
++  const vadArmPayload = {
++    event: 'vad_arm',
++    ts_ms: Date.now(),
++    session_id: ctx.sessionId || null,
++    turn_id: ctx.state?.activeTurnId || null,
++    open_db: minStartDb,
++    close_db: minStopDb,
++    min_open_ms: minSpeechMs,
++    preroll_ms: PRE_ROLL_DISCARD_MS,
++  };
++  voiceLog('info', '[vad] arm', vadArmPayload);
++  emitFlowBreadcrumb('vad_arm', vadArmPayload);
++  postAdminLog(vadArmPayload);
+   dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason: 'vad_armed' });
+ };
+ 
+ const teardownVad = (ctx) => {
+   const { audio } = ctx;
+   if (audio.vad) {
+     try { audio.vad.stop({ reason: 'teardown' }); } catch {}
+   }
+   audio.vad = null;
+   ctx.state.vadArmed = false;
+   ctx.state.vadRecording = false;
+ };
+ 
+ const ensureGreetGate = (ctx, active) => {
+   ctx.state.greetGateActive = !!active;
+   if (!active) { ctx.state.greetGatePhase = 'idle'; ctx.state.greetGateWaiters = []; }
+   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
+ };
+ 
+ const manualBargeAllowed = (ctx) => isTtsMaskActive(ctx);
+ 
+ export async function initMic(stream = null) {
+   const ctx = ensureCtx();
+   if (stream) ctx.audio.stream = stream;
+   if (!ctx.audio.stream) {
+diff --git a/tests/voice-core/hysteresis_vad.test.js b/tests/voice-core/hysteresis_vad.test.js
+index 1b305e97fb61b059b343ba8a271de7cc96d9458d..f4f021825e1296b445deb10ed2d0ee43dd6225a3 100644
+--- a/tests/voice-core/hysteresis_vad.test.js
++++ b/tests/voice-core/hysteresis_vad.test.js
+@@ -1,12 +1,33 @@
+ import test from 'node:test';
+ import assert from 'node:assert/strict';
+ import { HysteresisVAD } from '../../static/js/voice/core/HysteresisVAD.js';
+ 
+-test('hysteresis VAD transitions with thresholds', () => {
+-  const vad = new HysteresisVAD({ enter: 2, exit: 2 });
+-  assert.equal(vad.push(false), 'silence');
+-  assert.equal(vad.push(true), 'hold');
+-  assert.equal(vad.push(true), 'speech');
+-  assert.equal(vad.push(false), 'hold');
+-  assert.equal(vad.push(false), 'silence');
++test('hysteresis VAD enforces minimum open window', () => {
++  const vad = new HysteresisVAD({ minOpenMs: 180, frameMs: 30 });
++
++  for (let i = 0; i < 5; i += 1) {
++    assert.equal(vad.push(-39), 'hold');
++  }
++  assert.equal(vad.push(-39), 'speech');
++
++  for (let i = 0; i < 5; i += 1) {
++    assert.equal(vad.push(-60), 'speech');
++  }
++  assert.equal(vad.push(-60), 'silence');
++});
++
++test('hysteresis VAD resets cleanly on silence', () => {
++  const vad = new HysteresisVAD({ openDb: -38, closeDb: -44, minOpenMs: 200, frameMs: 40 });
++
++  assert.equal(vad.push(-90), 'silence');
++  assert.equal(vad.push(-90), 'silence');
++
++  for (let i = 0; i < 4; i += 1) {
++    assert.equal(vad.push(-35), 'hold');
++  }
++  assert.equal(vad.push(-35), 'speech');
++
++  vad.reset();
++  assert.equal(vad.state, 'silence');
++  assert.equal(vad.push(-90), 'silence');
+ });

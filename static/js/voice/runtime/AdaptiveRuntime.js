@@ -388,8 +388,6 @@ function handleTtsPlaybackEnded(ctx) {
 }
 
 const PRE_ROLL_MS = 550,
-  PRE_ROLL_DISCARD_MS = 120,
-  RECORD_TIMESLICE_MS = 160,
   SAFETY_CLOSE_DELAY_MS = 2200,
   EVIDENCE_MIN_SPEECH_MS = 480,
   EVIDENCE_MIN_BYTES = 8 * 1024,
@@ -866,6 +864,11 @@ const HPF_CUTOFF_HZ = 100;
 const HPF_DEFAULT_Q = 0.707;
 const RMS_IDLE_SAMPLE_MS = 250;
 const RMS_IDLE_LOG_INTERVAL_MS = 2000;
+const HYSTERESIS_OPEN_DB = -40;
+const HYSTERESIS_CLOSE_DB = -46;
+const HYSTERESIS_MIN_OPEN_MS = 200;
+const RECORD_TIMESLICE_MS = 180;
+const PRE_ROLL_DISCARD_MS = Math.max(120, Math.min(200, RECORD_TIMESLICE_MS));
 const VAD_NOISE_SAMPLE_MS = 320;
 const VAD_NOISE_SAMPLE_STEP_MS = 40;
 const VAD_NOISE_DEADBAND_DB = 0.35;
@@ -2187,12 +2190,29 @@ const ensureVad = (ctx, opts = {}) => {
   const { audio } = ctx;
   if (audio.vad) return;
   const echoStateFn = () => isTtsMaskActive(ctx);
+  const minSpeechMs = Math.max(
+    HYSTERESIS_MIN_OPEN_MS,
+    Number.isFinite(opts.minSpeechMs) ? Number(opts.minSpeechMs) : HYSTERESIS_MIN_OPEN_MS,
+  );
+  const minSilenceMs = Math.max(
+    HYSTERESIS_MIN_OPEN_MS,
+    Number.isFinite(opts.minSilenceMs) ? Number(opts.minSilenceMs) : 300,
+  );
+  const minStartDb = Number.isFinite(opts.minStartDb)
+    ? Math.max(HYSTERESIS_OPEN_DB, Number(opts.minStartDb))
+    : HYSTERESIS_OPEN_DB;
+  const minStopDb = Number.isFinite(opts.minStopDb)
+    ? Math.max(HYSTERESIS_CLOSE_DB, Number(opts.minStopDb))
+    : HYSTERESIS_CLOSE_DB;
+
   audio.vad = new VAD(audio.analyser, {
     startDbOffset: VAD_BASE_START_DB_OFFSET + ctx.state.vadBoostDb,
     stopDbOffset: VAD_BASE_STOP_DB_OFFSET + ctx.state.vadBoostDb,
     echoStateFn,
-    minSpeechMs: Math.max(160, opts.minSpeechMs ?? 200),
-    minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
+    minSpeechMs,
+    minSilenceMs,
+    minStartDb,
+    minStopDb,
     gateFn: () => !isTtsMaskActive(ctx),
   }, {
     onSpeechStart: (detail) => {
@@ -2239,6 +2259,19 @@ const ensureVad = (ctx, opts = {}) => {
   } catch {
     ctx.state.lastVadOpts = opts;
   }
+  const vadArmPayload = {
+    event: 'vad_arm',
+    ts_ms: Date.now(),
+    session_id: ctx.sessionId || null,
+    turn_id: ctx.state?.activeTurnId || null,
+    open_db: minStartDb,
+    close_db: minStopDb,
+    min_open_ms: minSpeechMs,
+    preroll_ms: PRE_ROLL_DISCARD_MS,
+  };
+  voiceLog('info', '[vad] arm', vadArmPayload);
+  emitFlowBreadcrumb('vad_arm', vadArmPayload);
+  postAdminLog(vadArmPayload);
   dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason: 'vad_armed' });
 };
 
