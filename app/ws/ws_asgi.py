@@ -4616,11 +4616,40 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                             # Always define this first so later 'if synthetic_emitted' is safe
                             synthetic_emitted = False
+                            asr_ready_wait_timed_out = False
+
+                            async def _await_close_asr_ready(
+                                timeout: float,
+                                *,
+                                mark_timeout: bool = True,
+                                log_cb: Optional[Callable[[], None]] = None,
+                            ) -> bool:
+                                nonlocal asr_ready_wait_timed_out
+                                if asr_ready_evt is None:
+                                    return False
+                                if asr_ready_evt.is_set():
+                                    return True
+                                if asr_ready_wait_timed_out:
+                                    return False
+                                if timeout <= 0:
+                                    return False
+                                try:
+                                    await asyncio.wait_for(
+                                        asr_ready_evt.wait(), timeout=timeout
+                                    )
+                                    return True
+                                except asyncio.TimeoutError:
+                                    if mark_timeout:
+                                        asr_ready_wait_timed_out = True
+                                    if log_cb is not None:
+                                        with contextlib.suppress(Exception):
+                                            log_cb()
+                                    return False
 
                             if callable(final_guard_local_vad_ref[0]):
                                 with contextlib.suppress(Exception):
                                     final_guard_local_vad_ref[0]("stop")
-                            _on_local_vad_stop()                                    
+                            _on_local_vad_stop()
 
                             _ensure_confirm_closed("close_stream")
 
@@ -4661,10 +4690,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         dg_connect_task = asyncio.create_task(
                                             _ensure_dg_connected()
                                         )
-                                    with contextlib.suppress(asyncio.TimeoutError):
-                                        await asyncio.wait_for(
-                                            asr_ready_evt.wait(), timeout=1.2
-                                        )
+                                    await _await_close_asr_ready(1.2, mark_timeout=False)
 
                                 # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
                                 if buffered_chunks and not asr_ready_evt.is_set():
@@ -4677,20 +4703,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                 dg_connect_task,
                                                 timeout=asr_ready_wait_s,
                                             )
-                                    with contextlib.suppress(asyncio.TimeoutError):
-                                        await asyncio.wait_for(
-                                            asr_ready_evt.wait(),
-                                            timeout=asr_ready_wait_s,
-                                        )
+                                    await _await_close_asr_ready(asr_ready_wait_s)
 
                                 # Flush any staged audio first
                                 await _flush_buffered_chunks()
 
                                 # Give ASR a brief chance to be "ready", then flush again
-                                with contextlib.suppress(asyncio.TimeoutError):
-                                    await asyncio.wait_for(
-                                        asr_ready_evt.wait(), timeout=1.0
-                                    )
+                                await _await_close_asr_ready(1.0, mark_timeout=False)
 
                                 await _flush_buffered_chunks()
 
@@ -4730,18 +4749,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                 sid=sid,
                                                 err=type(exc).__name__,
                                             )
-                                    if (
-                                        asr_ready_evt is not None
-                                        and not asr_ready_evt.is_set()
-                                    ):
-                                        try:
-                                            await asyncio.wait_for(
-                                                asr_ready_evt.wait(),
-                                                timeout=asr_ready_wait_s,
-                                            )
-                                        except asyncio.TimeoutError:
+                                    if asr_ready_evt is not None:
+                                        ready_now = await _await_close_asr_ready(
+                                            asr_ready_wait_s,
+                                            log_cb=lambda: _jlog(
+                                                "ws_close_dg_ready_timeout", sid=sid
+                                            ),
+                                        )
+                                        if not ready_now:
                                             readiness_timeout = True
-                                            _jlog("ws_close_dg_ready_timeout", sid=sid)
                                     provider_open = _dg_client_ready(dg)
                                     if not provider_open:
                                         _jlog("ws_close_dg_not_open", sid=sid)

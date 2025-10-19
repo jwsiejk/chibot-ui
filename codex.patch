@@ -1,613 +1,222 @@
-diff --git a/app/admin_log.py b/app/admin_log.py
-index 4a1a2fada906959cade9a75d0f8c5befdb7e8940..1365430ced089d7f58adbeab2ba9807be48773dd 100644
---- a/app/admin_log.py
-+++ b/app/admin_log.py
-@@ -49,88 +49,90 @@ def _normalize_session_id(value: Any) -> str | None:
-     except Exception:  # pragma: no cover - extremely defensive
-         return None
-     return text or None
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index b0d6385089b5ea1705e663048304624758aad2db..59ac70262e14c5b012a1b7d93c3f43032c7c9b30 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -4594,176 +4594,192 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                         corr,
+                                         meta_overrides=meta_overrides,
+                                     )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "user_fail", e.__class__.__name__
+                                             ),
+                                         )
+                                     _emit_ws_error("user_fail")
  
+                             asyncio.create_task(_bg_user())
  
- def _normalize_turn_id(value: Any) -> str | None:
-     if value is None:
-         return None
-     try:
-         text = str(value).strip()
-     except Exception:  # pragma: no cover - extremely defensive
-         return None
-     return text or None
+                         elif t == "CloseStream":
+                             _jlog("ws_close_stream", sid=sid)
+                             manual_turn_active[0] = False
+                             manual_button_down[0] = False
+                             turn_stream_committed[0] = False
+                             _cancel_asr_stream_activation()
+                             _cancel_asr_not_ready_timeout()
  
- 
- def _coerce_event(payload: Mapping[str, Any]) -> HistoryItem:
-     data: HistoryItem = dict(payload)
- 
-     event_name = data.get("event") or data.get("kind") or data.get("label")
-     if not isinstance(event_name, str) or not event_name.strip():
-         event_name = "log"
-     event_name = event_name.strip()
-     data["event"] = event_name
-     data.setdefault("kind", event_name)
- 
-+    preserve_text = event_name == "barge_decision"
+                             # Always define this first so later 'if synthetic_emitted' is safe
+                             synthetic_emitted = False
++                            asr_ready_wait_timed_out = False
 +
-     version = data.get("v")
-     try:
-         data["v"] = int(version)
-     except Exception:
-         data["v"] = 1
++                            async def _await_close_asr_ready(
++                                timeout: float,
++                                *,
++                                mark_timeout: bool = True,
++                                log_cb: Optional[Callable[[], None]] = None,
++                            ) -> bool:
++                                nonlocal asr_ready_wait_timed_out
++                                if asr_ready_evt is None:
++                                    return False
++                                if asr_ready_evt.is_set():
++                                    return True
++                                if asr_ready_wait_timed_out:
++                                    return False
++                                if timeout <= 0:
++                                    return False
++                                try:
++                                    await asyncio.wait_for(
++                                        asr_ready_evt.wait(), timeout=timeout
++                                    )
++                                    return True
++                                except asyncio.TimeoutError:
++                                    if mark_timeout:
++                                        asr_ready_wait_timed_out = True
++                                    if log_cb is not None:
++                                        with contextlib.suppress(Exception):
++                                            log_cb()
++                                    return False
  
-     ts_ms = data.get("ts_ms") or data.get("sent_at") or data.get("ts")
-     try:
-         ts_ms_int = int(ts_ms)
-     except Exception:
-         ts_ms_int = _now_ms()
-     data["ts_ms"] = ts_ms_int
-     data.setdefault("ts", ts_ms_int / 1000.0)
+                             if callable(final_guard_local_vad_ref[0]):
+                                 with contextlib.suppress(Exception):
+                                     final_guard_local_vad_ref[0]("stop")
+-                            _on_local_vad_stop()                                    
++                            _on_local_vad_stop()
  
-     sid = _normalize_session_id(data.pop("session_id", None) or data.get("sid"))
-     if sid is not None:
-         data["session_id"] = sid
-         data["sid"] = sid
-     else:
-         data.pop("sid", None)
+                             _ensure_confirm_closed("close_stream")
  
-     turn_id = (
-         data.pop("turnId", None)
-         or data.pop("turn", None)
-         or data.get("turn_id")
-     )
-     norm_turn = _normalize_turn_id(turn_id)
-     if norm_turn is not None:
-         data["turn_id"] = norm_turn
-     else:
-         data.pop("turn_id", None)
+                             if buf.is_empty():
+                                 # Empty turn closure; synthesize ids + reset final tracking.
+                                 turn_id_ref[0] = buf.turn_seq + 1
+                                 final_seen[0] = False
+                                 _reset_turn_metrics(time.time())
+                                 with contextlib.suppress(Exception):
+                                     _jlog(
+                                         "turn_start",
+                                         sid=sid,
+                                         turn_id=turn_id_ref[0],
+                                         first_bytes=0,
+                                         empty_turn=True,
+                                     )
  
--    if "text_preview" in data:
-+    if "text_preview" in data and not preserve_text:
-         data["text_preview"] = _clip_preview(data["text_preview"])
+                             # --- Get a turn_id (with guard logs) ---
+                             _jlog(
+                                 "before_close_turn",
+                                 sid=sid,
+                                 next_turn_id=buf.turn_seq + 1,
+                             )
+                             try:
+                                 turn_id, _pcm = buf.close_turn()
+                             except Exception as e:
+                                 _jlog("close_turn_fail", sid=sid, err=type(e).__name__)
+                                 turn_id = turn_id_ref[0] or (buf.turn_seq + 1)
+                                 _pcm = None
+                             _jlog("after_close_turn", sid=sid, turn_id=turn_id)
+                             turn_id_ref[0] = turn_id
  
-     if "text" in data:
-         text_val = data["text"]
--        if isinstance(text_val, str):
-+        if isinstance(text_val, str) and not preserve_text:
-             data["text"] = text_val[:4096]
+                             # ---- THEN finish the ASR turn (unchanged logic) ----
+                             if _has_deepgram_key():
+                                 # If provider isn't ready yet but we have audio, try to connect now (bounded wait)
+                                 if dg is None and (buffered_chunks or mic_chunks):
+                                     if dg_connect_task is None:
+                                         dg_connect_task = asyncio.create_task(
+                                             _ensure_dg_connected()
+                                         )
+-                                    with contextlib.suppress(asyncio.TimeoutError):
+-                                        await asyncio.wait_for(
+-                                            asr_ready_evt.wait(), timeout=1.2
+-                                        )
++                                    await _await_close_asr_ready(1.2, mark_timeout=False)
  
-     payload_section = data.get("payload")
-     if isinstance(payload_section, Mapping):
-         data["payload"] = {k: payload_section[k] for k in payload_section}
+                                 # If we have buffered chunks but ASR not ready yet, give it a moment then flush.
+                                 if buffered_chunks and not asr_ready_evt.is_set():
+                                     if (
+                                         dg_state == "connecting"
+                                         and dg_connect_task is not None
+                                     ):
+                                         with contextlib.suppress(Exception):
+                                             await asyncio.wait_for(
+                                                 dg_connect_task,
+                                                 timeout=asr_ready_wait_s,
+                                             )
+-                                    with contextlib.suppress(asyncio.TimeoutError):
+-                                        await asyncio.wait_for(
+-                                            asr_ready_evt.wait(),
+-                                            timeout=asr_ready_wait_s,
+-                                        )
++                                    await _await_close_asr_ready(asr_ready_wait_s)
  
-     return data
+                                 # Flush any staged audio first
+                                 await _flush_buffered_chunks()
  
+                                 # Give ASR a brief chance to be "ready", then flush again
+-                                with contextlib.suppress(asyncio.TimeoutError):
+-                                    await asyncio.wait_for(
+-                                        asr_ready_evt.wait(), timeout=1.0
+-                                    )
++                                await _await_close_asr_ready(1.0, mark_timeout=False)
  
- def admin_log_emit(event: Mapping[str, Any] | None) -> HistoryItem | None:
-     """Record an event and return the stored copy."""
+                                 await _flush_buffered_chunks()
  
-     if not isinstance(event, Mapping):
-         return None
+                                 # Optional tiny settle after flush if no partials yet (helps very short clips)
+                                 if not final_seen[0] and not asr_seen_partial[0]:
+                                     with contextlib.suppress(Exception):
+                                         await asyncio.sleep(
+                                             float(
+                                                 os.getenv(
+                                                     "ASR_POST_FLUSH_WAIT_S", "0.35"
+                                                 )
+                                             )
+                                         )
  
-     global _STEP
- 
-     with _LOCK:
-         normalised = _coerce_event(event)
-         _STEP += 1
-         normalised["step"] = _STEP
-         _HISTORY.append(dict(normalised))
- 
-     return dict(normalised)
- 
-diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
-index fd267ef45df5b8142857792bb9ed4ac61d8cf3fb..5cdad12169c8389530a436fa9c61928e06842e6d 100644
---- a/app/api_v1/flow.py
-+++ b/app/api_v1/flow.py
-@@ -1,40 +1,40 @@
- from __future__ import annotations
- 
- import copy
- import gzip
- import hashlib
- import io
- import ipaddress
- import json
- import re
- import zipfile
- from datetime import datetime, timezone
- import threading
- import time
- from collections import deque
--from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Tuple
-+from typing import Any, Deque, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
- 
- from flask import (
-     Blueprint,
-     Response,
-     abort,
-     jsonify,
-     request,
-     session as flask_session,
-     stream_with_context,
- )
- 
- from app.flow import FlowStore
- from app.flow.trace import (
-     assemble_ws_frames,
-     slice_client_console_for_session,
-     slice_server_log_for_session,
- )
- from app.flow.catalog import FLOW_EVENT_CATALOG
- from app.security_state import get_user
- from app.utils.admin import is_admin_email
- 
- bp = Blueprint("flow", __name__)
- 
- _CLIENT_BREADCRUMB_WINDOW_SEC = 60.0
- _CLIENT_BREADCRUMB_LIMIT = 30
-@@ -80,55 +80,134 @@ def _parse_levels(raw: Optional[str]) -> Iterable[str]:
-         piece = part.strip()
-         if not piece:
-             continue
-         if piece not in levels:
-             levels.append(piece)
-     return levels
- 
- 
- def _parse_bool(value: Optional[str], *, default: bool = True) -> bool:
-     if value is None:
-         return default
-     lowered = value.strip().lower()
-     if lowered in {"1", "true", "yes", "on"}:
-         return True
-     if lowered in {"0", "false", "no", "off"}:
-         return False
-     return default
- 
- 
- def _too_large_response() -> Response:
-     response = jsonify({"error": "export_too_large"})
-     response.status_code = 413
-     return response
- 
- 
-+def _extract_policy_snapshot(config_payload: Any) -> Optional[Dict[str, Any]]:
-+    if not isinstance(config_payload, Mapping):
-+        return None
-+
-+    interaction_policy = config_payload.get("interaction_policy")
-+    if not isinstance(interaction_policy, Mapping):
-+        return None
-+
-+    voice_runtime = interaction_policy.get("voice_runtime")
-+    if not isinstance(voice_runtime, Mapping):
-+        return None
-+
-+    barge_policy = voice_runtime.get("barge_in")
-+    if not isinstance(barge_policy, Mapping):
-+        return None
-+
-+    suppress_raw = barge_policy.get("suppress_during_tts")
-+    if isinstance(suppress_raw, str):
-+        suppress_value: Optional[str] = suppress_raw
-+    elif suppress_raw is None:
-+        suppress_value = None
-+    else:
-+        try:
-+            suppress_value = str(suppress_raw)
-+        except Exception:
-+            suppress_value = None
-+
-+    hold_raw = barge_policy.get("post_tts_hold_ms")
-+    hold_value: Optional[int]
-+    if isinstance(hold_raw, bool):
-+        hold_value = int(hold_raw)
-+    elif isinstance(hold_raw, (int, float)):
-+        try:
-+            hold_value = int(hold_raw)
-+        except Exception:
-+            hold_value = None
-+    elif isinstance(hold_raw, str):
-+        text = hold_raw.strip()
-+        if text:
-+            try:
-+                hold_value = int(float(text))
-+            except Exception:
-+                hold_value = None
-+        else:
-+            hold_value = None
-+    else:
-+        hold_value = None
-+
-+    allow_raw = barge_policy.get("allow_ptt")
-+    allow_value: Optional[bool]
-+    if isinstance(allow_raw, bool):
-+        allow_value = allow_raw
-+    elif isinstance(allow_raw, (int, float)):
-+        allow_value = bool(allow_raw)
-+    elif isinstance(allow_raw, str):
-+        lowered = allow_raw.strip().lower()
-+        if lowered in {"1", "true", "yes", "on"}:
-+            allow_value = True
-+        elif lowered in {"0", "false", "no", "off"}:
-+            allow_value = False
-+        else:
-+            allow_value = None
-+    else:
-+        allow_value = None
-+
-+    snapshot = {
-+        "suppress_during_tts": suppress_value,
-+        "post_tts_hold_ms": hold_value,
-+        "allow_ptt": allow_value,
-+    }
-+
-+    if not any(value is not None for value in snapshot.values()):
-+        return None
-+
-+    return {"voice_runtime": {"barge_in": snapshot}}
-+
-+
- DEFAULT_HANDOFF_PROMPT = (
-     "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), "
-     "smallest viable fix, and validation steps."
- )
- 
-+_HANDOFF_TELEMETRY_SCHEMAS = ["barge_decision.v1"]
-+
- _TEXT_EXACT_KEYS = {
-     "text",
-     "text_preview",
-     "user_text",
-     "assistant_text",
-     "tts_text",
-     "raw_text",
-     "message",
-     "body",
-     "delta",
-     "response",
-     "prompt",
-     "content",
- }
- _TEXT_SUFFIXES = ("_text", "_message", "_body", "_delta", "_content")
- _TEXT_SUBSTRINGS = ("transcript", "utterance")
- _DEVICE_KEYWORDS = ("device", "hardware", "microphone", "speaker", "headset")
- _DEVICE_CLASS_MAP = {
-     "iphone": "iphone",
-     "ipad": "ipad",
-     "macbook": "mac",
-     "imac": "mac",
-     "mac": "mac",
-     "pixel": "android",
-     "android": "android",
-@@ -709,50 +788,51 @@ def flow_handoff():
-         if pii_scrub_requested:
-             meta_payload["privacy"] = {"pii_scrub": True}
- 
-         buffer = io.BytesIO()
-         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-             archive.writestr("flow.ndjson", ndjson_bytes)
-             archive.writestr("prompt.txt", prompt_text)
-             archive.writestr(
-                 "meta.json",
-                 json.dumps(meta_payload, ensure_ascii=False, indent=2),
-             )
-         zip_bytes = buffer.getvalue()
-         if max_bytes is not None and len(zip_bytes) > max_bytes:
-             return _too_large_response()
-     else:
-         export_events = [copy.deepcopy(event) for event in events]
-         if pii_scrub_requested:
-             export_events = [_scrub_event(event) for event in export_events]
-         event_bytes = _to_ndjson_bytes(export_events)
-         gzip_buffer = io.BytesIO()
-         with gzip.GzipFile(fileobj=gzip_buffer, mode="wb") as gz_handle:
-             gz_handle.write(event_bytes)
-         events_gz_bytes = gzip_buffer.getvalue()
- 
-         config_payload = snapshot.config if isinstance(snapshot.config, dict) else {}
-+        policy_snapshot = _extract_policy_snapshot(config_payload)
-         try:
-             config_text = json.dumps(
-                 config_payload, ensure_ascii=False, indent=2, sort_keys=True
-             )
-         except TypeError:
-             config_text = json.dumps({}, ensure_ascii=False, indent=2)
-         config_bytes = config_text.encode("utf-8")
- 
-         prompt_bytes = prompt_text.encode("utf-8")
- 
-         include_ws_requested = bool(include_options.get("ws"))
-         include_logs_requested = bool(include_options.get("logs"))
- 
-         include_meta: Dict[str, Any] = {}
-         privacy_meta: Dict[str, Any] = {}
-         for key, value in privacy_options.items():
-             key_str = str(key)
-             if isinstance(value, bool):
-                 privacy_meta[key_str] = value
-             elif isinstance(value, str):
-                 privacy_meta[key_str] = value.strip() or value
-         if pii_scrub_requested and "pii_scrub" not in privacy_meta:
-             privacy_meta["pii_scrub"] = True
-         limits_meta: Dict[str, Any] = {}
-         if max_bytes is not None:
-@@ -855,52 +935,56 @@ def flow_handoff():
-                     path,
-                     data,
-                     content_type=content_type,
-                     description=description,
-                 )
-             )
- 
-         manifest_meta: Dict[str, Any] = {"mode": mode, "redacted": False}
-         if include_meta:
-             manifest_meta["include"] = include_meta
-         if privacy_meta:
-             manifest_meta["privacy"] = privacy_meta
-         if limits_meta:
-             manifest_meta["limits"] = limits_meta
-         if snapshot.started_at_iso:
-             manifest_meta["session_started_at"] = snapshot.started_at_iso
- 
-         manifest_payload = {
-             "schema_version": "1.0",
-             "exported_at": generated_at,
-             "session_id": session_id,
-             "levels": levels,
-             "event_count": event_count,
-             "files": manifest_files,
-         }
-+        if _HANDOFF_TELEMETRY_SCHEMAS:
-+            manifest_payload["telemetry_schemas"] = list(_HANDOFF_TELEMETRY_SCHEMAS)
-         if manifest_meta:
-             manifest_payload["meta"] = manifest_meta
-+        if policy_snapshot:
-+            manifest_payload["policy_snapshot"] = policy_snapshot
- 
-         manifest_bytes = json.dumps(
-             manifest_payload, ensure_ascii=False, indent=2
-         ).encode("utf-8")
- 
-         buffer = io.BytesIO()
-         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-             archive.writestr("prompt.txt", prompt_bytes)
-             archive.writestr("manifest.json", manifest_bytes)
-             archive.writestr("events/flow.ndjson.gz", events_gz_bytes)
-             archive.writestr("config/config.json", config_bytes)
-             for path, data, _, _ in optional_files:
-                 archive.writestr(path, data)
-         zip_bytes = buffer.getvalue()
- 
-     if max_bytes is not None and len(zip_bytes) > max_bytes:
-         return _too_large_response()
- 
-     response = Response(zip_bytes, mimetype="application/zip")
-     safe_session = re.sub(r"[^a-zA-Z0-9_-]+", "_", session_id) or "session"
-     response.headers[
-         "Content-Disposition"
-     ] = f'attachment; filename="flow_handoff_{safe_session}.zip"'
-     response.headers["X-Flow-Redacted"] = "0" if is_full else "1"
-     response.headers["X-Flow-Payload-Bytes"] = str(len(zip_bytes))
-diff --git a/tests/test_flow_api.py b/tests/test_flow_api.py
-index 23f83cfe873daa38c11251f3424bb1f4733f5447..0c87cec829f6dcd253cca12e33867f43d66b1ba5 100644
---- a/tests/test_flow_api.py
-+++ b/tests/test_flow_api.py
-@@ -281,51 +281,66 @@ def test_flow_handoff_returns_redacted_zip(admin_env):
-         assert "Hand-off transcript" not in ndjson_text
-         prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
-         assert prompt_text == "Investigate"
-         meta_payload = json.loads(archive.read("meta.json").decode("utf-8"))
-         assert meta_payload["payload_sig"]["sha1_8"]
-         assert meta_payload["payload_sig"]["bytes"] >= 0
-         assert meta_payload["mode"] == "redacted"
- 
- 
- def test_flow_handoff_full_mode_includes_manifest(admin_env):
-     store = FlowStore()
-     store.emit(
-         "sess-full",
-         "flow",
-         "session",
-         "session_open",
-         "system",
-         meta={"text": "Full transcript event"},
-     )
-     store.emit(
-         "sess-full",
-         "flow",
-         "session",
-         "session_config",
-         "system",
--        meta={"config": {"foo": "bar", "nested": {"value": 1}}},
-+        meta={
-+            "config": {
-+                "foo": "bar",
-+                "nested": {"value": 1},
-+                "interaction_policy": {
-+                    "voice_runtime": {
-+                        "barge_in": {
-+                            "suppress_during_tts": "partial",
-+                            "post_tts_hold_ms": 150,
-+                            "allow_ptt": False,
-+                            "extra": "ignored",
-+                        }
-+                    }
-+                },
-+            }
-+        },
-     )
-     store.emit(
-         "sess-full",
-         "debug",
-         "session",
-         "payload_sig",
-         "system",
-         meta={"path": "dg.message", "sha1_8": "feedbeef", "payload": "keep"},
-     )
- 
-     client = flask_app.test_client()
-     csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
-     token = csrf_resp.headers.get("X-CSRF-Token")
-     headers = dict(admin_env)
-     if token:
-         headers["X-CSRF-Token"] = token
- 
-     body = {
-         "session_id": "sess-full",
-         "levels": ["flow", "debug"],
-         "prompt": "Investigate deeply",
-         "options": {
-             "mode": "full",
-             "include": {"ws": True, "logs": False},
-             "privacy": {"pii_scrub": True, "redaction": "minimal"},
-@@ -336,50 +351,60 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
-     resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
-     assert resp.status_code == 200
-     assert resp.headers["Content-Type"].startswith("application/zip")
-     assert resp.headers["X-Flow-Redacted"] == "0"
-     assert resp.headers["X-Flow-Mode"] == "full"
-     assert resp.headers["X-Flow-Payload-Bytes"] == str(len(resp.data))
-     assert resp.headers["X-Flow-Payload-Sha1"] == hashlib.sha1(resp.data).hexdigest()
- 
-     with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
-         names = set(archive.namelist())
-         assert {
-             "prompt.txt",
-             "manifest.json",
-             "events/flow.ndjson.gz",
-             "config/config.json",
-         } <= names
- 
-         prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
-         assert prompt_text == "Investigate deeply"
- 
-         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
-         assert manifest["schema_version"] == "1.0"
-         assert manifest["session_id"] == "sess-full"
-         assert manifest["meta"]["mode"] == "full"
-         assert manifest["meta"]["redacted"] is False
-+        assert manifest["telemetry_schemas"] == ["barge_decision.v1"]
-+        assert manifest["policy_snapshot"] == {
-+            "voice_runtime": {
-+                "barge_in": {
-+                    "suppress_during_tts": "partial",
-+                    "post_tts_hold_ms": 150,
-+                    "allow_ptt": False,
-+                }
-+            }
-+        }
-         assert manifest["meta"]["include"]["ws"] is False
-         assert "logs" not in manifest["meta"]["include"]
-         assert manifest["meta"]["privacy"]["pii_scrub"] is True
-         assert manifest["meta"]["privacy"]["redaction"] == "minimal"
-         assert manifest["meta"]["limits"]["max_bytes"] == 5_000_000
-         assert manifest["event_count"] >= 2
- 
-         files_meta = {entry["path"]: entry for entry in manifest["files"]}
-         for path, entry in files_meta.items():
-             data = archive.read(path)
-             assert entry["bytes"] == len(data)
-             assert entry["sha1"] == hashlib.sha1(data).hexdigest()
-             assert entry["sha1_first8"] == entry["sha1"][:8]
- 
-         events_text = gzip.decompress(archive.read("events/flow.ndjson.gz")).decode("utf-8")
-         assert "Full transcript event" in events_text
-         assert "keep" in events_text
- 
-         config_payload = json.loads(
-             archive.read("config/config.json").decode("utf-8")
-         )
-         assert config_payload["foo"] == "bar"
-         assert config_payload["nested"]["value"] == 1
- 
- 
-diff --git a/tests/test_flow_handoff_options.py b/tests/test_flow_handoff_options.py
-index debf0cbe893e23cc57a1f4934b88682b94972803..07e19be81bb9aa25d3ca575f74fc0ae563c63612 100644
---- a/tests/test_flow_handoff_options.py
-+++ b/tests/test_flow_handoff_options.py
-@@ -122,46 +122,88 @@ def test_flow_handoff_pii_scrub_full_includes_logs(admin_env):
-         },
-     }
- 
-     resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
-     assert resp.status_code == 200
-     assert resp.headers.get("X-Flow-PII-Scrubbed") == "1"
- 
-     with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
-         events_payload = archive.read("events/flow.ndjson.gz")
-         events_text = _decode_gzip_bytes(events_payload)
-         assert "sk-newtokenVALUE999" not in events_text
-         assert "198.51.100.44" not in events_text
-         assert "[token:" in events_text
- 
-         client_log = archive.read("client/console.log.gz")
-         client_text = _decode_gzip_bytes(client_log)
-         assert "198.51.100.44" not in client_text
-         assert "[ip:" in client_text
- 
-         server_log = archive.read("server/server.log.gz")
-         server_text = _decode_gzip_bytes(server_log)
-         assert "198.51.100.22" not in server_text
-         assert "[ip:" in server_text
- 
- 
-+def test_flow_handoff_includes_full_barge_decision_logs(admin_env):
-+    store = FlowStore()
-+    session_id = "sess-barge-log"
-+    store.emit(session_id, "flow", "session", "session_open", "system")
-+
-+    long_text = "decide-" * 1200
-+    admin_log_emit(
-+        {
-+            "event": "barge_decision",
-+            "session_id": session_id,
-+            "text": long_text,
-+            "text_preview": long_text,
-+        }
-+    )
-+
-+    client = flask_app.test_client()
-+    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
-+    token = csrf_resp.headers.get("X-CSRF-Token")
-+    headers = dict(admin_env)
-+    if token:
-+        headers["X-CSRF-Token"] = token
-+
-+    body = {
-+        "session_id": session_id,
-+        "options": {"mode": "full", "include": {"logs": True}},
-+    }
-+
-+    resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
-+    assert resp.status_code == 200
-+
-+    with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
-+        server_log = archive.read("server/server.log.gz")
-+        server_text = _decode_gzip_bytes(server_log)
-+        records = [json.loads(line) for line in server_text.strip().splitlines() if line.strip()]
-+
-+    barge_records = [record for record in records if record.get("event") == "barge_decision"]
-+    assert barge_records, "expected barge_decision event in server log"
-+    payload = barge_records[0]
-+    assert payload.get("text") == long_text
-+    assert payload.get("text_preview") == long_text
-+
-+
- def test_flow_handoff_respects_max_bytes(admin_env):
-     store = FlowStore()
-     session_id = "sess-max"
-     store.emit(session_id, "flow", "session", "session_open", "system")
- 
-     client = flask_app.test_client()
-     csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
-     token = csrf_resp.headers.get("X-CSRF-Token")
-     headers = dict(admin_env)
-     if token:
-         headers["X-CSRF-Token"] = token
- 
-     body = {
-         "session_id": session_id,
-         "options": {"mode": "full", "limits": {"max_bytes": 10}},
-     }
- 
-     resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
-     assert resp.status_code == 413
-     payload = resp.get_json()
-     assert payload == {"error": "export_too_large"}
+                                 provider_can_close = False
+                                 fallback_reason = "no_audio"
+                                 if dg is not None and sent_any_audio[0]:
+                                     fallback_reason = None
+                                     readiness_timeout = False
+                                     if (
+                                         dg_connect_task is not None
+                                         and not dg_connect_task.done()
+                                     ):
+                                         try:
+                                             await asyncio.wait_for(
+                                                 dg_connect_task,
+                                                 timeout=asr_ready_wait_s,
+                                             )
+                                         except asyncio.TimeoutError:
+                                             readiness_timeout = True
+                                             _jlog(
+                                                 "ws_close_dg_connect_timeout", sid=sid
+                                             )
+                                         except Exception as exc:
+                                             _jlog(
+                                                 "ws_close_dg_connect_error",
+                                                 sid=sid,
+                                                 err=type(exc).__name__,
+                                             )
+-                                    if (
+-                                        asr_ready_evt is not None
+-                                        and not asr_ready_evt.is_set()
+-                                    ):
+-                                        try:
+-                                            await asyncio.wait_for(
+-                                                asr_ready_evt.wait(),
+-                                                timeout=asr_ready_wait_s,
+-                                            )
+-                                        except asyncio.TimeoutError:
++                                    if asr_ready_evt is not None:
++                                        ready_now = await _await_close_asr_ready(
++                                            asr_ready_wait_s,
++                                            log_cb=lambda: _jlog(
++                                                "ws_close_dg_ready_timeout", sid=sid
++                                            ),
++                                        )
++                                        if not ready_now:
+                                             readiness_timeout = True
+-                                            _jlog("ws_close_dg_ready_timeout", sid=sid)
+                                     provider_open = _dg_client_ready(dg)
+                                     if not provider_open:
+                                         _jlog("ws_close_dg_not_open", sid=sid)
+                                     sent_any_audio[0] = (
+                                         sent_any_audio[0]
+                                         and provider_open
+                                         and not readiness_timeout
+                                     )
+                                     if not sent_any_audio[0]:
+                                         if readiness_timeout or not provider_open:
+                                             fallback_reason = "dg_not_ready"
+                                         else:
+                                             fallback_reason = "no_audio"
+                                     else:
+                                         provider_can_close = True
+                                 elif (
+                                     fallback_reason == "dg_not_ready"
+                                     and dg_connect_task is not None
+                                 ):
+                                     if not dg_connect_task.done():
+                                         with contextlib.suppress(Exception):
+                                             await asyncio.wait_for(
+                                                 dg_connect_task,
+                                                 timeout=asr_ready_wait_s,
+                                             )
