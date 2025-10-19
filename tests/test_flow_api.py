@@ -314,8 +314,21 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
                             "post_tts_hold_ms": 150,
                             "allow_ptt": False,
                             "extra": "ignored",
+                            "require_asr_evidence": True,
                         }
-                    }
+                    },
+                    "asr": {"vad": {"enabled": True}},
+                },
+                "policy_snapshot": {
+                    "voice_runtime": {
+                        "barge_in": {
+                            "suppress_during_tts": "partial",
+                            "post_tts_hold_ms": 150,
+                            "allow_ptt": False,
+                            "require_asr_evidence": True,
+                        }
+                    },
+                    "asr": {"vad": {"enabled": True}},
                 },
             }
         },
@@ -380,8 +393,10 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
                     "suppress_during_tts": "partial",
                     "post_tts_hold_ms": 150,
                     "allow_ptt": False,
+                    "require_asr_evidence": True,
                 }
-            }
+            },
+            "asr": {"vad": {"enabled": True}},
         }
         assert manifest["meta"]["include"]["ws"] is False
         assert "logs" not in manifest["meta"]["include"]

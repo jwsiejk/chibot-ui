@@ -106,77 +106,111 @@ def _extract_policy_snapshot(config_payload: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(config_payload, Mapping):
         return None
 
+    def _normalize_str(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        try:
+            text = str(value)
+        except Exception:
+            return None
+        text = text.strip()
+        return text or None
+
+    def _normalize_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            try:
+                return int(value)
+            except Exception:
+                return None
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                return int(float(text))
+            except Exception:
+                return None
+        return None
+
+    def _normalize_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return None
+
+    def _parse_barge_policy(policy: Any) -> Dict[str, Any]:
+        if not isinstance(policy, Mapping):
+            return {}
+        suppress_value = _normalize_str(policy.get("suppress_during_tts"))
+        hold_value = _normalize_int(policy.get("post_tts_hold_ms"))
+        allow_value = _normalize_bool(policy.get("allow_ptt"))
+        require_value = _normalize_bool(policy.get("require_asr_evidence"))
+
+        snapshot: Dict[str, Any] = {}
+        if suppress_value is not None:
+            snapshot["suppress_during_tts"] = suppress_value
+        if hold_value is not None:
+            snapshot["post_tts_hold_ms"] = hold_value
+        if allow_value is not None:
+            snapshot["allow_ptt"] = allow_value
+        if require_value is not None:
+            snapshot["require_asr_evidence"] = require_value
+        return snapshot
+
+    def _coerce_snapshot(candidate: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(candidate, Mapping):
+            return None
+
+        result: Dict[str, Any] = {}
+
+        voice_runtime = candidate.get("voice_runtime")
+        if isinstance(voice_runtime, Mapping):
+            barge_data = _parse_barge_policy(voice_runtime.get("barge_in"))
+            if barge_data:
+                result.setdefault("voice_runtime", {})["barge_in"] = barge_data
+
+        asr_policy = candidate.get("asr")
+        if isinstance(asr_policy, Mapping):
+            vad_policy = asr_policy.get("vad")
+            if isinstance(vad_policy, Mapping):
+                vad_enabled = _normalize_bool(vad_policy.get("enabled"))
+                if vad_enabled is not None:
+                    result.setdefault("asr", {})["vad"] = {"enabled": vad_enabled}
+
+        return result or None
+
+    explicit_snapshot = _coerce_snapshot(config_payload.get("policy_snapshot"))
+    if explicit_snapshot:
+        return explicit_snapshot
+
     interaction_policy = config_payload.get("interaction_policy")
     if not isinstance(interaction_policy, Mapping):
         return None
 
+    candidate_payload: Dict[str, Any] = {}
     voice_runtime = interaction_policy.get("voice_runtime")
-    if not isinstance(voice_runtime, Mapping):
-        return None
+    if isinstance(voice_runtime, Mapping):
+        candidate_payload.setdefault("voice_runtime", {})["barge_in"] = voice_runtime.get("barge_in")
 
-    barge_policy = voice_runtime.get("barge_in")
-    if not isinstance(barge_policy, Mapping):
-        return None
+    asr_policy = interaction_policy.get("asr")
+    if isinstance(asr_policy, Mapping):
+        candidate_payload.setdefault("asr", {})["vad"] = asr_policy.get("vad")
 
-    suppress_raw = barge_policy.get("suppress_during_tts")
-    if isinstance(suppress_raw, str):
-        suppress_value: Optional[str] = suppress_raw
-    elif suppress_raw is None:
-        suppress_value = None
-    else:
-        try:
-            suppress_value = str(suppress_raw)
-        except Exception:
-            suppress_value = None
-
-    hold_raw = barge_policy.get("post_tts_hold_ms")
-    hold_value: Optional[int]
-    if isinstance(hold_raw, bool):
-        hold_value = int(hold_raw)
-    elif isinstance(hold_raw, (int, float)):
-        try:
-            hold_value = int(hold_raw)
-        except Exception:
-            hold_value = None
-    elif isinstance(hold_raw, str):
-        text = hold_raw.strip()
-        if text:
-            try:
-                hold_value = int(float(text))
-            except Exception:
-                hold_value = None
-        else:
-            hold_value = None
-    else:
-        hold_value = None
-
-    allow_raw = barge_policy.get("allow_ptt")
-    allow_value: Optional[bool]
-    if isinstance(allow_raw, bool):
-        allow_value = allow_raw
-    elif isinstance(allow_raw, (int, float)):
-        allow_value = bool(allow_raw)
-    elif isinstance(allow_raw, str):
-        lowered = allow_raw.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            allow_value = True
-        elif lowered in {"0", "false", "no", "off"}:
-            allow_value = False
-        else:
-            allow_value = None
-    else:
-        allow_value = None
-
-    snapshot = {
-        "suppress_during_tts": suppress_value,
-        "post_tts_hold_ms": hold_value,
-        "allow_ptt": allow_value,
-    }
-
-    if not any(value is not None for value in snapshot.values()):
-        return None
-
-    return {"voice_runtime": {"barge_in": snapshot}}
+    return _coerce_snapshot(candidate_payload)
 
 
 DEFAULT_HANDOFF_PROMPT = (

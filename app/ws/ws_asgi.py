@@ -1751,9 +1751,22 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         allow_ptt=bool(barge_allow_ptt),
     )
 
+    resolved_policy_snapshot = {
+        "voice_runtime": {
+            "barge_in": {
+                "suppress_during_tts": barge_suppress_mode or "none",
+                "post_tts_hold_ms": int(barge_post_tts_hold_ms),
+                "allow_ptt": bool(barge_allow_ptt),
+                "require_asr_evidence": bool(barge_require_asr_evidence),
+            }
+        },
+        "asr": {"vad": {"enabled": bool(local_vad_allowed)}}
+    }
+
     cfg["feature_manual_barge_in"] = manual_feature_enabled
     cfg["barge_in_mode_manual"] = manual_mode_manual_only
     cfg["auto_commit_when_ready"] = auto_commit_when_ready
+    cfg["policy_snapshot"] = resolved_policy_snapshot
 
     def _sanitize_session_config_value(value: Any) -> Any:
         if isinstance(value, (str, int, float, bool)) or value is None:
@@ -1986,13 +1999,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     vad_last_reason: List[str] = ["idle"]
     vad_apply_task: List[Optional[asyncio.Task]] = [None]
 
+    local_vad_open = [False]
+    local_vad_meta_sent = [False]
+
     def _decide_barge_attempt(source: str) -> Tuple[bool, str, str, str]:
         src = "ptt" if str(source).lower() == "ptt" else "vad"
         try:
             current_turn_id = _current_assistant_turn_id(sid)
         except Exception:
             current_turn_id = None
-        tts_state, _ = _lookup_tts_state(sid, current_turn_id)
+        tts_state, tts_key = _lookup_tts_state(sid, current_turn_id)
         tts_active_now = _is_tts_active(tts_state)
         now_ts = time.time()
         hold_active = False
@@ -2014,14 +2030,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
         allowed = True
         reason = "ok"
+        telemetry_reason = "normal"
         suppress_mode = (barge_suppress_mode or "none").strip() or "none"
         if src == "vad":
-            if tts_active_now:
+            if _manual_mode_active():
+                allowed = False
+                reason = "manual_interrupt_only"
+                telemetry_reason = "manual_interrupt_only"
+            elif tts_active_now:
                 allowed = False
                 reason = "tts_active"
             elif hold_active:
                 allowed = False
                 reason = "post_tts_hold"
+                telemetry_reason = "post_tts_hold"
             elif not local_vad_allowed:
                 allowed = False
                 reason = "local_vad_disabled"
@@ -2033,10 +2055,34 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 allowed = False
                 reason = "ptt_disabled"
 
+        ts_value = now_ts
+        ts_ms_value = int(ts_value * 1000)
+        event_payload: Dict[str, Any] = {
+            "session_id": sid,
+            "schema": "barge_decision.v1",
+            "by": src,
+            "state": tts_phase,
+            "allowed": bool(allowed),
+            "reason": telemetry_reason,
+            "local_vad_open": bool(local_vad_open[0]),
+            "local_vad_meta": bool(local_vad_meta_sent[0]),
+            "asr_seen_partial": bool(asr_seen_partial[0]),
+            "tts_active": bool(tts_active_now),
+            "tts_turn_key": tts_key,
+            "ts": ts_value,
+            "ts_ms": ts_ms_value,
+        }
+        if current_turn_id is not None:
+            event_payload["turn_id"] = current_turn_id
+        event_payload["reason_detail"] = reason
+
+        with contextlib.suppress(Exception):
+            if _admin_emit:
+                _admin_emit("barge_decision", **event_payload)
+
         return allowed, src, tts_phase, reason
     pending_confirm_request: List[Optional[Dict[str, Any]]] = [None]
     asr_ready = [False]
-    local_vad_open = [False]    
     turn_commit_mode_ref: List[str] = ["vad"]
     last_ready_signal_after: List[Optional[str]] = [None]
     active_turn_mode_ref: List[str] = ["vad"]
@@ -2349,8 +2395,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 parent_id=parent_id,
                 meta=payload,
             )
-    local_vad_meta_sent = [False]
-
     def _maybe_emit_evidence_gate(confidence: Optional[object] = None) -> None:
         if evidence_gate_emitted[0]:
             return
@@ -2425,8 +2469,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     def _emit_local_vad_signal(now_ts: float) -> None:
         if local_vad_meta_sent[0]:
-            return
-        if _manual_mode_active():
             return
         allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt("vad")
         if not allow_barge:

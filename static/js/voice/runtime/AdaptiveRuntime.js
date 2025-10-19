@@ -785,34 +785,30 @@ const schedulePlaybackHeartbeat = (ctx, turnId) => {
   }, CLIENT_AUDIO_HEARTBEAT_DELAY_MS);
 };
 
-const resumeAudioContextForTts = (ctx, turnId) => {
+const resumeAudioContextForTts = async (ctx, turnId) => {
   const audioCtx = ctx?.audio?.context;
   if (!audioCtx || typeof audioCtx.resume !== 'function') {
     const state = typeof audioCtx?.state === 'string' ? audioCtx.state : 'unavailable';
     emitClientAudioContextState(ctx, { state, error: 'audio_context_unavailable' }, turnId);
-    return Promise.resolve();
+    return;
   }
-  return (async () => {
-    let error = null;
-    try {
-      await audioCtx.resume();
-    } catch (err) {
-      error = err;
-    }
+  try {
+    await audioCtx.resume();
+  } catch (err) {
     const state = typeof audioCtx.state === 'string' ? audioCtx.state : 'unknown';
-    const detail = { state };
-    if (error) {
-      detail.error = error?.message || String(error || 'unknown_error');
-    }
-    emitClientAudioContextState(ctx, detail, turnId);
-  })();
+    const message = err?.message || String(err || 'unknown_error');
+    emitClientAudioContextState(ctx, { state, error: message }, turnId);
+    return;
+  }
+  const state = typeof audioCtx.state === 'string' ? audioCtx.state : 'unknown';
+  emitClientAudioContextState(ctx, { state }, turnId);
 };
 
 const attemptAudioPlay = (ctx, turnId) => {
   const audioEl = getPlaybackElement(ctx);
   if (!audioEl) {
     emitClientAudioEvent(ctx, 'client_audio_play_error', { message: 'audio_element_unavailable' }, turnId);
-    return;
+    return Promise.resolve();
   }
   rememberPlaybackElement(audioEl, ctx);
   let playResult;
@@ -821,10 +817,10 @@ const attemptAudioPlay = (ctx, turnId) => {
   } catch (err) {
     const message = err?.message || String(err || 'unknown_error');
     emitClientAudioEvent(ctx, 'client_audio_play_error', { message }, turnId);
-    return;
+    return Promise.resolve();
   }
   if (playResult && typeof playResult.then === 'function') {
-    playResult
+    return playResult
       .then(() => {
         emitClientAudioEvent(ctx, 'client_audio_play_ok', {}, turnId);
       })
@@ -832,18 +828,17 @@ const attemptAudioPlay = (ctx, turnId) => {
         const message = err?.message || String(err || 'unknown_error');
         emitClientAudioEvent(ctx, 'client_audio_play_error', { message }, turnId);
       });
-  } else {
-    emitClientAudioEvent(ctx, 'client_audio_play_ok', {}, turnId);
   }
+  emitClientAudioEvent(ctx, 'client_audio_play_ok', {}, turnId);
+  return Promise.resolve();
 };
 
-const handleClientTtsStartTelemetry = (ctx, frame) => {
+const handleClientTtsStartTelemetry = async (ctx, frame) => {
   ensurePlaybackElementTracker();
   const turnId = frame?.turn_id != null ? frame.turn_id : null;
   schedulePlaybackHeartbeat(ctx, turnId);
-  resumeAudioContextForTts(ctx, turnId).finally(() => {
-    attemptAudioPlay(ctx, turnId);
-  });
+  await resumeAudioContextForTts(ctx, turnId);
+  await attemptAudioPlay(ctx, turnId);
 };
 
 const logPreCommitMode = (ctx, mode, extra = {}) => {
@@ -1449,7 +1444,12 @@ function handleWsFrame(ctx, frame) {
     || type === 'tts_start'
     || event === 'tts_start'
   ) {
-    try { handleClientTtsStartTelemetry(ctx, frame); } catch {}
+    try {
+      const maybePromise = handleClientTtsStartTelemetry(ctx, frame);
+      if (maybePromise && typeof maybePromise.catch === 'function') {
+        maybePromise.catch(() => {});
+      }
+    } catch {}
   }
 
   if (type === 'state') {
