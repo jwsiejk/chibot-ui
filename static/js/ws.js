@@ -522,7 +522,13 @@ export function openWS(options = {}){
       }
 
       try {
-        window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail: { code: e.code, reason: e.reason }}));
+        const detail = {
+          code: e.code,
+          reason: e.reason,
+          wasClean: typeof e.wasClean === 'boolean' ? e.wasClean : undefined,
+          reconnectScheduled: shouldReconnect,
+        };
+        window.dispatchEvent(new CustomEvent('askchip-ws-close', { detail }));
       } catch {}
       if (!shouldReconnect) {
         return;

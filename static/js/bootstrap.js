@@ -321,6 +321,25 @@ function wireWSEventsOnce(){
   if (window.__askchip_ws_wired) return;
   window.__askchip_ws_wired = true;
 
+  const describeWsClose = (detail = {}) => {
+    const reason = typeof detail.reason === 'string' ? detail.reason.trim() : '';
+    if (reason) return reason;
+    const code = detail.code;
+    if (code === 1000 || code === 1001) return 'normal closure';
+    if (code === 1006) return 'network disconnect';
+    if (code === 1012) return 'service restart';
+    if (code === 1013) return 'service overload';
+    if (code === 1014) return 'bad gateway';
+    if (code === 1015) return 'TLS handshake failure';
+    return 'unknown reason';
+  };
+
+  const isExpectedAbnormalClose = (detail = {}) => {
+    if (!detail || typeof detail !== 'object') return false;
+    if (detail.code === 1006) return true;
+    return false;
+  };
+
   // Log first few frames to verify payload shape
   let seen = 0;
   const loggedTypes = new Set();
@@ -391,14 +410,12 @@ function wireWSEventsOnce(){
   window.addEventListener('askchip-ws-close', (ev) => {
     const detail = ev.detail || {};
     const normal = detail.code === 1000 || detail.code === 1001;
-    const reason = detail.reason || (normal ? 'normal closure' : '');
+    const expectedAbnormal = !normal && isExpectedAbnormalClose(detail);
+    const reason = describeWsClose(detail);
     const payload = { ...detail, reason };
 
-    if (normal) {
-      _console('info', '[WS close]', payload);
-    } else {
-      _console('warn', '[WS close]', payload);
-    }
+    const logLevel = normal || expectedAbnormal ? 'info' : 'warn';
+    _console(logLevel, '[WS close]', payload);
     // When WS closes, disable Send/End and re-enable Start
     _disableButtons();
     const sb = $('#startButton');
