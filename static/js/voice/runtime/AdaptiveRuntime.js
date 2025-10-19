@@ -604,6 +604,248 @@ const voiceLog = (level, ...args) => {
   });
 };
 
+const CLIENT_AUDIO_HEARTBEAT_DELAY_MS = 300;
+
+const playbackTracker = {
+  patched: false,
+  audioEl: null,
+};
+
+const rememberPlaybackElement = (el, ctx) => {
+  if (!el || typeof el.play !== 'function') return null;
+  playbackTracker.audioEl = el;
+  if (ctx) {
+    ctx.playbackAudioEl = el;
+  }
+  try {
+    if (typeof window !== 'undefined') {
+      window.__askchip_last_audio_el = el;
+    }
+  } catch {}
+  return el;
+};
+
+const ensurePlaybackElementTracker = () => {
+  if (playbackTracker.patched) return;
+  try {
+    const proto =
+      (typeof window !== 'undefined' ? window.HTMLMediaElement : undefined)?.prototype
+      || (typeof globalThis !== 'undefined' ? globalThis.HTMLMediaElement?.prototype : undefined);
+    if (!proto || typeof proto.play !== 'function') {
+      return;
+    }
+    if (proto.play && proto.play.__askchipPlaybackPatched) {
+      playbackTracker.patched = true;
+      return;
+    }
+    const original = proto.play;
+    const patched = function patchedPlay(...args) {
+      try { rememberPlaybackElement(this); } catch {}
+      return original.apply(this, args);
+    };
+    try { Object.defineProperty(patched, 'name', { value: 'play', configurable: true }); } catch {}
+    patched.__askchipPlaybackPatched = true;
+    patched.__askchipPlaybackOriginal = original;
+    proto.play = patched;
+    playbackTracker.patched = true;
+  } catch {}
+};
+
+const getPlaybackElement = (ctx) => {
+  if (ctx?.playbackAudioEl && typeof ctx.playbackAudioEl.play === 'function') {
+    return rememberPlaybackElement(ctx.playbackAudioEl, ctx);
+  }
+  if (playbackTracker.audioEl && typeof playbackTracker.audioEl.play === 'function') {
+    return rememberPlaybackElement(playbackTracker.audioEl, ctx);
+  }
+  try {
+    if (typeof window !== 'undefined' && window.__askchip_last_audio_el) {
+      const candidate = window.__askchip_last_audio_el;
+      if (candidate && typeof candidate.play === 'function') {
+        return rememberPlaybackElement(candidate, ctx);
+      }
+    }
+  } catch {}
+  try {
+    if (typeof document !== 'undefined') {
+      const domCandidate = document.querySelector('audio');
+      if (domCandidate && typeof domCandidate.play === 'function') {
+        return rememberPlaybackElement(domCandidate, ctx);
+      }
+    }
+  } catch {}
+  return null;
+};
+
+const safeGetSid = () => {
+  try {
+    return getSID();
+  } catch {
+    return null;
+  }
+};
+
+const postAdminLog = (payload) => {
+  if (!payload || typeof payload !== 'object') return;
+  const win = typeof window !== 'undefined' ? window : null;
+  if (!win) return;
+  try {
+    if (typeof win.askchipLog === 'function') {
+      win.askchipLog(payload);
+      return;
+    }
+  } catch {}
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    const csrf = typeof win.csrfToken === 'string' && win.csrfToken ? win.csrfToken : null;
+    if (csrf) headers['X-CSRF-Token'] = csrf;
+    const body = JSON.stringify(payload);
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      try {
+        const blob = new Blob([body], { type: 'application/json' });
+        if (navigator.sendBeacon('/api/v1/admin/log', blob)) {
+          return;
+        }
+      } catch {}
+    }
+    if (typeof fetch === 'function') {
+      fetch('/api/v1/admin/log', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body,
+      }).catch(() => {});
+    }
+  } catch {}
+};
+
+const emitClientAudioEvent = (ctx, eventName, detail = {}, turnId = null) => {
+  if (!eventName) return;
+  const ts = Date.now();
+  const sessionId = ctx?.sessionId || safeGetSid();
+  const normalizedTurnId =
+    turnId != null ? String(turnId) : ctx?.state?.activeTurnId != null ? ctx.state.activeTurnId : null;
+  const payload = {
+    event: eventName,
+    ts_ms: ts,
+    session_id: sessionId || null,
+    turn_id: normalizedTurnId != null ? String(normalizedTurnId) : null,
+    ...detail,
+  };
+  voiceLog('info', `[client] ${eventName}`, payload);
+  emitVoiceEvent(eventName, payload);
+  emitFlowBreadcrumb(eventName, payload);
+  postAdminLog(payload);
+};
+
+const emitClientAudioContextState = (ctx, detail, turnId) => {
+  const payload = { ...detail };
+  if (typeof payload.state !== 'string' || !payload.state) {
+    payload.state = 'unknown';
+  }
+  emitClientAudioEvent(ctx, 'client_audio_context_state', payload, turnId);
+};
+
+const emitClientAudioHeartbeat = (ctx, turnId) => {
+  const audioEl = getPlaybackElement(ctx);
+  const detail = {
+    currentTime: null,
+    readyState: null,
+    muted: null,
+    volume: null,
+    sinkId: 'default',
+  };
+  if (audioEl) {
+    rememberPlaybackElement(audioEl, ctx);
+    try { detail.currentTime = Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : null; } catch {}
+    try { detail.readyState = Number.isFinite(audioEl.readyState) ? audioEl.readyState : null; } catch {}
+    try { detail.muted = !!audioEl.muted; } catch {}
+    try { detail.volume = Number.isFinite(audioEl.volume) ? audioEl.volume : null; } catch {}
+    try {
+      const rawSinkId = audioEl.sinkId;
+      if (typeof rawSinkId === 'string' && rawSinkId) {
+        detail.sinkId = rawSinkId;
+      } else if (rawSinkId != null && rawSinkId !== '') {
+        detail.sinkId = String(rawSinkId);
+      }
+    } catch {}
+  }
+  emitClientAudioEvent(ctx, 'client_audio_heartbeat', detail, turnId);
+};
+
+const schedulePlaybackHeartbeat = (ctx, turnId) => {
+  if (!ctx?.state) return;
+  if (ctx.state.ttsHeartbeatTimer) {
+    try { clearTimeout(ctx.state.ttsHeartbeatTimer); } catch {}
+    ctx.state.ttsHeartbeatTimer = null;
+  }
+  ctx.state.ttsHeartbeatTimer = setTimeout(() => {
+    ctx.state.ttsHeartbeatTimer = null;
+    emitClientAudioHeartbeat(ctx, turnId);
+  }, CLIENT_AUDIO_HEARTBEAT_DELAY_MS);
+};
+
+const resumeAudioContextForTts = (ctx, turnId) => {
+  const audioCtx = ctx?.audio?.context;
+  if (!audioCtx || typeof audioCtx.resume !== 'function') {
+    const state = typeof audioCtx?.state === 'string' ? audioCtx.state : 'unavailable';
+    emitClientAudioContextState(ctx, { state, error: 'audio_context_unavailable' }, turnId);
+    return Promise.resolve();
+  }
+  return (async () => {
+    let error = null;
+    try {
+      await audioCtx.resume();
+    } catch (err) {
+      error = err;
+    }
+    const state = typeof audioCtx.state === 'string' ? audioCtx.state : 'unknown';
+    const detail = { state };
+    if (error) {
+      detail.error = error?.message || String(error || 'unknown_error');
+    }
+    emitClientAudioContextState(ctx, detail, turnId);
+  })();
+};
+
+const attemptAudioPlay = (ctx, turnId) => {
+  const audioEl = getPlaybackElement(ctx);
+  if (!audioEl) {
+    emitClientAudioEvent(ctx, 'client_audio_play_error', { message: 'audio_element_unavailable' }, turnId);
+    return;
+  }
+  rememberPlaybackElement(audioEl, ctx);
+  let playResult;
+  try {
+    playResult = audioEl.play();
+  } catch (err) {
+    const message = err?.message || String(err || 'unknown_error');
+    emitClientAudioEvent(ctx, 'client_audio_play_error', { message }, turnId);
+    return;
+  }
+  if (playResult && typeof playResult.then === 'function') {
+    playResult
+      .then(() => {
+        emitClientAudioEvent(ctx, 'client_audio_play_ok', {}, turnId);
+      })
+      .catch((err) => {
+        const message = err?.message || String(err || 'unknown_error');
+        emitClientAudioEvent(ctx, 'client_audio_play_error', { message }, turnId);
+      });
+  } else {
+    emitClientAudioEvent(ctx, 'client_audio_play_ok', {}, turnId);
+  }
+};
+
+const handleClientTtsStartTelemetry = (ctx, frame) => {
+  ensurePlaybackElementTracker();
+  const turnId = frame?.turn_id != null ? frame.turn_id : null;
+  schedulePlaybackHeartbeat(ctx, turnId);
+  resumeAudioContextForTts(ctx, turnId).finally(() => {
+    attemptAudioPlay(ctx, turnId);
+  });
+};
+
 const logPreCommitMode = (ctx, mode, extra = {}) => {
   if (!ctx?.state) return;
   const normalized = typeof mode === 'string' && mode ? mode : 'shadow_only';
@@ -988,6 +1230,7 @@ const ensureCtx = () => {
       lastDualVadLogTs: 0,
       lastPreCommitFeedMode: 'shadow_only',
       ttsRearmTimer: null,
+      ttsHeartbeatTimer: null,
       ttsHoldUntilMs: 0,
       vadShouldRearmAfterTts: false,
       vadSuppressedForTts: false,
@@ -1199,6 +1442,15 @@ function handleWsFrame(ctx, frame) {
   if (!ctx?.state) return;
   const type = normalizeVadLabel(frame?.type);
   const event = normalizeVadLabel(frame?.event);
+
+  if (
+    type === 'tts:start'
+    || event === 'tts:start'
+    || type === 'tts_start'
+    || event === 'tts_start'
+  ) {
+    try { handleClientTtsStartTelemetry(ctx, frame); } catch {}
+  }
 
   if (type === 'state') {
     if (applyTtsState(ctx, frame?.phase, frame)) {

@@ -1,75 +1,409 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 59ac70262e14c5b012a1b7d93c3f43032c7c9b30..c9e6d291249fc1faa51e406867b4c68bbe2822ed 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -2042,68 +2042,70 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
-     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-     turn_connect_started = [False]
-     # When True we stream new audio chunks directly to Deepgram instead of staging
-     # them locally. Enabled once the socket is open and any backlog has been
-     # flushed so transcription isn't gated on the not-ready timeout.
-     asr_direct_stream = [False]
-     # Track whether the current turn has been committed (manual or automatic)
-     # so that we know when to flip into pass-through mode.
-     turn_stream_committed = [False]
-     # Coordinate async activation of the ASR stream once a turn commits.
-     asr_stream_activation_task: List[Optional[asyncio.Task]] = [None]
-     asr_not_ready_timeout_task: List[Optional[asyncio.Task]] = [None]
+diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
+index dd4f472281180ab129779f47fa34f34175bdc516..5fc05c0bcd6ff96b204a0ca4cba62c08c6c7ffba 100644
+--- a/static/js/voice/runtime/AdaptiveRuntime.js
++++ b/static/js/voice/runtime/AdaptiveRuntime.js
+@@ -582,50 +582,292 @@ const clearDualVadTimer = (ctx) => {
  
-     # NEW: per-turn mic capture state
-     mic_chunks: List[bytes] = []
-     mic_first_ts = [0.0]
-     mic_last_ts = [0.0]
+ const scheduleDualVadTimer = (ctx) => {
+   if (!ctx?.state || !dualVadEnabled(ctx) || !ctx.state.turnOpen) return;
+   const delay = quietCloseMs(ctx);
+   if (!Number.isFinite(delay) || delay <= 0) {
+     return;
+   }
+   clearDualVadTimer(ctx);
+   ctx.state.dualVadCloseTimer = setTimeout(() => {
+     ctx.state.dualVadCloseTimer = null;
+     if (!attemptCloseWithReason(ctx, 'dual_vad_quiet', 'dual_vad_quiet')) {
+       scheduleDualVadTimer(ctx);
+     }
+   }, delay);
+ };
  
-     # Local confirmation gating
-     try:
-         confirm_min_ms = int(cfg.get("confirm_ms", 420) or 420)
-     except Exception:
-         confirm_min_ms = 420
-     confirm_min_ms = max(0, confirm_min_ms)
-+    confirm_min_ms = max(300, confirm_min_ms)
-     try:
-         confirm_max_ms = int(cfg.get("confirm_max_ms", confirm_min_ms + 600) or (confirm_min_ms + 600))
-     except Exception:
-         confirm_max_ms = confirm_min_ms + 600
-     if confirm_max_ms < confirm_min_ms:
-         confirm_max_ms = confirm_min_ms
-     try:
-         confirm_gap_ms = float(cfg.get("confirm_max_gap_ms", 180.0) or 180.0)
-     except Exception:
-         confirm_gap_ms = 180.0
-     try:
-         confirm_min_tokens = max(1, int(cfg.get("confirm_min_tokens", 2) or 2))
-     except Exception:
-         confirm_min_tokens = 2
-     try:
-         confirm_min_conf = float(cfg.get("confirm_min_confidence", 0.5) or 0.5)
-     except Exception:
-         confirm_min_conf = 0.5
-+    confirm_min_conf = max(0.6, confirm_min_conf)
-     try:
-         confirm_snr_db = float(cfg.get("confirm_min_snr_db", 8.0) or 8.0)
-     except Exception:
-         confirm_snr_db = 8.0
-     try:
-         confirm_snr_slack_db = float(cfg.get("confirm_snr_slack_db", 0.5) or 0.5)
-     except Exception:
-         confirm_snr_slack_db = 0.5
-     if confirm_snr_slack_db < 0.0:
-         confirm_snr_slack_db = 0.0
+ const voiceLog = (level, ...args) => {
+   logIfEnabled(() => {
+     try {
+       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+       method?.apply(console, args);
+     } catch {}
+   });
+ };
  
-     confirm_window_ref: List[Optional[ConfirmWindow]] = [None]
-     confirm_timeout_task: List[Optional[asyncio.Task]] = [None]
-     confirm_timeout_cancelled: List[asyncio.Task] = []
-     confirm_flow_parent_id: List[Optional[str]] = [None]
-     confirm_debug_state: List[Dict[str, Any]] = [
-         {
-             "parent_id": "",
-             "opened_at": 0.0,
-             "last_vad_ts": None,
-             "last_audio_ts": None,
-             "last_partial_ts": None,
-             "vad_ticks": [],
-             "audio_chunks": [],
-             "dg_partials": [],
++const CLIENT_AUDIO_HEARTBEAT_DELAY_MS = 300;
++
++const playbackTracker = {
++  patched: false,
++  audioEl: null,
++};
++
++const rememberPlaybackElement = (el, ctx) => {
++  if (!el || typeof el.play !== 'function') return null;
++  playbackTracker.audioEl = el;
++  if (ctx) {
++    ctx.playbackAudioEl = el;
++  }
++  try {
++    if (typeof window !== 'undefined') {
++      window.__askchip_last_audio_el = el;
++    }
++  } catch {}
++  return el;
++};
++
++const ensurePlaybackElementTracker = () => {
++  if (playbackTracker.patched) return;
++  try {
++    const proto =
++      (typeof window !== 'undefined' ? window.HTMLMediaElement : undefined)?.prototype
++      || (typeof globalThis !== 'undefined' ? globalThis.HTMLMediaElement?.prototype : undefined);
++    if (!proto || typeof proto.play !== 'function') {
++      return;
++    }
++    if (proto.play && proto.play.__askchipPlaybackPatched) {
++      playbackTracker.patched = true;
++      return;
++    }
++    const original = proto.play;
++    const patched = function patchedPlay(...args) {
++      try { rememberPlaybackElement(this); } catch {}
++      return original.apply(this, args);
++    };
++    try { Object.defineProperty(patched, 'name', { value: 'play', configurable: true }); } catch {}
++    patched.__askchipPlaybackPatched = true;
++    patched.__askchipPlaybackOriginal = original;
++    proto.play = patched;
++    playbackTracker.patched = true;
++  } catch {}
++};
++
++const getPlaybackElement = (ctx) => {
++  if (ctx?.playbackAudioEl && typeof ctx.playbackAudioEl.play === 'function') {
++    return rememberPlaybackElement(ctx.playbackAudioEl, ctx);
++  }
++  if (playbackTracker.audioEl && typeof playbackTracker.audioEl.play === 'function') {
++    return rememberPlaybackElement(playbackTracker.audioEl, ctx);
++  }
++  try {
++    if (typeof window !== 'undefined' && window.__askchip_last_audio_el) {
++      const candidate = window.__askchip_last_audio_el;
++      if (candidate && typeof candidate.play === 'function') {
++        return rememberPlaybackElement(candidate, ctx);
++      }
++    }
++  } catch {}
++  try {
++    if (typeof document !== 'undefined') {
++      const domCandidate = document.querySelector('audio');
++      if (domCandidate && typeof domCandidate.play === 'function') {
++        return rememberPlaybackElement(domCandidate, ctx);
++      }
++    }
++  } catch {}
++  return null;
++};
++
++const safeGetSid = () => {
++  try {
++    return getSID();
++  } catch {
++    return null;
++  }
++};
++
++const postAdminLog = (payload) => {
++  if (!payload || typeof payload !== 'object') return;
++  const win = typeof window !== 'undefined' ? window : null;
++  if (!win) return;
++  try {
++    if (typeof win.askchipLog === 'function') {
++      win.askchipLog(payload);
++      return;
++    }
++  } catch {}
++  try {
++    const headers = { 'Content-Type': 'application/json' };
++    const csrf = typeof win.csrfToken === 'string' && win.csrfToken ? win.csrfToken : null;
++    if (csrf) headers['X-CSRF-Token'] = csrf;
++    const body = JSON.stringify(payload);
++    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
++      try {
++        const blob = new Blob([body], { type: 'application/json' });
++        if (navigator.sendBeacon('/api/v1/admin/log', blob)) {
++          return;
++        }
++      } catch {}
++    }
++    if (typeof fetch === 'function') {
++      fetch('/api/v1/admin/log', {
++        method: 'POST',
++        headers,
++        credentials: 'include',
++        body,
++      }).catch(() => {});
++    }
++  } catch {}
++};
++
++const emitClientAudioEvent = (ctx, eventName, detail = {}, turnId = null) => {
++  if (!eventName) return;
++  const ts = Date.now();
++  const sessionId = ctx?.sessionId || safeGetSid();
++  const normalizedTurnId =
++    turnId != null ? String(turnId) : ctx?.state?.activeTurnId != null ? ctx.state.activeTurnId : null;
++  const payload = {
++    event: eventName,
++    ts_ms: ts,
++    session_id: sessionId || null,
++    turn_id: normalizedTurnId != null ? String(normalizedTurnId) : null,
++    ...detail,
++  };
++  voiceLog('info', `[client] ${eventName}`, payload);
++  emitVoiceEvent(eventName, payload);
++  emitFlowBreadcrumb(eventName, payload);
++  postAdminLog(payload);
++};
++
++const emitClientAudioContextState = (ctx, detail, turnId) => {
++  const payload = { ...detail };
++  if (typeof payload.state !== 'string' || !payload.state) {
++    payload.state = 'unknown';
++  }
++  emitClientAudioEvent(ctx, 'client_audio_context_state', payload, turnId);
++};
++
++const emitClientAudioHeartbeat = (ctx, turnId) => {
++  const audioEl = getPlaybackElement(ctx);
++  const detail = {
++    currentTime: null,
++    readyState: null,
++    muted: null,
++    volume: null,
++    sinkId: 'default',
++  };
++  if (audioEl) {
++    rememberPlaybackElement(audioEl, ctx);
++    try { detail.currentTime = Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : null; } catch {}
++    try { detail.readyState = Number.isFinite(audioEl.readyState) ? audioEl.readyState : null; } catch {}
++    try { detail.muted = !!audioEl.muted; } catch {}
++    try { detail.volume = Number.isFinite(audioEl.volume) ? audioEl.volume : null; } catch {}
++    try {
++      const rawSinkId = audioEl.sinkId;
++      if (typeof rawSinkId === 'string' && rawSinkId) {
++        detail.sinkId = rawSinkId;
++      } else if (rawSinkId != null && rawSinkId !== '') {
++        detail.sinkId = String(rawSinkId);
++      }
++    } catch {}
++  }
++  emitClientAudioEvent(ctx, 'client_audio_heartbeat', detail, turnId);
++};
++
++const schedulePlaybackHeartbeat = (ctx, turnId) => {
++  if (!ctx?.state) return;
++  if (ctx.state.ttsHeartbeatTimer) {
++    try { clearTimeout(ctx.state.ttsHeartbeatTimer); } catch {}
++    ctx.state.ttsHeartbeatTimer = null;
++  }
++  ctx.state.ttsHeartbeatTimer = setTimeout(() => {
++    ctx.state.ttsHeartbeatTimer = null;
++    emitClientAudioHeartbeat(ctx, turnId);
++  }, CLIENT_AUDIO_HEARTBEAT_DELAY_MS);
++};
++
++const resumeAudioContextForTts = (ctx, turnId) => {
++  const audioCtx = ctx?.audio?.context;
++  if (!audioCtx || typeof audioCtx.resume !== 'function') {
++    const state = typeof audioCtx?.state === 'string' ? audioCtx.state : 'unavailable';
++    emitClientAudioContextState(ctx, { state, error: 'audio_context_unavailable' }, turnId);
++    return Promise.resolve();
++  }
++  return (async () => {
++    let error = null;
++    try {
++      await audioCtx.resume();
++    } catch (err) {
++      error = err;
++    }
++    const state = typeof audioCtx.state === 'string' ? audioCtx.state : 'unknown';
++    const detail = { state };
++    if (error) {
++      detail.error = error?.message || String(error || 'unknown_error');
++    }
++    emitClientAudioContextState(ctx, detail, turnId);
++  })();
++};
++
++const attemptAudioPlay = (ctx, turnId) => {
++  const audioEl = getPlaybackElement(ctx);
++  if (!audioEl) {
++    emitClientAudioEvent(ctx, 'client_audio_play_error', { message: 'audio_element_unavailable' }, turnId);
++    return;
++  }
++  rememberPlaybackElement(audioEl, ctx);
++  let playResult;
++  try {
++    playResult = audioEl.play();
++  } catch (err) {
++    const message = err?.message || String(err || 'unknown_error');
++    emitClientAudioEvent(ctx, 'client_audio_play_error', { message }, turnId);
++    return;
++  }
++  if (playResult && typeof playResult.then === 'function') {
++    playResult
++      .then(() => {
++        emitClientAudioEvent(ctx, 'client_audio_play_ok', {}, turnId);
++      })
++      .catch((err) => {
++        const message = err?.message || String(err || 'unknown_error');
++        emitClientAudioEvent(ctx, 'client_audio_play_error', { message }, turnId);
++      });
++  } else {
++    emitClientAudioEvent(ctx, 'client_audio_play_ok', {}, turnId);
++  }
++};
++
++const handleClientTtsStartTelemetry = (ctx, frame) => {
++  ensurePlaybackElementTracker();
++  const turnId = frame?.turn_id != null ? frame.turn_id : null;
++  schedulePlaybackHeartbeat(ctx, turnId);
++  resumeAudioContextForTts(ctx, turnId).finally(() => {
++    attemptAudioPlay(ctx, turnId);
++  });
++};
++
+ const logPreCommitMode = (ctx, mode, extra = {}) => {
+   if (!ctx?.state) return;
+   const normalized = typeof mode === 'string' && mode ? mode : 'shadow_only';
+   const previous = ctx.state.lastPreCommitFeedMode;
+   if (previous === normalized) {
+     return;
+   }
+   ctx.state.lastPreCommitFeedMode = normalized;
+   voiceLog('info', '[asr] pre-commit feed', {
+     ts_ms: Date.now(),
+     session_id: ctx.sessionId || null,
+     turn_id: ctx.state?.activeTurnId || null,
+     mode: normalized,
+     ...extra,
+   });
+ };
+ 
+ const MASK_LOG_INTERVAL_MS = 180;
+ const TTS_POST_PLAY_HOLD_MS = 180;
+ const RMS_EPSILON = 1e-8;
+ const MIC_GATE_TTS_REASON = 'tts_active';
+ const HPF_CUTOFF_HZ = 100;
+ const HPF_DEFAULT_Q = 0.707;
+ const RMS_IDLE_SAMPLE_MS = 250;
+ const RMS_IDLE_LOG_INTERVAL_MS = 2000;
+@@ -966,50 +1208,51 @@ const ensureCtx = () => {
+       turnState: TurnState.Idle, recording: false, vadArmed: false,
+       vadBoostDb: 0, vadNoiseBaselineDb: null, greetGateActive: false, greetGatePhase: 'idle',
+       greetGateWaiters: [], manualBargeInUsed: false,
+       bargeConfirmActive: false, bargeConfirmUntil: 0,
+       wsReady: false, turnOpen: false, hasOpenedTurn: false,
+       manualGate: false, manualPttActive: false, pttHeld: false,
+       lastVadOpts: null, pendingVadOpts: null,
+       turnSeq: 0, activeTurnId: null,
+       ttsPlaying: false, lastChunkAt: 0,
+       lastReadyLogAt: 0,
+       vadRecording: false,
+       lastUserAudioMs: 0,
+       dualVadBothSilentAt: null,
+       turnOpenedAtMs: 0,
+       preCommitASRFeed: false,
+       vadMasked: false,
+       pendingCommitReason: null,
+       readyPending: false,
+       readyForTurnSeq: 0,
+       asr: initAsrState(),
+       dualVadCloseTimer: null,
+       dualVadLogSnapshot: null,
+       lastDualVadLogTs: 0,
+       lastPreCommitFeedMode: 'shadow_only',
+       ttsRearmTimer: null,
++      ttsHeartbeatTimer: null,
+       ttsHoldUntilMs: 0,
+       vadShouldRearmAfterTts: false,
+       vadSuppressedForTts: false,
+       ttsSuppressionMode: POLICY_SUPPRESS_NONE,
+       ttsHoldStartedMs: 0,
+       evidenceGate, shadowBuffer, ttsMask,
+     },
+     audio: {
+       stream: null, context: null, source: null, analyser: null,
+       highpass: null, encoderDestination: null, encoderStream: null,      
+       vad: null, recorder: null, recTimeslice: RECORD_TIMESLICE_MS,
+       lastTimecode: null,
+       micGateReasons: new Set(),
+       micConnected: false,
+       rmsSampleTimer: null,
+       rmsScratch: null,
+       rmsStats: null,      
+     },
+     transport: { wsPromise: null, connected: false, safetyTimer: null },
+     evidenceGate,
+     shadowBuffer,
+     ttsMask,
+     maskLogTimer: null,
+     policy: policySnapshot,
+   };
+@@ -1178,50 +1421,59 @@ function shouldCloseTurn(ctx) {
+         clientSilent,
+         asrSilent,
+         quietMs: quietLogMs,
+         silentDebounceMs: silentSince,
+       });
+     } catch {}
+   }
+   const debounceReached = Number.isFinite(silentSince) && silentSince >= DUAL_VAD_SILENCE_DEBOUNCE_MS;
+   if (debounceReached) {
+     return true;
+   }
+   return quietMs > quietCloseMs(ctx);
+ }
+ 
+ const frameIndicatesAsrResult = (frame) => {
+   const type = normalizeVadLabel(frame?.type);
+   const event = normalizeVadLabel(frame?.event);
+   return type === 'result' || type === 'results' || event === 'result' || event === 'results';
+ };
+ 
+ function handleWsFrame(ctx, frame) {
+   if (!ctx?.state) return;
+   const type = normalizeVadLabel(frame?.type);
+   const event = normalizeVadLabel(frame?.event);
+ 
++  if (
++    type === 'tts:start'
++    || event === 'tts:start'
++    || type === 'tts_start'
++    || event === 'tts_start'
++  ) {
++    try { handleClientTtsStartTelemetry(ctx, frame); } catch {}
++  }
++
+   if (type === 'state') {
+     if (applyTtsState(ctx, frame?.phase, frame)) {
+       return;
+     }
+   }
+ 
+   if (type === 'barge_in' || event === 'barge_in') {
+     applyTtsState(ctx, frame?.phase || 'paused', frame);
+     return;
+   }
+ 
+   if (type === 'barge_resume' || event === 'barge_resume') {
+     applyTtsState(ctx, frame?.phase || 'assistant_speaking', frame);
+     return;
+   }
+ 
+   if (frameIndicatesAsrResult(frame)) {
+     const confidence = extractAsrConfidence(frame);
+     onAsrPartial(ctx, { confidence });
+     if (dualVadEnabled(ctx) && Number.isFinite(confidence) && confidence >= commitConfidenceThreshold(ctx)) {
+       if (!ctx.state.pendingCommitReason) {
+         ctx.state.pendingCommitReason = 'asr_confidence';
+       }
+     }
+     if (dualVadEnabled(ctx)) {
