@@ -1,6 +1,6 @@
 # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
-import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
+import asyncio, os, contextlib, time, io, struct, base64, uuid, copy, json, hashlib
 try:
     import audioop  # type: ignore[import-not-found]
 except Exception:  # pragma: no cover - optional dependency
@@ -34,7 +34,12 @@ from app.metrics import ws_metrics
 from app.flow.emit import add_batch, emit as flow_emit
 
 # NEW: invoke LLM on final transcript
-from app.services.streaming import run_ws_user_turn, prepare_turn_metadata  # NEW
+from app.services.streaming import (
+    run_ws_user_turn,
+    prepare_turn_metadata,
+    note_turn_commit_latency,
+    emit_watchdog_user_end,
+)  # NEW
 from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
 from app.ws.barge import BargeState
 from app.ws.confirm_window import ConfirmWindow
@@ -1181,9 +1186,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     flow_session_open_emitted = False
     flow_session_ready_emitted = False
     flow_session_close_emitted = False
+    flow_session_config_emitted = False
     post_greet_phase_active = [False]
     flow_turn_commit_emitted: Set[int] = set()
     flow_turn_abort_emitted: Set[int] = set()
+    greet_end_pending = False
+    greet_end_emitted = False
 
     def _emit_flow_event(
         type_: str,
@@ -1394,6 +1402,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     if not isinstance(policy_version, str) or not policy_version:
         policy_version = "unknown"
 
+    manual_feature_enabled = True
+    manual_mode_manual_only = False
+    auto_commit_when_ready = True
+    local_vad_allowed = True
+    barge_require_asr_evidence = False
+    barge_suppress_mode = "none"
+    barge_post_tts_hold_ms = 0
+    auto_commit_requires_dual = False
+    auto_commit_requires_asr_ready = False
+
     if not flow_session_open_emitted:
         meta = {"policy_version": policy_version}
         session_event_id = _emit_flow_event("session_open", phase="session", meta=meta)
@@ -1472,9 +1490,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         return
 
     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
-    manual_feature_enabled = True
-    manual_mode_manual_only = False
-    auto_commit_when_ready = True
     ws_configured = False
     if not isinstance(policy, dict):
         policy = {}
@@ -1534,13 +1549,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         voice_policy.get("auto_commit") if isinstance(voice_policy, dict) else {}
     )
 
-    local_vad_allowed = True
-    barge_require_asr_evidence = False
-    barge_suppress_mode = "none"
-    barge_post_tts_hold_ms = 0
-    auto_commit_requires_dual = False
-    auto_commit_requires_asr_ready = False
-
     if isinstance(auto_commit_policy, dict):
         enabled_value = auto_commit_policy.get("enabled")
         if isinstance(enabled_value, bool) and not enabled_value:
@@ -1574,6 +1582,82 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     cfg["feature_manual_barge_in"] = manual_feature_enabled
     cfg["barge_in_mode_manual"] = manual_mode_manual_only
     cfg["auto_commit_when_ready"] = auto_commit_when_ready
+
+    def _sanitize_session_config_value(value: Any) -> Any:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if isinstance(value, dict):
+            sanitized_dict: Dict[str, Any] = {}
+            for key, item in value.items():
+                try:
+                    key_str = str(key)
+                except Exception:
+                    continue
+                if key_str.startswith("_"):
+                    continue
+                sanitized_dict[key_str] = _sanitize_session_config_value(item)
+            return sanitized_dict
+        if isinstance(value, (list, tuple)):
+            return [_sanitize_session_config_value(item) for item in value]
+        if isinstance(value, set):
+            sanitized_list = [_sanitize_session_config_value(item) for item in value]
+            return sorted(sanitized_list, key=lambda item: repr(item))
+        if isinstance(value, bytes):
+            try:
+                return base64.b64encode(value).decode("ascii")
+            except Exception:
+                return repr(value)
+        return repr(value)
+
+    def _session_config_snapshot() -> Dict[str, Any]:
+        snapshot: Dict[str, Any] = {}
+        for key, value in cfg.items():
+            try:
+                key_str = str(key)
+            except Exception:
+                continue
+            if key_str.startswith("_"):
+                continue
+            snapshot[key_str] = _sanitize_session_config_value(value)
+        return snapshot
+
+    def _emit_session_config_if_ready() -> None:
+        nonlocal flow_session_config_emitted
+        if flow_session_config_emitted:
+            return
+        snapshot = _session_config_snapshot()
+        config_hash = ""
+        try:
+            canonical = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        except Exception:
+            canonical = ""
+        if canonical:
+            try:
+                config_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            except Exception:
+                config_hash = ""
+        meta: Dict[str, Any] = {"config": snapshot}
+        if config_hash:
+            meta["config_hash"] = config_hash
+        _emit_flow_event("session_config", phase="session", meta=meta)
+        flow_session_config_emitted = True
+
+    def _ensure_session_ready_emitted() -> None:
+        nonlocal flow_session_ready_emitted
+        if flow_session_ready_emitted:
+            return
+        _emit_flow_event("session_ready", phase="session")
+        flow_session_ready_emitted = True
+        _emit_session_config_if_ready()
+
+    def _maybe_emit_greet_end(*, via: str = "") -> None:
+        nonlocal greet_end_pending, greet_end_emitted
+        if greet_end_emitted or not greet_end_pending:
+            return
+        _emit_flow_event("greet_end", phase="greet")
+        greet_end_emitted = True
+        greet_end_pending = False
+
     loop = asyncio.get_running_loop()
     barge = BargeState()
     last_barge_phase = [None]
@@ -2592,6 +2676,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             with contextlib.suppress(Exception):
                 holder = turn_timing.setdefault("tts_end", [0.0])
                 holder[0] = time.time()
+        if turn_id in (None, "", "greet"):
+            _maybe_emit_greet_end(via="tts_end")
         if tts_mask_active[0] and barge_post_tts_hold_ms > 0:
             delay_ms = barge_post_tts_hold_ms
             _cancel_tts_mask_release()
@@ -2709,6 +2795,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 frame["since_first_chunk_ms"] = since_first_ms
             with contextlib.suppress(Exception):
                 bus.broadcast(sid, frame)
+        with contextlib.suppress(Exception):
+            emit_watchdog_user_end(sid, turn_id=turn_id, source="watchdog")
 
     def _manual_buffered_bytes() -> int:
         total = 0
@@ -3018,6 +3106,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 max(0.0, (first_partial_ts - dg_open_ts) * 1000)
             )
         latency_ms_clean = {k: v for k, v in latency_ms.items() if v is not None}
+        diag_metrics = {
+            "mic_to_final_ms": latency_ms_clean.get("asr_final"),
+            "final_from_dg_open_ms": latency_ms_clean.get("final_from_dg_open"),
+            "final_from_first_partial_ms": latency_ms_clean.get("final_from_first_partial"),
+            "mic_to_first_partial_ms": latency_ms_clean.get("first_partial_from_mic_start"),
+            "dg_connect_ms": latency_ms_clean.get("dg_connect"),
+        }
+        with contextlib.suppress(Exception):
+            note_turn_commit_latency(sid, turn_id, diag_metrics)
         with contextlib.suppress(Exception):
             _jlog(
                 "turn_finish",
@@ -3346,9 +3443,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 _pump_bus_to_client(sid, send, _handle_bus_frame)
             )
 
-    if not flow_session_ready_emitted:
-        _emit_flow_event("session_ready", phase="session")
-        flow_session_ready_emitted = True
+    _ensure_session_ready_emitted()
 
     try:
         while True:
@@ -3726,12 +3821,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             _jlog("ws_greet_recv", sid=sid)
 
                             async def _bg():
-                                nonlocal flow_session_ready_emitted
+                                nonlocal greet_end_pending, greet_end_emitted
                                 try:
-                                    if not flow_session_ready_emitted:
-                                        _emit_flow_event("session_ready", phase="session")
-                                        flow_session_ready_emitted = True
+                                    _ensure_session_ready_emitted()
                                     _emit_flow_event("greet_start", phase="greet")
+                                    greet_end_pending = True
+                                    greet_end_emitted = False
                                     from app.services.streaming import run_ws_greet
 
                                     tid = await asyncio.to_thread(run_ws_greet, sid)
@@ -3748,6 +3843,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         phase="greet",
                                         meta=tid_meta,
                                     )
+                                    tts_state, _tts_key = _lookup_tts_state(sid, None)
+                                    emit_now = False
+                                    if not tts_state:
+                                        emit_now = True
+                                    elif isinstance(tts_state, dict):
+                                        if tts_state.get("done") or tts_state.get("error"):
+                                            emit_now = True
+                                    if emit_now:
+                                        _maybe_emit_greet_end(via="no_tts")
                                     with contextlib.suppress(Exception):
                                         if _admin_emit:
                                             cfg_now = db.get_config()
@@ -3764,6 +3868,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                 audio_scheduled=audio_on,
                                             )
                                 except Exception as e:
+                                    greet_end_pending = False
                                     with contextlib.suppress(Exception):
                                         await _ws_send_json(
                                             send,
@@ -4003,12 +4108,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 )
 
                                 async def _bg2():
-                                    nonlocal flow_session_ready_emitted
+                                    nonlocal greet_end_pending, greet_end_emitted
                                     try:
-                                        if not flow_session_ready_emitted:
-                                            _emit_flow_event("session_ready", phase="session")
-                                            flow_session_ready_emitted = True
+                                        _ensure_session_ready_emitted()
                                         _emit_flow_event("greet_start", phase="greet")
+                                        greet_end_pending = True
+                                        greet_end_emitted = False
                                         from app.services.streaming import run_ws_greet
 
                                         tid = await asyncio.to_thread(run_ws_greet, sid)
@@ -4025,6 +4130,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             phase="greet",
                                             meta=tid_meta,
                                         )
+                                        tts_state, _tts_key = _lookup_tts_state(sid, None)
+                                        emit_now = False
+                                        if not tts_state:
+                                            emit_now = True
+                                        elif isinstance(tts_state, dict):
+                                            if tts_state.get("done") or tts_state.get("error"):
+                                                emit_now = True
+                                        if emit_now:
+                                            _maybe_emit_greet_end(via="no_tts")
                                         with contextlib.suppress(Exception):
                                             if _admin_emit:
                                                 cfg_now = db.get_config()
@@ -4041,6 +4155,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                     audio_scheduled=audio_on,
                                                 )
                                     except Exception as e:
+                                        greet_end_pending = False
                                         with contextlib.suppress(Exception):
                                             await _ws_send_json(
                                                 send,

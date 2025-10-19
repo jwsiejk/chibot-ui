@@ -1260,16 +1260,20 @@ class DeepgramClient:
         except Exception:
             self._final_event = asyncio.Event()
 
-        if not self._asr_connect_emitted:
-            await self._emit_flow_event("asr_connect")
-            self._asr_connect_emitted = True
-
         url = _dg_url(self._cfg)
         self._emit_diag("provider_open", active=True, url=url)
 
-        containerized = False
+        transport = (self._cfg or {}).get("_transport", {}) or {}
+        containerized = bool(transport.get("containerized_opus"))
         safe_url = url
         url_meta: dict[str, Any] = {}
+        connect_meta: dict[str, Any] = {
+            "containerized": containerized,
+            "url_has_encoding": False,
+            "url_has_samplerate": False,
+            "url_has_channels": False,
+        }
+        q: dict[str, Any] = {}
 
         try:
             # Diagnostic: parse params and emit compact JSON log that shows
@@ -1279,8 +1283,6 @@ class DeepgramClient:
             parts = _p.urlsplit(url)
             q = dict(_p.parse_qsl(parts.query, keep_blank_values=True))
             self._url_tag = q.get("tag") or None
-            transport = (self._cfg or {}).get("_transport", {}) or {}
-            containerized = bool(transport.get("containerized_opus"))
             url_meta = {
                 "container": transport.get("container"),
                 "codec": transport.get("codec"),
@@ -1302,6 +1304,9 @@ class DeepgramClient:
                     "sample_rate": q.get("sample_rate"),
                     "channels": q.get("channels"),
                 }
+            connect_meta["url_has_encoding"] = "encoding" in q
+            connect_meta["url_has_samplerate"] = "sample_rate" in q
+            connect_meta["url_has_channels"] = "channels" in q
 
             # Build sanitized query string for telemetry without sensitive params
             sanitized_pairs = []
@@ -1366,6 +1371,10 @@ class DeepgramClient:
             )
         except Exception:
             self._logger.info("Deepgram connect start sid=%s url=%s", sid, url)
+
+        if not self._asr_connect_emitted:
+            await self._emit_flow_event("asr_connect", connect_meta)
+            self._asr_connect_emitted = True
 
         key_value, key_len = _api_key_info(
             log=self._advanced_logging_enabled, logger_obj=self._logger

@@ -19,6 +19,7 @@ from ..session_state import (
     set_phase,
     should_emit_phase,
 )
+from app.flow.emit import emit as flow_emit
 from .llm.flow_wrapper import make_llm_flow_tracker
 from .tts.flow_wrapper import make_tts_flow_tracker
 def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
@@ -701,6 +702,208 @@ def _coerce_int(value: Any) -> Optional[int]:
         return int(value)
     except Exception:
         return None
+
+
+_DIAG_LOCK = threading.Lock()
+_DIAG_LATENCY: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+
+def _diag_turn_key(session_id: str, turn_id: str) -> Tuple[str, str]:
+    return session_id, turn_id
+
+
+def _diag_coerce_turn_id(turn_id: Optional[object]) -> Optional[str]:
+    if turn_id in (None, ""):
+        return None
+    try:
+        tid = str(turn_id)
+    except Exception:
+        return None
+    tid = tid.strip()
+    return tid or None
+
+
+def _diag_store(session_id: str, turn_id: str, updates: Mapping[str, Any]) -> Dict[str, Any]:
+    key = _diag_turn_key(session_id, turn_id)
+    with _DIAG_LOCK:
+        entry = _DIAG_LATENCY.setdefault(key, {"session_id": session_id, "turn_id": turn_id})
+        for field, value in updates.items():
+            if value is None:
+                continue
+            entry[field] = value
+        return dict(entry)
+
+
+def _diag_snapshot(session_id: str, turn_id: str) -> Dict[str, Any]:
+    key = _diag_turn_key(session_id, turn_id)
+    with _DIAG_LOCK:
+        return dict(_DIAG_LATENCY.get(key) or {})
+
+
+def _diag_clear(session_id: str, turn_id: str) -> None:
+    key = _diag_turn_key(session_id, turn_id)
+    with _DIAG_LOCK:
+        _DIAG_LATENCY.pop(key, None)
+
+
+def _diag_maybe_emit(session_id: str, turn_id: str, *, force: bool = False) -> None:
+    snapshot = _diag_snapshot(session_id, turn_id)
+    if not snapshot:
+        return
+    if snapshot.get("mic_to_final_ms") is None or snapshot.get("llm_total_ms") is None:
+        return
+    tts_ready = snapshot.get("tts_total_ms") is not None or snapshot.get("tts_skipped")
+    if not tts_ready and not force:
+        return
+    meta: Dict[str, Any] = {
+        "turn_id": turn_id,
+        "mic_to_first_partial_ms": snapshot.get("mic_to_first_partial_ms"),
+        "mic_to_final_ms": snapshot.get("mic_to_final_ms"),
+        "final_from_dg_open_ms": snapshot.get("final_from_dg_open_ms"),
+        "final_from_first_partial_ms": snapshot.get("final_from_first_partial_ms"),
+        "dg_connect_ms": snapshot.get("dg_connect_ms"),
+        "llm_total_ms": snapshot.get("llm_total_ms"),
+        "tts_total_ms": snapshot.get("tts_total_ms"),
+        "tts_first_byte_ms": snapshot.get("tts_first_byte_ms"),
+        "tts_stream_ms": snapshot.get("tts_stream_ms"),
+        "tts_synth_ms": snapshot.get("tts_synth_ms"),
+    }
+    if snapshot.get("tts_skipped"):
+        meta["tts_skipped"] = True
+    correlation = snapshot.get("correlation_user_msg_id")
+    if correlation:
+        meta["correlation_user_msg_id"] = correlation
+    clean_meta = {key: value for key, value in meta.items() if value is not None}
+    try:
+        flow_emit(
+            session_id=session_id,
+            level="flow",
+            phase="turn",
+            type="diag_latency",
+            who="system",
+            meta=clean_meta or None,
+        )
+    except Exception:
+        pass
+    payload = {"session_id": session_id}
+    payload.update(clean_meta)
+    _broadcast_admin_ws_event("diag_latency", payload)
+    _diag_clear(session_id, turn_id)
+
+
+def note_turn_commit_latency(session_id: str,
+                             turn_id: object,
+                             metrics: Mapping[str, Any]) -> None:
+    tid = _diag_coerce_turn_id(turn_id)
+    if not session_id or not tid:
+        return
+    if not isinstance(metrics, Mapping):
+        return
+    sanitized: Dict[str, Any] = {}
+    for key, value in metrics.items():
+        coerced = _coerce_int(value)
+        if coerced is None:
+            continue
+        sanitized[key] = max(0, coerced)
+    if not sanitized:
+        return
+    _diag_store(session_id, tid, sanitized)
+    _diag_maybe_emit(session_id, tid)
+
+
+def _diag_note_llm_latency(session_id: str,
+                           turn_id: object,
+                           llm_ms: Optional[int],
+                           correlation_user_msg_id: Optional[str]) -> None:
+    tid = _diag_coerce_turn_id(turn_id)
+    if not session_id or not tid:
+        return
+    updates: Dict[str, Any] = {}
+    llm_value = _coerce_int(llm_ms)
+    if llm_value is not None and llm_value >= 0:
+        updates["llm_total_ms"] = llm_value
+    if correlation_user_msg_id is not None:
+        try:
+            updates["correlation_user_msg_id"] = str(correlation_user_msg_id)
+        except Exception:
+            updates["correlation_user_msg_id"] = correlation_user_msg_id
+    if not updates:
+        return
+    _diag_store(session_id, tid, updates)
+    _diag_maybe_emit(session_id, tid)
+
+
+def _diag_note_tts_metrics(session_id: str,
+                           turn_id: object,
+                           metrics: Mapping[str, Any],
+                           correlation_user_msg_id: Optional[str]) -> None:
+    tid = _diag_coerce_turn_id(turn_id)
+    if not session_id or not tid:
+        return
+    if not isinstance(metrics, Mapping):
+        return
+    updates: Dict[str, Any] = {}
+    for source_key, target_key in (
+        ("total_ms", "tts_total_ms"),
+        ("first_byte_ms", "tts_first_byte_ms"),
+        ("stream_ms", "tts_stream_ms"),
+        ("synth_ms", "tts_synth_ms"),
+    ):
+        coerced = _coerce_int(metrics.get(source_key))
+        if coerced is not None and coerced >= 0:
+            updates[target_key] = coerced
+    if correlation_user_msg_id is not None:
+        try:
+            updates["correlation_user_msg_id"] = str(correlation_user_msg_id)
+        except Exception:
+            updates["correlation_user_msg_id"] = correlation_user_msg_id
+    if not updates:
+        return
+    _diag_store(session_id, tid, updates)
+    _diag_maybe_emit(session_id, tid)
+
+
+def _diag_finalize_no_tts(session_id: str, turn_id: object) -> None:
+    tid = _diag_coerce_turn_id(turn_id)
+    if not session_id or not tid:
+        return
+    _diag_store(session_id, tid, {"tts_skipped": True})
+    _diag_maybe_emit(session_id, tid, force=True)
+
+
+def emit_watchdog_user_end(session_id: str,
+                           *,
+                           turn_id: Optional[object] = None,
+                           source: str = "watchdog",
+                           correlation_user_msg_id: Optional[str] = None) -> None:
+    if not session_id:
+        return
+    tid = _diag_coerce_turn_id(turn_id)
+    meta: Dict[str, Any] = {"source": source}
+    if tid:
+        meta["turn_id"] = tid
+    if correlation_user_msg_id is not None:
+        try:
+            meta["correlation_user_msg_id"] = str(correlation_user_msg_id)
+        except Exception:
+            meta["correlation_user_msg_id"] = correlation_user_msg_id
+    try:
+        flow_emit(
+            session_id=session_id,
+            level="flow",
+            phase="turn",
+            type="u_end",
+            who="system",
+            meta=meta,
+        )
+    except Exception:
+        pass
+    admin_payload: Dict[str, Any] = {"session_id": session_id, "source": source}
+    if tid:
+        admin_payload["turn_id"] = tid
+    if "correlation_user_msg_id" in meta:
+        admin_payload["correlation_user_msg_id"] = meta["correlation_user_msg_id"]
+    _broadcast_admin_ws_event("u_end", admin_payload)
 
 
 def _coerce_bool(value: Any) -> Optional[bool]:
@@ -3383,6 +3586,14 @@ def schedule_tts_audio(session_id: str,
                     max(0.0, (stream_end_ts - stream_start_ts) * 1000)
                 )
 
+            if safe_turn_id:
+                _diag_note_tts_metrics(
+                    session_id,
+                    safe_turn_id,
+                    metrics_payload,
+                    correlation_user_msg_id,
+                )
+
             tracker.end(metrics=metrics_payload, chunks=chunk_items)
 
             state['done'] = True
@@ -3677,8 +3888,12 @@ def run_ws_user_turn(session_id: str,
             except Exception:
                 meta[key] = value
 
+    llm_started_at = _t.time()
     tid, frames = make_assistant_frames(text, session_id, meta=meta,
                                         correlation_user_msg_id=correlation_user_msg_id)
+    llm_elapsed_ms = int(max(0.0, (_t.time() - llm_started_at) * 1000))
+    if tid:
+        _diag_note_llm_latency(session_id, tid, llm_elapsed_ms, correlation_user_msg_id)
     if _ws_generation_failed(tid, frames):
         tid = _allocate_turn_id(force_turn_id=None)
         frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
@@ -3783,6 +3998,8 @@ def run_ws_user_turn(session_id: str,
                 _emit_ready_once()
             except Exception:
                 pass
+        if tid:
+            _diag_finalize_no_tts(session_id, tid)
     return tid
 
 
