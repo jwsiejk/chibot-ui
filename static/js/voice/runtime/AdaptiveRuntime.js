@@ -138,6 +138,18 @@ function handleTtsPlaybackStarted(ctx, detail) {
   });
   clearPostTtsRearm(ctx);
   ctx.state.ttsSuppressionMode = resolveSuppressionMode(detail);
+  const ttsSuppressionMode =
+    typeof ctx.state.ttsSuppressionMode === 'string' && ctx.state.ttsSuppressionMode
+      ? ctx.state.ttsSuppressionMode
+      : POLICY_SUPPRESS_NONE;
+  const ttsHoldMs = resolvePostTtsHoldMs(ctx);
+  voiceLog('info', '[tts] playback_start', {
+    ts_ms: Date.now(),
+    session_id: ctx?.sessionId || null,
+    turn_id: ctx?.state?.activeTurnId || null,
+    suppress_mode: ttsSuppressionMode,
+    post_tts_hold_ms: Number.isFinite(ttsHoldMs) ? Math.max(0, Math.round(ttsHoldMs)) : 0,
+  });
   const pendingRearm = ctx.state.pendingVadOpts != null || ctx.state.vadShouldRearmAfterTts === true;
   if (!policyAllowLocalVad()) {
     if (ctx.state.vadArmed) {
@@ -168,6 +180,18 @@ function handleTtsPlaybackStarted(ctx, detail) {
 function handleTtsPlaybackEnded(ctx) {
   if (!ctx?.state) return;
   dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason: 'tts_ended' });
+  const ttsSuppressionMode =
+    typeof ctx.state.ttsSuppressionMode === 'string' && ctx.state.ttsSuppressionMode
+      ? ctx.state.ttsSuppressionMode
+      : POLICY_SUPPRESS_NONE;
+  const ttsHoldMs = resolvePostTtsHoldMs(ctx);
+  voiceLog('info', '[tts] playback_end', {
+    ts_ms: Date.now(),
+    session_id: ctx?.sessionId || null,
+    turn_id: ctx?.state?.activeTurnId || null,
+    suppress_mode: ttsSuppressionMode,
+    post_tts_hold_ms: Number.isFinite(ttsHoldMs) ? Math.max(0, Math.round(ttsHoldMs)) : 0,
+  });
   const shouldRearm = ctx.state.vadShouldRearmAfterTts || ctx.state.pendingVadOpts != null;
   if (!shouldRearm) {
     ctx.state.vadSuppressedForTts = false;

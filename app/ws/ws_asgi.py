@@ -1439,6 +1439,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     barge_require_asr_evidence = False
     barge_suppress_mode = "none"
     barge_post_tts_hold_ms = 0
+    barge_allow_ptt = True
     auto_commit_requires_dual = False
     auto_commit_requires_asr_ready = False
 
@@ -1722,9 +1723,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             auto_commit_requires_asr_ready = requires_asr_value
 
     if isinstance(barge_policy, dict):
-        allow_ptt = barge_policy.get("allow_ptt")
-        if isinstance(allow_ptt, bool) and not allow_ptt:
-            manual_feature_enabled = False
+        allow_ptt_value = barge_policy.get("allow_ptt")
+        if isinstance(allow_ptt_value, bool):
+            barge_allow_ptt = allow_ptt_value
+            if not allow_ptt_value:
+                manual_feature_enabled = False
         allow_local_vad_value = barge_policy.get("allow_local_vad")
         if isinstance(allow_local_vad_value, bool):
             local_vad_allowed = allow_local_vad_value
@@ -1739,6 +1742,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         post_hold_value = barge_policy.get("post_tts_hold_ms")
         if isinstance(post_hold_value, (int, float)):
             barge_post_tts_hold_ms = max(0, int(post_hold_value))
+
+    _jlog(
+        "voice_runtime_config",
+        sid=sid,
+        suppress_during_tts=barge_suppress_mode or "none",
+        post_tts_hold_ms=int(barge_post_tts_hold_ms),
+        allow_ptt=bool(barge_allow_ptt),
+    )
 
     cfg["feature_manual_barge_in"] = manual_feature_enabled
     cfg["barge_in_mode_manual"] = manual_mode_manual_only
