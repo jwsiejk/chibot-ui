@@ -451,3 +451,86 @@ def test_levels_and_since_filter(flow_env):
     ids = [evt["type"] for evt in since_data["events"]]
     assert "asr_ready" in ids
     assert "session_open" not in ids
+
+
+def test_add_batch_for_event_lookup(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-batch-event"
+
+    parent_id = store.emit(session_id, "flow", "turn", "confirm_open", "assistant")
+    advance(5)
+    child_id = store.emit(
+        session_id,
+        "transition",
+        "turn",
+        "asr_partial_first",
+        "client",
+        parent_id=parent_id,
+    )
+    assert child_id
+
+    added = store.add_batch_for_event(parent_id, "transcript", ["hi", "there"])
+    assert added is True
+    missing = store.add_batch_for_event("missing", "transcript", ["nope"])
+    assert missing is False
+
+    snapshot = store.list(session_id, expand="flow")
+    event = snapshot["events"][0]
+    assert event["batches"][0]["items"] == ["hi", "there"]
+    assert event["children"][0]["id"] == child_id
+
+
+def test_list_expand_modes(flow_env):
+    store, advance, _ = flow_env
+    session_id = "sess-expand"
+
+    parent_id = store.emit(session_id, "flow", "turn", "confirm_open", "assistant")
+    child_id = store.emit(
+        session_id,
+        "transition",
+        "turn",
+        "asr_partial_first",
+        "client",
+        parent_id=parent_id,
+    )
+    grandchild_id = store.emit(
+        session_id,
+        "debug",
+        "turn",
+        "latency_tick",
+        "system",
+        parent_id=child_id,
+    )
+    assert grandchild_id
+
+    none_payload = store.list(session_id, expand="none")
+    assert none_payload["events"][0]["children"] == [child_id]
+
+    flow_payload = store.list(session_id, expand="flow")
+    assert flow_payload["events"][0]["children"][0]["id"] == child_id
+    assert flow_payload["events"][0]["children"][0]["children"] == [grandchild_id]
+
+    ids_payload = store.list(session_id, expand=f"ids:{child_id}")
+    child_entry = next(evt for evt in ids_payload["events"] if evt["id"] == child_id)
+    assert child_entry["children"][0]["id"] == grandchild_id
+
+
+def test_get_returns_nested_event(flow_env):
+    store, _, _ = flow_env
+    session_id = "sess-get"
+
+    parent_id = store.emit(session_id, "flow", "turn", "confirm_open", "assistant")
+    child_id = store.emit(
+        session_id,
+        "transition",
+        "turn",
+        "asr_partial_first",
+        "client",
+        parent_id=parent_id,
+    )
+    assert child_id
+
+    payload = store.get(session_id, parent_id)
+    assert payload
+    assert payload["id"] == parent_id
+    assert payload["children"][0]["id"] == child_id

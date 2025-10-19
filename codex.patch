@@ -1,462 +1,104 @@
-diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
-index 5f677f06ba05cc638379748e55563d234cc17ccf..dc6509a9ea12adf337546229e224d0f4975c97fe 100644
---- a/app/api_v1/flow.py
-+++ b/app/api_v1/flow.py
-@@ -1,29 +1,35 @@
- from __future__ import annotations
- 
-+import copy
-+import hashlib
-+import io
- import json
--from typing import Iterable, List, Optional
-+import re
-+import zipfile
-+from datetime import datetime, timezone
-+from typing import Any, Dict, Iterable, Iterator, List, Optional
- 
- from flask import (
-     Blueprint,
-     Response,
-     abort,
-     jsonify,
-     request,
-     session as flask_session,
-     stream_with_context,
- )
- 
- from app.flow import FlowStore
- from app.flow.catalog import FLOW_EVENT_CATALOG
- from app.security_state import get_user
- from app.utils.admin import is_admin_email
- 
- bp = Blueprint("flow", __name__)
- 
- 
- def _normalize_str(value: Optional[str]) -> Optional[str]:
-     if value is None:
-         return None
-     text = value.strip()
-     return text or None
- 
-@@ -53,50 +59,282 @@ def _parse_int(value: Optional[str], *, name: str, minimum: Optional[int] = None
- 
- def _parse_levels(raw: Optional[str]) -> Iterable[str]:
-     if raw is None:
-         return ("flow", "transition")
-     levels: List[str] = []
-     for part in raw.split(","):
-         piece = part.strip()
-         if not piece:
-             continue
-         if piece not in levels:
-             levels.append(piece)
-     return levels
- 
- 
- def _parse_bool(value: Optional[str], *, default: bool = True) -> bool:
-     if value is None:
-         return default
-     lowered = value.strip().lower()
-     if lowered in {"1", "true", "yes", "on"}:
-         return True
-     if lowered in {"0", "false", "no", "off"}:
-         return False
-     return default
- 
- 
-+DEFAULT_HANDOFF_PROMPT = (
-+    "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), "
-+    "smallest viable fix, and validation steps."
-+)
+diff --git a/docs/README_ADMIN.md b/docs/README_ADMIN.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..c11faa110ea7610ecb641b2f002181cbfef6c9fa
+--- /dev/null
++++ b/docs/README_ADMIN.md
+@@ -0,0 +1,67 @@
++# Flow Trace and Admin Console Guide
 +
-+_TEXT_EXACT_KEYS = {
-+    "text",
-+    "text_preview",
-+    "user_text",
-+    "assistant_text",
-+    "tts_text",
-+    "raw_text",
-+    "message",
-+    "body",
-+    "delta",
-+    "response",
-+    "prompt",
-+    "content",
-+}
-+_TEXT_SUFFIXES = ("_text", "_message", "_body", "_delta", "_content")
-+_TEXT_SUBSTRINGS = ("transcript", "utterance")
-+_DEVICE_KEYWORDS = ("device", "hardware", "microphone", "speaker", "headset")
-+_DEVICE_CLASS_MAP = {
-+    "iphone": "iphone",
-+    "ipad": "ipad",
-+    "macbook": "mac",
-+    "imac": "mac",
-+    "mac": "mac",
-+    "pixel": "android",
-+    "android": "android",
-+    "galaxy": "android",
-+    "oneplus": "android",
-+    "samsung": "android",
-+    "windows": "windows",
-+    "surface": "windows",
-+    "pc": "windows",
-+    "thinkpad": "windows",
-+    "linux": "linux",
-+}
++## Overview
++The Admin Flow Inspector provides a live, queryable view of every event recorded during a voice or chat session. It is built on the `FlowStore` timeline and surfaces levels, smart hints, batching metadata, and hand-off tooling so on-call responders can triage issues without engineering support. This guide explains how to drive the console effectively and how to export data for deeper analysis.
 +
++## Navigating Flow Trace
++1. **Select a session** – Search active session IDs or paste a known ID. The view fetches an initial snapshot and begins tailing the stream.
++2. **Tail controls** – The tail widget (Go live/Refresh) toggles between continuous polling and a paused state. Pause to inspect a past window without new events shifting the timeline; resume when ready.
++3. **Timeline** – Rows are grouped by rail, time, phase, actor, type, blurb, and meta chips. Click a row to open the drawer with raw JSON, related events, and copy-to-clipboard shortcuts.
 +
-+def _iter_session_events(
-+    store: FlowStore,
-+    session_id: str,
-+    levels: Iterable[str],
-+    since_ms: Optional[int] = None,
-+) -> Iterator[Dict[str, Any]]:
-+    cursor = since_ms if since_ms is not None else 0
-+    while True:
-+        chunk = store.list(
-+            session_id=session_id,
-+            since_ms=cursor,
-+            limit=500,
-+            levels=levels,
-+            expand="all",
-+        )
-+        events = chunk.get("events", [])
-+        if not events:
-+            break
-+        for event in events:
-+            if isinstance(event, dict):
-+                yield event
-+        next_since = chunk.get("next_since_ms")
-+        if not isinstance(next_since, int) or next_since <= cursor:
-+            break
-+        cursor = next_since
++## Levels
++Events are classified into four levels:
++- **Flow** – High-level milestones and human-readable steps.
++- **Transition** – Precise edges such as VAD changes, barge-in, or ASR evidence.
++- **Debug** – Diagnostic metadata: runtime flags, timers, queue depths, provider plumbing.
++- **Raw** – Large payload batches (audio frames, visemes, etc.).
 +
++Use the level toggles to include/exclude layers. Toggling resets the event cache and re-fetches with the new level mask. Raw batches stream efficiently; avoid enabling them unless you need the payloads.
 +
-+def _coerce_levels(value: Any) -> List[str]:
-+    if value is None:
-+        return list(_parse_levels(None))
-+    if isinstance(value, str):
-+        return list(_parse_levels(value))
-+    levels: List[str] = []
-+    if isinstance(value, Iterable):
-+        for item in value:
-+            text = str(item).strip()
-+            if not text:
-+                continue
-+            if text not in levels:
-+                levels.append(text)
-+    if not levels:
-+        return list(_parse_levels(None))
-+    if "flow" not in levels:
-+        levels.insert(0, "flow")
-+    return levels
++## Grouping Modes
++The grouping selector changes how rows render:
++- **Chronological** (default) – Strict event order by relative timestamp.
++- **By Phase** – Groups into session/turn/guardrail/etc. columns.
++- **By Turn** – Buckets events by `turn_id` and expands children inline.
 +
++Group changes recompute the tree and persist in the URL hash for easy sharing.
 +
-+def _should_mask_text(key: str) -> bool:
-+    key_lower = key.lower()
-+    if key_lower in _TEXT_EXACT_KEYS:
-+        return True
-+    if key_lower.endswith("_preview"):
-+        return True
-+    if any(key_lower.endswith(suffix) for suffix in _TEXT_SUFFIXES):
-+        return True
-+    if any(fragment in key_lower for fragment in _TEXT_SUBSTRINGS):
-+        return True
-+    if "prompt" in key_lower and "token" not in key_lower:
-+        return True
-+    return False
++## Filters, Tail, and Chips
++- Text filter matches type, phase, who, or blurb substrings.
++- Turn filter focuses on a specific turn number.
++- Clicking a meta chip adds a removable filter chip.
++- The tail state indicator shows Live/Paused; use “Refresh” to fetch once when paused.
 +
++## Smart Hints
++The hint bar summarizes heuristics from `FlowStore._compute_hints` (e.g., `asr_recovered`, `tts_slow`, queue pressure). Click a hint badge to jump to anchor events. Hints recalc on every fetch and reflect the currently loaded levels.
 +
-+def _should_classify_device(key: str) -> bool:
-+    key_lower = key.lower()
-+    return any(fragment in key_lower for fragment in _DEVICE_KEYWORDS)
++## Safety Injectors
++`FlowStore` automatically closes long-running confirmations, TTS streams, or LLM spans. Injected events carry `meta.__warning` values (`inferred_close`, `forced_close`) so you can spot them quickly.
 +
++## Exporting Data
++- **Export NDJSON** – Streams the current session with selected levels. Use this when you need the full, unredacted timeline.
++- **Export Redacted** – Masks sensitive text, payload bodies, and device labels for safer sharing.
++- **Copy link** – Captures the current filters, levels, and grouping in the URL hash.
++- **Hand off to ChatGPT** – Downloads a ZIP containing redacted NDJSON (`flow.ndjson`), the default prompt (`prompt.txt`), and `meta.json` summarizing sensitive payload fingerprints.
 +
-+def _mask_text(value: str) -> str:
-+    digest = hashlib.sha1(value.encode("utf-8", "ignore")).hexdigest()[:8]
-+    return f"[redacted len={len(value)} sha1_8={digest}]"
++### Example NDJSON
++A lightweight example lives at [`docs/examples/flow_session_sample.ndjson`](examples/flow_session_sample.ndjson). Each line is a single event JSON object:
++```
++{"id":"e_00001","t_rel_ms":0,"level":"flow","phase":"session","type":"session_open","who":"system","meta":{}}
++{"id":"e_00002","t_rel_ms":120,"level":"transition","phase":"turn","type":"asr_partial_first","who":"client","meta":{"turn_id":"1"}}
++```
 +
++## Forensic Mode
++Forensic mode temporarily widens the level mask, expands the full tree, and freezes the poll interval for 10 seconds. Use it when you need a dense capture of a tricky sequence (e.g., ASR+LLM races). Exiting restores your previous level selections and expansion state.
 +
-+def _classify_device_label(value: str) -> str:
-+    cleaned = re.sub(r"[^a-zA-Z0-9]+", " ", value or "").strip().lower()
-+    if not cleaned:
-+        return ""
-+    tokens = [token for token in cleaned.split() if token]
-+    for token in tokens:
-+        mapped = _DEVICE_CLASS_MAP.get(token)
-+        if mapped:
-+            return mapped
-+    base = tokens[0] if tokens else ""
-+    return base[:12] if base else "unknown"
++## Sample ChatGPT Prompt
++```
++Analyze the redacted flow transcript and identify:
++1. Primary failure modes or regressions.
++2. Evidence (event IDs + brief justification).
++3. The smallest viable fix or mitigation.
++4. Validation steps to confirm the fix.
 +
++Return a concise incident summary plus a bullet checklist for responders.
++```
 +
-+def _redact_string(key: str, value: str) -> str:
-+    text = value.strip()
-+    if not text:
-+        return ""
-+    key_lower = key.lower()
-+    if key_lower in {"sha1", "sha1_8", "md5"}:
-+        return text
-+    if key_lower in {"bytes", "len", "length"}:
-+        return text
-+    if _should_classify_device(key_lower):
-+        return _classify_device_label(text)
-+    if _should_mask_text(key_lower):
-+        return _mask_text(text)
-+    return text
-+
-+
-+def _redact_node(value: Any, *, key_path: Optional[tuple[str, ...]] = None) -> Any:
-+    key_path = key_path or ()
-+    if isinstance(value, dict):
-+        sanitized: Dict[str, Any] = {}
-+        for child_key, child_value in value.items():
-+            if child_value is None:
-+                continue
-+            child_key_str = str(child_key)
-+            sanitized[child_key_str] = _redact_node(
-+                child_value,
-+                key_path=key_path + (child_key_str.lower(),),
-+            )
-+        return sanitized
-+    if isinstance(value, list):
-+        return [
-+            _redact_node(item, key_path=key_path)
-+            for item in value
-+        ]
-+    if isinstance(value, str):
-+        last_key = key_path[-1] if key_path else ""
-+        return _redact_string(last_key, value)
-+    return value
-+
-+
-+def _redact_mapping(mapping: Any) -> Dict[str, Any]:
-+    if not isinstance(mapping, dict):
-+        return {}
-+    sanitized: Dict[str, Any] = {}
-+    for key, value in mapping.items():
-+        if value is None:
-+            continue
-+        key_str = str(key)
-+        sanitized[key_str] = _redact_node(value, key_path=(key_str.lower(),))
-+    return sanitized
-+
-+
-+def _classify_payload_category(path_value: Any) -> Optional[str]:
-+    if not isinstance(path_value, str):
-+        return None
-+    lowered = path_value.lower()
-+    if "llm" in lowered:
-+        return "llm"
-+    if "tts" in lowered:
-+        return "tts"
-+    if "dg" in lowered or "deepgram" in lowered or "asr" in lowered:
-+        return "asr"
-+    return None
-+
-+
-+def _redact_payload_sig_meta(meta: Any) -> Dict[str, Any]:
-+    source = meta if isinstance(meta, dict) else {}
-+    sanitized: Dict[str, Any] = {}
-+    bytes_value = source.get("bytes")
-+    try:
-+        if bytes_value is not None:
-+            sanitized["bytes"] = int(bytes_value)
-+    except (TypeError, ValueError):
-+        pass
-+    sha_value = source.get("sha1_8")
-+    if isinstance(sha_value, str) and sha_value:
-+        sanitized["sha1_8"] = sha_value[:8]
-+    category = _classify_payload_category(source.get("path"))
-+    if category:
-+        sanitized["category"] = category
-+    return sanitized
-+
-+
-+def _redact_event(event: Dict[str, Any]) -> Dict[str, Any]:
-+    clone = copy.deepcopy(event)
-+    original_meta = clone.get("meta")
-+    if clone.get("type") == "payload_sig":
-+        clone["meta"] = _redact_payload_sig_meta(original_meta)
-+    else:
-+        clone["meta"] = _redact_mapping(original_meta)
-+    if isinstance(clone.get("children"), list):
-+        clone["children"] = [
-+            _redact_event(child)
-+            for child in clone["children"]
-+            if isinstance(child, dict)
-+        ]
-+    if isinstance(clone.get("batches"), list):
-+        clone["batches"] = [
-+            _redact_node(batch, key_path=("batch",))
-+            if isinstance(batch, dict)
-+            else batch
-+            for batch in clone["batches"]
-+        ]
-+    return clone
-+
-+
- @bp.get("/flow/catalog")
- def flow_catalog():
-     _require_admin()
-     return jsonify({"catalog": FLOW_EVENT_CATALOG})
- 
- 
- @bp.get("/flow/sessions")
- def flow_sessions():
-     _require_admin()
- 
-     search_value = _normalize_str(request.args.get("q") or request.args.get("query"))
-     limit_value = _parse_int(request.args.get("limit"), name="limit", minimum=0)
- 
-     store = FlowStore()
-     limit = limit_value if limit_value is not None else 50
-     sessions = store.sessions(query=search_value, limit=limit)
-     return jsonify({"sessions": sessions})
- 
- 
- @bp.get("/flow/trace")
- def flow_trace():
-     _require_admin()
- 
-     session_id = _normalize_str(request.args.get("session_id"))
-     if not session_id:
-@@ -125,56 +363,101 @@ def flow_trace():
- @bp.get("/flow/event")
- def flow_event():
-     _require_admin()
- 
-     session_id = _normalize_str(request.args.get("session_id"))
-     event_id = _normalize_str(request.args.get("id"))
-     if not session_id or not event_id:
-         abort(400, description="session_id and id are required")
- 
-     store = FlowStore()
-     event = store.get(session_id, event_id)
-     if not event:
-         abort(404)
-     return jsonify(event)
- 
- 
- @bp.get("/flow/export.ndjson")
- def flow_export_ndjson():
-     _require_admin()
- 
-     session_id = _normalize_str(request.args.get("session_id"))
-     if not session_id:
-         abort(400, description="session_id is required")
- 
-     since_value = _parse_int(request.args.get("since_ms"), name="since_ms", minimum=0)
--    levels = _parse_levels(request.args.get("levels"))
-+    levels = list(_parse_levels(request.args.get("levels")))
-     redacted = _parse_bool(request.args.get("redacted"), default=True)
- 
-     store = FlowStore()
- 
-     def _generate() -> Iterable[str]:
--        cursor = since_value if since_value is not None else 0
--        while True:
--            chunk = store.list(
--                session_id=session_id,
--                since_ms=cursor,
--                limit=500,
--                levels=levels,
--                expand="all",
--            )
--            events = chunk.get("events", [])
--            if not events:
--                break
--            for event in events:
--                yield json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
--            next_since = chunk.get("next_since_ms")
--            if not isinstance(next_since, int) or next_since <= cursor:
--                break
--            cursor = next_since
-+        for event in _iter_session_events(store, session_id, levels, since_value):
-+            payload = _redact_event(event) if redacted else event
-+            yield json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
- 
-     response = Response(stream_with_context(_generate()), mimetype="application/x-ndjson")
-     response.headers["X-Flow-Redacted"] = "1" if redacted else "0"
-     return response
- 
- 
-+@bp.post("/flow/handoff")
-+def flow_handoff():
-+    _require_admin()
-+
-+    payload = request.get_json(silent=True) or {}
-+    session_id = _normalize_str(payload.get("session_id"))
-+    if not session_id:
-+        abort(400, description="session_id is required")
-+
-+    levels = _coerce_levels(payload.get("levels"))
-+    prompt_value = payload.get("prompt")
-+    prompt_text = _normalize_str(prompt_value) or DEFAULT_HANDOFF_PROMPT
-+
-+    store = FlowStore()
-+    events = list(_iter_session_events(store, session_id, levels, None))
-+    redacted_events = [_redact_event(event) for event in events]
-+
-+    lines = [
-+        json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-+        for event in redacted_events
-+    ]
-+    ndjson_text = "\n".join(lines)
-+    if ndjson_text:
-+        ndjson_text += "\n"
-+    ndjson_bytes = ndjson_text.encode("utf-8")
-+
-+    sha_hex = hashlib.sha1(ndjson_bytes).hexdigest()
-+    short_hash = sha_hex[:8]
-+    generated_at = datetime.now(timezone.utc).isoformat()
-+
-+    meta_payload = {
-+        "session_id": session_id,
-+        "levels": levels,
-+        "generated_at": generated_at,
-+        "event_count": len(redacted_events),
-+        "payload_sig": {"bytes": len(ndjson_bytes), "sha1_8": short_hash},
-+    }
-+
-+    buffer = io.BytesIO()
-+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-+        archive.writestr("flow.ndjson", ndjson_bytes)
-+        archive.writestr("prompt.txt", prompt_text)
-+        archive.writestr(
-+            "meta.json",
-+            json.dumps(meta_payload, ensure_ascii=False, indent=2),
-+        )
-+    buffer.seek(0)
-+
-+    response = Response(buffer.getvalue(), mimetype="application/zip")
-+    safe_session = re.sub(r"[^a-zA-Z0-9_-]+", "_", session_id) or "session"
-+    response.headers[
-+        "Content-Disposition"
-+    ] = f'attachment; filename="flow_handoff_{safe_session}.zip"'
-+    response.headers["X-Flow-Redacted"] = "1"
-+    response.headers["X-Flow-Payload-Bytes"] = str(len(ndjson_bytes))
-+    response.headers["X-Flow-Payload-Sha1"] = short_hash
-+    response.headers["Cache-Control"] = "no-store"
-+    return response
-+
-+
- __all__ = ["bp"]
++Keep the prompt in the hand-off ZIP if you need ChatGPT to triage automatically.
+diff --git a/docs/examples/flow_session_sample.ndjson b/docs/examples/flow_session_sample.ndjson
+new file mode 100644
+index 0000000000000000000000000000000000000000..2851e1fb21e29b1be6e2c27f3a6fd42b1c8fd4b3
+--- /dev/null
++++ b/docs/examples/flow_session_sample.ndjson
+@@ -0,0 +1,2 @@
++{"id":"e_00001","t_rel_ms":0,"level":"flow","phase":"session","type":"session_open","who":"system","meta":{}}
++{"id":"e_00002","t_rel_ms":120,"level":"transition","phase":"turn","type":"asr_partial_first","who":"client","meta":{"turn_id":"1"}}
 diff --git a/static/js/admin_flow.js b/static/js/admin_flow.js
-index 87c2e8192965e49702d1286fe7a5acc4f6d77d54..20966a6aaa8a7a40f902e8e73bc7cbba2766861b 100644
+index 20966a6aaa8a7a40f902e8e73bc7cbba2766861b..b743f0c50469cac8795a5798054b1c50991e6456 100644
 --- a/static/js/admin_flow.js
 +++ b/static/js/admin_flow.js
-@@ -1,125 +1,138 @@
+@@ -1,34 +1,40 @@
  const POLL_MIN_MS = 750;
  const POLL_MAX_MS = 1000;
  const MAX_SESSION_RESULTS = 20;
  const MAX_META_LENGTH = 48;
  const LEVELS = ["flow", "transition", "debug", "raw"];
-+const FORENSIC_DURATION_MS = 10_000;
-+const HANDOFF_PROMPT =
-+  "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), smallest viable fix, and validation steps.";
+ const FORENSIC_DURATION_MS = 10_000;
+ const HANDOFF_PROMPT =
+   "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), smallest viable fix, and validation steps.";
  
++const defaultFetchImpl =
++  typeof fetch === "function"
++    ? (...args) => fetch(...args)
++    : () => Promise.reject(new Error("fetch not available"));
++let fetchImpl = defaultFetchImpl;
++
  const PHASE_COLORS = {
    session: "#7aa0ff",
    turn: "#62ddb8",
@@ -482,377 +124,60 @@ index 87c2e8192965e49702d1286fe7a5acc4f6d77d54..20966a6aaa8a7a40f902e8e73bc7cbba
    root: null,
    sessionId: "",
    sessions: [],
-   sessionQuery: "",
-   events: new Map(),
-   expanded: new Set(),
-   bookmarks: [],
-   pollTimer: null,
-   pollSinceMs: 0,
-   levels: new Set(["flow", "transition"]),
-   grouping: "chronological",
-   live: false,
-   filterText: "",
-   filterChips: [],
-   turnFilter: "",
-   matchedIds: new Set(),
-   visibleIds: new Set(),
-   drawerEventId: null,
-   lastFetchedAt: null,
-   loading: false,
-   hints: [],
-   hintMap: new Map(),
-+  forensicActive: false,
-+  forensicTimer: null,
-+  forensicTicker: null,
-+  forensicPrevLevels: null,
-+  forensicPrevExpanded: null,
-+  forensicUntil: 0,
-+  forensicExpandAll: false,
-+  pendingExpandedRestore: null,
- };
- 
- const els = {};
- let sessionsDebounce = null;
- let popoverNode = null;
- 
- function init() {
-   const root = document.getElementById("admin-flow-app");
-   if (!root) {
-     return;
+@@ -473,51 +479,51 @@ function setLevelsFromString(raw) {
+   const allowed = new Set(LEVELS);
+   const parsed = new Set(["flow"]);
+   for (const part of String(raw).split(",")) {
+     const trimmed = part.trim();
+     if (allowed.has(trimmed)) {
+       parsed.add(trimmed);
+     }
    }
-   state.root = root;
+   if (!parsed.has("flow")) parsed.add("flow");
+   state.levels = parsed;
+   reflectLevelButtons();
+ }
  
-   els.sessionInput = document.getElementById("flowSessionInput");
-   els.sessionOptions = document.getElementById("flowSessionOptions");
-   els.sessionResults = document.getElementById("flowSessionResults");
-   els.sessionHint = document.getElementById("flowSessionHint");
-   els.sessionRefresh = document.getElementById("flowSessionRefresh");
-   els.levelContainer = root.querySelector("[data-ref=\"level-toggles\"]");
-   els.groupContainer = root.querySelector("[data-ref=\"grouping\"]");
-   els.filterInput = document.getElementById("flowFilterInput");
-   els.turnInput = document.getElementById("flowTurnInput");
-   els.filterChips = document.getElementById("flowFilterChips");
-   els.tailState = document.getElementById("flowTailState");
-   els.tailToggle = document.getElementById("flowTailToggle");
-   els.tailStep = document.getElementById("flowTailStep");
-   els.timeline = document.getElementById("flowTimeline");
-+  els.forensic = document.getElementById("flowForensic");
-   els.exportFull = document.getElementById("flowExportFull");
-   els.exportRedacted = document.getElementById("flowExportRedacted");
-   els.copyLink = document.getElementById("flowCopyLink");
-   els.handoff = document.getElementById("flowHandoff");
-   els.drawer = document.getElementById("flowDrawer");
-   els.drawerTitle = document.getElementById("flowDrawerTitle");
-   els.drawerMeta = document.getElementById("flowDrawerMeta");
-   els.drawerJson = document.getElementById("flowDrawerJson");
-   els.drawerRelated = document.getElementById("flowDrawerRelated");
-   els.drawerCopy = document.getElementById("flowDrawerCopy");
-   els.drawerClose = document.getElementById("flowDrawerClose");
-   els.hints = document.getElementById("flowHints");
-   els.treeControls = root.querySelector('[data-ref="tree-controls"]');
+ function refreshSessions(opts = {}) {
+   const { force = false } = opts;
+   if (sessionsDebounce) {
+     clearTimeout(sessionsDebounce);
+     sessionsDebounce = null;
+   }
+   sessionsDebounce = setTimeout(async () => {
+     try {
+       const params = new URLSearchParams();
+       if (state.sessionQuery) {
+         params.set("q", state.sessionQuery);
+       }
+-      const resp = await fetch(`/api/v1/flow/sessions?${params.toString()}`, {
++      const resp = await fetchImpl(`/api/v1/flow/sessions?${params.toString()}`, {
+         credentials: "include",
+       });
+       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+       const payload = await resp.json();
+       const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+       state.sessions = sessions;
+       renderSessions();
+     } catch (err) {
+       console.warn("[flow] sessions fetch failed", err);
+       setHint("Failed to load sessions.");
+     }
+   }, force ? 0 : 160);
+ }
  
-   bindEvents();
-   hydrateFromLocation();
+ function onSessionInput(ev) {
+   const value = ev.currentTarget.value.trim();
+   state.sessionQuery = value;
+   renderSessions();
    refreshSessions();
-   renderSessions();
-   renderFilters();
-   renderTail();
-   renderTimeline();
-   renderDrawer();
-   renderHints();
-+  renderForensicButton();
- 
-   if (state.sessionId) {
-     fetchTrace({ reset: true });
-     goLive();
-   }
  }
  
- document.addEventListener("DOMContentLoaded", init);
- 
- function bindEvents() {
-   if (els.sessionInput) {
-     els.sessionInput.addEventListener("input", onSessionInput);
-     els.sessionInput.addEventListener("keydown", (ev) => {
-       if (ev.key === "Enter") {
-         ev.preventDefault();
-         const value = ev.currentTarget.value.trim();
-         if (value) {
-           selectSession(value);
-         }
-       }
-     });
-   }
- 
-   if (els.sessionResults) {
-     els.sessionResults.addEventListener("click", (ev) => {
-@@ -172,50 +185,54 @@ function bindEvents() {
-     els.filterChips.addEventListener("click", (ev) => {
-       const closeBtn = ev.target.closest("button[data-chip-index]");
-       if (!closeBtn) return;
-       const idx = Number(closeBtn.getAttribute("data-chip-index"));
-       if (!Number.isNaN(idx)) {
-         state.filterChips.splice(idx, 1);
-         scheduleRender();
-       }
-     });
-   }
- 
-   if (els.tailToggle) {
-     els.tailToggle.addEventListener("click", () => {
-       if (state.live) {
-         pauseLive();
-       } else {
-         goLive(true);
-       }
-     });
-   }
- 
-   if (els.tailStep) {
-     els.tailStep.addEventListener("click", () => fetchTrace({ reset: false }));
-   }
- 
-+  if (els.forensic) {
-+    els.forensic.addEventListener("click", () => toggleForensicMode());
-+  }
-+
-   if (els.exportFull) {
-     els.exportFull.addEventListener("click", () => downloadExport({ redacted: false }));
-   }
- 
-   if (els.exportRedacted) {
-     els.exportRedacted.addEventListener("click", () => downloadExport({ redacted: true }));
-   }
- 
-   if (els.copyLink) {
-     els.copyLink.addEventListener("click", () => copyLink());
-   }
- 
-   if (els.handoff) {
-     els.handoff.addEventListener("click", () => handoffToChatGPT());
-   }
- 
-   if (els.timeline) {
-     els.timeline.addEventListener("click", onTimelineClick);
-     els.timeline.addEventListener("contextmenu", onTimelineContext);
-   }
- 
-   if (els.drawerClose) {
-     els.drawerClose.addEventListener("click", () => openDrawer(null));
-   }
-   if (els.drawerCopy) {
-@@ -240,50 +257,167 @@ function bindEvents() {
-     els.treeControls.addEventListener("click", (ev) => {
-       const btn = ev.target.closest("button[data-tree]");
-       if (!btn) return;
-       const mode = btn.getAttribute("data-tree");
-       if (mode) {
-         handleTreeToggle(mode);
-       }
-     });
-   }
- 
-   document.addEventListener("click", (ev) => {
-     if (!popoverNode) return;
-     if (ev.target.closest(".popover") || ev.target.closest(".raw-batch-btn")) {
-       return;
-     }
-     hidePopover();
-   });
- 
-   document.addEventListener("keydown", (ev) => {
-     if (ev.key === "Escape") {
-       hidePopover();
-     }
-   });
- }
- 
-+function renderForensicButton() {
-+  if (!els.forensic) return;
-+  const btn = els.forensic;
-+  if (!state.sessionId) {
-+    btn.disabled = true;
-+    btn.textContent = "Forensic mode";
-+    btn.classList.remove("active");
-+    return;
-+  }
-+  btn.disabled = false;
-+  if (state.forensicActive) {
-+    const remainingMs = Math.max(0, state.forensicUntil - Date.now());
-+    const remainingSec = Math.max(0, Math.ceil(remainingMs / 1000));
-+    btn.textContent = `Forensic (${remainingSec}s)`;
-+    btn.classList.add("active");
-+  } else {
-+    btn.textContent = "Forensic mode";
-+    btn.classList.remove("active");
-+  }
-+}
-+
-+function toggleForensicMode() {
-+  if (state.forensicActive) {
-+    exitForensicMode({ auto: false });
-+  } else {
-+    enterForensicMode();
-+  }
-+}
-+
-+function enterForensicMode() {
-+  if (state.forensicActive) return;
-+  if (!state.sessionId) {
-+    setHint("Select a session first.");
-+    return;
-+  }
-+  state.forensicActive = true;
-+  state.forensicPrevLevels = new Set(state.levels);
-+  state.forensicPrevExpanded = new Set(state.expanded);
-+  state.forensicExpandAll = true;
-+  state.pendingExpandedRestore = null;
-+  clearForensicTimer();
-+  state.forensicUntil = Date.now() + FORENSIC_DURATION_MS;
-+  state.forensicTimer = setTimeout(() => exitForensicMode({ auto: true }), FORENSIC_DURATION_MS);
-+  startForensicTicker();
-+  state.levels = new Set(LEVELS);
-+  reflectLevelButtons();
-+  setHint("Forensic mode active (10s).");
-+  renderForensicButton();
-+  reloadAfterLevelChange({ skipHistory: true });
-+}
-+
-+function exitForensicMode(options = {}) {
-+  const { auto = false, skipReload = false } = options;
-+  if (!state.forensicActive) {
-+    renderForensicButton();
-+    return;
-+  }
-+  clearForensicTimer();
-+  stopForensicTicker();
-+  state.forensicActive = false;
-+  state.forensicExpandAll = false;
-+  state.forensicUntil = 0;
-+
-+  const prevLevels = state.forensicPrevLevels ? new Set(state.forensicPrevLevels) : new Set(["flow", "transition"]);
-+  if (!prevLevels.has("flow")) {
-+    prevLevels.add("flow");
-+  }
-+  const prevExpanded = state.forensicPrevExpanded ? new Set(state.forensicPrevExpanded) : null;
-+  state.forensicPrevLevels = null;
-+  state.forensicPrevExpanded = null;
-+
-+  state.levels = prevLevels;
-+  reflectLevelButtons();
-+
-+  if (skipReload) {
-+    state.pendingExpandedRestore = null;
-+  } else if (auto) {
-+    state.pendingExpandedRestore = null;
-+  } else if (prevExpanded && prevExpanded.size) {
-+    state.pendingExpandedRestore = new Set(prevExpanded);
-+  } else {
-+    state.pendingExpandedRestore = null;
-+  }
-+
-+  if (!skipReload) {
-+    reloadAfterLevelChange({ skipHistory: true });
-+  }
-+
-+  renderForensicButton();
-+  setHint(auto ? "Forensic mode ended." : "Forensic mode off.");
-+}
-+
-+function clearForensicTimer() {
-+  if (state.forensicTimer) {
-+    clearTimeout(state.forensicTimer);
-+    state.forensicTimer = null;
-+  }
-+}
-+
-+function startForensicTicker() {
-+  stopForensicTicker();
-+  state.forensicTicker = setInterval(() => {
-+    if (!state.forensicActive) {
-+      stopForensicTicker();
-+      return;
-+    }
-+    renderForensicButton();
-+  }, 250);
-+}
-+
-+function stopForensicTicker() {
-+  if (state.forensicTicker) {
-+    clearInterval(state.forensicTicker);
-+    state.forensicTicker = null;
-+  }
-+}
-+
- function hydrateFromLocation() {
-   const url = new URL(window.location.href);
-   let sessionId = url.searchParams.get("session_id") || "";
- 
-   const hash = window.location.hash || "";
-   if (!sessionId && hash.startsWith("#/admin/flow")) {
-     const qIndex = hash.indexOf("?");
-     if (qIndex >= 0) {
-       const hashParams = new URLSearchParams(hash.slice(qIndex + 1));
-       sessionId = hashParams.get("session_id") || sessionId;
-       const levels = hashParams.get("levels");
-       if (levels) {
-         setLevelsFromString(levels);
-       }
-       const group = hashParams.get("group");
-       if (group) {
-         state.grouping = group;
-       }
-       const filter = hashParams.get("filter");
-       if (filter) {
-         state.filterText = filter;
-         if (els.filterInput) els.filterInput.value = filter;
-       }
-       const turn = hashParams.get("turn");
-       if (turn) {
-@@ -405,148 +539,169 @@ function renderSessions() {
-     return;
-   }
- 
-   els.sessionResults.innerHTML = sessions
-     .map((item) => renderSessionListItem(item))
-     .join("");
- }
- 
- function renderSessionListItem(item) {
-   const isActive = item.session_id === state.sessionId;
-   const timeText = typeof item.last_event_ms === "number" ? `${item.last_event_ms.toLocaleString()} ms` : "—";
-   const typeText = item.last_type ? item.last_type.replace(/_/g, " ") : "—";
-   return `
-     <li data-session-id="${escapeAttr(item.session_id)}" class="${isActive ? "active" : ""}">
-       <div class="session-id">${escapeHtml(item.session_id)}</div>
-       <div class="session-meta">
-         <span>${escapeHtml(typeText)}</span>
-         <span>${escapeHtml(timeText)}</span>
-         <span>${item.event_count || 0} evts</span>
-       </div>
-     </li>`;
- }
- 
- function selectSession(sessionId) {
-   if (!sessionId) return;
-+  if (state.forensicActive) {
-+    exitForensicMode({ auto: false, skipReload: true });
-+  }
-   state.sessionId = sessionId;
-   state.pollSinceMs = 0;
-   state.events.clear();
-   state.expanded.clear();
-   state.bookmarks = [];
-   state.matchedIds = new Set();
-   state.visibleIds = new Set();
-   state.drawerEventId = null;
-   updateHints([]);
-+  renderForensicButton();
-   if (els.sessionInput) {
-     els.sessionInput.value = sessionId;
-   }
-   setHint(`Session ${sessionId}`);
-   renderSessions();
+ function renderSessions() {
+   if (!els.sessionResults) return;
+   const query = state.sessionQuery.toLowerCase();
+   const sessions = state.sessions
+@@ -582,51 +588,51 @@ function selectSession(sessionId) {
    renderTimeline();
    renderDrawer();
    fetchTrace({ reset: true }).then(() => {
@@ -878,7 +203,8 @@ index 87c2e8192965e49702d1286fe7a5acc4f6d77d54..20966a6aaa8a7a40f902e8e73bc7cbba
    params.set("limit", "400");
  
    state.loading = true;
-   return fetch(`/api/v1/flow/trace?${params.toString()}`, { credentials: "include" })
+-  return fetch(`/api/v1/flow/trace?${params.toString()}`, { credentials: "include" })
++  return fetchImpl(`/api/v1/flow/trace?${params.toString()}`, { credentials: "include" })
      .then((resp) => {
        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
        return resp.json();
@@ -892,7 +218,7 @@ index 87c2e8192965e49702d1286fe7a5acc4f6d77d54..20966a6aaa8a7a40f902e8e73bc7cbba
          state.pollSinceMs = nextSince;
        }
        state.lastFetchedAt = Date.now();
-+      applyPendingExpandedRestore();
+       applyPendingExpandedRestore();
        renderTimeline();
        renderDrawer();
      })
@@ -904,166 +230,60 @@ index 87c2e8192965e49702d1286fe7a5acc4f6d77d54..20966a6aaa8a7a40f902e8e73bc7cbba
        state.loading = false;
      });
  }
+@@ -1279,51 +1285,51 @@ function pauseLive() {
+ }
  
- function ingestEvents(events) {
-   const queue = Array.isArray(events) ? [...events] : [];
-   while (queue.length) {
-     const event = queue.shift();
-     if (!event || typeof event !== "object") continue;
-     const { children, ...rest } = event;
-     const childIds = Array.isArray(children) ? children.map((child) => child && child.id).filter(Boolean) : [];
-     const normalized = normalizeEvent(rest, childIds);
-     const existing = state.events.get(normalized.id);
-     if (existing) {
-       mergeEvent(existing, normalized);
-       if (childIds.length) {
-         const merged = new Set([...(existing.childrenIds || []), ...childIds]);
-         existing.childrenIds = Array.from(merged);
-       }
-     } else {
-       state.events.set(normalized.id, normalized);
--      if (normalized.parentId) {
-+      if (state.forensicActive || state.forensicExpandAll) {
-+        state.expanded.add(normalized.id);
-+        if (normalized.parentId) {
-+          state.expanded.add(normalized.parentId);
-+        }
-+      } else if (normalized.parentId) {
-         state.expanded.add(normalized.parentId);
-       } else {
-         state.expanded.add(normalized.id);
-       }
-     }
-     if (Array.isArray(event.children)) {
-       for (const child of event.children) {
-         if (!child || typeof child !== "object") continue;
-         const clone = { ...child, parent_id: event.id };
-         queue.push(clone);
-       }
-     }
+ function schedulePoll() {
+   if (!state.live) return;
+   if (state.pollTimer) {
+     clearTimeout(state.pollTimer);
    }
+   const delay = POLL_MIN_MS + Math.random() * (POLL_MAX_MS - POLL_MIN_MS);
+   state.pollTimer = setTimeout(() => {
+     fetchTrace({ reset: false }).finally(() => {
+       if (state.live) schedulePoll();
+     });
+   }, delay);
  }
  
-+function applyPendingExpandedRestore() {
-+  if (!state.pendingExpandedRestore) return;
-+  const restore = state.pendingExpandedRestore;
-+  state.pendingExpandedRestore = null;
-+  for (const id of restore) {
-+    if (state.events.has(id)) {
-+      state.expanded.add(id);
-+    }
-+  }
-+}
-+
- function normalizeEvent(event, childIds = []) {
-   const meta = sanitizeMeta(event.meta);
-   const batches = Array.isArray(event.batches) ? event.batches.map((b) => ({ ...b })) : [];
-   const parentId = event.parent_id || null;
-   return {
-     id: String(event.id),
-     t_rel_ms: typeof event.t_rel_ms === "number" ? event.t_rel_ms : 0,
-     level: event.level || "flow",
-     phase: event.phase || "",
-     who: event.who || "",
-     type: event.type || "",
-     blurb: event.blurb || "",
-     meta,
-     batches,
-     parentId,
-     childrenIds: childIds,
-     turnId: meta.turn_id != null ? String(meta.turn_id) : meta.turn != null ? String(meta.turn) : "",
-     raw: buildRawSnapshot(event, meta, batches),
-   };
- }
- 
- function mergeEvent(existing, incoming) {
-   existing.t_rel_ms = incoming.t_rel_ms || existing.t_rel_ms;
-   existing.level = incoming.level || existing.level;
-   existing.phase = incoming.phase || existing.phase;
-@@ -1030,65 +1185,74 @@ function showBatchPopover(anchor, eventId, index) {
-   const itemsText = JSON.stringify(batch.items, null, 2);
-   pop.innerHTML = `<h3>${escapeHtml(batch.kind || `Batch ${index + 1}`)}</h3><pre>${escapeHtml(itemsText)}</pre>`;
-   document.body.appendChild(pop);
-   const rect = anchor.getBoundingClientRect();
-   pop.style.top = `${rect.bottom + window.scrollY + 8}px`;
-   pop.style.left = `${rect.left + window.scrollX}px`;
-   popoverNode = pop;
- }
- 
- function hidePopover() {
-   if (popoverNode && popoverNode.parentNode) {
-     popoverNode.parentNode.removeChild(popoverNode);
+ function downloadExport({ redacted }) {
+   if (!state.sessionId) {
+     setHint("Select a session first.");
+     return;
    }
-   popoverNode = null;
+   const params = new URLSearchParams();
+   params.set("session_id", state.sessionId);
+   params.set("expand", "all");
+   params.set("levels", Array.from(state.levels).join(","));
+   params.set("redacted", redacted ? "1" : "0");
+-  fetch(`/api/v1/flow/export.ndjson?${params.toString()}`, { credentials: "include" })
++  fetchImpl(`/api/v1/flow/export.ndjson?${params.toString()}`, { credentials: "include" })
+     .then((resp) => {
+       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+       return resp.blob();
+     })
+     .then((blob) => {
+       const href = URL.createObjectURL(blob);
+       const link = document.createElement("a");
+       const suffix = redacted ? "redacted" : "full";
+       link.href = href;
+       link.download = `flow_${state.sessionId}_${suffix}.ndjson`;
+       document.body.appendChild(link);
+       link.click();
+       requestAnimationFrame(() => {
+         URL.revokeObjectURL(href);
+         link.remove();
+       });
+     })
+     .catch((err) => {
+       console.warn("[flow] export failed", err);
+       setHint("Export failed.");
+     });
  }
  
- function addFilterChip(key, value) {
-   const exists = state.filterChips.some((chip) => chip.key === key && chip.value === String(value));
-   if (exists) return;
-   state.filterChips.push({ key, value: String(value), display: String(value) });
-   scheduleRender();
- }
- 
- function toggleLevel(level) {
-   if (!level || level === "flow") return;
-+  if (state.forensicActive) return;
-   if (state.levels.has(level)) {
-     state.levels.delete(level);
-   } else {
-     state.levels.add(level);
-   }
-   reflectLevelButtons();
-+  state.pendingExpandedRestore = null;
-+  reloadAfterLevelChange();
-+}
-+
-+function reloadAfterLevelChange(options = {}) {
-+  const { skipHistory = false } = options;
-   state.events.clear();
--  state.expanded.clear();
-+  state.expanded = new Set();
-   state.matchedIds = new Set();
-   state.visibleIds = new Set();
-   state.drawerEventId = null;
-   renderTimeline();
-   renderDrawer();
-   fetchTrace({ reset: true });
--  updateHistory();
-+  if (!skipHistory) {
-+    updateHistory();
-+  }
- }
- 
- function reflectLevelButtons() {
-   if (!els.levelContainer) return;
-   for (const btn of els.levelContainer.querySelectorAll("button[data-level]")) {
-     const level = btn.getAttribute("data-level");
-     const active = state.levels.has(level);
-     btn.classList.toggle("active", active);
-   }
- }
- 
- function setGrouping(group) {
-   if (!group) return;
-   if (!GROUP_LABELS[group] && group !== "chronological") return;
-   state.grouping = group;
-   reflectGroupingButtons();
-   renderTimeline();
-   updateHistory();
- }
- 
- function reflectGroupingButtons() {
-   if (!els.groupContainer) return;
-   for (const btn of els.groupContainer.querySelectorAll("button[data-group]")) {
-     const group = btn.getAttribute("data-group");
-     btn.classList.toggle("active", group === state.grouping);
-@@ -1172,54 +1336,85 @@ function copyLink() {
-   if (state.grouping && state.grouping !== "chronological") {
-     params.set("group", state.grouping);
-   }
-   if (state.filterText) params.set("filter", state.filterText);
-   if (state.turnFilter) params.set("turn", state.turnFilter);
-   if (state.filterChips.length) {
+ function copyLink() {
+   if (!state.sessionId) {
+@@ -1342,51 +1348,51 @@ function copyLink() {
      params.set(
        "chips",
        state.filterChips
@@ -1083,187 +303,408 @@ index 87c2e8192965e49702d1286fe7a5acc4f6d77d54..20966a6aaa8a7a40f902e8e73bc7cbba
      setHint("Select a session first.");
      return;
    }
--  const summary = buildSessionSummary();
--  writeClipboardText(summary)
--    .then(() => setHint("Summary copied for ChatGPT."))
--    .catch(() => setHint("Could not copy summary."));
-+  const payload = {
-+    session_id: state.sessionId,
-+    levels: Array.from(state.levels),
-+    prompt: HANDOFF_PROMPT,
-+  };
-+  setHint("Preparing hand-off…");
-+  fetch("/api/v1/flow/handoff", {
-+    method: "POST",
-+    credentials: "include",
-+    headers: { "Content-Type": "application/json" },
-+    body: JSON.stringify(payload),
-+  })
-+    .then((resp) => {
-+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-+      return resp.blob();
-+    })
-+    .then((blob) => {
-+      const href = URL.createObjectURL(blob);
-+      const link = document.createElement("a");
-+      const iso = new Date().toISOString().replace(/[:.]/g, "-");
-+      const safeSession = state.sessionId.replace(/[^a-zA-Z0-9_-]+/g, "_");
-+      link.href = href;
-+      link.download = `flow_handoff_${safeSession}_${iso}.zip`;
-+      document.body.appendChild(link);
-+      link.click();
-+      requestAnimationFrame(() => {
-+        URL.revokeObjectURL(href);
-+        link.remove();
-+      });
-+      setHint("Hand-off package downloaded.");
-+    })
-+    .catch((err) => {
-+      console.warn("[flow] hand-off failed", err);
-+      setHint("Hand-off failed.");
-+    });
- }
- 
- function buildSessionSummary() {
-   const events = Array.from(state.events.values()).sort((a, b) => a.t_rel_ms - b.t_rel_ms);
-   const head = events.slice(0, 5).map((evt) => `- ${evt.t_rel_ms}ms ${evt.phase} ${evt.type}`);
-   return `Ask Chip Flow Summary\nSession: ${state.sessionId}\nLevels: ${Array.from(state.levels).join(", ")}\nEvents captured: ${events.length}\nFirst samples:\n${head.join("\n")}`;
- }
- 
- function openDrawer(eventId) {
-   state.drawerEventId = eventId;
-   renderDrawer();
-   if (!eventId) return;
-   const row = els.timeline?.querySelector(`.timeline-row[data-event-id="${cssEscape(eventId)}"]`);
-   if (row) {
-     row.scrollIntoView({ behavior: "smooth", block: "center" });
-     row.classList.add("pulse");
-     setTimeout(() => row.classList.remove("pulse"), 1400);
+   const payload = {
+     session_id: state.sessionId,
+     levels: Array.from(state.levels),
+     prompt: HANDOFF_PROMPT,
+   };
+   setHint("Preparing hand-off…");
+-  fetch("/api/v1/flow/handoff", {
++  fetchImpl("/api/v1/flow/handoff", {
+     method: "POST",
+     credentials: "include",
+     headers: { "Content-Type": "application/json" },
+     body: JSON.stringify(payload),
+   })
+     .then((resp) => {
+       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+       return resp.blob();
+     })
+     .then((blob) => {
+       const href = URL.createObjectURL(blob);
+       const link = document.createElement("a");
+       const iso = new Date().toISOString().replace(/[:.]/g, "-");
+       const safeSession = state.sessionId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+       link.href = href;
+       link.download = `flow_handoff_${safeSession}_${iso}.zip`;
+       document.body.appendChild(link);
+       link.click();
+       requestAnimationFrame(() => {
+         URL.revokeObjectURL(href);
+         link.remove();
+       });
+       setHint("Hand-off package downloaded.");
+     })
+     .catch((err) => {
+@@ -1583,26 +1589,58 @@ function writeClipboardText(text) {
    }
- }
- 
- function renderDrawer() {
-   if (!els.drawer) return;
-   const event = state.drawerEventId ? state.events.get(state.drawerEventId) : null;
-   if (!event) {
-     els.drawer.setAttribute("aria-hidden", "true");
-@@ -1303,50 +1498,51 @@ function focusEvent(eventId) {
-       } catch {
-         row.scrollIntoView({ block: "center" });
+   return new Promise((resolve, reject) => {
+     const area = document.createElement("textarea");
+     area.value = text;
+     area.setAttribute("readonly", "true");
+     area.style.position = "fixed";
+     area.style.opacity = "0";
+     document.body.appendChild(area);
+     area.focus();
+     area.select();
+     try {
+       const ok = document.execCommand("copy");
+       document.body.removeChild(area);
+       if (ok) {
+         resolve();
+       } else {
+         reject(new Error("copy command failed"));
        }
-       setTimeout(() => {
-         row.classList.remove("pulse");
-       }, 1400);
+     } catch (err) {
+       document.body.removeChild(area);
+       reject(err);
      }
    });
  }
  
- function copyDrawerJson() {
-   const event = state.drawerEventId ? state.events.get(state.drawerEventId) : null;
-   if (!event) return;
-   const text = JSON.stringify(event.raw, null, 2);
-   writeClipboardText(text)
-     .then(() => setHint("Event JSON copied."))
-     .catch(() => setHint("Copy failed."));
- }
- 
- function setHint(text) {
-   if (!els.sessionHint) return;
-   els.sessionHint.textContent = text;
- }
- 
- function updateHistory() {
-+  if (state.forensicActive) return;
-   if (!state.sessionId) return;
-   const params = new URLSearchParams();
-   params.set("session_id", state.sessionId);
-   params.set("levels", Array.from(state.levels).join(","));
-   if (state.grouping && state.grouping !== "chronological") {
-     params.set("group", state.grouping);
-   }
-   if (state.filterText) params.set("filter", state.filterText);
-   if (state.turnFilter) params.set("turn", state.turnFilter);
-   if (state.filterChips.length) {
-     params.set(
-       "chips",
-       state.filterChips.map((chip) => `${encodeURIComponent(chip.key)}:${encodeURIComponent(chip.value)}`).join(",")
-     );
-   }
-   const url = `/admin/flow?${params.toString()}`;
-   window.history.replaceState({}, "", url);
-   window.location.hash = `#/admin/flow${params.toString() ? `?${params.toString()}` : ""}`;
- }
- 
- function cssEscape(value) {
-   if (window.CSS?.escape) return window.CSS.escape(value);
-   return value.replace(/[^a-zA-Z0-9_-]/g, "");
- }
- 
-diff --git a/templates/admin_flow.html b/templates/admin_flow.html
-index edd775496b67a908349bff1ef2db665d3515c17a..ca16312d3e8a7a9410204046161bc816ecc61999 100644
---- a/templates/admin_flow.html
-+++ b/templates/admin_flow.html
-@@ -40,50 +40,51 @@
-             <button type="button" class="toggle" data-group="turn">By Turn</button>
-             <button type="button" class="toggle active" data-group="chronological">Chronological</button>
-           </div>
-         </div>
-       </div>
-       <div class="flow-header-secondary">
-         <div class="filters" data-ref="filters">
-           <label class="filter-search">
-             <span>Filter</span>
-             <input id="flowFilterInput" type="search" placeholder="type, who, phase…" autocomplete="off">
-           </label>
-           <label class="filter-turn">
-             <span>Turn</span>
-             <input id="flowTurnInput" type="number" min="0" step="1" placeholder="Any">
-           </label>
-           <div class="filter-chips" id="flowFilterChips" aria-live="polite"></div>
-         </div>
-         <div class="tail" data-ref="tail">
-           <div class="tail-state" id="flowTailState" role="status">Paused</div>
-           <div class="tail-actions">
-             <button type="button" id="flowTailToggle" class="toggle">Go live</button>
-             <button type="button" id="flowTailStep" class="toggle" title="Fetch latest once">Refresh</button>
-           </div>
-         </div>
-         <div class="flow-actions" data-ref="actions">
-+          <button type="button" id="flowForensic" class="action-btn">Forensic mode</button>
-           <button type="button" id="flowExportFull" class="action-btn">Export NDJSON</button>
-           <button type="button" id="flowExportRedacted" class="action-btn">Export Redacted</button>
-           <button type="button" id="flowCopyLink" class="action-btn">Copy link</button>
-           <button type="button" id="flowHandoff" class="action-btn">Hand off to ChatGPT</button>
-         </div>
-       </div>
-     </header>
- 
-     <main class="flow-main">
-       <div class="timeline-shell">
-         <div class="flow-hint-bar">
-           <span class="hint-label">Smart hints</span>
-           <div class="hint-badges" id="flowHints" aria-live="polite"></div>
-         </div>
-         <div class="timeline-toolbar">
-           <div class="tree-controls" data-ref="tree-controls">
-             <span class="group-label">Tree</span>
-             <div class="toggle-group">
-               <button type="button" class="toggle" data-tree="collapse">Collapse all</button>
-               <button type="button" class="toggle" data-tree="flow">Expand flow</button>
-               <button type="button" class="toggle" data-tree="all">Expand all</button>
-             </div>
-           </div>
-         </div>
-         <div class="timeline-head">
++const __TEST_ONLY__ = {
++  state,
++  els,
++  goLive,
++  pauseLive,
++  toggleLevel,
++  setGrouping,
++  downloadExport,
++  handoffToChatGPT,
++  fetchTrace,
++  schedulePoll,
++  setHint,
++  setSessionForTests(sessionId) {
++    state.sessionId = sessionId || "";
++  },
++  setLevelsForTests(levels) {
++    state.levels = new Set(Array.isArray(levels) ? levels : ["flow", "transition"]);
++  },
++  setFetch(fn) {
++    fetchImpl = typeof fn === "function" ? fn : defaultFetchImpl;
++  },
++};
++
++if (typeof window !== "undefined") {
++  Object.defineProperty(window, "__ADMIN_FLOW_TEST__", {
++    value: __TEST_ONLY__,
++    configurable: true,
++  });
++}
++
++export { __TEST_ONLY__ };
++
+ export {};
+diff --git a/tests/js/admin-flow-smoke.test.mjs b/tests/js/admin-flow-smoke.test.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..6e1c6be0525ba699752f2cd1ffa59c2a21d03059
+--- /dev/null
++++ b/tests/js/admin-flow-smoke.test.mjs
+@@ -0,0 +1,295 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++
++const listeners = new Map();
++
++function setupDom() {
++  const documentStub = {
++    readyState: 'complete',
++    addEventListener(type, handler) {
++      listeners.set(type, handler);
++    },
++    removeEventListener(type) {
++      listeners.delete(type);
++    },
++    getElementById() {
++      return null;
++    },
++    querySelector() {
++      return null;
++    },
++    createElement(tag) {
++      return {
++        tagName: tag.toUpperCase(),
++        style: {},
++        href: '',
++        download: '',
++        click() {},
++        remove() {},
++      };
++    },
++    body: {
++      appendChild() {},
++    },
++  };
++
++  const windowStub = {
++    location: { origin: 'http://localhost', hash: '' },
++    history: { replaceState() {} },
++    addEventListener() {},
++    removeEventListener() {},
++    scrollTo() {},
++  };
++  documentStub.defaultView = windowStub;
++
++  Object.defineProperty(globalThis, 'document', {
++    value: documentStub,
++    configurable: true,
++    writable: true,
++  });
++  Object.defineProperty(globalThis, 'window', {
++    value: windowStub,
++    configurable: true,
++    writable: true,
++  });
++
++  Object.defineProperty(windowStub, 'document', {
++    value: documentStub,
++    configurable: true,
++    writable: true,
++  });
++
++  Object.defineProperty(globalThis, 'navigator', {
++    value: { clipboard: { writeText: async () => {} } },
++    configurable: true,
++  });
++
++  Object.defineProperty(globalThis, 'CustomEvent', {
++    value: class CustomEvent {
++      constructor(type, init = {}) {
++        this.type = type;
++        this.detail = init.detail;
++      }
++    },
++    configurable: true,
++  });
++
++  globalThis.requestAnimationFrame = (cb) => {
++    cb();
++    return 1;
++  };
++
++}
++
++setupDom();
++
++const modulePromise = import(new URL('../../static/js/admin_flow.js', import.meta.url));
++
++function prepareFlow(flow) {
++  flow.setFetch(async () => ({
++    ok: true,
++    json: async () => ({ events: [], hints: [], next_since_ms: 0 }),
++    blob: async () => ({}),
++  }));
++  flow.setSessionForTests('');
++  flow.setLevelsForTests(['flow', 'transition']);
++  flow.state.events = new Map();
++  flow.state.expanded = new Set();
++  flow.state.bookmarks = [];
++  flow.state.pollTimer = null;
++  flow.state.hints = [];
++  flow.state.hintMap = new Map();
++  flow.state.grouping = 'chronological';
++  flow.state.live = false;
++  flow.state.pendingExpandedRestore = null;
++  flow.state.sessionId = '';
++
++  const makeButton = (valueAttr, getValue) => ({
++    getAttribute: () => getValue ?? valueAttr,
++    classList: { toggle() {} },
++  });
++
++  flow.els.tailState = { textContent: '' };
++  flow.els.tailToggle = { textContent: '' };
++  flow.els.sessionHint = { textContent: '' };
++  flow.els.timeline = { innerHTML: '', querySelectorAll: () => [], querySelector: () => null };
++  flow.els.drawer = { setAttribute() {} };
++  flow.els.drawerTitle = { textContent: '' };
++  flow.els.drawerMeta = { innerHTML: '' };
++  flow.els.drawerJson = { textContent: '' };
++  flow.els.drawerRelated = { innerHTML: '' };
++  flow.els.hints = { innerHTML: '' };
++  flow.els.filterChips = { innerHTML: '' };
++  flow.els.levelContainer = {
++    querySelectorAll: () => [
++      { getAttribute: () => 'flow', classList: { toggle() {} } },
++      { getAttribute: () => 'transition', classList: { toggle() {} } },
++      { getAttribute: () => 'debug', classList: { toggle() {} } },
++      { getAttribute: () => 'raw', classList: { toggle() {} } },
++    ],
++  };
++  flow.els.groupContainer = {
++    querySelectorAll: () => [
++      { getAttribute: () => 'phase', classList: { toggle() {} } },
++      { getAttribute: () => 'turn', classList: { toggle() {} } },
++      { getAttribute: () => 'chronological', classList: { toggle() {} } },
++    ],
++  };
++}
++
++test('tail goLive/pause toggles live state and schedules poll', async () => {
++  const mod = await modulePromise;
++  const flow = mod.__TEST_ONLY__;
++  prepareFlow(flow);
++  flow.setSessionForTests('sess-tail');
++
++  const timers = [];
++  const cleared = [];
++  globalThis.setTimeout = (fn, delay) => {
++    timers.push({ fn, delay });
++    return timers.length;
++  };
++  globalThis.clearTimeout = (id) => {
++    cleared.push(id);
++  };
++  const originalRandom = Math.random;
++  Math.random = () => 0;
++
++  flow.goLive(false);
++  assert.equal(flow.state.live, true);
++  assert.equal(timers.length, 1);
++  assert.equal(timers[0].delay, 750);
++
++  flow.pauseLive();
++  assert.equal(flow.state.live, false);
++  assert.deepEqual(cleared, [1]);
++
++  Math.random = originalRandom;
++});
++
++test('level toggles and grouping update state and history', async () => {
++  const mod = await modulePromise;
++  const flow = mod.__TEST_ONLY__;
++  prepareFlow(flow);
++  flow.setSessionForTests('sess-toggle');
++
++  const historyCalls = [];
++  window.history.replaceState = (...args) => {
++    historyCalls.push(args);
++  };
++
++  let fetchCalls = 0;
++  flow.setFetch(async () => {
++    fetchCalls += 1;
++    return { ok: true, json: async () => ({ events: [], hints: [], next_since_ms: 0 }) };
++  });
++
++  assert.equal(flow.state.levels.has('debug'), false);
++  flow.toggleLevel('debug');
++  assert.equal(flow.state.levels.has('debug'), true);
++  flow.toggleLevel('debug');
++  assert.equal(flow.state.levels.has('debug'), false);
++
++  flow.setGrouping('phase');
++  assert.equal(flow.state.grouping, 'phase');
++  assert.ok(historyCalls.length >= 1);
++  assert.ok(fetchCalls >= 1);
++});
++
++test('download export requests NDJSON with expected params', async () => {
++  const mod = await modulePromise;
++  const flow = mod.__TEST_ONLY__;
++  prepareFlow(flow);
++  flow.setSessionForTests('sess-export');
++  flow.setLevelsForTests(['flow', 'debug']);
++
++  const requests = [];
++  flow.setFetch(async (url, opts = {}) => {
++    requests.push({ url, opts });
++    return { ok: true, blob: async () => ({}) };
++  });
++
++  let clicked = false;
++  let removed = false;
++  document.createElement = () => ({
++    href: '',
++    download: '',
++    click() {
++      clicked = true;
++    },
++    remove() {
++      removed = true;
++    },
++    style: {},
++  });
++
++  const urls = [];
++  const originalCreate = URL.createObjectURL;
++  const originalRevoke = URL.revokeObjectURL;
++  URL.createObjectURL = (blob) => {
++    urls.push(blob);
++    return 'blob://export';
++  };
++  URL.revokeObjectURL = (href) => {
++    urls.push(href);
++  };
++
++  flow.downloadExport({ redacted: true });
++  await new Promise((resolve) => setImmediate(resolve));
++  assert.equal(requests.length, 1);
++  assert.match(requests[0].url, /redacted=1/);
++  assert.match(requests[0].url, /levels=flow%2Cdebug/);
++  assert.equal(clicked, true);
++  assert.equal(removed, true);
++  assert.equal(urls[1], 'blob://export');
++
++  URL.createObjectURL = originalCreate;
++  URL.revokeObjectURL = originalRevoke;
++});
++
++test('handoff posts session payload and triggers download', async () => {
++  const mod = await modulePromise;
++  const flow = mod.__TEST_ONLY__;
++  prepareFlow(flow);
++  flow.setSessionForTests('sess-hand');
++  flow.setLevelsForTests(['flow', 'transition', 'debug']);
++
++  const calls = [];
++  flow.setFetch(async (url, opts = {}) => {
++    calls.push({ url, opts });
++    return { ok: true, blob: async () => ({}) };
++  });
++
++  let clicked = false;
++  let removed = false;
++  document.createElement = () => ({
++    href: '',
++    download: '',
++    click() {
++      clicked = true;
++    },
++    remove() {
++      removed = true;
++    },
++    style: {},
++  });
++
++  const originalCreate = URL.createObjectURL;
++  const originalRevoke = URL.revokeObjectURL;
++  URL.createObjectURL = () => 'blob://handoff';
++  URL.revokeObjectURL = () => {};
++
++  flow.handoffToChatGPT();
++  await new Promise((resolve) => setImmediate(resolve));
++  assert.equal(calls.length, 1);
++  assert.equal(calls[0].url, '/api/v1/flow/handoff');
++  const payload = JSON.parse(calls[0].opts.body);
++  assert.equal(payload.session_id, 'sess-hand');
++  assert.deepEqual(new Set(payload.levels), new Set(['flow', 'transition', 'debug']));
++  assert.ok(payload.prompt.includes('Analyze the redacted conversational flow'));
++  assert.equal(clicked, true);
++  assert.equal(removed, true);
++
++  URL.createObjectURL = originalCreate;
++  URL.revokeObjectURL = originalRevoke;
++});
 diff --git a/tests/test_flow_api.py b/tests/test_flow_api.py
-index fd3680f7fd18c8a43f246038a6a8ae8f24064182..32373421ffe5ef7c5c1437e5f79de08006b0a53f 100644
+index 32373421ffe5ef7c5c1437e5f79de08006b0a53f..0cce925007b2bcb09da8a751fe14dc43e119ecf2 100644
 --- a/tests/test_flow_api.py
 +++ b/tests/test_flow_api.py
-@@ -1,25 +1,29 @@
-+import io
-+import json
-+import zipfile
-+
+@@ -1,49 +1,64 @@
+ import io
+ import json
+ import zipfile
+ 
  import pytest
  
  from app.asgi_gateway import app as flask_app
@@ -1284,161 +725,379 @@ index fd3680f7fd18c8a43f246038a6a8ae8f24064182..32373421ffe5ef7c5c1437e5f79de080
      return {"X-User-Email": "admin@example.com"}
  
  
++@pytest.fixture
++def flow_clock(monkeypatch):
++    clock = {"now": 1000.0}
++
++    def fake_monotonic():
++        return clock["now"]
++
++    monkeypatch.setattr("app.flow.trace.time.monotonic", fake_monotonic)
++
++    def advance(ms: int) -> None:
++        clock["now"] += ms / 1000.0
++
++    return advance
++
++
  def test_flow_trace_endpoint(admin_env):
      store = FlowStore()
      event_id = store.emit("sess-api", "flow", "session", "session_open", "system")
      assert event_id
  
-@@ -41,53 +45,152 @@ def test_flow_event_endpoint(admin_env):
+     client = flask_app.test_client()
+     resp = client.get("/api/v1/flow/trace", query_string={"session_id": "sess-api"}, headers=admin_env)
+     assert resp.status_code == 200
+     data = resp.get_json()
+     assert data["session_id"] == "sess-api"
+     assert any(evt["id"] == event_id for evt in data["events"])
+ 
+ 
+ def test_flow_event_endpoint(admin_env):
+     store = FlowStore()
+     event_id = store.emit("sess-event", "flow", "session", "session_open", "system")
+ 
+     client = flask_app.test_client()
+     resp = client.get(
+         "/api/v1/flow/event",
          query_string={"session_id": "sess-event", "id": event_id},
          headers=admin_env,
      )
      assert resp.status_code == 200
      data = resp.get_json()
-     assert data["id"] == event_id
- 
- 
- def test_flow_export_ndjson(admin_env):
-     store = FlowStore()
-     store.emit("sess-export", "flow", "session", "session_open", "system")
-     store.emit("sess-export", "transition", "session", "asr_ready", "system")
- 
-     client = flask_app.test_client()
-     resp = client.get(
-         "/api/v1/flow/export.ndjson",
-         query_string={"session_id": "sess-export"},
-         headers=admin_env,
+@@ -172,25 +187,222 @@ def test_flow_handoff_returns_redacted_zip(admin_env):
+     csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
+     token = csrf_resp.headers.get("X-CSRF-Token")
+     handoff_headers = dict(admin_env)
+     if token:
+         handoff_headers["X-CSRF-Token"] = token
+     resp = client.post(
+         "/api/v1/flow/handoff",
+         json={"session_id": "sess-hand", "levels": ["flow", "debug"], "prompt": "Investigate"},
+         headers=handoff_headers,
      )
      assert resp.status_code == 200
-     assert resp.headers["Content-Type"].startswith("application/x-ndjson")
-     body = resp.data.decode("utf-8").strip().split("\n")
-     assert len(body) >= 2
+     assert resp.headers["Content-Type"].startswith("application/zip")
+     assert resp.headers["X-Flow-Redacted"] == "1"
  
- 
-+def test_flow_export_redaction_masks_sensitive_fields(admin_env):
+     buffer = io.BytesIO(resp.data)
+     with zipfile.ZipFile(buffer) as archive:
+         names = set(archive.namelist())
+         assert {"flow.ndjson", "prompt.txt", "meta.json"}.issubset(names)
+         ndjson_text = archive.read("flow.ndjson").decode("utf-8")
+         assert "Hand-off transcript" not in ndjson_text
+         prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
+         assert prompt_text == "Investigate"
+         meta_payload = json.loads(archive.read("meta.json").decode("utf-8"))
+         assert meta_payload["payload_sig"]["sha1_8"]
+         assert meta_payload["payload_sig"]["bytes"] >= 0
++
++
++def test_flow_trace_happy_path_integration(admin_env, flow_clock):
 +    store = FlowStore()
-+    store.emit(
-+        "sess-redact",
++    session_id = "sess-happy"
++
++    store.emit(session_id, "flow", "session", "session_open", "system")
++    flow_clock(50)
++    confirm_id = store.emit(
++        session_id,
 +        "flow",
-+        "session",
-+        "session_open",
-+        "system",
-+        meta={"text": "Hello from user"},
++        "turn",
++        "confirm_open",
++        "assistant",
++        meta={"turn_id": "1"},
 +    )
++    flow_clock(200)
 +    store.emit(
-+        "sess-redact",
-+        "debug",
-+        "session",
-+        "payload_sig",
-+        "system",
-+        meta={"bytes": 42, "sha1_8": "abcdef12", "path": "llm.prompt", "body": "LLM prompt"},
++        session_id,
++        "transition",
++        "turn",
++        "asr_partial_first",
++        "client",
++        meta={"turn_id": "1"},
++        parent_id=confirm_id,
 +    )
++    flow_clock(150)
 +    store.emit(
-+        "sess-redact",
-+        "debug",
-+        "session",
-+        "device_tag",
-+        "system",
-+        meta={"device_label": "Jane's MacBook Pro"},
++        session_id,
++        "flow",
++        "turn",
++        "confirm_close",
++        "assistant",
++        meta={"turn_id": "1", "reason": "commit"},
++        parent_id=confirm_id,
 +    )
 +
 +    client = flask_app.test_client()
 +    resp = client.get(
-+        "/api/v1/flow/export.ndjson",
-+        query_string={"session_id": "sess-redact", "levels": "flow,debug"},
++        "/api/v1/flow/trace",
++        query_string={"session_id": session_id, "expand": "flow", "levels": "flow,transition"},
 +        headers=admin_env,
 +    )
 +    assert resp.status_code == 200
-+    lines = [line for line in resp.data.decode("utf-8").split("\n") if line.strip()]
-+    assert lines
-+    events = [json.loads(line) for line in lines]
-+
-+    text_meta = next(evt.get("meta", {}) for evt in events if evt.get("meta", {}).get("text"))
-+    assert "Hello from user" not in text_meta.get("text", "")
-+    assert "[redacted" in text_meta.get("text", "")
-+
-+    payload_meta = next(evt.get("meta", {}) for evt in events if evt.get("type") == "payload_sig")
-+    assert "body" not in payload_meta
-+    assert payload_meta.get("bytes") == 42
-+    assert payload_meta.get("sha1_8") == "abcdef12"
-+    assert payload_meta.get("category") == "llm"
-+
-+    device_meta = next(evt.get("meta", {}) for evt in events if evt.get("meta", {}).get("device_label"))
-+    assert device_meta.get("device_label") in {"mac", "macbook"}
++    payload = resp.get_json()
++    types = [evt["type"] for evt in payload["events"]]
++    assert types[:3] == ["session_open", "confirm_open", "asr_partial_first"]
++    assert payload["hints"] == []
 +
 +
- def test_flow_sessions_endpoint(admin_env):
-     store = FlowStore()
-     store.emit("sess-a", "flow", "session", "session_open", "system")
-     store.emit("sess-b", "flow", "session", "session_open", "system")
-     store.emit("sess-b", "transition", "turn", "turn_start", "system")
- 
-     client = flask_app.test_client()
-     resp = client.get("/api/v1/flow/sessions", headers=admin_env)
-     assert resp.status_code == 200
-     data = resp.get_json()
-     assert any(item["session_id"] == "sess-a" for item in data["sessions"])
-     assert any(item["session_id"] == "sess-b" for item in data["sessions"])
- 
-     resp_filtered = client.get(
-         "/api/v1/flow/sessions",
-         query_string={"q": "sess-b", "limit": "1"},
-         headers=admin_env,
-     )
-     assert resp_filtered.status_code == 200
-     filtered = resp_filtered.get_json()
-     assert len(filtered["sessions"]) == 1
-     assert filtered["sessions"][0]["session_id"] == "sess-b"
- 
- 
- def test_flow_admin_guard():
-     client = flask_app.test_client()
-     resp = client.get("/api/v1/flow/trace", query_string={"session_id": "nope"})
-     assert resp.status_code == 403
-+
-+
-+def test_flow_handoff_returns_redacted_zip(admin_env):
++def test_flow_trace_barge_in_integration(admin_env, flow_clock):
 +    store = FlowStore()
-+    store.emit(
-+        "sess-hand",
-+        "flow",
-+        "session",
-+        "session_open",
-+        "system",
-+        meta={"text": "Hand-off transcript"},
++    session_id = "sess-barge"
++
++    first = store.emit(session_id, "transition", "turn", "barge_in", "client")
++    assert first
++    store.emit(session_id, "transition", "turn", "barge_pause", "system")
++    flow_clock(500)
++    suppressed = store.emit(session_id, "transition", "turn", "barge_in", "client")
++    assert suppressed is None
++    store.emit(session_id, "transition", "turn", "barge_resume", "system")
++    flow_clock(50)
++    second = store.emit(session_id, "transition", "turn", "barge_in", "client")
++    assert second and second != first
++
++    client = flask_app.test_client()
++    resp = client.get(
++        "/api/v1/flow/trace",
++        query_string={"session_id": session_id, "levels": "transition", "expand": "all"},
++        headers=admin_env,
 +    )
++    assert resp.status_code == 200
++    data = resp.get_json()
++    barge_types = [evt["type"] for evt in data["events"] if evt["type"].startswith("barge")]
++    assert barge_types.count("barge_in") == 2
++
++
++def test_flow_trace_silence_timeout_integration(admin_env, flow_clock):
++    store = FlowStore()
++    session_id = "sess-silence"
++
 +    store.emit(
-+        "sess-hand",
++        session_id,
++        "flow",
++        "confirm",
++        "confirm_open",
++        "assistant",
++        meta={"confirm_id": "silence"},
++    )
++    flow_clock(4500)
++
++    client = flask_app.test_client()
++    resp = client.get(
++        "/api/v1/flow/trace",
++        query_string={"session_id": session_id, "expand": "flow"},
++        headers=admin_env,
++    )
++    assert resp.status_code == 200
++    events = resp.get_json()["events"]
++    inferred = [evt for evt in events if evt["type"] == "confirm_close"]
++    assert inferred
++    assert inferred[-1]["meta"].get("__warning") == "inferred_close"
++
++
++def test_flow_trace_manual_only_integration(admin_env):
++    store = FlowStore()
++    session_id = "sess-manual"
++
++    event_id = store.emit(
++        session_id,
 +        "debug",
 +        "session",
-+        "payload_sig",
++        "runtime_flags",
 +        "system",
-+        meta={"bytes": 99, "sha1_8": "12345678", "path": "dg.message", "payload": "should hide"},
++        meta={"manual_mode_manual_only": True},
++    )
++    assert event_id
++
++    client = flask_app.test_client()
++    resp = client.get(
++        "/api/v1/flow/trace",
++        query_string={"session_id": session_id, "levels": "debug", "expand": "none"},
++        headers=admin_env,
++    )
++    assert resp.status_code == 200
++    data = resp.get_json()
++    assert data["events"][0]["meta"]["manual_mode_manual_only"] is True
++
++
++def test_flow_trace_asr_recover_hint(admin_env):
++    store = FlowStore()
++    session_id = "sess-asr"
++
++    err_id = store.emit(session_id, "transition", "asr", "asr_error", "system")
++    assert err_id
++    recover_id = store.emit(session_id, "transition", "asr", "recover_ok", "system")
++    assert recover_id
++
++    client = flask_app.test_client()
++    resp = client.get(
++        "/api/v1/flow/trace",
++        query_string={"session_id": session_id, "levels": "transition", "expand": "all"},
++        headers=admin_env,
++    )
++    assert resp.status_code == 200
++    hints = resp.get_json()["hints"]
++    assert any(hint["id"].startswith("asr_recovered:") for hint in hints)
++
++
++def test_flow_trace_slow_tts_hint(admin_env):
++    store = FlowStore()
++    session_id = "sess-tts"
++
++    end_id = store.emit(session_id, "flow", "tts", "tts_end", "assistant")
++    assert end_id
++    store.emit(
++        session_id,
++        "debug",
++        "tts",
++        "tts_metrics",
++        "assistant",
++        meta={"first_byte_ms": 800},
++        parent_id=end_id,
 +    )
 +
 +    client = flask_app.test_client()
-+    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
-+    token = csrf_resp.headers.get("X-CSRF-Token")
-+    handoff_headers = dict(admin_env)
-+    if token:
-+        handoff_headers["X-CSRF-Token"] = token
-+    resp = client.post(
-+        "/api/v1/flow/handoff",
-+        json={"session_id": "sess-hand", "levels": ["flow", "debug"], "prompt": "Investigate"},
-+        headers=handoff_headers,
++    resp = client.get(
++        "/api/v1/flow/trace",
++        query_string={"session_id": session_id, "levels": "flow,debug", "expand": "all"},
++        headers=admin_env,
 +    )
 +    assert resp.status_code == 200
-+    assert resp.headers["Content-Type"].startswith("application/zip")
-+    assert resp.headers["X-Flow-Redacted"] == "1"
++    hints = resp.get_json()["hints"]
++    assert any(hint["id"].startswith("tts_slow:") for hint in hints)
 +
-+    buffer = io.BytesIO(resp.data)
-+    with zipfile.ZipFile(buffer) as archive:
-+        names = set(archive.namelist())
-+        assert {"flow.ndjson", "prompt.txt", "meta.json"}.issubset(names)
-+        ndjson_text = archive.read("flow.ndjson").decode("utf-8")
-+        assert "Hand-off transcript" not in ndjson_text
-+        prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
-+        assert prompt_text == "Investigate"
-+        meta_payload = json.loads(archive.read("meta.json").decode("utf-8"))
-+        assert meta_payload["payload_sig"]["sha1_8"]
-+        assert meta_payload["payload_sig"]["bytes"] >= 0
++
++def test_flow_trace_large_raw_batches(admin_env):
++    store = FlowStore()
++    session_id = "sess-raw"
++
++    raw_id = store.emit(session_id, "raw", "audio", "mic_raw_chunk", "system")
++    assert raw_id
++    frames = [f"frame-{idx}" for idx in range(300)]
++    assert store.add_batch(session_id, raw_id, "raw_audio", frames) is True
++
++    client = flask_app.test_client()
++    resp = client.get(
++        "/api/v1/flow/trace",
++        query_string={"session_id": session_id, "levels": "raw", "expand": "all"},
++        headers=admin_env,
++    )
++    assert resp.status_code == 200
++    data = resp.get_json()
++    event = data["events"][0]
++    assert event["type"] == "mic_raw_chunk"
++    batch_items = event["batches"][0]["items"]
++    assert batch_items[0] == "frame-0" and batch_items[-1] == "frame-299"
+diff --git a/tests/test_flow_store.py b/tests/test_flow_store.py
+index 34b6130aae865baa7dfab4fc58e99ad53d838756..09c652fc77b87aac90ce260b7f89faf502f06b8a 100644
+--- a/tests/test_flow_store.py
++++ b/tests/test_flow_store.py
+@@ -429,25 +429,108 @@ def test_injected_confirm_close(flow_env):
+ 
+     store.emit(session_id, "flow", "confirm", CONFIRM_OPEN_TYPE, "assistant", meta={"confirm_id": "1"})
+     advance(4500)
+     data = store.list(session_id)
+     types = [evt["type"] for evt in data["events"]]
+     assert CONFIRM_CLOSE_TYPE in types
+     warning_meta = next(evt["meta"] for evt in data["events"] if evt["type"] == CONFIRM_CLOSE_TYPE)
+     assert warning_meta.get("__warning") == "inferred_close"
+ 
+ 
+ def test_levels_and_since_filter(flow_env):
+     store, advance, _ = flow_env
+     session_id = "sess-filters"
+ 
+     store.emit(session_id, "flow", "session", "session_open", "system")
+     advance(10)
+     store.emit(session_id, "transition", "session", "asr_ready", "system")
+ 
+     flow_only = store.list(session_id, levels=["flow"])
+     assert len(flow_only["events"]) == 1
+ 
+     since_data = store.list(session_id, since_ms=5)
+     ids = [evt["type"] for evt in since_data["events"]]
+     assert "asr_ready" in ids
+     assert "session_open" not in ids
++
++
++def test_add_batch_for_event_lookup(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-batch-event"
++
++    parent_id = store.emit(session_id, "flow", "turn", "confirm_open", "assistant")
++    advance(5)
++    child_id = store.emit(
++        session_id,
++        "transition",
++        "turn",
++        "asr_partial_first",
++        "client",
++        parent_id=parent_id,
++    )
++    assert child_id
++
++    added = store.add_batch_for_event(parent_id, "transcript", ["hi", "there"])
++    assert added is True
++    missing = store.add_batch_for_event("missing", "transcript", ["nope"])
++    assert missing is False
++
++    snapshot = store.list(session_id, expand="flow")
++    event = snapshot["events"][0]
++    assert event["batches"][0]["items"] == ["hi", "there"]
++    assert event["children"][0]["id"] == child_id
++
++
++def test_list_expand_modes(flow_env):
++    store, advance, _ = flow_env
++    session_id = "sess-expand"
++
++    parent_id = store.emit(session_id, "flow", "turn", "confirm_open", "assistant")
++    child_id = store.emit(
++        session_id,
++        "transition",
++        "turn",
++        "asr_partial_first",
++        "client",
++        parent_id=parent_id,
++    )
++    grandchild_id = store.emit(
++        session_id,
++        "debug",
++        "turn",
++        "latency_tick",
++        "system",
++        parent_id=child_id,
++    )
++    assert grandchild_id
++
++    none_payload = store.list(session_id, expand="none")
++    assert none_payload["events"][0]["children"] == [child_id]
++
++    flow_payload = store.list(session_id, expand="flow")
++    assert flow_payload["events"][0]["children"][0]["id"] == child_id
++    assert flow_payload["events"][0]["children"][0]["children"] == [grandchild_id]
++
++    ids_payload = store.list(session_id, expand=f"ids:{child_id}")
++    child_entry = next(evt for evt in ids_payload["events"] if evt["id"] == child_id)
++    assert child_entry["children"][0]["id"] == grandchild_id
++
++
++def test_get_returns_nested_event(flow_env):
++    store, _, _ = flow_env
++    session_id = "sess-get"
++
++    parent_id = store.emit(session_id, "flow", "turn", "confirm_open", "assistant")
++    child_id = store.emit(
++        session_id,
++        "transition",
++        "turn",
++        "asr_partial_first",
++        "client",
++        parent_id=parent_id,
++    )
++    assert child_id
++
++    payload = store.get(session_id, parent_id)
++    assert payload
++    assert payload["id"] == parent_id
++    assert payload["children"][0]["id"] == child_id

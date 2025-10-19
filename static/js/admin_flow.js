@@ -7,6 +7,12 @@ const FORENSIC_DURATION_MS = 10_000;
 const HANDOFF_PROMPT =
   "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), smallest viable fix, and validation steps.";
 
+const defaultFetchImpl =
+  typeof fetch === "function"
+    ? (...args) => fetch(...args)
+    : () => Promise.reject(new Error("fetch not available"));
+let fetchImpl = defaultFetchImpl;
+
 const PHASE_COLORS = {
   session: "#7aa0ff",
   turn: "#62ddb8",
@@ -495,7 +501,7 @@ function refreshSessions(opts = {}) {
       if (state.sessionQuery) {
         params.set("q", state.sessionQuery);
       }
-      const resp = await fetch(`/api/v1/flow/sessions?${params.toString()}`, {
+      const resp = await fetchImpl(`/api/v1/flow/sessions?${params.toString()}`, {
         credentials: "include",
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -604,7 +610,7 @@ function fetchTrace({ reset }) {
   params.set("limit", "400");
 
   state.loading = true;
-  return fetch(`/api/v1/flow/trace?${params.toString()}`, { credentials: "include" })
+  return fetchImpl(`/api/v1/flow/trace?${params.toString()}`, { credentials: "include" })
     .then((resp) => {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return resp.json();
@@ -1301,7 +1307,7 @@ function downloadExport({ redacted }) {
   params.set("expand", "all");
   params.set("levels", Array.from(state.levels).join(","));
   params.set("redacted", redacted ? "1" : "0");
-  fetch(`/api/v1/flow/export.ndjson?${params.toString()}`, { credentials: "include" })
+  fetchImpl(`/api/v1/flow/export.ndjson?${params.toString()}`, { credentials: "include" })
     .then((resp) => {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return resp.blob();
@@ -1364,7 +1370,7 @@ function handoffToChatGPT() {
     prompt: HANDOFF_PROMPT,
   };
   setHint("Preparing hand-off…");
-  fetch("/api/v1/flow/handoff", {
+  fetchImpl("/api/v1/flow/handoff", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -1604,5 +1610,37 @@ function writeClipboardText(text) {
     }
   });
 }
+
+const __TEST_ONLY__ = {
+  state,
+  els,
+  goLive,
+  pauseLive,
+  toggleLevel,
+  setGrouping,
+  downloadExport,
+  handoffToChatGPT,
+  fetchTrace,
+  schedulePoll,
+  setHint,
+  setSessionForTests(sessionId) {
+    state.sessionId = sessionId || "";
+  },
+  setLevelsForTests(levels) {
+    state.levels = new Set(Array.isArray(levels) ? levels : ["flow", "transition"]);
+  },
+  setFetch(fn) {
+    fetchImpl = typeof fn === "function" ? fn : defaultFetchImpl;
+  },
+};
+
+if (typeof window !== "undefined") {
+  Object.defineProperty(window, "__ADMIN_FLOW_TEST__", {
+    value: __TEST_ONLY__,
+    configurable: true,
+  });
+}
+
+export { __TEST_ONLY__ };
 
 export {};
