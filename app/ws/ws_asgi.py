@@ -2075,6 +2075,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     except Exception:
         confirm_min_ms = 420
     confirm_min_ms = max(0, confirm_min_ms)
+    confirm_min_ms = max(300, confirm_min_ms)
     try:
         confirm_max_ms = int(cfg.get("confirm_max_ms", confirm_min_ms + 600) or (confirm_min_ms + 600))
     except Exception:
@@ -2093,6 +2094,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         confirm_min_conf = float(cfg.get("confirm_min_confidence", 0.5) or 0.5)
     except Exception:
         confirm_min_conf = 0.5
+    confirm_min_conf = max(0.6, confirm_min_conf)
     try:
         confirm_snr_db = float(cfg.get("confirm_min_snr_db", 8.0) or 8.0)
     except Exception:

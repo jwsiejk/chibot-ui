@@ -173,7 +173,13 @@ class ConfirmWindow:
             return ConfirmDecision(None, None)
         gap_ms = (now_ts - self.last_chunk_ts) * 1000.0
         if self.max_gap_ms > 0.0 and gap_ms > self.max_gap_ms:
-            if not self.gap_grace_used:
+            conf_threshold = max(self.min_confidence, 0.6)
+            have_confident_partial = (
+                self.partial_confidence is not None
+                and self.partial_confidence >= conf_threshold
+                and self.partial_tokens >= self.min_tokens
+            )
+            if have_confident_partial and not self.gap_grace_used:
                 elapsed = self._elapsed_ms(now_ts)
                 early_window = elapsed <= (self.min_duration_ms + self.max_gap_ms)
                 if early_window or self.total_bytes <= 12000:
@@ -184,6 +190,10 @@ class ConfirmWindow:
 
     def _can_commit(self) -> bool:
         if self.partial_tokens < self.min_tokens:
+            return False
+        if self.partial_confidence is None:
+            return False
+        if self.partial_confidence < max(self.min_confidence, 0.6):
             return False
         if not self.snr_enabled:
             return True
