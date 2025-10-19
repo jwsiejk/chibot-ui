@@ -84,11 +84,15 @@ function rearmLocalVad(ctx) {
   if (ctx.state.vadArmed) {
     return;
   }
+  const pendingOpts = ctx.state.pendingVadOpts;
+  const opts = pendingOpts || ctx.state.lastVadOpts || {};
   try {
-    const opts = ctx.state.pendingVadOpts || ctx.state.lastVadOpts || {};
-    ctx.state.pendingVadOpts = null;
     ensureVad(ctx, opts);
+    ctx.state.pendingVadOpts = null;
   } catch (err) {
+    if (pendingOpts != null) {
+      ctx.state.pendingVadOpts = pendingOpts;
+    }
     if (typeof console !== 'undefined' && console.warn) {
       console.warn('[voice][vad] rearm failed', err);
     }
