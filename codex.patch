@@ -1,1157 +1,801 @@
-diff --git a/static/js/audio.js b/static/js/audio.js
-index 244298cab44065635d3fa942a93a1fd0c7c72e59..e4a323dfd900bb967dccb5433ef2f9b8672e3b64 100644
---- a/static/js/audio.js
-+++ b/static/js/audio.js
-@@ -1,137 +1,225 @@
- // static/js/audio.js — unified playback (MSE chunked by MIME) + unlockAudio
- // Backwards compatible:
- //   • playStream(chunks, mime?)            // legacy
- //   • playStream(frameObject)              // { mime, audio_chunks:[], is_last }
- // New helpers:
- //   • audioEnd() — mark natural end-of-utterance (drain then endOfStream)
- //   • audioTeardown() — hard reset pipeline (optional)
+diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
+index 871597a5e75bcb05b6fc30cca1312262dec366d6..da05f5cd637cd5657bf4763cf8c8792ce87ac3bf 100644
+--- a/app/api_v1/flow.py
++++ b/app/api_v1/flow.py
+@@ -1,28 +1,29 @@
+ from __future__ import annotations
  
- import { ChunkedAudioPlayer } from './audio_player.js';
-+import { emitFlowBreadcrumb } from './flow_breadcrumbs.js';
- import { logIfEnabled } from './util/logging.js';
+ import copy
++import gzip
+ import hashlib
+ import io
+ import json
+ import re
+ import zipfile
+ from datetime import datetime, timezone
+ import threading
+ import time
+ from collections import deque
+ from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional
  
- const DEFAULT_SIGNATURE = Object.freeze({ rms: 0, rmsDb: -Infinity, mfcc: [], timestamp: 0 });
+ from flask import (
+     Blueprint,
+     Response,
+     abort,
+     jsonify,
+     request,
+     session as flask_session,
+     stream_with_context,
+ )
  
-+const AUDIO_CTX_HOOK_KEY = '__flowBreadcrumbCtxHooked';
+ from app.flow import FlowStore
+ from app.flow.catalog import FLOW_EVENT_CATALOG
+ from app.security_state import get_user
+ from app.utils.admin import is_admin_email
+@@ -454,86 +455,267 @@ def flow_event():
+ 
+ @bp.get("/flow/export.ndjson")
+ def flow_export_ndjson():
+     _require_admin()
+ 
+     session_id = _normalize_str(request.args.get("session_id"))
+     if not session_id:
+         abort(400, description="session_id is required")
+ 
+     since_value = _parse_int(request.args.get("since_ms"), name="since_ms", minimum=0)
+     levels = list(_parse_levels(request.args.get("levels")))
+     redacted = _parse_bool(request.args.get("redacted"), default=True)
+ 
+     store = FlowStore()
+ 
+     def _generate() -> Iterable[str]:
+         for event in _iter_session_events(store, session_id, levels, since_value):
+             payload = _redact_event(event) if redacted else event
+             yield json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+ 
+     response = Response(stream_with_context(_generate()), mimetype="application/x-ndjson")
+     response.headers["X-Flow-Redacted"] = "1" if redacted else "0"
+     return response
+ 
+ 
+-@bp.post("/flow/handoff")
++@bp.route("/flow/handoff", methods=["GET", "POST"])
+ def flow_handoff():
+     _require_admin()
+ 
+-    payload = request.get_json(silent=True) or {}
+-    session_id = _normalize_str(payload.get("session_id"))
++    payload: Dict[str, Any] = {}
++    query_args = request.args or {}
 +
- let _player = null;
- let _el = null;
- let _lastTtsState = 'ended';
- 
- const _analysis = {
-   ctx: null,
-   source: null,
-   analyser: null,
-   raf: null,
-   timeBuf: null,
-   freqBuf: null,
-   signature: { ...DEFAULT_SIGNATURE },
-   mfccConfig: null,
- };
- 
- const TTS_IDLE_VOLUME = 1.0;
- const TTS_ATTENUATED_VOLUME = 0.5; // ~6 dB reduction to limit mic bleed
- 
- const DEFAULT_MIME = 'audio/webm; codecs="opus"';
- 
-+function _emitAudioCtxBreadcrumb(ctx, origin = 'audio') {
-+  if (!ctx) return;
-+  try {
-+    const state = typeof ctx.state === 'string' ? ctx.state : 'unknown';
-+    const detail = {
-+      state,
-+      origin,
-+      sample_rate: Number.isFinite(ctx.sampleRate) ? ctx.sampleRate : null,
-+    };
-+    emitFlowBreadcrumb('audio_ctx', detail);
-+  } catch {}
-+}
++    if request.method == "POST":
++        raw_payload = request.get_json(silent=True)
++        if isinstance(raw_payload, dict):
++            payload = raw_payload
++        else:
++            payload = {}
 +
-+function _attachAudioCtxBreadcrumb(ctx, origin = 'audio') {
-+  if (!ctx || typeof ctx !== 'object') return;
-+  try {
-+    if (ctx[AUDIO_CTX_HOOK_KEY]) {
-+      return;
-+    }
-+    Object.defineProperty(ctx, AUDIO_CTX_HOOK_KEY, {
-+      value: true,
-+      enumerable: false,
-+      configurable: true,
-+    });
++    def _payload_value(key: str) -> Any:
++        if request.method != "POST":
++            return None
++        return payload.get(key)
 +
-+    const emit = () => _emitAudioCtxBreadcrumb(ctx, origin);
-+    emit();
++    session_id = _normalize_str(
++        _payload_value("session_id") or query_args.get("session_id")
++    )
+     if not session_id:
+         abort(400, description="session_id is required")
+ 
+-    levels = _coerce_levels(payload.get("levels"))
+-    prompt_value = payload.get("prompt")
++    levels_value = _payload_value("levels")
++    if levels_value is None:
++        levels_value = query_args.get("levels")
++    levels = _coerce_levels(levels_value)
 +
-+    const handler = () => emit();
-+    if (typeof ctx.addEventListener === 'function') {
-+      try { ctx.addEventListener('statechange', handler); } catch {}
-+    } else if ('onstatechange' in ctx) {
-+      const prev = ctx.onstatechange;
-+      ctx.onstatechange = function patchedStateChange(ev) {
-+        try { handler(ev); } catch {}
-+        if (typeof prev === 'function') {
-+          try { prev.call(this, ev); } catch {}
++    prompt_value = _payload_value("prompt")
++    if prompt_value is None:
++        prompt_value = query_args.get("prompt")
+     prompt_text = _normalize_str(prompt_value) or DEFAULT_HANDOFF_PROMPT
+ 
++    raw_options: Dict[str, Any] = {}
++    if request.method == "POST":
++        options_payload = payload.get("options")
++        if isinstance(options_payload, dict):
++            raw_options = options_payload
++
++    mode_candidate: Optional[str] = None
++    if request.method == "POST":
++        mode_payload = payload.get("mode")
++        if isinstance(mode_payload, str):
++            mode_candidate = mode_payload
++    options_mode = raw_options.get("mode") if raw_options else None
++    if isinstance(options_mode, str):
++        mode_candidate = options_mode
++    if mode_candidate is None:
++        query_mode = query_args.get("mode")
++        if isinstance(query_mode, str):
++            mode_candidate = query_mode
++    mode_text = _normalize_str(mode_candidate) or "redacted"
++    mode = mode_text.lower()
++    if mode not in {"redacted", "full"}:
++        mode = "redacted"
++    is_full = mode == "full"
++
++    include_options = raw_options.get("include") if raw_options else {}
++    if not isinstance(include_options, dict):
++        include_options = {}
++    privacy_options = raw_options.get("privacy") if raw_options else {}
++    if not isinstance(privacy_options, dict):
++        privacy_options = {}
++    limits_options = raw_options.get("limits") if raw_options else {}
++    if not isinstance(limits_options, dict):
++        limits_options = {}
++
++    max_bytes: Optional[int] = None
++    if "max_bytes" in limits_options:
++        try:
++            max_bytes = int(limits_options.get("max_bytes"))
++        except (TypeError, ValueError):
++            abort(400, description="limits.max_bytes must be an integer")
++        if max_bytes < 0:
++            abort(400, description="limits.max_bytes must be >= 0")
++
+     store = FlowStore()
+-    events = list(_iter_session_events(store, session_id, levels, None))
+-    redacted_events = [_redact_event(event) for event in events]
+-
+-    lines = [
+-        json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+-        for event in redacted_events
+-    ]
+-    ndjson_text = "\n".join(lines)
+-    if ndjson_text:
+-        ndjson_text += "\n"
+-    ndjson_bytes = ndjson_text.encode("utf-8")
+-
+-    sha_hex = hashlib.sha1(ndjson_bytes).hexdigest()
+-    short_hash = sha_hex[:8]
++    snapshot = store.snapshot(session_id=session_id, levels=levels, expand="all")
++    events = snapshot.events
++    event_count = len(events)
++
+     generated_at = datetime.now(timezone.utc).isoformat()
+ 
+-    meta_payload = {
+-        "session_id": session_id,
+-        "levels": levels,
+-        "generated_at": generated_at,
+-        "event_count": len(redacted_events),
+-        "payload_sig": {"bytes": len(ndjson_bytes), "sha1_8": short_hash},
+-    }
+-
+-    buffer = io.BytesIO()
+-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+-        archive.writestr("flow.ndjson", ndjson_bytes)
+-        archive.writestr("prompt.txt", prompt_text)
+-        archive.writestr(
+-            "meta.json",
+-            json.dumps(meta_payload, ensure_ascii=False, indent=2),
+-        )
+-    buffer.seek(0)
++    def _to_ndjson_bytes(items: Iterable[Dict[str, Any]]) -> bytes:
++        lines = [
++            json.dumps(item, ensure_ascii=False, separators=(",", ":"))
++            for item in items
++        ]
++        ndjson_text = "\n".join(lines)
++        if ndjson_text:
++            ndjson_text += "\n"
++        return ndjson_text.encode("utf-8")
++
++    if not is_full:
++        redacted_events = [_redact_event(event) for event in events]
++        ndjson_bytes = _to_ndjson_bytes(redacted_events)
++        payload_sha = hashlib.sha1(ndjson_bytes).hexdigest()
++        meta_payload = {
++            "session_id": session_id,
++            "levels": levels,
++            "generated_at": generated_at,
++            "event_count": len(redacted_events),
++            "payload_sig": {"bytes": len(ndjson_bytes), "sha1_8": payload_sha[:8]},
++            "mode": mode,
 +        }
-+      };
-+    }
-+  } catch {}
-+}
 +
-+function _playWithBreadcrumb(audioEl, { reason } = {}) {
-+  if (!audioEl) return null;
-+  const detailBase = {
-+    reason: reason || 'unknown',
-+    muted: !!audioEl.muted,
-+    volume: Number.isFinite(audioEl.volume) ? audioEl.volume : null,
-+    autoplay: !!audioEl.autoplay,
-+  };
-+  try {
-+    if (typeof document !== 'undefined' && typeof document.hidden === 'boolean') {
-+      detailBase.document_hidden = document.hidden;
-+    }
-+  } catch {}
++        buffer = io.BytesIO()
++        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
++            archive.writestr("flow.ndjson", ndjson_bytes)
++            archive.writestr("prompt.txt", prompt_text)
++            archive.writestr(
++                "meta.json",
++                json.dumps(meta_payload, ensure_ascii=False, indent=2),
++            )
++        zip_bytes = buffer.getvalue()
++    else:
++        event_bytes = _to_ndjson_bytes(events)
++        gzip_buffer = io.BytesIO()
++        with gzip.GzipFile(fileobj=gzip_buffer, mode="wb") as gz_handle:
++            gz_handle.write(event_bytes)
++        events_gz_bytes = gzip_buffer.getvalue()
 +
-+  emitFlowBreadcrumb('play_attempt', detailBase);
++        config_payload = snapshot.config if isinstance(snapshot.config, dict) else {}
++        try:
++            config_text = json.dumps(
++                config_payload, ensure_ascii=False, indent=2, sort_keys=True
++            )
++        except TypeError:
++            config_text = json.dumps({}, ensure_ascii=False, indent=2)
++        config_bytes = config_text.encode("utf-8")
 +
-+  let playResult = null;
-+  try {
-+    playResult = audioEl.play();
-+  } catch (err) {
-+    const message = err?.message || String(err || 'unknown_error');
-+    emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
-+    return null;
-+  }
++        prompt_bytes = prompt_text.encode("utf-8")
 +
-+  const onSuccess = () => emitFlowBreadcrumb('play_result', { ...detailBase, ok: true });
-+  const onError = (err) => {
-+    const message = err?.message || String(err || 'unknown_error');
-+    emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
-+  };
++        include_meta = {
++            str(key): value
++            for key, value in include_options.items()
++            if isinstance(value, bool)
++        }
++        privacy_meta: Dict[str, Any] = {}
++        for key, value in privacy_options.items():
++            key_str = str(key)
++            if isinstance(value, bool):
++                privacy_meta[key_str] = value
++            elif isinstance(value, str):
++                privacy_meta[key_str] = value.strip() or value
++        limits_meta: Dict[str, Any] = {}
++        if max_bytes is not None:
++            limits_meta["max_bytes"] = max_bytes
 +
-+  if (playResult && typeof playResult.then === 'function') {
-+    playResult.then(onSuccess).catch(onError);
-+  } else {
-+    onSuccess();
-+  }
++        def _manifest_entry(
++            path: str,
++            data: bytes,
++            *,
++            content_type: Optional[str] = None,
++            description: Optional[str] = None,
++        ) -> Dict[str, Any]:
++            digest = hashlib.sha1(data).hexdigest()
++            entry: Dict[str, Any] = {
++                "path": path,
++                "bytes": len(data),
++                "sha1": digest,
++                "sha1_first8": digest[:8],
++            }
++            if content_type:
++                entry["content_type"] = content_type
++            if description:
++                entry["description"] = description
++            return entry
 +
-+  return playResult;
-+}
++        manifest_files = [
++            _manifest_entry(
++                "prompt.txt",
++                prompt_bytes,
++                content_type="text/plain; charset=utf-8",
++                description="Flow analysis prompt",
++            ),
++            _manifest_entry(
++                "events/flow.ndjson.gz",
++                events_gz_bytes,
++                content_type="application/x-ndjson+gzip",
++                description="Session events (gzipped NDJSON)",
++            ),
++            _manifest_entry(
++                "config/config.json",
++                config_bytes,
++                content_type="application/json",
++                description="Session configuration snapshot",
++            ),
++        ]
+ 
+-    response = Response(buffer.getvalue(), mimetype="application/zip")
++        manifest_meta: Dict[str, Any] = {"mode": mode, "redacted": False}
++        if include_meta:
++            manifest_meta["include"] = include_meta
++        if privacy_meta:
++            manifest_meta["privacy"] = privacy_meta
++        if limits_meta:
++            manifest_meta["limits"] = limits_meta
++        if snapshot.started_at_iso:
++            manifest_meta["session_started_at"] = snapshot.started_at_iso
 +
- function _emitTtsState(state) {
-   if (!state || state === _lastTtsState) return;
-   _lastTtsState = state;
-   logIfEnabled(() => {
-     try {
-       const tsMs = Date.now();
-       const sessionId = (() => {
-         try { return window?.__askchip_voice_session_id || null; } catch { return null; }
-       })();
-       const turnId = (() => {
-         try { return window?.__askchip_turn_trace_id || null; } catch { return null; }
-       })();
-       if (state === 'playing') {
-         console.info('[tts] playing: true', { ts_ms: tsMs, session_id: sessionId, turn_id: turnId });
-       } else if (state === 'ended' || state === 'stopped') {
-         console.info('[tts] playing: false', { ts_ms: tsMs, session_id: sessionId, turn_id: turnId });
-       }
-     } catch {}
-   });
-   try {
-     window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state } }));
-   } catch {}
- }
++        manifest_payload = {
++            "schema_version": "1.0",
++            "exported_at": generated_at,
++            "session_id": session_id,
++            "levels": levels,
++            "event_count": event_count,
++            "files": manifest_files,
++        }
++        if manifest_meta:
++            manifest_payload["meta"] = manifest_meta
++
++        manifest_bytes = json.dumps(
++            manifest_payload, ensure_ascii=False, indent=2
++        ).encode("utf-8")
++
++        buffer = io.BytesIO()
++        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
++            archive.writestr("prompt.txt", prompt_bytes)
++            archive.writestr("manifest.json", manifest_bytes)
++            archive.writestr("events/flow.ndjson.gz", events_gz_bytes)
++            archive.writestr("config/config.json", config_bytes)
++        zip_bytes = buffer.getvalue()
++
++    if max_bytes is not None and len(zip_bytes) > max_bytes:
++        abort(413, description="export exceeds requested size limit")
++
++    response = Response(zip_bytes, mimetype="application/zip")
+     safe_session = re.sub(r"[^a-zA-Z0-9_-]+", "_", session_id) or "session"
+     response.headers[
+         "Content-Disposition"
+     ] = f'attachment; filename="flow_handoff_{safe_session}.zip"'
+-    response.headers["X-Flow-Redacted"] = "1"
+-    response.headers["X-Flow-Payload-Bytes"] = str(len(ndjson_bytes))
+-    response.headers["X-Flow-Payload-Sha1"] = short_hash
++    response.headers["X-Flow-Redacted"] = "0" if is_full else "1"
++    response.headers["X-Flow-Payload-Bytes"] = str(len(zip_bytes))
++    response.headers["X-Flow-Payload-Sha1"] = hashlib.sha1(zip_bytes).hexdigest()
++    response.headers["X-Flow-Mode"] = mode
+     response.headers["Cache-Control"] = "no-store"
+     return response
  
- export async function unlockAudio() {
-   try {
-     const AC = window.AudioContext || window.webkitAudioContext;
-     if (!AC) return;
-     const ctx = new AC();
-+    _attachAudioCtxBreadcrumb(ctx, 'unlock_audio');
-     if (ctx.state === 'suspended') await ctx.resume();
-     const o = ctx.createOscillator();
-     const g = ctx.createGain();
-     g.gain.value = 0.00001;
-     o.connect(g).connect(ctx.destination);
-     o.start();
-     o.stop(ctx.currentTime + 0.01);
-   } catch (_) {}
- }
  
- function ensureEl() {
-   if (_el) return _el;
-   _el = new Audio();
-   _el.autoplay = true;
-   // _el.playsInline = true; // optional (mobile)
-   try {
-     _el.volume = TTS_IDLE_VOLUME;
-     _el.addEventListener('playing', () => {
-       _el.volume = TTS_ATTENUATED_VOLUME;
-       _emitTtsState('playing');
-     });
-     const onEnd = () => {
-       _el.volume = TTS_IDLE_VOLUME;
-       _emitTtsState('ended');
-       _analysis.signature = { ...DEFAULT_SIGNATURE };
-     };
-     _el.addEventListener('pause', onEnd);
-     _el.addEventListener('ended', onEnd);
-   } catch {}
-   try { _ensureSignatureTracker(); } catch {}
-   return _el;
- }
- 
- function ensurePlayer(mime) {
-   ensureEl();
-   const m = mime || DEFAULT_MIME;
-   if (!_player) _player = new ChunkedAudioPlayer(_el, m);
-   _player.setMime(m);
-   return _player;
- }
- 
- function _ensureSignatureTracker() {
-   if (!_el) return;
-   if (_analysis.ctx && _analysis.analyser) return;
- 
-   const AC = window.AudioContext || window.webkitAudioContext;
-   if (!AC) return;
- 
-   try {
-     const ctx = new AC();
-+    _attachAudioCtxBreadcrumb(ctx, 'playback_analysis');
-     if (ctx.state === 'suspended') {
-       try { ctx.resume(); } catch {}
-     }
- 
-     let source = null;
-     try {
-       if (typeof _el.captureStream === 'function') {
-         const stream = _el.captureStream();
-         if (stream) {
-           source = ctx.createMediaStreamSource(stream);
-         }
-       }
-     } catch {}
- 
-     if (!source) {
-       try {
-         source = ctx.createMediaElementSource(_el);
-         const passthrough = ctx.createGain();
-         passthrough.gain.value = 1;
-         source.connect(passthrough).connect(ctx.destination);
-       } catch (err) {
-         console.warn('[audio] failed to create analysis source', err);
-         try { ctx.close(); } catch {}
-         return;
-       }
-@@ -369,36 +457,36 @@ export function stopPlayback() {
-   try { _player?.stop(); } catch {}
-   try { ensureEl().pause(); } catch {}
-   try { ensureEl().volume = TTS_IDLE_VOLUME; } catch {}
-   _emitTtsState('ended');
- }
- 
- export function isPlaying() {
-   try { return !!(_el && !_el.paused); } catch { return false; }
- }
- 
- export function pausePlayback() {
-   try {
-     const el = ensureEl();
-     if (!el.paused) {
-       el.pause();
-       el.volume = TTS_IDLE_VOLUME;
-       _emitTtsState('ended');
-     }
-   } catch {}
- }
- 
- export function resumePlayback() {
-   try {
-     const el = ensureEl();
-     if (el.paused) {
--      const rv = el.play();
-+      const rv = _playWithBreadcrumb(el, { reason: 'resume_playback' });
-       if (rv && typeof rv.then === 'function') {
-         rv.then(() => _emitTtsState('playing')).catch(() => {});
--      } else {
-+      } else if (!el.paused) {
-         _emitTtsState('playing');
-       }
-     }
-   } catch {}
- }
- 
- export function setVisemeCallback(_fn) { /* no-op in 2D */ }
-diff --git a/static/js/audio_player.js b/static/js/audio_player.js
-index 44014588d571538296a18dc3cc90efd78b130a6f..f899eaefdf51298f46cb5241ec2168aff8e24c3b 100644
---- a/static/js/audio_player.js
-+++ b/static/js/audio_player.js
+ __all__ = ["bp"]
+diff --git a/app/flow/trace.py b/app/flow/trace.py
+index 5cb637be30fd7e51b2024d93cbe81928ea2c1174..dfda374a85e288663f08648e30878c186a1a07d8 100644
+--- a/app/flow/trace.py
++++ b/app/flow/trace.py
 @@ -1,27 +1,28 @@
- // ChunkedAudioPlayer — plays streamed audio via MediaSource (dynamic MIME)
- // Production-optimized: queue-based, safe re-init, and graceful end-of-stream.
-+import { emitFlowBreadcrumb } from './flow_breadcrumbs.js';
- export class ChunkedAudioPlayer {
-   constructor(audioEl, mime = 'audio/webm; codecs="opus"') {
-     this.audioEl = audioEl;
+ from __future__ import annotations
  
-     // MSE state
-     this.mediaSource = null;
-     this.sourceBuffer = null;
-     this.objectUrl = null;
++import copy
+ import threading
+ import time
+ from collections import deque
+ from dataclasses import dataclass, field
+ from datetime import datetime, timezone
+ from typing import Any, Deque, Dict, Iterable, List, Optional, Set, Tuple
  
-     // Stream state
-     this.queue = [];
-     this.initialized = false;
-     this.mime = mime;
-     this.endingRequested = false; // logical end requested; endOfStream after queue drains
-     this._pendingReinit = false;
+ MAX_EVENTS = 5000
+ DEDUP_WINDOW_MS = 100
+ ASR_PARTIAL_TYPE = "asr_partial_first"
+ BARGE_IN_TYPE = "barge_in"
+ BARGE_PAUSE_TYPES = {"barge_pause", "barge_hold"}
+ BARGE_RESUME_TYPE = "barge_resume"
+ TTS_START_TYPE = "tts_start"
+ TTS_END_TYPE = "tts_end"
+ LLM_START_TYPE = "llm_start"
+ LLM_FINAL_TYPE = "llm_final"
+ CONFIRM_OPEN_TYPE = "confirm_open"
+ CONFIRM_CLOSE_TYPE = "confirm_close"
  
-     // Bound handlers
-     this._onSourceOpen = this._onSourceOpen.bind(this);
-     this._onUpdateEnd  = this._onUpdateEnd.bind(this);
-   }
+ MAX_BATCH_ITEMS = 1000
+ MAX_BATCH_BYTES = 512 * 1024
  
-   // --- Public API -----------------------------------------------------------
+ # Simple static blurbs with light interpolation.
+ BLURBS: Dict[str, str] = {
+@@ -68,50 +69,63 @@ class EventRecord:
+                 payload["children"] = children
+         elif self.children_ids:
+             payload["children"] = list(self.children_ids)
+         if self.batches:
+             payload["batches"] = [dict(batch) for batch in self.batches]
+         return payload
  
-   setMime(mime) {
-     if (!mime || this.mime === mime) return;
-@@ -181,30 +182,71 @@ export class ChunkedAudioPlayer {
-     // Put the failed chunk back at the front of the queue to replay after re-init
-     if (firstChunkToReplay) this.queue.unshift(firstChunkToReplay);
  
-     // Recreate pipeline but keep the buffered queue
-     this._reinitPipeline({ keepQueue: true });
+ @dataclass
+ class SessionBucket:
+     session_id: str
+     started_at_iso: str
+     t0_monotonic: float
+     seq: int = 1
+     events: Deque[EventRecord] = field(default_factory=deque)
+     event_index: Dict[str, EventRecord] = field(default_factory=dict)
+     dedupe: Dict[Tuple[str, str, Optional[str]], Tuple[float, str]] = field(default_factory=dict)
+     asr_partial_turns: Dict[str, str] = field(default_factory=dict)
+     barge_paused: bool = False
+     open_confirms: Dict[str, EventRecord] = field(default_factory=dict)
+     open_tts: Dict[str, EventRecord] = field(default_factory=dict)
+     open_llm: Dict[str, EventRecord] = field(default_factory=dict)
+     tts_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
  
-     // Allow a tick for MSE to open before we resume pumping
-     setTimeout(() => {
-       this._pendingReinit = false;
-       this._pump();
-       this._ensurePlayUnlocked();
-     }, 0);
-   }
  
-   _reinitPipeline({ keepQueue } = { keepQueue: true }) {
-     const savedQueue = keepQueue ? this.queue.slice(0) : [];
-     this.teardown();
-     this.queue = savedQueue;
-     this._initOnce();
-   }
- 
-   _ensurePlayUnlocked() {
-     try {
-       if (this.audioEl && this.audioEl.paused) {
-         // Autoplay can be blocked; Start button should have unlocked it already.
--        this.audioEl.play().catch(() => {});
-+        this._attemptPlay('ensure_play_unlocked');
-       }
-     } catch {}
-   }
++@dataclass
++class FlowSessionSnapshot:
++    session_id: str
++    started_at_iso: Optional[str]
++    levels: List[str]
++    events: List[Dict[str, Any]]
++    config: Optional[Dict[str, Any]]
 +
-+  _attemptPlay(reason = 'auto') {
-+    const audioEl = this.audioEl;
-+    if (!audioEl) return null;
-+    const detailBase = {
-+      reason,
-+      muted: !!audioEl.muted,
-+      volume: Number.isFinite(audioEl.volume) ? audioEl.volume : null,
-+      autoplay: !!audioEl.autoplay,
-+    };
-+    try {
-+      if (typeof document !== 'undefined' && typeof document.hidden === 'boolean') {
-+        detailBase.document_hidden = document.hidden;
-+      }
-+    } catch {}
++    @property
++    def event_count(self) -> int:
++        return len(self.events)
 +
-+    emitFlowBreadcrumb('play_attempt', detailBase);
 +
-+    let playResult = null;
-+    try {
-+      playResult = audioEl.play();
-+    } catch (err) {
-+      const message = err?.message || String(err || 'unknown_error');
-+      emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
-+      return null;
+ class FlowStore:
+     """Thread-safe, singleton flow trace store."""
+ 
+     _instance: Optional["FlowStore"] = None
+     _singleton_lock = threading.Lock()
+ 
+     @classmethod
+     def instance(cls) -> "FlowStore":
+         """Return the singleton FlowStore instance."""
+         return cls()
+ 
+     def __new__(cls) -> "FlowStore":
+         with cls._singleton_lock:
+             if cls._instance is None:
+                 cls._instance = super().__new__(cls)
+                 cls._instance._init()
+         return cls._instance
+ 
+     def _init(self) -> None:
+         self._lock = threading.RLock()
+         self._sessions: Dict[str, SessionBucket] = {}
+         self._event_sessions: Dict[str, str] = {}
+ 
+     # ------------------------------------------------------------------
+     # Public API
+@@ -190,50 +204,103 @@ class FlowStore:
+             record.batches.append(batch_payload)
+             return True
+ 
+     def add_batch_for_event(self, parent_id: str, kind: str, items: Iterable[Any]) -> bool:
+         items_list = list(items)
+         if len(items_list) > MAX_BATCH_ITEMS:
+             raise ValueError("batch too large")
+         serialized = str(items_list).encode("utf-8")
+         if len(serialized) > MAX_BATCH_BYTES:
+             raise ValueError("batch exceeds size limit")
+ 
+         with self._lock:
+             session_id = self._event_sessions.get(parent_id)
+             if session_id is None:
+                 return False
+             bucket = self._sessions.get(session_id)
+             if not bucket:
+                 return False
+             record = bucket.event_index.get(parent_id)
+             if not record:
+                 return False
+             batch_payload = {"kind": kind, "items": items_list}
+             record.batches.append(batch_payload)
+             return True
+ 
++    def snapshot(
++        self,
++        session_id: str,
++        *,
++        levels: Iterable[str] = ("flow", "transition"),
++        expand: str = "all",
++    ) -> FlowSessionSnapshot:
++        sanitized_levels: List[str] = []
++        seen: Set[str] = set()
++        for level in levels:
++            try:
++                text = str(level)
++            except Exception:
++                continue
++            text = text.strip()
++            if not text or text in seen:
++                continue
++            seen.add(text)
++            sanitized_levels.append(text)
++        if not sanitized_levels:
++            sanitized_levels = ["flow", "transition"]
++
++        with self._lock:
++            bucket = self._sessions.get(session_id)
++            if not bucket:
++                return FlowSessionSnapshot(
++                    session_id=session_id,
++                    started_at_iso=None,
++                    levels=list(sanitized_levels),
++                    events=[],
++                    config=None,
++                )
++
++            self._inject_safety_events(bucket)
++            expand_policy = self._parse_expand(expand)
++            level_filter = set(sanitized_levels)
++
++            events: List[Dict[str, Any]] = []
++            for record in bucket.events:
++                if level_filter and record.data.get("level") not in level_filter:
++                    continue
++                events.append(self._format_event(bucket, record, expand_policy))
++
++            config = self._extract_session_config(bucket)
++
++            return FlowSessionSnapshot(
++                session_id=session_id,
++                started_at_iso=bucket.started_at_iso,
++                levels=list(sanitized_levels),
++                events=events,
++                config=config,
++            )
++
+     def list(
+         self,
+         session_id: str,
+         since_ms: Optional[int] = None,
+         limit: int = 200,
+         levels: Iterable[str] = ("flow", "transition"),
+         expand: str = "flow",
+     ) -> Dict[str, Any]:
+         with self._lock:
+             bucket = self._sessions.get(session_id)
+             if not bucket:
+                 return {
+                     "session_id": session_id,
+                     "started_at": None,
+                     "events": [],
+                     "next_since_ms": since_ms or 0,
+                     "hints": [],
+                 }
+             self._inject_safety_events(bucket)
+             levels_set = set(levels)
+             since_value = since_ms or 0
+             expand_policy = self._parse_expand(expand)
+ 
+             events: List[Dict[str, Any]] = []
+             count = 0
+@@ -298,50 +365,62 @@ class FlowStore:
+                 )
+ 
+             filtered.sort(
+                 key=lambda item: (item["last_event_ms"], item["event_count"], item["session_id"]),
+                 reverse=True,
+             )
+ 
+             if limit is not None and limit >= 0:
+                 return filtered[: limit or 0] if limit == 0 else filtered[:limit]
+             return filtered
+ 
+     def get(self, session_id: str, event_id: str) -> Optional[Dict[str, Any]]:
+         with self._lock:
+             bucket = self._sessions.get(session_id)
+             if not bucket:
+                 return None
+             record = bucket.event_index.get(event_id)
+             if not record:
+                 return None
+             expand_policy = {"mode": "all", "ids": set()}
+             return self._format_event(bucket, record, expand_policy)
+ 
+     # ------------------------------------------------------------------
+     # Internal helpers
+     # ------------------------------------------------------------------
++    def _extract_session_config(self, bucket: SessionBucket) -> Optional[Dict[str, Any]]:
++        for record in reversed(bucket.events):
++            if record.data.get("type") != "session_config":
++                continue
++            meta = record.data.get("meta")
++            if not isinstance(meta, dict):
++                continue
++            config = meta.get("config")
++            if isinstance(config, dict):
++                return copy.deepcopy(config)
++        return None
++
+     def _ensure_bucket(self, session_id: str) -> SessionBucket:
+         bucket = self._sessions.get(session_id)
+         if bucket is None:
+             bucket = SessionBucket(
+                 session_id=session_id,
+                 started_at_iso=_utc_now_iso(),
+                 t0_monotonic=time.monotonic(),
+             )
+             self._sessions[session_id] = bucket
+         return bucket
+ 
+     def _extract_turn_id(self, meta: Dict[str, Any]) -> Optional[str]:
+         turn_id = meta.get("turn_id") if isinstance(meta, dict) else None
+         if turn_id is None:
+             return None
+         return str(turn_id)
+ 
+     def _should_suppress(
+         self,
+         bucket: SessionBucket,
+         now: float,
+         type_: str,
+         who: str,
+         turn_id: Optional[str],
+     ) -> Optional[str]:
+diff --git a/tests/test_flow_api.py b/tests/test_flow_api.py
+index f4900753ba7c02bf48cae7fe0d9e868e9339fa71..6332c2bfa6f52b8cd3edda98289e176e0dc10500 100644
+--- a/tests/test_flow_api.py
++++ b/tests/test_flow_api.py
+@@ -1,25 +1,27 @@
++import gzip
++import hashlib
+ import io
+ import json
+ import zipfile
+ 
+ import pytest
+ 
+ from app.api_v1 import flow as flow_api
+ from app.asgi_gateway import app as flask_app
+ from app.flow.trace import FlowStore
+ 
+ 
+ @pytest.fixture(autouse=True)
+ def reset_flow_store():
+     store = FlowStore()
+     store._init()
+     flow_api._CLIENT_BREADCRUMB_HITS.clear()
+     yield
+     store._init()
+     flow_api._CLIENT_BREADCRUMB_HITS.clear()
+ 
+ 
+ @pytest.fixture
+ def admin_env(monkeypatch):
+     monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
+     return {"X-User-Email": "admin@example.com"}
+@@ -242,62 +244,162 @@ def test_flow_handoff_returns_redacted_zip(admin_env):
+         meta={"text": "Hand-off transcript"},
+     )
+     store.emit(
+         "sess-hand",
+         "debug",
+         "session",
+         "payload_sig",
+         "system",
+         meta={"bytes": 99, "sha1_8": "12345678", "path": "dg.message", "payload": "should hide"},
+     )
+ 
+     client = flask_app.test_client()
+     csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
+     token = csrf_resp.headers.get("X-CSRF-Token")
+     handoff_headers = dict(admin_env)
+     if token:
+         handoff_headers["X-CSRF-Token"] = token
+     resp = client.post(
+         "/api/v1/flow/handoff",
+         json={"session_id": "sess-hand", "levels": ["flow", "debug"], "prompt": "Investigate"},
+         headers=handoff_headers,
+     )
+     assert resp.status_code == 200
+     assert resp.headers["Content-Type"].startswith("application/zip")
+     assert resp.headers["X-Flow-Redacted"] == "1"
++    assert resp.headers["X-Flow-Mode"] == "redacted"
++    assert resp.headers["X-Flow-Payload-Bytes"] == str(len(resp.data))
++    assert resp.headers["X-Flow-Payload-Sha1"] == hashlib.sha1(resp.data).hexdigest()
+ 
+     buffer = io.BytesIO(resp.data)
+     with zipfile.ZipFile(buffer) as archive:
+         names = set(archive.namelist())
+         assert {"flow.ndjson", "prompt.txt", "meta.json"}.issubset(names)
+         ndjson_text = archive.read("flow.ndjson").decode("utf-8")
+         assert "Hand-off transcript" not in ndjson_text
+         prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
+         assert prompt_text == "Investigate"
+         meta_payload = json.loads(archive.read("meta.json").decode("utf-8"))
+         assert meta_payload["payload_sig"]["sha1_8"]
+         assert meta_payload["payload_sig"]["bytes"] >= 0
++        assert meta_payload["mode"] == "redacted"
++
++
++def test_flow_handoff_full_mode_includes_manifest(admin_env):
++    store = FlowStore()
++    store.emit(
++        "sess-full",
++        "flow",
++        "session",
++        "session_open",
++        "system",
++        meta={"text": "Full transcript event"},
++    )
++    store.emit(
++        "sess-full",
++        "flow",
++        "session",
++        "session_config",
++        "system",
++        meta={"config": {"foo": "bar", "nested": {"value": 1}}},
++    )
++    store.emit(
++        "sess-full",
++        "debug",
++        "session",
++        "payload_sig",
++        "system",
++        meta={"path": "dg.message", "sha1_8": "feedbeef", "payload": "keep"},
++    )
++
++    client = flask_app.test_client()
++    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
++    token = csrf_resp.headers.get("X-CSRF-Token")
++    headers = dict(admin_env)
++    if token:
++        headers["X-CSRF-Token"] = token
++
++    body = {
++        "session_id": "sess-full",
++        "levels": ["flow", "debug"],
++        "prompt": "Investigate deeply",
++        "options": {
++            "mode": "full",
++            "include": {"ws": True, "logs": False},
++            "privacy": {"pii_scrub": True, "redaction": "minimal"},
++            "limits": {"max_bytes": 5_000_000},
++        },
 +    }
 +
-+    const onSuccess = () => emitFlowBreadcrumb('play_result', { ...detailBase, ok: true });
-+    const onError = (err) => {
-+      const message = err?.message || String(err || 'unknown_error');
-+      emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
-+    };
++    resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
++    assert resp.status_code == 200
++    assert resp.headers["Content-Type"].startswith("application/zip")
++    assert resp.headers["X-Flow-Redacted"] == "0"
++    assert resp.headers["X-Flow-Mode"] == "full"
++    assert resp.headers["X-Flow-Payload-Bytes"] == str(len(resp.data))
++    assert resp.headers["X-Flow-Payload-Sha1"] == hashlib.sha1(resp.data).hexdigest()
 +
-+    if (playResult && typeof playResult.then === 'function') {
-+      playResult.then(onSuccess).catch(onError);
-+    } else {
-+      onSuccess();
-+    }
++    with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
++        names = set(archive.namelist())
++        assert {
++            "prompt.txt",
++            "manifest.json",
++            "events/flow.ndjson.gz",
++            "config/config.json",
++        } <= names
 +
-+    return playResult;
-+  }
- }
-diff --git a/static/js/flow_breadcrumbs.js b/static/js/flow_breadcrumbs.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..0e77552c123f434172de8b803721a23db149bb4c
---- /dev/null
-+++ b/static/js/flow_breadcrumbs.js
-@@ -0,0 +1,115 @@
-+const BREADCRUMB_URL = '/api/v1/flow/breadcrumbs';
++        prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
++        assert prompt_text == "Investigate deeply"
 +
-+function isEnabled() {
-+  try {
-+    return Boolean(globalThis?.__FLOW_BREADCRUMBS_ENABLED);
-+  } catch {
-+    return false;
-+  }
-+}
++        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
++        assert manifest["schema_version"] == "1.0"
++        assert manifest["session_id"] == "sess-full"
++        assert manifest["meta"]["mode"] == "full"
++        assert manifest["meta"]["redacted"] is False
++        assert manifest["meta"]["include"]["ws"] is True
++        assert manifest["meta"]["include"]["logs"] is False
++        assert manifest["meta"]["privacy"]["pii_scrub"] is True
++        assert manifest["meta"]["privacy"]["redaction"] == "minimal"
++        assert manifest["meta"]["limits"]["max_bytes"] == 5_000_000
++        assert manifest["event_count"] >= 2
 +
-+function getSessionId() {
-+  try {
-+    return globalThis?.__askchip_voice_session_id || null;
-+  } catch {
-+    return null;
-+  }
-+}
++        files_meta = {entry["path"]: entry for entry in manifest["files"]}
++        for path, entry in files_meta.items():
++            data = archive.read(path)
++            assert entry["bytes"] == len(data)
++            assert entry["sha1"] == hashlib.sha1(data).hexdigest()
++            assert entry["sha1_first8"] == entry["sha1"][:8]
 +
-+function getTurnId() {
-+  try {
-+    const turn = globalThis?.__askchip_turn_trace_id;
-+    if (typeof turn === 'string' && turn) return turn;
-+    if (Number.isFinite(turn)) return String(turn);
-+  } catch {}
-+  return null;
-+}
++        events_text = gzip.decompress(archive.read("events/flow.ndjson.gz")).decode("utf-8")
++        assert "Full transcript event" in events_text
++        assert "keep" in events_text
 +
-+function sanitizeDetail(detail) {
-+  if (!detail || typeof detail !== 'object') {
-+    return {};
-+  }
-+  try {
-+    return JSON.parse(JSON.stringify(detail));
-+  } catch {
-+    const safe = {};
-+    for (const [key, value] of Object.entries(detail)) {
-+      if (value === undefined) {
-+        continue;
-+      }
-+      if (value === null || typeof value === 'string' || typeof value === 'boolean') {
-+        safe[key] = value;
-+        continue;
-+      }
-+      if (typeof value === 'number') {
-+        safe[key] = Number.isFinite(value) ? value : null;
-+        continue;
-+      }
-+      if (Array.isArray(value)) {
-+        safe[key] = value
-+          .map((item) => {
-+            if (item === null || typeof item === 'string' || typeof item === 'boolean') {
-+              return item;
-+            }
-+            if (typeof item === 'number') {
-+              return Number.isFinite(item) ? item : null;
-+            }
-+            if (typeof item === 'object') {
-+              return sanitizeDetail(item);
-+            }
-+            return String(item);
-+          })
-+          .filter((item) => item !== undefined);
-+        continue;
-+      }
-+      if (typeof value === 'object') {
-+        safe[key] = sanitizeDetail(value);
-+        continue;
-+      }
-+      try {
-+        safe[key] = String(value);
-+      } catch {
-+        safe[key] = null;
-+      }
-+    }
-+    return safe;
-+  }
-+}
-+
-+export function emitFlowBreadcrumb(name, detail = {}) {
-+  if (typeof name !== 'string' || !name) {
-+    return;
-+  }
-+  if (!isEnabled()) {
-+    return;
-+  }
-+
-+  const envelope = {
-+    name,
-+    ts_ms: Date.now(),
-+    session_id: getSessionId(),
-+    turn_id: getTurnId(),
-+    detail: sanitizeDetail(detail),
-+  };
-+
-+  try {
-+    const body = JSON.stringify(envelope);
-+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-+      try {
-+        const blob = new Blob([body], { type: 'application/json' });
-+        if (navigator.sendBeacon(BREADCRUMB_URL, blob)) {
-+          return;
-+        }
-+      } catch {}
-+    }
-+    if (typeof fetch === 'function') {
-+      fetch(BREADCRUMB_URL, {
-+        method: 'POST',
-+        headers: { 'Content-Type': 'application/json' },
-+        body,
-+        keepalive: true,
-+        credentials: 'same-origin',
-+      }).catch(() => {});
-+    }
-+  } catch {}
-+}
-diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index 0aa92e408563bf6a92e0303390b152aef410dcb1..10bf4251c68946d0cc4d26007f4a5ef98c64325a 100644
---- a/static/js/voice/runtime/AdaptiveRuntime.js
-+++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -16,50 +16,51 @@ import {
-   resolveSuppressionMode,
- } from '../utils/policy.js';
- import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
- import { emitVoiceEvent } from '../ui/Events.js';
- import {
-   openWS,
-   waitWSOpen,
-   sendAudioChunk,
-   sendJSON,
- } from '../../ws_module.js';
- // Guarded CloseStream wrapper so we never kill the session before the first user turn.
- import { sendCloseStream as __sendCloseStream } from '../../ws.js';
++        config_payload = json.loads(
++            archive.read("config/config.json").decode("utf-8")
++        )
++        assert config_payload["foo"] == "bar"
++        assert config_payload["nested"]["value"] == 1
  
- function safeCloseStream(reason = '') {
-   try {
-     const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
-     if (!opened) {
-       console.debug('[voice] skip CloseStream (no user turn yet)', { reason });
-       return;
-     }
-   } catch {}
-   __sendCloseStream();
- }
- import { VAD } from '../vad.js';
- import { stopPlayback } from '../../audio.js';
-+import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
- import { logIfEnabled } from '../../util/logging.js';
- import { getSID } from '../../util/sid.js';
  
- const clamp01 = (value) => {
-   const num = Number(value);
-   if (!Number.isFinite(num)) {
-     return 0;
-   }
-   if (num <= 0) {
-     return 0;
-   }
-   if (num >= 1) {
-     return 1;
-   }
-   return num;
- };
+ def test_flow_trace_happy_path_integration(admin_env, flow_clock):
+     store = FlowStore()
+     session_id = "sess-happy"
  
- const clampRange = (value, min, max) => {
-   const numeric = Number.isFinite(value) ? value : 0;
-   return Math.min(max, Math.max(min, numeric));
- };
- 
- const POST_TTS_HOLD_MAX_MS = 200;
- 
- function clearPostTtsRearm(ctx) {
-@@ -160,50 +161,92 @@ function handleTtsPlaybackStarted(ctx, detail) {
- function handleTtsPlaybackEnded(ctx) {
-   if (!ctx?.state) return;
-   dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason: 'tts_ended' });
-   if (!ctx.state.vadShouldRearmAfterTts) {
-     ctx.state.vadSuppressedForTts = false;
-     clearPostTtsRearm(ctx);
-     if (!ctx.state.manualGate) {
-       markReady(ctx, 'post_tts_release');
-     }
-     return;
-   }
-   schedulePostTtsRearm(ctx);
- }
- 
- const PRE_ROLL_MS = 550,
-   RECORD_TIMESLICE_MS = 150,
-   SAFETY_CLOSE_DELAY_MS = 2200,
-   EVIDENCE_MIN_SPEECH_MS = 480,
-   EVIDENCE_MIN_BYTES = 8 * 1024,
-   MIN_VALID_BLOB_BYTES = 1,
-   BARGE_CONFIRM_MS = 420,
-   DUAL_VAD_SILENCE_DEBOUNCE_MS = 300,
-   MIN_TURN_OPEN_MS = 600;
- 
- const ctxRef = { current: null };
-+const MIC_AUDIO_CTX_HOOK_KEY = '__flowBreadcrumbMicCtx';
-+let lastPttDownAtMs = 0;
-+
-+const attachMicAudioCtxBreadcrumb = (ctx, origin = 'mic_capture') => {
-+  if (!ctx || typeof ctx !== 'object') return;
-+  try {
-+    if (ctx[MIC_AUDIO_CTX_HOOK_KEY]) {
-+      return;
-+    }
-+    Object.defineProperty(ctx, MIC_AUDIO_CTX_HOOK_KEY, {
-+      value: true,
-+      enumerable: false,
-+      configurable: true,
-+    });
-+
-+    const emit = () => {
-+      try {
-+        const state = typeof ctx.state === 'string' ? ctx.state : 'unknown';
-+        emitFlowBreadcrumb('audio_ctx', {
-+          state,
-+          origin,
-+          sample_rate: Number.isFinite(ctx.sampleRate) ? ctx.sampleRate : null,
-+        });
-+      } catch {}
-+    };
-+
-+    emit();
-+
-+    const handler = () => emit();
-+    if (typeof ctx.addEventListener === 'function') {
-+      try { ctx.addEventListener('statechange', handler); } catch {}
-+    } else if ('onstatechange' in ctx) {
-+      const prev = ctx.onstatechange;
-+      ctx.onstatechange = function patchedStateChange(ev) {
-+        try { handler(ev); } catch {}
-+        if (typeof prev === 'function') {
-+          try { prev.call(this, ev); } catch {}
-+        }
-+      };
-+    }
-+  } catch {}
-+};
- 
- const initAsrState = () => ({
-   speaking: false,
-   lastPartialTs: 0,
-   lastActivityTs: 0,
-   lastConf: 0,
-   lastPartialLogTs: 0,
-   lastVadLogTs: 0,
-   lastVadLogType: null,
- });
- 
- const ensureAsrState = (ctx) => {
-   if (!ctx?.state) return initAsrState();
-   if (!ctx.state.asr) {
-     ctx.state.asr = initAsrState();
-   }
-   return ctx.state.asr;
- };
- 
- const resetAsrState = (ctx) => {
-   const target = ensureAsrState(ctx);
-   target.speaking = false;
-   target.lastPartialTs = 0;
-   target.lastActivityTs = 0;
-   target.lastConf = 0;
-@@ -1022,50 +1065,51 @@ const ensureTransport = async (ctx) => {
-     ctx.state.wsReady = true;
-     return wsHandle;
-   } catch (err) {
-     ctx.transport.wsPromise = null;
-     ctx.transport.connected = false;
-     ctx.state.wsReady = false;
-     throw err;
-   }
- };
- 
- const teardownTransport = (ctx) => {
-   ctx.transport.connected = false;
-   ctx.state.wsReady = false;
-   ctx.transport.wsPromise = null;
-   if (ctx.transport.safetyTimer) {
-     try { clearTimeout(ctx.transport.safetyTimer); } catch {}
-     ctx.transport.safetyTimer = null;
-   }
- };
- const ensureAudioGraph = (ctx, stream) => {
-   const audio = ctx.audio;
-   if (audio.context && audio.analyser && audio.source) return;
-   const AudioCtx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
-   if (!AudioCtx) throw new Error('AudioContext not supported');
-   audio.context = audio.context || new AudioCtx();
-+  attachMicAudioCtxBreadcrumb(audio.context, 'mic_capture');
-   try {
-     if (typeof audio.context?.resume === 'function') {
-       audio.context.resume().catch(() => {});
-     }
-   } catch {}
-   try {
-     if (audio.context?.state === 'suspended' && typeof audio.context.resume === 'function') {
-       audio.context.resume().catch(() => {});
-     }
-   } catch {}
-   audio.analyser = audio.context.createAnalyser();
-   audio.analyser.fftSize = 2048;
-   audio.analyser.smoothingTimeConstant = 0.4;
-   audio.source = audio.context.createMediaStreamSource(stream);
-   audio.source.connect(audio.analyser);
- };
- 
- const startRecorder = (ctx, stream) => {
-   const { audio } = ctx;
-   if (audio.recorder) return;
-   let mimeType = 'audio/webm; codecs=opus';
-   try {
-     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
-       && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
-       mimeType = 'audio/ogg; codecs=opus';
-@@ -1645,51 +1689,53 @@ const ensureVad = (ctx, opts = {}) => {
-       ctx.state.vadRecording = false;
-       if (!ctx.state.turnOpen) {
-         ctx.state.preCommitASRFeed = false;
-       }
-       if (ctx.state.vadMasked) {
-         ctx.state.vadMasked = false;
-         ctx.evidenceGate.reset('tts_mask_block');
-         logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_release' });
-         return;
-       }
-       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'shadow_only', {
-         reason: 'speech_end',
-       });
-       handleSpeechEnd(ctx, detail);
-     },
-   });
-   audio.vad.start();
-   ctx.state.vadArmed = true;
-   ctx.state.vadSuppressedForTts = false;
-   ctx.state.vadShouldRearmAfterTts = false;
-   dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason: 'vad_armed' });
- };
- 
- const teardownVad = (ctx) => {
-   const { audio } = ctx;
--  if (audio.vad) { try { audio.vad.stop(); } catch {} }
-+  if (audio.vad) {
-+    try { audio.vad.stop({ reason: 'teardown' }); } catch {}
-+  }
-   audio.vad = null;
-   ctx.state.vadArmed = false;
-   ctx.state.vadRecording = false;
- };
- 
- const ensureGreetGate = (ctx, active) => {
-   ctx.state.greetGateActive = !!active;
-   if (!active) { ctx.state.greetGatePhase = 'idle'; ctx.state.greetGateWaiters = []; }
-   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
- };
- 
- const manualBargeAllowed = (ctx) => isTtsMaskActive(ctx);
- 
- export async function initMic(stream = null) {
-   const ctx = ensureCtx();
-   if (stream) ctx.audio.stream = stream;
-   if (!ctx.audio.stream) {
-     const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
-     ctx.audio.stream = await navigator.mediaDevices.getUserMedia(constraints);
-   }
-   ensureAudioGraph(ctx, ctx.audio.stream);
-   return ctx.audio.stream;
- }
- 
- export async function armVAD(stream = null, opts = {}) {
-@@ -1713,161 +1759,211 @@ export async function armVAD(stream = null, opts = {}) {
-   await ensureTransport(ctx).catch(() => {});
-   emitVoiceEvent('armed', { mode: 'adaptive' });
-   return mic;
- }
- 
- export function disarmVAD() {
-   const ctx = ensureCtx();
-   clearPostTtsRearm(ctx);
-   ctx.state.vadShouldRearmAfterTts = false;
-   ctx.state.vadSuppressedForTts = false;
-   teardownVad(ctx); stopRecorder(ctx);
-   closeTurn(ctx, 'manual_disarm');
-   teardownTransport(ctx);
-   setManualGate(ctx, false);
-   ctx.state.pttHeld = false;
-   ctx.state.hasOpenedTurn = false;
-   stopMaskLogging(ctx);
-   dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: 'manual_disarm' });
- }
- 
- export function isRecording() {
-   const ctx = ensureCtx();
-   return !!ctx.state.recording;
- }
- 
--export function bargeIn() {
-+export function bargeIn(meta = {}) {
-   const ctx = ensureCtx();
-   const shouldNotify = manualBargeAllowed(ctx);
-   ctx.state.manualBargeInUsed = true;
-   ctx.state.bargeConfirmActive = false;
-   ctx.state.bargeConfirmUntil = 0;
-   ctx.state.pendingCommitReason = null;
-   clearDualVadTimer(ctx);
-   clearPostTtsRearm(ctx);
-   ctx.state.vadShouldRearmAfterTts = false;
-   ctx.state.vadSuppressedForTts = false;
-   try { stopPlayback(); } catch {}
-   if (ctx.state.turnOpen) {
-     closeTurn(ctx, 'manual_barge_preempt');
-   }
-+  const maskActive = isTtsMaskActive(ctx);
-+  const whileTts = !!(ctx.state.ttsPlaying || maskActive);
-+  const asrState = ctx.state?.asr;
-+  const asrConf = Number.isFinite(asrState?.lastConf) ? Number(asrState.lastConf) : null;
-+  const source = typeof meta?.source === 'string' && meta.source
-+    ? meta.source
-+    : (ctx.state.manualGate ? 'manual' : 'auto');
-+  emitFlowBreadcrumb('barge_in', {
-+    source,
-+    while_tts: whileTts,
-+    asr_conf_at_trigger: asrConf,
-+    manual_gate: !!ctx.state.manualGate,
-+    notify_server: !!shouldNotify,
-+    mask_active: maskActive,
-+  });
-   ctx.state.ttsPlaying = false;
-   ctx.ttsEndedAtMs = nowMs();
-   ctx.ttsMask.clear();
-   if (shouldNotify) {
-     sendJSON({ type: 'manual_barge_in' });
-   }
-   ctx.evidenceGate.reset('manual_barge_in');
-   ctx.shadowBuffer.clear();
-   ctx.audio.lastTimecode = null;
-   emitVoiceEvent('barge_in', { reason: 'manual' });
-   return true;
- }
- 
- export function setVadBoost(value) {
-   const ctx = ensureCtx();
-   const numeric = Number.isFinite(value) ? value : 0;
-   ctx.state.vadBoostDb = Math.max(0, numeric);
-   if (ctx.audio.vad) {
-     teardownVad(ctx); ensureVad(ctx, {});
-   }
- }
- 
- export function setGreetGateActive(active = true) {
-   const ctx = ensureCtx();
-   ensureGreetGate(ctx, active);
-   emitVoiceEvent('greet_gate', { active: ctx.state.greetGateActive });
- }
- 
- export function forceBargeInStart(meta = {}) {
-   const ctx = ensureCtx();
-   if (ctx.state.manualGate) {
-     ctx.state.pttHeld = true;
-     return false;
-   }
- 
-   ctx.state.pttHeld = true;
-+  const maskActive = isTtsMaskActive(ctx);
-+  const whileTts = !!(ctx.state.ttsPlaying || maskActive);
-+  const source = typeof meta?.source === 'string' && meta.source ? meta.source : 'manual';
-+  lastPttDownAtMs = nowMs();
-+  emitFlowBreadcrumb('ptt_down', {
-+    source,
-+    while_tts: whileTts,
-+    manual_gate: true,
-+    mask_active: maskActive,
-+  });
-   clearPostTtsRearm(ctx);
-   ctx.state.vadShouldRearmAfterTts = false;
-   ctx.state.vadSuppressedForTts = false;
-   setManualGate(ctx, true);
- 
--  bargeIn();
-+  bargeIn(meta);
- 
-   ctx.state.manualBargeInUsed = true;
-   ctx.state.ttsPlaying = false;
-   ctx.ttsMask.clear();
-   ctx.ttsEndedAtMs = nowMs();
- 
-   const controlFrame = { type: 'Control', action: 'barge_in_start' };
-   const sent = sendJSON(controlFrame);
-   if (!sent) {
-     ensureTransport(ctx).then(() => {
-       try { sendJSON(controlFrame); } catch {}
-     }).catch(() => {});
-   }
- 
-   dispatchTurnEvent(ctx, TurnEvent.SpeechStart, { reason: 'manual_start' });
-   emitVoiceEvent('barge_in_start', meta);
- 
-   const open = openTurn(ctx, 'manual_start');
-   if (open && typeof open.then === 'function') {
-     open.catch(() => {});
-   }
- 
-   return true;
- }
- 
- export function forceBargeInEnd(opts = {}) {
-   const ctx = ensureCtx();
-   const wasActive = ctx.state.manualGate;
-   const stillHeld = !!opts?.pttHeld;
-+  const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
-+  const nowTs = nowMs();
-+  let durationMs = null;
-+  if (!stillHeld) {
-+    if (Number.isFinite(lastPttDownAtMs)) {
-+      durationMs = Math.max(0, Math.round(nowTs - lastPttDownAtMs));
-+    } else {
-+      durationMs = null;
-+    }
-+    lastPttDownAtMs = 0;
-+  }
-   ctx.state.pttHeld = stillHeld;
-   if (!stillHeld) {
-     setManualGate(ctx, false);
-   }
-   if (!stillHeld) {
-     clearPostTtsRearm(ctx);
-     ctx.state.vadShouldRearmAfterTts = false;
-     ctx.state.vadSuppressedForTts = false;
-     rearmLocalVad(ctx);
-   }
-   ctx.state.ttsPlaying = false;
-   ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });
--  ctx.ttsEndedAtMs = nowMs();
-+  ctx.ttsEndedAtMs = nowTs;
- 
--  const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
-   const released = wasActive && !ctx.state.manualGate;
-+  if (!stillHeld) {
-+    emitFlowBreadcrumb('ptt_up', {
-+      reason,
-+      duration_ms: durationMs,
-+      manual_gate: wasActive,
-+      released,
-+    });
-+  }
-   if (released) {
-     const controlFrame = { type: 'Control', action: 'barge_in_end' };
-     const sent = sendJSON(controlFrame);
-     if (!sent) {
-       ensureTransport(ctx).then(() => {
-         try { sendJSON(controlFrame); } catch {}
-       }).catch(() => {});
-     }
- 
-     if (ctx.state.turnOpen) {
-       closeTurn(ctx, reason);
-     }
-     dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason, force: true });
-     markReady(ctx, reason, { force: true });
-     dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason, force: true });
-   }
- 
-   if (released) {
-     ctx.state.bargeConfirmActive = false;
-     ctx.state.bargeConfirmUntil = 0;
-     ctx.evidenceGate.reset('manual_release');
-     ctx.shadowBuffer.clear();
-     ctx.audio.lastTimecode = null;
-+    emitFlowBreadcrumb('barge_in_end', {
-+      reason,
-+      duration_ms: durationMs,
-+      manual_gate: wasActive,
-+      mask_active: isTtsMaskActive(ctx),
-+      released: true,
-+    });
-     emitVoiceEvent('barge_in_end', opts);
-   }
-   return wasActive;
- }
- 
- const getCtx = () => ctxRef.current;
- 
- export const __TEST_ONLY__ = Object.freeze({
-   getCtx: () => (globalThis.ADVANCED_LOGGING_ENABLED ? getCtx() : null),
-   nowMs,
- });
-diff --git a/static/js/voice/vad.js b/static/js/voice/vad.js
-index 2f0e13904e82f179082eaf9c0b0e9d8e3abec4ea..b4b0a3571d51f5f543817a6ab86ec86e10bd59d0 100644
---- a/static/js/voice/vad.js
-+++ b/static/js/voice/vad.js
-@@ -1,33 +1,34 @@
- // static/js/voice/vad.js
- // Lightweight RMS-based VAD tuned for conversational UX.
- // Features:
- //  • Rolling noise-floor tracking with adaptive thresholds (dB offsets)
- //  • Echo-aware gating (raise thresholds while TTS is active)
- //  • Emits onSpeechStart / onSpeechEnd callbacks with metrics
- //  • Safe timers; idempotent start/stop
- 
-+import { emitFlowBreadcrumb } from '../flow_breadcrumbs.js';
- import { logIfEnabled } from '../util/logging.js';
- import { nowMs } from './core/index.js';
- 
- const voiceLog = (level, ...args) => {
-   logIfEnabled(() => {
-     try {
-       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
-       method?.apply(console, args);
-     } catch {}
-   });
- };
- 
- const getSessionId = () => {
-   try {
-     if (typeof window !== 'undefined' && window.__askchip_voice_session_id) {
-       return window.__askchip_voice_session_id;
-     }
-   } catch {}
-   return null;
- };
- 
- const getTurnId = () => {
-   try {
-     if (typeof window !== 'undefined' && window.__askchip_turn_trace_id != null) {
-       return window.__askchip_turn_trace_id;
-@@ -113,50 +114,51 @@ export class VAD {
-       initialNoiseFloorDb: -72,
-       echoStateFn: null,
-       gateFn: null,
-     }, opts || {});
-     this.cbs = cbs || {};
-     this._buf = new Float32Array(this.analyser.fftSize || 2048);
-     this._timer = null;
-     this._recording = false;
-     this._aboveSince = 0;
-     this._belowSince = 0;
-     this._cooldownUntil = 0;
-     this._speechStartedAt = 0;
-     this._activeDetail = null;
-     this._activeNoiseFloorDb = null;
-     this._noiseFloorDb = clampDb(
-       Number.isFinite(this.opts.initialNoiseFloorDb)
-         ? this.opts.initialNoiseFloorDb
-         : -72
-     );
-     this._lastNoiseUpdate = 0;
-     this._legacyStartDb = Number.isFinite(this.opts.startRms) ? rmsToDb(this.opts.startRms) : null;
-     this._legacyStopDb = Number.isFinite(this.opts.stopRms) ? rmsToDb(this.opts.stopRms) : null;
-     this._suppressingEcho = false;
-     this._lastGateLogTs = 0;
-     this._gateWasBlocked = false;
-+    this._startedAt = 0;
-   }
- 
-   _rms() {
-     this.analyser.getFloatTimeDomainData(this._buf);
-     let sum = 0;
-     for (let i = 0; i < this._buf.length; i++) {
-       const v = this._buf[i];
-       sum += v * v;
-     }
-     return Math.sqrt(sum / this._buf.length);
-   }
- 
-   _makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb) {
-     const snrDb = (Number.isFinite(rmsDb) && Number.isFinite(noiseFloorDb))
-       ? rmsDb - noiseFloorDb
-       : null;
-     return {
-       rms,
-       rmsDb,
-       noiseFloorDb,
-       snrDb,
-       thresholds: { startDb, stopDb },
-     };
-   }
- 
-@@ -197,74 +199,95 @@ export class VAD {
-     );
- 
-     let startDb = baseStart;
-     let stopDb = baseStop;
- 
-     if (Number.isFinite(this._legacyStartDb)) {
-       startDb = Math.max(startDb, this._legacyStartDb);
-     }
-     if (Number.isFinite(this._legacyStopDb)) {
-       stopDb = Math.max(stopDb, this._legacyStopDb);
-     }
- 
-     if (echoActive) {
-       startDb += this.opts.echoBoostStartDb ?? 0;
-       stopDb += this.opts.echoBoostStopDb ?? 0;
-     }
- 
-     return {
-       startDb: clampDb(startDb),
-       stopDb: clampDb(stopDb),
-       baseStartDb: baseStart,
-     };
-   }
- 
-   start() {
--    this.stop(); // idempotent
-+    this.stop({ silent: true }); // idempotent
-     this._aboveSince = 0;
-     this._belowSince = 0;
-     this._cooldownUntil = 0;
-     this._speechStartedAt = 0;
-     this._activeDetail = null;
-     this._activeNoiseFloorDb = null;
-     this._suppressingEcho = false;
- 
-     const pollMs = Number.isFinite(this.opts.pollMs) ? this.opts.pollMs : 33;
- 
-     this._timer = setInterval(() => this._pollFrame(), pollMs);
-+    this._startedAt = nowMs();
-+    const sampleRate = Number.isFinite(this.analyser?.context?.sampleRate)
-+      ? this.analyser.context.sampleRate
-+      : null;
-+    emitFlowBreadcrumb('client_vad_start', {
-+      poll_ms: pollMs,
-+      fft_size: Number.isFinite(this.analyser?.fftSize) ? this.analyser.fftSize : null,
-+      sample_rate: sampleRate,
-+    });
-   }
- 
--  stop() {
-+  stop(opts = {}) {
-+    const silent = !!opts?.silent;
-+    const reason = typeof opts?.reason === 'string' ? opts.reason : null;
-     if (this._timer) { clearInterval(this._timer); this._timer = null; }
-     this._recording = false;
-     this._aboveSince = 0;
-     this._belowSince = 0;
-     this._cooldownUntil = 0;
-     this._speechStartedAt = 0;
-     this._activeDetail = null;
-     this._activeNoiseFloorDb = null;
-     this._suppressingEcho = false;
-+    const startedAt = Number.isFinite(this._startedAt) ? this._startedAt : 0;
-+    const durationMs = startedAt > 0 ? Math.max(0, Math.round(nowMs() - startedAt)) : null;
-+    this._startedAt = 0;
-+    if (!silent) {
-+      const detail = {};
-+      if (durationMs !== null) detail.duration_ms = durationMs;
-+      if (Number.isFinite(this.opts.pollMs)) detail.poll_ms = this.opts.pollMs;
-+      if (reason) detail.reason = reason;
-+      emitFlowBreadcrumb('client_vad_stop', detail);
-+    }
-   }
- 
-   isRecording() { return this._recording; }
- 
-   _shouldSuppressEcho(rmsDb, now) {
-     if (!Number.isFinite(rmsDb)) return false;
-     const fn = this.opts.echoSignatureFn;
-     if (typeof fn !== 'function') return false;
-     let signature;
-     try {
-       signature = fn();
-     } catch {
-       return false;
-     }
-     if (!signature || !Number.isFinite(signature.rmsDb)) return false;
-     const requiredGap = Number.isFinite(this.opts.echoSuppressDb)
-       ? this.opts.echoSuppressDb
-       : DEFAULT_SUPPRESS_DB;
-     const maxAge = Number.isFinite(this.opts.echoSignatureMaxAgeMs)
-       ? this.opts.echoSignatureMaxAgeMs
-       : DEFAULT_SIGNATURE_MAX_AGE_MS;
-     const signatureTs = Number.isFinite(signature.timestamp) ? signature.timestamp : null;
-     if (signatureTs !== null) {
-       const age = now - signatureTs;
-       if (Number.isFinite(age) && age > maxAge) {
+     store.emit(session_id, "flow", "session", "session_open", "system")
+     flow_clock(50)
+     confirm_id = store.emit(
+         session_id,
+         "flow",
+         "turn",
+         "confirm_open",
+         "assistant",
+         meta={"turn_id": "1"},
+     )
+     flow_clock(200)
+     store.emit(
+         session_id,
+         "transition",
+         "turn",
+         "asr_partial_first",
+         "client",
+         meta={"turn_id": "1"},
+         parent_id=confirm_id,

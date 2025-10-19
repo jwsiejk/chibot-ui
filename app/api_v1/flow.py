@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gzip
 import hashlib
 import io
 import json
@@ -476,62 +477,243 @@ def flow_export_ndjson():
     return response
 
 
-@bp.post("/flow/handoff")
+@bp.route("/flow/handoff", methods=["GET", "POST"])
 def flow_handoff():
     _require_admin()
 
-    payload = request.get_json(silent=True) or {}
-    session_id = _normalize_str(payload.get("session_id"))
+    payload: Dict[str, Any] = {}
+    query_args = request.args or {}
+
+    if request.method == "POST":
+        raw_payload = request.get_json(silent=True)
+        if isinstance(raw_payload, dict):
+            payload = raw_payload
+        else:
+            payload = {}
+
+    def _payload_value(key: str) -> Any:
+        if request.method != "POST":
+            return None
+        return payload.get(key)
+
+    session_id = _normalize_str(
+        _payload_value("session_id") or query_args.get("session_id")
+    )
     if not session_id:
         abort(400, description="session_id is required")
 
-    levels = _coerce_levels(payload.get("levels"))
-    prompt_value = payload.get("prompt")
+    levels_value = _payload_value("levels")
+    if levels_value is None:
+        levels_value = query_args.get("levels")
+    levels = _coerce_levels(levels_value)
+
+    prompt_value = _payload_value("prompt")
+    if prompt_value is None:
+        prompt_value = query_args.get("prompt")
     prompt_text = _normalize_str(prompt_value) or DEFAULT_HANDOFF_PROMPT
 
+    raw_options: Dict[str, Any] = {}
+    if request.method == "POST":
+        options_payload = payload.get("options")
+        if isinstance(options_payload, dict):
+            raw_options = options_payload
+
+    mode_candidate: Optional[str] = None
+    if request.method == "POST":
+        mode_payload = payload.get("mode")
+        if isinstance(mode_payload, str):
+            mode_candidate = mode_payload
+    options_mode = raw_options.get("mode") if raw_options else None
+    if isinstance(options_mode, str):
+        mode_candidate = options_mode
+    if mode_candidate is None:
+        query_mode = query_args.get("mode")
+        if isinstance(query_mode, str):
+            mode_candidate = query_mode
+    mode_text = _normalize_str(mode_candidate) or "redacted"
+    mode = mode_text.lower()
+    if mode not in {"redacted", "full"}:
+        mode = "redacted"
+    is_full = mode == "full"
+
+    include_options = raw_options.get("include") if raw_options else {}
+    if not isinstance(include_options, dict):
+        include_options = {}
+    privacy_options = raw_options.get("privacy") if raw_options else {}
+    if not isinstance(privacy_options, dict):
+        privacy_options = {}
+    limits_options = raw_options.get("limits") if raw_options else {}
+    if not isinstance(limits_options, dict):
+        limits_options = {}
+
+    max_bytes: Optional[int] = None
+    if "max_bytes" in limits_options:
+        try:
+            max_bytes = int(limits_options.get("max_bytes"))
+        except (TypeError, ValueError):
+            abort(400, description="limits.max_bytes must be an integer")
+        if max_bytes < 0:
+            abort(400, description="limits.max_bytes must be >= 0")
+
     store = FlowStore()
-    events = list(_iter_session_events(store, session_id, levels, None))
-    redacted_events = [_redact_event(event) for event in events]
+    snapshot = store.snapshot(session_id=session_id, levels=levels, expand="all")
+    events = snapshot.events
+    event_count = len(events)
 
-    lines = [
-        json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-        for event in redacted_events
-    ]
-    ndjson_text = "\n".join(lines)
-    if ndjson_text:
-        ndjson_text += "\n"
-    ndjson_bytes = ndjson_text.encode("utf-8")
-
-    sha_hex = hashlib.sha1(ndjson_bytes).hexdigest()
-    short_hash = sha_hex[:8]
     generated_at = datetime.now(timezone.utc).isoformat()
 
-    meta_payload = {
-        "session_id": session_id,
-        "levels": levels,
-        "generated_at": generated_at,
-        "event_count": len(redacted_events),
-        "payload_sig": {"bytes": len(ndjson_bytes), "sha1_8": short_hash},
-    }
+    def _to_ndjson_bytes(items: Iterable[Dict[str, Any]]) -> bytes:
+        lines = [
+            json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+            for item in items
+        ]
+        ndjson_text = "\n".join(lines)
+        if ndjson_text:
+            ndjson_text += "\n"
+        return ndjson_text.encode("utf-8")
 
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("flow.ndjson", ndjson_bytes)
-        archive.writestr("prompt.txt", prompt_text)
-        archive.writestr(
-            "meta.json",
-            json.dumps(meta_payload, ensure_ascii=False, indent=2),
-        )
-    buffer.seek(0)
+    if not is_full:
+        redacted_events = [_redact_event(event) for event in events]
+        ndjson_bytes = _to_ndjson_bytes(redacted_events)
+        payload_sha = hashlib.sha1(ndjson_bytes).hexdigest()
+        meta_payload = {
+            "session_id": session_id,
+            "levels": levels,
+            "generated_at": generated_at,
+            "event_count": len(redacted_events),
+            "payload_sig": {"bytes": len(ndjson_bytes), "sha1_8": payload_sha[:8]},
+            "mode": mode,
+        }
 
-    response = Response(buffer.getvalue(), mimetype="application/zip")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("flow.ndjson", ndjson_bytes)
+            archive.writestr("prompt.txt", prompt_text)
+            archive.writestr(
+                "meta.json",
+                json.dumps(meta_payload, ensure_ascii=False, indent=2),
+            )
+        zip_bytes = buffer.getvalue()
+    else:
+        event_bytes = _to_ndjson_bytes(events)
+        gzip_buffer = io.BytesIO()
+        with gzip.GzipFile(fileobj=gzip_buffer, mode="wb") as gz_handle:
+            gz_handle.write(event_bytes)
+        events_gz_bytes = gzip_buffer.getvalue()
+
+        config_payload = snapshot.config if isinstance(snapshot.config, dict) else {}
+        try:
+            config_text = json.dumps(
+                config_payload, ensure_ascii=False, indent=2, sort_keys=True
+            )
+        except TypeError:
+            config_text = json.dumps({}, ensure_ascii=False, indent=2)
+        config_bytes = config_text.encode("utf-8")
+
+        prompt_bytes = prompt_text.encode("utf-8")
+
+        include_meta = {
+            str(key): value
+            for key, value in include_options.items()
+            if isinstance(value, bool)
+        }
+        privacy_meta: Dict[str, Any] = {}
+        for key, value in privacy_options.items():
+            key_str = str(key)
+            if isinstance(value, bool):
+                privacy_meta[key_str] = value
+            elif isinstance(value, str):
+                privacy_meta[key_str] = value.strip() or value
+        limits_meta: Dict[str, Any] = {}
+        if max_bytes is not None:
+            limits_meta["max_bytes"] = max_bytes
+
+        def _manifest_entry(
+            path: str,
+            data: bytes,
+            *,
+            content_type: Optional[str] = None,
+            description: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            digest = hashlib.sha1(data).hexdigest()
+            entry: Dict[str, Any] = {
+                "path": path,
+                "bytes": len(data),
+                "sha1": digest,
+                "sha1_first8": digest[:8],
+            }
+            if content_type:
+                entry["content_type"] = content_type
+            if description:
+                entry["description"] = description
+            return entry
+
+        manifest_files = [
+            _manifest_entry(
+                "prompt.txt",
+                prompt_bytes,
+                content_type="text/plain; charset=utf-8",
+                description="Flow analysis prompt",
+            ),
+            _manifest_entry(
+                "events/flow.ndjson.gz",
+                events_gz_bytes,
+                content_type="application/x-ndjson+gzip",
+                description="Session events (gzipped NDJSON)",
+            ),
+            _manifest_entry(
+                "config/config.json",
+                config_bytes,
+                content_type="application/json",
+                description="Session configuration snapshot",
+            ),
+        ]
+
+        manifest_meta: Dict[str, Any] = {"mode": mode, "redacted": False}
+        if include_meta:
+            manifest_meta["include"] = include_meta
+        if privacy_meta:
+            manifest_meta["privacy"] = privacy_meta
+        if limits_meta:
+            manifest_meta["limits"] = limits_meta
+        if snapshot.started_at_iso:
+            manifest_meta["session_started_at"] = snapshot.started_at_iso
+
+        manifest_payload = {
+            "schema_version": "1.0",
+            "exported_at": generated_at,
+            "session_id": session_id,
+            "levels": levels,
+            "event_count": event_count,
+            "files": manifest_files,
+        }
+        if manifest_meta:
+            manifest_payload["meta"] = manifest_meta
+
+        manifest_bytes = json.dumps(
+            manifest_payload, ensure_ascii=False, indent=2
+        ).encode("utf-8")
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("prompt.txt", prompt_bytes)
+            archive.writestr("manifest.json", manifest_bytes)
+            archive.writestr("events/flow.ndjson.gz", events_gz_bytes)
+            archive.writestr("config/config.json", config_bytes)
+        zip_bytes = buffer.getvalue()
+
+    if max_bytes is not None and len(zip_bytes) > max_bytes:
+        abort(413, description="export exceeds requested size limit")
+
+    response = Response(zip_bytes, mimetype="application/zip")
     safe_session = re.sub(r"[^a-zA-Z0-9_-]+", "_", session_id) or "session"
     response.headers[
         "Content-Disposition"
     ] = f'attachment; filename="flow_handoff_{safe_session}.zip"'
-    response.headers["X-Flow-Redacted"] = "1"
-    response.headers["X-Flow-Payload-Bytes"] = str(len(ndjson_bytes))
-    response.headers["X-Flow-Payload-Sha1"] = short_hash
+    response.headers["X-Flow-Redacted"] = "0" if is_full else "1"
+    response.headers["X-Flow-Payload-Bytes"] = str(len(zip_bytes))
+    response.headers["X-Flow-Payload-Sha1"] = hashlib.sha1(zip_bytes).hexdigest()
+    response.headers["X-Flow-Mode"] = mode
     response.headers["Cache-Control"] = "no-store"
     return response
 

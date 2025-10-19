@@ -1,3 +1,5 @@
+import gzip
+import hashlib
 import io
 import json
 import zipfile
@@ -264,6 +266,9 @@ def test_flow_handoff_returns_redacted_zip(admin_env):
     assert resp.status_code == 200
     assert resp.headers["Content-Type"].startswith("application/zip")
     assert resp.headers["X-Flow-Redacted"] == "1"
+    assert resp.headers["X-Flow-Mode"] == "redacted"
+    assert resp.headers["X-Flow-Payload-Bytes"] == str(len(resp.data))
+    assert resp.headers["X-Flow-Payload-Sha1"] == hashlib.sha1(resp.data).hexdigest()
 
     buffer = io.BytesIO(resp.data)
     with zipfile.ZipFile(buffer) as archive:
@@ -276,6 +281,103 @@ def test_flow_handoff_returns_redacted_zip(admin_env):
         meta_payload = json.loads(archive.read("meta.json").decode("utf-8"))
         assert meta_payload["payload_sig"]["sha1_8"]
         assert meta_payload["payload_sig"]["bytes"] >= 0
+        assert meta_payload["mode"] == "redacted"
+
+
+def test_flow_handoff_full_mode_includes_manifest(admin_env):
+    store = FlowStore()
+    store.emit(
+        "sess-full",
+        "flow",
+        "session",
+        "session_open",
+        "system",
+        meta={"text": "Full transcript event"},
+    )
+    store.emit(
+        "sess-full",
+        "flow",
+        "session",
+        "session_config",
+        "system",
+        meta={"config": {"foo": "bar", "nested": {"value": 1}}},
+    )
+    store.emit(
+        "sess-full",
+        "debug",
+        "session",
+        "payload_sig",
+        "system",
+        meta={"path": "dg.message", "sha1_8": "feedbeef", "payload": "keep"},
+    )
+
+    client = flask_app.test_client()
+    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
+    token = csrf_resp.headers.get("X-CSRF-Token")
+    headers = dict(admin_env)
+    if token:
+        headers["X-CSRF-Token"] = token
+
+    body = {
+        "session_id": "sess-full",
+        "levels": ["flow", "debug"],
+        "prompt": "Investigate deeply",
+        "options": {
+            "mode": "full",
+            "include": {"ws": True, "logs": False},
+            "privacy": {"pii_scrub": True, "redaction": "minimal"},
+            "limits": {"max_bytes": 5_000_000},
+        },
+    }
+
+    resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("application/zip")
+    assert resp.headers["X-Flow-Redacted"] == "0"
+    assert resp.headers["X-Flow-Mode"] == "full"
+    assert resp.headers["X-Flow-Payload-Bytes"] == str(len(resp.data))
+    assert resp.headers["X-Flow-Payload-Sha1"] == hashlib.sha1(resp.data).hexdigest()
+
+    with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
+        names = set(archive.namelist())
+        assert {
+            "prompt.txt",
+            "manifest.json",
+            "events/flow.ndjson.gz",
+            "config/config.json",
+        } <= names
+
+        prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
+        assert prompt_text == "Investigate deeply"
+
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        assert manifest["schema_version"] == "1.0"
+        assert manifest["session_id"] == "sess-full"
+        assert manifest["meta"]["mode"] == "full"
+        assert manifest["meta"]["redacted"] is False
+        assert manifest["meta"]["include"]["ws"] is True
+        assert manifest["meta"]["include"]["logs"] is False
+        assert manifest["meta"]["privacy"]["pii_scrub"] is True
+        assert manifest["meta"]["privacy"]["redaction"] == "minimal"
+        assert manifest["meta"]["limits"]["max_bytes"] == 5_000_000
+        assert manifest["event_count"] >= 2
+
+        files_meta = {entry["path"]: entry for entry in manifest["files"]}
+        for path, entry in files_meta.items():
+            data = archive.read(path)
+            assert entry["bytes"] == len(data)
+            assert entry["sha1"] == hashlib.sha1(data).hexdigest()
+            assert entry["sha1_first8"] == entry["sha1"][:8]
+
+        events_text = gzip.decompress(archive.read("events/flow.ndjson.gz")).decode("utf-8")
+        assert "Full transcript event" in events_text
+        assert "keep" in events_text
+
+        config_payload = json.loads(
+            archive.read("config/config.json").decode("utf-8")
+        )
+        assert config_payload["foo"] == "bar"
+        assert config_payload["nested"]["value"] == 1
 
 
 def test_flow_trace_happy_path_integration(admin_env, flow_clock):

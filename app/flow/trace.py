@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import threading
 import time
 from collections import deque
@@ -88,6 +89,19 @@ class SessionBucket:
     open_tts: Dict[str, EventRecord] = field(default_factory=dict)
     open_llm: Dict[str, EventRecord] = field(default_factory=dict)
     tts_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass
+class FlowSessionSnapshot:
+    session_id: str
+    started_at_iso: Optional[str]
+    levels: List[str]
+    events: List[Dict[str, Any]]
+    config: Optional[Dict[str, Any]]
+
+    @property
+    def event_count(self) -> int:
+        return len(self.events)
 
 
 class FlowStore:
@@ -212,6 +226,59 @@ class FlowStore:
             record.batches.append(batch_payload)
             return True
 
+    def snapshot(
+        self,
+        session_id: str,
+        *,
+        levels: Iterable[str] = ("flow", "transition"),
+        expand: str = "all",
+    ) -> FlowSessionSnapshot:
+        sanitized_levels: List[str] = []
+        seen: Set[str] = set()
+        for level in levels:
+            try:
+                text = str(level)
+            except Exception:
+                continue
+            text = text.strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            sanitized_levels.append(text)
+        if not sanitized_levels:
+            sanitized_levels = ["flow", "transition"]
+
+        with self._lock:
+            bucket = self._sessions.get(session_id)
+            if not bucket:
+                return FlowSessionSnapshot(
+                    session_id=session_id,
+                    started_at_iso=None,
+                    levels=list(sanitized_levels),
+                    events=[],
+                    config=None,
+                )
+
+            self._inject_safety_events(bucket)
+            expand_policy = self._parse_expand(expand)
+            level_filter = set(sanitized_levels)
+
+            events: List[Dict[str, Any]] = []
+            for record in bucket.events:
+                if level_filter and record.data.get("level") not in level_filter:
+                    continue
+                events.append(self._format_event(bucket, record, expand_policy))
+
+            config = self._extract_session_config(bucket)
+
+            return FlowSessionSnapshot(
+                session_id=session_id,
+                started_at_iso=bucket.started_at_iso,
+                levels=list(sanitized_levels),
+                events=events,
+                config=config,
+            )
+
     def list(
         self,
         session_id: str,
@@ -320,6 +387,18 @@ class FlowStore:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _extract_session_config(self, bucket: SessionBucket) -> Optional[Dict[str, Any]]:
+        for record in reversed(bucket.events):
+            if record.data.get("type") != "session_config":
+                continue
+            meta = record.data.get("meta")
+            if not isinstance(meta, dict):
+                continue
+            config = meta.get("config")
+            if isinstance(config, dict):
+                return copy.deepcopy(config)
+        return None
+
     def _ensure_bucket(self, session_id: str) -> SessionBucket:
         bucket = self._sessions.get(session_id)
         if bucket is None:
