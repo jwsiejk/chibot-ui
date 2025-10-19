@@ -61,8 +61,6 @@ const clampRange = (value, min, max) => {
   return Math.min(max, Math.max(min, numeric));
 };
 
-const POST_TTS_HOLD_MAX_MS = 200;
-
 function clearPostTtsRearm(ctx) {
   if (!ctx?.state) return;
   const timer = ctx.state.ttsRearmTimer;
@@ -87,7 +85,9 @@ function rearmLocalVad(ctx) {
     return;
   }
   try {
-    ensureVad(ctx, {});
+    const opts = ctx.state.pendingVadOpts || ctx.state.lastVadOpts || {};
+    ctx.state.pendingVadOpts = null;
+    ensureVad(ctx, opts);
   } catch (err) {
     if (typeof console !== 'undefined' && console.warn) {
       console.warn('[voice][vad] rearm failed', err);
@@ -108,7 +108,7 @@ function schedulePostTtsRearm(ctx) {
   }
   clearPostTtsRearm(ctx);
   const holdMs = resolvePostTtsHoldMs(ctx);
-  const delay = Math.max(0, Math.min(POST_TTS_HOLD_MAX_MS, holdMs));
+  const delay = Math.max(0, Number.isFinite(holdMs) ? holdMs : 0);
   if (delay <= 0) {
     ctx.state.vadShouldRearmAfterTts = false;
     markReady(ctx, 'post_tts_hold_elapsed');
@@ -134,6 +134,7 @@ function handleTtsPlaybackStarted(ctx, detail) {
   });
   clearPostTtsRearm(ctx);
   ctx.state.ttsSuppressionMode = resolveSuppressionMode(detail);
+  const pendingRearm = ctx.state.pendingVadOpts != null || ctx.state.vadShouldRearmAfterTts === true;
   if (!policyAllowLocalVad()) {
     if (ctx.state.vadArmed) {
       teardownVad(ctx);
@@ -141,16 +142,18 @@ function handleTtsPlaybackStarted(ctx, detail) {
     }
     ctx.state.vadShouldRearmAfterTts = false;
     ctx.state.vadSuppressedForTts = true;
+    ctx.state.pendingVadOpts = null;
     return;
   }
   if (ctx.state.ttsSuppressionMode === POLICY_SUPPRESS_NONE) {
-    ctx.state.vadShouldRearmAfterTts = false;
-    ctx.state.vadSuppressedForTts = false;
+    ctx.state.vadShouldRearmAfterTts = pendingRearm;
+    ctx.state.vadSuppressedForTts = pendingRearm;
     return;
   }
   const wasArmed = !!ctx.state.vadArmed;
-  ctx.state.vadShouldRearmAfterTts = wasArmed;
-  ctx.state.vadSuppressedForTts = wasArmed;
+  const shouldRearm = wasArmed || pendingRearm;
+  ctx.state.vadShouldRearmAfterTts = shouldRearm;
+  ctx.state.vadSuppressedForTts = true;
   ctx.state.ttsHoldStartedMs = nowMs();
   if (wasArmed) {
     teardownVad(ctx);
@@ -161,7 +164,8 @@ function handleTtsPlaybackStarted(ctx, detail) {
 function handleTtsPlaybackEnded(ctx) {
   if (!ctx?.state) return;
   dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason: 'tts_ended' });
-  if (!ctx.state.vadShouldRearmAfterTts) {
+  const shouldRearm = ctx.state.vadShouldRearmAfterTts || ctx.state.pendingVadOpts != null;
+  if (!shouldRearm) {
     ctx.state.vadSuppressedForTts = false;
     clearPostTtsRearm(ctx);
     if (!ctx.state.manualGate) {
@@ -169,6 +173,7 @@ function handleTtsPlaybackEnded(ctx) {
     }
     return;
   }
+  ctx.state.vadShouldRearmAfterTts = true;
   schedulePostTtsRearm(ctx);
 }
 
@@ -437,7 +442,7 @@ const resolvePostTtsHoldMs = (ctx) => {
   const policyHold = policyGet('voice_runtime.barge_in.post_tts_hold_ms', POLICY_NOT_SET);
   if (policyHold !== POLICY_NOT_SET && Number.isFinite(policyHold)) {
     const numeric = Math.max(0, Number(policyHold));
-    return Math.min(POST_TTS_HOLD_MAX_MS, numeric);
+    return numeric;
   }
   const cfg = ctx?.config?.tts ?? {};
   let value;
@@ -456,7 +461,7 @@ const resolvePostTtsHoldMs = (ctx) => {
   if (value <= 0) {
     return 0;
   }
-  return Math.min(POST_TTS_HOLD_MAX_MS, value);
+  return value;
 };
 
 const setManualGate = (ctx, active) => {
@@ -470,6 +475,7 @@ const setManualGate = (ctx, active) => {
     clearPostTtsRearm(ctx);
     ctx.state.vadShouldRearmAfterTts = false;
     ctx.state.vadSuppressedForTts = false;
+    ctx.state.pendingVadOpts = null;
   }
 };
 
@@ -745,6 +751,7 @@ const ensureCtx = () => {
       bargeConfirmActive: false, bargeConfirmUntil: 0,
       wsReady: false, turnOpen: false, hasOpenedTurn: false,
       manualGate: false, manualPttActive: false, pttHeld: false,
+      lastVadOpts: null, pendingVadOpts: null,
       turnSeq: 0, activeTurnId: null,
       ttsPlaying: false, lastChunkAt: 0,
       lastReadyLogAt: 0,
@@ -1706,6 +1713,11 @@ const ensureVad = (ctx, opts = {}) => {
   ctx.state.vadArmed = true;
   ctx.state.vadSuppressedForTts = false;
   ctx.state.vadShouldRearmAfterTts = false;
+  try {
+    ctx.state.lastVadOpts = { ...opts };
+  } catch {
+    ctx.state.lastVadOpts = opts;
+  }
   dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason: 'vad_armed' });
 };
 
@@ -1754,7 +1766,36 @@ export async function armVAD(stream = null, opts = {}) {
       session_id: ctx.sessionId || null,
     });
   }
-  ensureVad(ctx, opts);
+  const localVadAllowed = policyAllowLocalVad();
+  const nowTs = nowMs();
+  const holdMs = resolvePostTtsHoldMs(ctx);
+  const holdActive = Number.isFinite(ctx.state.ttsHoldUntilMs)
+    ? ctx.state.ttsHoldUntilMs > nowTs
+    : false;
+  const ttsActive = !!(ctx.state.ttsPlaying || isTtsMaskActive(ctx));
+  const endedRecently = holdMs > 0
+    && Number.isFinite(ctx.ttsEndedAtMs)
+    && (nowTs - ctx.ttsEndedAtMs) < holdMs;
+  const shouldDeferVad = localVadAllowed
+    && !ctx.state.manualGate
+    && (ctx.state.vadSuppressedForTts || ttsActive || holdActive || endedRecently);
+  if (shouldDeferVad) {
+    try {
+      ctx.state.pendingVadOpts = { ...opts };
+    } catch {
+      ctx.state.pendingVadOpts = opts;
+    }
+    ctx.state.vadShouldRearmAfterTts = true;
+    ctx.state.vadSuppressedForTts = true;
+    if (!ttsActive && !holdActive && endedRecently) {
+      schedulePostTtsRearm(ctx);
+    }
+  } else if (localVadAllowed) {
+    ctx.state.pendingVadOpts = null;
+    ensureVad(ctx, opts);
+  } else {
+    ctx.state.pendingVadOpts = null;
+  }
   startRecorder(ctx, mic);
   await ensureTransport(ctx).catch(() => {});
   emitVoiceEvent('armed', { mode: 'adaptive' });
@@ -1766,6 +1807,7 @@ export function disarmVAD() {
   clearPostTtsRearm(ctx);
   ctx.state.vadShouldRearmAfterTts = false;
   ctx.state.vadSuppressedForTts = false;
+  ctx.state.pendingVadOpts = null;
   teardownVad(ctx); stopRecorder(ctx);
   closeTurn(ctx, 'manual_disarm');
   teardownTransport(ctx);

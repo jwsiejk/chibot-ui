@@ -1,562 +1,463 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index cccd0ace5b66d979f10248071daa18782fc777db..b0d6385089b5ea1705e663048304624758aad2db 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1028,50 +1028,53 @@ async def _emit_user_final_payload(
-                         await on_asr_open_flush()
-                         await asyncio.sleep(0.05)
-                         await on_asr_open_flush()
-                 continue
+diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
+index 10bf4251c68946d0cc4d26007f4a5ef98c64325a..c3801c8f35f5427f065a00ac77f53c8ce196fef2 100644
+--- a/static/js/voice/runtime/AdaptiveRuntime.js
++++ b/static/js/voice/runtime/AdaptiveRuntime.js
+@@ -39,158 +39,163 @@ function safeCloseStream(reason = '') {
+ import { VAD } from '../vad.js';
+ import { stopPlayback } from '../../audio.js';
+ import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
+ import { logIfEnabled } from '../../util/logging.js';
+ import { getSID } from '../../util/sid.js';
  
-             if et in ("user_partial", "user_final"):
-                 is_final = et == "user_final"
-                 text = (ev.get("text") or "").strip()
-                 turn_id_for_event = turn_id_ref[0]
-                 if is_final:
-                     next_turn_id = None
-                     try:
-                         next_turn_id = pending_final_turns.popleft()
-                     except Exception:
-                         next_turn_id = None
-                     if next_turn_id is None:
-                         try:
-                             next_turn_id = min(synthetic_final_turns)
-                             synthetic_final_turns.discard(next_turn_id)
-                         except Exception:
-                             next_turn_id = turn_id_ref[0]
-                     else:
-                         synthetic_final_turns.discard(next_turn_id)
-                     turn_id_for_event = next_turn_id
-                 else:
-+                    allow_barge, _, _, _ = _decide_barge_attempt("vad")
-+                    if not allow_barge:
-+                        continue
-                     with contextlib.suppress(Exception):
-                         asr_seen_partial[0] = True
-                     if turn_timing is not None:
-                         with contextlib.suppress(Exception):
-                             first_holder = turn_timing.setdefault("first_partial", [0.0])
-                             if not first_holder[0]:
-                                 first_holder[0] = time.time()
-                 if (not is_final) and on_asr_partial:
-                     with contextlib.suppress(Exception):
-                         on_asr_partial(ev)
+ const clamp01 = (value) => {
+   const num = Number(value);
+   if (!Number.isFinite(num)) {
+     return 0;
+   }
+   if (num <= 0) {
+     return 0;
+   }
+   if (num >= 1) {
+     return 1;
+   }
+   return num;
+ };
  
-                 preview_text = _clip_text(text)
-                 _jlog(
-                     "dg_transcript",
-                     sid=sid,
-                     turn_id=turn_id_for_event,
-                     is_final=is_final,
-                     chars=len(text),
-                     preview=preview_text,
-                     ts_ms=int(time.time() * 1000),
-                 )
-                 if not is_final:
-                     with contextlib.suppress(Exception):
-                         if _admin_emit:
-                             asr_partial_counter[0] += 1
-@@ -1942,50 +1945,87 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     dg: Optional[DeepgramClient] = None
-     rx_task: Optional[asyncio.Task] = None
-     dg_connect_task: Optional[asyncio.Task] = None
-     dg_state: str = "closed"
-     turn_id_ref = [0]
-     pending_final_turns: Deque[int] = deque()
-     completed_llm_turns: Set[int] = set()
-     synthetic_final_turns: Set[int] = set()
-     final_seen = [False]
-     asr_seen_partial = [False]
-     asr_partial_counter = [0]
-     asr_partial_first_emitted = [False]
-     evidence_gate_emitted = [False]
-     last_confident_partial_conf: List[Optional[float]] = [None]
-     current_assistant_turn_ref: List[Optional[Any]] = [None]
-     manual_commit_pending = [False]
-     manual_button_down = [False]
-     manual_turn_active = [False]
-     ptt_down_emitted = [False]
-     # Runtime flags to coordinate commit + VAD gating
-     assistant_speaking = [False]
-     tts_mask_active = [False]
-     tts_mask_mode = ["none"]
-     tts_mask_release_task: List[Optional[asyncio.Task]] = [None]
-     tts_mask_release_deadline = [0.0]
-+
-+    def _decide_barge_attempt(source: str) -> Tuple[bool, str, str, str]:
-+        src = "ptt" if str(source).lower() == "ptt" else "vad"
-+        try:
-+            current_turn_id = _current_assistant_turn_id(sid)
-+        except Exception:
-+            current_turn_id = None
-+        tts_state, _ = _lookup_tts_state(sid, current_turn_id)
-+        tts_active_now = _is_tts_active(tts_state)
-+        post_hold_active = bool(tts_mask_active[0]) and not tts_active_now
-+        if tts_active_now:
-+            tts_phase = "TTS_ACTIVE"
-+        elif post_hold_active:
-+            tts_phase = "POST_TTS_HOLD"
-+        else:
-+            tts_phase = "IDLE"
-+
-+        allowed = True
-+        reason = "ok"
-+        suppress_mode = (barge_suppress_mode or "none").strip() or "none"
-+        if src == "vad":
-+            if not local_vad_allowed:
-+                allowed = False
-+                reason = "local_vad_disabled"
-+            elif suppress_mode == "all":
-+                if tts_active_now:
-+                    allowed = False
-+                    reason = "tts_active"
-+                elif post_hold_active:
-+                    allowed = False
-+                    reason = "post_tts_hold"
-+        else:
-+            if not manual_feature_enabled:
-+                allowed = False
-+                reason = "ptt_disabled"
-+
-+        return allowed, src, tts_phase, reason
-     pending_confirm_request: List[Optional[Dict[str, Any]]] = [None]
-     asr_ready = [False]
-     local_vad_open = [False]    
-     turn_commit_mode_ref: List[str] = ["vad"]
-     last_ready_signal_after: List[Optional[str]] = [None]
-     active_turn_mode_ref: List[str] = ["vad"]
-     turn_timing: Dict[str, List[float]] = {
-         "start": [0.0],
-         "dg_open": [0.0],
-         "first_partial": [0.0],
-         "final": [0.0],
-         "tts_end": [0.0],
+ const clampRange = (value, min, max) => {
+   const numeric = Number.isFinite(value) ? value : 0;
+   return Math.min(max, Math.max(min, numeric));
+ };
+ 
+-const POST_TTS_HOLD_MAX_MS = 200;
+-
+ function clearPostTtsRearm(ctx) {
+   if (!ctx?.state) return;
+   const timer = ctx.state.ttsRearmTimer;
+   if (timer) {
+     try { clearTimeout(timer); } catch {}
+   }
+   ctx.state.ttsRearmTimer = null;
+   ctx.state.ttsHoldUntilMs = 0;
+ }
+ 
+ function rearmLocalVad(ctx) {
+   if (!ctx?.state) return;
+   ctx.state.vadSuppressedForTts = false;
+   if (!policyAllowLocalVad()) {
+     ctx.state.vadShouldRearmAfterTts = false;
+     return;
+   }
+   if (ctx.state.manualGate) {
+     return;
+   }
+   if (ctx.state.vadArmed) {
+     return;
+   }
+   try {
+-    ensureVad(ctx, {});
++    const opts = ctx.state.pendingVadOpts || ctx.state.lastVadOpts || {};
++    ctx.state.pendingVadOpts = null;
++    ensureVad(ctx, opts);
+   } catch (err) {
+     if (typeof console !== 'undefined' && console.warn) {
+       console.warn('[voice][vad] rearm failed', err);
      }
-     turn_finish_logged = [False]
-     last_partial_ts: List[float] = [0.0]
+   }
+ }
  
-     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
-     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
+ function schedulePostTtsRearm(ctx) {
+   if (!ctx?.state) return;
+   if (!ctx.state.vadShouldRearmAfterTts || ctx.state.manualGate) {
+     ctx.state.vadShouldRearmAfterTts = false;
+     ctx.state.vadSuppressedForTts = false;
+     clearPostTtsRearm(ctx);
+     if (!ctx.state.manualGate) {
+       markReady(ctx, 'post_tts_release');
+     }
+     return;
+   }
+   clearPostTtsRearm(ctx);
+   const holdMs = resolvePostTtsHoldMs(ctx);
+-  const delay = Math.max(0, Math.min(POST_TTS_HOLD_MAX_MS, holdMs));
++  const delay = Math.max(0, Number.isFinite(holdMs) ? holdMs : 0);
+   if (delay <= 0) {
+     ctx.state.vadShouldRearmAfterTts = false;
+     markReady(ctx, 'post_tts_hold_elapsed');
+     rearmLocalVad(ctx);
+     return;
+   }
+   ctx.state.vadSuppressedForTts = true;
+   ctx.state.ttsHoldUntilMs = nowMs() + delay;
+   ctx.state.ttsRearmTimer = setTimeout(() => {
+     ctx.state.ttsRearmTimer = null;
+     ctx.state.ttsHoldUntilMs = 0;
+     ctx.state.vadShouldRearmAfterTts = false;
+     markReady(ctx, 'post_tts_hold_elapsed');
+     rearmLocalVad(ctx);
+   }, delay);
+ }
  
-     # Turn-scoped buffering + state
-     buffered_chunks: Deque[bytes] = deque()
-     sent_any_audio = [False]
-     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
-     no_audio_notified = [False]
-     no_audio_turn_id = [0]
-@@ -2294,50 +2334,62 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             seq = 0
-         return seq + 1 if seq >= 0 else 0
+ function handleTtsPlaybackStarted(ctx, detail) {
+   if (!ctx?.state) return;
+   dispatchTurnEvent(ctx, TurnEvent.TtsStarted, {
+     reason: normalizeVadLabel(detail?.state) || 'tts_started',
+     detail,
+   });
+   clearPostTtsRearm(ctx);
+   ctx.state.ttsSuppressionMode = resolveSuppressionMode(detail);
++  const pendingRearm = ctx.state.pendingVadOpts != null || ctx.state.vadShouldRearmAfterTts === true;
+   if (!policyAllowLocalVad()) {
+     if (ctx.state.vadArmed) {
+       teardownVad(ctx);
+       ctx.state.vadRecording = false;
+     }
+     ctx.state.vadShouldRearmAfterTts = false;
+     ctx.state.vadSuppressedForTts = true;
++    ctx.state.pendingVadOpts = null;
+     return;
+   }
+   if (ctx.state.ttsSuppressionMode === POLICY_SUPPRESS_NONE) {
+-    ctx.state.vadShouldRearmAfterTts = false;
+-    ctx.state.vadSuppressedForTts = false;
++    ctx.state.vadShouldRearmAfterTts = pendingRearm;
++    ctx.state.vadSuppressedForTts = pendingRearm;
+     return;
+   }
+   const wasArmed = !!ctx.state.vadArmed;
+-  ctx.state.vadShouldRearmAfterTts = wasArmed;
+-  ctx.state.vadSuppressedForTts = wasArmed;
++  const shouldRearm = wasArmed || pendingRearm;
++  ctx.state.vadShouldRearmAfterTts = shouldRearm;
++  ctx.state.vadSuppressedForTts = true;
+   ctx.state.ttsHoldStartedMs = nowMs();
+   if (wasArmed) {
+     teardownVad(ctx);
+     ctx.state.vadRecording = false;
+   }
+ }
  
-     def _cancel_confirm_timeout() -> None:
-         task = confirm_timeout_task[0]
-         if task:
-             if not task.done():
-                 task.cancel()
-                 confirm_timeout_cancelled.append(task)
-                 if confirm_flow_parent_id[0]:
-                     _emit_debug_event(
-                         "timer_cancel",
-                         phase="turn",
-                         parent_id=confirm_flow_parent_id[0],
-                         meta={"name": "confirm_timeout"},
-                     )
-             else:
-                 confirm_timeout_cancelled.append(task)
-         confirm_timeout_task[0] = None
+ function handleTtsPlaybackEnded(ctx) {
+   if (!ctx?.state) return;
+   dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason: 'tts_ended' });
+-  if (!ctx.state.vadShouldRearmAfterTts) {
++  const shouldRearm = ctx.state.vadShouldRearmAfterTts || ctx.state.pendingVadOpts != null;
++  if (!shouldRearm) {
+     ctx.state.vadSuppressedForTts = false;
+     clearPostTtsRearm(ctx);
+     if (!ctx.state.manualGate) {
+       markReady(ctx, 'post_tts_release');
+     }
+     return;
+   }
++  ctx.state.vadShouldRearmAfterTts = true;
+   schedulePostTtsRearm(ctx);
+ }
  
-     def _emit_local_vad_signal(now_ts: float) -> None:
-         if local_vad_meta_sent[0]:
-             return
-         if _manual_mode_active():
-             return
-+        allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt("vad")
-+        if not allow_barge:
-+            with contextlib.suppress(Exception):
-+                if allow_reason and allow_reason != "ok":
-+                    _jlog(
-+                        "local_vad_ignored",
-+                        sid=sid,
-+                        by=allow_src,
-+                        state=allow_state,
-+                        reason=allow_reason,
-+                    )
-+            return
-         local_vad_meta_sent[0] = True
-         _maybe_emit_evidence_gate()
-         if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
-             _set_barge_pause_meta("client_vad")
-         _on_local_vad_start()
-         if callable(final_guard_local_vad_ref[0]):
-             with contextlib.suppress(Exception):
-                 final_guard_local_vad_ref[0]("start")
-         payload = {
-             "type": "meta",
-             "turn_id": turn_id_ref[0],
-             "meta": {"local_vad": "start", "ts": int(now_ts * 1000)},
-         }
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "local_vad_start",
-                 sid=sid,
-                 turn_id=turn_id_ref[0],
-                 ts_ms=int(now_ts * 1000),
-             )
-         with contextlib.suppress(Exception):
-             bus.broadcast(sid, payload)
-         try:
-             if loop.is_closed():
-                 return
-@@ -2742,50 +2794,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         except (TypeError, ValueError):
-             conf_val = None
-         text_preview = ev.get("text") if isinstance(ev, dict) else ""
-         try:
-             char_count = len(text_preview or "")
-         except Exception:
-             char_count = 0
-         _record_confirm_partial(now_ts, char_count, conf_val)
-         decision = window.observe_partial(
-             ev.get("token_count"), conf_val, now_ts
-         )
-         if decision.action == "commit" and decision.metrics is not None:
-             _finalize_confirm_commit(
-                 decision.metrics.get("reason") or "partial",
-                 decision.metrics,
-                 window,
-             )
-         elif decision.action == "abort" and decision.metrics is not None:
-             _finalize_confirm_abort(
-                 decision.metrics.get("reason") or "partial",
-                 decision.metrics,
-                 window,
-             )
+ const PRE_ROLL_MS = 550,
+   RECORD_TIMESLICE_MS = 150,
+   SAFETY_CLOSE_DELAY_MS = 2200,
+   EVIDENCE_MIN_SPEECH_MS = 480,
+   EVIDENCE_MIN_BYTES = 8 * 1024,
+   MIN_VALID_BLOB_BYTES = 1,
+   BARGE_CONFIRM_MS = 420,
+   DUAL_VAD_SILENCE_DEBOUNCE_MS = 300,
+   MIN_TURN_OPEN_MS = 600;
  
-     def _handle_asr_partial_with_flow(ev: Dict[str, Any]) -> None:
-+        allow_barge, _, _, _ = _decide_barge_attempt("vad")
-+        if not allow_barge:
-+            return
-         try:
-             _handle_confirm_partial(ev)
-         except Exception:
-             pass
+ const ctxRef = { current: null };
+ const MIC_AUDIO_CTX_HOOK_KEY = '__flowBreadcrumbMicCtx';
+ let lastPttDownAtMs = 0;
  
-         last_partial_ts[0] = time.time()
+ const attachMicAudioCtxBreadcrumb = (ctx, origin = 'mic_capture') => {
+   if (!ctx || typeof ctx !== 'object') return;
+   try {
+     if (ctx[MIC_AUDIO_CTX_HOOK_KEY]) {
+       return;
+     }
+     Object.defineProperty(ctx, MIC_AUDIO_CTX_HOOK_KEY, {
+       value: true,
+@@ -415,83 +420,84 @@ const VAD_NOISE_DELTA_LIMIT_DB = 1.75;
+ const VAD_NOISE_SMOOTHING = 0.25;
  
-         raw_conf = ev.get("confidence") if isinstance(ev, dict) else None
-         conf_val: Optional[float]
-         try:
-             conf_val = float(raw_conf) if raw_conf is not None else None
-         except (TypeError, ValueError):
-             conf_val = None
+ const updateVadBoost = (ctx, boostDb) => {
+   if (!ctx?.state) return;
+   const clamped = clampRange(boostDb, -3, 3);
+   ctx.state.vadBoostDb = clamped;
+   if (ctx?.audio?.vad?.opts) {
+     ctx.audio.vad.opts.startDbOffset = 6 + clamped;
+     ctx.audio.vad.opts.stopDbOffset = 6 + clamped;
+   }
+ };
  
-         if turn_timing is not None:
-             with contextlib.suppress(Exception):
-                 holder = turn_timing.setdefault("first_partial", [0.0])
-                 if not holder[0]:
-                     holder[0] = time.time()
+ const nowMs = () => {
+   try {
+     if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+       return performance.now();
+     }
+   } catch {}
+   return Date.now();
+ };
  
-         if not asr_partial_first_emitted[0]:
-             asr_partial_first_emitted[0] = True
-             meta_conf = conf_val if conf_val is not None else 0.0
-             _emit_transition_event(
-                 "asr_partial_first",
-@@ -3749,61 +3804,79 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                         confirm_ms = 420
-                         try:
-                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
-                         except Exception:
-                             confirm_ms = 420
-                         barge_started = False
-                         should_pause = not (
-                             manual_mode_manual_only and commit_mode == "auto_commit"
-                         )
-                         if should_pause:
-                             active_assistant_turn = current_assistant_turn_ref[0]
-                             tts_state, _tts_key = _lookup_tts_state(
-                                 sid, active_assistant_turn
-                             )
-                             if _is_tts_active(tts_state):
-                                 should_pause = False
-                                 try:
-                                     _jlog(
-                                         "barge_skip_tts_active",
-                                         sid=sid,
-                                         turn_hint=turn_hint,
-                                     )
-                                 except Exception:
-                                     pass
-                         if not manual_turn_active[0] and should_pause:
--                            if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
--                                _set_barge_pause_meta("client_vad")
--                            try:
--                                barge_started = barge.start(
--                                    confirm_ms=confirm_ms,
--                                    on_commit=_on_barge_commit,
--                                    send_state=_send_barge_state,
--                                    auto_commit=False,
--                                )
--                            except Exception:
-+                            allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
-+                                "vad"
-+                            )
-+                            if allow_barge:
-+                                if (
-+                                    not barge_pause_meta_ref[0]
-+                                    or barge_pause_meta_ref[0].get("src") != "ptt"
-+                                ):
-+                                    _set_barge_pause_meta("client_vad")
-+                                try:
-+                                    barge_started = barge.start(
-+                                        confirm_ms=confirm_ms,
-+                                        on_commit=_on_barge_commit,
-+                                        send_state=_send_barge_state,
-+                                        auto_commit=False,
-+                                    )
-+                                except Exception:
-+                                    barge_started = False
-+                            else:
-                                 barge_started = False
-+                                with contextlib.suppress(Exception):
-+                                    if allow_reason and allow_reason != "ok":
-+                                        _jlog(
-+                                            "barge_attempt_ignored",
-+                                            sid=sid,
-+                                            by=allow_src,
-+                                            state=allow_state,
-+                                            reason=allow_reason,
-+                                        )
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         pending_confirm_request[0] = None
-                         if barge_started:
-                             if manual_mode_manual_only:
-                                 try:
-                                     barge.commit(_send_barge_state)
-                                 except Exception:
-                                     pass
-                             else:
-                                 _start_confirm_window(now)
-                         else:
-                             confirm_window_ref[0] = None
-                             local_vad_meta_sent[0] = False
-                             local_vad_open[0] = False
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         turn_connect_started[0] = False
-                         turn_stream_committed[0] = False
-                         asr_direct_stream[0] = False
-                         _cancel_asr_stream_activation()
-@@ -4062,149 +4135,205 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                                 audio_scheduled=audio_on,
-                                             )
-                                 except Exception as e:
-                                     greet_end_pending = False
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "greet_fail", e.__class__.__name__
-                                             ),
-                                         )
-                                     _emit_ws_error("greet_fail")
-                                 finally:
-                                     post_greet_phase_active[0] = True
+ const resolvePostTtsHoldMs = (ctx) => {
+   const policyHold = policyGet('voice_runtime.barge_in.post_tts_hold_ms', POLICY_NOT_SET);
+   if (policyHold !== POLICY_NOT_SET && Number.isFinite(policyHold)) {
+     const numeric = Math.max(0, Number(policyHold));
+-    return Math.min(POST_TTS_HOLD_MAX_MS, numeric);
++    return numeric;
+   }
+   const cfg = ctx?.config?.tts ?? {};
+   let value;
+   if (Number.isFinite(cfg.mask_decay_ms)) {
+     value = cfg.mask_decay_ms;
+   } else if (Number.isFinite(cfg.post_play_hold_ms)) {
+     value = cfg.post_play_hold_ms;
+   } else if (Number.isFinite(cfg.decay_ms)) {
+     value = cfg.decay_ms;
+   } else {
+     value = TTS_POST_PLAY_HOLD_MS;
+   }
+   if (!Number.isFinite(value)) {
+     return TTS_POST_PLAY_HOLD_MS;
+   }
+   if (value <= 0) {
+     return 0;
+   }
+-  return Math.min(POST_TTS_HOLD_MAX_MS, value);
++  return value;
+ };
  
-                             asyncio.create_task(_bg())
+ const setManualGate = (ctx, active) => {
+   if (!ctx?.state) return;
+   const value = !!active;
+   ctx.state.manualGate = value;
+   ctx.state.manualPttActive = value;
+   ctx.state.pendingCommitReason = null;
+   clearDualVadTimer(ctx);
+   if (value) {
+     clearPostTtsRearm(ctx);
+     ctx.state.vadShouldRearmAfterTts = false;
+     ctx.state.vadSuppressedForTts = false;
++    ctx.state.pendingVadOpts = null;
+   }
+ };
  
-                         elif t == "Control":
-                             action_raw = obj.get("action")
-                             action = str(action_raw or "").strip().lower()
-                             meta_payload = obj.get("meta")
-                             if not isinstance(meta_payload, dict):
-                                 meta_payload = {}
+ const logReadyState = (ctx) => {
+   if (!ctx || !ctx.state) return;
+   const tsLocal = nowMs();
+   const last = Number.isFinite(ctx.state.lastReadyLogAt) ? ctx.state.lastReadyLogAt : 0;
+   if (tsLocal - last < 25) {
+     return;
+   }
+   ctx.state.lastReadyLogAt = tsLocal;
+   const ts = Date.now();
+   voiceLog('info', "state { phase:'ready' }", {
+     ts_ms: ts,
+     session_id: ctx.sessionId || null,
+     turn_id: ctx.state.activeTurnId || null,
+   });
+ };
  
-                             if action == "ptt_down":
--                                tts_active_now = _current_tts_active()
-+                                allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
-+                                    "ptt"
-+                                )
-+                                if not allow_barge:
-+                                    with contextlib.suppress(Exception):
-+                                        if allow_reason and allow_reason != "ok":
-+                                            _jlog(
-+                                                "ptt_ignored",
-+                                                sid=sid,
-+                                                by=allow_src,
-+                                                state=allow_state,
-+                                                reason=allow_reason,
-+                                            )
-+                                    continue
-+                                tts_active_now = allow_state == "TTS_ACTIVE"
-                                 _emit_transition_event(
-                                     "ptt_down",
-                                     meta={"during_tts": bool(tts_active_now)},
-                                     phase="ptt",
-                                 )
-                                 _set_barge_pause_meta("ptt", tts_active=tts_active_now)
-                                 ptt_down_emitted[0] = True
-                                 continue
+ const stopMaskLogging = (ctx) => {
+   if (!ctx) return;
+   if (ctx.maskLogTimer) {
+     try { clearInterval(ctx.maskLogTimer); } catch {}
+   }
+   ctx.maskLogTimer = null;
+@@ -723,50 +729,51 @@ const ensureCtx = () => {
+   } catch {}
+   const evidenceGate = new EvidenceGate({
+     snrSigma: config.evidence?.snr_sigma,
+     asrConf: config.evidence?.asr_conf,
+     baseSnrDb: config.evidence?.baseSnrDb,
+     evidence: config.evidence,
+   });
+   const shadowBuffer = new ShadowBuffer({ maxMs: config.shadow?.ms ?? PRE_ROLL_MS });
+   const ttsMask = new TtsMask();
+   try {
+     if (typeof window !== 'undefined') {
+       window.__askchip_voice_session_id = sessionId;
+     }
+   } catch {}
  
-                             if action == "ptt_up":
--                                tts_active_now = _current_tts_active()
-+                                allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
-+                                    "ptt"
-+                                )
-+                                if not allow_barge:
-+                                    with contextlib.suppress(Exception):
-+                                        if allow_reason and allow_reason != "ok":
-+                                            _jlog(
-+                                                "ptt_ignored",
-+                                                sid=sid,
-+                                                by=allow_src,
-+                                                state=allow_state,
-+                                                reason=allow_reason,
-+                                            )
-+                                    continue
-+                                tts_active_now = allow_state == "TTS_ACTIVE"
-                                 _emit_transition_event(
-                                     "ptt_up",
-                                     meta={"during_tts": bool(tts_active_now)},
-                                     phase="ptt",
-                                 )
-                                 ptt_down_emitted[0] = False
-                                 continue
+   const ctx = {
+     config,
+     sessionId,
+     state: {
+       turnState: TurnState.Idle, recording: false, vadArmed: false,
+       vadBoostDb: 0, vadNoiseBaselineDb: null, greetGateActive: false, greetGatePhase: 'idle',
+       greetGateWaiters: [], manualBargeInUsed: false,
+       bargeConfirmActive: false, bargeConfirmUntil: 0,
+       wsReady: false, turnOpen: false, hasOpenedTurn: false,
+       manualGate: false, manualPttActive: false, pttHeld: false,
++      lastVadOpts: null, pendingVadOpts: null,
+       turnSeq: 0, activeTurnId: null,
+       ttsPlaying: false, lastChunkAt: 0,
+       lastReadyLogAt: 0,
+       vadRecording: false,
+       lastUserAudioMs: 0,
+       dualVadBothSilentAt: null,
+       turnOpenedAtMs: 0,
+       preCommitASRFeed: false,
+       vadMasked: false,
+       pendingCommitReason: null,
+       readyPending: false,
+       readyForTurnSeq: 0,
+       asr: initAsrState(),
+       dualVadCloseTimer: null,
+       dualVadLogSnapshot: null,
+       lastDualVadLogTs: 0,
+       lastPreCommitFeedMode: 'shadow_only',
+       ttsRearmTimer: null,
+       ttsHoldUntilMs: 0,
+       vadShouldRearmAfterTts: false,
+       vadSuppressedForTts: false,
+       ttsSuppressionMode: POLICY_SUPPRESS_NONE,
+       ttsHoldStartedMs: 0,
+       evidenceGate, shadowBuffer, ttsMask,
+     },
+@@ -1684,110 +1691,145 @@ const ensureVad = (ctx, opts = {}) => {
+         reason: 'speech_start',
+       });
+       handleSpeechStart(ctx, detail);
+     },
+     onSpeechEnd: (detail) => {
+       ctx.state.vadRecording = false;
+       if (!ctx.state.turnOpen) {
+         ctx.state.preCommitASRFeed = false;
+       }
+       if (ctx.state.vadMasked) {
+         ctx.state.vadMasked = false;
+         ctx.evidenceGate.reset('tts_mask_block');
+         logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_release' });
+         return;
+       }
+       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'shadow_only', {
+         reason: 'speech_end',
+       });
+       handleSpeechEnd(ctx, detail);
+     },
+   });
+   audio.vad.start();
+   ctx.state.vadArmed = true;
+   ctx.state.vadSuppressedForTts = false;
+   ctx.state.vadShouldRearmAfterTts = false;
++  try {
++    ctx.state.lastVadOpts = { ...opts };
++  } catch {
++    ctx.state.lastVadOpts = opts;
++  }
+   dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason: 'vad_armed' });
+ };
  
-                             if action == "vad_gate_open":
-                                 reason_val = meta_payload.get("reason")
-                                 if reason_val is None:
-                                     reason_val = obj.get("reason")
-                                 if isinstance(reason_val, str):
-                                     reason = reason_val.strip().lower()
-                                 elif reason_val is not None:
-                                     reason = str(reason_val).strip().lower()
-                                 else:
-                                     reason = ""
-                                 if not reason:
-                                     reason = "speech"
-+                                allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
-+                                    "vad"
-+                                )
-+                                if not allow_barge:
-+                                    with contextlib.suppress(Exception):
-+                                        if allow_reason and allow_reason != "ok":
-+                                            _jlog(
-+                                                "remote_vad_ignored",
-+                                                sid=sid,
-+                                                by=allow_src,
-+                                                state=allow_state,
-+                                                reason=allow_reason,
-+                                            )
-+                                    continue
-                                 rms_val = meta_payload.get("rms")
-                                 if rms_val is None:
-                                     rms_val = obj.get("rms")
-                                 meta_out: Dict[str, Any] = {"reason": reason}
-                                 if rms_val is not None:
-                                     try:
-                                         meta_out["rms"] = float(rms_val)
-                                     except Exception:
-                                         pass
-                                 _emit_transition_event(
-                                     "vad_gate_open", meta=meta_out, phase="mic"
-                                 )
-                                 extra_meta = dict(meta_out)
-                                 if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
-                                     _set_barge_pause_meta(
-                                         "client_vad",
-                                         extra=extra_meta,
-                                     )
-                                 _on_local_vad_start()
-                                 continue
+ const teardownVad = (ctx) => {
+   const { audio } = ctx;
+   if (audio.vad) {
+     try { audio.vad.stop({ reason: 'teardown' }); } catch {}
+   }
+   audio.vad = null;
+   ctx.state.vadArmed = false;
+   ctx.state.vadRecording = false;
+ };
  
-                             if action == "vad_gate_close":
-                                 reason_val = meta_payload.get("reason")
-                                 if reason_val is None:
-                                     reason_val = obj.get("reason")
-                                 if isinstance(reason_val, str):
-                                     reason = reason_val.strip().lower()
-                                 elif reason_val is not None:
-                                     reason = str(reason_val).strip().lower()
-                                 else:
-                                     reason = ""
-                                 if not reason:
-                                     reason = "silence"
-                                 rms_val = meta_payload.get("rms")
-                                 if rms_val is None:
-                                     rms_val = obj.get("rms")
-                                 meta_out: Dict[str, Any] = {"reason": reason}
-                                 if rms_val is not None:
-                                     try:
-                                         meta_out["rms"] = float(rms_val)
-                                     except Exception:
-                                         pass
-                                 _emit_transition_event(
-                                     "vad_gate_close", meta=meta_out, phase="mic"
-                                 )
-                                 _on_local_vad_stop()
-                                 continue
+ const ensureGreetGate = (ctx, active) => {
+   ctx.state.greetGateActive = !!active;
+   if (!active) { ctx.state.greetGatePhase = 'idle'; ctx.state.greetGateWaiters = []; }
+   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
+ };
  
-                             if action == "barge_in_start":
-                                 if manual_feature_enabled:
-+                                    allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
-+                                        "ptt"
-+                                    )
-+                                    if not allow_barge:
-+                                        with contextlib.suppress(Exception):
-+                                            if allow_reason and allow_reason != "ok":
-+                                                _jlog(
-+                                                    "manual_barge_ignored",
-+                                                    sid=sid,
-+                                                    by=allow_src,
-+                                                    state=allow_state,
-+                                                    reason=allow_reason,
-+                                                )
-+                                        continue
-                                     manual_button_down[0] = True
-                                     manual_turn_active[0] = True
-                                     manual_commit_pending[0] = True
-                                     turn_commit_mode_ref[0] = "manual"
-                                     active_turn_mode_ref[0] = "manual"
-                                     _ensure_confirm_closed("manual_start")
-                                     buffered_bytes = _manual_buffered_bytes()
-                                     _manual_log_event(
-                                         "manual_barge_in_start",
-                                         bytes_buffered=buffered_bytes,
-                                         provider_open=dg_state == "open",
-                                     )
-                                     try:
-                                         current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
-                                     except Exception:
-                                         current_assistant_turn_ref[0] = None
--                                    tts_active_now = _current_tts_active()
-+                                    tts_active_now = allow_state == "TTS_ACTIVE"
-                                     if not ptt_down_emitted[0]:
-                                         _emit_transition_event(
-                                             "ptt_down",
-                                             meta={"during_tts": bool(tts_active_now)},
-                                             phase="ptt",
-                                         )
-                                         ptt_down_emitted[0] = True
-                                     _set_barge_pause_meta("ptt", tts_active=tts_active_now)
-                                     if not barge.is_paused():
-                                         try:
-                                             barge.start(
-                                                 confirm_ms=0,
-                                                 on_commit=_on_barge_commit,
-                                                 send_state=_send_barge_state,
-                                                 auto_commit=False,
-                                             )
-                                         except Exception:
-                                             pass
-                                     try:
-                                         barge.commit(_send_barge_state)
-                                     except Exception:
-                                         manual_commit_pending[0] = False
-                                 continue
-                             if action == "barge_in_end":
-                                 if manual_feature_enabled:
+ const manualBargeAllowed = (ctx) => isTtsMaskActive(ctx);
+ 
+ export async function initMic(stream = null) {
+   const ctx = ensureCtx();
+   if (stream) ctx.audio.stream = stream;
+   if (!ctx.audio.stream) {
+     const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
+     ctx.audio.stream = await navigator.mediaDevices.getUserMedia(constraints);
+   }
+   ensureAudioGraph(ctx, ctx.audio.stream);
+   return ctx.audio.stream;
+ }
+ 
+ export async function armVAD(stream = null, opts = {}) {
+   const ctx = ensureCtx();
+   const mic = await initMic(stream);
+   ensureAudioGraph(ctx, mic);
+   try {
+     if (typeof ctx.audio?.context?.resume === 'function') {
+       await ctx.audio.context.resume();
+     }
+   } catch {}
+   if (ctx.audio?.context) {
+     const contextState = ctx.audio.context.state || 'unknown';
+     voiceLog('info', `[audio] context state: ${contextState}`, {
+       ts_ms: Date.now(),
+       session_id: ctx.sessionId || null,
+     });
+   }
+-  ensureVad(ctx, opts);
++  const localVadAllowed = policyAllowLocalVad();
++  const nowTs = nowMs();
++  const holdMs = resolvePostTtsHoldMs(ctx);
++  const holdActive = Number.isFinite(ctx.state.ttsHoldUntilMs)
++    ? ctx.state.ttsHoldUntilMs > nowTs
++    : false;
++  const ttsActive = !!(ctx.state.ttsPlaying || isTtsMaskActive(ctx));
++  const endedRecently = holdMs > 0
++    && Number.isFinite(ctx.ttsEndedAtMs)
++    && (nowTs - ctx.ttsEndedAtMs) < holdMs;
++  const shouldDeferVad = localVadAllowed
++    && !ctx.state.manualGate
++    && (ctx.state.vadSuppressedForTts || ttsActive || holdActive || endedRecently);
++  if (shouldDeferVad) {
++    try {
++      ctx.state.pendingVadOpts = { ...opts };
++    } catch {
++      ctx.state.pendingVadOpts = opts;
++    }
++    ctx.state.vadShouldRearmAfterTts = true;
++    ctx.state.vadSuppressedForTts = true;
++    if (!ttsActive && !holdActive && endedRecently) {
++      schedulePostTtsRearm(ctx);
++    }
++  } else if (localVadAllowed) {
++    ctx.state.pendingVadOpts = null;
++    ensureVad(ctx, opts);
++  } else {
++    ctx.state.pendingVadOpts = null;
++  }
+   startRecorder(ctx, mic);
+   await ensureTransport(ctx).catch(() => {});
+   emitVoiceEvent('armed', { mode: 'adaptive' });
+   return mic;
+ }
+ 
+ export function disarmVAD() {
+   const ctx = ensureCtx();
+   clearPostTtsRearm(ctx);
+   ctx.state.vadShouldRearmAfterTts = false;
+   ctx.state.vadSuppressedForTts = false;
++  ctx.state.pendingVadOpts = null;
+   teardownVad(ctx); stopRecorder(ctx);
+   closeTurn(ctx, 'manual_disarm');
+   teardownTransport(ctx);
+   setManualGate(ctx, false);
+   ctx.state.pttHeld = false;
+   ctx.state.hasOpenedTurn = false;
+   stopMaskLogging(ctx);
+   dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: 'manual_disarm' });
+ }
+ 
+ export function isRecording() {
+   const ctx = ensureCtx();
+   return !!ctx.state.recording;
+ }
+ 
+ export function bargeIn(meta = {}) {
+   const ctx = ensureCtx();
+   const shouldNotify = manualBargeAllowed(ctx);
+   ctx.state.manualBargeInUsed = true;
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
+   ctx.state.pendingCommitReason = null;
+   clearDualVadTimer(ctx);
+   clearPostTtsRearm(ctx);
+   ctx.state.vadShouldRearmAfterTts = false;
