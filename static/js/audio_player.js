@@ -1,5 +1,6 @@
 // ChunkedAudioPlayer — plays streamed audio via MediaSource (dynamic MIME)
 // Production-optimized: queue-based, safe re-init, and graceful end-of-stream.
+import { emitFlowBreadcrumb } from './flow_breadcrumbs.js';
 export class ChunkedAudioPlayer {
   constructor(audioEl, mime = 'audio/webm; codecs="opus"') {
     this.audioEl = audioEl;
@@ -203,8 +204,49 @@ export class ChunkedAudioPlayer {
     try {
       if (this.audioEl && this.audioEl.paused) {
         // Autoplay can be blocked; Start button should have unlocked it already.
-        this.audioEl.play().catch(() => {});
+        this._attemptPlay('ensure_play_unlocked');
       }
     } catch {}
+  }
+
+  _attemptPlay(reason = 'auto') {
+    const audioEl = this.audioEl;
+    if (!audioEl) return null;
+    const detailBase = {
+      reason,
+      muted: !!audioEl.muted,
+      volume: Number.isFinite(audioEl.volume) ? audioEl.volume : null,
+      autoplay: !!audioEl.autoplay,
+    };
+    try {
+      if (typeof document !== 'undefined' && typeof document.hidden === 'boolean') {
+        detailBase.document_hidden = document.hidden;
+      }
+    } catch {}
+
+    emitFlowBreadcrumb('play_attempt', detailBase);
+
+    let playResult = null;
+    try {
+      playResult = audioEl.play();
+    } catch (err) {
+      const message = err?.message || String(err || 'unknown_error');
+      emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
+      return null;
+    }
+
+    const onSuccess = () => emitFlowBreadcrumb('play_result', { ...detailBase, ok: true });
+    const onError = (err) => {
+      const message = err?.message || String(err || 'unknown_error');
+      emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
+    };
+
+    if (playResult && typeof playResult.then === 'function') {
+      playResult.then(onSuccess).catch(onError);
+    } else {
+      onSuccess();
+    }
+
+    return playResult;
   }
 }

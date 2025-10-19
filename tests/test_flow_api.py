@@ -4,6 +4,7 @@ import zipfile
 
 import pytest
 
+from app.api_v1 import flow as flow_api
 from app.asgi_gateway import app as flask_app
 from app.flow.trace import FlowStore
 
@@ -12,8 +13,10 @@ from app.flow.trace import FlowStore
 def reset_flow_store():
     store = FlowStore()
     store._init()
+    flow_api._CLIENT_BREADCRUMB_HITS.clear()
     yield
     store._init()
+    flow_api._CLIENT_BREADCRUMB_HITS.clear()
 
 
 @pytest.fixture
@@ -35,6 +38,70 @@ def flow_clock(monkeypatch):
         clock["now"] += ms / 1000.0
 
     return advance
+
+
+def _csrf_headers(client):
+    resp = client.get("/api/v1/csrf")
+    token = resp.headers.get("X-CSRF-Token") or (resp.get_json() or {}).get("csrf")
+    return {"X-CSRF-Token": token}
+
+
+def test_flow_breadcrumb_records_client_event():
+    client = flask_app.test_client()
+    headers = _csrf_headers(client)
+    payload = {
+        "session_id": "sess-client",
+        "event": "ws_error",
+        "meta": {"code": 4400},
+        "ts_ms": 123456,
+    }
+
+    resp = client.post("/api/v1/flow/breadcrumb", json=payload, headers=headers)
+    assert resp.status_code == 204
+
+    store = FlowStore()
+    events = store.list("sess-client", levels=("debug",)).get("events", [])
+    assert events
+    event = next(evt for evt in events if evt.get("type") == "client_ws_error")
+    meta = event.get("meta") or {}
+    assert meta.get("code") == 4400
+    assert meta.get("ts_ms") == 123456
+
+
+def test_flow_breadcrumb_requires_session_and_event():
+    client = flask_app.test_client()
+    headers = _csrf_headers(client)
+
+    resp = client.post("/api/v1/flow/breadcrumb", json={"event": "oops"}, headers=headers)
+    assert resp.status_code == 400
+
+    resp = client.post(
+        "/api/v1/flow/breadcrumb",
+        json={"session_id": "sess", "meta": {}},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_flow_breadcrumb_rate_limit(monkeypatch):
+    client = flask_app.test_client()
+    headers = _csrf_headers(client)
+    clock = {"now": 1000.0}
+
+    def fake_monotonic():
+        return clock["now"]
+
+    monkeypatch.setattr(flow_api.time, "monotonic", fake_monotonic)
+
+    session_id = "sess-rate"
+    payload = {"session_id": session_id, "event": "vad_gate_open"}
+
+    for _ in range(flow_api._CLIENT_BREADCRUMB_LIMIT):
+        resp = client.post("/api/v1/flow/breadcrumb", json=payload, headers=headers)
+        assert resp.status_code == 204
+
+    resp = client.post("/api/v1/flow/breadcrumb", json=payload, headers=headers)
+    assert resp.status_code == 429
 
 
 def test_flow_trace_endpoint(admin_env):

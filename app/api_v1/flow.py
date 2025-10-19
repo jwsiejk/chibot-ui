@@ -7,7 +7,10 @@ import json
 import re
 import zipfile
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+import threading
+import time
+from collections import deque
+from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional
 
 from flask import (
     Blueprint,
@@ -25,6 +28,11 @@ from app.security_state import get_user
 from app.utils.admin import is_admin_email
 
 bp = Blueprint("flow", __name__)
+
+_CLIENT_BREADCRUMB_WINDOW_SEC = 60.0
+_CLIENT_BREADCRUMB_LIMIT = 30
+_CLIENT_BREADCRUMB_LOCK = threading.Lock()
+_CLIENT_BREADCRUMB_HITS: Dict[str, Deque[float]] = {}
 
 
 def _normalize_str(value: Optional[str]) -> Optional[str]:
@@ -169,6 +177,19 @@ def _coerce_levels(value: Any) -> List[str]:
     return levels
 
 
+def _check_client_breadcrumb_rate(session_id: str) -> bool:
+    now = time.monotonic()
+    with _CLIENT_BREADCRUMB_LOCK:
+        queue = _CLIENT_BREADCRUMB_HITS.setdefault(session_id, deque())
+        cutoff = now - _CLIENT_BREADCRUMB_WINDOW_SEC
+        while queue and queue[0] <= cutoff:
+            queue.popleft()
+        if len(queue) >= _CLIENT_BREADCRUMB_LIMIT:
+            return False
+        queue.append(now)
+        return True
+
+
 def _should_mask_text(key: str) -> bool:
     key_lower = key.lower()
     if key_lower in _TEXT_EXACT_KEYS:
@@ -311,6 +332,61 @@ def _redact_event(event: Dict[str, Any]) -> Dict[str, Any]:
             for batch in clone["batches"]
         ]
     return clone
+
+
+@bp.post("/flow/breadcrumb")
+def flow_breadcrumb():
+    payload = request.get_json(silent=True) or {}
+
+    session_id = _normalize_str(
+        payload.get("session_id") or payload.get("sid")
+    )
+    meta_payload = payload.get("meta")
+    if not session_id and isinstance(meta_payload, dict):
+        session_id = _normalize_str(
+            meta_payload.get("session_id") or meta_payload.get("sid")
+        )
+    if not session_id:
+        abort(400, description="session_id is required")
+
+    event_name = _normalize_str(payload.get("event"))
+    if not event_name:
+        abort(400, description="event is required")
+
+    if meta_payload is None:
+        meta: Dict[str, Any] = {}
+    elif isinstance(meta_payload, dict):
+        meta = dict(meta_payload)
+    else:
+        abort(400, description="meta must be an object")
+
+    ts_value = payload.get("ts_ms")
+    if ts_value is not None:
+        try:
+            ts_ms = int(ts_value)
+        except (TypeError, ValueError):
+            abort(400, description="ts_ms must be an integer")
+        meta["ts_ms"] = ts_ms
+
+    if "event" not in meta:
+        meta["event"] = event_name
+
+    if not _check_client_breadcrumb_rate(session_id):
+        abort(429, description="rate limit exceeded")
+
+    event_type = event_name if event_name.startswith("client_") else f"client_{event_name}"
+
+    store = FlowStore()
+    store.emit(
+        session_id=session_id,
+        level="debug",
+        phase="client",
+        type_=event_type,
+        who="client",
+        meta=meta,
+    )
+
+    return ("", 204)
 
 
 @bp.get("/flow/catalog")

@@ -1,941 +1,1157 @@
-diff --git a/app/services/llm/flow_wrapper.py b/app/services/llm/flow_wrapper.py
-index d710de251f37623a91cbedb263f32716fd247867..0cec5f942ef0656e137f92e030488ca1cf7b8a34 100644
---- a/app/services/llm/flow_wrapper.py
-+++ b/app/services/llm/flow_wrapper.py
-@@ -4,170 +4,242 @@ from __future__ import annotations
+diff --git a/static/js/audio.js b/static/js/audio.js
+index 244298cab44065635d3fa942a93a1fd0c7c72e59..e4a323dfd900bb967dccb5433ef2f9b8672e3b64 100644
+--- a/static/js/audio.js
++++ b/static/js/audio.js
+@@ -1,137 +1,225 @@
+ // static/js/audio.js — unified playback (MSE chunked by MIME) + unlockAudio
+ // Backwards compatible:
+ //   • playStream(chunks, mime?)            // legacy
+ //   • playStream(frameObject)              // { mime, audio_chunks:[], is_last }
+ // New helpers:
+ //   • audioEnd() — mark natural end-of-utterance (drain then endOfStream)
+ //   • audioTeardown() — hard reset pipeline (optional)
  
- import time
- from dataclasses import dataclass
- from typing import Optional, Protocol, runtime_checkable
+ import { ChunkedAudioPlayer } from './audio_player.js';
++import { emitFlowBreadcrumb } from './flow_breadcrumbs.js';
+ import { logIfEnabled } from './util/logging.js';
  
- from app.flow.emit import add_batch, emit as flow_emit
+ const DEFAULT_SIGNATURE = Object.freeze({ rms: 0, rmsDb: -Infinity, mfcc: [], timestamp: 0 });
  
- 
- @runtime_checkable
- class _Tracker(Protocol):
-     def start(self) -> bool:
-         ...
- 
-     def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
-         ...
- 
-     def error(self, code: Optional[object] = None) -> None:
-         ...
- 
- 
- class _NullTracker:
-     """No-op tracker used when flow trace context is unavailable."""
- 
-     __slots__ = ()
- 
-+    def queue(self) -> None:  # noqa: D401 - trivial
-+        """Ignore queue notifications when tracing is disabled."""
-+        return None
++const AUDIO_CTX_HOOK_KEY = '__flowBreadcrumbCtxHooked';
 +
-     def start(self) -> bool:  # noqa: D401 - trivial
-         """Pretend to start a span and report no work."""
-         return False
+ let _player = null;
+ let _el = null;
+ let _lastTtsState = 'ended';
  
-+    def first_token(self) -> None:  # noqa: D401 - trivial
-+        """Ignore first-token hints when tracing is disabled."""
-+        return None
+ const _analysis = {
+   ctx: null,
+   source: null,
+   analyser: null,
+   raf: null,
+   timeBuf: null,
+   freqBuf: null,
+   signature: { ...DEFAULT_SIGNATURE },
+   mfccConfig: null,
+ };
+ 
+ const TTS_IDLE_VOLUME = 1.0;
+ const TTS_ATTENUATED_VOLUME = 0.5; // ~6 dB reduction to limit mic bleed
+ 
+ const DEFAULT_MIME = 'audio/webm; codecs="opus"';
+ 
++function _emitAudioCtxBreadcrumb(ctx, origin = 'audio') {
++  if (!ctx) return;
++  try {
++    const state = typeof ctx.state === 'string' ? ctx.state : 'unknown';
++    const detail = {
++      state,
++      origin,
++      sample_rate: Number.isFinite(ctx.sampleRate) ? ctx.sampleRate : null,
++    };
++    emitFlowBreadcrumb('audio_ctx', detail);
++  } catch {}
++}
 +
-     def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
-         """Ignore completion for missing spans."""
-         return None
- 
-     def error(self, code: Optional[object] = None) -> None:  # noqa: D401 - trivial
-         """Ignore error notifications when tracing is disabled."""
-         return None
- 
- 
- def _coerce_int(value: Optional[object]) -> Optional[int]:
-     """Best-effort conversion to int, returning ``None`` on failure."""
- 
-     if value is None:
-         return None
-     try:
-         return int(value)  # type: ignore[arg-type]
-     except (TypeError, ValueError):
-         return None
- 
- 
- @dataclass
- class LLMFlowTracker:
-     """Manage ``llm_start``/``llm_final`` flow events for a single turn."""
- 
-     session_id: str
-     phase: str
-     turn_id: Optional[str] = None
-     model: Optional[str] = None
-     who: str = "system"
- 
-     _started: bool = False
-     _start_event_id: Optional[str] = None
-     _start_monotonic: Optional[float] = None
-+    _queue_start_monotonic: Optional[float] = None
-+    _queue_end_monotonic: Optional[float] = None
-+    _first_token_monotonic: Optional[float] = None
++function _attachAudioCtxBreadcrumb(ctx, origin = 'audio') {
++  if (!ctx || typeof ctx !== 'object') return;
++  try {
++    if (ctx[AUDIO_CTX_HOOK_KEY]) {
++      return;
++    }
++    Object.defineProperty(ctx, AUDIO_CTX_HOOK_KEY, {
++      value: true,
++      enumerable: false,
++      configurable: true,
++    });
 +
-+    def queue(self) -> None:
-+        """Mark the time at which the request entered the provider queue."""
++    const emit = () => _emitAudioCtxBreadcrumb(ctx, origin);
++    emit();
 +
-+        self._queue_start_monotonic = time.monotonic()
- 
-     def start(self) -> bool:
-         """Emit the ``llm_start`` event if possible."""
- 
-         if not self.session_id or not self.phase:
-             return False
-         meta: dict[str, object] = {}
-         if self.turn_id:
-             meta["turn_id"] = str(self.turn_id)
-         if self.model:
-             meta["model"] = str(self.model)
-         try:
-             event_id = flow_emit(
-                 session_id=self.session_id,
-                 level="flow",
-                 phase=self.phase,
-                 type="llm_start",
-                 who=self.who,
-                 meta=meta or None,
-             )
-         except Exception:
-             return False
-         self._started = True
-         self._start_event_id = event_id or None
--        self._start_monotonic = time.monotonic()
-+        now = time.monotonic()
-+        self._start_monotonic = now
-+        if self._queue_start_monotonic is None:
-+            self._queue_start_monotonic = now
-+        self._queue_end_monotonic = now
-         return True
- 
-+    def first_token(self) -> None:
-+        """Record when the first token was observed from the provider."""
-+
-+        self._first_token_monotonic = time.monotonic()
-+
-     def final(
-         self,
-         *,
-         tokens_out: Optional[int] = None,
-+        tokens_in: Optional[int] = None,
-+        finish_reason: Optional[object] = None,
-         text: Optional[str] = None,
-         chars: Optional[int] = None,
-     ) -> None:
-         """Emit the ``llm_final`` event when output text is ready."""
- 
-         if not self._started or not self.session_id or not self.phase:
-             return
-         meta: dict[str, object] = {}
-         if self.turn_id:
-             meta["turn_id"] = str(self.turn_id)
-+        prompt_tokens = _coerce_int(tokens_in)
-+        if prompt_tokens is not None and prompt_tokens >= 0:
-+            meta["tokens_in"] = prompt_tokens
-         token_count = _coerce_int(tokens_out)
-         if token_count is not None and token_count >= 0:
-             meta["tokens_out"] = token_count
-         else:
-             char_count = _coerce_int(chars)
-             if char_count is None:
-                 char_count = len(text or "")
-             if char_count < 0:
-                 char_count = 0
-             meta["chars"] = char_count
-         try:
-             flow_emit(
-                 session_id=self.session_id,
-                 level="flow",
-                 phase=self.phase,
-                 type="llm_final",
-                 who=self.who,
-                 meta=meta or None,
-             )
-             if self._start_event_id:
-                 stream_items = []
-                 now = time.monotonic()
-                 if self._start_monotonic:
-                     dt_ms = int(max(0.0, (now - self._start_monotonic) * 1000))
-                 else:
-                     dt_ms = 0
-                 bytes_len = 0
-                 if text:
-                     try:
-                         bytes_len = len((text or "").encode("utf-8"))
-                     except Exception:
-                         bytes_len = len(text or "")
-                 stream_items.append({"dt_ms": dt_ms, "bytes": bytes_len})
-+                debug_meta: dict[str, object] = {}
-+                queue_start = self._queue_start_monotonic or self._start_monotonic
-+                queue_end = self._queue_end_monotonic or self._start_monotonic
-+                if queue_start is not None and queue_end is not None:
-+                    queue_ms = int(max(0.0, (queue_end - queue_start) * 1000))
-+                    debug_meta["queue_ms"] = queue_ms
-+                base = queue_end or queue_start or self._start_monotonic
-+                if base is not None:
-+                    if self._first_token_monotonic is not None:
-+                        first_token_ms = int(
-+                            max(0.0, (self._first_token_monotonic - base) * 1000)
-+                        )
-+                        debug_meta["first_token_ms"] = first_token_ms
-+                    full_ms = int(max(0.0, (now - base) * 1000))
-+                    debug_meta["full_ms"] = full_ms
-+                if prompt_tokens is not None and prompt_tokens >= 0:
-+                    debug_meta["tokens_in"] = prompt_tokens
-+                if token_count is not None and token_count >= 0:
-+                    debug_meta["tokens_out"] = token_count
-+                if finish_reason is not None:
-+                    try:
-+                        reason_text = str(finish_reason)
-+                    except Exception:
-+                        reason_text = None
-+                    if reason_text:
-+                        debug_meta["finish_reason"] = reason_text
-+                if debug_meta:
-+                    try:
-+                        flow_emit(
-+                            session_id=self.session_id,
-+                            level="debug",
-+                            phase=self.phase,
-+                            type="llm_latency",
-+                            who=self.who,
-+                            meta=debug_meta,
-+                            parent_id=self._start_event_id,
-+                        )
-+                    except Exception:
-+                        pass
-                 try:
-                     add_batch(self._start_event_id, "llm_stream", stream_items)
-                 except Exception:
-                     pass
-         except Exception:
-             pass
-         self._started = False
-         self._start_event_id = None
-         self._start_monotonic = None
-+        self._queue_start_monotonic = None
-+        self._queue_end_monotonic = None
-+        self._first_token_monotonic = None
- 
-     def error(
-         self,
-         code: Optional[object] = None,
-         *,
-         state: Optional[dict[str, object]] = None,
-     ) -> None:
-         """Emit an ``llm_error`` transition with the provided code."""
- 
-         if not self.session_id or not self.phase:
-             return
-         meta: dict[str, object] = {}
-         if code is not None:
-             try:
-                 meta["code"] = str(code)
-             except Exception:
-                 meta["code"] = "unknown"
-         try:
-             event_id = flow_emit(
-                 session_id=self.session_id,
-                 level="transition",
-                 phase=self.phase,
-                 type="llm_error",
-                 who=self.who,
-                 meta=meta or None,
-diff --git a/app/services/providers/elevenlabs_tts.py b/app/services/providers/elevenlabs_tts.py
-index 7b2e86d38ef3853f9fffe9cb574d2cceaee028d8..e37472431f357d93a72bfd83a3821835ba7df12f 100644
---- a/app/services/providers/elevenlabs_tts.py
-+++ b/app/services/providers/elevenlabs_tts.py
-@@ -1,89 +1,173 @@
- # app/services/providers/elevenlabs_tts.py
--import os, json, urllib.request, urllib.error, time
-+import os, json, urllib.request, urllib.error, time, hashlib
- from typing import Tuple, List
- from ...db import db
- 
-+try:
-+    from ...admin_log import emit as _admin_emit
-+except Exception:  # pragma: no cover - optional diagnostic pipe
-+    _admin_emit = None
-+
- _TTS_CACHE: dict[str, Tuple[bytes, List[dict]]] = {}
- 
-+
-+def _admin_emit_safe(kind: str, **payload) -> None:
-+    if not callable(_admin_emit):
-+        return
-+    try:
-+        _admin_emit(kind, **payload)
-+    except Exception:  # pragma: no cover - diagnostics must not fail synth
-+        pass
-+
- class ElevenLabsTTS:
-     def __init__(self):
-         self.api_key = os.environ.get("ELEVENLABS_API_KEY")
-         if not self.api_key:
-             raise RuntimeError("ELEVENLABS_API_KEY missing")
-         cfg = db.get_config()
-         self.voice_id = cfg.get('tts_voice_id') or os.environ.get('ELEVENLABS_VOICE_ID') or "EXAVITQu4vr4xnSDxMaL"
-         self.output_format = cfg.get('tts_output_format') or os.environ.get('ELEVEN_OUTPUT_FORMAT') or "opus_24000"
-         self.model_id = cfg.get('tts_model_id') or os.environ.get('ELEVEN_MODEL_ID') or "eleven_multilingual_v2"
-         self.max_retries = int(os.environ.get("TTS_RETRIES", "2"))
-         self.backoff_base = float(os.environ.get("TTS_BACKOFF_BASE", "0.2"))
- 
-     def _cache_key(self, text: str, voice_id: str, fmt: str) -> str:
-         return f"{voice_id}|{fmt}|{hash(text)}"
- 
-     def synth(self, text: str, *, voice_id: str | None = None, format: str | None = None) -> tuple[bytes, list[dict]]:
-         vid = (voice_id or self.voice_id).strip()
-         fmt = (format or self.output_format).strip()
- 
-         key = self._cache_key(text, vid, fmt)
-         if key in _TTS_CACHE:
-             return _TTS_CACHE[key]
- 
-         url = f"https://api.elevenlabs.io/v1/text-to-speech/{vid}/stream?output_format={fmt}"
-         payload = json.dumps({
-             "text": text,
-             "model_id": self.model_id,
-             "optimize_streaming_latency": 0,
-             "voice_settings": {"stability": 0.5, "similarity_boost": 0.8}
-         }).encode("utf-8")
- 
-         headers = {
-             "xi-api-key": self.api_key,
-             "Content-Type": "application/json",
-             "Accept": "audio/mpeg" if fmt.startswith("mp3") else "application/octet-stream",
-         }
- 
-         attempts = 0
-         last_err = None
-         while attempts <= self.max_retries:
-             attempts += 1
-             req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-             try:
-+                start_ts = time.monotonic()
-+                first_chunk_ts = None
-+                last_chunk_ts = None
-+                chunks: list[bytes] = []
-                 with urllib.request.urlopen(req, timeout=30) as resp:
-                     if resp.status != 200:
-                         body = resp.read().decode("utf-8", "ignore")
-                         raise urllib.error.HTTPError(url, resp.status, f"TTS HTTP {resp.status}: {body}", resp.headers, None)
-                     ctype = resp.headers.get('Content-Type', '') or ''
-                     self.last_mime = ctype.strip().lower() or None
--                    audio_bytes = resp.read()
-+                    while True:
-+                        part = resp.read(64 * 1024)
-+                        if not part:
-+                            break
-+                        now = time.monotonic()
-+                        if first_chunk_ts is None:
-+                            first_chunk_ts = now
-+                        last_chunk_ts = now
-+                        chunks.append(part)
-+                end_ts = time.monotonic()
-+                audio_bytes = b"".join(chunks)
-                 # Minimal synthetic viseme schedule by duration estimate (assume ~128kbps)
-                 bitrate_bps = 128000.0
-                 est_ms = int((len(audio_bytes) * 8 / bitrate_bps) * 1000.0) if audio_bytes else 0
-                 dur_ms = max(300, est_ms)
-                 N = 12
-                 times = [int(round(i * dur_ms / (N - 1))) for i in range(N)]
-                 for i in range(1, len(times)):
-                     if times[i] <= times[i-1]:
-                         times[i] = times[i-1] + 1
-                 vis = [{"t_ms": t, "v": "A"} for t in times]
-                 _TTS_CACHE[key] = (audio_bytes, vis)
-+                synth_ms = int(max(0.0, (end_ts - start_ts) * 1000))
-+                if first_chunk_ts is not None:
-+                    first_byte_ms = int(max(0.0, (first_chunk_ts - start_ts) * 1000))
-+                    last_byte_ms = int(max(0.0, (end_ts - first_chunk_ts) * 1000))
-+                else:
-+                    first_byte_ms = 0
-+                    last_byte_ms = synth_ms
-+                latency_payload = {
-+                    "voice_id": vid,
-+                    "format": fmt,
-+                    "attempt": attempts,
-+                    "synth_ms": synth_ms,
-+                    "first_byte_ms": first_byte_ms,
-+                    "last_byte_ms": last_byte_ms,
-+                }
-+                _admin_emit_safe("tts_latency", **latency_payload)
-                 return audio_bytes, vis
-             except urllib.error.HTTPError as e:
-                 detail = ""
-                 try:
-                     if getattr(e, "fp", None):
-                         detail = (e.fp.read() or b"").decode("utf-8", "ignore")
-                 except Exception:
-                     pass
-+                status = getattr(e, "code", None)
-+                retriable = attempts <= self.max_retries
-+                backoff_s = self.backoff_base * (2 ** (attempts - 1)) if retriable else 0.0
-+                body_hash = ""
-+                if detail:
-+                    try:
-+                        body_hash = hashlib.sha256(detail.encode("utf-8", "ignore")).hexdigest()
-+                    except Exception:
-+                        body_hash = ""
-+                error_payload = {
-+                    "status": status,
-+                    "retriable": bool(retriable),
-+                    "attempt": attempts,
-+                    "backoff_ms": int(backoff_s * 1000),
-+                    "body_hash": body_hash,
-+                    "voice_id": vid,
-+                }
-+                _admin_emit_safe("tts_error", **error_payload)
-                 if e.code == 401:
-                     raise RuntimeError(
-                         "ElevenLabs returned 401 Unauthorized. Check ELEVENLABS_API_KEY, voice permissions, and project access. "
-                         f"Endpoint={url}, Response={detail[:300]}"
-                     ) from e
-                 last_err = e
-+                if not retriable:
-+                    break
-             except Exception as e:
-+                retriable = attempts <= self.max_retries
-+                backoff_s = self.backoff_base * (2 ** (attempts - 1)) if retriable else 0.0
-+                body_hash = ""
-+                try:
-+                    body_hash = hashlib.sha256(str(e).encode("utf-8", "ignore")).hexdigest()
-+                except Exception:
-+                    body_hash = ""
-+                error_payload = {
-+                    "status": getattr(e, "code", None),
-+                    "retriable": bool(retriable),
-+                    "attempt": attempts,
-+                    "backoff_ms": int(backoff_s * 1000),
-+                    "body_hash": body_hash,
-+                    "voice_id": vid,
-+                    "error": e.__class__.__name__,
-+                }
-+                _admin_emit_safe("tts_error", **error_payload)
-                 last_err = e
--            time.sleep(self.backoff_base * (2 ** (attempts - 1)))
-+                if not retriable:
-+                    break
-+            if attempts <= self.max_retries:
-+                time.sleep(self.backoff_base * (2 ** (attempts - 1)))
-         raise RuntimeError(f"TTS synth failed after {self.max_retries} attempts: {last_err}")
- 
-     def get_last_mime(self):
-         return getattr(self, 'last_mime', None)
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 511c1ee7f718d8576be06c098ef33b93676f0bab..162474a492970752a3e6866d56abdb2226a242e0 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1165,50 +1165,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             path=scope.get("path"),
-             raw_query=raw_query,
-         )
-     except Exception:
-         pass
- 
-     if scope.get("type") != "websocket":
-         await send({"type": "http.response.start", "status": 404, "headers": []})
-         await send({"type": "http.response.body", "body": b"not found"})
-         return
- 
-     sid = _get_session_id(scope)
-     conn_id = uuid.uuid4().hex
-     start_ts = time.time()
-     ws_open_ts = start_ts
-     last_msg_ts = start_ts
-     had_disconnect = False
-     active_ws_registered = False
-     active_ws_closed = False
-     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
- 
-     flow_session_open_emitted = False
-     flow_session_ready_emitted = False
-     flow_session_close_emitted = False
-     flow_session_config_emitted = False
-+    session_flow_event_id: List[Optional[str]] = [None]
-     post_greet_phase_active = [False]
-     flow_turn_commit_emitted: Set[int] = set()
-     flow_turn_abort_emitted: Set[int] = set()
-     greet_end_pending = False
-     greet_end_emitted = False
- 
-     def _emit_flow_event(
-         type_: str,
-         *,
-         phase: str,
-         meta: Optional[Dict[str, Any]] = None,
-     ) -> str:
-         try:
-             return (
-                 flow_emit(
-                     session_id=sid,
-                     level="flow",
-                     phase=phase,
-                     type=type_,
-                     who="system",
-                     meta=meta,
-                 )
-                 or ""
-             )
-         except Exception:
-@@ -1395,83 +1396,141 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-     if not policy:
-         try:
-             policy = load_policy()
-         except Exception:
-             policy = {}
- 
-     if not isinstance(policy_version, str) or not policy_version:
-         policy_version = "unknown"
- 
-     manual_feature_enabled = True
-     manual_mode_manual_only = False
-     auto_commit_when_ready = True
-     local_vad_allowed = True
-     barge_require_asr_evidence = False
-     barge_suppress_mode = "none"
-     barge_post_tts_hold_ms = 0
-     auto_commit_requires_dual = False
-     auto_commit_requires_asr_ready = False
- 
-     if not flow_session_open_emitted:
-         meta = {"policy_version": policy_version}
-         session_event_id = _emit_flow_event("session_open", phase="session", meta=meta)
-         flow_session_open_emitted = True
-         if session_event_id:
-+            session_flow_event_id[0] = session_event_id
-             policy_meta: Dict[str, Any] = {"policy_version": policy_version}
-             if isinstance(policy, dict):
-                 try:
-                     policy_meta["policy"] = copy.deepcopy(policy)
-                 except Exception:
-                     try:
-                         policy_meta["policy"] = dict(policy)
-                     except Exception:
-                         policy_meta["policy"] = {}
-             _emit_debug_event(
-                 "policy_snapshot",
-                 phase="session",
-                 parent_id=session_event_id,
-                 meta=policy_meta,
-             )
-             runtime_meta = {
-                 "manual_feature_enabled": bool(manual_feature_enabled),
-                 "manual_mode_manual_only": bool(manual_mode_manual_only),
-                 "auto_commit_when_ready": bool(auto_commit_when_ready),
-                 "local_vad_allowed": bool(local_vad_allowed),
-                 "barge_require_asr_evidence": bool(barge_require_asr_evidence),
-                 "barge_suppress_mode": barge_suppress_mode or "none",
-                 "barge_post_tts_hold_ms": int(barge_post_tts_hold_ms),
-                 "auto_commit_requires_dual": bool(auto_commit_requires_dual),
-                 "auto_commit_requires_asr_ready": bool(auto_commit_requires_asr_ready),
-             }
-             _emit_debug_event(
-                 "runtime_flags",
-                 phase="session",
-                 parent_id=session_event_id,
-                 meta=runtime_meta,
-             )
- 
-+    if ws_transport_parent_id[0] is None:
-+        transport_meta = {
-+            "path": str(scope.get("path") or ""),
-+            "client_ip": client_ip,
++    const handler = () => emit();
++    if (typeof ctx.addEventListener === 'function') {
++      try { ctx.addEventListener('statechange', handler); } catch {}
++    } else if ('onstatechange' in ctx) {
++      const prev = ctx.onstatechange;
++      ctx.onstatechange = function patchedStateChange(ev) {
++        try { handler(ev); } catch {}
++        if (typeof prev === 'function') {
++          try { prev.call(this, ev); } catch {}
 +        }
-+        transport_event_id = _emit_flow_event(
-+            "ws_transport",
-+            phase="session",
-+            meta=transport_meta,
-+        )
-+        if transport_event_id:
-+            ws_transport_parent_id[0] = transport_event_id
-+        elif session_flow_event_id[0]:
-+            ws_transport_parent_id[0] = session_flow_event_id[0]
++      };
++    }
++  } catch {}
++}
 +
-+    _raw_send = send
++function _playWithBreadcrumb(audioEl, { reason } = {}) {
++  if (!audioEl) return null;
++  const detailBase = {
++    reason: reason || 'unknown',
++    muted: !!audioEl.muted,
++    volume: Number.isFinite(audioEl.volume) ? audioEl.volume : null,
++    autoplay: !!audioEl.autoplay,
++  };
++  try {
++    if (typeof document !== 'undefined' && typeof document.hidden === 'boolean') {
++      detailBase.document_hidden = document.hidden;
++    }
++  } catch {}
 +
-+    async def _send_instrumented(message, *, route: str = "app"):
-+        nonlocal ws_frames_out, ws_bytes_out
++  emitFlowBreadcrumb('play_attempt', detailBase);
 +
-+        frame_type = None
-+        try:
-+            frame_type = message.get("type") if isinstance(message, dict) else None
-+        except Exception:
-+            frame_type = None
-+        if frame_type == "websocket.send":
-+            payload_bytes = 0
-+            frame_kind = "text"
-+            text_payload = message.get("text") if isinstance(message, dict) else None
-+            if text_payload is not None:
-+                try:
-+                    payload_bytes = len((text_payload or "").encode("utf-8"))
-+                except Exception:
-+                    payload_bytes = len(text_payload or "")
-+            else:
-+                frame_kind = "binary"
-+                try:
-+                    payload_bytes = len(message.get("bytes") or b"") if isinstance(message, dict) else 0
-+                except Exception:
-+                    payload_bytes = 0
-+            ws_frames_out += 1
-+            ws_bytes_out += payload_bytes
-+            if ws_transport_parent_id[0] and ws_frames_out % _WS_FRAME_SAMPLE == 0:
-+                _emit_debug_event(
-+                    "ws_frame_out",
-+                    phase="session",
-+                    parent_id=ws_transport_parent_id[0],
-+                    meta={
-+                        "type": frame_kind,
-+                        "bytes": payload_bytes,
-+                        "route": route,
-+                    },
-+                )
-+        await _raw_send(message)
++  let playResult = null;
++  try {
++    playResult = audioEl.play();
++  } catch (err) {
++    const message = err?.message || String(err || 'unknown_error');
++    emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
++    return null;
++  }
 +
-+    send = _send_instrumented
++  const onSuccess = () => emitFlowBreadcrumb('play_result', { ...detailBase, ok: true });
++  const onError = (err) => {
++    const message = err?.message || String(err || 'unknown_error');
++    emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
++  };
 +
-     with contextlib.suppress(Exception):
-         clear_greet_turn_cache(sid)
- 
-     bus_task: Optional[asyncio.Task] = None
- 
-     voice_metrics_registered = False
-     try:
-         voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
-     except Exception:
-         voice_metrics_registered = False
- 
-     async def _ping_loop():
-         try:
-             while True:
-                 await asyncio.sleep(20)
-                 try:
-                     await _ws_send_json(
-                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
-                     )
-                 except Exception:
-                     break
-         except asyncio.CancelledError:
-             pass
- 
-     ping_task = asyncio.create_task(_ping_loop())
-@@ -1823,50 +1882,55 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     last_partial_ts: List[float] = [0.0]
- 
-     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
-     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
- 
-     # Turn-scoped buffering + state
-     buffered_chunks: Deque[bytes] = deque()
-     sent_any_audio = [False]
-     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
-     no_audio_notified = [False]
-     no_audio_turn_id = [0]
-     try:
-         no_audio_window_s = float(
-             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
-         )
-     except Exception:
-         no_audio_window_s = 10.0
-     if no_audio_window_s < 0:
-         no_audio_window_s = 0.0
-     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
-     asr_ready_evt: asyncio.Event = asyncio.Event()
-     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
-     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-     ws_frames_in = 0
-     ws_bytes_in = 0
-+    ws_text_frames_in = 0
-+    ws_frames_out = 0
-+    ws_bytes_out = 0
-+    _WS_FRAME_SAMPLE = 20
-+    ws_transport_parent_id: List[Optional[str]] = [None]
-     backpressure_drop_count = 0
-     backpressure_last_emit = 0.0
-     backpressure_last_queue_len = 0
-     backpressure_emit_interval = 1.0
-     turn_connect_started = [False]
-     # When True we stream new audio chunks directly to Deepgram instead of staging
-     # them locally. Enabled once the socket is open and any backlog has been
-     # flushed so transcription isn't gated on the not-ready timeout.
-     asr_direct_stream = [False]
-     # Track whether the current turn has been committed (manual or automatic)
-     # so that we know when to flip into pass-through mode.
-     turn_stream_committed = [False]
-     # Coordinate async activation of the ASR stream once a turn commits.
-     asr_stream_activation_task: List[Optional[asyncio.Task]] = [None]
-     asr_not_ready_timeout_task: List[Optional[asyncio.Task]] = [None]
- 
-     # NEW: per-turn mic capture state
-     mic_chunks: List[bytes] = []
-     mic_first_ts = [0.0]
-     mic_last_ts = [0.0]
- 
-     # Local confirmation gating
-     try:
-         confirm_min_ms = int(cfg.get("confirm_ms", 420) or 420)
-     except Exception:
-@@ -3341,50 +3405,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-         now = time.time()
-         threshold_crossed = (
-             queue_len >= max_buffered_chunks
-             and backpressure_last_queue_len < max_buffered_chunks
-         )
-         should_emit = force or threshold_crossed or dropped_now > 0
- 
-         if should_emit:
-             if (
-                 force
-                 or threshold_crossed
-                 or now - backpressure_last_emit >= backpressure_emit_interval
-                 or (dropped_now > 0 and previous_drop_count == 0)
-             ):
-                 payload = dict(
-                     sid=sid,
-                     queue_len=queue_len,
-                     dropped=backpressure_drop_count,
-                 )
-                 with contextlib.suppress(Exception):
-                     _jlog("ws_backpressure", **payload)
-                 if _admin_emit:
-                     with contextlib.suppress(Exception):
-                         _admin_emit("ws_backpressure", **payload)
-+                if ws_transport_parent_id[0]:
-+                    _emit_debug_event(
-+                        "ws_backpressure",
-+                        phase="session",
-+                        parent_id=ws_transport_parent_id[0],
-+                        meta={
-+                            "queue_len": queue_len,
-+                            "dropped": backpressure_drop_count,
-+                        },
-+                    )
-                 backpressure_last_emit = now
- 
-         backpressure_last_queue_len = queue_len
- 
-     async def _send_chunk(
-         data: bytes, *, from_buffer: bool = False, retry: bool = True
-     ) -> bool:
-         nonlocal dg, dg_state
-         if dg is None:
-             return False
-         try:
-             await dg.send(data)
-             sent_any_audio[0] = True
-             _cancel_no_audio_watch()
-             _jlog("ws_audio_forward", sid=sid, bytes=len(data), buffered=from_buffer)
-             return True
-         except RuntimeError as e:
-             if "deepgram_not_connected" in str(e).lower() and retry:
-                 _jlog("asr_send_retry", sid=sid)
-                 if not asr_ready_evt.is_set():
-                     with contextlib.suppress(asyncio.TimeoutError):
-                         await asyncio.wait_for(asr_ready_evt.wait(), timeout=1.0)
-                 else:
-                     await asyncio.sleep(0.05)
-                 return await _send_chunk(data, from_buffer=from_buffer, retry=False)
-@@ -3418,114 +3492,125 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                     buffered_chunks.popleft()
-                 flushed_chunks += 1
-                 flushed_bytes += chunk_len
-                 if callable(final_guard_reset_ref[0]):
-                     with contextlib.suppress(Exception):
-                         final_guard_reset_ref[0]("flush")
-                 continue
-             break
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_flush_done",
-                 sid=sid,
-                 queued=initial_queued,
-                 flushed_chunks=flushed_chunks,
-                 flushed_bytes=flushed_bytes,
-                 remaining=len(buffered_chunks),
-             )
-         _maybe_emit_backpressure(len(buffered_chunks))
-         if not buffered_chunks:
-             backpressure_drop_count = 0
-             if dg_state == "open":
-                 asr_direct_stream[0] = True
- 
-         if bus_task is None:
-             bus_task = asyncio.create_task(
--                _pump_bus_to_client(sid, send, _handle_bus_frame)
-+                _pump_bus_to_client(sid, partial(send, route="bus"), _handle_bus_frame)
-             )
- 
-     _ensure_session_ready_emitted()
- 
-     try:
-         while True:
-             ev = await receive()
-             et = ev.get("type")
- 
-             if et == "websocket.disconnect":
-                 had_disconnect = True
-                 now = time.time()
-                 idle_s = (
-                     max(0.0, now - last_msg_ts) if last_msg_ts is not None else None
-                 )
-                 with contextlib.suppress(Exception):
-                     _jlog(
-                         "ws_conn_disconnect",
-                         conn_id=conn_id,
-                         sid=sid,
-                         code=ev.get("code"),
-                         reason=ev.get("reason"),
-                         idle_s=idle_s,
-                     )
-                 with contextlib.suppress(Exception):
-                     if _admin_emit:
-                         _admin_emit(
-                             "ws_conn_disconnect",
-                             conn_id=conn_id,
-                             sid=sid,
-                             code=ev.get("code"),
-                             reason=ev.get("reason"),
-                             idle_s=idle_s,
-                         )
-                 await _remove_active_ws_entry("disconnect")
-                 last_msg_ts = now
-                 break
- 
-             if et == "websocket.receive":
-                 last_msg_ts = time.time()
-                 # -------------------- Binary / audio lane --------------------
-                 if ev.get("bytes") is not None:
-                     now = time.time()
-                     frame_bytes = ev.get("bytes")
-                     chunk = frame_bytes or b""
-                     ws_frames_in += 1
-                     ws_bytes_in += len(chunk)
--                    if ws_frames_in % 20 == 0:
-+                    if ws_frames_in % _WS_FRAME_SAMPLE == 0:
-                         with contextlib.suppress(Exception):
-                             _jlog(
-                                 "ws_bin_recv",
-                                 sid=sid,
-                                 frames_in=ws_frames_in,
-                                 bytes_total=ws_bytes_in,
-                             )
-                         if _admin_emit:
-                             with contextlib.suppress(Exception):
-                                 _admin_emit(
-                                     "ws_bin_recv",
-                                     sid=sid,
-                                     frames_in=ws_frames_in,
-                                     bytes_total=ws_bytes_in,
-                                 )
-+                        if ws_transport_parent_id[0]:
-+                            _emit_debug_event(
-+                                "ws_frame_in",
-+                                phase="session",
-+                                parent_id=ws_transport_parent_id[0],
-+                                meta={
-+                                    "type": "binary",
-+                                    "bytes": len(chunk or b""),
-+                                    "route": "client",
-+                                },
-+                            )
-                     raw_chunk = chunk
- 
-                     new_turn = buf.is_empty()
-                     turn_hint = turn_id_ref[0] or (buf.turn_seq + (1 if new_turn else 0))
-                     if chunk:
-                         _jlog(
-                             "ws_audio_chunk",
-                             sid=sid,
-                             bytes=len(chunk),
-                             turn_id=turn_hint,
-                             ts_ms=int(now * 1000),
-                             frame_seq=ws_frames_in,
-                         )
-                         if not audio_sig_logged:
-                             with contextlib.suppress(Exception):
-                                 _jlog(
-                                     "audio_sig",
-                                     sid=sid,
-                                     first8_hex=chunk[:8].hex(),
-                                     turn_id=turn_hint,
-                                     ts_ms=int(now * 1000),
-                                 )
-                             audio_sig_logged = True
-                     else:
-                         with contextlib.suppress(Exception):
-@@ -3792,50 +3877,68 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 )
-                             except asyncio.TimeoutError:
-                                 _jlog("asr_not_ready_timeout", sid=sid)
-                         if len(buffered_chunks) >= max_buffered_chunks:
-                             await _flush_buffered_chunks()
-                         await _flush_buffered_chunks()
-                     else:
-                         _jlog(
-                             "ws_audio_provider_connecting",
-                             sid=sid,
-                             queued=len(buffered_chunks),
-                         )
-                     continue
- 
-                 # -------------------- Text / control lane --------------------
-                 if ev.get("text") is not None:
-                     try:
-                         obj = parse_client_json(ev.get("text") or "")
-                         t = obj.get("type")
-                         with contextlib.suppress(Exception):
-                             _jlog("ws_json_recv", sid=sid, type=t)
-                         if _admin_emit:
-                             with contextlib.suppress(Exception):
-                                 _admin_emit("ws_json_recv", sid=sid, type=t)
- 
-+                        ws_text_frames_in += 1
-+                        if ws_transport_parent_id[0] and ws_text_frames_in % _WS_FRAME_SAMPLE == 0:
-+                            payload_bytes = 0
-+                            try:
-+                                payload_bytes = len((ev.get("text") or "").encode("utf-8"))
-+                            except Exception:
-+                                payload_bytes = len(ev.get("text") or "")
-+                            _emit_debug_event(
-+                                "ws_frame_in",
-+                                phase="session",
-+                                parent_id=ws_transport_parent_id[0],
-+                                meta={
-+                                    "type": "text",
-+                                    "bytes": payload_bytes,
-+                                    "route": "client",
-+                                },
-+                            )
++  if (playResult && typeof playResult.then === 'function') {
++    playResult.then(onSuccess).catch(onError);
++  } else {
++    onSuccess();
++  }
 +
-                         if t == "KeepAlive":
-                             await _ws_send_json(send, make_keepalive_ack())
++  return playResult;
++}
++
+ function _emitTtsState(state) {
+   if (!state || state === _lastTtsState) return;
+   _lastTtsState = state;
+   logIfEnabled(() => {
+     try {
+       const tsMs = Date.now();
+       const sessionId = (() => {
+         try { return window?.__askchip_voice_session_id || null; } catch { return null; }
+       })();
+       const turnId = (() => {
+         try { return window?.__askchip_turn_trace_id || null; } catch { return null; }
+       })();
+       if (state === 'playing') {
+         console.info('[tts] playing: true', { ts_ms: tsMs, session_id: sessionId, turn_id: turnId });
+       } else if (state === 'ended' || state === 'stopped') {
+         console.info('[tts] playing: false', { ts_ms: tsMs, session_id: sessionId, turn_id: turnId });
+       }
+     } catch {}
+   });
+   try {
+     window.dispatchEvent(new CustomEvent('chip-tts', { detail: { state } }));
+   } catch {}
+ }
  
-                         elif t == "greet":
-                             _jlog("ws_greet_recv", sid=sid)
+ export async function unlockAudio() {
+   try {
+     const AC = window.AudioContext || window.webkitAudioContext;
+     if (!AC) return;
+     const ctx = new AC();
++    _attachAudioCtxBreadcrumb(ctx, 'unlock_audio');
+     if (ctx.state === 'suspended') await ctx.resume();
+     const o = ctx.createOscillator();
+     const g = ctx.createGain();
+     g.gain.value = 0.00001;
+     o.connect(g).connect(ctx.destination);
+     o.start();
+     o.stop(ctx.currentTime + 0.01);
+   } catch (_) {}
+ }
  
-                             async def _bg():
-                                 nonlocal greet_end_pending, greet_end_emitted
-                                 try:
-                                     _ensure_session_ready_emitted()
-                                     _emit_flow_event("greet_start", phase="greet")
-                                     greet_end_pending = True
-                                     greet_end_emitted = False
-                                     from app.services.streaming import run_ws_greet
+ function ensureEl() {
+   if (_el) return _el;
+   _el = new Audio();
+   _el.autoplay = true;
+   // _el.playsInline = true; // optional (mobile)
+   try {
+     _el.volume = TTS_IDLE_VOLUME;
+     _el.addEventListener('playing', () => {
+       _el.volume = TTS_ATTENUATED_VOLUME;
+       _emitTtsState('playing');
+     });
+     const onEnd = () => {
+       _el.volume = TTS_IDLE_VOLUME;
+       _emitTtsState('ended');
+       _analysis.signature = { ...DEFAULT_SIGNATURE };
+     };
+     _el.addEventListener('pause', onEnd);
+     _el.addEventListener('ended', onEnd);
+   } catch {}
+   try { _ensureSignatureTracker(); } catch {}
+   return _el;
+ }
  
-                                     tid = await asyncio.to_thread(run_ws_greet, sid)
-                                     tid_meta: Optional[Dict[str, Any]] = None
-                                     if tid:
-                                         try:
-                                             tid_str = str(tid)
-                                         except Exception:
-                                             tid_str = ""
-                                         if tid_str:
-                                             tid_meta = {"turn_id": tid_str}
-                                     _emit_flow_event(
+ function ensurePlayer(mime) {
+   ensureEl();
+   const m = mime || DEFAULT_MIME;
+   if (!_player) _player = new ChunkedAudioPlayer(_el, m);
+   _player.setMime(m);
+   return _player;
+ }
+ 
+ function _ensureSignatureTracker() {
+   if (!_el) return;
+   if (_analysis.ctx && _analysis.analyser) return;
+ 
+   const AC = window.AudioContext || window.webkitAudioContext;
+   if (!AC) return;
+ 
+   try {
+     const ctx = new AC();
++    _attachAudioCtxBreadcrumb(ctx, 'playback_analysis');
+     if (ctx.state === 'suspended') {
+       try { ctx.resume(); } catch {}
+     }
+ 
+     let source = null;
+     try {
+       if (typeof _el.captureStream === 'function') {
+         const stream = _el.captureStream();
+         if (stream) {
+           source = ctx.createMediaStreamSource(stream);
+         }
+       }
+     } catch {}
+ 
+     if (!source) {
+       try {
+         source = ctx.createMediaElementSource(_el);
+         const passthrough = ctx.createGain();
+         passthrough.gain.value = 1;
+         source.connect(passthrough).connect(ctx.destination);
+       } catch (err) {
+         console.warn('[audio] failed to create analysis source', err);
+         try { ctx.close(); } catch {}
+         return;
+       }
+@@ -369,36 +457,36 @@ export function stopPlayback() {
+   try { _player?.stop(); } catch {}
+   try { ensureEl().pause(); } catch {}
+   try { ensureEl().volume = TTS_IDLE_VOLUME; } catch {}
+   _emitTtsState('ended');
+ }
+ 
+ export function isPlaying() {
+   try { return !!(_el && !_el.paused); } catch { return false; }
+ }
+ 
+ export function pausePlayback() {
+   try {
+     const el = ensureEl();
+     if (!el.paused) {
+       el.pause();
+       el.volume = TTS_IDLE_VOLUME;
+       _emitTtsState('ended');
+     }
+   } catch {}
+ }
+ 
+ export function resumePlayback() {
+   try {
+     const el = ensureEl();
+     if (el.paused) {
+-      const rv = el.play();
++      const rv = _playWithBreadcrumb(el, { reason: 'resume_playback' });
+       if (rv && typeof rv.then === 'function') {
+         rv.then(() => _emitTtsState('playing')).catch(() => {});
+-      } else {
++      } else if (!el.paused) {
+         _emitTtsState('playing');
+       }
+     }
+   } catch {}
+ }
+ 
+ export function setVisemeCallback(_fn) { /* no-op in 2D */ }
+diff --git a/static/js/audio_player.js b/static/js/audio_player.js
+index 44014588d571538296a18dc3cc90efd78b130a6f..f899eaefdf51298f46cb5241ec2168aff8e24c3b 100644
+--- a/static/js/audio_player.js
++++ b/static/js/audio_player.js
+@@ -1,27 +1,28 @@
+ // ChunkedAudioPlayer — plays streamed audio via MediaSource (dynamic MIME)
+ // Production-optimized: queue-based, safe re-init, and graceful end-of-stream.
++import { emitFlowBreadcrumb } from './flow_breadcrumbs.js';
+ export class ChunkedAudioPlayer {
+   constructor(audioEl, mime = 'audio/webm; codecs="opus"') {
+     this.audioEl = audioEl;
+ 
+     // MSE state
+     this.mediaSource = null;
+     this.sourceBuffer = null;
+     this.objectUrl = null;
+ 
+     // Stream state
+     this.queue = [];
+     this.initialized = false;
+     this.mime = mime;
+     this.endingRequested = false; // logical end requested; endOfStream after queue drains
+     this._pendingReinit = false;
+ 
+     // Bound handlers
+     this._onSourceOpen = this._onSourceOpen.bind(this);
+     this._onUpdateEnd  = this._onUpdateEnd.bind(this);
+   }
+ 
+   // --- Public API -----------------------------------------------------------
+ 
+   setMime(mime) {
+     if (!mime || this.mime === mime) return;
+@@ -181,30 +182,71 @@ export class ChunkedAudioPlayer {
+     // Put the failed chunk back at the front of the queue to replay after re-init
+     if (firstChunkToReplay) this.queue.unshift(firstChunkToReplay);
+ 
+     // Recreate pipeline but keep the buffered queue
+     this._reinitPipeline({ keepQueue: true });
+ 
+     // Allow a tick for MSE to open before we resume pumping
+     setTimeout(() => {
+       this._pendingReinit = false;
+       this._pump();
+       this._ensurePlayUnlocked();
+     }, 0);
+   }
+ 
+   _reinitPipeline({ keepQueue } = { keepQueue: true }) {
+     const savedQueue = keepQueue ? this.queue.slice(0) : [];
+     this.teardown();
+     this.queue = savedQueue;
+     this._initOnce();
+   }
+ 
+   _ensurePlayUnlocked() {
+     try {
+       if (this.audioEl && this.audioEl.paused) {
+         // Autoplay can be blocked; Start button should have unlocked it already.
+-        this.audioEl.play().catch(() => {});
++        this._attemptPlay('ensure_play_unlocked');
+       }
+     } catch {}
+   }
++
++  _attemptPlay(reason = 'auto') {
++    const audioEl = this.audioEl;
++    if (!audioEl) return null;
++    const detailBase = {
++      reason,
++      muted: !!audioEl.muted,
++      volume: Number.isFinite(audioEl.volume) ? audioEl.volume : null,
++      autoplay: !!audioEl.autoplay,
++    };
++    try {
++      if (typeof document !== 'undefined' && typeof document.hidden === 'boolean') {
++        detailBase.document_hidden = document.hidden;
++      }
++    } catch {}
++
++    emitFlowBreadcrumb('play_attempt', detailBase);
++
++    let playResult = null;
++    try {
++      playResult = audioEl.play();
++    } catch (err) {
++      const message = err?.message || String(err || 'unknown_error');
++      emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
++      return null;
++    }
++
++    const onSuccess = () => emitFlowBreadcrumb('play_result', { ...detailBase, ok: true });
++    const onError = (err) => {
++      const message = err?.message || String(err || 'unknown_error');
++      emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
++    };
++
++    if (playResult && typeof playResult.then === 'function') {
++      playResult.then(onSuccess).catch(onError);
++    } else {
++      onSuccess();
++    }
++
++    return playResult;
++  }
+ }
+diff --git a/static/js/flow_breadcrumbs.js b/static/js/flow_breadcrumbs.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..0e77552c123f434172de8b803721a23db149bb4c
+--- /dev/null
++++ b/static/js/flow_breadcrumbs.js
+@@ -0,0 +1,115 @@
++const BREADCRUMB_URL = '/api/v1/flow/breadcrumbs';
++
++function isEnabled() {
++  try {
++    return Boolean(globalThis?.__FLOW_BREADCRUMBS_ENABLED);
++  } catch {
++    return false;
++  }
++}
++
++function getSessionId() {
++  try {
++    return globalThis?.__askchip_voice_session_id || null;
++  } catch {
++    return null;
++  }
++}
++
++function getTurnId() {
++  try {
++    const turn = globalThis?.__askchip_turn_trace_id;
++    if (typeof turn === 'string' && turn) return turn;
++    if (Number.isFinite(turn)) return String(turn);
++  } catch {}
++  return null;
++}
++
++function sanitizeDetail(detail) {
++  if (!detail || typeof detail !== 'object') {
++    return {};
++  }
++  try {
++    return JSON.parse(JSON.stringify(detail));
++  } catch {
++    const safe = {};
++    for (const [key, value] of Object.entries(detail)) {
++      if (value === undefined) {
++        continue;
++      }
++      if (value === null || typeof value === 'string' || typeof value === 'boolean') {
++        safe[key] = value;
++        continue;
++      }
++      if (typeof value === 'number') {
++        safe[key] = Number.isFinite(value) ? value : null;
++        continue;
++      }
++      if (Array.isArray(value)) {
++        safe[key] = value
++          .map((item) => {
++            if (item === null || typeof item === 'string' || typeof item === 'boolean') {
++              return item;
++            }
++            if (typeof item === 'number') {
++              return Number.isFinite(item) ? item : null;
++            }
++            if (typeof item === 'object') {
++              return sanitizeDetail(item);
++            }
++            return String(item);
++          })
++          .filter((item) => item !== undefined);
++        continue;
++      }
++      if (typeof value === 'object') {
++        safe[key] = sanitizeDetail(value);
++        continue;
++      }
++      try {
++        safe[key] = String(value);
++      } catch {
++        safe[key] = null;
++      }
++    }
++    return safe;
++  }
++}
++
++export function emitFlowBreadcrumb(name, detail = {}) {
++  if (typeof name !== 'string' || !name) {
++    return;
++  }
++  if (!isEnabled()) {
++    return;
++  }
++
++  const envelope = {
++    name,
++    ts_ms: Date.now(),
++    session_id: getSessionId(),
++    turn_id: getTurnId(),
++    detail: sanitizeDetail(detail),
++  };
++
++  try {
++    const body = JSON.stringify(envelope);
++    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
++      try {
++        const blob = new Blob([body], { type: 'application/json' });
++        if (navigator.sendBeacon(BREADCRUMB_URL, blob)) {
++          return;
++        }
++      } catch {}
++    }
++    if (typeof fetch === 'function') {
++      fetch(BREADCRUMB_URL, {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body,
++        keepalive: true,
++        credentials: 'same-origin',
++      }).catch(() => {});
++    }
++  } catch {}
++}
+diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
+index 0aa92e408563bf6a92e0303390b152aef410dcb1..10bf4251c68946d0cc4d26007f4a5ef98c64325a 100644
+--- a/static/js/voice/runtime/AdaptiveRuntime.js
++++ b/static/js/voice/runtime/AdaptiveRuntime.js
+@@ -16,50 +16,51 @@ import {
+   resolveSuppressionMode,
+ } from '../utils/policy.js';
+ import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
+ import { emitVoiceEvent } from '../ui/Events.js';
+ import {
+   openWS,
+   waitWSOpen,
+   sendAudioChunk,
+   sendJSON,
+ } from '../../ws_module.js';
+ // Guarded CloseStream wrapper so we never kill the session before the first user turn.
+ import { sendCloseStream as __sendCloseStream } from '../../ws.js';
+ 
+ function safeCloseStream(reason = '') {
+   try {
+     const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
+     if (!opened) {
+       console.debug('[voice] skip CloseStream (no user turn yet)', { reason });
+       return;
+     }
+   } catch {}
+   __sendCloseStream();
+ }
+ import { VAD } from '../vad.js';
+ import { stopPlayback } from '../../audio.js';
++import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
+ import { logIfEnabled } from '../../util/logging.js';
+ import { getSID } from '../../util/sid.js';
+ 
+ const clamp01 = (value) => {
+   const num = Number(value);
+   if (!Number.isFinite(num)) {
+     return 0;
+   }
+   if (num <= 0) {
+     return 0;
+   }
+   if (num >= 1) {
+     return 1;
+   }
+   return num;
+ };
+ 
+ const clampRange = (value, min, max) => {
+   const numeric = Number.isFinite(value) ? value : 0;
+   return Math.min(max, Math.max(min, numeric));
+ };
+ 
+ const POST_TTS_HOLD_MAX_MS = 200;
+ 
+ function clearPostTtsRearm(ctx) {
+@@ -160,50 +161,92 @@ function handleTtsPlaybackStarted(ctx, detail) {
+ function handleTtsPlaybackEnded(ctx) {
+   if (!ctx?.state) return;
+   dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason: 'tts_ended' });
+   if (!ctx.state.vadShouldRearmAfterTts) {
+     ctx.state.vadSuppressedForTts = false;
+     clearPostTtsRearm(ctx);
+     if (!ctx.state.manualGate) {
+       markReady(ctx, 'post_tts_release');
+     }
+     return;
+   }
+   schedulePostTtsRearm(ctx);
+ }
+ 
+ const PRE_ROLL_MS = 550,
+   RECORD_TIMESLICE_MS = 150,
+   SAFETY_CLOSE_DELAY_MS = 2200,
+   EVIDENCE_MIN_SPEECH_MS = 480,
+   EVIDENCE_MIN_BYTES = 8 * 1024,
+   MIN_VALID_BLOB_BYTES = 1,
+   BARGE_CONFIRM_MS = 420,
+   DUAL_VAD_SILENCE_DEBOUNCE_MS = 300,
+   MIN_TURN_OPEN_MS = 600;
+ 
+ const ctxRef = { current: null };
++const MIC_AUDIO_CTX_HOOK_KEY = '__flowBreadcrumbMicCtx';
++let lastPttDownAtMs = 0;
++
++const attachMicAudioCtxBreadcrumb = (ctx, origin = 'mic_capture') => {
++  if (!ctx || typeof ctx !== 'object') return;
++  try {
++    if (ctx[MIC_AUDIO_CTX_HOOK_KEY]) {
++      return;
++    }
++    Object.defineProperty(ctx, MIC_AUDIO_CTX_HOOK_KEY, {
++      value: true,
++      enumerable: false,
++      configurable: true,
++    });
++
++    const emit = () => {
++      try {
++        const state = typeof ctx.state === 'string' ? ctx.state : 'unknown';
++        emitFlowBreadcrumb('audio_ctx', {
++          state,
++          origin,
++          sample_rate: Number.isFinite(ctx.sampleRate) ? ctx.sampleRate : null,
++        });
++      } catch {}
++    };
++
++    emit();
++
++    const handler = () => emit();
++    if (typeof ctx.addEventListener === 'function') {
++      try { ctx.addEventListener('statechange', handler); } catch {}
++    } else if ('onstatechange' in ctx) {
++      const prev = ctx.onstatechange;
++      ctx.onstatechange = function patchedStateChange(ev) {
++        try { handler(ev); } catch {}
++        if (typeof prev === 'function') {
++          try { prev.call(this, ev); } catch {}
++        }
++      };
++    }
++  } catch {}
++};
+ 
+ const initAsrState = () => ({
+   speaking: false,
+   lastPartialTs: 0,
+   lastActivityTs: 0,
+   lastConf: 0,
+   lastPartialLogTs: 0,
+   lastVadLogTs: 0,
+   lastVadLogType: null,
+ });
+ 
+ const ensureAsrState = (ctx) => {
+   if (!ctx?.state) return initAsrState();
+   if (!ctx.state.asr) {
+     ctx.state.asr = initAsrState();
+   }
+   return ctx.state.asr;
+ };
+ 
+ const resetAsrState = (ctx) => {
+   const target = ensureAsrState(ctx);
+   target.speaking = false;
+   target.lastPartialTs = 0;
+   target.lastActivityTs = 0;
+   target.lastConf = 0;
+@@ -1022,50 +1065,51 @@ const ensureTransport = async (ctx) => {
+     ctx.state.wsReady = true;
+     return wsHandle;
+   } catch (err) {
+     ctx.transport.wsPromise = null;
+     ctx.transport.connected = false;
+     ctx.state.wsReady = false;
+     throw err;
+   }
+ };
+ 
+ const teardownTransport = (ctx) => {
+   ctx.transport.connected = false;
+   ctx.state.wsReady = false;
+   ctx.transport.wsPromise = null;
+   if (ctx.transport.safetyTimer) {
+     try { clearTimeout(ctx.transport.safetyTimer); } catch {}
+     ctx.transport.safetyTimer = null;
+   }
+ };
+ const ensureAudioGraph = (ctx, stream) => {
+   const audio = ctx.audio;
+   if (audio.context && audio.analyser && audio.source) return;
+   const AudioCtx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
+   if (!AudioCtx) throw new Error('AudioContext not supported');
+   audio.context = audio.context || new AudioCtx();
++  attachMicAudioCtxBreadcrumb(audio.context, 'mic_capture');
+   try {
+     if (typeof audio.context?.resume === 'function') {
+       audio.context.resume().catch(() => {});
+     }
+   } catch {}
+   try {
+     if (audio.context?.state === 'suspended' && typeof audio.context.resume === 'function') {
+       audio.context.resume().catch(() => {});
+     }
+   } catch {}
+   audio.analyser = audio.context.createAnalyser();
+   audio.analyser.fftSize = 2048;
+   audio.analyser.smoothingTimeConstant = 0.4;
+   audio.source = audio.context.createMediaStreamSource(stream);
+   audio.source.connect(audio.analyser);
+ };
+ 
+ const startRecorder = (ctx, stream) => {
+   const { audio } = ctx;
+   if (audio.recorder) return;
+   let mimeType = 'audio/webm; codecs=opus';
+   try {
+     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
+       && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
+       mimeType = 'audio/ogg; codecs=opus';
+@@ -1645,51 +1689,53 @@ const ensureVad = (ctx, opts = {}) => {
+       ctx.state.vadRecording = false;
+       if (!ctx.state.turnOpen) {
+         ctx.state.preCommitASRFeed = false;
+       }
+       if (ctx.state.vadMasked) {
+         ctx.state.vadMasked = false;
+         ctx.evidenceGate.reset('tts_mask_block');
+         logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_release' });
+         return;
+       }
+       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'shadow_only', {
+         reason: 'speech_end',
+       });
+       handleSpeechEnd(ctx, detail);
+     },
+   });
+   audio.vad.start();
+   ctx.state.vadArmed = true;
+   ctx.state.vadSuppressedForTts = false;
+   ctx.state.vadShouldRearmAfterTts = false;
+   dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason: 'vad_armed' });
+ };
+ 
+ const teardownVad = (ctx) => {
+   const { audio } = ctx;
+-  if (audio.vad) { try { audio.vad.stop(); } catch {} }
++  if (audio.vad) {
++    try { audio.vad.stop({ reason: 'teardown' }); } catch {}
++  }
+   audio.vad = null;
+   ctx.state.vadArmed = false;
+   ctx.state.vadRecording = false;
+ };
+ 
+ const ensureGreetGate = (ctx, active) => {
+   ctx.state.greetGateActive = !!active;
+   if (!active) { ctx.state.greetGatePhase = 'idle'; ctx.state.greetGateWaiters = []; }
+   else if (ctx.state.greetGatePhase === 'idle') ctx.state.greetGatePhase = 'calibrating';
+ };
+ 
+ const manualBargeAllowed = (ctx) => isTtsMaskActive(ctx);
+ 
+ export async function initMic(stream = null) {
+   const ctx = ensureCtx();
+   if (stream) ctx.audio.stream = stream;
+   if (!ctx.audio.stream) {
+     const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
+     ctx.audio.stream = await navigator.mediaDevices.getUserMedia(constraints);
+   }
+   ensureAudioGraph(ctx, ctx.audio.stream);
+   return ctx.audio.stream;
+ }
+ 
+ export async function armVAD(stream = null, opts = {}) {
+@@ -1713,161 +1759,211 @@ export async function armVAD(stream = null, opts = {}) {
+   await ensureTransport(ctx).catch(() => {});
+   emitVoiceEvent('armed', { mode: 'adaptive' });
+   return mic;
+ }
+ 
+ export function disarmVAD() {
+   const ctx = ensureCtx();
+   clearPostTtsRearm(ctx);
+   ctx.state.vadShouldRearmAfterTts = false;
+   ctx.state.vadSuppressedForTts = false;
+   teardownVad(ctx); stopRecorder(ctx);
+   closeTurn(ctx, 'manual_disarm');
+   teardownTransport(ctx);
+   setManualGate(ctx, false);
+   ctx.state.pttHeld = false;
+   ctx.state.hasOpenedTurn = false;
+   stopMaskLogging(ctx);
+   dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: 'manual_disarm' });
+ }
+ 
+ export function isRecording() {
+   const ctx = ensureCtx();
+   return !!ctx.state.recording;
+ }
+ 
+-export function bargeIn() {
++export function bargeIn(meta = {}) {
+   const ctx = ensureCtx();
+   const shouldNotify = manualBargeAllowed(ctx);
+   ctx.state.manualBargeInUsed = true;
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
+   ctx.state.pendingCommitReason = null;
+   clearDualVadTimer(ctx);
+   clearPostTtsRearm(ctx);
+   ctx.state.vadShouldRearmAfterTts = false;
+   ctx.state.vadSuppressedForTts = false;
+   try { stopPlayback(); } catch {}
+   if (ctx.state.turnOpen) {
+     closeTurn(ctx, 'manual_barge_preempt');
+   }
++  const maskActive = isTtsMaskActive(ctx);
++  const whileTts = !!(ctx.state.ttsPlaying || maskActive);
++  const asrState = ctx.state?.asr;
++  const asrConf = Number.isFinite(asrState?.lastConf) ? Number(asrState.lastConf) : null;
++  const source = typeof meta?.source === 'string' && meta.source
++    ? meta.source
++    : (ctx.state.manualGate ? 'manual' : 'auto');
++  emitFlowBreadcrumb('barge_in', {
++    source,
++    while_tts: whileTts,
++    asr_conf_at_trigger: asrConf,
++    manual_gate: !!ctx.state.manualGate,
++    notify_server: !!shouldNotify,
++    mask_active: maskActive,
++  });
+   ctx.state.ttsPlaying = false;
+   ctx.ttsEndedAtMs = nowMs();
+   ctx.ttsMask.clear();
+   if (shouldNotify) {
+     sendJSON({ type: 'manual_barge_in' });
+   }
+   ctx.evidenceGate.reset('manual_barge_in');
+   ctx.shadowBuffer.clear();
+   ctx.audio.lastTimecode = null;
+   emitVoiceEvent('barge_in', { reason: 'manual' });
+   return true;
+ }
+ 
+ export function setVadBoost(value) {
+   const ctx = ensureCtx();
+   const numeric = Number.isFinite(value) ? value : 0;
+   ctx.state.vadBoostDb = Math.max(0, numeric);
+   if (ctx.audio.vad) {
+     teardownVad(ctx); ensureVad(ctx, {});
+   }
+ }
+ 
+ export function setGreetGateActive(active = true) {
+   const ctx = ensureCtx();
+   ensureGreetGate(ctx, active);
+   emitVoiceEvent('greet_gate', { active: ctx.state.greetGateActive });
+ }
+ 
+ export function forceBargeInStart(meta = {}) {
+   const ctx = ensureCtx();
+   if (ctx.state.manualGate) {
+     ctx.state.pttHeld = true;
+     return false;
+   }
+ 
+   ctx.state.pttHeld = true;
++  const maskActive = isTtsMaskActive(ctx);
++  const whileTts = !!(ctx.state.ttsPlaying || maskActive);
++  const source = typeof meta?.source === 'string' && meta.source ? meta.source : 'manual';
++  lastPttDownAtMs = nowMs();
++  emitFlowBreadcrumb('ptt_down', {
++    source,
++    while_tts: whileTts,
++    manual_gate: true,
++    mask_active: maskActive,
++  });
+   clearPostTtsRearm(ctx);
+   ctx.state.vadShouldRearmAfterTts = false;
+   ctx.state.vadSuppressedForTts = false;
+   setManualGate(ctx, true);
+ 
+-  bargeIn();
++  bargeIn(meta);
+ 
+   ctx.state.manualBargeInUsed = true;
+   ctx.state.ttsPlaying = false;
+   ctx.ttsMask.clear();
+   ctx.ttsEndedAtMs = nowMs();
+ 
+   const controlFrame = { type: 'Control', action: 'barge_in_start' };
+   const sent = sendJSON(controlFrame);
+   if (!sent) {
+     ensureTransport(ctx).then(() => {
+       try { sendJSON(controlFrame); } catch {}
+     }).catch(() => {});
+   }
+ 
+   dispatchTurnEvent(ctx, TurnEvent.SpeechStart, { reason: 'manual_start' });
+   emitVoiceEvent('barge_in_start', meta);
+ 
+   const open = openTurn(ctx, 'manual_start');
+   if (open && typeof open.then === 'function') {
+     open.catch(() => {});
+   }
+ 
+   return true;
+ }
+ 
+ export function forceBargeInEnd(opts = {}) {
+   const ctx = ensureCtx();
+   const wasActive = ctx.state.manualGate;
+   const stillHeld = !!opts?.pttHeld;
++  const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
++  const nowTs = nowMs();
++  let durationMs = null;
++  if (!stillHeld) {
++    if (Number.isFinite(lastPttDownAtMs)) {
++      durationMs = Math.max(0, Math.round(nowTs - lastPttDownAtMs));
++    } else {
++      durationMs = null;
++    }
++    lastPttDownAtMs = 0;
++  }
+   ctx.state.pttHeld = stillHeld;
+   if (!stillHeld) {
+     setManualGate(ctx, false);
+   }
+   if (!stillHeld) {
+     clearPostTtsRearm(ctx);
+     ctx.state.vadShouldRearmAfterTts = false;
+     ctx.state.vadSuppressedForTts = false;
+     rearmLocalVad(ctx);
+   }
+   ctx.state.ttsPlaying = false;
+   ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });
+-  ctx.ttsEndedAtMs = nowMs();
++  ctx.ttsEndedAtMs = nowTs;
+ 
+-  const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
+   const released = wasActive && !ctx.state.manualGate;
++  if (!stillHeld) {
++    emitFlowBreadcrumb('ptt_up', {
++      reason,
++      duration_ms: durationMs,
++      manual_gate: wasActive,
++      released,
++    });
++  }
+   if (released) {
+     const controlFrame = { type: 'Control', action: 'barge_in_end' };
+     const sent = sendJSON(controlFrame);
+     if (!sent) {
+       ensureTransport(ctx).then(() => {
+         try { sendJSON(controlFrame); } catch {}
+       }).catch(() => {});
+     }
+ 
+     if (ctx.state.turnOpen) {
+       closeTurn(ctx, reason);
+     }
+     dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason, force: true });
+     markReady(ctx, reason, { force: true });
+     dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason, force: true });
+   }
+ 
+   if (released) {
+     ctx.state.bargeConfirmActive = false;
+     ctx.state.bargeConfirmUntil = 0;
+     ctx.evidenceGate.reset('manual_release');
+     ctx.shadowBuffer.clear();
+     ctx.audio.lastTimecode = null;
++    emitFlowBreadcrumb('barge_in_end', {
++      reason,
++      duration_ms: durationMs,
++      manual_gate: wasActive,
++      mask_active: isTtsMaskActive(ctx),
++      released: true,
++    });
+     emitVoiceEvent('barge_in_end', opts);
+   }
+   return wasActive;
+ }
+ 
+ const getCtx = () => ctxRef.current;
+ 
+ export const __TEST_ONLY__ = Object.freeze({
+   getCtx: () => (globalThis.ADVANCED_LOGGING_ENABLED ? getCtx() : null),
+   nowMs,
+ });
+diff --git a/static/js/voice/vad.js b/static/js/voice/vad.js
+index 2f0e13904e82f179082eaf9c0b0e9d8e3abec4ea..b4b0a3571d51f5f543817a6ab86ec86e10bd59d0 100644
+--- a/static/js/voice/vad.js
++++ b/static/js/voice/vad.js
+@@ -1,33 +1,34 @@
+ // static/js/voice/vad.js
+ // Lightweight RMS-based VAD tuned for conversational UX.
+ // Features:
+ //  • Rolling noise-floor tracking with adaptive thresholds (dB offsets)
+ //  • Echo-aware gating (raise thresholds while TTS is active)
+ //  • Emits onSpeechStart / onSpeechEnd callbacks with metrics
+ //  • Safe timers; idempotent start/stop
+ 
++import { emitFlowBreadcrumb } from '../flow_breadcrumbs.js';
+ import { logIfEnabled } from '../util/logging.js';
+ import { nowMs } from './core/index.js';
+ 
+ const voiceLog = (level, ...args) => {
+   logIfEnabled(() => {
+     try {
+       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
+       method?.apply(console, args);
+     } catch {}
+   });
+ };
+ 
+ const getSessionId = () => {
+   try {
+     if (typeof window !== 'undefined' && window.__askchip_voice_session_id) {
+       return window.__askchip_voice_session_id;
+     }
+   } catch {}
+   return null;
+ };
+ 
+ const getTurnId = () => {
+   try {
+     if (typeof window !== 'undefined' && window.__askchip_turn_trace_id != null) {
+       return window.__askchip_turn_trace_id;
+@@ -113,50 +114,51 @@ export class VAD {
+       initialNoiseFloorDb: -72,
+       echoStateFn: null,
+       gateFn: null,
+     }, opts || {});
+     this.cbs = cbs || {};
+     this._buf = new Float32Array(this.analyser.fftSize || 2048);
+     this._timer = null;
+     this._recording = false;
+     this._aboveSince = 0;
+     this._belowSince = 0;
+     this._cooldownUntil = 0;
+     this._speechStartedAt = 0;
+     this._activeDetail = null;
+     this._activeNoiseFloorDb = null;
+     this._noiseFloorDb = clampDb(
+       Number.isFinite(this.opts.initialNoiseFloorDb)
+         ? this.opts.initialNoiseFloorDb
+         : -72
+     );
+     this._lastNoiseUpdate = 0;
+     this._legacyStartDb = Number.isFinite(this.opts.startRms) ? rmsToDb(this.opts.startRms) : null;
+     this._legacyStopDb = Number.isFinite(this.opts.stopRms) ? rmsToDb(this.opts.stopRms) : null;
+     this._suppressingEcho = false;
+     this._lastGateLogTs = 0;
+     this._gateWasBlocked = false;
++    this._startedAt = 0;
+   }
+ 
+   _rms() {
+     this.analyser.getFloatTimeDomainData(this._buf);
+     let sum = 0;
+     for (let i = 0; i < this._buf.length; i++) {
+       const v = this._buf[i];
+       sum += v * v;
+     }
+     return Math.sqrt(sum / this._buf.length);
+   }
+ 
+   _makeDetail(rms, rmsDb, noiseFloorDb, startDb, stopDb) {
+     const snrDb = (Number.isFinite(rmsDb) && Number.isFinite(noiseFloorDb))
+       ? rmsDb - noiseFloorDb
+       : null;
+     return {
+       rms,
+       rmsDb,
+       noiseFloorDb,
+       snrDb,
+       thresholds: { startDb, stopDb },
+     };
+   }
+ 
+@@ -197,74 +199,95 @@ export class VAD {
+     );
+ 
+     let startDb = baseStart;
+     let stopDb = baseStop;
+ 
+     if (Number.isFinite(this._legacyStartDb)) {
+       startDb = Math.max(startDb, this._legacyStartDb);
+     }
+     if (Number.isFinite(this._legacyStopDb)) {
+       stopDb = Math.max(stopDb, this._legacyStopDb);
+     }
+ 
+     if (echoActive) {
+       startDb += this.opts.echoBoostStartDb ?? 0;
+       stopDb += this.opts.echoBoostStopDb ?? 0;
+     }
+ 
+     return {
+       startDb: clampDb(startDb),
+       stopDb: clampDb(stopDb),
+       baseStartDb: baseStart,
+     };
+   }
+ 
+   start() {
+-    this.stop(); // idempotent
++    this.stop({ silent: true }); // idempotent
+     this._aboveSince = 0;
+     this._belowSince = 0;
+     this._cooldownUntil = 0;
+     this._speechStartedAt = 0;
+     this._activeDetail = null;
+     this._activeNoiseFloorDb = null;
+     this._suppressingEcho = false;
+ 
+     const pollMs = Number.isFinite(this.opts.pollMs) ? this.opts.pollMs : 33;
+ 
+     this._timer = setInterval(() => this._pollFrame(), pollMs);
++    this._startedAt = nowMs();
++    const sampleRate = Number.isFinite(this.analyser?.context?.sampleRate)
++      ? this.analyser.context.sampleRate
++      : null;
++    emitFlowBreadcrumb('client_vad_start', {
++      poll_ms: pollMs,
++      fft_size: Number.isFinite(this.analyser?.fftSize) ? this.analyser.fftSize : null,
++      sample_rate: sampleRate,
++    });
+   }
+ 
+-  stop() {
++  stop(opts = {}) {
++    const silent = !!opts?.silent;
++    const reason = typeof opts?.reason === 'string' ? opts.reason : null;
+     if (this._timer) { clearInterval(this._timer); this._timer = null; }
+     this._recording = false;
+     this._aboveSince = 0;
+     this._belowSince = 0;
+     this._cooldownUntil = 0;
+     this._speechStartedAt = 0;
+     this._activeDetail = null;
+     this._activeNoiseFloorDb = null;
+     this._suppressingEcho = false;
++    const startedAt = Number.isFinite(this._startedAt) ? this._startedAt : 0;
++    const durationMs = startedAt > 0 ? Math.max(0, Math.round(nowMs() - startedAt)) : null;
++    this._startedAt = 0;
++    if (!silent) {
++      const detail = {};
++      if (durationMs !== null) detail.duration_ms = durationMs;
++      if (Number.isFinite(this.opts.pollMs)) detail.poll_ms = this.opts.pollMs;
++      if (reason) detail.reason = reason;
++      emitFlowBreadcrumb('client_vad_stop', detail);
++    }
+   }
+ 
+   isRecording() { return this._recording; }
+ 
+   _shouldSuppressEcho(rmsDb, now) {
+     if (!Number.isFinite(rmsDb)) return false;
+     const fn = this.opts.echoSignatureFn;
+     if (typeof fn !== 'function') return false;
+     let signature;
+     try {
+       signature = fn();
+     } catch {
+       return false;
+     }
+     if (!signature || !Number.isFinite(signature.rmsDb)) return false;
+     const requiredGap = Number.isFinite(this.opts.echoSuppressDb)
+       ? this.opts.echoSuppressDb
+       : DEFAULT_SUPPRESS_DB;
+     const maxAge = Number.isFinite(this.opts.echoSignatureMaxAgeMs)
+       ? this.opts.echoSignatureMaxAgeMs
+       : DEFAULT_SIGNATURE_MAX_AGE_MS;
+     const signatureTs = Number.isFinite(signature.timestamp) ? signature.timestamp : null;
+     if (signatureTs !== null) {
+       const age = now - signatureTs;
+       if (Number.isFinite(age) && age > maxAge) {

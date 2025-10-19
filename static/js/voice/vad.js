@@ -6,6 +6,7 @@
 //  • Emits onSpeechStart / onSpeechEnd callbacks with metrics
 //  • Safe timers; idempotent start/stop
 
+import { emitFlowBreadcrumb } from '../flow_breadcrumbs.js';
 import { logIfEnabled } from '../util/logging.js';
 import { nowMs } from './core/index.js';
 
@@ -135,6 +136,7 @@ export class VAD {
     this._suppressingEcho = false;
     this._lastGateLogTs = 0;
     this._gateWasBlocked = false;
+    this._startedAt = 0;
   }
 
   _rms() {
@@ -219,7 +221,7 @@ export class VAD {
   }
 
   start() {
-    this.stop(); // idempotent
+    this.stop({ silent: true }); // idempotent
     this._aboveSince = 0;
     this._belowSince = 0;
     this._cooldownUntil = 0;
@@ -231,9 +233,20 @@ export class VAD {
     const pollMs = Number.isFinite(this.opts.pollMs) ? this.opts.pollMs : 33;
 
     this._timer = setInterval(() => this._pollFrame(), pollMs);
+    this._startedAt = nowMs();
+    const sampleRate = Number.isFinite(this.analyser?.context?.sampleRate)
+      ? this.analyser.context.sampleRate
+      : null;
+    emitFlowBreadcrumb('client_vad_start', {
+      poll_ms: pollMs,
+      fft_size: Number.isFinite(this.analyser?.fftSize) ? this.analyser.fftSize : null,
+      sample_rate: sampleRate,
+    });
   }
 
-  stop() {
+  stop(opts = {}) {
+    const silent = !!opts?.silent;
+    const reason = typeof opts?.reason === 'string' ? opts.reason : null;
     if (this._timer) { clearInterval(this._timer); this._timer = null; }
     this._recording = false;
     this._aboveSince = 0;
@@ -243,6 +256,16 @@ export class VAD {
     this._activeDetail = null;
     this._activeNoiseFloorDb = null;
     this._suppressingEcho = false;
+    const startedAt = Number.isFinite(this._startedAt) ? this._startedAt : 0;
+    const durationMs = startedAt > 0 ? Math.max(0, Math.round(nowMs() - startedAt)) : null;
+    this._startedAt = 0;
+    if (!silent) {
+      const detail = {};
+      if (durationMs !== null) detail.duration_ms = durationMs;
+      if (Number.isFinite(this.opts.pollMs)) detail.poll_ms = this.opts.pollMs;
+      if (reason) detail.reason = reason;
+      emitFlowBreadcrumb('client_vad_stop', detail);
+    }
   }
 
   isRecording() { return this._recording; }

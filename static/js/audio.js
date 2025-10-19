@@ -7,9 +7,12 @@
 //   • audioTeardown() — hard reset pipeline (optional)
 
 import { ChunkedAudioPlayer } from './audio_player.js';
+import { emitFlowBreadcrumb } from './flow_breadcrumbs.js';
 import { logIfEnabled } from './util/logging.js';
 
 const DEFAULT_SIGNATURE = Object.freeze({ rms: 0, rmsDb: -Infinity, mfcc: [], timestamp: 0 });
+
+const AUDIO_CTX_HOOK_KEY = '__flowBreadcrumbCtxHooked';
 
 let _player = null;
 let _el = null;
@@ -30,6 +33,89 @@ const TTS_IDLE_VOLUME = 1.0;
 const TTS_ATTENUATED_VOLUME = 0.5; // ~6 dB reduction to limit mic bleed
 
 const DEFAULT_MIME = 'audio/webm; codecs="opus"';
+
+function _emitAudioCtxBreadcrumb(ctx, origin = 'audio') {
+  if (!ctx) return;
+  try {
+    const state = typeof ctx.state === 'string' ? ctx.state : 'unknown';
+    const detail = {
+      state,
+      origin,
+      sample_rate: Number.isFinite(ctx.sampleRate) ? ctx.sampleRate : null,
+    };
+    emitFlowBreadcrumb('audio_ctx', detail);
+  } catch {}
+}
+
+function _attachAudioCtxBreadcrumb(ctx, origin = 'audio') {
+  if (!ctx || typeof ctx !== 'object') return;
+  try {
+    if (ctx[AUDIO_CTX_HOOK_KEY]) {
+      return;
+    }
+    Object.defineProperty(ctx, AUDIO_CTX_HOOK_KEY, {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+
+    const emit = () => _emitAudioCtxBreadcrumb(ctx, origin);
+    emit();
+
+    const handler = () => emit();
+    if (typeof ctx.addEventListener === 'function') {
+      try { ctx.addEventListener('statechange', handler); } catch {}
+    } else if ('onstatechange' in ctx) {
+      const prev = ctx.onstatechange;
+      ctx.onstatechange = function patchedStateChange(ev) {
+        try { handler(ev); } catch {}
+        if (typeof prev === 'function') {
+          try { prev.call(this, ev); } catch {}
+        }
+      };
+    }
+  } catch {}
+}
+
+function _playWithBreadcrumb(audioEl, { reason } = {}) {
+  if (!audioEl) return null;
+  const detailBase = {
+    reason: reason || 'unknown',
+    muted: !!audioEl.muted,
+    volume: Number.isFinite(audioEl.volume) ? audioEl.volume : null,
+    autoplay: !!audioEl.autoplay,
+  };
+  try {
+    if (typeof document !== 'undefined' && typeof document.hidden === 'boolean') {
+      detailBase.document_hidden = document.hidden;
+    }
+  } catch {}
+
+  emitFlowBreadcrumb('play_attempt', detailBase);
+
+  let playResult = null;
+  try {
+    playResult = audioEl.play();
+  } catch (err) {
+    const message = err?.message || String(err || 'unknown_error');
+    emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
+    return null;
+  }
+
+  const onSuccess = () => emitFlowBreadcrumb('play_result', { ...detailBase, ok: true });
+  const onError = (err) => {
+    const message = err?.message || String(err || 'unknown_error');
+    emitFlowBreadcrumb('play_result', { ...detailBase, ok: false, message });
+  };
+
+  if (playResult && typeof playResult.then === 'function') {
+    playResult.then(onSuccess).catch(onError);
+  } else {
+    onSuccess();
+  }
+
+  return playResult;
+}
 
 function _emitTtsState(state) {
   if (!state || state === _lastTtsState) return;
@@ -60,6 +146,7 @@ export async function unlockAudio() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     const ctx = new AC();
+    _attachAudioCtxBreadcrumb(ctx, 'unlock_audio');
     if (ctx.state === 'suspended') await ctx.resume();
     const o = ctx.createOscillator();
     const g = ctx.createGain();
@@ -110,6 +197,7 @@ function _ensureSignatureTracker() {
 
   try {
     const ctx = new AC();
+    _attachAudioCtxBreadcrumb(ctx, 'playback_analysis');
     if (ctx.state === 'suspended') {
       try { ctx.resume(); } catch {}
     }
@@ -391,10 +479,10 @@ export function resumePlayback() {
   try {
     const el = ensureEl();
     if (el.paused) {
-      const rv = el.play();
+      const rv = _playWithBreadcrumb(el, { reason: 'resume_playback' });
       if (rv && typeof rv.then === 'function') {
         rv.then(() => _emitTtsState('playing')).catch(() => {});
-      } else {
+      } else if (!el.paused) {
         _emitTtsState('playing');
       }
     }

@@ -38,6 +38,7 @@ function safeCloseStream(reason = '') {
 }
 import { VAD } from '../vad.js';
 import { stopPlayback } from '../../audio.js';
+import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
 import { logIfEnabled } from '../../util/logging.js';
 import { getSID } from '../../util/sid.js';
 
@@ -182,6 +183,48 @@ const PRE_ROLL_MS = 550,
   MIN_TURN_OPEN_MS = 600;
 
 const ctxRef = { current: null };
+const MIC_AUDIO_CTX_HOOK_KEY = '__flowBreadcrumbMicCtx';
+let lastPttDownAtMs = 0;
+
+const attachMicAudioCtxBreadcrumb = (ctx, origin = 'mic_capture') => {
+  if (!ctx || typeof ctx !== 'object') return;
+  try {
+    if (ctx[MIC_AUDIO_CTX_HOOK_KEY]) {
+      return;
+    }
+    Object.defineProperty(ctx, MIC_AUDIO_CTX_HOOK_KEY, {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+
+    const emit = () => {
+      try {
+        const state = typeof ctx.state === 'string' ? ctx.state : 'unknown';
+        emitFlowBreadcrumb('audio_ctx', {
+          state,
+          origin,
+          sample_rate: Number.isFinite(ctx.sampleRate) ? ctx.sampleRate : null,
+        });
+      } catch {}
+    };
+
+    emit();
+
+    const handler = () => emit();
+    if (typeof ctx.addEventListener === 'function') {
+      try { ctx.addEventListener('statechange', handler); } catch {}
+    } else if ('onstatechange' in ctx) {
+      const prev = ctx.onstatechange;
+      ctx.onstatechange = function patchedStateChange(ev) {
+        try { handler(ev); } catch {}
+        if (typeof prev === 'function') {
+          try { prev.call(this, ev); } catch {}
+        }
+      };
+    }
+  } catch {}
+};
 
 const initAsrState = () => ({
   speaking: false,
@@ -1044,6 +1087,7 @@ const ensureAudioGraph = (ctx, stream) => {
   const AudioCtx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
   if (!AudioCtx) throw new Error('AudioContext not supported');
   audio.context = audio.context || new AudioCtx();
+  attachMicAudioCtxBreadcrumb(audio.context, 'mic_capture');
   try {
     if (typeof audio.context?.resume === 'function') {
       audio.context.resume().catch(() => {});
@@ -1667,7 +1711,9 @@ const ensureVad = (ctx, opts = {}) => {
 
 const teardownVad = (ctx) => {
   const { audio } = ctx;
-  if (audio.vad) { try { audio.vad.stop(); } catch {} }
+  if (audio.vad) {
+    try { audio.vad.stop({ reason: 'teardown' }); } catch {}
+  }
   audio.vad = null;
   ctx.state.vadArmed = false;
   ctx.state.vadRecording = false;
@@ -1735,7 +1781,7 @@ export function isRecording() {
   return !!ctx.state.recording;
 }
 
-export function bargeIn() {
+export function bargeIn(meta = {}) {
   const ctx = ensureCtx();
   const shouldNotify = manualBargeAllowed(ctx);
   ctx.state.manualBargeInUsed = true;
@@ -1750,6 +1796,21 @@ export function bargeIn() {
   if (ctx.state.turnOpen) {
     closeTurn(ctx, 'manual_barge_preempt');
   }
+  const maskActive = isTtsMaskActive(ctx);
+  const whileTts = !!(ctx.state.ttsPlaying || maskActive);
+  const asrState = ctx.state?.asr;
+  const asrConf = Number.isFinite(asrState?.lastConf) ? Number(asrState.lastConf) : null;
+  const source = typeof meta?.source === 'string' && meta.source
+    ? meta.source
+    : (ctx.state.manualGate ? 'manual' : 'auto');
+  emitFlowBreadcrumb('barge_in', {
+    source,
+    while_tts: whileTts,
+    asr_conf_at_trigger: asrConf,
+    manual_gate: !!ctx.state.manualGate,
+    notify_server: !!shouldNotify,
+    mask_active: maskActive,
+  });
   ctx.state.ttsPlaying = false;
   ctx.ttsEndedAtMs = nowMs();
   ctx.ttsMask.clear();
@@ -1786,12 +1847,22 @@ export function forceBargeInStart(meta = {}) {
   }
 
   ctx.state.pttHeld = true;
+  const maskActive = isTtsMaskActive(ctx);
+  const whileTts = !!(ctx.state.ttsPlaying || maskActive);
+  const source = typeof meta?.source === 'string' && meta.source ? meta.source : 'manual';
+  lastPttDownAtMs = nowMs();
+  emitFlowBreadcrumb('ptt_down', {
+    source,
+    while_tts: whileTts,
+    manual_gate: true,
+    mask_active: maskActive,
+  });
   clearPostTtsRearm(ctx);
   ctx.state.vadShouldRearmAfterTts = false;
   ctx.state.vadSuppressedForTts = false;
   setManualGate(ctx, true);
 
-  bargeIn();
+  bargeIn(meta);
 
   ctx.state.manualBargeInUsed = true;
   ctx.state.ttsPlaying = false;
@@ -1821,6 +1892,17 @@ export function forceBargeInEnd(opts = {}) {
   const ctx = ensureCtx();
   const wasActive = ctx.state.manualGate;
   const stillHeld = !!opts?.pttHeld;
+  const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
+  const nowTs = nowMs();
+  let durationMs = null;
+  if (!stillHeld) {
+    if (Number.isFinite(lastPttDownAtMs)) {
+      durationMs = Math.max(0, Math.round(nowTs - lastPttDownAtMs));
+    } else {
+      durationMs = null;
+    }
+    lastPttDownAtMs = 0;
+  }
   ctx.state.pttHeld = stillHeld;
   if (!stillHeld) {
     setManualGate(ctx, false);
@@ -1833,10 +1915,17 @@ export function forceBargeInEnd(opts = {}) {
   }
   ctx.state.ttsPlaying = false;
   ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });
-  ctx.ttsEndedAtMs = nowMs();
+  ctx.ttsEndedAtMs = nowTs;
 
-  const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
   const released = wasActive && !ctx.state.manualGate;
+  if (!stillHeld) {
+    emitFlowBreadcrumb('ptt_up', {
+      reason,
+      duration_ms: durationMs,
+      manual_gate: wasActive,
+      released,
+    });
+  }
   if (released) {
     const controlFrame = { type: 'Control', action: 'barge_in_end' };
     const sent = sendJSON(controlFrame);
@@ -1860,6 +1949,13 @@ export function forceBargeInEnd(opts = {}) {
     ctx.evidenceGate.reset('manual_release');
     ctx.shadowBuffer.clear();
     ctx.audio.lastTimecode = null;
+    emitFlowBreadcrumb('barge_in_end', {
+      reason,
+      duration_ms: durationMs,
+      manual_gate: wasActive,
+      mask_active: isTtsMaskActive(ctx),
+      released: true,
+    });
     emitVoiceEvent('barge_in_end', opts);
   }
   return wasActive;
