@@ -1,6 +1,10 @@
 # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
-import asyncio, os, contextlib, time, io, struct, base64, uuid, copy, audioop
+import asyncio, os, contextlib, time, io, struct, base64, uuid, copy
+try:
+    import audioop  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - optional dependency
+    audioop = None  # type: ignore[assignment]
 from functools import partial
 from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
 from collections import deque, defaultdict
@@ -1877,11 +1881,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             "mime": mime_value,
         })
         rms_val = None
-        try:
-            if chunk:
+        if chunk and audioop is not None:
+            try:
                 rms_val = audioop.rms(chunk, 2)
-        except Exception:
-            rms_val = None
+            except Exception:
+                rms_val = None
         last_vad = state.get("last_vad_ts")
         vad_base = last_vad if last_vad else opened_at
         if vad_base:
