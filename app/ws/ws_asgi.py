@@ -1050,6 +1050,9 @@ async def _emit_user_final_payload(
                         synthetic_final_turns.discard(next_turn_id)
                     turn_id_for_event = next_turn_id
                 else:
+                    allow_barge, _, _, _ = _decide_barge_attempt("vad")
+                    if not allow_barge:
+                        continue
                     with contextlib.suppress(Exception):
                         asr_seen_partial[0] = True
                     if turn_timing is not None:
@@ -1964,6 +1967,43 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     tts_mask_mode = ["none"]
     tts_mask_release_task: List[Optional[asyncio.Task]] = [None]
     tts_mask_release_deadline = [0.0]
+
+    def _decide_barge_attempt(source: str) -> Tuple[bool, str, str, str]:
+        src = "ptt" if str(source).lower() == "ptt" else "vad"
+        try:
+            current_turn_id = _current_assistant_turn_id(sid)
+        except Exception:
+            current_turn_id = None
+        tts_state, _ = _lookup_tts_state(sid, current_turn_id)
+        tts_active_now = _is_tts_active(tts_state)
+        post_hold_active = bool(tts_mask_active[0]) and not tts_active_now
+        if tts_active_now:
+            tts_phase = "TTS_ACTIVE"
+        elif post_hold_active:
+            tts_phase = "POST_TTS_HOLD"
+        else:
+            tts_phase = "IDLE"
+
+        allowed = True
+        reason = "ok"
+        suppress_mode = (barge_suppress_mode or "none").strip() or "none"
+        if src == "vad":
+            if not local_vad_allowed:
+                allowed = False
+                reason = "local_vad_disabled"
+            elif suppress_mode == "all":
+                if tts_active_now:
+                    allowed = False
+                    reason = "tts_active"
+                elif post_hold_active:
+                    allowed = False
+                    reason = "post_tts_hold"
+        else:
+            if not manual_feature_enabled:
+                allowed = False
+                reason = "ptt_disabled"
+
+        return allowed, src, tts_phase, reason
     pending_confirm_request: List[Optional[Dict[str, Any]]] = [None]
     asr_ready = [False]
     local_vad_open = [False]    
@@ -2315,6 +2355,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if local_vad_meta_sent[0]:
             return
         if _manual_mode_active():
+            return
+        allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt("vad")
+        if not allow_barge:
+            with contextlib.suppress(Exception):
+                if allow_reason and allow_reason != "ok":
+                    _jlog(
+                        "local_vad_ignored",
+                        sid=sid,
+                        by=allow_src,
+                        state=allow_state,
+                        reason=allow_reason,
+                    )
             return
         local_vad_meta_sent[0] = True
         _maybe_emit_evidence_gate()
@@ -2764,6 +2816,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             )
 
     def _handle_asr_partial_with_flow(ev: Dict[str, Any]) -> None:
+        allow_barge, _, _, _ = _decide_barge_attempt("vad")
+        if not allow_barge:
+            return
         try:
             _handle_confirm_partial(ev)
         except Exception:
@@ -3771,17 +3826,35 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 except Exception:
                                     pass
                         if not manual_turn_active[0] and should_pause:
-                            if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
-                                _set_barge_pause_meta("client_vad")
-                            try:
-                                barge_started = barge.start(
-                                    confirm_ms=confirm_ms,
-                                    on_commit=_on_barge_commit,
-                                    send_state=_send_barge_state,
-                                    auto_commit=False,
-                                )
-                            except Exception:
+                            allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
+                                "vad"
+                            )
+                            if allow_barge:
+                                if (
+                                    not barge_pause_meta_ref[0]
+                                    or barge_pause_meta_ref[0].get("src") != "ptt"
+                                ):
+                                    _set_barge_pause_meta("client_vad")
+                                try:
+                                    barge_started = barge.start(
+                                        confirm_ms=confirm_ms,
+                                        on_commit=_on_barge_commit,
+                                        send_state=_send_barge_state,
+                                        auto_commit=False,
+                                    )
+                                except Exception:
+                                    barge_started = False
+                            else:
                                 barge_started = False
+                                with contextlib.suppress(Exception):
+                                    if allow_reason and allow_reason != "ok":
+                                        _jlog(
+                                            "barge_attempt_ignored",
+                                            sid=sid,
+                                            by=allow_src,
+                                            state=allow_state,
+                                            reason=allow_reason,
+                                        )
                         turn_id_ref[0] = buf.turn_seq + 1
                         pending_confirm_request[0] = None
                         if barge_started:
@@ -4084,7 +4157,21 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 meta_payload = {}
 
                             if action == "ptt_down":
-                                tts_active_now = _current_tts_active()
+                                allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
+                                    "ptt"
+                                )
+                                if not allow_barge:
+                                    with contextlib.suppress(Exception):
+                                        if allow_reason and allow_reason != "ok":
+                                            _jlog(
+                                                "ptt_ignored",
+                                                sid=sid,
+                                                by=allow_src,
+                                                state=allow_state,
+                                                reason=allow_reason,
+                                            )
+                                    continue
+                                tts_active_now = allow_state == "TTS_ACTIVE"
                                 _emit_transition_event(
                                     "ptt_down",
                                     meta={"during_tts": bool(tts_active_now)},
@@ -4095,7 +4182,21 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 continue
 
                             if action == "ptt_up":
-                                tts_active_now = _current_tts_active()
+                                allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
+                                    "ptt"
+                                )
+                                if not allow_barge:
+                                    with contextlib.suppress(Exception):
+                                        if allow_reason and allow_reason != "ok":
+                                            _jlog(
+                                                "ptt_ignored",
+                                                sid=sid,
+                                                by=allow_src,
+                                                state=allow_state,
+                                                reason=allow_reason,
+                                            )
+                                    continue
+                                tts_active_now = allow_state == "TTS_ACTIVE"
                                 _emit_transition_event(
                                     "ptt_up",
                                     meta={"during_tts": bool(tts_active_now)},
@@ -4116,6 +4217,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     reason = ""
                                 if not reason:
                                     reason = "speech"
+                                allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
+                                    "vad"
+                                )
+                                if not allow_barge:
+                                    with contextlib.suppress(Exception):
+                                        if allow_reason and allow_reason != "ok":
+                                            _jlog(
+                                                "remote_vad_ignored",
+                                                sid=sid,
+                                                by=allow_src,
+                                                state=allow_state,
+                                                reason=allow_reason,
+                                            )
+                                    continue
                                 rms_val = meta_payload.get("rms")
                                 if rms_val is None:
                                     rms_val = obj.get("rms")
@@ -4166,6 +4281,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                             if action == "barge_in_start":
                                 if manual_feature_enabled:
+                                    allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
+                                        "ptt"
+                                    )
+                                    if not allow_barge:
+                                        with contextlib.suppress(Exception):
+                                            if allow_reason and allow_reason != "ok":
+                                                _jlog(
+                                                    "manual_barge_ignored",
+                                                    sid=sid,
+                                                    by=allow_src,
+                                                    state=allow_state,
+                                                    reason=allow_reason,
+                                                )
+                                        continue
                                     manual_button_down[0] = True
                                     manual_turn_active[0] = True
                                     manual_commit_pending[0] = True
@@ -4182,7 +4311,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
                                     except Exception:
                                         current_assistant_turn_ref[0] = None
-                                    tts_active_now = _current_tts_active()
+                                    tts_active_now = allow_state == "TTS_ACTIVE"
                                     if not ptt_down_emitted[0]:
                                         _emit_transition_event(
                                             "ptt_down",
