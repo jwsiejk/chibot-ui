@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""Validate a flow handoff ZIP file against the manifest schema."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import zipfile
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterable, Tuple
+
+try:  # pragma: no cover - optional dependency
+    import jsonschema  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    jsonschema = None
+
+
+class SchemaValidationError(ValueError):
+    """Raised when the manifest fails schema validation."""
+
+
+def _load_json(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _read_zip_manifest(archive: zipfile.ZipFile) -> Dict[str, Any]:
+    try:
+        manifest_bytes = archive.read("manifest.json")
+    except KeyError as exc:
+        raise SystemExit("manifest.json not found in archive") from exc
+
+    try:
+        return json.loads(manifest_bytes.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"manifest.json is not valid JSON: {exc}") from exc
+
+
+def _format_path(path: Tuple[Any, ...]) -> str:
+    return " / ".join(str(part) for part in path) or "<root>"
+
+
+def _fallback_validate(instance: Any, schema: Dict[str, Any], path: Tuple[Any, ...] = ()) -> None:
+    schema_type = schema.get("type")
+    if schema_type:
+        if schema_type == "object" and not isinstance(instance, dict):
+            raise SchemaValidationError(f"{_format_path(path)}: expected object")
+        if schema_type == "array" and not isinstance(instance, list):
+            raise SchemaValidationError(f"{_format_path(path)}: expected array")
+        if schema_type == "string" and not isinstance(instance, str):
+            raise SchemaValidationError(f"{_format_path(path)}: expected string")
+        if schema_type == "integer" and not isinstance(instance, int):
+            raise SchemaValidationError(f"{_format_path(path)}: expected integer")
+
+    if schema_type == "object":
+        required = schema.get("required", [])
+        for key in required:
+            if key not in instance:
+                raise SchemaValidationError(
+                    f"{_format_path(path)}: missing required property '{key}'"
+                )
+
+        properties = schema.get("properties", {})
+        additional = schema.get("additionalProperties", True)
+        for key, value in instance.items():
+            if key in properties:
+                _fallback_validate(value, properties[key], path + (key,))
+            else:
+                if additional is False:
+                    raise SchemaValidationError(
+                        f"{_format_path(path + (key,))}: unexpected property"
+                    )
+                if isinstance(additional, dict):
+                    _fallback_validate(value, additional, path + (key,))
+
+    if schema_type == "array":
+        min_items = schema.get("minItems")
+        if min_items is not None and len(instance) < min_items:
+            raise SchemaValidationError(
+                f"{_format_path(path)}: expected at least {min_items} item(s)"
+            )
+        if schema.get("uniqueItems"):
+            seen = set()
+            for idx, item in enumerate(instance):
+                marker = json.dumps(item, sort_keys=True)
+                if marker in seen:
+                    raise SchemaValidationError(
+                        f"{_format_path(path + (idx,))}: duplicate array item"
+                    )
+                seen.add(marker)
+        items_schema = schema.get("items")
+        if isinstance(items_schema, dict):
+            for index, value in enumerate(instance):
+                _fallback_validate(value, items_schema, path + (index,))
+
+    if schema_type == "string":
+        min_length = schema.get("minLength")
+        if min_length is not None and len(instance) < min_length:
+            raise SchemaValidationError(
+                f"{_format_path(path)}: expected minimum length {min_length}"
+            )
+        max_length = schema.get("maxLength")
+        if max_length is not None and len(instance) > max_length:
+            raise SchemaValidationError(
+                f"{_format_path(path)}: expected maximum length {max_length}"
+            )
+        pattern = schema.get("pattern")
+        if pattern and not re.fullmatch(pattern, instance):
+            raise SchemaValidationError(
+                f"{_format_path(path)}: value '{instance}' does not match pattern"
+            )
+        fmt = schema.get("format")
+        if fmt == "date-time":
+            try:
+                datetime.fromisoformat(instance.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise SchemaValidationError(
+                    f"{_format_path(path)}: invalid date-time '{instance}'"
+                ) from exc
+
+    if schema_type == "integer":
+        minimum = schema.get("minimum")
+        if minimum is not None and instance < minimum:
+            raise SchemaValidationError(
+                f"{_format_path(path)}: expected value >= {minimum}"
+            )
+
+
+def _validate_schema(manifest: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    if jsonschema is not None:  # pragma: no cover - prefer library when available
+        validator = jsonschema.Draft7Validator(schema)
+        errors = sorted(validator.iter_errors(manifest), key=lambda e: e.path)
+        if errors:
+            lines = [f"Schema validation failed ({len(errors)} error(s)):"]
+            for error in errors:
+                location = _format_path(tuple(error.path))
+                lines.append(f" - {location}: {error.message}")
+            raise SystemExit("\n".join(lines))
+        return
+
+    try:
+        _fallback_validate(manifest, schema)
+    except SchemaValidationError as exc:
+        raise SystemExit(f"Schema validation failed: {exc}") from exc
+
+
+def _iter_non_manifest_files(namelist: Iterable[str]) -> Iterable[str]:
+    for name in namelist:
+        if name.endswith("/"):
+            continue
+        if name == "manifest.json":
+            continue
+        yield name
+
+
+def _verify_files(manifest: Dict[str, Any], archive: zipfile.ZipFile) -> None:
+    declared = {}
+    for entry in manifest.get("files", []):
+        if not isinstance(entry, dict):
+            raise SystemExit("Manifest 'files' entries must be objects")
+        path = entry.get("path")
+        if not isinstance(path, str):
+            raise SystemExit("Manifest file path must be a string")
+        if path in declared:
+            raise SystemExit(f"Duplicate manifest entry for {path}")
+        declared[path] = entry
+
+        try:
+            data = archive.read(path)
+        except KeyError as exc:
+            raise SystemExit(f"File listed in manifest is missing from archive: {path}") from exc
+
+        size = len(data)
+        digest = hashlib.sha1(data).hexdigest()
+
+        if size != entry.get("bytes"):
+            raise SystemExit(
+                f"Byte size mismatch for {path}: manifest={entry.get('bytes')} actual={size}"
+            )
+        if digest != entry.get("sha1"):
+            raise SystemExit(
+                f"SHA-1 mismatch for {path}: manifest={entry.get('sha1')} actual={digest}"
+            )
+
+        short = entry.get("sha1_first8")
+        if short is not None and digest[:8] != short:
+            raise SystemExit(
+                f"sha1_first8 mismatch for {path}: manifest={short} actual={digest[:8]}"
+            )
+
+    archive_files = set(_iter_non_manifest_files(archive.namelist()))
+    missing_from_manifest = sorted(archive_files - set(declared))
+    if missing_from_manifest:
+        joined = ", ".join(missing_from_manifest)
+        raise SystemExit(f"Archive contains files not listed in manifest: {joined}")
+
+
+def parse_args(argv: Iterable[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("zip_path", type=Path, help="Path to the exported flow ZIP")
+    parser.add_argument("schema_path", type=Path, help="Path to the manifest JSON Schema")
+    return parser.parse_args(argv)
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    args = parse_args(argv)
+
+    if not args.zip_path.is_file():
+        raise SystemExit(f"ZIP not found: {args.zip_path}")
+    if not args.schema_path.is_file():
+        raise SystemExit(f"Schema not found: {args.schema_path}")
+
+    schema = _load_json(args.schema_path)
+
+    with zipfile.ZipFile(args.zip_path) as archive:
+        manifest = _read_zip_manifest(archive)
+        _validate_schema(manifest, schema)
+        _verify_files(manifest, archive)
+
+    print("OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
