@@ -108,6 +108,7 @@ function schedulePostTtsRearm(ctx) {
     if (!ctx.state.manualGate) {
       markReady(ctx, 'post_tts_release');
     }
+    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
     return;
   }
   clearPostTtsRearm(ctx);
@@ -116,6 +117,7 @@ function schedulePostTtsRearm(ctx) {
   if (delay <= 0) {
     ctx.state.vadShouldRearmAfterTts = false;
     markReady(ctx, 'post_tts_hold_elapsed');
+    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
     rearmLocalVad(ctx);
     return;
   }
@@ -126,8 +128,186 @@ function schedulePostTtsRearm(ctx) {
     ctx.state.ttsHoldUntilMs = 0;
     ctx.state.vadShouldRearmAfterTts = false;
     markReady(ctx, 'post_tts_hold_elapsed');
+    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
     rearmLocalVad(ctx);
   }, delay);
+}
+
+function ensureMicGateReasons(audio) {
+  if (!audio) return null;
+  if (!audio.micGateReasons || typeof audio.micGateReasons.add !== 'function') {
+    try {
+      audio.micGateReasons = new Set();
+    } catch {
+      audio.micGateReasons = {
+        _values: Object.create(null),
+        add(value) { this._values[value] = true; },
+        delete(value) { delete this._values[value]; },
+        clear() { this._values = Object.create(null); },
+        get size() { return Object.keys(this._values).length; },
+        has(value) { return Object.prototype.hasOwnProperty.call(this._values, value); },
+      };
+    }
+  }
+  return audio.micGateReasons;
+}
+
+function logMicGateChange(ctx, action, reason) {
+  voiceLog('info', `[audio] mic_gate ${action}`, {
+    ts_ms: Date.now(),
+    session_id: ctx?.sessionId || null,
+    turn_id: ctx?.state?.activeTurnId || null,
+    reason: reason || null,
+  });
+}
+
+function disconnectMicPipeline(ctx, reason) {
+  const audio = ctx?.audio;
+  if (!audio?.highpass) {
+    return;
+  }
+  if (!audio.micConnected) {
+    return;
+  }
+  try { audio.highpass.disconnect(audio.analyser); } catch {}
+  try { audio.highpass.disconnect(audio.encoderDestination); } catch {}
+  audio.micConnected = false;
+  logMicGateChange(ctx, 'engaged', reason);
+}
+
+function connectMicPipeline(ctx, reason) {
+  const audio = ctx?.audio;
+  if (!audio?.highpass) {
+    return;
+  }
+  const reasons = ensureMicGateReasons(audio);
+  if (reasons && reasons.size > 0) {
+    audio.micConnected = false;
+    return;
+  }
+  if (audio.micConnected) {
+    return;
+  }
+  try { if (audio.analyser) audio.highpass.connect(audio.analyser); } catch {}
+  try { if (audio.encoderDestination) audio.highpass.connect(audio.encoderDestination); } catch {}
+  audio.micConnected = true;
+  logMicGateChange(ctx, 'released', reason);
+}
+
+function engageMicGate(ctx, reason = 'unknown') {
+  const audio = ctx?.audio;
+  if (!audio) return;
+  const reasons = ensureMicGateReasons(audio);
+  if (reasons) {
+    const before = typeof reasons.size === 'number' ? reasons.size : 0;
+    if (typeof reasons.add === 'function') {
+      reasons.add(reason);
+    }
+    if (before === (typeof reasons.size === 'number' ? reasons.size : before)) {
+      // Reason already tracked; ensure pipeline reflects desired state.
+      disconnectMicPipeline(ctx, reason);
+      return;
+    }
+  }
+  disconnectMicPipeline(ctx, reason);
+}
+
+function releaseMicGate(ctx, reason = null, opts = {}) {
+  const audio = ctx?.audio;
+  if (!audio) return;
+  const reasons = ensureMicGateReasons(audio);
+  if (!reasons) {
+    connectMicPipeline(ctx, reason || 'unknown');
+    return;
+  }
+  const clearAll = !!opts?.clearAll;
+  if (clearAll && typeof reasons.clear === 'function') {
+    reasons.clear();
+  } else if (reason && typeof reasons.delete === 'function') {
+    reasons.delete(reason);
+  } else if (!reason && typeof reasons.clear === 'function') {
+    reasons.clear();
+  }
+  const remaining = typeof reasons.size === 'number' ? reasons.size : 0;
+  if (remaining === 0) {
+    const logReason = reason || (clearAll ? 'manual' : 'unknown');
+    connectMicPipeline(ctx, logReason);
+  }
+}
+
+function sampleIdleRms(ctx) {
+  const audio = ctx?.audio;
+  if (!audio?.analyser) return;
+  const fftSize = Number.isFinite(audio.analyser.fftSize) ? audio.analyser.fftSize : 0;
+  if (!fftSize) return;
+  if (!audio.rmsScratch || audio.rmsScratch.length !== fftSize) {
+    audio.rmsScratch = new Float32Array(fftSize);
+  }
+  const buffer = audio.rmsScratch;
+  try {
+    audio.analyser.getFloatTimeDomainData(buffer);
+  } catch {
+    return;
+  }
+  let sum = 0;
+  for (let i = 0; i < buffer.length; i += 1) {
+    const v = buffer[i];
+    sum += v * v;
+  }
+  const rms = Math.sqrt(sum / buffer.length);
+  const rmsDb = 20 * Math.log10(Math.max(RMS_EPSILON, rms));
+  if (!audio.rmsStats) {
+    audio.rmsStats = {
+      min: Number.POSITIVE_INFINITY,
+      max: Number.NEGATIVE_INFINITY,
+      count: 0,
+      lastLogTs: Date.now(),
+    };
+  }
+  const stats = audio.rmsStats;
+  const now = Date.now();
+  if (ctx?.state?.vadRecording || ctx?.state?.turnOpen) {
+    stats.min = Number.POSITIVE_INFINITY;
+    stats.max = Number.NEGATIVE_INFINITY;
+    stats.count = 0;
+    stats.lastLogTs = now;
+    return;
+  }
+  stats.min = Math.min(stats.min, rmsDb);
+  stats.max = Math.max(stats.max, rmsDb);
+  stats.count = (stats.count || 0) + 1;
+  if (!Number.isFinite(stats.lastLogTs)) {
+    stats.lastLogTs = now;
+  }
+  if (now - stats.lastLogTs >= RMS_IDLE_LOG_INTERVAL_MS && stats.count > 0) {
+    voiceLog('info', '[audio] idle_rms_window', {
+      ts_ms: now,
+      session_id: ctx?.sessionId || null,
+      turn_id: ctx?.state?.activeTurnId || null,
+      min_db: Number.isFinite(stats.min) ? Number(stats.min.toFixed(2)) : null,
+      max_db: Number.isFinite(stats.max) ? Number(stats.max.toFixed(2)) : null,
+      samples: stats.count,
+    });
+    stats.min = Number.POSITIVE_INFINITY;
+    stats.max = Number.NEGATIVE_INFINITY;
+    stats.count = 0;
+    stats.lastLogTs = now;
+  }
+}
+
+function ensureRmsLogger(ctx) {
+  const audio = ctx?.audio;
+  if (!audio?.analyser) return;
+  if (audio.rmsSampleTimer) return;
+  audio.rmsStats = {
+    min: Number.POSITIVE_INFINITY,
+    max: Number.NEGATIVE_INFINITY,
+    count: 0,
+    lastLogTs: Date.now(),
+  };
+  audio.rmsSampleTimer = setInterval(() => {
+    try { sampleIdleRms(ctx); } catch {}
+  }, RMS_IDLE_SAMPLE_MS);
 }
 
 function handleTtsPlaybackStarted(ctx, detail) {
@@ -137,6 +317,7 @@ function handleTtsPlaybackStarted(ctx, detail) {
     detail,
   });
   clearPostTtsRearm(ctx);
+  engageMicGate(ctx, MIC_GATE_TTS_REASON);  
   ctx.state.ttsSuppressionMode = resolveSuppressionMode(detail);
   const ttsSuppressionMode =
     typeof ctx.state.ttsSuppressionMode === 'string' && ctx.state.ttsSuppressionMode
@@ -199,6 +380,7 @@ function handleTtsPlaybackEnded(ctx) {
     if (!ctx.state.manualGate) {
       markReady(ctx, 'post_tts_release');
     }
+    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
     return;
   }
   ctx.state.vadShouldRearmAfterTts = true;
@@ -206,7 +388,8 @@ function handleTtsPlaybackEnded(ctx) {
 }
 
 const PRE_ROLL_MS = 550,
-  RECORD_TIMESLICE_MS = 150,
+  PRE_ROLL_DISCARD_MS = 120,
+  RECORD_TIMESLICE_MS = 160,
   SAFETY_CLOSE_DELAY_MS = 2200,
   EVIDENCE_MIN_SPEECH_MS = 480,
   EVIDENCE_MIN_BYTES = 8 * 1024,
@@ -441,19 +624,26 @@ const logPreCommitMode = (ctx, mode, extra = {}) => {
 const MASK_LOG_INTERVAL_MS = 180;
 const TTS_POST_PLAY_HOLD_MS = 180;
 const RMS_EPSILON = 1e-8;
+const MIC_GATE_TTS_REASON = 'tts_active';
+const HPF_CUTOFF_HZ = 100;
+const HPF_DEFAULT_Q = 0.707;
+const RMS_IDLE_SAMPLE_MS = 250;
+const RMS_IDLE_LOG_INTERVAL_MS = 2000;
 const VAD_NOISE_SAMPLE_MS = 320;
 const VAD_NOISE_SAMPLE_STEP_MS = 40;
 const VAD_NOISE_DEADBAND_DB = 0.35;
 const VAD_NOISE_DELTA_LIMIT_DB = 1.75;
 const VAD_NOISE_SMOOTHING = 0.25;
+const VAD_BASE_START_DB_OFFSET = 9;
+const VAD_BASE_STOP_DB_OFFSET = 5;
 
 const updateVadBoost = (ctx, boostDb) => {
   if (!ctx?.state) return;
   const clamped = clampRange(boostDb, -3, 3);
   ctx.state.vadBoostDb = clamped;
   if (ctx?.audio?.vad?.opts) {
-    ctx.audio.vad.opts.startDbOffset = 6 + clamped;
-    ctx.audio.vad.opts.stopDbOffset = 6 + clamped;
+    ctx.audio.vad.opts.startDbOffset = VAD_BASE_START_DB_OFFSET + clamped;
+    ctx.audio.vad.opts.stopDbOffset = VAD_BASE_STOP_DB_OFFSET + clamped;
   }
 };
 
@@ -807,8 +997,14 @@ const ensureCtx = () => {
     },
     audio: {
       stream: null, context: null, source: null, analyser: null,
+      highpass: null, encoderDestination: null, encoderStream: null,      
       vad: null, recorder: null, recTimeslice: RECORD_TIMESLICE_MS,
       lastTimecode: null,
+      micGateReasons: new Set(),
+      micConnected: false,
+      rmsSampleTimer: null,
+      rmsScratch: null,
+      rmsStats: null,      
     },
     transport: { wsPromise: null, connected: false, safetyTimer: null },
     evidenceGate,
@@ -883,6 +1079,7 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
     ctx.ttsEndedAtMs = nowMs();
     ctx.ttsMask.clear();
     stopMaskLogging(ctx);
+    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
     markReady(ctx, 'assistant_ready', { detail });
     return true;
   }
@@ -1118,10 +1315,15 @@ const teardownTransport = (ctx) => {
 };
 const ensureAudioGraph = (ctx, stream) => {
   const audio = ctx.audio;
-  if (audio.context && audio.analyser && audio.source) return;
   const AudioCtx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
   if (!AudioCtx) throw new Error('AudioContext not supported');
-  audio.context = audio.context || new AudioCtx();
+  if (!stream) {
+    return;
+  }
+  audio.stream = stream;
+  if (!audio.context) {
+    audio.context = new AudioCtx();
+  }
   attachMicAudioCtxBreadcrumb(audio.context, 'mic_capture');
   try {
     if (typeof audio.context?.resume === 'function') {
@@ -1133,16 +1335,37 @@ const ensureAudioGraph = (ctx, stream) => {
       audio.context.resume().catch(() => {});
     }
   } catch {}
-  audio.analyser = audio.context.createAnalyser();
-  audio.analyser.fftSize = 2048;
-  audio.analyser.smoothingTimeConstant = 0.4;
+  if (!audio.analyser) {
+    audio.analyser = audio.context.createAnalyser();
+    audio.analyser.fftSize = 2048;
+    audio.analyser.smoothingTimeConstant = 0.4;
+  }
+  if (!audio.highpass) {
+    audio.highpass = audio.context.createBiquadFilter();
+    audio.highpass.type = 'highpass';
+    try { audio.highpass.frequency.value = HPF_CUTOFF_HZ; } catch {}
+    try { audio.highpass.Q.value = HPF_DEFAULT_Q; } catch {}
+  }
+  if (!audio.encoderDestination) {
+    audio.encoderDestination = audio.context.createMediaStreamDestination();
+    audio.encoderStream = audio.encoderDestination.stream;
+  }
+  if (audio.source) {
+    try { audio.source.disconnect(); } catch {}
+  }
   audio.source = audio.context.createMediaStreamSource(stream);
-  audio.source.connect(audio.analyser);
+  try { audio.source.connect(audio.highpass); } catch {}
+  ensureRmsLogger(ctx);
+  connectMicPipeline(ctx, 'graph_init');
 };
 
-const startRecorder = (ctx, stream) => {
+const startRecorder = (ctx) => {
   const { audio } = ctx;
   if (audio.recorder) return;
+  const recorderStream = audio.encoderStream || audio.stream;
+  if (!recorderStream) {
+    return;
+  }  
   let mimeType = 'audio/webm; codecs=opus';
   try {
     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
@@ -1150,7 +1373,7 @@ const startRecorder = (ctx, stream) => {
       mimeType = 'audio/ogg; codecs=opus';
     }
   } catch {}
-  const recorder = new MediaRecorder(stream, { mimeType });
+  const recorder = new MediaRecorder(recorderStream, { mimeType });
   recorder.addEventListener('dataavailable', (event) => handleRecorderData(ctx, event));
   recorder.addEventListener('error', (event) => {
     emitVoiceEvent('recorder_error', { message: event?.error?.message || 'unknown' });
@@ -1162,6 +1385,7 @@ const startRecorder = (ctx, stream) => {
     session_id: ctx.sessionId || null,
     mime_type: mimeType,
     timeslice_ms: audio.recTimeslice,
+    source: audio.encoderDestination ? 'processor' : 'raw_stream',    
   });
   audio.recorder = recorder;
   ctx.state.recording = true;
@@ -1284,9 +1508,26 @@ const openTurn = async (ctx, reason = 'speech_commit') => {
       window.__askchip_turn_trace_id = String(turnId);
     }
   } catch {}
+  let discardRemainingMs = PRE_ROLL_DISCARD_MS;
+  let discardedTotalMs = 0;  
   const stats = flushShadowBuffer(ctx.shadowBuffer, (entry) => {
-    if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs: entry.durationMs });
+    const durationMs = Number.isFinite(entry?.durationMs) ? entry.durationMs : 0;
+    if (discardRemainingMs > 0) {
+      discardedTotalMs += durationMs;
+      discardRemainingMs -= durationMs;
+      return;
+    }
+    if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs });
   });
+  if (discardedTotalMs > 0) {
+    voiceLog('info', '[audio] pre_roll_discard', {
+      ts_ms: Date.now(),
+      session_id: ctx.sessionId || null,
+      turn_id: turnId,
+      requested_ms: PRE_ROLL_DISCARD_MS,
+      discarded_ms: discardedTotalMs,
+    });
+  }  
   ctx.evidenceGate.setBufferStats(stats);
 };
 
@@ -1695,8 +1936,8 @@ const ensureVad = (ctx, opts = {}) => {
   if (audio.vad) return;
   const echoStateFn = () => isTtsMaskActive(ctx);
   audio.vad = new VAD(audio.analyser, {
-    startDbOffset: 6 + ctx.state.vadBoostDb,
-    stopDbOffset: 6 + ctx.state.vadBoostDb,
+    startDbOffset: VAD_BASE_START_DB_OFFSET + ctx.state.vadBoostDb,
+    stopDbOffset: VAD_BASE_STOP_DB_OFFSET + ctx.state.vadBoostDb,
     echoStateFn,
     minSpeechMs: Math.max(160, opts.minSpeechMs ?? 200),
     minSilenceMs: Math.max(180, opts.minSilenceMs ?? 300),
@@ -1771,7 +2012,26 @@ export async function initMic(stream = null) {
   const ctx = ensureCtx();
   if (stream) ctx.audio.stream = stream;
   if (!ctx.audio.stream) {
-    const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
+    const constraints = {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
+        channelCount: 1,
+        sampleRate: { ideal: 48000 },
+      },
+    };
+    voiceLog('info', '[audio] getUserMedia constraints', {
+      ts_ms: Date.now(),
+      session_id: ctx.sessionId || null,
+      constraints: {
+        echoCancellation: constraints.audio.echoCancellation,
+        noiseSuppression: constraints.audio.noiseSuppression,
+        autoGainControl: constraints.audio.autoGainControl,
+        channelCount: constraints.audio.channelCount,
+        sampleRate: constraints.audio.sampleRate,
+      },
+    });
     ctx.audio.stream = await navigator.mediaDevices.getUserMedia(constraints);
   }
   ensureAudioGraph(ctx, ctx.audio.stream);
@@ -1824,7 +2084,7 @@ export async function armVAD(stream = null, opts = {}) {
   } else {
     ctx.state.pendingVadOpts = null;
   }
-  startRecorder(ctx, mic);
+  startRecorder(ctx);
   await ensureTransport(ctx).catch(() => {});
   emitVoiceEvent('armed', { mode: 'adaptive' });
   return mic;
@@ -1839,6 +2099,7 @@ export function disarmVAD() {
   teardownVad(ctx); stopRecorder(ctx);
   closeTurn(ctx, 'manual_disarm');
   teardownTransport(ctx);
+  releaseMicGate(ctx, 'manual', { clearAll: true });  
   setManualGate(ctx, false);
   ctx.state.pttHeld = false;
   ctx.state.hasOpenedTurn = false;
@@ -1884,6 +2145,7 @@ export function bargeIn(meta = {}) {
   ctx.state.ttsPlaying = false;
   ctx.ttsEndedAtMs = nowMs();
   ctx.ttsMask.clear();
+  releaseMicGate(ctx, MIC_GATE_TTS_REASON);  
   if (shouldNotify) {
     sendJSON({ type: 'manual_barge_in' });
   }
