@@ -1187,6 +1187,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     flow_session_ready_emitted = False
     flow_session_close_emitted = False
     flow_session_config_emitted = False
+    session_flow_event_id: List[Optional[str]] = [None]
     post_greet_phase_active = [False]
     flow_turn_commit_emitted: Set[int] = set()
     flow_turn_abort_emitted: Set[int] = set()
@@ -1417,6 +1418,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         session_event_id = _emit_flow_event("session_open", phase="session", meta=meta)
         flow_session_open_emitted = True
         if session_event_id:
+            session_flow_event_id[0] = session_event_id
             policy_meta: Dict[str, Any] = {"policy_version": policy_version}
             if isinstance(policy, dict):
                 try:
@@ -1449,6 +1451,63 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 parent_id=session_event_id,
                 meta=runtime_meta,
             )
+
+    if ws_transport_parent_id[0] is None:
+        transport_meta = {
+            "path": str(scope.get("path") or ""),
+            "client_ip": client_ip,
+        }
+        transport_event_id = _emit_flow_event(
+            "ws_transport",
+            phase="session",
+            meta=transport_meta,
+        )
+        if transport_event_id:
+            ws_transport_parent_id[0] = transport_event_id
+        elif session_flow_event_id[0]:
+            ws_transport_parent_id[0] = session_flow_event_id[0]
+
+    _raw_send = send
+
+    async def _send_instrumented(message, *, route: str = "app"):
+        nonlocal ws_frames_out, ws_bytes_out
+
+        frame_type = None
+        try:
+            frame_type = message.get("type") if isinstance(message, dict) else None
+        except Exception:
+            frame_type = None
+        if frame_type == "websocket.send":
+            payload_bytes = 0
+            frame_kind = "text"
+            text_payload = message.get("text") if isinstance(message, dict) else None
+            if text_payload is not None:
+                try:
+                    payload_bytes = len((text_payload or "").encode("utf-8"))
+                except Exception:
+                    payload_bytes = len(text_payload or "")
+            else:
+                frame_kind = "binary"
+                try:
+                    payload_bytes = len(message.get("bytes") or b"") if isinstance(message, dict) else 0
+                except Exception:
+                    payload_bytes = 0
+            ws_frames_out += 1
+            ws_bytes_out += payload_bytes
+            if ws_transport_parent_id[0] and ws_frames_out % _WS_FRAME_SAMPLE == 0:
+                _emit_debug_event(
+                    "ws_frame_out",
+                    phase="session",
+                    parent_id=ws_transport_parent_id[0],
+                    meta={
+                        "type": frame_kind,
+                        "bytes": payload_bytes,
+                        "route": route,
+                    },
+                )
+        await _raw_send(message)
+
+    send = _send_instrumented
 
     with contextlib.suppress(Exception):
         clear_greet_turn_cache(sid)
@@ -1845,6 +1904,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
     ws_frames_in = 0
     ws_bytes_in = 0
+    ws_text_frames_in = 0
+    ws_frames_out = 0
+    ws_bytes_out = 0
+    _WS_FRAME_SAMPLE = 20
+    ws_transport_parent_id: List[Optional[str]] = [None]
     backpressure_drop_count = 0
     backpressure_last_emit = 0.0
     backpressure_last_queue_len = 0
@@ -3363,6 +3427,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 if _admin_emit:
                     with contextlib.suppress(Exception):
                         _admin_emit("ws_backpressure", **payload)
+                if ws_transport_parent_id[0]:
+                    _emit_debug_event(
+                        "ws_backpressure",
+                        phase="session",
+                        parent_id=ws_transport_parent_id[0],
+                        meta={
+                            "queue_len": queue_len,
+                            "dropped": backpressure_drop_count,
+                        },
+                    )
                 backpressure_last_emit = now
 
         backpressure_last_queue_len = queue_len
@@ -3440,7 +3514,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
         if bus_task is None:
             bus_task = asyncio.create_task(
-                _pump_bus_to_client(sid, send, _handle_bus_frame)
+                _pump_bus_to_client(sid, partial(send, route="bus"), _handle_bus_frame)
             )
 
     _ensure_session_ready_emitted()
@@ -3488,7 +3562,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     chunk = frame_bytes or b""
                     ws_frames_in += 1
                     ws_bytes_in += len(chunk)
-                    if ws_frames_in % 20 == 0:
+                    if ws_frames_in % _WS_FRAME_SAMPLE == 0:
                         with contextlib.suppress(Exception):
                             _jlog(
                                 "ws_bin_recv",
@@ -3504,6 +3578,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     frames_in=ws_frames_in,
                                     bytes_total=ws_bytes_in,
                                 )
+                        if ws_transport_parent_id[0]:
+                            _emit_debug_event(
+                                "ws_frame_in",
+                                phase="session",
+                                parent_id=ws_transport_parent_id[0],
+                                meta={
+                                    "type": "binary",
+                                    "bytes": len(chunk or b""),
+                                    "route": "client",
+                                },
+                            )
                     raw_chunk = chunk
 
                     new_turn = buf.is_empty()
@@ -3813,6 +3898,24 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         if _admin_emit:
                             with contextlib.suppress(Exception):
                                 _admin_emit("ws_json_recv", sid=sid, type=t)
+
+                        ws_text_frames_in += 1
+                        if ws_transport_parent_id[0] and ws_text_frames_in % _WS_FRAME_SAMPLE == 0:
+                            payload_bytes = 0
+                            try:
+                                payload_bytes = len((ev.get("text") or "").encode("utf-8"))
+                            except Exception:
+                                payload_bytes = len(ev.get("text") or "")
+                            _emit_debug_event(
+                                "ws_frame_in",
+                                phase="session",
+                                parent_id=ws_transport_parent_id[0],
+                                meta={
+                                    "type": "text",
+                                    "bytes": payload_bytes,
+                                    "route": "client",
+                                },
+                            )
 
                         if t == "KeepAlive":
                             await _ws_send_json(send, make_keepalive_ack())

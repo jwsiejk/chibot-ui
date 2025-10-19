@@ -26,9 +26,17 @@ class _NullTracker:
 
     __slots__ = ()
 
+    def queue(self) -> None:  # noqa: D401 - trivial
+        """Ignore queue notifications when tracing is disabled."""
+        return None
+
     def start(self) -> bool:  # noqa: D401 - trivial
         """Pretend to start a span and report no work."""
         return False
+
+    def first_token(self) -> None:  # noqa: D401 - trivial
+        """Ignore first-token hints when tracing is disabled."""
+        return None
 
     def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
         """Ignore completion for missing spans."""
@@ -63,6 +71,14 @@ class LLMFlowTracker:
     _started: bool = False
     _start_event_id: Optional[str] = None
     _start_monotonic: Optional[float] = None
+    _queue_start_monotonic: Optional[float] = None
+    _queue_end_monotonic: Optional[float] = None
+    _first_token_monotonic: Optional[float] = None
+
+    def queue(self) -> None:
+        """Mark the time at which the request entered the provider queue."""
+
+        self._queue_start_monotonic = time.monotonic()
 
     def start(self) -> bool:
         """Emit the ``llm_start`` event if possible."""
@@ -87,13 +103,24 @@ class LLMFlowTracker:
             return False
         self._started = True
         self._start_event_id = event_id or None
-        self._start_monotonic = time.monotonic()
+        now = time.monotonic()
+        self._start_monotonic = now
+        if self._queue_start_monotonic is None:
+            self._queue_start_monotonic = now
+        self._queue_end_monotonic = now
         return True
+
+    def first_token(self) -> None:
+        """Record when the first token was observed from the provider."""
+
+        self._first_token_monotonic = time.monotonic()
 
     def final(
         self,
         *,
         tokens_out: Optional[int] = None,
+        tokens_in: Optional[int] = None,
+        finish_reason: Optional[object] = None,
         text: Optional[str] = None,
         chars: Optional[int] = None,
     ) -> None:
@@ -104,6 +131,9 @@ class LLMFlowTracker:
         meta: dict[str, object] = {}
         if self.turn_id:
             meta["turn_id"] = str(self.turn_id)
+        prompt_tokens = _coerce_int(tokens_in)
+        if prompt_tokens is not None and prompt_tokens >= 0:
+            meta["tokens_in"] = prompt_tokens
         token_count = _coerce_int(tokens_out)
         if token_count is not None and token_count >= 0:
             meta["tokens_out"] = token_count
@@ -137,6 +167,45 @@ class LLMFlowTracker:
                     except Exception:
                         bytes_len = len(text or "")
                 stream_items.append({"dt_ms": dt_ms, "bytes": bytes_len})
+                debug_meta: dict[str, object] = {}
+                queue_start = self._queue_start_monotonic or self._start_monotonic
+                queue_end = self._queue_end_monotonic or self._start_monotonic
+                if queue_start is not None and queue_end is not None:
+                    queue_ms = int(max(0.0, (queue_end - queue_start) * 1000))
+                    debug_meta["queue_ms"] = queue_ms
+                base = queue_end or queue_start or self._start_monotonic
+                if base is not None:
+                    if self._first_token_monotonic is not None:
+                        first_token_ms = int(
+                            max(0.0, (self._first_token_monotonic - base) * 1000)
+                        )
+                        debug_meta["first_token_ms"] = first_token_ms
+                    full_ms = int(max(0.0, (now - base) * 1000))
+                    debug_meta["full_ms"] = full_ms
+                if prompt_tokens is not None and prompt_tokens >= 0:
+                    debug_meta["tokens_in"] = prompt_tokens
+                if token_count is not None and token_count >= 0:
+                    debug_meta["tokens_out"] = token_count
+                if finish_reason is not None:
+                    try:
+                        reason_text = str(finish_reason)
+                    except Exception:
+                        reason_text = None
+                    if reason_text:
+                        debug_meta["finish_reason"] = reason_text
+                if debug_meta:
+                    try:
+                        flow_emit(
+                            session_id=self.session_id,
+                            level="debug",
+                            phase=self.phase,
+                            type="llm_latency",
+                            who=self.who,
+                            meta=debug_meta,
+                            parent_id=self._start_event_id,
+                        )
+                    except Exception:
+                        pass
                 try:
                     add_batch(self._start_event_id, "llm_stream", stream_items)
                 except Exception:
@@ -146,6 +215,9 @@ class LLMFlowTracker:
         self._started = False
         self._start_event_id = None
         self._start_monotonic = None
+        self._queue_start_monotonic = None
+        self._queue_end_monotonic = None
+        self._first_token_monotonic = None
 
     def error(
         self,
