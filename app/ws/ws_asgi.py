@@ -1275,11 +1275,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     client_ip = _client_ip_from_scope(scope)
 
     token = None
+    selected_subprotocol = "bearer"
     try:
         for _sp in scope.get("subprotocols") or []:
-            if isinstance(_sp, str) and _sp.startswith("bearer."):
+            if not isinstance(_sp, str):
+                continue
+            if _sp.startswith("bearer."):
                 token = _sp.split(".", 1)[1].strip()
+                selected_subprotocol = _sp
                 break
+            if _sp == "bearer":
+                selected_subprotocol = _sp
     except Exception:
         pass
     if not token:
@@ -1370,7 +1376,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             if _admin_emit:
                 _admin_emit("ws_conn_close", conn_id=conn_id, active=active_count)
 
-    await send({"type": "websocket.accept", "subprotocol": "bearer"})
+    await send({"type": "websocket.accept", "subprotocol": selected_subprotocol})
 
     with contextlib.suppress(Exception):
         _jlog(
@@ -1485,6 +1491,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         ws_transport_parent_id[0] = transport_event_id
     elif session_flow_event_id[0]:
         ws_transport_parent_id[0] = session_flow_event_id[0]
+
+    ws_frames_in = 0
+    ws_bytes_in = 0
+    ws_text_frames_in = 0
+    ws_frames_out = 0
+    ws_bytes_out = 0
+    _WS_FRAME_SAMPLE = 20
+    backpressure_drop_count = 0
+    backpressure_last_emit = 0.0
+    backpressure_last_queue_len = 0
+    backpressure_emit_interval = 1.0
 
     _raw_send = send
 
@@ -1984,16 +2001,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     asr_ready_evt: asyncio.Event = asyncio.Event()
     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
-    ws_frames_in = 0
-    ws_bytes_in = 0
-    ws_text_frames_in = 0
-    ws_frames_out = 0
-    ws_bytes_out = 0
-    _WS_FRAME_SAMPLE = 20
-    backpressure_drop_count = 0
-    backpressure_last_emit = 0.0
-    backpressure_last_queue_len = 0
-    backpressure_emit_interval = 1.0
     turn_connect_started = [False]
     # When True we stream new audio chunks directly to Deepgram instead of staging
     # them locally. Enabled once the socket is open and any backlog has been

@@ -1,599 +1,203 @@
 [ws] build=2025-10-16T23:15Z
 AdaptiveRuntime.js:1 [AdaptiveRuntime] build=2025-10-16T23:15Z
-bootstrap.js?v=1760859182:1 [bootstrap] build=2025-10-16T23:15Z
-bootstrap.js?v=1760859182:33 [AskChip] bootstrap loaded
-debug.js?v=1760859182:4 [DBG] debug:on Object
-ws.js?v=1760859182:1 [ws] build=2025-10-16T23:15Z
-ws.js:33 [ui] visibility=hidden
-ws.js:33 [ui] visibility=visible
-bootstrap.js?v=1760859182:33 [bootstrap] startOnce called N=1
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-bootstrap.js?v=1760859182:33 [bootstrap] ws listener attached Object
-bootstrap.js?v=1760859182:33 [bootstrap] ws listener attached Object
-bootstrap.js?v=1760859182:33 [bootstrap] startOnce sending greet configure
-ws.js?v=1760859182:744 [ws] [Configure OUT] {"type":"Configure","session_id":"64aa7bd9-6969-42f2-b693-9d03cbe7c0d8","greet":true,"reset":1,"feature_manual_barge_in":true,"barge_in_mode_manual":false,"auto_commit_when_ready":true,"greet_seq":1} Object
-debug.js?v=1760859182:4 [DBG] UI→WS Object
-bootstrap.js?v=1760859182:33 [bootstrap] startOnce greet configure sent — recorder setup will follow
-bootstrap.js?v=1760859182:33 [bootstrap] startOnce mic initialized — arming VAD for voice turns
-AdaptiveRuntime.js:386 [audio] context state: running Object
-AdaptiveRuntime.js:386 EVT_STATE Object
-AdaptiveRuntime.js:386 [recorder] started Object
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-bootstrap.js?v=1760859182:33 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
-bootstrap.js?v=1760859182:33 [bootstrap] ws listener attached Object
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active Object
-AdaptiveRuntime.js:386 [asr] pre-commit feed Object
-AdaptiveRuntime.js:386 EVT_STATE Object
-AdaptiveRuntime.js:1512 [dual-vad] commit? Object
-AdaptiveRuntime.js:386 [dual-vad] decision Object
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] Object
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-ws.js:33 [ui] visibility=hidden
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active Object
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] Object
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] Object
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active Object
-AdaptiveRuntime.js:386 [asr] pre-commit feed Object
-AdaptiveRuntime.js:386 EVT_STATE Object
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active Object
-bootstrap.js?v=1760859182:33 [WS close] Object
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active Object
-bootstrap.js?v=1760859182:33 [WS close] Object
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active Object
-AdaptiveRuntime.js:386 [asr] pre-commit feed Object
-AdaptiveRuntime.js:386 EVT_STATE Object
-AdaptiveRuntime.js:1512 [dual-vad] commit? Object
-AdaptiveRuntime.js:386 [dual-vad] decision Object
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] Object
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active Object
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] Object
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk Object
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] Object
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active Object
-AdaptiveRuntime.js:386 [asr] pre-commit feed Object
-AdaptiveRuntime.js:386 EVT_STATE Object
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active Object
-ws.js:33 [ui] visibility=visible
-bootstrap.js?v=1760859182:33 [WS close] Object
-ws.js?v=1760859182:144 [ws] openWS build Object
-ws.js?v=1760859182:144 [ws] openWS options= Object reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived Object
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open Object
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active Object
-bootstrap.js?v=1760859182:33 [bootstrap] startOnce duplicate guard hit Object
-(anonymous) @ bootstrap.js?v=1760859182:33Understand this warning
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859432418, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859432428, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Listening', to: 'Confirming', …}
+bootstrap.js?v=1760862012:1 [bootstrap] build=2025-10-16T23:15Z
+bootstrap.js?v=1760862012:33 [AskChip] bootstrap loaded
+debug.js?v=1760862012:4 [DBG] debug:on Object
+ws.js?v=1760862012:1 [ws] build=2025-10-16T23:15Z
+bootstrap.js?v=1760862012:33 [bootstrap] startOnce called N=1
+bootstrap.js?v=1760862012:515 [Violation] 'click' handler took 150ms
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws#1', event: 'askchip-ws', note: 'bootstrap-wire'}
+bootstrap.js?v=1760862012:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws-close#2', event: 'askchip-ws-close', note: 'bootstrap-wire'}
+bootstrap.js?v=1760862012:33 [bootstrap] startOnce sending greet configure
+ws.js?v=1760862012:744 [ws] [Configure OUT] {"type":"Configure","session_id":"64aa7bd9-6969-42f2-b693-9d03cbe7c0d8","greet":true,"reset":1,"feature_manual_barge_in":true,"barge_in_mode_manual":false,"auto_commit_when_ready":true,"greet_seq":1} {ts_ms: 1760862132015}
+debug.js?v=1760862012:4 [DBG] UI→WS {type: 'Configure', session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', greet: true, reset: 1, feature_manual_barge_in: true, …}
+bootstrap.js?v=1760862012:33 [bootstrap] startOnce greet configure sent — recorder setup will follow
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: false}
+bootstrap.js?v=1760862012:33 [bootstrap] startOnce mic initialized — arming VAD for voice turns
+AdaptiveRuntime.js:386 [audio] context state: running {ts_ms: 1760862132246, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8'}
+AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760862132247, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Idle', to: 'Listening', …}
+AdaptiveRuntime.js:386 [recorder] started {ts_ms: 1760862132251, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', mime_type: 'audio/webm; codecs=opus', timeslice_ms: 150}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862131875, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+bootstrap.js?v=1760862012:33 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
+bootstrap.js?v=1760862012:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws#3', event: 'askchip-ws', note: 'bootstrap-markAssistant-once'}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'f038cc432ef640baa7c2eb96131ba43b', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760862132908, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
+AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760862132909, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Listening', to: 'Confirming', …}
 AdaptiveRuntime.js:1512 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
-AdaptiveRuntime.js:386 [dual-vad] decision {ts_ms: 1760859432429, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, client_speech: true, asr_speaking: false, …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859432432, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859432613, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859433350, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '5113da8887e8431ab2ea63cb8eda33e8', …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859433332, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859433513, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859434412, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859434591, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859434292, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '87f29cac394146369ab85a348b132e24', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859435313, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859435491, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859435336, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'f51b461af55646888374a2b39f951303', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859436181, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859436182, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Confirming', to: 'Listening', …}
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859436237, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '3f52ece447e44c2d957dd3eb050cdfcf', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859447055, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '26337db38a1d44e5a1db54a854ba1cdd', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859457716, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '6a2a36816cbe4ca3aec67de96b564712', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859468330, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '48fa2b9d0702450cb717e2cf6733171d', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859479002, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'a5a766bcbfe04b92b1bc987fb8081929', …}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859487959, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859487959, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Listening', to: 'Confirming', …}
-AdaptiveRuntime.js:1512 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
-AdaptiveRuntime.js:386 [dual-vad] decision {ts_ms: 1760859487960, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, client_speech: true, asr_speaking: false, …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859488053, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859488232, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859488953, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859489133, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859489474, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859489475, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Confirming', to: 'Listening', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859488940, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'cfe7520e337b4111a991497e9300306d', …}
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859489824, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'aa9cd3a08f6b4fccb0cbc99bc9a12a91', …}
-ws.js:33 [ui] visibility=hidden
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859500831, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '92ccf69903bb4000a665de61892288d9', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859511853, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'd560a84ca87743e08160c49a45f4b7f2', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859522796, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '184be5e05cf24e6388d7bd37e037003f', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859533802, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '9ed66963a2bd4c3ab2cdfae404b44811', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859544845, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'f181b721d3eb4d4fa9fb9ad3bfd292dd', …}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859554583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859554584, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Listening', to: 'Confirming', …}
-AdaptiveRuntime.js:1512 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
-AdaptiveRuntime.js:386 [dual-vad] decision {ts_ms: 1760859554585, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, client_speech: true, asr_speaking: false, …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859554652, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859555913, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859556093, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859555802, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '0ae4524de37b4dce94cb61bb5f479dda', …}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859557584, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859557585, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Confirming', to: 'Listening', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859557799, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'ddec3e796a5e45648ba39fd0d90f30ec', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859568810, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '651d97b3a20f4d928c10c316fb90cbf7', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859579900, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '063a627112ba46339fbee25b5fec5490', …}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859581583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859581583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Listening', to: 'Confirming', …}
-AdaptiveRuntime.js:1512 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
-AdaptiveRuntime.js:386 [dual-vad] decision {ts_ms: 1760859581584, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, client_speech: true, asr_speaking: false, …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859581652, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859581831, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859582911, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859583091, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859582802, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'bd2eef58c8bd4874a4df5b5e329e8c93', …}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859583583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859583584, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Confirming', to: 'Listening', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859584816, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '0157e9d8e0c44b73b8869b59ce55b3d1', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859595796, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'b0a98dfd3f9249c48fdb7e87e1f07ee7', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859606897, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'eac2af17865d400cb860bae0a9db4a5d', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859617807, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '7178445175ca4806bc1e046fb94aa02b', …}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859619583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859619584, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Listening', to: 'Confirming', …}
-AdaptiveRuntime.js:1512 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
-AdaptiveRuntime.js:386 [dual-vad] decision {ts_ms: 1760859619585, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, client_speech: true, asr_speaking: false, …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859619632, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859619812, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859620892, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859620801, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '3af13ef214314271a1e63e629107247e', …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2915, mime: 'audio/webm;codecs=opus', ts_ms: 1760859621072, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2915)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859621793, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859621974, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859621809, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'b0890b3fc9594e15a1387d11ac4c40a5', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859622873, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859623051, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859622806, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'a52ff2e529504bc5b34dd5b7c3c0ad10', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859623951, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859623819, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '8288d3708a7c434f915f5d1dd2bfe3ed', …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859624131, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859625584, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859625584, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Confirming', to: 'Listening', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859625800, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'e2483e3f339b4ff2b73f69005bc46201', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859636854, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '5c13a104168e43fca5da2128ce4c9734', …}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859637583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859637584, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Listening', to: 'Confirming', …}
-AdaptiveRuntime.js:1512 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
-AdaptiveRuntime.js:386 [dual-vad] decision {ts_ms: 1760859637585, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, client_speech: true, asr_speaking: false, …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859637632, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859637812, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859638936, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '54a1557b0b084e9c9d09aa016928b1ee', …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859639071, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859639251, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859639583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859639583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Confirming', to: 'Listening', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859640911, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '45c8a23632134825b095b2c176327c15', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859651787, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'aa73578a9c2048409a00d13c1d9a3ce8', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859662915, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '841533ede96443c3bd3aacf61f82dd43', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859673801, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '170bcb57ff3e4a4e96ab251f66c47761', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859684794, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '07bcc2bb8b6143a3a6077512debf944a', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859695921, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '081e7cf6b7b94441a82d040a5fdf6295', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859706820, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '25122f731ec84e8f80ad2e9c10d7382c', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859717791, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '13fa23cade5b47ac9eb44506a296c5fb', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859728853, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '5b1d0fa6b83c4a77bc254598966ef669', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859739787, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'a96f84d45b7e417984ef6e9d842f894b', …}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859745583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859745584, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Listening', to: 'Confirming', …}
-AdaptiveRuntime.js:1512 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
-AdaptiveRuntime.js:386 [dual-vad] decision {ts_ms: 1760859745585, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, client_speech: true, asr_speaking: false, …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859745633, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859745812, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859746891, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859747071, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859746794, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '441ad6046f6846bf89c399644653e431', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859747792, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859747814, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '6370529d1784451ea577de76746bac3a', …}
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859747971, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859748872, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 1}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-ws.js?v=1760859182:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760859749052, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', chunk_seq: 2}
-debug.js?v=1760859182:4 [DBG] UI→WS ArrayBuffer(2898)
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859748795, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '3087642204d7494d94df079b45fba48c', …}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760859750583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760859750583, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Confirming', to: 'Listening', …}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859750786, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'f284dbe95cf7463ab2fda1733b1a6e8c', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859761936, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '461290a01c794eccb81defa2db3cd420', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859772833, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '980a648f5046428cbc90a4f502a88a11', …}
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859783916, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '4cc29f4a94e04509bcf6894745632a85', …}
-ws.js:33 [ui] visibility=visible
-bootstrap.js?v=1760859182:33 [WS close] {code: 1006, reason: 'network disconnect', wasClean: false, reconnectScheduled: true}
-ws.js?v=1760859182:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760859182', version: '1760859182', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760859182:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760859182:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760859794599, …}
-askchip_client_hooks.js?v=1760859182:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760859182:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'e6b6ad98566949e6a082d7fe1d0cdc37', …}
+AdaptiveRuntime.js:386 [dual-vad] decision {ts_ms: 1760862132912, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, client_speech: true, asr_speaking: false, …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862132579, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '1567c4aef0da4298969d41b580d8a8a7', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862133580, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'e54fe1e582604a398cc4d72b1ea516e4', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862134580, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'edd08f5510244a18b68bd1fe7def5b6d', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862135580, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'dc3ea9310e80455289c90f4901ab8bce', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760862135614, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
+AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760862135614, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Confirming', to: 'Listening', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862136582, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '6451a7d20d774016a56294a24bc4fd33', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862137583, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '7dbbd85718384ec1abd2ea1c7f89ccc6', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862138334, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'd3f4f5dda0d54e8cb9ed37a3873227be', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862139334, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'de986f63e94a4e4a96bfc4ce92b1fa1d', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862140335, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'de1b5663177044c8ab5b794d45a6b40f', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862141336, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'ceb36cfcb724438c83e5c1daea360b2e', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862142339, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '246124e0a8e24995a715cdb5f2173cb9', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862143339, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '1129a30dc845404ca865b10b0e752384', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862144340, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '90ddb9310c554d85ba27b906890375a7', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862145091, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '74bd06c686f146af8865a5914dfbdce5', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862145845, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '1952ee4f2884434182997553589c69a3', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862146853, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '69ee6052f51241a1af49b2f857697fdb', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862147855, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '03e9d192895e46699c12ab37761f7bf7', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862148605, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '49197474554040c58aeeb88636d2a23a', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862149606, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '9c09c508f5534a3fb5f2a2e1c2e09dac', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862150608, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'a7393663390d44efa394c57cff272462', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862151609, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '0a7a7f7a601a45f6aeda18db75424686', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862152360, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'cdd31969be044514990cff067e0f1955', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862153362, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '8d6c8cdb1c514ae0a96d49515d6907d7', …}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862154363, …}
+askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
+askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '3d145fc833ef40e7b422494d9b3ac391', …}
+bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
+ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true

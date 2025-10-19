@@ -1,154 +1,243 @@
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index cfed80f2b4a549e39db9859dfa4295d1ea09c0f8..912e7abb559643f4006a59895c63204efc01f211 100644
+index 912e7abb559643f4006a59895c63204efc01f211..cccd0ace5b66d979f10248071daa18782fc777db 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -1580,51 +1580,73 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     bus_task: Optional[asyncio.Task] = None
- 
-     voice_metrics_registered = False
-     try:
-         voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
-     except Exception:
-         voice_metrics_registered = False
- 
-     async def _ping_loop():
-         try:
-             while True:
-                 await asyncio.sleep(20)
-                 try:
-                     await _ws_send_json(
-                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
+@@ -1253,55 +1253,61 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                         meta={"dir": "pump_start"},
                      )
-                 except Exception:
-                     break
-         except asyncio.CancelledError:
-             pass
+                     or None
+                 )
+             except Exception:
+                 ws_transport_parent_id[0] = None
+             if ws_transport_parent_id[0] is None and session_flow_event_id[0]:
+                 ws_transport_parent_id[0] = session_flow_event_id[0]
+         return ws_transport_parent_id[0]
  
-     ping_task = asyncio.create_task(_ping_loop())
+     policy: Dict[str, Any] = {}
+     policy_version: str = "unknown"
  
+     # Auth
+     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in (
+         "0",
+         "false",
+         "no",
+     )
+     bearer_only = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0", "false", "no")
+     fail_limit = int(os.getenv("WS_FAIL_LIMIT", "10"))
+     fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC", "60"))
+     client_ip = _client_ip_from_scope(scope)
+ 
+     token = None
++    selected_subprotocol = "bearer"
      try:
-         await _ws_send_json(send, {"type": "ready", "session_id": sid})
--    except Exception:
-+    except Exception as ex:
-+        detail = str(ex).strip() or "initial ready failed"
-+        with contextlib.suppress(Exception):
-+            flow_emit(
-+                session_id=sid,
-+                type="ws_error",
-+                phase="transport",
-+                who="server",
-+                meta={
-+                    "where": "initial_ready",
-+                    "cause": ex.__class__.__name__,
-+                    "msg": str(ex)[:300],
-+                },
-+            )
-+        with contextlib.suppress(Exception):
-+            await _ws_send_json(
-+                send,
-+                {
-+                    "type": "Error",
-+                    "code": "INITIAL_READY_FAILED",
-+                    "detail": detail[:200],
-+                },
-+            )
-         with contextlib.suppress(Exception):
-             await _safe_close(1011, "initial_ready_failed")
-         return
- 
-     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
-     ws_configured = False
-     configure_ack_sent = False
-     if not isinstance(policy, dict):
-         policy = {}
-     if isinstance(policy, dict):
-         cfg["interaction_policy"] = policy
+         for _sp in scope.get("subprotocols") or []:
+-            if isinstance(_sp, str) and _sp.startswith("bearer."):
++            if not isinstance(_sp, str):
++                continue
++            if _sp.startswith("bearer."):
+                 token = _sp.split(".", 1)[1].strip()
++                selected_subprotocol = _sp
+                 break
++            if _sp == "bearer":
++                selected_subprotocol = _sp
+     except Exception:
+         pass
+     if not token:
+         try:
+             hdrs = {
+                 k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])
+             }
+             if "authorization" in hdrs and hdrs["authorization"].lower().startswith(
+                 "bearer "
+             ):
+                 token = hdrs["authorization"].split(" ", 1)[1].strip()
+         except Exception:
+             pass
+     if (not bearer_only) and (not token) and scope.get("query_string"):
+         try:
+             q = dict(
+                 [
+                     tuple(p.split("=", 1))
+                     for p in scope.get("query_string").decode().split("&")
+                     if "=" in p
+                 ]
+             )
+             token = q.get("ws_token") or token
+         except Exception:
+             pass
+@@ -1348,51 +1354,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         entry = None
+         active_count = None
+         try:
+             async with ACTIVE_WS_LOCK:
+                 entry = ACTIVE_WS.pop(conn_id, None)
+                 active_count = len(ACTIVE_WS)
+         except Exception:
+             entry = None
+             active_count = None
+         if entry is None:
+             with contextlib.suppress(Exception):
+                 _jlog("ws_conn_missing", conn_id=conn_id, sid=sid, source=source)
+             return
          with contextlib.suppress(Exception):
              _jlog(
-                 "EVT_POLICY_LOAD",
+                 "ws_conn_close",
+                 conn_id=conn_id,
                  sid=sid,
-                 keys=len(policy.keys()),
+                 active=active_count,
+                 source=source,
              )
-     else:
-         policy = {}
-     try:
-         runtime_cfg = db.get_config()
-         if isinstance(runtime_cfg, dict):
-             manual_feature_enabled = bool(
-                 runtime_cfg.get("feature_manual_barge_in", manual_feature_enabled)
+         with contextlib.suppress(Exception):
+             if _admin_emit:
+                 _admin_emit("ws_conn_close", conn_id=conn_id, active=active_count)
+ 
+-    await send({"type": "websocket.accept", "subprotocol": "bearer"})
++    await send({"type": "websocket.accept", "subprotocol": selected_subprotocol})
+ 
+     with contextlib.suppress(Exception):
+         _jlog(
+             "ws_conn_open",
+             sid=sid,
+             conn_id=conn_id,
+             client_ip=client_ip,
+             path=scope.get("path"),
+             query_string=raw_query,
+         )
+     active_count = await _register_active_ws_entry()
+     if active_count is not None:
+         with contextlib.suppress(Exception):
+             _jlog("ws_conn_active", conn_id=conn_id, sid=sid, active=active_count)
+     with contextlib.suppress(Exception):
+         if _admin_emit:
+             _admin_emit(
+                 "ws_conn_open",
+                 sid=sid,
+                 conn_id=conn_id,
+                 client_ip=client_ip,
+                 path=scope.get("path"),
+                 query_string=raw_query,
              )
-@@ -4884,50 +4906,73 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             with contextlib.suppress(asyncio.CancelledError, Exception):
-                 await task
-         confirm_timeout_cancelled.clear()
-         with contextlib.suppress(Exception):
-             await _safe_close(1000, "normal_shutdown")
+             if active_count is not None:
+@@ -1464,50 +1470,61 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 "barge_post_tts_hold_ms": int(barge_post_tts_hold_ms),
+                 "auto_commit_requires_dual": bool(auto_commit_requires_dual),
+                 "auto_commit_requires_asr_ready": bool(auto_commit_requires_asr_ready),
+             }
+             _emit_debug_event(
+                 "runtime_flags",
+                 phase="session",
+                 parent_id=session_event_id,
+                 meta=runtime_meta,
+             )
  
+     transport_meta = {
+         "path": str(scope.get("path") or ""),
+         "client_ip": client_ip,
+     }
+     transport_event_id = _emit_flow_event(
+         "ws_transport",
+         phase="session",
+         meta=transport_meta,
+     )
+     if transport_event_id:
+         ws_transport_parent_id[0] = transport_event_id
+     elif session_flow_event_id[0]:
+         ws_transport_parent_id[0] = session_flow_event_id[0]
  
- # --- Compatibility wrapper (not used by Starlette mount, kept for tests) ---
- try:
-     from starlette.websockets import WebSocket as _StarletteWebSocket  # noqa
- except Exception:
-     _StarletteWebSocket = None
++    ws_frames_in = 0
++    ws_bytes_in = 0
++    ws_text_frames_in = 0
++    ws_frames_out = 0
++    ws_bytes_out = 0
++    _WS_FRAME_SAMPLE = 20
++    backpressure_drop_count = 0
++    backpressure_last_emit = 0.0
++    backpressure_last_queue_len = 0
++    backpressure_emit_interval = 1.0
++
+     _raw_send = send
  
+     async def _send_instrumented(message, *, route: str = "app"):
+         nonlocal ws_frames_out, ws_bytes_out
  
- async def ws_chat(websocket):
-     """Accept, validate, send ready, then pump frames to keep the connection alive."""
-     _jlog("ws_chat_compat_invoked")
-     await websocket.accept()
+         frame_type = None
+         try:
+             frame_type = message.get("type") if isinstance(message, dict) else None
+         except Exception:
+             frame_type = None
+         if frame_type == "websocket.send":
+             payload_bytes = 0
+             frame_kind = "text"
+             text_payload = message.get("text") if isinstance(message, dict) else None
+             if text_payload is not None:
+                 try:
+                     payload_bytes = len((text_payload or "").encode("utf-8"))
+                 except Exception:
+                     payload_bytes = len(text_payload or "")
+             else:
+                 frame_kind = "binary"
+                 try:
+                     payload_bytes = len(message.get("bytes") or b"") if isinstance(message, dict) else 0
+                 except Exception:
+                     payload_bytes = 0
+@@ -1962,60 +1979,50 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+     }
+     turn_finish_logged = [False]
+     last_partial_ts: List[float] = [0.0]
+ 
+     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
+     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
+ 
+     # Turn-scoped buffering + state
+     buffered_chunks: Deque[bytes] = deque()
+     sent_any_audio = [False]
+     no_audio_watch_task: List[Optional[asyncio.Task]] = [None]
+     no_audio_notified = [False]
+     no_audio_turn_id = [0]
      try:
-         sid = _get_session_id(websocket.scope)
-     except Exception:
-         sid = "default"
- 
-     try:
-         await websocket.send_text(_dumps({"type": "ready", "session_id": sid}))
--    except Exception:
-+    except Exception as ex:
-+        detail = str(ex).strip() or "initial ready failed"
-+        with contextlib.suppress(Exception):
-+            flow_emit(
-+                session_id=sid,
-+                type="ws_error",
-+                phase="transport",
-+                who="server",
-+                meta={
-+                    "where": "initial_ready",
-+                    "cause": ex.__class__.__name__,
-+                    "msg": str(ex)[:300],
-+                },
-+            )
-+        with contextlib.suppress(Exception):
-+            await websocket.send_text(
-+                _dumps(
-+                    {
-+                        "type": "Error",
-+                        "code": "INITIAL_READY_FAILED",
-+                        "detail": detail[:200],
-+                    }
-+                )
-+            )
-         with contextlib.suppress(Exception):
-             await websocket.close(code=1011, reason="initial_ready_failed")
-             await asyncio.sleep(0.05)
-         return
- 
-     try:
-         await _pump_bus_to_client(
-             sid, lambda msg: websocket.send_text(msg.get("text") or "")
+         no_audio_window_s = float(
+             os.getenv("WS_NO_AUDIO_DETECT_WINDOW_S", "10.0") or "0"
          )
      except Exception:
-         pass
-     finally:
-         with contextlib.suppress(Exception):
-             await websocket.close(code=1000, reason="normal_shutdown")
-             await asyncio.sleep(0.05)
+         no_audio_window_s = 10.0
+     if no_audio_window_s < 0:
+         no_audio_window_s = 0.0
+     no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
+     asr_ready_evt: asyncio.Event = asyncio.Event()
+     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
+     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
+-    ws_frames_in = 0
+-    ws_bytes_in = 0
+-    ws_text_frames_in = 0
+-    ws_frames_out = 0
+-    ws_bytes_out = 0
+-    _WS_FRAME_SAMPLE = 20
+-    backpressure_drop_count = 0
+-    backpressure_last_emit = 0.0
+-    backpressure_last_queue_len = 0
+-    backpressure_emit_interval = 1.0
+     turn_connect_started = [False]
+     # When True we stream new audio chunks directly to Deepgram instead of staging
+     # them locally. Enabled once the socket is open and any backlog has been
+     # flushed so transcription isn't gated on the not-ready timeout.
+     asr_direct_stream = [False]
+     # Track whether the current turn has been committed (manual or automatic)
+     # so that we know when to flip into pass-through mode.
+     turn_stream_committed = [False]
+     # Coordinate async activation of the ASR stream once a turn commits.
+     asr_stream_activation_task: List[Optional[asyncio.Task]] = [None]
+     asr_not_ready_timeout_task: List[Optional[asyncio.Task]] = [None]
  
+     # NEW: per-turn mic capture state
+     mic_chunks: List[bytes] = []
+     mic_first_ts = [0.0]
+     mic_last_ts = [0.0]
  
- def _admin_ws_close_breadcrumb(session_id: str, code: int = 1000, reason: str = ''):
+     # Local confirmation gating
      try:
-         from app.api_v1.admin import _emit as _admin_emit
-         _admin_emit('ws_close', session_id=session_id, code=str(code), reason=reason)
+         confirm_min_ms = int(cfg.get("confirm_ms", 420) or 420)
      except Exception:
-         pass
- 
+         confirm_min_ms = 420
+     confirm_min_ms = max(0, confirm_min_ms)
+     try:
+         confirm_max_ms = int(cfg.get("confirm_max_ms", confirm_min_ms + 600) or (confirm_min_ms + 600))
