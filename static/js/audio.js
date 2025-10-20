@@ -177,7 +177,28 @@ function ensureEl() {
     _el.addEventListener('ended', onEnd);
   } catch {}
   try { _ensureSignatureTracker(); } catch {}
+  try { markElAsLastPlaybackTarget(_el); } catch {}
   return _el;
+}
+
+function markElAsLastPlaybackTarget(el) {
+  if (!el) return;
+  try {
+    if (typeof window !== 'undefined') {
+      window.__askchip_last_audio_el = el;
+    }
+  } catch {}
+  try {
+    if (typeof globalThis !== 'undefined') {
+      globalThis.__askchip_last_audio_el = el;
+    }
+  } catch {}
+}
+
+export function preparePlaybackElement() {
+  const el = ensureEl();
+  markElAsLastPlaybackTarget(el);
+  return el;
 }
 
 function ensurePlayer(mime) {

@@ -37,7 +37,7 @@ function safeCloseStream(reason = '') {
   __sendCloseStream();
 }
 import { VAD } from '../vad.js';
-import { stopPlayback } from '../../audio.js';
+import { stopPlayback, preparePlaybackElement } from '../../audio.js';
 import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
 import { logIfEnabled } from '../../util/logging.js';
 import { getSID } from '../../util/sid.js';
@@ -842,6 +842,10 @@ const attemptAudioPlay = (ctx, turnId) => {
 
 const handleClientTtsStartTelemetry = async (ctx, frame) => {
   ensurePlaybackElementTracker();
+  const audioEl = preparePlaybackElement();
+  if (audioEl) {
+    rememberPlaybackElement(audioEl, ctx);
+  }
   const turnId = frame?.turn_id != null ? frame.turn_id : null;
   schedulePlaybackHeartbeat(ctx, turnId);
   await resumeAudioContextForTts(ctx, turnId);
