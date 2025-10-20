@@ -1,7 +1,4 @@
 const DEFAULT_CONFIG = {
-  barge_in: {
-    mode: 'manual_only',
-  },
   debug: {
     vad: true,
   },
@@ -60,9 +57,6 @@ export function getConfig() {
   const source = (typeof window !== 'undefined' && window.__askchip_config) || {};
 
   return {
-    barge_in: {
-      mode: source.barge_in?.mode ?? DEFAULT_CONFIG.barge_in.mode,
-    },
     debug: {
       vad: source.debug?.vad ?? DEFAULT_CONFIG.debug.vad,
     },
