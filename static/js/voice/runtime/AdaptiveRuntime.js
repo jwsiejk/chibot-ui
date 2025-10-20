@@ -73,6 +73,15 @@ function clearPostTtsRearm(ctx) {
 
 function rearmLocalVad(ctx) {
   if (!ctx?.state) return;
+  const holdUntil = Number.isFinite(ctx.state.ttsHoldUntilMs) ? ctx.state.ttsHoldUntilMs : 0;
+  const holdActive = holdUntil > 0 && holdUntil > nowMs();
+  const maskActive = isTtsMaskActive(ctx);
+  const ttsActive = !!ctx.state.ttsPlaying;
+  if (holdActive || maskActive || ttsActive) {
+    ctx.state.vadSuppressedForTts = true;
+    ctx.state.vadShouldRearmAfterTts = true;
+    return;
+  }
   ctx.state.vadSuppressedForTts = false;
   if (!policyAllowLocalVad()) {
     ctx.state.vadShouldRearmAfterTts = false;
@@ -2477,6 +2486,8 @@ export function forceBargeInStart(meta = {}) {
   clearPostTtsRearm(ctx);
   ctx.state.vadShouldRearmAfterTts = false;
   ctx.state.vadSuppressedForTts = false;
+  startRecorder(ctx);
+  ensureTransport(ctx).catch(() => {});
   setManualGate(ctx, true);
 
   bargeIn(meta);
@@ -2485,6 +2496,8 @@ export function forceBargeInStart(meta = {}) {
   ctx.state.ttsPlaying = false;
   ctx.ttsMask.clear();
   ctx.ttsEndedAtMs = nowMs();
+
+  emitClientAudioEvent(ctx, 'ptt_open', { skip_vad: true });
 
   const controlFrame = { type: 'Control', action: 'barge_in_start' };
   const sent = sendJSON(controlFrame);
@@ -2544,6 +2557,7 @@ export function forceBargeInEnd(opts = {}) {
     });
   }
   if (released) {
+    emitClientAudioEvent(ctx, 'ptt_close', {});
     const controlFrame = { type: 'Control', action: 'barge_in_end' };
     const sent = sendJSON(controlFrame);
     if (!sent) {
