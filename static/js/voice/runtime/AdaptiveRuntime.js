@@ -1247,6 +1247,7 @@ const ensureCtx = () => {
       vadSuppressedForTts: false,
       ttsSuppressionMode: POLICY_SUPPRESS_NONE,
       ttsHoldStartedMs: 0,
+      ttsPendingStart: false,
       evidenceGate, shadowBuffer, ttsMask,
     },
     audio: {
@@ -1311,6 +1312,11 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
   if (!normalized) return false;
 
   if (['playing', 'assistant_speaking', 'speaking', 'paused'].includes(normalized)) {
+    const pending = ctx.state?.ttsPendingStart === true;
+    if (!ctx.state.ttsPlaying && !pending) {
+      return false;
+    }
+    ctx.state.ttsPendingStart = false;
     ctx.state.ttsPlaying = true;
     ctx.ttsEndedAtMs = undefined;
     ctx.ttsMask.start();
@@ -1321,6 +1327,7 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
 
   if (['ended', 'stopped', 'done'].includes(normalized)) {
     ctx.state.ttsPlaying = false;
+    ctx.state.ttsPendingStart = false;
     ctx.ttsEndedAtMs = nowMs();
     ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
     handleTtsPlaybackEnded(ctx);
@@ -1330,10 +1337,11 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
 
   if (['ready', 'idle', 'listening', 'assistant_listening'].includes(normalized)) {
     ctx.state.ttsPlaying = false;
+    ctx.state.ttsPendingStart = false;
     ctx.ttsEndedAtMs = nowMs();
     ctx.ttsMask.clear();
     stopMaskLogging(ctx);
-    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
+    releaseMicGate(ctx, MIC_GATE_TTS_REASON);
     markReady(ctx, 'assistant_ready', { detail });
     return true;
   }
@@ -1472,6 +1480,9 @@ function handleWsFrame(ctx, frame) {
   }
 
   if (isExplicitTtsStart || isAssistantAudio) {
+    if (ctx?.state) {
+      ctx.state.ttsPendingStart = true;
+    }
     const phaseState = typeof frame?.phase === 'string' && frame.phase.trim()
       ? frame.phase
       : 'assistant_speaking';
@@ -2455,9 +2466,10 @@ export function bargeIn(meta = {}) {
     mask_active: maskActive,
   });
   ctx.state.ttsPlaying = false;
+  ctx.state.ttsPendingStart = false;
   ctx.ttsEndedAtMs = nowMs();
   ctx.ttsMask.clear();
-  releaseMicGate(ctx, MIC_GATE_TTS_REASON);  
+  releaseMicGate(ctx, MIC_GATE_TTS_REASON);
   if (shouldNotify) {
     sendJSON({ type: 'manual_barge_in' });
   }
@@ -2512,6 +2524,7 @@ export function forceBargeInStart(meta = {}) {
 
   ctx.state.manualBargeInUsed = true;
   ctx.state.ttsPlaying = false;
+  ctx.state.ttsPendingStart = false;
   ctx.ttsMask.clear();
   ctx.ttsEndedAtMs = nowMs();
 
@@ -2562,6 +2575,7 @@ export function forceBargeInEnd(opts = {}) {
     rearmLocalVad(ctx);
   }
   ctx.state.ttsPlaying = false;
+  ctx.state.ttsPendingStart = false;
   ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });
   ctx.ttsEndedAtMs = nowTs;
 
