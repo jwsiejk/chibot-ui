@@ -20,6 +20,7 @@ from ..session_state import (
     should_emit_phase,
 )
 from app.flow.emit import emit as flow_emit
+from app.obs.source_tags import make_source_meta
 from .llm.flow_wrapper import make_llm_flow_tracker
 from .tts.flow_wrapper import make_tts_flow_tracker
 def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
@@ -340,6 +341,25 @@ def _emit_turn_action_metadata(turn_id: Optional[str],
                 session_id_value = sid_candidate  # type: ignore[assignment]
     if session_id_value:
         payload["session_id"] = session_id_value
+    evidence_payload: Dict[str, Any] = {}
+    intent_val = payload.get("nlu", {}).get("intent") if isinstance(payload.get("nlu"), dict) else None
+    if intent_val:
+        evidence_payload["intent"] = intent_val
+    action_val = policy_payload.get("action")
+    if action_val:
+        evidence_payload["action"] = action_val
+    show_suggestions_val = policy_payload.get("show_suggestions")
+    if show_suggestions_val is not None:
+        evidence_payload["show_suggestions"] = bool(show_suggestions_val)
+    try:
+        payload.update(
+            make_source_meta(
+                "turn_action_metadata",
+                evidence=evidence_payload or None,
+            )
+        )
+    except Exception:
+        pass
     try:
         _admin_emit("turn_action_metadata", **payload)
     except Exception:
@@ -586,6 +606,23 @@ def _log_policy_decision(*,
             payload["persona_move"] = seed_move_name
         if used_docs:
             payload["used_docs"] = used_docs
+        evidence_payload: Dict[str, Any] = {
+            "reason": reason,
+            "policy_move": policy_move_name,
+            "meta_action": normalized_action_name,
+        }
+        teacher_move_val = resolved_move_name or seed_move_name
+        if teacher_move_val:
+            evidence_payload["teacher_move"] = teacher_move_val
+        try:
+            payload.update(
+                make_source_meta(
+                    "dialog_policy",
+                    evidence={k: v for k, v in evidence_payload.items() if v},
+                )
+            )
+        except Exception:
+            pass
         _jlog("policy.decision", **payload)
 
         if callable(_admin_emit):

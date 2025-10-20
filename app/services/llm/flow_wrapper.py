@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Optional, Protocol, runtime_checkable
+from typing import Dict, Optional, Protocol, runtime_checkable
 
 from app.flow.emit import add_batch, emit as flow_emit
+from app.obs.source_tags import make_source_meta
 
 
 @runtime_checkable
@@ -75,6 +76,31 @@ class LLMFlowTracker:
     _queue_end_monotonic: Optional[float] = None
     _first_token_monotonic: Optional[float] = None
 
+    def _annotate_meta(
+        self,
+        meta: Dict[str, object],
+        *,
+        extra: Optional[Dict[str, object]] = None,
+    ) -> None:
+        evidence: Dict[str, object] = {}
+        if extra:
+            for key, value in extra.items():
+                if value is None:
+                    continue
+                evidence[key] = value
+        if self.model and "model" not in evidence:
+            try:
+                evidence["model"] = str(self.model)
+            except Exception:
+                evidence["model"] = self.model  # type: ignore[assignment]
+        try:
+            meta["source_meta"] = make_source_meta(
+                "llm_runtime",
+                evidence=evidence or None,
+            )
+        except Exception:
+            pass
+
     def queue(self) -> None:
         """Mark the time at which the request entered the provider queue."""
 
@@ -90,6 +116,7 @@ class LLMFlowTracker:
             meta["turn_id"] = str(self.turn_id)
         if self.model:
             meta["model"] = str(self.model)
+        self._annotate_meta(meta)
         try:
             event_id = flow_emit(
                 session_id=self.session_id,
@@ -135,6 +162,7 @@ class LLMFlowTracker:
         if prompt_tokens is not None and prompt_tokens >= 0:
             meta["tokens_in"] = prompt_tokens
         token_count = _coerce_int(tokens_out)
+        char_count: Optional[int] = None
         if token_count is not None and token_count >= 0:
             meta["tokens_out"] = token_count
         else:
@@ -144,6 +172,19 @@ class LLMFlowTracker:
             if char_count < 0:
                 char_count = 0
             meta["chars"] = char_count
+        extra_evidence: Dict[str, object] = {}
+        if prompt_tokens is not None and prompt_tokens >= 0:
+            extra_evidence["tokens_in"] = prompt_tokens
+        if token_count is not None and token_count >= 0:
+            extra_evidence["tokens_out"] = token_count
+        if char_count is not None and char_count >= 0:
+            extra_evidence["chars"] = char_count
+        if finish_reason is not None:
+            try:
+                extra_evidence["finish_reason"] = str(finish_reason)
+            except Exception:
+                pass
+        self._annotate_meta(meta, extra=extra_evidence)
         try:
             flow_emit(
                 session_id=self.session_id,
@@ -194,6 +235,7 @@ class LLMFlowTracker:
                     if reason_text:
                         debug_meta["finish_reason"] = reason_text
                 if debug_meta:
+                    self._annotate_meta(debug_meta)
                     try:
                         flow_emit(
                             session_id=self.session_id,
@@ -235,6 +277,7 @@ class LLMFlowTracker:
                 meta["code"] = str(code)
             except Exception:
                 meta["code"] = "unknown"
+        self._annotate_meta(meta, extra={"code": meta.get("code")})
         try:
             event_id = flow_emit(
                 session_id=self.session_id,

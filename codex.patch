@@ -1,116 +1,27 @@
-diff --git a/app/obs/source_tags.py b/app/obs/source_tags.py
-index c5113a2bc8bc110a5329d906a39bb0dd18c19bfd..442b4f6a279748369ba56ebb5bb88e48b0fbd194 100644
---- a/app/obs/source_tags.py
-+++ b/app/obs/source_tags.py
-@@ -44,50 +44,69 @@ def resolve_barge_origin(
-     finally ASR evidence. The output is always one of the supported enumerations.
-     """
- 
-     if manual_gate:
-         return "manual_ptt"
-     if policy_triggered:
-         return "server_policy"
-     if client_vad_recent_ms is not None and client_vad_recent_ms >= 0:
-         return "client_vad"
-     if asr_conf_recent is not None:
-         return "asr_evidence"
-     return "client_vad"
- 
- 
- def gate_snapshot(tts_active: bool, manual_gate: bool, vad_auto: bool) -> Dict[str, bool]:
-     """Return a normalized snapshot of relevant gate state."""
- 
-     snapshot = {
-         "tts_active": bool(tts_active),
-         "manual_gate": bool(manual_gate),
-         "vad_auto": bool(vad_auto),
-     }
-     return snapshot
- 
- 
-+def make_source_meta(
-+    source: str,
-+    *,
-+    gates: Optional[Mapping[str, Any]] = None,
-+    evidence: Optional[Mapping[str, Any]] = None,
-+) -> Dict[str, Any]:
-+    """Return a schema/source metadata payload with optional gates/evidence."""
-+
-+    meta: Dict[str, Any] = {"schema": FLOW_SCHEMA_VERSION, "source": source}
-+    if gates:
-+        try:
-+            meta["gates"] = {str(key): bool(value) for key, value in gates.items()}
-+        except Exception:
-+            # Best-effort normalization; fall back to the original mapping.
-+            meta["gates"] = dict(gates)  # type: ignore[arg-type]
-+    attach_evidence(meta, evidence)
-+    return meta
-+
-+
- def _encode_size_bytes(payload: Mapping[str, Any]) -> int:
-     try:
-         encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-     except (TypeError, ValueError):
-         # Fall back to a conservative upper bound by stringifying the mapping.
-         encoded = str(payload)
-     return len(encoded.encode("utf-8", "ignore"))
- 
- 
- def clamp_evidence(evidence: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
-     """Return a copy of ``evidence`` constrained to ``_MAX_EVIDENCE_BYTES``.
- 
-     Fields are added in a deterministic key order. Once the payload would exceed the
-     byte budget, remaining fields are dropped. Invalid inputs fall back to an empty
-     mapping to avoid raising.
-     """
- 
-     if not evidence:
-         return {}
-     if not isinstance(evidence, Mapping):
-         return {}
- 
-     trimmed: Dict[str, Any] = {}
-     for key in sorted(evidence.keys()):
-         value = evidence[key]
-diff --git a/app/services/tts/flow_wrapper.py b/app/services/tts/flow_wrapper.py
-index cb79879f9eec6062230077b2451224d3bde39a58..eafa8b63853df145e66eebe6af61213a8df37cee 100644
---- a/app/services/tts/flow_wrapper.py
-+++ b/app/services/tts/flow_wrapper.py
-@@ -1,33 +1,45 @@
- """Flow trace helpers for TTS playback."""
+diff --git a/app/services/llm/flow_wrapper.py b/app/services/llm/flow_wrapper.py
+index 0cec5f942ef0656e137f92e030488ca1cf7b8a34..2ef4d56b01e5f6b42f5f9ac580d1a457805356ce 100644
+--- a/app/services/llm/flow_wrapper.py
++++ b/app/services/llm/flow_wrapper.py
+@@ -1,34 +1,35 @@
+ """Flow trace helpers for LLM interactions."""
  
  from __future__ import annotations
  
+ import time
  from dataclasses import dataclass
--from typing import Iterable, Optional, Protocol, runtime_checkable
-+from typing import Dict, Iterable, Mapping, Optional, Protocol, runtime_checkable
+-from typing import Optional, Protocol, runtime_checkable
++from typing import Dict, Optional, Protocol, runtime_checkable
  
  from app.flow.emit import add_batch, emit as flow_emit
-+from app.obs.source_tags import FLOW_SCHEMA_VERSION, make_source_meta
-+
-+
-+def make_tts_mask_meta(
-+    source: str,
-+    *,
-+    gates: Optional[Mapping[str, bool]] = None,
-+    evidence: Optional[Mapping[str, object]] = None,
-+) -> Dict[str, object]:
-+    """Return a normalized metadata payload for TTS mask events."""
-+
-+    return make_source_meta(source, gates=gates, evidence=evidence)
++from app.obs.source_tags import make_source_meta
  
  
  @runtime_checkable
  class _Tracker(Protocol):
-     """Protocol describing the minimal TTS flow tracker."""
- 
-     def queue(self) -> None:
+     def start(self) -> bool:
          ...
  
-     def start(self) -> None:
-         ...
- 
-     def end(self) -> None:
+     def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
          ...
  
      def error(self, code: Optional[object] = None) -> None:
@@ -118,1600 +29,747 @@ index cb79879f9eec6062230077b2451224d3bde39a58..eafa8b63853df145e66eebe6af61213a
  
  
  class _NullTracker:
-     """No-op tracker when flow context is unavailable."""
+     """No-op tracker used when flow trace context is unavailable."""
  
      __slots__ = ()
  
      def queue(self) -> None:  # noqa: D401 - trivial
-@@ -41,53 +53,54 @@ class _NullTracker:
-     def end(self) -> None:  # noqa: D401 - trivial
-         """Ignore end events."""
+         """Ignore queue notifications when tracing is disabled."""
          return None
  
-     def error(self, code: Optional[object] = None) -> None:  # noqa: D401 - trivial
-         """Ignore error events."""
+     def start(self) -> bool:  # noqa: D401 - trivial
+         """Pretend to start a span and report no work."""
+@@ -53,210 +54,252 @@ def _coerce_int(value: Optional[object]) -> Optional[int]:
+     if value is None:
+         return None
+     try:
+         return int(value)  # type: ignore[arg-type]
+     except (TypeError, ValueError):
          return None
  
  
  @dataclass
- class TTSFlowTracker:
-     """Emit ``tts_*`` flow events for a single synthesis request."""
+ class LLMFlowTracker:
+     """Manage ``llm_start``/``llm_final`` flow events for a single turn."""
  
      session_id: str
      phase: str
-     who: str = "system"
      turn_id: Optional[str] = None
-     include_turn_meta: bool = True
+     model: Optional[str] = None
+     who: str = "system"
  
-     _queued: bool = False
      _started: bool = False
-     _ended: bool = False
      _start_event_id: Optional[str] = None
+     _start_monotonic: Optional[float] = None
+     _queue_start_monotonic: Optional[float] = None
+     _queue_end_monotonic: Optional[float] = None
+     _first_token_monotonic: Optional[float] = None
  
-     def _meta(self) -> Optional[dict[str, object]]:
--        if not self.include_turn_meta or not self.turn_id:
--            return None
--        return {"turn_id": self.turn_id}
-+        meta: Dict[str, object] = {"schema": FLOW_SCHEMA_VERSION}
-+        if self.include_turn_meta and self.turn_id:
-+            meta["turn_id"] = self.turn_id
-+        return meta
- 
-     def _emit_debug(
-         self,
-         type_: str,
-         *,
-         parent_id: Optional[str],
-         meta: Optional[dict[str, object]] = None,
-     ) -> None:
-         if not parent_id:
-             return
-         try:
-             flow_emit(
-                 session_id=self.session_id,
-                 level="debug",
-                 phase=self.phase,
-                 type=type_,
-                 who=self.who,
-                 meta=meta,
-                 parent_id=parent_id,
-             )
-         except Exception:
-             pass
- 
-     def queue(self) -> None:
-         if self._queued:
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index b8610c580538dff23691b6662c2565ba13f68141..724db037933af70987934db097c27e6301a818f1 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -23,50 +23,58 @@ from .schema_v1 import (
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.config import load_settings
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.policy.loader import load_policy, load_policy_layers
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
- from app.flow.emit import add_batch, emit as flow_emit
- from app.session_state import set_phase, should_emit_phase
- 
- # NEW: invoke LLM on final transcript
- from app.services.streaming import (
-     run_ws_user_turn,
-     prepare_turn_metadata,
-     note_turn_commit_latency,
-     emit_watchdog_user_end,
- )  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.confirm_window import ConfirmWindow
- from app.ws.bus import bus
-+from app.obs.source_tags import (
-+    FLOW_SCHEMA_VERSION,
-+    gate_snapshot,
-+    make_source_meta,
-+    ms_since,
-+    resolve_barge_origin,
-+)
-+from app.services.tts.flow_wrapper import make_tts_mask_meta
- 
- # Optional admin emitter
- try:
-     from app.api_v1.admin import _emit as _admin_emit_base
- except Exception:
-     _admin_emit_base = None
- 
- 
- def _broadcast_admin_frame(event: str, payload: Dict[str, Any]) -> None:
-     """Mirror admin diagnostic breadcrumbs onto the session bus."""
- 
-     try:
-         sid = payload.get("session_id") or payload.get("sid")
-     except Exception:
-         sid = None
- 
-     if not sid:
-         return
- 
-     try:
-         sid_str = str(sid)
-     except Exception:
-         sid_str = sid  # type: ignore[assignment]
- 
-     frame: Dict[str, Any] = {"type": event}
-@@ -146,63 +154,97 @@ def _emit_barge_admin_events(sid: str,
-                               phase: Optional[str],
-                               previous_phase: Optional[str]) -> None:
-     if not phase:
-         return
-     admin_cb = globals().get("_admin_emit")
-     if not callable(admin_cb):
-         return
- 
-     turn_id = _current_assistant_turn_id(sid)
-     tts_state, tts_key = _lookup_tts_state(sid, turn_id)
- 
-     payload: Dict[str, Any] = {
-         "session_id": sid,
-         "sid": sid,
-         "phase": phase,
-     }
-     if turn_id is not None:
-         payload["turn_id"] = turn_id
-     if previous_phase:
-         payload["previous_phase"] = previous_phase
-     if tts_key:
-         payload["tts_turn_key"] = tts_key
-     if tts_state is not None:
-         payload["tts_state"] = tts_state
- 
-+    state = _BARGE_EVENT_STATE.get(sid, {})
-+    manual_gate = bool(state.get("manual_gate"))
-+    client_vad_active = bool(state.get("client_vad_active"))
-+    policy_triggered = bool(state.get("policy_triggered"))
-+    last_conf = state.get("last_confident_conf")
-+    if last_conf is None:
-+        last_conf = state.get("last_partial_conf")
-+    try:
-+        last_conf = float(last_conf) if last_conf is not None else None
-+    except (TypeError, ValueError):
-+        last_conf = None
-+    payload.update(
-+        make_source_meta(
-+            resolve_barge_origin(
-+                manual_gate=manual_gate,
-+                client_vad_recent_ms=ms_since(state.get("client_vad_start_ms")),
-+                asr_conf_recent=last_conf,
-+                policy_triggered=policy_triggered,
-+            ),
-+            gates=gate_snapshot(
-+                _is_tts_active(tts_state),
-+                manual_gate,
-+                client_vad_active,
-+            ),
-+            evidence={
-+                "ms_since_last_ptt": ms_since(state.get("last_manual_ptt_ms")),
-+                "ms_since_vad_start": ms_since(state.get("client_vad_start_ms")),
-+                "dg_conf": last_conf,
-+            },
-+        )
-+    )
-+
-     if phase == "paused" and previous_phase != "paused":
-         admin_cb("barge_in", **payload)
-         if _is_tts_active(tts_state):
-             admin_cb("tts_pause", **payload)
-     elif phase == "assistant_speaking" and previous_phase == "paused":
-         admin_cb("barge_resume", **payload)
-         if _is_tts_active(tts_state):
-             admin_cb("tts_resume", **payload)
-     elif phase == "ready" and previous_phase == "paused":
-         admin_cb("barge_commit", **payload)
-         if _is_tts_active(tts_state):
-             admin_cb("tts_cancel", **payload)
- 
-+ 
-+_BARGE_EVENT_STATE: Dict[str, Dict[str, Any]] = defaultdict(dict)
- 
- ACTIVE_WS: dict[str, dict[str, Any]] = {}
- ACTIVE_WS_LOCK = asyncio.Lock()
- 
- GREET_SEQ_CACHE: dict[str, Set[int]] = defaultdict(set)
- GREET_SEQ_CACHE_LOCK = asyncio.Lock()
- 
- WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
- 
- _SETTINGS = load_settings()
- _ADVANCED_LOGGING_ENABLED = bool(
-     getattr(_SETTINGS, "advanced_logging_enabled", True)
- )
- 
- # ------------------------------ small helpers ------------------------------
- 
- 
- def _client_ip_from_scope(scope) -> str:
-     try:
-         c = scope.get("client") or ()
-         if isinstance(c, (list, tuple)) and c:
-             return str(c[0])
-     except Exception:
-         pass
-     try:
-@@ -2009,50 +2051,237 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     last_confident_partial_conf: List[Optional[float]] = [None]
-     last_partial_conf: List[Optional[float]] = [None]
-     last_partial_speech_ms: List[int] = [0]
-     last_user_final_text: List[str] = [""]
-     last_partial_text: List[str] = [""]
-     current_assistant_turn_ref: List[Optional[Any]] = [None]
-     manual_commit_pending = [False]
-     manual_button_down = [False]
-     manual_turn_active = [False]
-     ptt_down_emitted = [False]
-     ptt_turn_preopened = [False]
-     # Runtime flags to coordinate commit + VAD gating
-     assistant_speaking = [False]
-     tts_mask_active = [False]
-     tts_mask_mode = ["none"]
-     tts_mask_release_task: List[Optional[asyncio.Task]] = [None]
-     tts_mask_release_deadline = [0.0]
-     tts_last_end_ts = [0.0]
-     vad_desired_state: List[bool] = [True]
-     vad_last_reason: List[str] = ["idle"]
-     vad_apply_task: List[Optional[asyncio.Task]] = [None]
- 
-     local_vad_open = [False]
-     local_vad_meta_sent = [False]
- 
-+    def _barge_state() -> Dict[str, Any]:
-+        return _BARGE_EVENT_STATE.setdefault(sid, {})
-+
-+    def _coerce_ts_ms(ts: Optional[float] = None) -> int:
-+        base = ts if ts is not None else time.time()
-+        return int(max(0.0, base) * 1000)
-+
-+    def _update_barge_state(**updates: Any) -> None:
-+        state = _barge_state()
-+        for key, value in updates.items():
-+            if value is None:
-+                state.pop(key, None)
-+            else:
-+                state[key] = value
-+
-+    def _note_manual_down(ts: Optional[float] = None) -> None:
-+        _update_barge_state(
-+            manual_gate=True,
-+            last_manual_ptt_ms=_coerce_ts_ms(ts),
-+            policy_triggered=False,
-+        )
-+
-+    def _note_manual_up() -> None:
-+        _update_barge_state(manual_gate=False)
-+
-+    def _note_client_vad_start(ts: Optional[float] = None) -> None:
-+        _update_barge_state(
-+            client_vad_active=True,
-+            client_vad_start_ms=_coerce_ts_ms(ts),
-+        )
-+
-+    def _note_client_vad_stop() -> None:
-+        _update_barge_state(client_vad_active=False)
-+
-+    def _current_gate_snapshot(tts_override: Optional[bool] = None) -> Dict[str, bool]:
-+        state = _barge_state()
-+        manual_gate = bool(state.get("manual_gate"))
-+        vad_auto = bool(state.get("client_vad_active"))
-+        tts_active_now = bool(
-+            tts_override
-+            if tts_override is not None
-+            else (assistant_speaking[0] or tts_mask_active[0])
-+        )
-+        return gate_snapshot(tts_active_now, manual_gate, vad_auto)
-+
-+    def _make_barge_evidence() -> Dict[str, Any]:
-+        state = _barge_state()
-+        conf = state.get("last_confident_conf")
-+        if conf is None:
-+            conf = state.get("last_partial_conf")
++    def _annotate_meta(
++        self,
++        meta: Dict[str, object],
++        *,
++        extra: Optional[Dict[str, object]] = None,
++    ) -> None:
++        evidence: Dict[str, object] = {}
++        if extra:
++            for key, value in extra.items():
++                if value is None:
++                    continue
++                evidence[key] = value
++        if self.model and "model" not in evidence:
++            try:
++                evidence["model"] = str(self.model)
++            except Exception:
++                evidence["model"] = self.model  # type: ignore[assignment]
 +        try:
-+            conf_val = float(conf) if conf is not None else None
-+        except (TypeError, ValueError):
-+            conf_val = None
-+        return {
-+            "ms_since_last_ptt": ms_since(state.get("last_manual_ptt_ms")),
-+            "ms_since_vad_start": ms_since(state.get("client_vad_start_ms")),
-+            "dg_conf": conf_val,
-+        }
-+
-+    def _resolve_turn_open_source(commit_mode: str) -> str:
-+        mode_norm = (commit_mode or "").strip().lower()
-+        if mode_norm == "programmatic":
-+            return "programmatic"
-+        state = _barge_state()
-+        conf = state.get("last_confident_conf")
-+        if conf is None:
-+            conf = state.get("last_partial_conf")
-+        try:
-+            conf_val = float(conf) if conf is not None else None
-+        except (TypeError, ValueError):
-+            conf_val = None
-+        return resolve_barge_origin(
-+            manual_gate=bool(state.get("manual_gate")),
-+            client_vad_recent_ms=ms_since(state.get("client_vad_start_ms")),
-+            asr_conf_recent=conf_val,
-+            policy_triggered=bool(state.get("policy_triggered"))
-+            or mode_norm == "auto_commit",
-+        )
-+
-+    def _classify_commit_source(mode: str, reason: Optional[str]) -> str:
-+        mode_norm = (mode or "").strip().lower()
-+        reason_norm = (reason or "").strip().lower()
-+        if mode_norm == "manual":
-+            return "manual_release"
-+        if reason_norm in {"timeout_commit", "timeout"}:
-+            return "silence_timeout"
-+        if mode_norm in {"auto", "auto_commit"}:
-+            return "server_policy"
-+        return "endpointing_asr"
-+
-+    def _map_endpoint_reason(reason: Optional[str]) -> str:
-+        reason_norm = (reason or "").strip().lower()
-+        if reason_norm in {"timeout_commit", "timeout"}:
-+            return "timeout"
-+        if reason_norm in {"no_input", "silence"}:
-+            return "no_input"
-+        return "end_of_utterance"
-+
-+    def _make_commit_evidence(reason: Optional[str]) -> Dict[str, Any]:
-+        state = _barge_state()
-+        metrics = dict(state.get("last_commit_metrics") or {})
-+        try:
-+            ms_speech = int(metrics.get("elapsed_ms")) if metrics.get("elapsed_ms") is not None else None
-+        except (TypeError, ValueError):
-+            ms_speech = None
-+        raw_silence = metrics.get("gap_ms") or metrics.get("silence_ms")
-+        try:
-+            ms_silence = int(raw_silence) if raw_silence is not None else None
-+        except (TypeError, ValueError):
-+            ms_silence = None
-+        conf = state.get("last_confident_conf")
-+        if conf is None:
-+            conf = state.get("last_partial_conf")
-+        try:
-+            conf_val = float(conf) if conf is not None else None
-+        except (TypeError, ValueError):
-+            conf_val = None
-+        return {
-+            "endpoint": _map_endpoint_reason(reason or metrics.get("reason")),
-+            "ms_since_last_audio": ms_since(state.get("last_audio_ts_ms")),
-+            "ms_speech": ms_speech,
-+            "ms_silence": ms_silence,
-+            "dg_conf_at_eos": conf_val,
-+            "vendor_reason": metrics.get("reason") or reason,
-+        }
-+
-+    def _classify_cancel_source(reason: Optional[str]) -> str:
-+        reason_norm = (reason or "").strip().lower()
-+        if "transport" in reason_norm or "relay" in reason_norm:
-+            return "transport_error"
-+        if reason_norm in {"close_stream", "page_unload"}:
-+            return "page_unload"
-+        if reason_norm in {"manual", "manual_cancel", "user_cancel"}:
-+            return "manual_cancel"
-+        return "policy_preempt"
-+
-+    def _make_cancel_evidence(reason: Optional[str]) -> Dict[str, Any]:
-+        state = _barge_state()
-+        conf = state.get("last_confident_conf")
-+        if conf is None:
-+            conf = state.get("last_partial_conf")
-+        try:
-+            conf_val = float(conf) if conf is not None else None
-+        except (TypeError, ValueError):
-+            conf_val = None
-+        reason_norm = (reason or "").strip().lower() or None
-+        return {
-+            "reason": reason_norm,
-+            "ms_since_last_audio": ms_since(state.get("last_audio_ts_ms")),
-+            "dg_conf": conf_val,
-+        }
-+
-+    def _emit_endpoint_event(turn_id: Optional[int], source: str, reason: Optional[str]) -> None:
-+        admin_cb = globals().get("_admin_emit")
-+        if not callable(admin_cb):
-+            return
-+        payload: Dict[str, Any] = {
-+            "session_id": sid,
-+            "sid": sid,
-+        }
-+        payload.update(
-+            make_source_meta(
-+                source,
-+                gates=_current_gate_snapshot(),
-+                evidence=_make_commit_evidence(reason),
++            meta["source_meta"] = make_source_meta(
++                "llm_runtime",
++                evidence=evidence or None,
 +            )
-+        )
-+        if turn_id is not None:
-+            payload["turn_id"] = turn_id
-+        try:
-+            admin_cb("endpoint_detected", **payload)
 +        except Exception:
 +            pass
 +
-+    _update_barge_state(
-+        manual_gate=False,
-+        client_vad_active=False,
-+        policy_triggered=False,
-+        last_manual_ptt_ms=None,
-+        client_vad_start_ms=None,
-+        last_partial_conf=None,
-+        last_confident_conf=None,
-+        last_commit_metrics=None,
-+        last_audio_ts_ms=None,
-+    )
-+
-     def _decide_barge_attempt(source: str) -> Tuple[bool, str, str, str]:
-         src = "ptt" if str(source).lower() == "ptt" else "vad"
+     def queue(self) -> None:
+         """Mark the time at which the request entered the provider queue."""
+ 
+         self._queue_start_monotonic = time.monotonic()
+ 
+     def start(self) -> bool:
+         """Emit the ``llm_start`` event if possible."""
+ 
+         if not self.session_id or not self.phase:
+             return False
+         meta: dict[str, object] = {}
+         if self.turn_id:
+             meta["turn_id"] = str(self.turn_id)
+         if self.model:
+             meta["model"] = str(self.model)
++        self._annotate_meta(meta)
          try:
-             current_turn_id = _current_assistant_turn_id(sid)
+             event_id = flow_emit(
+                 session_id=self.session_id,
+                 level="flow",
+                 phase=self.phase,
+                 type="llm_start",
+                 who=self.who,
+                 meta=meta or None,
+             )
          except Exception:
-             current_turn_id = None
-         tts_state, tts_key = _lookup_tts_state(sid, current_turn_id)
-         tts_active_now = _is_tts_active(tts_state)
-         now_ts = time.time()
-         hold_active = False
-         post_hold_ms = 0
-         try:
-             post_hold_ms = int(barge_post_tts_hold_ms)
-         except Exception:
-             post_hold_ms = 0
-         post_hold_ms = max(0, post_hold_ms)
-         last_end = tts_last_end_ts[0]
-         if (not tts_active_now) and last_end and post_hold_ms > 0:
-             hold_active = now_ts < (last_end + (post_hold_ms / 1000.0))
-         if tts_active_now:
-             tts_phase = "TTS_ACTIVE"
-         elif hold_active:
-             tts_phase = "POST_TTS_HOLD"
-         else:
-             tts_phase = "IDLE"
-@@ -2584,50 +2813,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         if confirm_flow_parent_id[0] and wait_s > 0:
-             _emit_debug_event(
-                 "timer_start",
-                 phase="turn",
-                 parent_id=confirm_flow_parent_id[0],
-                 meta={"name": "confirm_timeout", "ms": int(window.max_duration_ms)},
-             )
+             return False
+         self._started = True
+         self._start_event_id = event_id or None
+         now = time.monotonic()
+         self._start_monotonic = now
+         if self._queue_start_monotonic is None:
+             self._queue_start_monotonic = now
+         self._queue_end_monotonic = now
+         return True
  
-     def _finalize_confirm_commit(
-         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
-     ) -> None:
-         if confirm_window_ref[0] is not window:
-             return
-         if manual_button_down[0] or manual_turn_active[0]:
-             _cancel_confirm_timeout()
-             confirm_window_ref[0] = None
-             _reset_confirm_debug(None)
-             confirm_flow_parent_id[0] = None
-             _on_local_vad_stop()
-             return
-         _cancel_confirm_timeout()
-         confirm_window_ref[0] = None
-         data = {k: v for k, v in (metrics or {}).items() if v is not None}
-         data.setdefault("reason", trigger)
-         data.setdefault("snr_enabled", window.snr_enabled)
-+        _update_barge_state(last_commit_metrics=dict(data))
-         _jlog("confirm_commit", sid=sid, **data)
-         if post_greet_phase_active[0]:
-             _emit_flow_event(
-                 "confirm_close",
-                 phase="turn",
-                 meta={"reason": "commit"},
-             )
-         _flush_confirm_debug_batches()
-         _on_local_vad_stop()
-         if barge.is_paused():
-             try:
-                 barge.commit(_send_barge_state)
-             except Exception:
-                 pass
+     def first_token(self) -> None:
+         """Record when the first token was observed from the provider."""
  
-     def _finalize_confirm_abort(
-         trigger: str, metrics: Dict[str, Any], window: ConfirmWindow
-     ) -> None:
-         if confirm_window_ref[0] is not window:
-             return
-         if manual_button_down[0] or manual_turn_active[0]:
-             _cancel_confirm_timeout()
-             confirm_window_ref[0] = None
-             _reset_confirm_debug(None)
-             confirm_flow_parent_id[0] = None
-@@ -2652,51 +2882,63 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             turn_id_hint = _flow_turn_id_hint()
-             if (
-                 not is_timeout
-                 and reason_lower not in system_abort_reasons
-                 and turn_id_hint not in flow_turn_abort_emitted
-             ):
-                 flow_turn_abort_emitted.add(turn_id_hint)
-                 flow_turn_commit_emitted.discard(turn_id_hint)
-                 abort_reason = reason_value or "abort"
-                 _emit_flow_event(
-                     "turn_abort",
-                     phase="turn",
-                     meta={"reason": abort_reason},
-                 )
-             close_reason = "timeout" if is_timeout else "abort"
-             confirm_close_event_id = _emit_flow_event(
-                 "confirm_close",
-                 phase="turn",
-                 meta={"reason": close_reason},
-             )
-         else:
-             confirm_close_event_id = ""
-         if confirm_close_event_id:
-             _emit_gate_checks(window, data, confirm_close_event_id, reason_lower)
-         _flush_confirm_debug_batches()
--        _jlog("confirm_abort", sid=sid, **data)
-+        cancel_payload: Dict[str, Any] = {
-+            "sid": sid,
-+            "turn_id": turn_id_ref[0],
-+            **data,
-+        }
-+        cancel_payload.update(
-+            make_source_meta(
-+                _classify_cancel_source(data.get("reason")),
-+                gates=_current_gate_snapshot(),
-+                evidence=_make_cancel_evidence(data.get("reason")),
-+            )
-+        )
-+        _jlog("confirm_abort", **cancel_payload)
-         _on_local_vad_stop()
-         if barge.is_paused():
-             if manual_button_down[0]:
-                 return
-             try:
-                 barge.cancel(_send_barge_state)
-             except Exception:
-                 pass
+         self._first_token_monotonic = time.monotonic()
  
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "EVT_CONFIRM_ABORT",
-                 sid=sid,
-                 turn=turn_id_ref[0],
-                 reason=data.get("reason"),
-                 elapsed_ms=data.get("elapsed_ms"),
-                 snr_db=data.get("snr_db"),
-                 partials=data.get("partial_tokens"),
-                 conf=data.get("partial_confidence"),
-             )
- 
-     def _open_confirm_window(
-         now_ts: float,
+     def final(
+         self,
          *,
-         min_ms: int,
-@@ -2792,56 +3034,72 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         if idle_evidence_required and turn_commit_mode_ref[0] == "vad" and not _idle_evidence_ready():
+         tokens_out: Optional[int] = None,
+         tokens_in: Optional[int] = None,
+         finish_reason: Optional[object] = None,
+         text: Optional[str] = None,
+         chars: Optional[int] = None,
+     ) -> None:
+         """Emit the ``llm_final`` event when output text is ready."""
+ 
+         if not self._started or not self.session_id or not self.phase:
              return
-         pending_confirm_request[0] = None
-         effective_now = now_ts if now_ts is not None else time.time()
-         _open_confirm_window(
-             effective_now,
-             min_ms=request.get("min_ms", confirm_min_ms),
-             max_ms_local=request.get("max_ms_local", confirm_max_ms),
-             snr_threshold=request.get("snr_threshold", confirm_snr_db),
-             policy_until_asr_ready=bool(request.get("policy_until_asr_ready")),
-             is_first_turn=bool(request.get("is_first_turn")),
-         )
- 
-     def _cancel_tts_mask_release() -> None:
-         task = tts_mask_release_task[0]
-         if task and not task.done():
-             task.cancel()
-         tts_mask_release_task[0] = None
-         tts_mask_release_deadline[0] = 0.0
- 
-     def _mark_tts_mask_off(turn_id: Any, hold_ms: int) -> None:
-         previously_active = tts_mask_active[0]
-         tts_mask_active[0] = False
-         tts_mask_mode[0] = barge_suppress_mode or "none"
-         tts_mask_release_deadline[0] = 0.0
-+        mask_source = "assistant_audio_end"
-+        if hold_ms > 0:
-+            mask_source = "policy_hold"
-+        elif manual_button_down[0]:
-+            mask_source = "manual_override"
-         with contextlib.suppress(Exception):
-+            mask_meta = make_tts_mask_meta(
-+                mask_source,
-+                gates=_current_gate_snapshot(),
-+                evidence={
-+                    "utterance_id": str(turn_id)
-+                    if turn_id not in (None, "", "greet")
-+                    else None,
-+                    "post_tts_hold_ms": max(0, hold_ms),
-+                },
-+            )
-             _jlog(
-                 "EVT_TTS_MASK_OFF",
-                 sid=sid,
-                 turn_id=turn_id,
-                 post_hold_ms=max(0, hold_ms),
-+                **mask_meta,
-             )
-         if previously_active:
-             _maybe_start_pending_confirm()
-         _schedule_vad_state(True, "idle")
- 
-     async def _await_tts_mask_release(delay_ms: int, turn_id: Any) -> None:
-         try:
-             await asyncio.sleep(max(0.0, delay_ms / 1000.0))
-             _mark_tts_mask_off(turn_id, delay_ms)
-         except asyncio.CancelledError:
-             return
-         finally:
-             if tts_mask_release_task[0] is asyncio.current_task():
-                 tts_mask_release_task[0] = None
- 
-     def _start_confirm_window(now_ts: float) -> None:
-         if not local_vad_allowed:
-             _jlog("confirm_skip_local_vad_disabled", sid=sid)
-             return
-         if _manual_mode_active():
-             try:
-                 active_turn = bus.current_assistant_turn(sid)
-             except Exception:
-                 active_turn = None
-             tts_state, _ = _lookup_tts_state(sid, active_turn)
-@@ -2969,86 +3227,88 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         elif decision.action == "abort" and decision.metrics is not None:
-             _finalize_confirm_abort(
-                 decision.metrics.get("reason") or "partial",
-                 decision.metrics,
-                 window,
-             )
- 
-     def _handle_asr_partial_with_flow(ev: Dict[str, Any]) -> None:
-         allow_barge, _, _, _ = _decide_barge_attempt("vad")
-         if not allow_barge:
-             return
-         try:
-             _handle_confirm_partial(ev)
-         except Exception:
-             pass
- 
-         last_partial_ts[0] = time.time()
- 
-         raw_conf = ev.get("confidence") if isinstance(ev, dict) else None
-         conf_val: Optional[float]
-         try:
-             conf_val = float(raw_conf) if raw_conf is not None else None
-         except (TypeError, ValueError):
-             conf_val = None
-         last_partial_conf[0] = conf_val
-+        _update_barge_state(last_partial_conf=conf_val)
- 
-         speech_ms_val: Optional[int] = None
-         if isinstance(ev, dict):
-             raw_speech = ev.get("speech_ms")
-             if raw_speech is not None:
-                 try:
-                     speech_ms_val = int(float(raw_speech))
-                 except (TypeError, ValueError):
-                     speech_ms_val = None
-         if speech_ms_val is not None and speech_ms_val >= 0:
-             last_partial_speech_ms[0] = speech_ms_val
-             if turn_timing is not None:
-                 with contextlib.suppress(Exception):
-                     holder = turn_timing.setdefault("voiced_ms", [0])
-                     if not holder:
-                         turn_timing["voiced_ms"] = [speech_ms_val]
-                     elif speech_ms_val > holder[0]:
-                         holder[0] = speech_ms_val
- 
-         if turn_timing is not None:
-             with contextlib.suppress(Exception):
-                 holder = turn_timing.setdefault("first_partial", [0.0])
-                 if not holder[0]:
-                     holder[0] = time.time()
- 
-         if not asr_partial_first_emitted[0]:
-             asr_partial_first_emitted[0] = True
-             meta_conf = conf_val if conf_val is not None else 0.0
-             _emit_transition_event(
-                 "asr_partial_first",
-                 meta={"conf": meta_conf},
-                 phase="asr",
-             )
- 
-         if conf_val is not None and conf_val >= confirm_min_conf:
-             last_confident_partial_conf[0] = conf_val
-+            _update_barge_state(last_confident_conf=conf_val)
-             _maybe_emit_evidence_gate(conf_val)
- 
-         if pending_confirm_request[0] and idle_evidence_required and turn_commit_mode_ref[0] == "vad":
-             _maybe_start_pending_confirm(time.time())
- 
-     def _ensure_confirm_closed(reason: str) -> None:
-         window = confirm_window_ref[0]
-         if not window:
-             return
-         decision = window.cancel(reason, time.time())
-         if decision.action == "abort" and decision.metrics is not None:
-             _finalize_confirm_abort(reason, decision.metrics, window)
- 
-     def _schedule_vad_state(enabled: bool, reason: str, *, force: bool = False) -> None:
-         desired = bool(enabled)
-         reason_norm = reason if reason in {"tts", "hold", "idle"} else (
-             "idle" if desired else "tts"
-         )
-         if not force and vad_desired_state[0] == desired and vad_last_reason[0] == reason_norm:
-             return
-         vad_desired_state[0] = desired
-         vad_last_reason[0] = reason_norm
-         _jlog("asr_vad_state", sid=sid, enabled=desired, reason=reason_norm)
- 
-         async def _apply() -> None:
-@@ -3070,158 +3330,182 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         if task and not task.done():
-             task.cancel()
-         if loop.is_closed():
-             vad_apply_task[0] = None
-             return
-         new_task = asyncio.create_task(_apply())
-         vad_apply_task[0] = new_task
- 
-         def _clear(done: asyncio.Task) -> None:
-             if vad_apply_task[0] is done:
-                 vad_apply_task[0] = None
- 
-         new_task.add_done_callback(_clear)
-             
-     def _on_assistant_tts_start(turn_id: Any) -> None:
-         assistant_speaking[0] = True
-         mode = (barge_suppress_mode or "none").strip() or "none"
-         mask_engaged = mode != "none"
-         tts_mask_mode[0] = mode
-         if mask_engaged:
-             tts_mask_active[0] = True
+         meta: dict[str, object] = {}
+         if self.turn_id:
+             meta["turn_id"] = str(self.turn_id)
+         prompt_tokens = _coerce_int(tokens_in)
+         if prompt_tokens is not None and prompt_tokens >= 0:
+             meta["tokens_in"] = prompt_tokens
+         token_count = _coerce_int(tokens_out)
++        char_count: Optional[int] = None
+         if token_count is not None and token_count >= 0:
+             meta["tokens_out"] = token_count
          else:
-             tts_mask_active[0] = False
-         _cancel_tts_mask_release()
-         with contextlib.suppress(Exception):
--            _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode)
-+            mask_meta = make_tts_mask_meta(
-+                "assistant_audio_start",
-+                gates=_current_gate_snapshot(tts_override=True),
-+                evidence={
-+                    "utterance_id": str(turn_id)
-+                    if turn_id not in (None, "", "greet")
-+                    else None,
-+                },
-+            )
-+            _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode, **mask_meta)
-         _schedule_vad_state(False, "tts")
-         _ensure_confirm_closed("tts_start")
-         if not manual_button_down[0]:
-             with contextlib.suppress(Exception):
-                 barge.cancel(_send_barge_state)
- 
-     def _on_assistant_tts_end(turn_id: Any) -> None:
-         assistant_speaking[0] = False
-         now_ts = time.time()
-         if turn_timing is not None:
-             with contextlib.suppress(Exception):
-                 holder = turn_timing.setdefault("tts_end", [0.0])
-                 holder[0] = now_ts
-         tts_last_end_ts[0] = now_ts
-         if turn_id in (None, "", "greet"):
-             _maybe_emit_greet_end(via="tts_end")
-         if tts_mask_active[0] and barge_post_tts_hold_ms > 0:
-             delay_ms = barge_post_tts_hold_ms
-             _cancel_tts_mask_release()
-             tts_mask_release_deadline[0] = time.time() + (delay_ms / 1000.0)
-             tts_mask_release_task[0] = asyncio.create_task(
-                 _await_tts_mask_release(delay_ms, turn_id)
-             )
-             _schedule_vad_state(False, "hold", force=True)
-         elif tts_mask_active[0]:
-             _cancel_tts_mask_release()
-             _mark_tts_mask_off(turn_id, 0)
-         else:
-             _cancel_tts_mask_release()
-             _mark_tts_mask_off(turn_id, 0)
- 
-     def _on_asr_connect_ok() -> None:
-         already_ready = asr_ready[0]
-         asr_ready[0] = True
-         if not already_ready:
-             with contextlib.suppress(Exception):
-                 delta_ms = int(max(0.0, (time.time() - ws_open_ts) * 1000))
-                 _jlog("EVT_ASR_READY", sid=sid, t_ms_since_ws=delta_ms)
-         _maybe_start_pending_confirm()
- 
-     def _on_local_vad_start() -> None:
-         local_vad_open[0] = True
-+        _note_client_vad_start(time.time())
-         _maybe_emit_evidence_gate()
- 
-     def _on_local_vad_stop() -> None:
-         local_vad_open[0] = False
-+        _note_client_vad_stop()
- 
-     def _open_turn_for_ptt(now_ts: float, *, pause_tts: bool = False) -> None:
-         manual_button_down[0] = True
-+        _note_manual_down(now_ts)
-         _ensure_confirm_closed("ptt_start")
-         if pause_tts:
-             try:
-                 barge.start(
-                     confirm_ms=0,
-                     on_commit=_on_barge_commit,
-                     send_state=_send_barge_state,
-                     auto_commit=False,
-                 )
-             except Exception:
-                 pass
-         if manual_turn_active[0] or ptt_turn_preopened[0]:
-             manual_turn_active[0] = True
-             return
+             char_count = _coerce_int(chars)
+             if char_count is None:
+                 char_count = len(text or "")
+             if char_count < 0:
+                 char_count = 0
+             meta["chars"] = char_count
++        extra_evidence: Dict[str, object] = {}
++        if prompt_tokens is not None and prompt_tokens >= 0:
++            extra_evidence["tokens_in"] = prompt_tokens
++        if token_count is not None and token_count >= 0:
++            extra_evidence["tokens_out"] = token_count
++        if char_count is not None and char_count >= 0:
++            extra_evidence["chars"] = char_count
++        if finish_reason is not None:
++            try:
++                extra_evidence["finish_reason"] = str(finish_reason)
++            except Exception:
++                pass
++        self._annotate_meta(meta, extra=extra_evidence)
          try:
-             current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
-         except Exception:
-             current_assistant_turn_ref[0] = None
-         manual_turn_active[0] = True
-         manual_commit_pending[0] = True
-         active_turn_mode_ref[0] = "manual"
-         turn_commit_mode_ref[0] = "manual"
-         turn_id = buf.turn_seq + 1
-         turn_id_ref[0] = turn_id
-         pending_confirm_request[0] = None
-         confirm_window_ref[0] = None
-         local_vad_meta_sent[0] = False
-         local_vad_open[0] = False
-         buffered_chunks.clear()
-         sent_any_audio[0] = False
-         final_seen[0] = False
-         asr_seen_partial[0] = False
-         last_partial_conf[0] = None
-         last_partial_speech_ms[0] = 0
-         last_partial_text[0] = ""
-         turn_connect_started[0] = False
-         turn_stream_committed[0] = False
-         asr_direct_stream[0] = False
-         _cancel_asr_stream_activation()
-         _cancel_asr_not_ready_timeout()
-         mic_chunks.clear()
-         mic_first_ts[0] = now_ts
-         mic_last_ts[0] = now_ts
-+        _update_barge_state(
-+            last_partial_conf=None,
-+            last_confident_conf=None,
-+            last_audio_ts_ms=_coerce_ts_ms(now_ts),
-+        )
-         _reset_turn_metrics(now_ts)
-         _schedule_no_audio_watch(turn_id)
-         with contextlib.suppress(Exception):
-             pending_final_turns.append(turn_id)
-             completed_llm_turns.discard(turn_id)
-         with contextlib.suppress(Exception):
--            _jlog(
--                "turn_start",
--                sid=sid,
--                turn_id=turn_id,
--                first_bytes=0,
--                commit_mode="manual",
--                auto_commit=False,
--                ts_ms=int(time.time() * 1000),
-+            turn_payload: Dict[str, Any] = {
-+                "sid": sid,
-+                "turn_id": turn_id,
-+                "first_bytes": 0,
-+                "commit_mode": "manual",
-+                "auto_commit": False,
-+                "ts_ms": int(time.time() * 1000),
-+            }
-+            turn_payload.update(
-+                make_source_meta(
-+                    _resolve_turn_open_source("manual"),
-+                    gates=_current_gate_snapshot(),
-+                    evidence=_make_barge_evidence(),
-+                )
+             flow_emit(
+                 session_id=self.session_id,
+                 level="flow",
+                 phase=self.phase,
+                 type="llm_final",
+                 who=self.who,
+                 meta=meta or None,
              )
-+            _jlog("turn_start", **turn_payload)
-         ptt_turn_preopened[0] = True
- 
-     def _handle_bus_frame(frame: Dict[str, Any]) -> None:
-         ftype_raw = frame.get("type")
-         ftype = (ftype_raw or "").lower()
-         if not ftype:
-             return
-         turn_id = frame.get("turn_id")
-         if ftype in {"tts_start", "assistant_audio", "tts:start"}:
-             _on_assistant_tts_start(turn_id)
-             if ftype == "assistant_audio":
-                 is_last_val = frame.get("is_last")
-                 is_last = False
-                 if isinstance(is_last_val, bool):
-                     is_last = is_last_val
-                 elif isinstance(is_last_val, str):
-                     is_last = is_last_val.strip().lower() in {"1", "true", "yes"}
-                 elif isinstance(is_last_val, (int, float)):
-                     is_last = bool(is_last_val)
-                 if is_last:
-                     _on_assistant_tts_end(turn_id)
-         elif ftype in {
-             "utteranceend",
-             "utterance_end",
-             "tts_end",
-@@ -3467,61 +3751,78 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         dual_evidence = True if event_mode == "manual" else _has_dual_evidence()
-         asr_ready_flag = bool(asr_ready[0])
-         target_turn = current_assistant_turn_ref[0]
-         try:
-             latest = bus.current_assistant_turn(sid)
-             if latest:
-                 target_turn = latest
-         except Exception:
-             pass
-         cancel_reason: Optional[str] = None
-         if target_turn:
-             with contextlib.suppress(Exception):
-                 bus.cancel_turn(sid, target_turn)
-                 cancel_reason = "assistant_cancel"
-         last_ready_signal_after[0] = cancel_reason
-         _send_barge_state("ready")
-         if last_ready_signal_after[0]:
-             with contextlib.suppress(Exception):
-                 _jlog(
-                     "EVT_READY_SIGNAL",
-                     sid=sid,
-                     after=last_ready_signal_after[0],
-                     turn=turn_id_ref[0],
-                 )
-             last_ready_signal_after[0] = None
--        _jlog(
--            "turn_committed",
--            sid=sid,
--            mode=mode,
--            manual=(mode == "manual"),
--            auto_commit=(mode == "auto_commit"),
--            turn_id=turn_id_ref[0],
--            ts_ms=int(time.time() * 1000),
--            admin_event="turn_committed",
--            admin_label="turn_committed",
-+        commit_metrics = dict(_barge_state().get("last_commit_metrics") or {})
-+        commit_reason = commit_metrics.get("reason")
-+        commit_source = _classify_commit_source(mode or "", commit_reason)
-+        commit_payload: Dict[str, Any] = {
-+            "sid": sid,
-+            "mode": mode,
-+            "manual": mode == "manual",
-+            "auto_commit": mode == "auto_commit",
-+            "turn_id": turn_id_ref[0],
-+            "ts_ms": int(time.time() * 1000),
-+            "admin_event": "turn_committed",
-+            "admin_label": "turn_committed",
-+        }
-+        commit_payload.update(
-+            make_source_meta(
-+                commit_source,
-+                gates=_current_gate_snapshot(),
-+                evidence=_make_commit_evidence(commit_reason),
-+            )
-+        )
-+        _jlog("turn_committed", **commit_payload)
-+        endpoint_source = (
-+            "silence_timer"
-+            if commit_source == "silence_timeout"
-+            else "manual_release" if commit_source == "manual_release" else "asr_endpoint"
-         )
-+        _emit_endpoint_event(turn_id_ref[0], endpoint_source, commit_reason)
-+        _update_barge_state(last_commit_metrics=None, policy_triggered=False)
-         commit_event_id = ""
-         if post_greet_phase_active[0]:
-             turn_id_hint = _flow_turn_id_hint()
-             if turn_id_hint not in flow_turn_commit_emitted:
-                 flow_turn_commit_emitted.add(turn_id_hint)
-                 flow_turn_abort_emitted.discard(turn_id_hint)
-                 commit_event_id = _emit_flow_event(
-                     "turn_commit",
-                     phase="turn",
-                     meta={"turn_id": turn_id_hint},
-                 )
-         if not commit_event_id:
-             parent_event_id = confirm_flow_parent_id[0] or ""
-         else:
-             parent_event_id = commit_event_id
-         if parent_event_id:
-             tts_end_ts = turn_timing.get("tts_end", [0.0])[0]
-             first_partial_ts = turn_timing.get("first_partial", [0.0])[0]
-             if tts_end_ts and first_partial_ts and first_partial_ts >= tts_end_ts:
-                 latency_ms = int(max(0.0, (first_partial_ts - tts_end_ts) * 1000))
-                 _emit_debug_event(
-                     "latency_tick",
-                     phase="turn",
-                     parent_id=parent_event_id,
-                     meta={
-@@ -4212,50 +4513,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- 
-                         commit_mode = "vad"
-                         if manual_turn_active[0]:
-                             commit_mode = "manual"
-                         elif manual_mode_manual_only:
-                             if not auto_commit_when_ready:
-                                 _jlog(
-                                     "manual_mode_voice_chunk_ignored",
-                                     sid=sid,
-                                     bytes=len(raw_chunk or b""),
-                                     reason="auto_commit_disabled",
-                                 )
-                                 continue
-                             if not _session_ready_for_auto_commit():
-                                 _jlog(
-                                     "manual_mode_voice_chunk_ignored",
-                                     sid=sid,
-                                     bytes=len(raw_chunk or b""),
-                                     reason="session_not_ready",
-                                 )
-                                 continue
-                             commit_mode = "auto_commit"
- 
-                         active_turn_mode_ref[0] = commit_mode
-                         turn_commit_mode_ref[0] = commit_mode
-+                        _update_barge_state(
-+                            policy_triggered=commit_mode == "auto_commit"
-+                        )
-                         if commit_mode != "manual":
-                             manual_commit_pending[0] = False
- 
-                         confirm_ms = 420
-                         try:
-                             confirm_ms = int(cfg.get("confirm_ms", 420) or 0)
-                         except Exception:
-                             confirm_ms = 420
-                         barge_started = False
-                         should_pause = not (
-                             manual_mode_manual_only and commit_mode == "auto_commit"
-                         )
-                         if should_pause:
-                             active_assistant_turn = current_assistant_turn_ref[0]
-                             tts_state, _tts_key = _lookup_tts_state(
-                                 sid, active_assistant_turn
-                             )
-                             if _is_tts_active(tts_state):
-                                 should_pause = False
-                                 try:
-                                     _jlog(
-                                         "barge_skip_tts_active",
-                                         sid=sid,
-                                         turn_hint=turn_hint,
-                                     )
-@@ -4302,62 +4606,74 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                     barge.commit(_send_barge_state)
-                                 except Exception:
-                                     pass
-                             else:
-                                 _start_confirm_window(now)
-                         else:
-                             confirm_window_ref[0] = None
-                             local_vad_meta_sent[0] = False
-                             local_vad_open[0] = False
-                         with contextlib.suppress(Exception):
-                             pending_final_turns.append(turn_id_ref[0])
-                             completed_llm_turns.discard(turn_id_ref[0])
-                         final_seen[0] = False
-                         asr_seen_partial[0] = False
-                         sent_any_audio[0] = False
-                         buffered_chunks.clear()
-                         turn_connect_started[0] = False
-                         turn_stream_committed[0] = False
-                         asr_direct_stream[0] = False
-                         _cancel_asr_stream_activation()
-                         _cancel_asr_not_ready_timeout()
-                         # reset mic capture
-                         mic_chunks.clear()
-                         mic_first_ts[0] = now
-                         mic_last_ts[0] = now
-+                        _update_barge_state(
-+                            last_partial_conf=None,
-+                            last_confident_conf=None,
-+                            last_audio_ts_ms=_coerce_ts_ms(now),
-+                        )
-                         _reset_turn_metrics(now)
-                         _schedule_no_audio_watch(turn_id_ref[0])
-                         with contextlib.suppress(Exception):
--                            _jlog(
--                                "turn_start",
--                                sid=sid,
--                                turn_id=turn_id_ref[0],
--                                first_bytes=len(raw_chunk),
--                                commit_mode=commit_mode,
--                                auto_commit=(commit_mode == "auto_commit"),
--                                ts_ms=int(time.time() * 1000),
-+                            turn_payload: Dict[str, Any] = {
-+                                "sid": sid,
-+                                "turn_id": turn_id_ref[0],
-+                                "first_bytes": len(raw_chunk),
-+                                "commit_mode": commit_mode,
-+                                "auto_commit": commit_mode == "auto_commit",
-+                                "ts_ms": int(time.time() * 1000),
-+                            }
-+                            turn_payload.update(
-+                                make_source_meta(
-+                                    _resolve_turn_open_source(commit_mode),
-+                                    gates=_current_gate_snapshot(),
-+                                    evidence=_make_barge_evidence(),
-+                                )
-                             )
-+                            _jlog("turn_start", **turn_payload)
-                         if commit_mode == "auto_commit":
-                             try:
-                                 _on_barge_commit("auto")
-                             except Exception:
-                                 pass
-                     elif preopened_turn:
-                         ptt_turn_preopened[0] = False
-                     # Detect container early using raw bytes
- 
-                     # Detect container early
+             if self._start_event_id:
+                 stream_items = []
+                 now = time.monotonic()
+                 if self._start_monotonic:
+                     dt_ms = int(max(0.0, (now - self._start_monotonic) * 1000))
+                 else:
+                     dt_ms = 0
+                 bytes_len = 0
+                 if text:
                      try:
-                         if transport.get("container") is None and raw_chunk:
-                             det = sniffer.feed(raw_chunk)
-                             if det:
-                                 container = getattr(det, "container", None)
-                                 codec = getattr(det, "codec", None)
-                                 containerized = bool(
-                                     getattr(det, "containerized", codec == "opus")
-                                 )
-                                 transport["container"] = container
-                                 transport["codec"] = codec
-                                 transport["containerized_opus"] = containerized
-                                 _jlog(
-                                     "sniffer_detect",
-                                     sid=sid,
-@@ -4379,50 +4695,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                             meta_det, "containerized", codec == "opus"
-                                         )
-                                     )
-                                     transport["container"] = container
-                                     transport["codec"] = codec
-                                     transport["containerized_opus"] = containerized
-                                     _jlog(
-                                         "sniffer_detect",
-                                         sid=sid,
-                                         container=transport.get("container"),
-                                         codec=transport.get("codec"),
-                                         containerized_opus=transport.get(
-                                             "containerized_opus"
-                                         ),
-                                     )
+                         bytes_len = len((text or "").encode("utf-8"))
+                     except Exception:
+                         bytes_len = len(text or "")
+                 stream_items.append({"dt_ms": dt_ms, "bytes": bytes_len})
+                 debug_meta: dict[str, object] = {}
+                 queue_start = self._queue_start_monotonic or self._start_monotonic
+                 queue_end = self._queue_end_monotonic or self._start_monotonic
+                 if queue_start is not None and queue_end is not None:
+                     queue_ms = int(max(0.0, (queue_end - queue_start) * 1000))
+                     debug_meta["queue_ms"] = queue_ms
+                 base = queue_end or queue_start or self._start_monotonic
+                 if base is not None:
+                     if self._first_token_monotonic is not None:
+                         first_token_ms = int(
+                             max(0.0, (self._first_token_monotonic - base) * 1000)
+                         )
+                         debug_meta["first_token_ms"] = first_token_ms
+                     full_ms = int(max(0.0, (now - base) * 1000))
+                     debug_meta["full_ms"] = full_ms
+                 if prompt_tokens is not None and prompt_tokens >= 0:
+                     debug_meta["tokens_in"] = prompt_tokens
+                 if token_count is not None and token_count >= 0:
+                     debug_meta["tokens_out"] = token_count
+                 if finish_reason is not None:
+                     try:
+                         reason_text = str(finish_reason)
+                     except Exception:
+                         reason_text = None
+                     if reason_text:
+                         debug_meta["finish_reason"] = reason_text
+                 if debug_meta:
++                    self._annotate_meta(debug_meta)
+                     try:
+                         flow_emit(
+                             session_id=self.session_id,
+                             level="debug",
+                             phase=self.phase,
+                             type="llm_latency",
+                             who=self.who,
+                             meta=debug_meta,
+                             parent_id=self._start_event_id,
+                         )
                      except Exception:
                          pass
+                 try:
+                     add_batch(self._start_event_id, "llm_stream", stream_items)
+                 except Exception:
+                     pass
+         except Exception:
+             pass
+         self._started = False
+         self._start_event_id = None
+         self._start_monotonic = None
+         self._queue_start_monotonic = None
+         self._queue_end_monotonic = None
+         self._first_token_monotonic = None
  
-                     chunk = raw_chunk
-                     buf.append(chunk)
+     def error(
+         self,
+         code: Optional[object] = None,
+         *,
+         state: Optional[dict[str, object]] = None,
+     ) -> None:
+         """Emit an ``llm_error`` transition with the provided code."""
  
-                     # capture bytes for diagnostic playback
-                     if MIC_CAPTURE:
-                         mic_chunks.append(chunk)
-                         mic_last_ts[0] = now
-+                    _update_barge_state(last_audio_ts_ms=_coerce_ts_ms(now))
-                     _jlog(
-                         "mic_capture_append",
-                         sid=sid,
-                         turn_id=turn_id_ref[0],
-                         chunks=len(mic_chunks),
-                         last_bytes=len(chunk),
-                         ts_ms=int(time.time() * 1000),
-                     )
- 
-                     _handle_confirm_chunk(raw_chunk, now)
- 
-                     if not _has_deepgram_key():
-                         _jlog("ws_audio_no_key", sid=sid, bytes=len(chunk))
-                         continue
- 
-                     # Stage early frames or stream directly when ASR is ready
-                     if chunk:
-                         if callable(final_guard_reset_ref[0]):
-                             with contextlib.suppress(Exception):
-                                 final_guard_reset_ref[0]("chunk")
- 
-                         direct_sent = False
-                         if (
-                             asr_direct_stream[0]
-                             and dg_state == "open"
-@@ -4616,59 +4933,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 now_ts = time.time()
-                                 tts_active_now = allow_state == "TTS_ACTIVE"
-                                 _emit_transition_event(
-                                     "ptt_down",
-                                     meta={"during_tts": bool(tts_active_now)},
-                                     phase="ptt",
-                                 )
-                                 _set_barge_pause_meta("ptt", tts_active=tts_active_now)
-                                 _open_turn_for_ptt(now_ts, pause_tts=tts_active_now)
-                                 ptt_down_emitted[0] = True
-                                 continue
- 
-                             if action == "ptt_up":
-                                 allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
-                                     "ptt"
-                                 )
-                                 if not allow_barge:
-                                     with contextlib.suppress(Exception):
-                                         if allow_reason and allow_reason != "ok":
-                                             _jlog(
-                                                 "ptt_ignored",
-                                                 sid=sid,
-                                                 by=allow_src,
-                                                 state=allow_state,
-                                                 reason=allow_reason,
--                                            )
-+                                        )
-                                     continue
-                                 tts_active_now = allow_state == "TTS_ACTIVE"
-                                 _emit_transition_event(
-                                     "ptt_up",
-                                     meta={"during_tts": bool(tts_active_now)},
-                                     phase="ptt",
-                                 )
-                                 ptt_down_emitted[0] = False
-+                                _note_manual_up()
-                                 continue
- 
-                             if action == "vad_gate_open":
-                                 reason_val = meta_payload.get("reason")
-                                 if reason_val is None:
-                                     reason_val = obj.get("reason")
-                                 if isinstance(reason_val, str):
-                                     reason = reason_val.strip().lower()
-                                 elif reason_val is not None:
-                                     reason = str(reason_val).strip().lower()
-                                 else:
-                                     reason = ""
-                                 if not reason:
-                                     reason = "speech"
-                                 allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
-                                     "vad"
-                                 )
-                                 if not allow_barge:
-                                     with contextlib.suppress(Exception):
-                                         if allow_reason and allow_reason != "ok":
-                                             _jlog(
-                                                 "remote_vad_ignored",
-                                                 sid=sid,
-                                                 by=allow_src,
-                                                 state=allow_state,
-@@ -4722,90 +5040,92 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 )
-                                 _on_local_vad_stop()
-                                 continue
- 
-                             if action == "barge_in_start":
-                                 if manual_feature_enabled:
-                                     allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
-                                         "ptt"
-                                     )
-                                     if not allow_barge:
-                                         with contextlib.suppress(Exception):
-                                             if allow_reason and allow_reason != "ok":
-                                                 _jlog(
-                                                     "manual_barge_ignored",
-                                                     sid=sid,
-                                                     by=allow_src,
-                                                     state=allow_state,
-                                                     reason=allow_reason,
-                                                 )
-                                         continue
-                                     manual_button_down[0] = True
-                                     manual_turn_active[0] = True
-                                     manual_commit_pending[0] = True
-                                     turn_commit_mode_ref[0] = "manual"
-                                     active_turn_mode_ref[0] = "manual"
-+                                    _note_manual_down(time.time())
-                                     _ensure_confirm_closed("manual_start")
-                                     buffered_bytes = _manual_buffered_bytes()
-                                     _manual_log_event(
-                                         "manual_barge_in_start",
-                                         bytes_buffered=buffered_bytes,
-                                         provider_open=dg_state == "open",
-                                     )
-                                     try:
-                                         current_assistant_turn_ref[0] = bus.current_assistant_turn(sid)
-                                     except Exception:
-                                         current_assistant_turn_ref[0] = None
-                                     tts_active_now = allow_state == "TTS_ACTIVE"
-                                     if not ptt_down_emitted[0]:
-                                         _emit_transition_event(
-                                             "ptt_down",
-                                             meta={"during_tts": bool(tts_active_now)},
-                                             phase="ptt",
-                                         )
-                                         ptt_down_emitted[0] = True
-                                     _set_barge_pause_meta("ptt", tts_active=tts_active_now)
-                                     if not barge.is_paused():
-                                         try:
-                                             barge.start(
-                                                 confirm_ms=0,
-                                                 on_commit=_on_barge_commit,
-                                                 send_state=_send_barge_state,
-                                                 auto_commit=False,
-                                             )
-                                         except Exception:
-                                             pass
-                                     try:
-                                         barge.commit(_send_barge_state)
-                                     except Exception:
-                                         manual_commit_pending[0] = False
-                                 continue
-                             if action == "barge_in_end":
-                                 if manual_feature_enabled:
-                                     manual_button_down[0] = False
-                                     manual_turn_active[0] = False
-                                     manual_commit_pending[0] = False
-+                                    _note_manual_up()
-                                     ptt_turn_preopened[0] = False
-                                     turn_commit_mode_ref[0] = "vad"
-                                     buffered_bytes = _manual_buffered_bytes()
-                                     _manual_log_event(
-                                         "manual_barge_in_end",
-                                         bytes_buffered=buffered_bytes,
-                                         provider_open=dg_state == "open",
-                                     )
-                                     tts_active_now = _current_tts_active()
-                                     if ptt_down_emitted[0]:
-                                         _emit_transition_event(
-                                             "ptt_up",
-                                             meta={"during_tts": bool(tts_active_now)},
-                                             phase="ptt",
-                                         )
-                                     ptt_down_emitted[0] = False
-                                 continue
-                             continue
- 
-                         elif t == "Configure":
-                             try:
-                                 cfg.update(obj or {})
-                                 manual_feature_enabled = bool(
-                                     cfg.get("feature_manual_barge_in", manual_feature_enabled)
-                                 )
-@@ -4832,50 +5152,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                             session_id=sid,
-                                             type="session_ready",
-                                             phase="ws",
-                                             who="server",
-                                             meta={
-                                                 "greet": greet_flag,
-                                                 "reset": reset_val,
-                                             },
-                                         )
-                                     except Exception:
-                                         pass
-                                     await _ws_send_json(
-                                         send,
-                                         {
-                                             "type": "ConfigureAck",
-                                             "ok": True,
-                                             "greet": greet_flag,
-                                         },
-                                     )
-                                     configure_ack_sent = True
-                                 if not manual_feature_enabled:
-                                     manual_button_down[0] = False
-                                     manual_turn_active[0] = False
-                                     manual_commit_pending[0] = False
-                                     ptt_turn_preopened[0] = False
-+                                    _note_manual_up()
-                                 greet_seq_raw = obj.get("greet_seq")
-                                 greet_seq: Optional[int] = None
-                                 is_new_greet_seq = True
-                                 if greet_seq_raw is not None:
-                                     try:
-                                         greet_seq = int(greet_seq_raw)
-                                     except Exception:
-                                         greet_seq = None
-                                 if greet_seq is not None and (
-                                     obj.get("greet") or obj.get("reset")
-                                 ):
-                                     try:
-                                         is_new_greet_seq = await _greet_seq_mark_if_new(
-                                             sid, greet_seq
-                                         )
-                                     except Exception:
-                                         is_new_greet_seq = True
-                                 if obj.get("reset"):
-                                     if is_new_greet_seq:
-                                         with contextlib.suppress(Exception):
-                                             clear_greet_turn_cache(sid)
-                                         with contextlib.suppress(Exception):
-                                             _admin_emit and _admin_emit(
-                                                 "greet:reset",
-                                                 route="/ws/v1/chat",
-@@ -5037,50 +5358,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             async def _bg_user():
-                                 try:
-                                     await asyncio.to_thread(
-                                         run_ws_user_turn,
-                                         sid,
-                                         text,
-                                         corr,
-                                         meta_overrides=meta_overrides,
-                                     )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "user_fail", e.__class__.__name__
-                                             ),
-                                         )
-                                     _emit_ws_error("user_fail")
- 
-                             asyncio.create_task(_bg_user())
- 
-                         elif t == "CloseStream":
-                             _jlog("ws_close_stream", sid=sid)
-                             manual_turn_active[0] = False
-                             manual_button_down[0] = False
-+                            _note_manual_up()
-                             ptt_turn_preopened[0] = False
-                             turn_stream_committed[0] = False
-                             _cancel_asr_stream_activation()
-                             _cancel_asr_not_ready_timeout()
- 
-                             # Always define this first so later 'if synthetic_emitted' is safe
-                             synthetic_emitted = False
-                             asr_ready_wait_timed_out = False
-                             force_end_due_to_asr_timeout = False
- 
-                             async def _await_close_asr_ready(
-                                 timeout: float,
-                                 *,
-                                 mark_timeout: bool = True,
-                                 log_cb: Optional[Callable[[], None]] = None,
-                             ) -> bool:
-                                 nonlocal asr_ready_wait_timed_out, force_end_due_to_asr_timeout
-                                 if asr_ready_evt is None:
-                                     return False
-                                 if asr_ready_evt.is_set():
-                                     return True
-                                 if asr_ready_wait_timed_out:
-                                     return False
-                                 if timeout <= 0:
-                                     return False
-@@ -5089,57 +5411,67 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                         asr_ready_evt.wait(), timeout=timeout
-                                     )
-                                     return True
-                                 except asyncio.TimeoutError:
-                                     if mark_timeout:
-                                         asr_ready_wait_timed_out = True
-                                         force_end_due_to_asr_timeout = True
-                                     if log_cb is not None:
-                                         with contextlib.suppress(Exception):
-                                             log_cb()
-                                     return False
- 
-                             if callable(final_guard_local_vad_ref[0]):
-                                 with contextlib.suppress(Exception):
-                                     final_guard_local_vad_ref[0]("stop")
-                             _on_local_vad_stop()
- 
-                             _ensure_confirm_closed("close_stream")
- 
-                             if buf.is_empty():
-                                 # Empty turn closure; synthesize ids + reset final tracking.
-                                 turn_id_ref[0] = buf.turn_seq + 1
-                                 final_seen[0] = False
-                                 _reset_turn_metrics(time.time())
-                                 with contextlib.suppress(Exception):
--                                    _jlog(
--                                        "turn_start",
--                                        sid=sid,
--                                        turn_id=turn_id_ref[0],
--                                        first_bytes=0,
--                                        empty_turn=True,
-+                                    turn_payload: Dict[str, Any] = {
-+                                        "sid": sid,
-+                                        "turn_id": turn_id_ref[0],
-+                                        "first_bytes": 0,
-+                                        "empty_turn": True,
-+                                        "commit_mode": "programmatic",
-+                                        "auto_commit": False,
-+                                        "ts_ms": int(time.time() * 1000),
-+                                    }
-+                                    turn_payload.update(
-+                                        make_source_meta(
-+                                            _resolve_turn_open_source("programmatic"),
-+                                            gates=_current_gate_snapshot(),
-+                                            evidence=_make_barge_evidence(),
-+                                        )
-                                     )
-+                                    _jlog("turn_start", **turn_payload)
- 
-                             # --- Get a turn_id (with guard logs) ---
-                             _jlog(
-                                 "before_close_turn",
-                                 sid=sid,
-                                 next_turn_id=buf.turn_seq + 1,
-                             )
-                             try:
-                                 turn_id, _pcm = buf.close_turn()
-                             except Exception as e:
-                                 _jlog("close_turn_fail", sid=sid, err=type(e).__name__)
-                                 turn_id = turn_id_ref[0] or (buf.turn_seq + 1)
-                                 _pcm = None
-                             _jlog("after_close_turn", sid=sid, turn_id=turn_id)
-                             turn_id_ref[0] = turn_id
- 
-                             # ---- THEN finish the ASR turn (unchanged logic) ----
-                             if _has_deepgram_key():
-                                 # If provider isn't ready yet but we have audio, try to connect now (bounded wait)
-                                 if dg is None and (buffered_chunks or mic_chunks):
-                                     if dg_connect_task is None:
-                                         dg_connect_task = asyncio.create_task(
-                                             _ensure_dg_connected()
-                                         )
-                                     await _await_close_asr_ready(1.2, mark_timeout=False)
-@@ -5517,50 +5849,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         _cancel_asr_not_ready_timeout()
-         task = vad_apply_task[0]
-         if task:
-             with contextlib.suppress(asyncio.CancelledError, Exception):
-                 task.cancel()
-                 await task
-         await _remove_active_ws_entry("cleanup")
-         duration = max(0.0, time.time() - start_ts) if start_ts is not None else None
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "ws_conn_cleanup",
-                 conn_id=conn_id,
-                 sid=sid,
-                 duration=duration,
-                 had_disconnect=had_disconnect,
+         if not self.session_id or not self.phase:
+             return
+         meta: dict[str, object] = {}
+         if code is not None:
+             try:
+                 meta["code"] = str(code)
+             except Exception:
+                 meta["code"] = "unknown"
++        self._annotate_meta(meta, extra={"code": meta.get("code")})
+         try:
+             event_id = flow_emit(
+                 session_id=self.session_id,
+                 level="transition",
+                 phase=self.phase,
+                 type="llm_error",
+                 who=self.who,
+                 meta=meta or None,
              )
-         with contextlib.suppress(Exception):
-             if _admin_emit:
-                 _admin_emit(
-                     "ws_conn_cleanup",
-                     conn_id=conn_id,
-                     sid=sid,
-                     duration=duration,
-                     had_disconnect=had_disconnect,
-                 )
-+        with contextlib.suppress(Exception):
-+            _BARGE_EVENT_STATE.pop(sid, None)
-         # Clean up safely; never raise in cleanup
-         with contextlib.suppress(Exception):
-             if rx_task:
-                 rx_task.cancel()
-                 await rx_task
-         with contextlib.suppress(Exception):
-             if dg is not None:
-                 await dg.close(wait_for_final=False)
-         if bus_task:
-             with contextlib.suppress(Exception):
-                 bus_task.cancel()
-                 await bus_task
-         with contextlib.suppress(Exception):
-             ping_task.cancel()
-             await ping_task
-         if voice_metrics_registered:
-             with contextlib.suppress(Exception):
-                 await _unregister_voice_metrics_subscriber(conn_id)
-         for task in list(confirm_timeout_cancelled):
-             with contextlib.suppress(asyncio.CancelledError, Exception):
-                 await task
-         confirm_timeout_cancelled.clear()
-         with contextlib.suppress(Exception):
-             await _safe_close(1000, "normal_shutdown")
+             if state:
+                 cleaned = {
+                     key: value
+                     for key, value in state.items()
+                     if value is not None
+                 }
+                 try:
+                     flow_emit(
+                         session_id=self.session_id,
+                         level="debug",
+                         phase=self.phase,
+                         type="state_snapshot",
+                         who=self.who,
+                         meta=cleaned or None,
+                         parent_id=event_id or None,
+                     )
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 50419502c060ef71dadd7fd8c2cabf18b071607f..f8a15e27e01ae83bb2ae2adfc8d832f9f5647a32 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -1,47 +1,48 @@
+ # app/services/streaming.py — Production-grade assistant framing
+ # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
+ # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
  
+ from __future__ import annotations
+ from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable, Mapping
+ import base64
+ import hashlib
+ import threading, time as _t
+ import os
+ import re
+ import copy
+ import random
+ 
+ from ..security_state import get_profile, get_user
+ from ..session_state import (
+     get as get_session_state,
+     note_utterance_end,
+     set_phase,
+     should_emit_phase,
+ )
+ from app.flow.emit import emit as flow_emit
++from app.obs.source_tags import make_source_meta
+ from .llm.flow_wrapper import make_llm_flow_tracker
+ from .tts.flow_wrapper import make_tts_flow_tracker
+ def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
+     # 1) Profile name
+     try:
+         prof = get_profile() or {}
+         name = str(prof.get("name") or "").strip()
+         if name:
+             return name.split()[0]
+     except Exception:
+         pass
+     # 2) Email to first name
+     email = None
+     try:
+         email = (meta or {}).get("email")
+     except Exception:
+         email = None
+     if not email:
+         try:
+             email = get_user() or None
+         except Exception:
+             email = None
+     if isinstance(email, str) and "@" in email:
+         first = email.split("@",1)[0].split(".")[0].replace("_"," ").replace("-", " ").strip()
+         if first:
+@@ -318,50 +319,69 @@ def _emit_turn_action_metadata(turn_id: Optional[str],
+     payload: Dict[str, Any] = {
+         "turn_id": turn_id,
+         "is_greet": bool(is_greet),
+         "nlu": {
+             "intent": nlu_meta.get("intent"),
+             "topic": nlu_meta.get("topic"),
+             "needs_scoping": nlu_meta.get("needs_scoping"),
+             "wants_list": nlu_meta.get("wants_list"),
+             "expected_depth": nlu_meta.get("expected_depth"),
+             "confidence": nlu_meta.get("confidence"),
+         },
+         "policy": policy_payload,
+     }
+     session_id_value: Optional[str] = None
+     if session_id:
+         session_id_value = str(session_id)
+     elif isinstance(meta, dict):
+         sid_candidate = meta.get("session_id") or meta.get("sid")
+         if sid_candidate:
+             try:
+                 session_id_value = str(sid_candidate)
+             except Exception:
+                 session_id_value = sid_candidate  # type: ignore[assignment]
+     if session_id_value:
+         payload["session_id"] = session_id_value
++    evidence_payload: Dict[str, Any] = {}
++    intent_val = payload.get("nlu", {}).get("intent") if isinstance(payload.get("nlu"), dict) else None
++    if intent_val:
++        evidence_payload["intent"] = intent_val
++    action_val = policy_payload.get("action")
++    if action_val:
++        evidence_payload["action"] = action_val
++    show_suggestions_val = policy_payload.get("show_suggestions")
++    if show_suggestions_val is not None:
++        evidence_payload["show_suggestions"] = bool(show_suggestions_val)
++    try:
++        payload.update(
++            make_source_meta(
++                "turn_action_metadata",
++                evidence=evidence_payload or None,
++            )
++        )
++    except Exception:
++        pass
+     try:
+         _admin_emit("turn_action_metadata", **payload)
+     except Exception:
+         pass
+     _broadcast_admin_ws_event("turn_action_metadata", payload)
+ 
+ 
+ def _get_persona_for_session(session_id: str) -> Dict:
+     try:
+         sess = db.memory.get('sessions', {}).get(session_id) or {}
+         persona_id = (sess.get('persona_id') or 'chip')
+         return db.memory.get('personas', {}).get(persona_id) or {'id': 'chip'}
+     except Exception:
+         return {'id': 'chip'}
+ 
+ 
+ def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher_move: Optional[str]) -> str:
+     parts = [build_persona_preamble(persona)]
+     if kb_snippets:
+         parts.append(format_kb_context(kb_snippets))
+     if teacher_move:
+         parts.append(f"Teacher move: {teacher_move}.")
+     parts.append(f"User said: {seed_text.strip()}")
+     return "\n\n".join(parts)
+ 
+@@ -564,50 +584,67 @@ def _log_policy_decision(*,
+ 
+         payload: Dict[str, Any] = {
+             "sid": session_id,
+             "turn_id": turn_id,
+             "teacher_move": resolved_move_name or None,
+             "teacher_move_family": _teacher_move_family(resolved_move_name),
+             "reason": reason,
+             "fallback_fired": bool(fallback_fired),
+             "fallback_reason": fallback_reason,
+             "nlu_intent": nlu_intent,
+             "nlu_confidence": nlu_confidence,
+         }
+         if session_id:
+             try:
+                 payload["session_id"] = str(session_id)
+             except Exception:
+                 payload["session_id"] = session_id  # type: ignore[assignment]
+         if normalized_action_name:
+             payload["meta_action"] = normalized_action_name
+         if policy_move_name:
+             payload["policy_move"] = policy_move_name
+         if seed_move_name and seed_move_name != resolved_move_name:
+             payload["persona_move"] = seed_move_name
+         if used_docs:
+             payload["used_docs"] = used_docs
++        evidence_payload: Dict[str, Any] = {
++            "reason": reason,
++            "policy_move": policy_move_name,
++            "meta_action": normalized_action_name,
++        }
++        teacher_move_val = resolved_move_name or seed_move_name
++        if teacher_move_val:
++            evidence_payload["teacher_move"] = teacher_move_val
++        try:
++            payload.update(
++                make_source_meta(
++                    "dialog_policy",
++                    evidence={k: v for k, v in evidence_payload.items() if v},
++                )
++            )
++        except Exception:
++            pass
+         _jlog("policy.decision", **payload)
+ 
+         if callable(_admin_emit):
+             label_move = (
+                 resolved_move_name
+                 or policy_move_name
+                 or normalized_action_name
+                 or seed_move_name
+                 or "unknown"
+             )
+             try:
+                 _admin_emit(
+                     "policy_decision",
+                     event="policy_decision",
+                     label=f"policy_decision: {label_move}",
+                     decision=label_move,
+                     **payload,
+                 )
+             except Exception:
+                 pass
+         _broadcast_admin_ws_event("policy_decision", payload)
+     except Exception:
+         pass
+ 
+ 
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 9e1b3ab1dc17658141b36e05eb0198bd7e4ca093..8ad7bb0031cd3046ecd3693f5e97f926927a0191 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -1,40 +1,41 @@
+ from __future__ import annotations
+ 
+ import asyncio
+ import json
+ import logging
+ import os
+ import re
+ import time
+ import warnings
+ from typing import AsyncGenerator, Optional, Any, Deque, Tuple, Callable
+ from collections import deque
+ 
+ import websockets  # provided by uvicorn[standard]
+ 
+ from app.flow.emit import emit as flow_emit
++from app.obs.source_tags import make_source_meta
+ from app.ws.bus import bus as stream_bus
+ 
+ from .asr_metrics import record_turn_metrics
+ 
+ try:
+     from app.admin_log import emit as _admin_emit
+ except Exception:  # pragma: no cover - extremely defensive
+ 
+     def _admin_emit(*a, **k):  # type: ignore[empty-body]
+         pass
+ 
+ try:
+     from websockets import exceptions as _ws_exceptions  # type: ignore[attr-defined]
+ except Exception:  # pragma: no cover - extremely defensive
+     _ws_exceptions = None  # type: ignore[assignment]
+ else:
+     _invalid_types = []
+     with warnings.catch_warnings():
+         warnings.simplefilter("ignore", DeprecationWarning)
+         for _name in ("InvalidStatus", "InvalidStatusCode"):
+             _cls = getattr(_ws_exceptions, _name, None)
+             if isinstance(_cls, type):
+                 _invalid_types.append(_cls)
+     _INVALID_STATUS_TYPES = tuple(_invalid_types)
+ if "_INVALID_STATUS_TYPES" not in globals():
+@@ -727,50 +728,56 @@ class DeepgramClient:
+         self._turn_counter: int = 0
+         self._turn_current_id: Optional[int] = None
+         self._turn_active: bool = False
+         self._turn_start_ts: float = 0.0
+         self._turn_first_partial_ts: float = 0.0
+         self._turn_final_ts: float = 0.0
+         self._turn_bytes_baseline: int = 0
+         self._turn_metrics_recorded: bool = False
+         self._turn_saw_1011: bool = False
+         self._turn_last_close_code: Optional[int] = None
+         self._turn_first_partial_emitted: bool = False
+         self._turn_final_emitted: bool = False
+ 
+         # Deepgram feature toggles
+         self._desired_vad_state: bool = True
+         self._vad_events_enabled: bool = True
+ 
+     def _diag_payload(self, **extra: Any) -> dict:
+         payload: dict[str, Any] = {"provider": "deepgram"}
+         if self._diag_session_id:
+             payload["session_id"] = self._diag_session_id
+         tag = self._url_tag or self._diag_tag_hint
+         if tag:
+             payload["tag"] = tag
+         payload.update(extra)
++        provider = payload.get("provider")
++        evidence = {"provider": provider} if provider else None
++        try:
++            payload.update(make_source_meta("asr_provider", evidence=evidence))
++        except Exception:
++            pass
+         return payload
+ 
+     def _emit_diag(self, label: str, **extra: Any) -> None:
+         payload = self._diag_payload(**extra)
+         hook = self._diag_hook
+         if callable(hook):
+             try:
+                 hook(label, **payload)
+             except TypeError:
+                 try:
+                     hook(label, payload)
+                 except Exception:
+                     pass
+             except Exception:
+                 pass
+         try:
+             _admin_emit("asr:diag", label=label, **dict(payload))
+         except Exception:
+             pass
+ 
+     def _emit_transition_event(
+         self,
+         event: str,
+         *,
+         code: Optional[object] = None,
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 724db037933af70987934db097c27e6301a818f1..ad4c1e3d96d5109bd8d060d1b4b9d07d3d1d2a18 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -446,50 +446,76 @@ def _emit_admin_nlu_event(text: str,
+ 
+     if "products" not in entities_payload:
+         entities_payload["products"] = []
+ 
+     if "product" not in entities_payload:
+         products = entities_payload.get("products")
+         if isinstance(products, list) and products:
+             entities_payload["product"] = products[0]
+         else:
+             entities_payload["product"] = None
+ 
+     if "env" not in entities_payload:
+         env_candidate = None
+         if isinstance(dialog_entities, dict):
+             env_candidate = dialog_entities.get("env")
+         if env_candidate is None and isinstance(dialog_nlu, dict):
+             env_candidate = dialog_nlu.get("env")
+         entities_payload["env"] = env_candidate
+ 
+     if "keywords" not in entities_payload:
+         keywords = canonical_universal.get("entities", {}).get("keywords") if isinstance(canonical_universal.get("entities"), dict) else None
+         entities_payload["keywords"] = list(keywords or [])
+ 
+     payload["entities"] = _safe_copy(entities_payload)
+ 
++    evidence_payload: Dict[str, Any] = {}
++    intent_val = dialog_nlu.get("intent") if isinstance(dialog_nlu, dict) else None
++    if intent_val:
++        evidence_payload["intent"] = intent_val
++    confidence_val = dialog_nlu.get("confidence") if isinstance(dialog_nlu, dict) else None
++    if confidence_val is not None:
++        try:
++            evidence_payload["confidence"] = float(confidence_val)
++        except Exception:
++            try:
++                evidence_payload["confidence"] = str(confidence_val)
++            except Exception:
++                pass
++    phase_val = payload.get("phase")
++    if isinstance(phase_val, str) and phase_val:
++        evidence_payload["phase"] = phase_val
++    try:
++        payload.update(
++            make_source_meta(
++                "nlu_runtime",
++                evidence=evidence_payload or None,
++            )
++        )
++    except Exception:
++        pass
++
+     try:
+         admin_cb("nlu", **payload)
+     except Exception:
+         pass
+ 
+ 
+ def _get_session_id(scope) -> str:
+     try:
+         raw = (scope.get("query_string") or b"").decode("utf-8", "ignore")
+         if raw:
+             for pair in raw.split("&"):
+                 if not pair or "=" not in pair:
+                     continue
+                 k, v = pair.split("=", 1)
+                 if k == "session_id":
+                     return v or "default"
+     except Exception:
+         pass
+     return "default"
+ 
+ 
+ def _has_deepgram_key() -> bool:
+     return bool((os.getenv("DEEPGRAM_API_KEY") or "").strip())
+ 
+ 
+@@ -1472,80 +1498,105 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             except Exception:
+                 policy_version = "unknown"
+ 
+     if not policy:
+         try:
+             policy = load_policy()
+         except Exception:
+             policy = {}
+ 
+     if not isinstance(policy_version, str) or not policy_version:
+         policy_version = "unknown"
+ 
+     manual_feature_enabled = True
+     manual_mode_manual_only = False
+     auto_commit_when_ready = True
+     local_vad_allowed = True
+     barge_require_asr_evidence = False
+     barge_suppress_mode = "none"
+     barge_post_tts_hold_ms = 0
+     barge_allow_ptt = True
+     auto_commit_requires_dual = False
+     auto_commit_requires_asr_ready = False
+ 
+     if not flow_session_open_emitted:
+         meta = {"policy_version": policy_version}
++        try:
++            meta["source_meta"] = make_source_meta(
++                "policy_loader",
++                evidence={"policy_version": policy_version} if policy_version else None,
++            )
++        except Exception:
++            pass
+         session_event_id = _emit_flow_event("session_open", phase="session", meta=meta)
+         flow_session_open_emitted = True
+         if session_event_id:
+             session_flow_event_id[0] = session_event_id
+             policy_meta: Dict[str, Any] = {"policy_version": policy_version}
+             if isinstance(policy, dict):
+                 try:
+                     policy_meta["policy"] = copy.deepcopy(policy)
+                 except Exception:
+                     try:
+                         policy_meta["policy"] = dict(policy)
+                     except Exception:
+                         policy_meta["policy"] = {}
++            try:
++                policy_meta["source_meta"] = make_source_meta(
++                    "policy_loader",
++                    evidence={"policy_version": policy_version} if policy_version else None,
++                )
++            except Exception:
++                pass
+             _emit_debug_event(
+                 "policy_snapshot",
+                 phase="session",
+                 parent_id=session_event_id,
+                 meta=policy_meta,
+             )
+             runtime_meta = {
+                 "manual_feature_enabled": bool(manual_feature_enabled),
+                 "manual_mode_manual_only": bool(manual_mode_manual_only),
+                 "auto_commit_when_ready": bool(auto_commit_when_ready),
+                 "local_vad_allowed": bool(local_vad_allowed),
+                 "barge_require_asr_evidence": bool(barge_require_asr_evidence),
+                 "barge_suppress_mode": barge_suppress_mode or "none",
+                 "barge_post_tts_hold_ms": int(barge_post_tts_hold_ms),
+                 "auto_commit_requires_dual": bool(auto_commit_requires_dual),
+                 "auto_commit_requires_asr_ready": bool(auto_commit_requires_asr_ready),
+             }
++            try:
++                runtime_meta["source_meta"] = make_source_meta(
++                    "policy_runtime",
++                    evidence={
++                        "auto_commit_when_ready": bool(auto_commit_when_ready),
++                        "auto_commit_requires_dual": bool(auto_commit_requires_dual),
++                        "auto_commit_requires_asr_ready": bool(auto_commit_requires_asr_ready),
++                    },
++                )
++            except Exception:
++                pass
+             _emit_debug_event(
+                 "runtime_flags",
+                 phase="session",
+                 parent_id=session_event_id,
+                 meta=runtime_meta,
+             )
+ 
+     transport_meta = {
+         "path": str(scope.get("path") or ""),
+         "client_ip": client_ip,
+     }
+     transport_event_id = _emit_flow_event(
+         "ws_transport",
+         phase="session",
+         meta=transport_meta,
+     )
+     if transport_event_id:
+         ws_transport_parent_id[0] = transport_event_id
+     elif session_flow_event_id[0]:
+         ws_transport_parent_id[0] = session_flow_event_id[0]
+ 
+     ws_frames_in = 0
+     ws_bytes_in = 0
+     ws_text_frames_in = 0
+     ws_frames_out = 0

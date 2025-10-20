@@ -468,6 +468,32 @@ def _emit_admin_nlu_event(text: str,
 
     payload["entities"] = _safe_copy(entities_payload)
 
+    evidence_payload: Dict[str, Any] = {}
+    intent_val = dialog_nlu.get("intent") if isinstance(dialog_nlu, dict) else None
+    if intent_val:
+        evidence_payload["intent"] = intent_val
+    confidence_val = dialog_nlu.get("confidence") if isinstance(dialog_nlu, dict) else None
+    if confidence_val is not None:
+        try:
+            evidence_payload["confidence"] = float(confidence_val)
+        except Exception:
+            try:
+                evidence_payload["confidence"] = str(confidence_val)
+            except Exception:
+                pass
+    phase_val = payload.get("phase")
+    if isinstance(phase_val, str) and phase_val:
+        evidence_payload["phase"] = phase_val
+    try:
+        payload.update(
+            make_source_meta(
+                "nlu_runtime",
+                evidence=evidence_payload or None,
+            )
+        )
+    except Exception:
+        pass
+
     try:
         admin_cb("nlu", **payload)
     except Exception:
@@ -1494,6 +1520,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     if not flow_session_open_emitted:
         meta = {"policy_version": policy_version}
+        try:
+            meta["source_meta"] = make_source_meta(
+                "policy_loader",
+                evidence={"policy_version": policy_version} if policy_version else None,
+            )
+        except Exception:
+            pass
         session_event_id = _emit_flow_event("session_open", phase="session", meta=meta)
         flow_session_open_emitted = True
         if session_event_id:
@@ -1507,6 +1540,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         policy_meta["policy"] = dict(policy)
                     except Exception:
                         policy_meta["policy"] = {}
+            try:
+                policy_meta["source_meta"] = make_source_meta(
+                    "policy_loader",
+                    evidence={"policy_version": policy_version} if policy_version else None,
+                )
+            except Exception:
+                pass
             _emit_debug_event(
                 "policy_snapshot",
                 phase="session",
@@ -1524,6 +1564,17 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 "auto_commit_requires_dual": bool(auto_commit_requires_dual),
                 "auto_commit_requires_asr_ready": bool(auto_commit_requires_asr_ready),
             }
+            try:
+                runtime_meta["source_meta"] = make_source_meta(
+                    "policy_runtime",
+                    evidence={
+                        "auto_commit_when_ready": bool(auto_commit_when_ready),
+                        "auto_commit_requires_dual": bool(auto_commit_requires_dual),
+                        "auto_commit_requires_asr_ready": bool(auto_commit_requires_asr_ready),
+                    },
+                )
+            except Exception:
+                pass
             _emit_debug_event(
                 "runtime_flags",
                 phase="session",

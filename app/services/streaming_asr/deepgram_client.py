@@ -13,6 +13,7 @@ from collections import deque
 import websockets  # provided by uvicorn[standard]
 
 from app.flow.emit import emit as flow_emit
+from app.obs.source_tags import make_source_meta
 from app.ws.bus import bus as stream_bus
 
 from .asr_metrics import record_turn_metrics
@@ -749,6 +750,12 @@ class DeepgramClient:
         if tag:
             payload["tag"] = tag
         payload.update(extra)
+        provider = payload.get("provider")
+        evidence = {"provider": provider} if provider else None
+        try:
+            payload.update(make_source_meta("asr_provider", evidence=evidence))
+        except Exception:
+            pass
         return payload
 
     def _emit_diag(self, label: str, **extra: Any) -> None:
