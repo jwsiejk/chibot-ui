@@ -1,180 +1,152 @@
-diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index 11d9a15362541b56a6e44318c856873b0386aeb2..a8ae8183cea54b7e4476cd34c10486343f0aae11 100644
---- a/static/js/voice/runtime/AdaptiveRuntime.js
-+++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -51,50 +51,59 @@ const clamp01 = (value) => {
-     return 0;
-   }
-   if (num >= 1) {
-     return 1;
-   }
-   return num;
- };
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 9b1882e7287a7ac4efe1df712d6d445b7430d0be..9ed772a84a28135f0c53825a2f7c413bd03ea902 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -4869,74 +4869,76 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                     )
+                                 except Exception as e:
+                                     with contextlib.suppress(Exception):
+                                         await _ws_send_json(
+                                             send,
+                                             make_error(
+                                                 "user_fail", e.__class__.__name__
+                                             ),
+                                         )
+                                     _emit_ws_error("user_fail")
  
- const clampRange = (value, min, max) => {
-   const numeric = Number.isFinite(value) ? value : 0;
-   return Math.min(max, Math.max(min, numeric));
- };
+                             asyncio.create_task(_bg_user())
  
- function clearPostTtsRearm(ctx) {
-   if (!ctx?.state) return;
-   const timer = ctx.state.ttsRearmTimer;
-   if (timer) {
-     try { clearTimeout(timer); } catch {}
-   }
-   ctx.state.ttsRearmTimer = null;
-   ctx.state.ttsHoldUntilMs = 0;
- }
+                         elif t == "CloseStream":
+                             _jlog("ws_close_stream", sid=sid)
+                             manual_turn_active[0] = False
+                             manual_button_down[0] = False
+                             ptt_turn_preopened[0] = False
+                             turn_stream_committed[0] = False
+                             _cancel_asr_stream_activation()
+                             _cancel_asr_not_ready_timeout()
  
- function rearmLocalVad(ctx) {
-   if (!ctx?.state) return;
-+  const holdUntil = Number.isFinite(ctx.state.ttsHoldUntilMs) ? ctx.state.ttsHoldUntilMs : 0;
-+  const holdActive = holdUntil > 0 && holdUntil > nowMs();
-+  const maskActive = isTtsMaskActive(ctx);
-+  const ttsActive = !!ctx.state.ttsPlaying;
-+  if (holdActive || maskActive || ttsActive) {
-+    ctx.state.vadSuppressedForTts = true;
-+    ctx.state.vadShouldRearmAfterTts = true;
-+    return;
-+  }
-   ctx.state.vadSuppressedForTts = false;
-   if (!policyAllowLocalVad()) {
-     ctx.state.vadShouldRearmAfterTts = false;
-     return;
-   }
-   if (ctx.state.manualGate) {
-     return;
-   }
-   if (ctx.state.vadArmed) {
-     return;
-   }
-   const pendingOpts = ctx.state.pendingVadOpts;
-   const opts = pendingOpts || ctx.state.lastVadOpts || {};
-   try {
-     ensureVad(ctx, opts);
-     ctx.state.pendingVadOpts = null;
-   } catch (err) {
-     if (pendingOpts != null) {
-       ctx.state.pendingVadOpts = pendingOpts;
-     }
-     if (typeof console !== 'undefined' && console.warn) {
-       console.warn('[voice][vad] rearm failed', err);
-     }
-   }
- }
-@@ -2455,59 +2464,63 @@ export function setGreetGateActive(active = true) {
-   ensureGreetGate(ctx, active);
-   emitVoiceEvent('greet_gate', { active: ctx.state.greetGateActive });
- }
+                             # Always define this first so later 'if synthetic_emitted' is safe
+                             synthetic_emitted = False
+                             asr_ready_wait_timed_out = False
++                            force_end_due_to_asr_timeout = False
  
- export function forceBargeInStart(meta = {}) {
-   const ctx = ensureCtx();
-   if (ctx.state.manualGate) {
-     ctx.state.pttHeld = true;
-     return false;
-   }
+                             async def _await_close_asr_ready(
+                                 timeout: float,
+                                 *,
+                                 mark_timeout: bool = True,
+                                 log_cb: Optional[Callable[[], None]] = None,
+                             ) -> bool:
+-                                nonlocal asr_ready_wait_timed_out
++                                nonlocal asr_ready_wait_timed_out, force_end_due_to_asr_timeout
+                                 if asr_ready_evt is None:
+                                     return False
+                                 if asr_ready_evt.is_set():
+                                     return True
+                                 if asr_ready_wait_timed_out:
+                                     return False
+                                 if timeout <= 0:
+                                     return False
+                                 try:
+                                     await asyncio.wait_for(
+                                         asr_ready_evt.wait(), timeout=timeout
+                                     )
+                                     return True
+                                 except asyncio.TimeoutError:
+                                     if mark_timeout:
+                                         asr_ready_wait_timed_out = True
++                                        force_end_due_to_asr_timeout = True
+                                     if log_cb is not None:
+                                         with contextlib.suppress(Exception):
+                                             log_cb()
+                                     return False
  
-   ctx.state.pttHeld = true;
-   const maskActive = isTtsMaskActive(ctx);
-   const whileTts = !!(ctx.state.ttsPlaying || maskActive);
-   const source = typeof meta?.source === 'string' && meta.source ? meta.source : 'manual';
-   lastPttDownAtMs = nowMs();
-   emitFlowBreadcrumb('ptt_down', {
-     source,
-     while_tts: whileTts,
-     manual_gate: true,
-     mask_active: maskActive,
-   });
-   clearPostTtsRearm(ctx);
-   ctx.state.vadShouldRearmAfterTts = false;
-   ctx.state.vadSuppressedForTts = false;
-+  startRecorder(ctx);
-+  ensureTransport(ctx).catch(() => {});
-   setManualGate(ctx, true);
+                             if callable(final_guard_local_vad_ref[0]):
+                                 with contextlib.suppress(Exception):
+                                     final_guard_local_vad_ref[0]("stop")
+                             _on_local_vad_stop()
  
-   bargeIn(meta);
+                             _ensure_confirm_closed("close_stream")
  
-   ctx.state.manualBargeInUsed = true;
-   ctx.state.ttsPlaying = false;
-   ctx.ttsMask.clear();
-   ctx.ttsEndedAtMs = nowMs();
+                             if buf.is_empty():
+                                 # Empty turn closure; synthesize ids + reset final tracking.
+                                 turn_id_ref[0] = buf.turn_seq + 1
+                                 final_seen[0] = False
+                                 _reset_turn_metrics(time.time())
+                                 with contextlib.suppress(Exception):
+                                     _jlog(
+                                         "turn_start",
+                                         sid=sid,
+                                         turn_id=turn_id_ref[0],
+                                         first_bytes=0,
+                                         empty_turn=True,
+                                     )
+@@ -5153,50 +5155,69 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                     ):
+                                         synthetic_emitted = True
+                                         with contextlib.suppress(ValueError):
+                                             pending_final_turns.remove(turn_id)
+                                         synthetic_final_turns.add(turn_id)
  
-+  emitClientAudioEvent(ctx, 'ptt_open', { skip_vad: true });
+                             _cancel_no_audio_watch()
+                             if (not sent_any_audio[0]) and not no_audio_notified[0]:
+                                 elapsed = None
+                                 if mic_first_ts[0]:
+                                     elapsed = time.time() - mic_first_ts[0]
+                                 should_emit = (not assistant_speaking[0]) and (
+                                     no_audio_window_s <= 0
+                                     or (
+                                         elapsed is not None
+                                         and elapsed >= no_audio_window_s
+                                     )
+                                 )
+                                 if should_emit:
+                                     _emit_no_audio_alert("close_stream")
+ 
+                             if synthetic_emitted:
+                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
+                                 final_seen[0] = False
+ 
++                            if force_end_due_to_asr_timeout:
++                                _jlog(
++                                    "session_force_end",
++                                    sid=sid,
++                                    reason="user_end_waiting_asr",
++                                )
++                                try:
++                                    flow_emit(
++                                        session_id=sid,
++                                        type="session_force_end",
++                                        phase="session",
++                                        who="server",
++                                        meta={"reason": "user_end_waiting_asr"},
++                                    )
++                                except Exception:
++                                    pass
++                                await _safe_close(4000, "user_end_waiting_asr")
++                                return
 +
-   const controlFrame = { type: 'Control', action: 'barge_in_start' };
-   const sent = sendJSON(controlFrame);
-   if (!sent) {
-     ensureTransport(ctx).then(() => {
-       try { sendJSON(controlFrame); } catch {}
-     }).catch(() => {});
-   }
+                             if barge.is_paused():
+                                 _ensure_confirm_closed("cleanup")
+                                 if not manual_button_down[0]:
+                                     with contextlib.suppress(Exception):
+                                         barge.cancel(_send_barge_state)
+                                 await asyncio.sleep(0)
  
-   dispatchTurnEvent(ctx, TurnEvent.SpeechStart, { reason: 'manual_start' });
-   emitVoiceEvent('barge_in_start', meta);
+                             if ws_configured and not turn_stream_committed[0]:
+                                 if manual_commit_pending[0] and not assistant_speaking[0]:
+                                     _on_barge_commit("manual")
+                                 elif _can_auto_commit_now():
+                                     _on_barge_commit("auto")
  
-   const open = openTurn(ctx, 'manual_start');
-   if (open && typeof open.then === 'function') {
-     open.catch(() => {});
-   }
+                             active_turn_mode_ref[0] = "vad"
+                             turn_commit_mode_ref[0] = "vad"
  
-   return true;
- }
+                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
  
- export function forceBargeInEnd(opts = {}) {
-   const ctx = ensureCtx();
-   const wasActive = ctx.state.manualGate;
-   const stillHeld = !!opts?.pttHeld;
-   const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
-   const nowTs = nowMs();
-@@ -2522,50 +2535,51 @@ export function forceBargeInEnd(opts = {}) {
-   }
-   ctx.state.pttHeld = stillHeld;
-   if (!stillHeld) {
-     setManualGate(ctx, false);
-   }
-   if (!stillHeld) {
-     clearPostTtsRearm(ctx);
-     ctx.state.vadShouldRearmAfterTts = false;
-     ctx.state.vadSuppressedForTts = false;
-     rearmLocalVad(ctx);
-   }
-   ctx.state.ttsPlaying = false;
-   ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });
-   ctx.ttsEndedAtMs = nowTs;
- 
-   const released = wasActive && !ctx.state.manualGate;
-   if (!stillHeld) {
-     emitFlowBreadcrumb('ptt_up', {
-       reason,
-       duration_ms: durationMs,
-       manual_gate: wasActive,
-       released,
-     });
-   }
-   if (released) {
-+    emitClientAudioEvent(ctx, 'ptt_close', {});
-     const controlFrame = { type: 'Control', action: 'barge_in_end' };
-     const sent = sendJSON(controlFrame);
-     if (!sent) {
-       ensureTransport(ctx).then(() => {
-         try { sendJSON(controlFrame); } catch {}
-       }).catch(() => {});
-     }
- 
-     if (ctx.state.turnOpen) {
-       closeTurn(ctx, reason);
-     }
-     dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason, force: true });
-     markReady(ctx, reason, { force: true });
-     dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason, force: true });
-   }
- 
-   if (released) {
-     ctx.state.bargeConfirmActive = false;
-     ctx.state.bargeConfirmUntil = 0;
-     ctx.evidenceGate.reset('manual_release');
-     ctx.shadowBuffer.clear();
-     ctx.audio.lastTimecode = null;
-     emitFlowBreadcrumb('barge_in_end', {
-       reason,
-       duration_ms: durationMs,
+                             _jlog(
+                                 "mic_capture_block_enter",
+                                 sid=sid,
+                                 turn_id=turn_id,
+                                 mic_chunks=len(mic_chunks),
+                             )
+                             if MIC_CAPTURE:

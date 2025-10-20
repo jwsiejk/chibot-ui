@@ -4891,6 +4891,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             # Always define this first so later 'if synthetic_emitted' is safe
                             synthetic_emitted = False
                             asr_ready_wait_timed_out = False
+                            force_end_due_to_asr_timeout = False
 
                             async def _await_close_asr_ready(
                                 timeout: float,
@@ -4898,7 +4899,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 mark_timeout: bool = True,
                                 log_cb: Optional[Callable[[], None]] = None,
                             ) -> bool:
-                                nonlocal asr_ready_wait_timed_out
+                                nonlocal asr_ready_wait_timed_out, force_end_due_to_asr_timeout
                                 if asr_ready_evt is None:
                                     return False
                                 if asr_ready_evt.is_set():
@@ -4915,6 +4916,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 except asyncio.TimeoutError:
                                     if mark_timeout:
                                         asr_ready_wait_timed_out = True
+                                        force_end_due_to_asr_timeout = True
                                     if log_cb is not None:
                                         with contextlib.suppress(Exception):
                                             log_cb()
@@ -5174,6 +5176,25 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             if synthetic_emitted:
                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
                                 final_seen[0] = False
+
+                            if force_end_due_to_asr_timeout:
+                                _jlog(
+                                    "session_force_end",
+                                    sid=sid,
+                                    reason="user_end_waiting_asr",
+                                )
+                                try:
+                                    flow_emit(
+                                        session_id=sid,
+                                        type="session_force_end",
+                                        phase="session",
+                                        who="server",
+                                        meta={"reason": "user_end_waiting_asr"},
+                                    )
+                                except Exception:
+                                    pass
+                                await _safe_close(4000, "user_end_waiting_asr")
+                                return
 
                             if barge.is_paused():
                                 _ensure_confirm_closed("cleanup")
