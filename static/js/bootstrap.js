@@ -53,20 +53,9 @@ const manualState = {
   sessionActive: false,
 };
 
-const TTS_REARM_DELAY_MS = 360; // ms delay before re-arming VAD after TTS completes
 let _lastMicStream = null;
 let _ttsHoldActive = false;
 let _ttsActiveTurnId = null;
-let _ttsRearmTimer = null;
-
-function _setVoiceMask(active) {
-  try {
-    const ctx = window.__askchip_voice_ctx;
-    if (ctx?.state) {
-      ctx.state.maskLocalBargeIn = !!active;
-    }
-  } catch {}
-}
 
 function _updateManualButtonAvailability() {
   const btn = manualState.button;
@@ -286,37 +275,6 @@ function _ensureVoiceCtxLoaded() {
     .catch(() => {});
 }
 
-function _cancelTtsRearmTimer() {
-  if (_ttsRearmTimer) {
-    try { clearTimeout(_ttsRearmTimer); } catch {}
-    _ttsRearmTimer = null;
-  }
-}
-
-function _startTtsRearmTimer(delayMs = TTS_REARM_DELAY_MS, trigger = 'UtteranceEnd') {
-  _cancelTtsRearmTimer();
-  const waitMs = Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : TTS_REARM_DELAY_MS;  
-  _ttsRearmTimer = setTimeout(() => {
-    _ttsRearmTimer = null;
-    if (_ttsHoldActive) return;
-    try {
-      _console('log', `[bootstrap] VAD re-arming after TTS (trigger=${trigger})`);
-    } catch {}
-    armVAD(_lastMicStream ?? undefined)
-      .then(() => {
-        _ensureVoiceCtxLoaded();
-        try { _console('log', '[bootstrap] VAD armed — ready for user audio'); } catch {}
-      })
-      .catch((err) => {
-        try { _console('warn', '[bootstrap] VAD re-arm failed after TTS', err); } catch {}
-      });
-  }, waitMs);
-}
-
-function _scheduleVadRearmAfterTts(trigger = 'UtteranceEnd') {
-  _startTtsRearmTimer(TTS_REARM_DELAY_MS, trigger);
-}
-
 function wireWSEventsOnce(){
   if (window.__askchip_ws_wired) return;
   window.__askchip_ws_wired = true;
@@ -370,7 +328,6 @@ function wireWSEventsOnce(){
       if (!_ttsHoldActive) {
         _ttsHoldActive = true;
         _ttsActiveTurnId = frameTurnId;
-        _cancelTtsRearmTimer();
         try {
           disarmVAD();
           _console('log', '[bootstrap] VAD disarmed while TTS is active');
@@ -380,7 +337,6 @@ function wireWSEventsOnce(){
       } else if (!_ttsActiveTurnId && frameTurnId) {
         _ttsActiveTurnId = frameTurnId;
       }
-      _setVoiceMask(true);      
     }
 
     if (normalizedType === 'UtteranceEnd' || normalizedType === 'utteranceend') {
@@ -389,8 +345,6 @@ function wireWSEventsOnce(){
       if (_ttsHoldActive && idsMatch) {
         _ttsHoldActive = false;
         _ttsActiveTurnId = null;
-        _startTtsRearmTimer(280, 'UtteranceEnd');
-        _setVoiceMask(false);
       }
     }
 
