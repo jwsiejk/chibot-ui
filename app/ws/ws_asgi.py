@@ -45,6 +45,14 @@ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal
 from app.ws.barge import BargeState
 from app.ws.confirm_window import ConfirmWindow
 from app.ws.bus import bus
+from app.obs.source_tags import (
+    FLOW_SCHEMA_VERSION,
+    gate_snapshot,
+    make_source_meta,
+    ms_since,
+    resolve_barge_origin,
+)
+from app.services.tts.flow_wrapper import make_tts_mask_meta
 
 # Optional admin emitter
 try:
@@ -168,6 +176,38 @@ def _emit_barge_admin_events(sid: str,
     if tts_state is not None:
         payload["tts_state"] = tts_state
 
+    state = _BARGE_EVENT_STATE.get(sid, {})
+    manual_gate = bool(state.get("manual_gate"))
+    client_vad_active = bool(state.get("client_vad_active"))
+    policy_triggered = bool(state.get("policy_triggered"))
+    last_conf = state.get("last_confident_conf")
+    if last_conf is None:
+        last_conf = state.get("last_partial_conf")
+    try:
+        last_conf = float(last_conf) if last_conf is not None else None
+    except (TypeError, ValueError):
+        last_conf = None
+    payload.update(
+        make_source_meta(
+            resolve_barge_origin(
+                manual_gate=manual_gate,
+                client_vad_recent_ms=ms_since(state.get("client_vad_start_ms")),
+                asr_conf_recent=last_conf,
+                policy_triggered=policy_triggered,
+            ),
+            gates=gate_snapshot(
+                _is_tts_active(tts_state),
+                manual_gate,
+                client_vad_active,
+            ),
+            evidence={
+                "ms_since_last_ptt": ms_since(state.get("last_manual_ptt_ms")),
+                "ms_since_vad_start": ms_since(state.get("client_vad_start_ms")),
+                "dg_conf": last_conf,
+            },
+        )
+    )
+
     if phase == "paused" and previous_phase != "paused":
         admin_cb("barge_in", **payload)
         if _is_tts_active(tts_state):
@@ -181,6 +221,8 @@ def _emit_barge_admin_events(sid: str,
         if _is_tts_active(tts_state):
             admin_cb("tts_cancel", **payload)
 
+ 
+_BARGE_EVENT_STATE: Dict[str, Dict[str, Any]] = defaultdict(dict)
 
 ACTIVE_WS: dict[str, dict[str, Any]] = {}
 ACTIVE_WS_LOCK = asyncio.Lock()
@@ -2031,6 +2073,193 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     local_vad_open = [False]
     local_vad_meta_sent = [False]
 
+    def _barge_state() -> Dict[str, Any]:
+        return _BARGE_EVENT_STATE.setdefault(sid, {})
+
+    def _coerce_ts_ms(ts: Optional[float] = None) -> int:
+        base = ts if ts is not None else time.time()
+        return int(max(0.0, base) * 1000)
+
+    def _update_barge_state(**updates: Any) -> None:
+        state = _barge_state()
+        for key, value in updates.items():
+            if value is None:
+                state.pop(key, None)
+            else:
+                state[key] = value
+
+    def _note_manual_down(ts: Optional[float] = None) -> None:
+        _update_barge_state(
+            manual_gate=True,
+            last_manual_ptt_ms=_coerce_ts_ms(ts),
+            policy_triggered=False,
+        )
+
+    def _note_manual_up() -> None:
+        _update_barge_state(manual_gate=False)
+
+    def _note_client_vad_start(ts: Optional[float] = None) -> None:
+        _update_barge_state(
+            client_vad_active=True,
+            client_vad_start_ms=_coerce_ts_ms(ts),
+        )
+
+    def _note_client_vad_stop() -> None:
+        _update_barge_state(client_vad_active=False)
+
+    def _current_gate_snapshot(tts_override: Optional[bool] = None) -> Dict[str, bool]:
+        state = _barge_state()
+        manual_gate = bool(state.get("manual_gate"))
+        vad_auto = bool(state.get("client_vad_active"))
+        tts_active_now = bool(
+            tts_override
+            if tts_override is not None
+            else (assistant_speaking[0] or tts_mask_active[0])
+        )
+        return gate_snapshot(tts_active_now, manual_gate, vad_auto)
+
+    def _make_barge_evidence() -> Dict[str, Any]:
+        state = _barge_state()
+        conf = state.get("last_confident_conf")
+        if conf is None:
+            conf = state.get("last_partial_conf")
+        try:
+            conf_val = float(conf) if conf is not None else None
+        except (TypeError, ValueError):
+            conf_val = None
+        return {
+            "ms_since_last_ptt": ms_since(state.get("last_manual_ptt_ms")),
+            "ms_since_vad_start": ms_since(state.get("client_vad_start_ms")),
+            "dg_conf": conf_val,
+        }
+
+    def _resolve_turn_open_source(commit_mode: str) -> str:
+        mode_norm = (commit_mode or "").strip().lower()
+        if mode_norm == "programmatic":
+            return "programmatic"
+        state = _barge_state()
+        conf = state.get("last_confident_conf")
+        if conf is None:
+            conf = state.get("last_partial_conf")
+        try:
+            conf_val = float(conf) if conf is not None else None
+        except (TypeError, ValueError):
+            conf_val = None
+        return resolve_barge_origin(
+            manual_gate=bool(state.get("manual_gate")),
+            client_vad_recent_ms=ms_since(state.get("client_vad_start_ms")),
+            asr_conf_recent=conf_val,
+            policy_triggered=bool(state.get("policy_triggered"))
+            or mode_norm == "auto_commit",
+        )
+
+    def _classify_commit_source(mode: str, reason: Optional[str]) -> str:
+        mode_norm = (mode or "").strip().lower()
+        reason_norm = (reason or "").strip().lower()
+        if mode_norm == "manual":
+            return "manual_release"
+        if reason_norm in {"timeout_commit", "timeout"}:
+            return "silence_timeout"
+        if mode_norm in {"auto", "auto_commit"}:
+            return "server_policy"
+        return "endpointing_asr"
+
+    def _map_endpoint_reason(reason: Optional[str]) -> str:
+        reason_norm = (reason or "").strip().lower()
+        if reason_norm in {"timeout_commit", "timeout"}:
+            return "timeout"
+        if reason_norm in {"no_input", "silence"}:
+            return "no_input"
+        return "end_of_utterance"
+
+    def _make_commit_evidence(reason: Optional[str]) -> Dict[str, Any]:
+        state = _barge_state()
+        metrics = dict(state.get("last_commit_metrics") or {})
+        try:
+            ms_speech = int(metrics.get("elapsed_ms")) if metrics.get("elapsed_ms") is not None else None
+        except (TypeError, ValueError):
+            ms_speech = None
+        raw_silence = metrics.get("gap_ms") or metrics.get("silence_ms")
+        try:
+            ms_silence = int(raw_silence) if raw_silence is not None else None
+        except (TypeError, ValueError):
+            ms_silence = None
+        conf = state.get("last_confident_conf")
+        if conf is None:
+            conf = state.get("last_partial_conf")
+        try:
+            conf_val = float(conf) if conf is not None else None
+        except (TypeError, ValueError):
+            conf_val = None
+        return {
+            "endpoint": _map_endpoint_reason(reason or metrics.get("reason")),
+            "ms_since_last_audio": ms_since(state.get("last_audio_ts_ms")),
+            "ms_speech": ms_speech,
+            "ms_silence": ms_silence,
+            "dg_conf_at_eos": conf_val,
+            "vendor_reason": metrics.get("reason") or reason,
+        }
+
+    def _classify_cancel_source(reason: Optional[str]) -> str:
+        reason_norm = (reason or "").strip().lower()
+        if "transport" in reason_norm or "relay" in reason_norm:
+            return "transport_error"
+        if reason_norm in {"close_stream", "page_unload"}:
+            return "page_unload"
+        if reason_norm in {"manual", "manual_cancel", "user_cancel"}:
+            return "manual_cancel"
+        return "policy_preempt"
+
+    def _make_cancel_evidence(reason: Optional[str]) -> Dict[str, Any]:
+        state = _barge_state()
+        conf = state.get("last_confident_conf")
+        if conf is None:
+            conf = state.get("last_partial_conf")
+        try:
+            conf_val = float(conf) if conf is not None else None
+        except (TypeError, ValueError):
+            conf_val = None
+        reason_norm = (reason or "").strip().lower() or None
+        return {
+            "reason": reason_norm,
+            "ms_since_last_audio": ms_since(state.get("last_audio_ts_ms")),
+            "dg_conf": conf_val,
+        }
+
+    def _emit_endpoint_event(turn_id: Optional[int], source: str, reason: Optional[str]) -> None:
+        admin_cb = globals().get("_admin_emit")
+        if not callable(admin_cb):
+            return
+        payload: Dict[str, Any] = {
+            "session_id": sid,
+            "sid": sid,
+        }
+        payload.update(
+            make_source_meta(
+                source,
+                gates=_current_gate_snapshot(),
+                evidence=_make_commit_evidence(reason),
+            )
+        )
+        if turn_id is not None:
+            payload["turn_id"] = turn_id
+        try:
+            admin_cb("endpoint_detected", **payload)
+        except Exception:
+            pass
+
+    _update_barge_state(
+        manual_gate=False,
+        client_vad_active=False,
+        policy_triggered=False,
+        last_manual_ptt_ms=None,
+        client_vad_start_ms=None,
+        last_partial_conf=None,
+        last_confident_conf=None,
+        last_commit_metrics=None,
+        last_audio_ts_ms=None,
+    )
+
     def _decide_barge_attempt(source: str) -> Tuple[bool, str, str, str]:
         src = "ptt" if str(source).lower() == "ptt" else "vad"
         try:
@@ -2606,6 +2835,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         data = {k: v for k, v in (metrics or {}).items() if v is not None}
         data.setdefault("reason", trigger)
         data.setdefault("snr_enabled", window.snr_enabled)
+        _update_barge_state(last_commit_metrics=dict(data))
         _jlog("confirm_commit", sid=sid, **data)
         if post_greet_phase_active[0]:
             _emit_flow_event(
@@ -2674,7 +2904,19 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if confirm_close_event_id:
             _emit_gate_checks(window, data, confirm_close_event_id, reason_lower)
         _flush_confirm_debug_batches()
-        _jlog("confirm_abort", sid=sid, **data)
+        cancel_payload: Dict[str, Any] = {
+            "sid": sid,
+            "turn_id": turn_id_ref[0],
+            **data,
+        }
+        cancel_payload.update(
+            make_source_meta(
+                _classify_cancel_source(data.get("reason")),
+                gates=_current_gate_snapshot(),
+                evidence=_make_cancel_evidence(data.get("reason")),
+            )
+        )
+        _jlog("confirm_abort", **cancel_payload)
         _on_local_vad_stop()
         if barge.is_paused():
             if manual_button_down[0]:
@@ -2814,12 +3056,28 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         tts_mask_active[0] = False
         tts_mask_mode[0] = barge_suppress_mode or "none"
         tts_mask_release_deadline[0] = 0.0
+        mask_source = "assistant_audio_end"
+        if hold_ms > 0:
+            mask_source = "policy_hold"
+        elif manual_button_down[0]:
+            mask_source = "manual_override"
         with contextlib.suppress(Exception):
+            mask_meta = make_tts_mask_meta(
+                mask_source,
+                gates=_current_gate_snapshot(),
+                evidence={
+                    "utterance_id": str(turn_id)
+                    if turn_id not in (None, "", "greet")
+                    else None,
+                    "post_tts_hold_ms": max(0, hold_ms),
+                },
+            )
             _jlog(
                 "EVT_TTS_MASK_OFF",
                 sid=sid,
                 turn_id=turn_id,
                 post_hold_ms=max(0, hold_ms),
+                **mask_meta,
             )
         if previously_active:
             _maybe_start_pending_confirm()
@@ -2991,6 +3249,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         except (TypeError, ValueError):
             conf_val = None
         last_partial_conf[0] = conf_val
+        _update_barge_state(last_partial_conf=conf_val)
 
         speech_ms_val: Optional[int] = None
         if isinstance(ev, dict):
@@ -3027,6 +3286,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
         if conf_val is not None and conf_val >= confirm_min_conf:
             last_confident_partial_conf[0] = conf_val
+            _update_barge_state(last_confident_conf=conf_val)
             _maybe_emit_evidence_gate(conf_val)
 
         if pending_confirm_request[0] and idle_evidence_required and turn_commit_mode_ref[0] == "vad":
@@ -3092,7 +3352,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             tts_mask_active[0] = False
         _cancel_tts_mask_release()
         with contextlib.suppress(Exception):
-            _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode)
+            mask_meta = make_tts_mask_meta(
+                "assistant_audio_start",
+                gates=_current_gate_snapshot(tts_override=True),
+                evidence={
+                    "utterance_id": str(turn_id)
+                    if turn_id not in (None, "", "greet")
+                    else None,
+                },
+            )
+            _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode, **mask_meta)
         _schedule_vad_state(False, "tts")
         _ensure_confirm_closed("tts_start")
         if not manual_button_down[0]:
@@ -3135,13 +3404,16 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     def _on_local_vad_start() -> None:
         local_vad_open[0] = True
+        _note_client_vad_start(time.time())
         _maybe_emit_evidence_gate()
 
     def _on_local_vad_stop() -> None:
         local_vad_open[0] = False
+        _note_client_vad_stop()
 
     def _open_turn_for_ptt(now_ts: float, *, pause_tts: bool = False) -> None:
         manual_button_down[0] = True
+        _note_manual_down(now_ts)
         _ensure_confirm_closed("ptt_start")
         if pause_tts:
             try:
@@ -3185,21 +3457,33 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         mic_chunks.clear()
         mic_first_ts[0] = now_ts
         mic_last_ts[0] = now_ts
+        _update_barge_state(
+            last_partial_conf=None,
+            last_confident_conf=None,
+            last_audio_ts_ms=_coerce_ts_ms(now_ts),
+        )
         _reset_turn_metrics(now_ts)
         _schedule_no_audio_watch(turn_id)
         with contextlib.suppress(Exception):
             pending_final_turns.append(turn_id)
             completed_llm_turns.discard(turn_id)
         with contextlib.suppress(Exception):
-            _jlog(
-                "turn_start",
-                sid=sid,
-                turn_id=turn_id,
-                first_bytes=0,
-                commit_mode="manual",
-                auto_commit=False,
-                ts_ms=int(time.time() * 1000),
+            turn_payload: Dict[str, Any] = {
+                "sid": sid,
+                "turn_id": turn_id,
+                "first_bytes": 0,
+                "commit_mode": "manual",
+                "auto_commit": False,
+                "ts_ms": int(time.time() * 1000),
+            }
+            turn_payload.update(
+                make_source_meta(
+                    _resolve_turn_open_source("manual"),
+                    gates=_current_gate_snapshot(),
+                    evidence=_make_barge_evidence(),
+                )
             )
+            _jlog("turn_start", **turn_payload)
         ptt_turn_preopened[0] = True
 
     def _handle_bus_frame(frame: Dict[str, Any]) -> None:
@@ -3489,17 +3773,34 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     turn=turn_id_ref[0],
                 )
             last_ready_signal_after[0] = None
-        _jlog(
-            "turn_committed",
-            sid=sid,
-            mode=mode,
-            manual=(mode == "manual"),
-            auto_commit=(mode == "auto_commit"),
-            turn_id=turn_id_ref[0],
-            ts_ms=int(time.time() * 1000),
-            admin_event="turn_committed",
-            admin_label="turn_committed",
+        commit_metrics = dict(_barge_state().get("last_commit_metrics") or {})
+        commit_reason = commit_metrics.get("reason")
+        commit_source = _classify_commit_source(mode or "", commit_reason)
+        commit_payload: Dict[str, Any] = {
+            "sid": sid,
+            "mode": mode,
+            "manual": mode == "manual",
+            "auto_commit": mode == "auto_commit",
+            "turn_id": turn_id_ref[0],
+            "ts_ms": int(time.time() * 1000),
+            "admin_event": "turn_committed",
+            "admin_label": "turn_committed",
+        }
+        commit_payload.update(
+            make_source_meta(
+                commit_source,
+                gates=_current_gate_snapshot(),
+                evidence=_make_commit_evidence(commit_reason),
+            )
         )
+        _jlog("turn_committed", **commit_payload)
+        endpoint_source = (
+            "silence_timer"
+            if commit_source == "silence_timeout"
+            else "manual_release" if commit_source == "manual_release" else "asr_endpoint"
+        )
+        _emit_endpoint_event(turn_id_ref[0], endpoint_source, commit_reason)
+        _update_barge_state(last_commit_metrics=None, policy_triggered=False)
         commit_event_id = ""
         if post_greet_phase_active[0]:
             turn_id_hint = _flow_turn_id_hint()
@@ -4234,6 +4535,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         active_turn_mode_ref[0] = commit_mode
                         turn_commit_mode_ref[0] = commit_mode
+                        _update_barge_state(
+                            policy_triggered=commit_mode == "auto_commit"
+                        )
                         if commit_mode != "manual":
                             manual_commit_pending[0] = False
 
@@ -4324,18 +4628,30 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         mic_chunks.clear()
                         mic_first_ts[0] = now
                         mic_last_ts[0] = now
+                        _update_barge_state(
+                            last_partial_conf=None,
+                            last_confident_conf=None,
+                            last_audio_ts_ms=_coerce_ts_ms(now),
+                        )
                         _reset_turn_metrics(now)
                         _schedule_no_audio_watch(turn_id_ref[0])
                         with contextlib.suppress(Exception):
-                            _jlog(
-                                "turn_start",
-                                sid=sid,
-                                turn_id=turn_id_ref[0],
-                                first_bytes=len(raw_chunk),
-                                commit_mode=commit_mode,
-                                auto_commit=(commit_mode == "auto_commit"),
-                                ts_ms=int(time.time() * 1000),
+                            turn_payload: Dict[str, Any] = {
+                                "sid": sid,
+                                "turn_id": turn_id_ref[0],
+                                "first_bytes": len(raw_chunk),
+                                "commit_mode": commit_mode,
+                                "auto_commit": commit_mode == "auto_commit",
+                                "ts_ms": int(time.time() * 1000),
+                            }
+                            turn_payload.update(
+                                make_source_meta(
+                                    _resolve_turn_open_source(commit_mode),
+                                    gates=_current_gate_snapshot(),
+                                    evidence=_make_barge_evidence(),
+                                )
                             )
+                            _jlog("turn_start", **turn_payload)
                         if commit_mode == "auto_commit":
                             try:
                                 _on_barge_commit("auto")
@@ -4401,6 +4717,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     if MIC_CAPTURE:
                         mic_chunks.append(chunk)
                         mic_last_ts[0] = now
+                    _update_barge_state(last_audio_ts_ms=_coerce_ts_ms(now))
                     _jlog(
                         "mic_capture_append",
                         sid=sid,
@@ -4638,7 +4955,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                                 by=allow_src,
                                                 state=allow_state,
                                                 reason=allow_reason,
-                                            )
+                                        )
                                     continue
                                 tts_active_now = allow_state == "TTS_ACTIVE"
                                 _emit_transition_event(
@@ -4647,6 +4964,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     phase="ptt",
                                 )
                                 ptt_down_emitted[0] = False
+                                _note_manual_up()
                                 continue
 
                             if action == "vad_gate_open":
@@ -4744,6 +5062,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     manual_commit_pending[0] = True
                                     turn_commit_mode_ref[0] = "manual"
                                     active_turn_mode_ref[0] = "manual"
+                                    _note_manual_down(time.time())
                                     _ensure_confirm_closed("manual_start")
                                     buffered_bytes = _manual_buffered_bytes()
                                     _manual_log_event(
@@ -4784,6 +5103,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     manual_button_down[0] = False
                                     manual_turn_active[0] = False
                                     manual_commit_pending[0] = False
+                                    _note_manual_up()
                                     ptt_turn_preopened[0] = False
                                     turn_commit_mode_ref[0] = "vad"
                                     buffered_bytes = _manual_buffered_bytes()
@@ -4854,6 +5174,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     manual_turn_active[0] = False
                                     manual_commit_pending[0] = False
                                     ptt_turn_preopened[0] = False
+                                    _note_manual_up()
                                 greet_seq_raw = obj.get("greet_seq")
                                 greet_seq: Optional[int] = None
                                 is_new_greet_seq = True
@@ -5059,6 +5380,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             _jlog("ws_close_stream", sid=sid)
                             manual_turn_active[0] = False
                             manual_button_down[0] = False
+                            _note_manual_up()
                             ptt_turn_preopened[0] = False
                             turn_stream_committed[0] = False
                             _cancel_asr_stream_activation()
@@ -5111,13 +5433,23 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 final_seen[0] = False
                                 _reset_turn_metrics(time.time())
                                 with contextlib.suppress(Exception):
-                                    _jlog(
-                                        "turn_start",
-                                        sid=sid,
-                                        turn_id=turn_id_ref[0],
-                                        first_bytes=0,
-                                        empty_turn=True,
+                                    turn_payload: Dict[str, Any] = {
+                                        "sid": sid,
+                                        "turn_id": turn_id_ref[0],
+                                        "first_bytes": 0,
+                                        "empty_turn": True,
+                                        "commit_mode": "programmatic",
+                                        "auto_commit": False,
+                                        "ts_ms": int(time.time() * 1000),
+                                    }
+                                    turn_payload.update(
+                                        make_source_meta(
+                                            _resolve_turn_open_source("programmatic"),
+                                            gates=_current_gate_snapshot(),
+                                            evidence=_make_barge_evidence(),
+                                        )
                                     )
+                                    _jlog("turn_start", **turn_payload)
 
                             # --- Get a turn_id (with guard logs) ---
                             _jlog(
@@ -5539,6 +5871,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     duration=duration,
                     had_disconnect=had_disconnect,
                 )
+        with contextlib.suppress(Exception):
+            _BARGE_EVENT_STATE.pop(sid, None)
         # Clean up safely; never raise in cleanup
         with contextlib.suppress(Exception):
             if rx_task:

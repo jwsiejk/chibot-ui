@@ -3,9 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Protocol, runtime_checkable
+from typing import Dict, Iterable, Mapping, Optional, Protocol, runtime_checkable
 
 from app.flow.emit import add_batch, emit as flow_emit
+from app.obs.source_tags import FLOW_SCHEMA_VERSION, make_source_meta
+
+
+def make_tts_mask_meta(
+    source: str,
+    *,
+    gates: Optional[Mapping[str, bool]] = None,
+    evidence: Optional[Mapping[str, object]] = None,
+) -> Dict[str, object]:
+    """Return a normalized metadata payload for TTS mask events."""
+
+    return make_source_meta(source, gates=gates, evidence=evidence)
 
 
 @runtime_checkable
@@ -63,9 +75,10 @@ class TTSFlowTracker:
     _start_event_id: Optional[str] = None
 
     def _meta(self) -> Optional[dict[str, object]]:
-        if not self.include_turn_meta or not self.turn_id:
-            return None
-        return {"turn_id": self.turn_id}
+        meta: Dict[str, object] = {"schema": FLOW_SCHEMA_VERSION}
+        if self.include_turn_meta and self.turn_id:
+            meta["turn_id"] = self.turn_id
+        return meta
 
     def _emit_debug(
         self,

@@ -66,6 +66,25 @@ def gate_snapshot(tts_active: bool, manual_gate: bool, vad_auto: bool) -> Dict[s
     return snapshot
 
 
+def make_source_meta(
+    source: str,
+    *,
+    gates: Optional[Mapping[str, Any]] = None,
+    evidence: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return a schema/source metadata payload with optional gates/evidence."""
+
+    meta: Dict[str, Any] = {"schema": FLOW_SCHEMA_VERSION, "source": source}
+    if gates:
+        try:
+            meta["gates"] = {str(key): bool(value) for key, value in gates.items()}
+        except Exception:
+            # Best-effort normalization; fall back to the original mapping.
+            meta["gates"] = dict(gates)  # type: ignore[arg-type]
+    attach_evidence(meta, evidence)
+    return meta
+
+
 def _encode_size_bytes(payload: Mapping[str, Any]) -> int:
     try:
         encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
