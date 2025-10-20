@@ -11,6 +11,8 @@ import {
 import { ensurePolicy, getPolicySync, pget as policyGet, POLICY_NOT_SET } from '../policy/index.js';
 import { ensureInteractionPolicy } from '../policy/InteractionPolicy.js';
 import PolicyBus from '../policy/PolicyBus.js';
+import { guardBargeInDispatch } from '../guards/VadGuard.js';
+import { canOpenTurn as evidenceGateCanOpenTurn } from '../guards/EvidenceGateGuard.js';
 import {
   POLICY_SUPPRESS_ALL,
   POLICY_SUPPRESS_NONE,
@@ -2210,6 +2212,12 @@ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', a
     commitReason = 'evidence_gate_commit';
   }
   if (commitReason) {
+    if (!evidenceGateCanOpenTurn()) {
+      if (ctx?.state && !ctx.state.pendingCommitReason) {
+        ctx.state.pendingCommitReason = commitReason;
+      }
+      return;
+    }
     const pending = maybeCommitSpeech(ctx, commitReason);
     if (pending && typeof pending.then === 'function') {
       pending.catch(() => {});
@@ -2294,6 +2302,13 @@ const ensureVad = (ctx, opts = {}) => {
         ctx.state.preCommitASRFeed = false;
         ctx.evidenceGate.reset('tts_mask_block');
         logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_block' });
+        return;
+      }
+      if (!guardBargeInDispatch('client_vad')) {
+        ctx.state.vadRecording = false;
+        ctx.state.preCommitASRFeed = false;
+        ctx.evidenceGate.reset('policy_block');
+        logPreCommitMode(ctx, 'shadow_only', { reason: 'policy_block' });
         return;
       }
       ctx.state.vadMasked = false;

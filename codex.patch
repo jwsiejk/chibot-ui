@@ -1,656 +1,80 @@
-diff --git a/app/policy/interaction_policy.py b/app/policy/interaction_policy.py
+diff --git a/static/js/voice/guards/EvidenceGateGuard.js b/static/js/voice/guards/EvidenceGateGuard.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..3032dbf8b238234678051d7dcb3b5340b2a9a2f6
+index 0000000000000000000000000000000000000000..4e39b76b65e69a4f284bc3157b19b9aea5567a3a
 --- /dev/null
-+++ b/app/policy/interaction_policy.py
-@@ -0,0 +1,43 @@
-+from __future__ import annotations
++++ b/static/js/voice/guards/EvidenceGateGuard.js
+@@ -0,0 +1,18 @@
++import PolicyBus from '../policy/PolicyBus.js';
++import { emitVoiceEvent } from '../ui/Events.js';
++import { InteractionPolicyMode } from '../policy/InteractionPolicy.js';
 +
-+from typing import Dict, Mapping
++const SUPPRESSED_REASON = 'manual_only_during_tts';
 +
-+MANUAL_ONLY_DURING_TTS = "manual_only_during_tts"
-+AUTO_VAD_READY = "auto_vad_ready"
-+
-+_BASE_POLICIES: Dict[str, Dict[str, object]] = {
-+    MANUAL_ONLY_DURING_TTS: {
-+        "mode": MANUAL_ONLY_DURING_TTS,
-+        "allow_auto_vad": False,
-+        "auto_commit_when_ready": False,
-+        "allow_ptt_barge": True,
-+        "suppress_vad_during_tts": True,
-+    },
-+    AUTO_VAD_READY: {
-+        "mode": AUTO_VAD_READY,
-+        "allow_auto_vad": True,
-+        "auto_commit_when_ready": False,
-+        "allow_ptt_barge": True,
-+        "suppress_vad_during_tts": False,
-+    },
++export function canOpenTurn() {
++  const policy = PolicyBus.getPolicy();
++  if (policy && policy.mode === InteractionPolicyMode.MANUAL_ONLY_DURING_TTS) {
++    emitVoiceEvent('evidence:suppressed', { reason: SUPPRESSED_REASON, mode: policy.mode });
++    return false;
++  }
++  return true;
 +}
 +
-+
-+def _snapshot(mode: str, overrides: Mapping[str, object] | None = None) -> Dict[str, object]:
-+    base = dict(_BASE_POLICIES[mode])
-+    if overrides:
-+        for key, value in overrides.items():
-+            base[key] = value
-+    return base
-+
-+
-+def for_tts(overrides: Mapping[str, object] | None = None) -> Dict[str, object]:
-+    """Snapshot used while assistant audio or confirmations are active."""
-+
-+    return _snapshot(MANUAL_ONLY_DURING_TTS, overrides)
-+
-+
-+def for_idle(overrides: Mapping[str, object] | None = None) -> Dict[str, object]:
-+    """Snapshot used when the client is idle and auto VAD is allowed."""
-+
-+    return _snapshot(AUTO_VAD_READY, overrides)
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index ad4c1e3d96d5109bd8d060d1b4b9d07d3d1d2a18..634444896a7a919cb6550fe5baf6d133378615fe 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -7,50 +7,54 @@ except Exception:  # pragma: no cover - optional dependency
-     audioop = None  # type: ignore[assignment]
- from functools import partial
- from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
- from collections import deque, defaultdict
- from app.services.audio.container_sniffer import (
-     AudioContainerSniffer,
-     coerce_detection_from_meta,
- )
- 
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.config import load_settings
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.policy.loader import load_policy, load_policy_layers
-+from app.policy.interaction_policy import (
-+    for_idle as interaction_policy_idle,
-+    for_tts as interaction_policy_tts,
-+)
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
- from app.flow.emit import add_batch, emit as flow_emit
- from app.session_state import set_phase, should_emit_phase
- 
- # NEW: invoke LLM on final transcript
- from app.services.streaming import (
-     run_ws_user_turn,
-     prepare_turn_metadata,
-     note_turn_commit_latency,
-     emit_watchdog_user_end,
- )  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.confirm_window import ConfirmWindow
- from app.ws.bus import bus
- from app.obs.source_tags import (
-     FLOW_SCHEMA_VERSION,
-     gate_snapshot,
-     make_source_meta,
-     ms_since,
-     resolve_barge_origin,
- )
- from app.services.tts.flow_wrapper import make_tts_mask_meta
- 
-@@ -1318,50 +1322,77 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             )
-         except Exception:
-             return ""
- 
-     def _ensure_ws_parent_id() -> Optional[str]:
-         if ws_transport_parent_id[0] is None:
-             try:
-                 ws_transport_parent_id[0] = (
-                     flow_emit(
-                         session_id=sid,
-                         type="ws_frames",
-                         phase="transport",
-                         who="server",
-                         meta={"dir": "pump_start"},
-                     )
-                     or None
-                 )
-             except Exception:
-                 ws_transport_parent_id[0] = None
-             if ws_transport_parent_id[0] is None and session_flow_event_id[0]:
-                 ws_transport_parent_id[0] = session_flow_event_id[0]
-         return ws_transport_parent_id[0]
- 
-     policy: Dict[str, Any] = {}
-     policy_version: str = "unknown"
-+    current_interaction_policy_mode: List[Optional[str]] = [None]
-+
-+    def _push_interaction_policy(snapshot: Dict[str, Any]) -> None:
-+        if not isinstance(snapshot, dict):
-+            return
-+        payload = dict(snapshot)
-+        mode_value = payload.get("mode")
-+        try:
-+            mode_str = str(mode_value) if mode_value is not None else ""
-+        except Exception:
-+            mode_str = ""
-+        if current_interaction_policy_mode[0] == mode_str:
-+            pass
-+        else:
-+            current_interaction_policy_mode[0] = mode_str
-+        frame = {
-+            "type": "policy.interaction",
-+            "mode": mode_str or None,
-+            "scope": "interaction",
-+            "policy": payload,
-+        }
-+        try:
-+            asyncio.create_task(_ws_send_json(send, frame))
-+        except Exception:
-+            pass
-+        with contextlib.suppress(Exception):
-+            _admin_emit("policy:applied", session_id=sid, mode=mode_str or None, policy=payload)
- 
-     # Auth
-     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in (
-         "0",
-         "false",
-         "no",
-     )
-     bearer_only = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0", "false", "no")
-     fail_limit = int(os.getenv("WS_FAIL_LIMIT", "10"))
-     fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC", "60"))
-     client_ip = _client_ip_from_scope(scope)
- 
-     token = None
-     selected_subprotocol = "bearer"
-     try:
-         for _sp in scope.get("subprotocols") or []:
-             if not isinstance(_sp, str):
-                 continue
-             if _sp.startswith("bearer."):
-                 token = _sp.split(".", 1)[1].strip()
-                 selected_subprotocol = _sp
-                 break
-             if _sp == "bearer":
-                 selected_subprotocol = _sp
-     except Exception:
-@@ -1718,50 +1749,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         loop.call_soon(_start_bus_pump)
- 
-     voice_metrics_registered = False
-     try:
-         voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
-     except Exception:
-         voice_metrics_registered = False
- 
-     async def _ping_loop():
-         try:
-             while True:
-                 await asyncio.sleep(20)
-                 try:
-                     await _ws_send_json(
-                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
-                     )
-                 except Exception:
-                     break
-         except asyncio.CancelledError:
-             pass
- 
-     ping_task = asyncio.create_task(_ping_loop())
- 
-     try:
-         await _ws_send_json(send, {"type": "ready", "session_id": sid})
-+        _push_interaction_policy(interaction_policy_idle())
-     except Exception as ex:
-         detail = str(ex).strip() or "initial ready failed"
-         with contextlib.suppress(Exception):
-             flow_emit(
-                 session_id=sid,
-                 type="ws_error",
-                 phase="transport",
-                 who="server",
-                 meta={
-                     "where": "initial_ready",
-                     "cause": ex.__class__.__name__,
-                     "msg": str(ex)[:300],
-                 },
-             )
-         with contextlib.suppress(Exception):
-             await _ws_send_json(
-                 send,
-                 {
-                     "type": "Error",
-                     "code": "INITIAL_READY_FAILED",
-                     "detail": detail[:200],
-                 },
-             )
-         with contextlib.suppress(Exception):
-             await _safe_close(1011, "initial_ready_failed")
-@@ -2986,50 +3018,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 elapsed_ms=data.get("elapsed_ms"),
-                 snr_db=data.get("snr_db"),
-                 partials=data.get("partial_tokens"),
-                 conf=data.get("partial_confidence"),
-             )
- 
-     def _open_confirm_window(
-         now_ts: float,
-         *,
-         min_ms: int,
-         max_ms_local: int,
-         snr_threshold: float,
-         policy_until_asr_ready: bool,
-         is_first_turn: bool,
-     ) -> None:
-         window = ConfirmWindow(
-             min_duration_ms=min_ms,
-             max_duration_ms=max_ms_local,
-             max_gap_ms=confirm_gap_ms,
-             min_tokens=confirm_min_tokens,
-             min_confidence=confirm_min_conf,
-             snr_threshold_db=snr_threshold,
-             snr_slack_db=confirm_snr_slack_db,
-             snr_enabled=True,
-         )
-+        _push_interaction_policy(interaction_policy_tts())
-         try:
-             setattr(window, "policy_until_asr_ready", policy_until_asr_ready)
-         except Exception:
-             pass
-         window.start(now_ts)
-         confirm_window_ref[0] = window
-         pending_confirm_request[0] = None
-         local_vad_meta_sent[0] = False
-         _emit_local_vad_signal(now_ts)
-         _jlog(
-             "EVT_CONFIRM_OPEN",
-             sid=sid,
-             turn=turn_id_ref[0],
-             is_first=bool(is_first_turn),
-             min_ms=min_ms,
-             max_ms=max_ms_local,
-             until_asr_ready=policy_until_asr_ready,
-         )
-         _jlog(
-             "confirm_start",
-             sid=sid,
-             turn_id=turn_id_ref[0],
-             min_ms=min_ms,
-             max_ms=max_ms_local,
-             max_gap_ms=confirm_gap_ms,
-@@ -3111,50 +3144,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         if hold_ms > 0:
-             mask_source = "policy_hold"
-         elif manual_button_down[0]:
-             mask_source = "manual_override"
-         with contextlib.suppress(Exception):
-             mask_meta = make_tts_mask_meta(
-                 mask_source,
-                 gates=_current_gate_snapshot(),
-                 evidence={
-                     "utterance_id": str(turn_id)
-                     if turn_id not in (None, "", "greet")
-                     else None,
-                     "post_tts_hold_ms": max(0, hold_ms),
-                 },
-             )
-             _jlog(
-                 "EVT_TTS_MASK_OFF",
-                 sid=sid,
-                 turn_id=turn_id,
-                 post_hold_ms=max(0, hold_ms),
-                 **mask_meta,
-             )
-         if previously_active:
-             _maybe_start_pending_confirm()
-         _schedule_vad_state(True, "idle")
-+        _push_interaction_policy(interaction_policy_idle())
- 
-     async def _await_tts_mask_release(delay_ms: int, turn_id: Any) -> None:
-         try:
-             await asyncio.sleep(max(0.0, delay_ms / 1000.0))
-             _mark_tts_mask_off(turn_id, delay_ms)
-         except asyncio.CancelledError:
-             return
-         finally:
-             if tts_mask_release_task[0] is asyncio.current_task():
-                 tts_mask_release_task[0] = None
- 
-     def _start_confirm_window(now_ts: float) -> None:
-         if not local_vad_allowed:
-             _jlog("confirm_skip_local_vad_disabled", sid=sid)
-             return
-         if _manual_mode_active():
-             try:
-                 active_turn = bus.current_assistant_turn(sid)
-             except Exception:
-                 active_turn = None
-             tts_state, _ = _lookup_tts_state(sid, active_turn)
-             if _is_tts_active(tts_state):
-                 _jlog(
-                     "confirm_skip_manual_mode_tts",
-                     sid=sid,
-@@ -3372,50 +3406,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 _jlog(
-                     "asr_vad_toggle_error",
-                     sid=sid,
-                     enabled=desired,
-                     reason=reason_norm,
-                     err=exc.__class__.__name__,
-                 )
- 
-         task = vad_apply_task[0]
-         if task and not task.done():
-             task.cancel()
-         if loop.is_closed():
-             vad_apply_task[0] = None
-             return
-         new_task = asyncio.create_task(_apply())
-         vad_apply_task[0] = new_task
- 
-         def _clear(done: asyncio.Task) -> None:
-             if vad_apply_task[0] is done:
-                 vad_apply_task[0] = None
- 
-         new_task.add_done_callback(_clear)
-             
-     def _on_assistant_tts_start(turn_id: Any) -> None:
-         assistant_speaking[0] = True
-+        _push_interaction_policy(interaction_policy_tts())
-         mode = (barge_suppress_mode or "none").strip() or "none"
-         mask_engaged = mode != "none"
-         tts_mask_mode[0] = mode
-         if mask_engaged:
-             tts_mask_active[0] = True
-         else:
-             tts_mask_active[0] = False
-         _cancel_tts_mask_release()
-         with contextlib.suppress(Exception):
-             mask_meta = make_tts_mask_meta(
-                 "assistant_audio_start",
-                 gates=_current_gate_snapshot(tts_override=True),
-                 evidence={
-                     "utterance_id": str(turn_id)
-                     if turn_id not in (None, "", "greet")
-                     else None,
-                 },
-             )
-             _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode, **mask_meta)
-         _schedule_vad_state(False, "tts")
-         _ensure_confirm_closed("tts_start")
-         if not manual_button_down[0]:
-             with contextlib.suppress(Exception):
-                 barge.cancel(_send_barge_state)
- 
-@@ -5149,50 +5184,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                     except Exception:
-                                         manual_commit_pending[0] = False
-                                 continue
-                             if action == "barge_in_end":
-                                 if manual_feature_enabled:
-                                     manual_button_down[0] = False
-                                     manual_turn_active[0] = False
-                                     manual_commit_pending[0] = False
-                                     _note_manual_up()
-                                     ptt_turn_preopened[0] = False
-                                     turn_commit_mode_ref[0] = "vad"
-                                     buffered_bytes = _manual_buffered_bytes()
-                                     _manual_log_event(
-                                         "manual_barge_in_end",
-                                         bytes_buffered=buffered_bytes,
-                                         provider_open=dg_state == "open",
-                                     )
-                                     tts_active_now = _current_tts_active()
-                                     if ptt_down_emitted[0]:
-                                         _emit_transition_event(
-                                             "ptt_up",
-                                             meta={"during_tts": bool(tts_active_now)},
-                                             phase="ptt",
-                                         )
-                                     ptt_down_emitted[0] = False
-+                                    _push_interaction_policy(interaction_policy_idle())
-                                 continue
-                             continue
- 
-                         elif t == "Configure":
-                             try:
-                                 cfg.update(obj or {})
-                                 manual_feature_enabled = bool(
-                                     cfg.get("feature_manual_barge_in", manual_feature_enabled)
-                                 )
-                                 manual_mode_manual_only = bool(
-                                     cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-                                 )
-                                 auto_commit_when_ready = bool(
-                                     cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-                                 )
-                                 ws_configured = True
-                                 _jlog(
-                                     "ws_configure",
-                                     sid=sid,
-                                     ts_ms=int(time.time() * 1000),
-                                     barge_in_mode_manual=manual_mode_manual_only,
-                                     feature_manual_barge_in=manual_feature_enabled,
-                                     auto_commit_when_ready=auto_commit_when_ready,
-                                 )
-                                 if not configure_ack_sent:
-diff --git a/static/js/voice/policy/InteractionPolicy.js b/static/js/voice/policy/InteractionPolicy.js
++export default {
++  canOpenTurn,
++};
+diff --git a/static/js/voice/guards/VadGuard.js b/static/js/voice/guards/VadGuard.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..66b263437a7f9957a6ecfb22ab72827c22c61572
+index 0000000000000000000000000000000000000000..78dc57f93150be6db8f46aaffffad2b8894e4d17
 --- /dev/null
-+++ b/static/js/voice/policy/InteractionPolicy.js
-@@ -0,0 +1,130 @@
-+const MODES = Object.freeze({
-+  MANUAL_ONLY_DURING_TTS: 'manual_only_during_tts',
-+  AUTO_VAD_READY: 'auto_vad_ready',
-+});
++++ b/static/js/voice/guards/VadGuard.js
+@@ -0,0 +1,42 @@
++import PolicyBus from '../policy/PolicyBus.js';
++import { emitVoiceEvent } from '../ui/Events.js';
++import { InteractionPolicyMode } from '../policy/InteractionPolicy.js';
 +
-+const SHAPE_KEYS = Object.freeze([
-+  'mode',
-+  'allow_auto_vad',
-+  'auto_commit_when_ready',
-+  'allow_ptt_barge',
-+  'suppress_vad_during_tts',
-+]);
++const BLOCK_REASON = 'assistant_speaking';
 +
-+function coerceBoolean(value, fallback = false) {
-+  if (typeof value === 'boolean') {
-+    return value;
-+  }
-+  if (value == null) {
-+    return fallback;
-+  }
-+  if (typeof value === 'string') {
-+    const normalized = value.trim().toLowerCase();
-+    if (normalized === 'true' || normalized === '1' || normalized === 'yes') {
-+      return true;
-+    }
-+    if (normalized === 'false' || normalized === '0' || normalized === 'no') {
-+      return false;
-+    }
-+  }
-+  if (typeof value === 'number') {
-+    if (!Number.isFinite(value)) {
-+      return fallback;
-+    }
-+    return value !== 0;
-+  }
-+  return fallback;
-+}
-+
-+function normalizeMode(rawMode, fallback) {
-+  const normalized = typeof rawMode === 'string' ? rawMode.trim().toLowerCase() : '';
-+  if (normalized === MODES.MANUAL_ONLY_DURING_TTS) {
-+    return MODES.MANUAL_ONLY_DURING_TTS;
-+  }
-+  if (normalized === MODES.AUTO_VAD_READY) {
-+    return MODES.AUTO_VAD_READY;
-+  }
-+  return fallback;
-+}
-+
-+function baseShapeForMode(mode) {
-+  if (mode === MODES.MANUAL_ONLY_DURING_TTS) {
-+    return {
-+      mode,
-+      allow_auto_vad: false,
-+      auto_commit_when_ready: false,
-+      allow_ptt_barge: true,
-+      suppress_vad_during_tts: true,
-+    };
-+  }
-+  return {
-+    mode,
-+    allow_auto_vad: true,
-+    auto_commit_when_ready: false,
-+    allow_ptt_barge: true,
-+    suppress_vad_during_tts: false,
-+  };
-+}
-+
-+function clonePolicy(policy) {
++const isManualOnlyDuringTts = (policy) => {
 +  if (!policy || typeof policy !== 'object') {
-+    return null;
++    return false;
 +  }
-+  const snapshot = {};
-+  for (const key of SHAPE_KEYS) {
-+    if (Object.prototype.hasOwnProperty.call(policy, key)) {
-+      snapshot[key] = policy[key];
-+    }
-+  }
-+  return snapshot;
-+}
-+
-+export function ensureInteractionPolicy(rawPolicy, fallbackMode = MODES.AUTO_VAD_READY) {
-+  const baseMode = normalizeMode(rawPolicy?.mode, fallbackMode);
-+  const base = baseShapeForMode(baseMode);
-+  if (!rawPolicy || typeof rawPolicy !== 'object') {
-+    return Object.freeze({ ...base });
-+  }
-+  const normalized = { ...base };
-+  if (Object.prototype.hasOwnProperty.call(rawPolicy, 'allow_auto_vad')) {
-+    normalized.allow_auto_vad = coerceBoolean(rawPolicy.allow_auto_vad, base.allow_auto_vad);
-+  }
-+  if (Object.prototype.hasOwnProperty.call(rawPolicy, 'auto_commit_when_ready')) {
-+    normalized.auto_commit_when_ready = coerceBoolean(
-+      rawPolicy.auto_commit_when_ready,
-+      base.auto_commit_when_ready,
-+    );
-+  }
-+  if (Object.prototype.hasOwnProperty.call(rawPolicy, 'allow_ptt_barge')) {
-+    normalized.allow_ptt_barge = coerceBoolean(rawPolicy.allow_ptt_barge, base.allow_ptt_barge);
-+  }
-+  if (Object.prototype.hasOwnProperty.call(rawPolicy, 'suppress_vad_during_tts')) {
-+    normalized.suppress_vad_during_tts = coerceBoolean(
-+      rawPolicy.suppress_vad_during_tts,
-+      base.suppress_vad_during_tts,
-+    );
-+  }
-+  normalized.mode = baseMode;
-+  return Object.freeze(normalized);
-+}
-+
-+export function cloneInteractionPolicy(rawPolicy) {
-+  const snapshot = clonePolicy(rawPolicy);
-+  if (!snapshot) {
-+    return Object.freeze(baseShapeForMode(MODES.AUTO_VAD_READY));
-+  }
-+  snapshot.mode = normalizeMode(snapshot.mode, MODES.AUTO_VAD_READY);
-+  return Object.freeze({ ...snapshot });
-+}
-+
-+export function manualOnlyDuringTtsPolicy(overrides = {}) {
-+  const base = baseShapeForMode(MODES.MANUAL_ONLY_DURING_TTS);
-+  return ensureInteractionPolicy({ ...base, ...clonePolicy(overrides) }, MODES.MANUAL_ONLY_DURING_TTS);
-+}
-+
-+export function autoVadReadyPolicy(overrides = {}) {
-+  const base = baseShapeForMode(MODES.AUTO_VAD_READY);
-+  return ensureInteractionPolicy({ ...base, ...clonePolicy(overrides) }, MODES.AUTO_VAD_READY);
-+}
-+
-+export const InteractionPolicyMode = MODES;
-diff --git a/static/js/voice/policy/PolicyBus.js b/static/js/voice/policy/PolicyBus.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..7d5287d252c14a3e34adbb034e50f5a23e759a2b
---- /dev/null
-+++ b/static/js/voice/policy/PolicyBus.js
-@@ -0,0 +1,60 @@
-+let currentPolicy = null;
-+const listeners = new Set();
-+
-+function freezePolicy(policy) {
-+  if (!policy || typeof policy !== 'object') {
-+    return null;
-+  }
-+  const snapshot = { ...policy };
-+  try {
-+    return Object.freeze(snapshot);
-+  } catch (err) {
-+    return snapshot;
-+  }
-+}
-+
-+function notifyListeners(policy) {
-+  for (const listener of Array.from(listeners)) {
-+    if (typeof listener !== 'function') {
-+      listeners.delete(listener);
-+      continue;
-+    }
-+    try {
-+      listener(policy);
-+    } catch (err) {
-+      if (typeof console !== 'undefined' && console.warn) {
-+        console.warn('[voice][policy] listener error', err);
-+      }
-+    }
-+  }
-+}
-+
-+const PolicyBus = {
-+  setPolicy(policy) {
-+    currentPolicy = freezePolicy(policy);
-+    notifyListeners(currentPolicy);
-+    return currentPolicy;
-+  },
-+  getPolicy() {
-+    return currentPolicy;
-+  },
-+  on(event, handler) {
-+    if (event !== 'policy' || typeof handler !== 'function') {
-+      return () => {};
-+    }
-+    listeners.add(handler);
-+    return () => {
-+      listeners.delete(handler);
-+    };
-+  },
-+  off(handler) {
-+    listeners.delete(handler);
-+  },
-+  clear() {
-+    listeners.clear();
-+    currentPolicy = null;
-+  },
++  const mode = policy.mode;
++  return mode === InteractionPolicyMode.MANUAL_ONLY_DURING_TTS;
 +};
 +
-+export default PolicyBus;
-+export { PolicyBus };
++export function shouldAllowAutoVAD(policySnapshot = PolicyBus.getPolicy()) {
++  const policy = policySnapshot;
++  if (!policy || typeof policy !== 'object') {
++    return true;
++  }
++  if (isManualOnlyDuringTts(policy)) {
++    return policy.allow_auto_vad !== false;
++  }
++  if (Object.prototype.hasOwnProperty.call(policy, 'allow_auto_vad')) {
++    return policy.allow_auto_vad !== false;
++  }
++  return true;
++}
++
++export function guardBargeInDispatch(src) {
++  const policy = PolicyBus.getPolicy();
++  if (shouldAllowAutoVAD(policy)) {
++    return true;
++  }
++  const mode = policy && typeof policy === 'object' ? policy.mode : null;
++  emitVoiceEvent('barge_in:blocked', { src, reason: BLOCK_REASON, mode });
++  return false;
++}
++
++export default {
++  shouldAllowAutoVAD,
++  guardBargeInDispatch,
++};
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index b3b882095779d5759413fd2b582d68d6a7dac51d..672f92d5d191ddfa5fc01a1464b54a5838c4c485 100644
+index 672f92d5d191ddfa5fc01a1464b54a5838c4c485..5d0aae3fc21424c170ec9eef0ccef681e759acea 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -1,36 +1,38 @@
+@@ -1,38 +1,40 @@
  console.log("[AdaptiveRuntime] build=2025-10-16T23:15Z");
  import {
    EvidenceGate,
@@ -662,8 +86,10 @@ index b3b882095779d5759413fd2b582d68d6a7dac51d..672f92d5d191ddfa5fc01a1464b54a58
    getConfig,
  } from '../core/index.js';
  import { ensurePolicy, getPolicySync, pget as policyGet, POLICY_NOT_SET } from '../policy/index.js';
-+import { ensureInteractionPolicy } from '../policy/InteractionPolicy.js';
-+import PolicyBus from '../policy/PolicyBus.js';
+ import { ensureInteractionPolicy } from '../policy/InteractionPolicy.js';
+ import PolicyBus from '../policy/PolicyBus.js';
++import { guardBargeInDispatch } from '../guards/VadGuard.js';
++import { canOpenTurn as evidenceGateCanOpenTurn } from '../guards/EvidenceGateGuard.js';
  import {
    POLICY_SUPPRESS_ALL,
    POLICY_SUPPRESS_NONE,
@@ -689,72 +115,118 @@ index b3b882095779d5759413fd2b582d68d6a7dac51d..672f92d5d191ddfa5fc01a1464b54a58
        return;
      }
    } catch {}
-@@ -1444,50 +1446,68 @@ function shouldCloseTurn(ctx) {
-       console.debug('[dual-vad] close?', {
-         clientSilent,
-         asrSilent,
-         quietMs: quietLogMs,
-         silentDebounceMs: silentSince,
-       });
-     } catch {}
-   }
-   const debounceReached = Number.isFinite(silentSince) && silentSince >= DUAL_VAD_SILENCE_DEBOUNCE_MS;
-   if (debounceReached) {
-     return true;
-   }
-   return quietMs > quietCloseMs(ctx);
- }
+@@ -2188,50 +2190,56 @@ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', a
+   const evidenceCfg = ctx.config?.evidence ?? {};
+   const snrDetail = Number.isFinite(detail?.snr)
+     ? detail.snr
+     : Number.isFinite(detail?.snrDb)
+       ? detail.snrDb
+       : 0;
+   const snr01 = clamp01(snrDetail / 20);
+   const voiced = Number.isFinite(detail?.voicedRatio) ? detail.voicedRatio : 0;
+   const asrConf = Number.isFinite(ctx.state?.asr?.lastConf) ? ctx.state.asr.lastConf : 0;
+   const w1 = Number.isFinite(evidenceCfg.w_snr) ? evidenceCfg.w_snr : 0.4;
+   const w2 = Number.isFinite(evidenceCfg.w_voiced) ? evidenceCfg.w_voiced : 0.2;
+   const w3 = Number.isFinite(evidenceCfg.w_asr) ? evidenceCfg.w_asr : 0.6;
+   const score = (w1 * snr01) + (w2 * voiced) + (w3 * asrConf);
+   const commitScore = Number.isFinite(evidenceCfg.commit_score) ? evidenceCfg.commit_score : 1.0;
  
- const frameIndicatesAsrResult = (frame) => {
-   const type = normalizeVadLabel(frame?.type);
-   const event = normalizeVadLabel(frame?.event);
-   return type === 'result' || type === 'results' || event === 'result' || event === 'results';
+   let commitReason = null;
+   if (score >= commitScore) {
+     ctx.evidenceGate.satisfy('score');
+     commitReason = 'evidence_gate_score';
+   }
+   if (result.shouldCommit) {
+     ctx.evidenceGate.satisfy('commit');
+     commitReason = 'evidence_gate_commit';
+   }
+   if (commitReason) {
++    if (!evidenceGateCanOpenTurn()) {
++      if (ctx?.state && !ctx.state.pendingCommitReason) {
++        ctx.state.pendingCommitReason = commitReason;
++      }
++      return;
++    }
+     const pending = maybeCommitSpeech(ctx, commitReason);
+     if (pending && typeof pending.then === 'function') {
+       pending.catch(() => {});
+     }
+     if (detail) ctx.evidenceGate.setDetail(detail);
+   }
  };
  
- function handleWsFrame(ctx, frame) {
-   if (!ctx?.state) return;
-   const type = normalizeVadLabel(frame?.type);
-   const event = normalizeVadLabel(frame?.event);
-+  const scope = normalizeVadLabel(frame?.scope);
-+
-+  if (type === 'policy.interaction' || (type === 'policy' && scope === 'interaction')) {
-+    const rawPolicy = frame && typeof frame === 'object' && frame.policy && typeof frame.policy === 'object'
-+      ? frame.policy
-+      : frame;
-+    const normalizedPolicy = ensureInteractionPolicy(rawPolicy);
-+    PolicyBus.setPolicy(normalizedPolicy);
-+    const logPayload = {
-+      event: 'policy:applied',
-+      ts_ms: Date.now(),
-+      session_id: ctx.sessionId || safeGetSid(),
-+      mode: normalizedPolicy.mode,
-+      policy: { ...normalizedPolicy },
-+    };
-+    postAdminLog(logPayload);
-+    return;
-+  }
- 
-   const isAssistantAudio = type === 'assistant_audio' || event === 'assistant_audio';
-   const isExplicitTtsStart = (
-     type === 'tts:start'
-     || event === 'tts:start'
-     || type === 'tts_start'
-     || event === 'tts_start'
-   );
- 
-   if (isExplicitTtsStart) {
-     try {
-       const maybePromise = handleClientTtsStartTelemetry(ctx, frame);
-       if (maybePromise && typeof maybePromise.catch === 'function') {
-         maybePromise.catch(() => {});
-       }
-     } catch {}
+ const handleSpeechStart = async (ctx, detail) => {
+   if (ctx.state.manualGate) {
+     return;
    }
+   if (ctx.state.ttsPlaying) {
+     return;
+   }
+   if (isTtsMaskActive(ctx)) {
+     return;
+   }
+   clearDualVadTimer(ctx);
+   ctx.state.bargeConfirmActive = true;
+   ctx.state.bargeConfirmUntil = nowMs() + BARGE_CONFIRM_MS;
+   dispatchTurnEvent(ctx, TurnEvent.SpeechStart, { reason: 'speech_start', detail });
+   const stats = ctx.shadowBuffer.stats();
+   ctx.evidenceGate.start({ startedAt: nowMs(), detail, bufferedMs: stats.durationMs, bufferedBytes: stats.totalBytes });
+   emitVoiceEvent('speech_start', detail);
+@@ -2274,50 +2282,57 @@ const ensureVad = (ctx, opts = {}) => {
+     : HYSTERESIS_OPEN_DB;
+   const minStopDb = Number.isFinite(opts.minStopDb)
+     ? Math.max(HYSTERESIS_CLOSE_DB, Number(opts.minStopDb))
+     : HYSTERESIS_CLOSE_DB;
  
-   if (isExplicitTtsStart || isAssistantAudio) {
-     if (ctx?.state) {
-       ctx.state.ttsPendingStart = true;
-       const turnId = frame?.turn_id;
-       if (turnId != null && turnId !== '') {
-         try {
-           ctx.state.ttsCurrentTurnId = String(turnId);
+   audio.vad = new VAD(audio.analyser, {
+     startDbOffset: VAD_BASE_START_DB_OFFSET + ctx.state.vadBoostDb,
+     stopDbOffset: VAD_BASE_STOP_DB_OFFSET + ctx.state.vadBoostDb,
+     echoStateFn,
+     minSpeechMs,
+     minSilenceMs,
+     minStartDb,
+     minStopDb,
+     gateFn: () => !isTtsMaskActive(ctx),
+   }, {
+     onSpeechStart: (detail) => {
+       const masked = ctx.state.manualGate || ctx.state.ttsPlaying || isTtsMaskActive(ctx);
+       if (masked) {
+         ctx.state.vadMasked = true;
+         ctx.state.vadRecording = false;
+         ctx.state.preCommitASRFeed = false;
+         ctx.evidenceGate.reset('tts_mask_block');
+         logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_block' });
+         return;
+       }
++      if (!guardBargeInDispatch('client_vad')) {
++        ctx.state.vadRecording = false;
++        ctx.state.preCommitASRFeed = false;
++        ctx.evidenceGate.reset('policy_block');
++        logPreCommitMode(ctx, 'shadow_only', { reason: 'policy_block' });
++        return;
++      }
+       ctx.state.vadMasked = false;
+       ctx.state.vadRecording = true;
+       ctx.state.preCommitASRFeed = true;
+       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'asr_priming', {
+         reason: 'speech_start',
+       });
+       handleSpeechStart(ctx, detail);
+     },
+     onSpeechEnd: (detail) => {
+       ctx.state.vadRecording = false;
+       if (!ctx.state.turnOpen) {
+         ctx.state.preCommitASRFeed = false;
+       }
+       if (ctx.state.vadMasked) {
+         ctx.state.vadMasked = false;
+         ctx.evidenceGate.reset('tts_mask_block');
+         logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_release' });
+         return;
+       }
+       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'shadow_only', {
+         reason: 'speech_end',
+       });
+       handleSpeechEnd(ctx, detail);
+     },
+   });
