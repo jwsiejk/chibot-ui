@@ -15,7 +15,7 @@ Events are classified into four levels:
 - **Debug** – Diagnostic metadata: runtime flags, timers, queue depths, provider plumbing.
 - **Raw** – Large payload batches (audio frames, visemes, etc.).
 
-Use the level toggles to include/exclude layers. Toggling resets the event cache and re-fetches with the new level mask. Raw batches stream efficiently; avoid enabling them unless you need the payloads.
+Use the level toggles to include/exclude layers. The inspector now enables Flow, Transition, and Debug by default so exports capture diagnostic breadcrumbs (client audio signals, WS traces, etc.). Toggling resets the event cache and re-fetches with the new level mask. Raw batches stream efficiently; avoid enabling them unless you need the payloads.
 
 ## Grouping Modes
 The grouping selector changes how rows render:
@@ -41,7 +41,7 @@ The hint bar summarizes heuristics from `FlowStore._compute_hints` (e.g., `asr_r
 - **Export NDJSON** – Streams the current session with selected levels. Use this when you need the full, unredacted timeline.
 - **Export Redacted** – Masks sensitive text, payload bodies, and device labels for safer sharing.
 - **Copy link** – Captures the current filters, levels, and grouping in the URL hash.
-- **Hand off to ChatGPT** – Downloads a ZIP containing redacted NDJSON (`flow.ndjson`), the default prompt (`prompt.txt`), and `meta.json` summarizing sensitive payload fingerprints.
+- **Hand off to ChatGPT** – Downloads a ZIP containing redacted NDJSON (`flow.ndjson`), the default prompt (`prompt.txt`), and `meta.json` summarizing sensitive payload fingerprints. With the default level mask the NDJSON includes Flow, Transition, and Debug events so the archive mirrors the live timeline.
 
 ### Example NDJSON
 A lightweight example lives at [`docs/examples/flow_session_sample.ndjson`](examples/flow_session_sample.ndjson). Each line is a single event JSON object:

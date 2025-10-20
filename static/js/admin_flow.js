@@ -45,7 +45,7 @@ const state = {
   bookmarks: [],
   pollTimer: null,
   pollSinceMs: 0,
-  levels: new Set(["flow", "transition"]),
+  levels: new Set(["flow", "transition", "debug"]),
   grouping: "chronological",
   live: false,
   filterText: "",
@@ -1823,7 +1823,8 @@ const __TEST_ONLY__ = {
     state.sessionId = sessionId || "";
   },
   setLevelsForTests(levels) {
-    state.levels = new Set(Array.isArray(levels) ? levels : ["flow", "transition"]);
+    const defaultLevels = ["flow", "transition", "debug"];
+    state.levels = new Set(Array.isArray(levels) ? levels : defaultLevels);
   },
   setFetch(fn) {
     fetchImpl = typeof fn === "function" ? fn : defaultFetchImpl;

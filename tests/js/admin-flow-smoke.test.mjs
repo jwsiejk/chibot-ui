@@ -92,7 +92,7 @@ function prepareFlow(flow) {
     blob: async () => ({}),
   }));
   flow.setSessionForTests('');
-  flow.setLevelsForTests(['flow', 'transition']);
+  flow.setLevelsForTests(['flow', 'transition', 'debug']);
   flow.state.events = new Map();
   flow.state.expanded = new Set();
   flow.state.bookmarks = [];
@@ -184,11 +184,11 @@ test('level toggles and grouping update state and history', async () => {
     return { ok: true, json: async () => ({ events: [], hints: [], next_since_ms: 0 }) };
   });
 
-  assert.equal(flow.state.levels.has('debug'), false);
-  flow.toggleLevel('debug');
   assert.equal(flow.state.levels.has('debug'), true);
   flow.toggleLevel('debug');
   assert.equal(flow.state.levels.has('debug'), false);
+  flow.toggleLevel('debug');
+  assert.equal(flow.state.levels.has('debug'), true);
 
   flow.setGrouping('phase');
   assert.equal(flow.state.grouping, 'phase');
@@ -257,7 +257,7 @@ test('handoff posts session payload and triggers download', async () => {
   const calls = [];
   flow.setFetch(async (url, opts = {}) => {
     calls.push({ url, opts });
-    return { ok: true, blob: async () => ({}) };
+    return { ok: true, blob: async () => ({}), headers: new Map() };
   });
 
   let clicked = false;

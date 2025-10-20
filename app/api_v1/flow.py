@@ -74,7 +74,7 @@ def _parse_int(value: Optional[str], *, name: str, minimum: Optional[int] = None
 
 def _parse_levels(raw: Optional[str]) -> Iterable[str]:
     if raw is None:
-        return ("flow", "transition")
+        return ("flow", "transition", "debug")
     levels: List[str] = []
     for part in raw.split(","):
         piece = part.strip()
