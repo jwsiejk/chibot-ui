@@ -3408,6 +3408,7 @@ def schedule_tts_audio(session_id: str,
             utterance_end_sent = True
 
         stream_payload = audio_bytes if audio_override else payload_for_stream
+        stream_start_ts: Optional[float] = None
         try:
             # Small pacing delay if requested
             if delay_ms and delay_ms > 0:
@@ -3431,6 +3432,7 @@ def schedule_tts_audio(session_id: str,
                 pass
 
             tracker.start()
+            stream_start_ts = _t.time()
 
             # Chunk and broadcast
             mv = memoryview(stream_payload)

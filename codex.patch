@@ -1,401 +1,80 @@
-diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
-index 8c6a4dc321b9e83001caf20ba184bf21def8fe80..8c505f66fa683a1aecbc52805e22bd6d1dda641a 100644
---- a/app/api_v1/flow.py
-+++ b/app/api_v1/flow.py
-@@ -52,51 +52,51 @@ def _normalize_str(value: Optional[str]) -> Optional[str]:
- def _require_admin() -> None:
-     email = (
-         (flask_session.get("user") or {}).get("email")
-         or flask_session.get("email")
-         or request.headers.get("X-User-Email")
-         or (get_user() or "")
-     )
-     if not is_admin_email((email or "").strip().lower()):
-         abort(403)
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 9f7124f2d32e0330c4e9914c8dab7b6f0934a679..177db05c55e48c1a8bd01bbff4b8e8c0715ba055 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -3386,73 +3386,75 @@ def schedule_tts_audio(session_id: str,
+         utterance_end_sent = False
+         max_frames = 256  # guardrail
  
+         def _emit_utterance_end(reason: str) -> None:
+             nonlocal utterance_end_sent
+             if utterance_end_sent:
+                 _log("tts.utterance_end.skip", reason=reason, already_sent=True)
+                 return
+             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
+             end_payload = {
+                 "session_id": session_id,
+                 "turn_id": safe_turn_id,
+                 "reason": reason,
+             }
+             try:
+                 _admin_emit('UtteranceEnd', **end_payload)
+             except Exception:
+                 pass
+             try:
+                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
+             except Exception:
+                 pass
+             utterance_end_sent = True
  
- def _parse_int(value: Optional[str], *, name: str, minimum: Optional[int] = None) -> Optional[int]:
-     if value is None:
-         return None
-     try:
-         parsed = int(value)
-     except (TypeError, ValueError):
-         abort(400, description=f"Invalid {name}")
-     if minimum is not None and parsed < minimum:
-         abort(400, description=f"{name} must be >= {minimum}")
-     return parsed
+         stream_payload = audio_bytes if audio_override else payload_for_stream
++        stream_start_ts: Optional[float] = None
+         try:
+             # Small pacing delay if requested
+             if delay_ms and delay_ms > 0:
+                 _t.sleep(max(0, delay_ms) / 1000.0)
  
+             total_audio_bytes = len(stream_payload or b"")
  
- def _parse_levels(raw: Optional[str]) -> Iterable[str]:
-     if raw is None:
--        return ("flow", "transition")
-+        return ("flow", "transition", "debug")
-     levels: List[str] = []
-     for part in raw.split(","):
-         piece = part.strip()
-         if not piece:
-             continue
-         if piece not in levels:
-             levels.append(piece)
-     return levels
+             start_payload = {"session_id": session_id, "turn_id": safe_turn_id}
+             try:
+                 _admin_emit('tts:start', **start_payload)
+             except Exception:
+                 pass
+             _broadcast_admin_ws_event('tts:start', start_payload)
  
+             start_frame: Dict[str, Any] = {"type": "TTS_START", "turn_id": safe_turn_id}
+             if correlation_user_msg_id:
+                 start_frame["correlation_user_msg_id"] = correlation_user_msg_id
+             try:
+                 bus.broadcast(session_id, start_frame)
+             except Exception:
+                 pass
  
- def _parse_bool(value: Optional[str], *, default: bool = True) -> bool:
-     if value is None:
-         return default
-     lowered = value.strip().lower()
-     if lowered in {"1", "true", "yes", "on"}:
-         return True
-     if lowered in {"0", "false", "no", "off"}:
-         return False
-     return default
+             tracker.start()
++            stream_start_ts = _t.time()
  
+             # Chunk and broadcast
+             mv = memoryview(stream_payload)
+             idx = 0
+             first_sent = False
+             first_chunk_ts: Optional[float] = None
+             last_chunk_ts: Optional[float] = None
+             prev_chunk_ts: Optional[float] = stream_start_ts
+             chunk_items: List[Dict[str, Any]] = []
  
- def _too_large_response() -> Response:
-     response = jsonify({"error": "export_too_large"})
-     response.status_code = 413
-     return response
-diff --git a/docs/README_ADMIN.md b/docs/README_ADMIN.md
-index c11faa110ea7610ecb641b2f002181cbfef6c9fa..602889ef47da24ffc806da8ee34e51719801db71 100644
---- a/docs/README_ADMIN.md
-+++ b/docs/README_ADMIN.md
-@@ -1,67 +1,67 @@
- # Flow Trace and Admin Console Guide
- 
- ## Overview
- The Admin Flow Inspector provides a live, queryable view of every event recorded during a voice or chat session. It is built on the `FlowStore` timeline and surfaces levels, smart hints, batching metadata, and hand-off tooling so on-call responders can triage issues without engineering support. This guide explains how to drive the console effectively and how to export data for deeper analysis.
- 
- ## Navigating Flow Trace
- 1. **Select a session** – Search active session IDs or paste a known ID. The view fetches an initial snapshot and begins tailing the stream.
- 2. **Tail controls** – The tail widget (Go live/Refresh) toggles between continuous polling and a paused state. Pause to inspect a past window without new events shifting the timeline; resume when ready.
- 3. **Timeline** – Rows are grouped by rail, time, phase, actor, type, blurb, and meta chips. Click a row to open the drawer with raw JSON, related events, and copy-to-clipboard shortcuts.
- 
- ## Levels
- Events are classified into four levels:
- - **Flow** – High-level milestones and human-readable steps.
- - **Transition** – Precise edges such as VAD changes, barge-in, or ASR evidence.
- - **Debug** – Diagnostic metadata: runtime flags, timers, queue depths, provider plumbing.
- - **Raw** – Large payload batches (audio frames, visemes, etc.).
- 
--Use the level toggles to include/exclude layers. Toggling resets the event cache and re-fetches with the new level mask. Raw batches stream efficiently; avoid enabling them unless you need the payloads.
-+Use the level toggles to include/exclude layers. The inspector now enables Flow, Transition, and Debug by default so exports capture diagnostic breadcrumbs (client audio signals, WS traces, etc.). Toggling resets the event cache and re-fetches with the new level mask. Raw batches stream efficiently; avoid enabling them unless you need the payloads.
- 
- ## Grouping Modes
- The grouping selector changes how rows render:
- - **Chronological** (default) – Strict event order by relative timestamp.
- - **By Phase** – Groups into session/turn/guardrail/etc. columns.
- - **By Turn** – Buckets events by `turn_id` and expands children inline.
- 
- Group changes recompute the tree and persist in the URL hash for easy sharing.
- 
- ## Filters, Tail, and Chips
- - Text filter matches type, phase, who, or blurb substrings.
- - Turn filter focuses on a specific turn number.
- - Clicking a meta chip adds a removable filter chip.
- - The tail state indicator shows Live/Paused; use “Refresh” to fetch once when paused.
- 
- ## Smart Hints
- The hint bar summarizes heuristics from `FlowStore._compute_hints` (e.g., `asr_recovered`, `tts_slow`, queue pressure). Click a hint badge to jump to anchor events. Hints recalc on every fetch and reflect the currently loaded levels.
- 
- ## Safety Injectors
- `FlowStore` automatically closes long-running confirmations, TTS streams, or LLM spans. Injected events carry `meta.__warning` values (`inferred_close`, `forced_close`) so you can spot them quickly.
- 
- ## Exporting Data
- - **Export NDJSON** – Streams the current session with selected levels. Use this when you need the full, unredacted timeline.
- - **Export Redacted** – Masks sensitive text, payload bodies, and device labels for safer sharing.
- - **Copy link** – Captures the current filters, levels, and grouping in the URL hash.
--- **Hand off to ChatGPT** – Downloads a ZIP containing redacted NDJSON (`flow.ndjson`), the default prompt (`prompt.txt`), and `meta.json` summarizing sensitive payload fingerprints.
-+- **Hand off to ChatGPT** – Downloads a ZIP containing redacted NDJSON (`flow.ndjson`), the default prompt (`prompt.txt`), and `meta.json` summarizing sensitive payload fingerprints. With the default level mask the NDJSON includes Flow, Transition, and Debug events so the archive mirrors the live timeline.
- 
- ### Example NDJSON
- A lightweight example lives at [`docs/examples/flow_session_sample.ndjson`](examples/flow_session_sample.ndjson). Each line is a single event JSON object:
- ```
- {"id":"e_00001","t_rel_ms":0,"level":"flow","phase":"session","type":"session_open","who":"system","meta":{}}
- {"id":"e_00002","t_rel_ms":120,"level":"transition","phase":"turn","type":"asr_partial_first","who":"client","meta":{"turn_id":"1"}}
- ```
- 
- ## Forensic Mode
- Forensic mode temporarily widens the level mask, expands the full tree, and freezes the poll interval for 10 seconds. Use it when you need a dense capture of a tricky sequence (e.g., ASR+LLM races). Exiting restores your previous level selections and expansion state.
- 
- ## Sample ChatGPT Prompt
- ```
- Analyze the redacted flow transcript and identify:
- 1. Primary failure modes or regressions.
- 2. Evidence (event IDs + brief justification).
- 3. The smallest viable fix or mitigation.
- 4. Validation steps to confirm the fix.
- 
- Return a concise incident summary plus a bullet checklist for responders.
- ```
- 
- Keep the prompt in the hand-off ZIP if you need ChatGPT to triage automatically.
-diff --git a/static/js/admin_flow.js b/static/js/admin_flow.js
-index 5d7d9fa982b5feba3f883a409ce176bad7f1a9e4..b1c236ae5f78d189dd2bd38a607cbb55e004beeb 100644
---- a/static/js/admin_flow.js
-+++ b/static/js/admin_flow.js
-@@ -23,51 +23,51 @@ const PHASE_COLORS = {
-   nlg: "#f97316",
-   tts: "#22d3ee",
-   audio: "#38bdf8",
-   evidence: "#facc15",
-   ops: "#f97316",
-   policy: "#fbbf24",
-   default: "#717b9b",
- };
- 
- const GROUP_LABELS = {
-   phase: "Phase",
-   turn: "Turn",
-   chronological: "Timeline",
- };
- 
- const state = {
-   root: null,
-   sessionId: "",
-   sessions: [],
-   sessionQuery: "",
-   events: new Map(),
-   expanded: new Set(),
-   bookmarks: [],
-   pollTimer: null,
-   pollSinceMs: 0,
--  levels: new Set(["flow", "transition"]),
-+  levels: new Set(["flow", "transition", "debug"]),
-   grouping: "chronological",
-   live: false,
-   filterText: "",
-   filterChips: [],
-   turnFilter: "",
-   matchedIds: new Set(),
-   visibleIds: new Set(),
-   drawerEventId: null,
-   lastFetchedAt: null,
-   loading: false,
-   hints: [],
-   hintMap: new Map(),
-   forensicActive: false,
-   forensicTimer: null,
-   forensicTicker: null,
-   forensicPrevLevels: null,
-   forensicPrevExpanded: null,
-   forensicUntil: 0,
-   forensicExpandAll: false,
-   pendingExpandedRestore: null,
-   handoffOptions: {
-     mode: "redacted",
-     includeWs: false,
-     includeLogs: false,
-     piiScrub: false,
-@@ -1801,42 +1801,43 @@ function writeClipboardText(text) {
-         reject(new Error("copy command failed"));
-       }
-     } catch (err) {
-       document.body.removeChild(area);
-       reject(err);
-     }
-   });
- }
- 
- const __TEST_ONLY__ = {
-   state,
-   els,
-   goLive,
-   pauseLive,
-   toggleLevel,
-   setGrouping,
-   downloadExport,
-   handoffToChatGPT,
-   fetchTrace,
-   schedulePoll,
-   setHint,
-   setSessionForTests(sessionId) {
-     state.sessionId = sessionId || "";
-   },
-   setLevelsForTests(levels) {
--    state.levels = new Set(Array.isArray(levels) ? levels : ["flow", "transition"]);
-+    const defaultLevels = ["flow", "transition", "debug"];
-+    state.levels = new Set(Array.isArray(levels) ? levels : defaultLevels);
-   },
-   setFetch(fn) {
-     fetchImpl = typeof fn === "function" ? fn : defaultFetchImpl;
-   },
- };
- 
- if (typeof window !== "undefined") {
-   Object.defineProperty(window, "__ADMIN_FLOW_TEST__", {
-     value: __TEST_ONLY__,
-     configurable: true,
-   });
- }
- 
- export { __TEST_ONLY__ };
- 
- export {};
-diff --git a/tests/js/admin-flow-smoke.test.mjs b/tests/js/admin-flow-smoke.test.mjs
-index 6e1c6be0525ba699752f2cd1ffa59c2a21d03059..63a090e0c52edadb03cc6a6ab10e185828dd8ca4 100644
---- a/tests/js/admin-flow-smoke.test.mjs
-+++ b/tests/js/admin-flow-smoke.test.mjs
-@@ -70,51 +70,51 @@ function setupDom() {
-         this.type = type;
-         this.detail = init.detail;
-       }
-     },
-     configurable: true,
-   });
- 
-   globalThis.requestAnimationFrame = (cb) => {
-     cb();
-     return 1;
-   };
- 
- }
- 
- setupDom();
- 
- const modulePromise = import(new URL('../../static/js/admin_flow.js', import.meta.url));
- 
- function prepareFlow(flow) {
-   flow.setFetch(async () => ({
-     ok: true,
-     json: async () => ({ events: [], hints: [], next_since_ms: 0 }),
-     blob: async () => ({}),
-   }));
-   flow.setSessionForTests('');
--  flow.setLevelsForTests(['flow', 'transition']);
-+  flow.setLevelsForTests(['flow', 'transition', 'debug']);
-   flow.state.events = new Map();
-   flow.state.expanded = new Set();
-   flow.state.bookmarks = [];
-   flow.state.pollTimer = null;
-   flow.state.hints = [];
-   flow.state.hintMap = new Map();
-   flow.state.grouping = 'chronological';
-   flow.state.live = false;
-   flow.state.pendingExpandedRestore = null;
-   flow.state.sessionId = '';
- 
-   const makeButton = (valueAttr, getValue) => ({
-     getAttribute: () => getValue ?? valueAttr,
-     classList: { toggle() {} },
-   });
- 
-   flow.els.tailState = { textContent: '' };
-   flow.els.tailToggle = { textContent: '' };
-   flow.els.sessionHint = { textContent: '' };
-   flow.els.timeline = { innerHTML: '', querySelectorAll: () => [], querySelector: () => null };
-   flow.els.drawer = { setAttribute() {} };
-   flow.els.drawerTitle = { textContent: '' };
-   flow.els.drawerMeta = { innerHTML: '' };
-   flow.els.drawerJson = { textContent: '' };
-   flow.els.drawerRelated = { innerHTML: '' };
-@@ -162,55 +162,55 @@ test('tail goLive/pause toggles live state and schedules poll', async () => {
- 
-   flow.pauseLive();
-   assert.equal(flow.state.live, false);
-   assert.deepEqual(cleared, [1]);
- 
-   Math.random = originalRandom;
- });
- 
- test('level toggles and grouping update state and history', async () => {
-   const mod = await modulePromise;
-   const flow = mod.__TEST_ONLY__;
-   prepareFlow(flow);
-   flow.setSessionForTests('sess-toggle');
- 
-   const historyCalls = [];
-   window.history.replaceState = (...args) => {
-     historyCalls.push(args);
-   };
- 
-   let fetchCalls = 0;
-   flow.setFetch(async () => {
-     fetchCalls += 1;
-     return { ok: true, json: async () => ({ events: [], hints: [], next_since_ms: 0 }) };
-   });
- 
--  assert.equal(flow.state.levels.has('debug'), false);
--  flow.toggleLevel('debug');
-   assert.equal(flow.state.levels.has('debug'), true);
-   flow.toggleLevel('debug');
-   assert.equal(flow.state.levels.has('debug'), false);
-+  flow.toggleLevel('debug');
-+  assert.equal(flow.state.levels.has('debug'), true);
- 
-   flow.setGrouping('phase');
-   assert.equal(flow.state.grouping, 'phase');
-   assert.ok(historyCalls.length >= 1);
-   assert.ok(fetchCalls >= 1);
- });
- 
- test('download export requests NDJSON with expected params', async () => {
-   const mod = await modulePromise;
-   const flow = mod.__TEST_ONLY__;
-   prepareFlow(flow);
-   flow.setSessionForTests('sess-export');
-   flow.setLevelsForTests(['flow', 'debug']);
- 
-   const requests = [];
-   flow.setFetch(async (url, opts = {}) => {
-     requests.push({ url, opts });
-     return { ok: true, blob: async () => ({}) };
-   });
- 
-   let clicked = false;
-   let removed = false;
-   document.createElement = () => ({
-     href: '',
-     download: '',
-@@ -235,51 +235,51 @@ test('download export requests NDJSON with expected params', async () => {
-   };
- 
-   flow.downloadExport({ redacted: true });
-   await new Promise((resolve) => setImmediate(resolve));
-   assert.equal(requests.length, 1);
-   assert.match(requests[0].url, /redacted=1/);
-   assert.match(requests[0].url, /levels=flow%2Cdebug/);
-   assert.equal(clicked, true);
-   assert.equal(removed, true);
-   assert.equal(urls[1], 'blob://export');
- 
-   URL.createObjectURL = originalCreate;
-   URL.revokeObjectURL = originalRevoke;
- });
- 
- test('handoff posts session payload and triggers download', async () => {
-   const mod = await modulePromise;
-   const flow = mod.__TEST_ONLY__;
-   prepareFlow(flow);
-   flow.setSessionForTests('sess-hand');
-   flow.setLevelsForTests(['flow', 'transition', 'debug']);
- 
-   const calls = [];
-   flow.setFetch(async (url, opts = {}) => {
-     calls.push({ url, opts });
--    return { ok: true, blob: async () => ({}) };
-+    return { ok: true, blob: async () => ({}), headers: new Map() };
-   });
- 
-   let clicked = false;
-   let removed = false;
-   document.createElement = () => ({
-     href: '',
-     download: '',
-     click() {
-       clicked = true;
-     },
-     remove() {
-       removed = true;
-     },
-     style: {},
-   });
- 
-   const originalCreate = URL.createObjectURL;
-   const originalRevoke = URL.revokeObjectURL;
-   URL.createObjectURL = () => 'blob://handoff';
-   URL.revokeObjectURL = () => {};
- 
-   flow.handoffToChatGPT();
-   await new Promise((resolve) => setImmediate(resolve));
-   assert.equal(calls.length, 1);
-   assert.equal(calls[0].url, '/api/v1/flow/handoff');
+             while idx < len(mv):
+                 # stop early if canceled
+                 try:
+                     from ..ws.bus import bus as _bus_ref
+                     if _bus_ref.is_canceled(session_id, safe_turn_id):
+                         canceled = True
+                         _log(
+                             "tts.chunks.cancelled",
+                             chunk_count=chunk_count,
+                             bytes_sent=chunk_bytes_sent,
+                             total_bytes=total_audio_bytes,
+                         )
+                         break
+                 except Exception:
+                     pass
