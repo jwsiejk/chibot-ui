@@ -771,6 +771,7 @@ async def _emit_user_final_payload(
     turn_id_for_event: int, text: str, *, final_reason: str = "provider_final"
 ) -> None:
     final_seen[0] = True
+    pending_final_texts.pop(turn_id_for_event, None)
     now_ts = time.time()
 
     if turn_timing is not None:
@@ -835,63 +836,61 @@ async def _emit_user_final_payload(
     if not text_str:
         return
 
-    # ... rest of your existing logic after the final (metadata/NLU/etc.) ...
+    dialog_nlu_pre: Dict[str, Any] = {}
+    universal_pre: Dict[str, Any] = {}
+    meta_stub = {"source": "user_ws", "channel": "ws"}
+    try:
+        prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
+        if isinstance(dialog_nlu_raw, dict):
+            dialog_nlu_pre = dict(dialog_nlu_raw)
+        if isinstance(prepared_meta, dict):
+            raw_universal = prepared_meta.get("universal") or {}
+            if isinstance(raw_universal, dict):
+                universal_pre = _ensure_universal_fields(raw_universal)
+    except Exception:
+        dialog_nlu_pre = {}
+        universal_pre = {}
+    _emit_admin_nlu_event(
+        text,
+        sid,
+        dialog_nlu=dialog_nlu_pre,
+        universal=universal_pre,
+    )
+    meta_overrides: Optional[Dict[str, Any]] = None
+    if dialog_nlu_pre or universal_pre:
+        meta_overrides = {}
+        if dialog_nlu_pre:
+            meta_overrides["nlu"] = dict(dialog_nlu_pre)
+            meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
+        if universal_pre:
+            meta_overrides["universal"] = dict(universal_pre)
+    if turn_id_for_event in completed_llm_turns:
+        with contextlib.suppress(Exception):
+            _jlog(
+                "llm_turn_skip_duplicate",
+                sid=sid,
+                turn_id=turn_id_for_event,
+            )
+        return
+    completed_llm_turns.add(turn_id_for_event)
 
-        dialog_nlu_pre: Dict[str, Any] = {}
-        universal_pre: Dict[str, Any] = {}
-        meta_stub = {"source": "user_ws", "channel": "ws"}
+    async def _bg_turn(meta_payload=meta_overrides):
         try:
-            prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
-            if isinstance(dialog_nlu_raw, dict):
-                dialog_nlu_pre = dict(dialog_nlu_raw)
-            if isinstance(prepared_meta, dict):
-                raw_universal = prepared_meta.get("universal") or {}
-                if isinstance(raw_universal, dict):
-                    universal_pre = _ensure_universal_fields(raw_universal)
-        except Exception:
-            dialog_nlu_pre = {}
-            universal_pre = {}
-        _emit_admin_nlu_event(
-            text,
-            sid,
-            dialog_nlu=dialog_nlu_pre,
-            universal=universal_pre,
-        )
-        meta_overrides: Optional[Dict[str, Any]] = None
-        if dialog_nlu_pre or universal_pre:
-            meta_overrides = {}
-            if dialog_nlu_pre:
-                meta_overrides["nlu"] = dict(dialog_nlu_pre)
-                meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
-            if universal_pre:
-                meta_overrides["universal"] = dict(universal_pre)
-        if turn_id_for_event in completed_llm_turns:
+            await asyncio.to_thread(
+                run_ws_user_turn,
+                sid,
+                text,
+                None,
+                meta_overrides=meta_payload,
+            )
+        except Exception as e:
             with contextlib.suppress(Exception):
-                _jlog(
-                    "llm_turn_skip_duplicate",
-                    sid=sid,
-                    turn_id=turn_id_for_event,
+                await _ws_send_json(
+                    send,
+                    make_error("llm_turn_fail", e.__class__.__name__),
                 )
-            return
-        completed_llm_turns.add(turn_id_for_event)
 
-        async def _bg_turn(meta_payload=meta_overrides):
-            try:
-                await asyncio.to_thread(
-                    run_ws_user_turn,
-                    sid,
-                    text,
-                    None,
-                    meta_overrides=meta_payload,
-                )
-            except Exception as e:
-                with contextlib.suppress(Exception):
-                    await _ws_send_json(
-                        send,
-                        make_error("llm_turn_fail", e.__class__.__name__),
-                    )
-
-        asyncio.create_task(_bg_turn())
+    asyncio.create_task(_bg_turn())
 
     async def _guard_runner(payload: Tuple[int, str, str]) -> None:
         turn_id_for_event, text, final_reason = payload
@@ -913,6 +912,7 @@ async def _emit_user_final_payload(
                 await guard_state["local_vad_event"].wait()
             if guard_state["pending"] is payload:
                 guard_state["pending"] = None
+                pending_final_texts.pop(turn_id_for_event, None)
                 _jlog(
                     "ws_final_guard_emit",
                     sid=sid,
@@ -939,6 +939,7 @@ async def _emit_user_final_payload(
         guard_state["pending_ts"] = time.time()
         if guard_state["last_audio_ts"] <= 0:
             guard_state["last_audio_ts"] = guard_state["pending_ts"]
+        pending_final_texts[turn_id_for_event] = text
         _jlog(
             "ws_final_guard_schedule",
             sid=sid,
@@ -1033,6 +1034,8 @@ async def _emit_user_final_payload(
             if et in ("user_partial", "user_final"):
                 is_final = et == "user_final"
                 text = (ev.get("text") or "").strip()
+                if not is_final and text:
+                    last_partial_text[0] = text
                 turn_id_for_event = turn_id_ref[0]
                 if is_final:
                     next_turn_id = None
@@ -1049,6 +1052,9 @@ async def _emit_user_final_payload(
                     else:
                         synthetic_final_turns.discard(next_turn_id)
                     turn_id_for_event = next_turn_id
+                    last_user_final_text[0] = text
+                    if text:
+                        last_partial_text[0] = text
                 else:
                     allow_barge, _, _, _ = _decide_barge_attempt("vad")
                     if not allow_barge:
@@ -1600,6 +1606,23 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     bus_task: Optional[asyncio.Task] = None
 
+    def _ensure_bus_task_started() -> None:
+        nonlocal bus_task
+        if bus_task is not None:
+            return
+
+        loop = asyncio.get_running_loop()
+
+        def _start_bus_pump() -> None:
+            nonlocal bus_task
+            if bus_task is not None:
+                return
+            bus_task = loop.create_task(
+                _pump_bus_to_client(sid, partial(send, route="bus"), _handle_bus_frame)
+            )
+
+        loop.call_soon(_start_bus_pump)
+
     voice_metrics_registered = False
     try:
         voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
@@ -1649,6 +1672,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         with contextlib.suppress(Exception):
             await _safe_close(1011, "initial_ready_failed")
         return
+
+    _ensure_bus_task_started()
 
     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
     ws_configured = False
@@ -1972,6 +1997,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     dg_state: str = "closed"
     turn_id_ref = [0]
     pending_final_turns: Deque[int] = deque()
+    pending_final_texts: Dict[int, str] = {}
     completed_llm_turns: Set[int] = set()
     synthetic_final_turns: Set[int] = set()
     final_seen = [False]
@@ -1982,6 +2008,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     last_confident_partial_conf: List[Optional[float]] = [None]
     last_partial_conf: List[Optional[float]] = [None]
     last_partial_speech_ms: List[int] = [0]
+    last_user_final_text: List[str] = [""]
+    last_partial_text: List[str] = [""]
     current_assistant_turn_ref: List[Optional[Any]] = [None]
     manual_commit_pending = [False]
     manual_button_down = [False]
@@ -3147,6 +3175,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         asr_seen_partial[0] = False
         last_partial_conf[0] = None
         last_partial_speech_ms[0] = 0
+        last_partial_text[0] = ""
         turn_connect_started[0] = False
         turn_stream_committed[0] = False
         asr_direct_stream[0] = False
@@ -3199,6 +3228,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             "tts_stop",
         }:
             _on_assistant_tts_end(turn_id)
+
+    _ensure_bus_task_started()
 
     def _reset_turn_metrics(start_ts: float) -> None:
         turn_timing["start"][0] = start_ts
@@ -3624,20 +3655,94 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     reason=reason,
                 )
             return False
+
         final_seen[0] = True
-        payload = make_results(turn_id, transcript=transcript, is_final=True)
+        text = (
+            transcript
+            or pending_final_texts.pop(turn_id, "")
+            or last_user_final_text[0]
+            or last_partial_text[0]
+        )
+
+        payload = make_results(turn_id, transcript=text, is_final=True)
         payload["type"] = "Results"
         await _ws_send_json(send, payload)
         utterance_payload = make_utterance_end(turn_id)
         utterance_payload["type"] = "UtteranceEnd"
         await _ws_send_json(send, utterance_payload)
+
         with contextlib.suppress(Exception):
             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+
+        if _admin_emit:
+            final_payload: Dict[str, Any] = {
+                "session_id": sid,
+                "turn_id": turn_id,
+            }
+            if text:
+                final_payload["text"] = text
+                final_payload["text_preview"] = _clip_text(text)
+            with contextlib.suppress(Exception):
+                _admin_emit("asr:final", **final_payload)
+
+        if text:
+            dialog_nlu_pre: Dict[str, Any] = {}
+            universal_pre: Dict[str, Any] = {}
+            meta_stub = {"source": "user_ws", "channel": "ws"}
+            try:
+                prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
+                if isinstance(dialog_nlu_raw, dict):
+                    dialog_nlu_pre = dict(dialog_nlu_raw)
+                if isinstance(prepared_meta, dict):
+                    raw_universal = prepared_meta.get("universal") or {}
+                    if isinstance(raw_universal, dict):
+                        universal_pre = _ensure_universal_fields(raw_universal)
+            except Exception:
+                dialog_nlu_pre = {}
+                universal_pre = {}
+
+            _emit_admin_nlu_event(
+                text,
+                sid,
+                dialog_nlu=dialog_nlu_pre,
+                universal=universal_pre,
+            )
+
+            meta_overrides: Optional[Dict[str, Any]] = None
+            if dialog_nlu_pre or universal_pre:
+                meta_overrides = {}
+                if dialog_nlu_pre:
+                    meta_overrides["nlu"] = dict(dialog_nlu_pre)
+                    meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
+                if universal_pre:
+                    meta_overrides["universal"] = dict(universal_pre)
+
+            if turn_id not in completed_llm_turns:
+                completed_llm_turns.add(turn_id)
+
+                async def _bg_turn(meta_payload=meta_overrides, final_text=text):
+                    try:
+                        await asyncio.to_thread(
+                            run_ws_user_turn,
+                            sid,
+                            final_text,
+                            None,
+                            meta_overrides=meta_payload,
+                        )
+                    except Exception as e:
+                        with contextlib.suppress(Exception):
+                            await _ws_send_json(
+                                send,
+                                make_error("llm_turn_fail", e.__class__.__name__),
+                            )
+
+                asyncio.create_task(_bg_turn())
+
         _log_turn_finish(
             turn_id,
             reason=reason,
             synthetic=True,
-            transcript_chars=len(transcript or ""),
+            transcript_chars=len(text or ""),
         )
         completed_llm_turns.discard(turn_id)
         return True
@@ -3695,6 +3800,18 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 except Exception:
                     pass
                 await client.connect()
+                ready_evt = getattr(client, "_open_evt", None)
+                if isinstance(ready_evt, asyncio.Event):
+                    with contextlib.suppress(Exception):
+                        if not ready_evt.is_set():
+                            ready_evt.set()
+                else:
+                    try:
+                        evt = asyncio.Event()
+                        evt.set()
+                        setattr(client, "_open_evt", evt)
+                    except Exception:
+                        pass
                 dg_state = "open"
                 connect_result["ok"] = True
                 turn_id_ref[0] = buf.turn_seq + 1
@@ -3797,6 +3914,33 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             except Exception:
                 return False
         return False
+
+    def _recover_transcript_from_client(client: Any) -> Optional[str]:
+        if client is None:
+            return None
+        queue = getattr(client, "_queue", None)
+        if isinstance(queue, asyncio.Queue):
+            drained: List[Any] = []
+            while True:
+                try:
+                    item = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                drained.append(item)
+            for item in drained:
+                if isinstance(item, dict):
+                    text_val = (item.get("text") or "").strip()
+                    if text_val:
+                        return text_val
+            return None
+        pending = getattr(client, "_pending_events", None)
+        if isinstance(pending, (list, tuple)):
+            for item in pending:
+                if isinstance(item, dict):
+                    text_val = (item.get("text") or "").strip()
+                    if text_val:
+                        return text_val
+        return None
 
     def _maybe_emit_backpressure(
         queue_len: int, *, dropped_now: int = 0, force: bool = False
@@ -4124,6 +4268,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         pending_confirm_request[0] = None
                         last_partial_conf[0] = None
                         last_partial_speech_ms[0] = 0
+                        last_partial_text[0] = ""
                         if barge_started:
                             if manual_mode_manual_only:
                                 try:
@@ -4355,6 +4500,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                         elif t == "greet":
                             _jlog("ws_greet_recv", sid=sid)
+                            _ensure_bus_task_started()
 
                             async def _bg():
                                 nonlocal greet_end_pending, greet_end_emitted
@@ -4732,6 +4878,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         via="Configure",
                                         greet_seq=greet_seq,
                                     )
+                                    _ensure_bus_task_started()
 
                                     async def _bg2():
                                         nonlocal greet_end_pending, greet_end_emitted
@@ -4857,6 +5004,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
                                 if universal_pre:
                                     meta_overrides["universal"] = dict(universal_pre)
+
+                            _ensure_bus_task_started()
 
                             async def _bg_user():
                                 try:
@@ -5100,11 +5249,38 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     _relay_task = rx_task
                                     rx_task = None
                                     if _relay_task:
-                                        _relay_task.cancel()
-                                        with contextlib.suppress(
-                                            asyncio.CancelledError, Exception
-                                        ):
-                                            await _relay_task
+                                        drain_wait_s = 0.15
+                                        with contextlib.suppress(Exception):
+                                            drain_wait_s = float(
+                                                os.getenv(
+                                                    "DG_FINAL_DRAIN_WAIT_S",
+                                                    "0.15",
+                                                )
+                                            )
+                                        drain_wait_s = max(0.0, drain_wait_s)
+                                        if drain_wait_s > 0 and not _relay_task.done():
+                                            try:
+                                                await asyncio.wait_for(
+                                                    asyncio.shield(_relay_task),
+                                                    timeout=drain_wait_s,
+                                                )
+                                            except asyncio.TimeoutError:
+                                                pass
+                                            except Exception:
+                                                pass
+                                        if not _relay_task.done():
+                                            _relay_task.cancel()
+                                            with contextlib.suppress(
+                                                asyncio.CancelledError, Exception
+                                            ):
+                                                await _relay_task
+                                    if not final_seen[0]:
+                                        recovered_text = _recover_transcript_from_client(dg)
+                                        if recovered_text:
+                                            pending_final_texts[turn_id] = recovered_text
+                                            last_user_final_text[0] = recovered_text
+                                            if recovered_text:
+                                                last_partial_text[0] = recovered_text
                                     dg = None
                                     with contextlib.suppress(Exception):
                                         asr_ready_evt.clear()

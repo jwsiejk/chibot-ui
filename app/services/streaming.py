@@ -611,10 +611,10 @@ def _log_policy_decision(*,
         pass
 
 
-def _should_use_foundation(seed_text: str) -> bool:
+def _should_use_foundation(seed_text: str, force: bool = False) -> bool:
     if not ENABLE_CHIP_FOUNDATION:
         return False
-    if _foundation_backoff_active():
+    if (not force) and _foundation_backoff_active():
         return False
     try:
         normalized = str(seed_text or "").strip().lower()
@@ -2297,7 +2297,10 @@ def make_assistant_frames(seed_text: str,
         fallback_on_error = _cfg_flag("assistant_fallback_on_error", True)
         fallback_emit_event = _cfg_flag("assistant_fallback_emit_event", True)
 
-        if _should_use_foundation(seed_text):
+        force_foundation = False
+        if isinstance(meta, dict):
+            force_foundation = bool(meta.get("force_foundation"))
+        if _should_use_foundation(seed_text, force_foundation):
             try:
                 return _make_foundation_frames(
                     seed_text,
@@ -3746,7 +3749,7 @@ def run_ws_greet(session_id: str) -> str:
     tid, frames = make_assistant_frames(
         "greet",
         session_id,
-        meta={"source": "ws_greet", "channel": "ws"},
+        meta={"source": "ws_greet", "channel": "ws", "force_foundation": True},
         force_turn_id=forced_tid,
         cfg=cfg,
     )

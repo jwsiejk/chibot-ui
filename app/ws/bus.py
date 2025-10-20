@@ -60,8 +60,13 @@ class StreamBus:
         q = Queue()
         with self._lock(sid):
             self._subs.setdefault(sid, []).append(q)
-            if sid in self._pending:
-                self._pending.pop(sid, None)
+            pending = self._pending.pop(sid, None)
+            if pending:
+                for frame in pending:
+                    try:
+                        q.put(frame)
+                    except Exception:
+                        pass
         return q
 
     def _coalesce_legacy_audio_chunk(self, buf, frame):
