@@ -1869,6 +1869,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             )
     except Exception:
         pass
+
+    config_manual_feature_enabled = bool(manual_feature_enabled)
+    config_auto_commit_enabled = bool(auto_commit_when_ready)
     voice_policy = policy.get("voice_runtime") if isinstance(policy, dict) else {}
     confirm_policy = (
         voice_policy.get("confirm_window") if isinstance(voice_policy, dict) else {}
@@ -1885,10 +1888,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         voice_policy.get("auto_commit") if isinstance(voice_policy, dict) else {}
     )
 
+    policy_auto_commit_enabled = True
+
     if isinstance(auto_commit_policy, dict):
         enabled_value = auto_commit_policy.get("enabled")
-        if isinstance(enabled_value, bool) and not enabled_value:
-            auto_commit_when_ready = False
+        if isinstance(enabled_value, bool):
+            policy_auto_commit_enabled = enabled_value
         requires_dual_value = auto_commit_policy.get("requires_dual_evidence")
         if isinstance(requires_dual_value, bool):
             auto_commit_requires_dual = requires_dual_value
@@ -1900,8 +1905,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         allow_ptt_value = barge_policy.get("allow_ptt")
         if isinstance(allow_ptt_value, bool):
             barge_allow_ptt = allow_ptt_value
-            if not allow_ptt_value:
-                manual_feature_enabled = False
         allow_local_vad_value = barge_policy.get("allow_local_vad")
         if isinstance(allow_local_vad_value, bool):
             local_vad_allowed = allow_local_vad_value
@@ -1916,6 +1919,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         post_hold_value = barge_policy.get("post_tts_hold_ms")
         if isinstance(post_hold_value, (int, float)):
             barge_post_tts_hold_ms = max(0, int(post_hold_value))
+
+    manual_feature_enabled = bool(config_manual_feature_enabled and barge_allow_ptt)
+    auto_commit_when_ready = bool(
+        config_auto_commit_enabled and policy_auto_commit_enabled
+    )
 
     _reapply_interaction_policy()
 
