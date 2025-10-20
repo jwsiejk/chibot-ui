@@ -752,17 +752,20 @@ class DeepgramClient:
         return payload
 
     def _emit_diag(self, label: str, **extra: Any) -> None:
-        hook = self._diag_hook
-        if not callable(hook):
-            return
         payload = self._diag_payload(**extra)
-        try:
-            hook(label, **payload)
-        except TypeError:
+        hook = self._diag_hook
+        if callable(hook):
             try:
-                hook(label, payload)
+                hook(label, **payload)
+            except TypeError:
+                try:
+                    hook(label, payload)
+                except Exception:
+                    pass
             except Exception:
                 pass
+        try:
+            _admin_emit("asr:diag", label=label, **dict(payload))
         except Exception:
             pass
 

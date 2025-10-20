@@ -1,351 +1,657 @@
-diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index 46146926f316730c2625b6291bdf4d0feb42d89e..c48c4bf9fbb9dcdbdd5cb472321d74ddf974356b 100644
---- a/static/js/voice/runtime/AdaptiveRuntime.js
-+++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -1225,50 +1225,51 @@ const ensureCtx = () => {
-       lastVadOpts: null, pendingVadOpts: null,
-       turnSeq: 0, activeTurnId: null,
-       ttsPlaying: false, lastChunkAt: 0,
-       lastReadyLogAt: 0,
-       vadRecording: false,
-       lastUserAudioMs: 0,
-       dualVadBothSilentAt: null,
-       turnOpenedAtMs: 0,
-       preCommitASRFeed: false,
-       vadMasked: false,
-       pendingCommitReason: null,
-       readyPending: false,
-       readyForTurnSeq: 0,
-       asr: initAsrState(),
-       dualVadCloseTimer: null,
-       dualVadLogSnapshot: null,
-       lastDualVadLogTs: 0,
-       lastPreCommitFeedMode: 'shadow_only',
-       ttsRearmTimer: null,
-       ttsHeartbeatTimer: null,
-       ttsHoldUntilMs: 0,
-       vadShouldRearmAfterTts: false,
-       vadSuppressedForTts: false,
-       ttsSuppressionMode: POLICY_SUPPRESS_NONE,
-       ttsHoldStartedMs: 0,
-+      ttsPendingStart: false,
-       evidenceGate, shadowBuffer, ttsMask,
-     },
-     audio: {
-       stream: null, context: null, source: null, analyser: null,
-       highpass: null, encoderDestination: null, encoderStream: null,      
-       vad: null, recorder: null, recTimeslice: RECORD_TIMESLICE_MS,
-       lastTimecode: null,
-       micGateReasons: new Set(),
-       micConnected: false,
-       rmsSampleTimer: null,
-       rmsScratch: null,
-       rmsStats: null,      
-     },
-     transport: { wsPromise: null, connected: false, safetyTimer: null },
-     evidenceGate,
-     shadowBuffer,
-     ttsMask,
-     maskLogTimer: null,
-     policy: policySnapshot,
-   };
+diff --git a/app/config.py b/app/config.py
+index 9549470c6d954761598fd174408baa9c28e32a43..6c5171b6f402540825a7cc2e31bd2f558a956033 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -2,69 +2,84 @@ import os
+ from dataclasses import dataclass
+ from typing import Optional
  
-   registerTtsListener(ctx);
-   registerWsListener(ctx);
-   ctx.ttsEndedAtMs = 0;
-   ctxRef.current = ctx;
-@@ -1289,73 +1290,80 @@ const registerTtsListener = (ctx) => {
-   const listener = (ev) => {
-     const { detail } = ev || {};
-     const handled = applyTtsState(ctx, detail?.state, detail);
-     if (handled && normalizeVadLabel(detail?.state) === 'ended') {
-       try {
-         ctx.state.vadBoostDb = Math.max(0, (ctx.state.vadBoostDb ?? 0) - 3);
-         setTimeout(() => {
-           try {
-             ctx.state.vadBoostDb = 0;
-           } catch {}
-         }, 250);
-       } catch {}
-     }
-   };
-   try { win?.addEventListener?.('chip-tts', listener, { passive: true }); } catch {}
- };
  
- const normalizeVadLabel = (value) => (typeof value === 'string' ? value.toLowerCase() : '');
+ def _optional_bool_from_env(name: str) -> Optional[bool]:
+     raw = os.getenv(name)
+     if raw is None:
+         return None
+     lowered = raw.strip().lower()
+     if lowered in ("1", "true", "yes", "on"):
+         return True
+     if lowered in ("0", "false", "no", "off"):
+         return False
+     return None
  
- const applyTtsState = (ctx, rawState, detail = {}) => {
-   if (!ctx || !ctx.state || !ctx.ttsMask) return false;
-   const normalized = normalizeVadLabel(rawState);
-   if (!normalized) return false;
  
-   if (['playing', 'assistant_speaking', 'speaking', 'paused'].includes(normalized)) {
-+    const pending = ctx.state?.ttsPendingStart === true;
-+    if (!ctx.state.ttsPlaying && !pending) {
-+      return false;
-+    }
-+    ctx.state.ttsPendingStart = false;
-     ctx.state.ttsPlaying = true;
-     ctx.ttsEndedAtMs = undefined;
-     ctx.ttsMask.start();
-     handleTtsPlaybackStarted(ctx, detail);
-     startMaskLogging(ctx);
-     return true;
-   }
+ def _float_from_env(name: str, default: float) -> float:
+     raw = os.getenv(name)
+     if raw is None:
+         return default
+     try:
+         return float(raw)
+     except (TypeError, ValueError):
+         return default
  
-   if (['ended', 'stopped', 'done'].includes(normalized)) {
-     ctx.state.ttsPlaying = false;
-+    ctx.state.ttsPendingStart = false;
-     ctx.ttsEndedAtMs = nowMs();
-     ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
-     handleTtsPlaybackEnded(ctx);
-     startMaskLogging(ctx);
-     return true;
-   }
++
++def _bool_from_env(default: bool, *names: str) -> bool:
++    for name in names:
++        raw = os.getenv(name)
++        if raw is None:
++            continue
++        lowered = raw.strip().lower()
++        return lowered not in ("0", "false", "no", "off")
++    return default
++
++
++_ADVANCED_LOGGING_DEFAULT = _bool_from_env(
++    True,
++    "VOICE_ADVANCED_LOGGING_ENABLED",
++    "ADVANCED_LOGGING_ENABLED",
++)
++
+ @dataclass
+ class Settings:
+     admin_emails: str = os.getenv("ADMIN_EMAILS", "")
+     database_url: str = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/ask_chip?sslmode=require")
+     openai_api_key: str = os.getenv("OPENAI_API_KEY", "mock-openai-key")
+     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+     openai_stt_language: str = os.getenv("OPENAI_STT_LANGUAGE", "en")
+     elevenlabs_api_key: str = os.getenv("ELEVENLABS_API_KEY", "mock-eleven-key")
+     eleven_voice_id: str = os.getenv("ELEVENLABS_VOICE_ID", "mock-voice")
+     eleven_output_format: str = os.getenv("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128")
+     eleven_output_format_ws: str = os.getenv("ELEVEN_OUTPUT_FORMAT_WS", "mp3_44100_128")
+     email_host: str = os.getenv("EMAIL_HOST", "mock.smtp.local")
+     email_port: int = int(os.getenv("EMAIL_PORT", "587"))
+     email_use_tls: bool = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+     email_host_user: str = os.getenv("EMAIL_HOST_USER", "mock-user")
+     email_host_password: str = os.getenv("EMAIL_HOST_PASSWORD", "mock-pass")
+     email_from_name: str = os.getenv("EMAIL_FROM_NAME", "Chip")
+     from_email: str = os.getenv("FROM_EMAIL", "chip@example.com")
+     feature_admin_ui: bool = os.getenv("FEATURE_ADMIN_UI", "true").lower() == "true"
+     feature_audio: bool = os.getenv("FEATURE_AUDIO", "true").lower() == "true"
+     feature_tools: bool = os.getenv("FEATURE_TOOLS", "false").lower() == "true"
+     enable_chip_foundation: bool = os.getenv("ENABLE_CHIP_FOUNDATION", "1").strip().lower() not in ("0", "false", "no")
+     enable_policy_chips: bool = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
+     enable_nlu_logging: Optional[bool] = _optional_bool_from_env("ENABLE_NLU_LOGGING")
+-    advanced_logging_enabled: bool = os.getenv("ADVANCED_LOGGING_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
++    advanced_logging_enabled: bool = _ADVANCED_LOGGING_DEFAULT
+     suggestion_max: int = int(os.getenv("SUGGESTION_MAX", "4"))
+     secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
+     session_type: str = os.getenv("SESSION_TYPE", "filesystem")
+     ws_ping_interval_ms: int = int(os.getenv("WS_PING_INTERVAL_MS", "25000"))
+     vad_base_threshold_db: float = _float_from_env("VAD_BASE_THRESHOLD", 10.0)
+     vad_exit_threshold_db: float = _float_from_env("VAD_EXIT_THRESHOLD", 6.0)
+     vad_tts_boost_db: float = _float_from_env("VAD_TTS_BOOST", 6.0)
+     vad_min_speech_ms: int = int(os.getenv("VAD_MIN_SPEECH_MS", "360"))
  
-   if (['ready', 'idle', 'listening', 'assistant_listening'].includes(normalized)) {
-     ctx.state.ttsPlaying = false;
-+    ctx.state.ttsPendingStart = false;
-     ctx.ttsEndedAtMs = nowMs();
-     ctx.ttsMask.clear();
-     stopMaskLogging(ctx);
--    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
-+    releaseMicGate(ctx, MIC_GATE_TTS_REASON);
-     markReady(ctx, 'assistant_ready', { detail });
-     return true;
-   }
+ def load_settings() -> Settings:
+     return Settings()
  
-   return false;
- };
  
- const resolveVadEventType = (frame) => {
-   if (!frame || typeof frame !== 'object') return null;
-   const metaVad = normalizeVadLabel(frame?.meta?.local_vad);
-   if (metaVad) {
-     if (['start', 'active', 'speech_start', 'begin'].includes(metaVad)) return 'speech_start';
-     if (['stop', 'end', 'inactive', 'speech_end'].includes(metaVad)) return 'speech_end';
-   }
+-import os
+-
+ # Usage caps / rate limits (Phase 3)
+ MAX_TURN_SEC = int(os.getenv("MAX_TURN_SEC", "30"))
+ MAX_SESSION_MIN = int(os.getenv("MAX_SESSION_MIN", "15"))
+ RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))  # requests per minute
+diff --git a/app/services/streaming.py b/app/services/streaming.py
+index 177db05c55e48c1a8bd01bbff4b8e8c0715ba055..50419502c060ef71dadd7fd8c2cabf18b071607f 100644
+--- a/app/services/streaming.py
++++ b/app/services/streaming.py
+@@ -2088,65 +2088,74 @@ def _summarize_persona_trace(trace: Optional[Dict[str, Any]],
  
-   const candidates = [
-     frame?.type,
-     frame?.event,
-     frame?.kind,
-     frame?.label,
-     frame?.state,
-     frame?.signal,
-     frame?.detail?.type,
-     frame?.detail?.event,
-     frame?.payload?.type,
-@@ -1450,50 +1458,53 @@ const frameIndicatesAsrResult = (frame) => {
- };
+     quote_enabled_flag = quote_meta.get("enabled")
+     candidate_count = quote_meta.get("candidate_count")
+     try:
+         candidate_count_val = int(candidate_count)
+     except Exception:
+         candidate_count_val = 0
+     if quote_enabled_flag is False and (candidate_count_val or quote_meta.get("bank")):
+         guardrails.append("quote")
  
- function handleWsFrame(ctx, frame) {
-   if (!ctx?.state) return;
-   const type = normalizeVadLabel(frame?.type);
-   const event = normalizeVadLabel(frame?.event);
+     cfg_quote_enabled = _coerce_bool_flag(cfg.get("nebraska_quotes_enabled")) if isinstance(cfg, dict) else None
+     if cfg_quote_enabled is False:
+         guardrails.append("quote")
  
-   const isAssistantAudio = type === 'assistant_audio' || event === 'assistant_audio';
-   const isExplicitTtsStart = (
-     type === 'tts:start'
-     || event === 'tts:start'
-     || type === 'tts_start'
-     || event === 'tts_start'
-   );
+     persona_elements = sorted({elem for elem in persona_elements if elem})
+     guardrails = sorted({g for g in guardrails if g})
  
-   if (isExplicitTtsStart) {
-     try {
-       const maybePromise = handleClientTtsStartTelemetry(ctx, frame);
-       if (maybePromise && typeof maybePromise.catch === 'function') {
-         maybePromise.catch(() => {});
-       }
-     } catch {}
-   }
+     return persona_level, persona_elements, guardrails
  
-   if (isExplicitTtsStart || isAssistantAudio) {
-+    if (ctx?.state) {
-+      ctx.state.ttsPendingStart = true;
-+    }
-     const phaseState = typeof frame?.phase === 'string' && frame.phase.trim()
-       ? frame.phase
-       : 'assistant_speaking';
-     applyTtsState(ctx, phaseState, frame);
-   }
  
-   if (type === 'state') {
-     if (applyTtsState(ctx, frame?.phase, frame)) {
-       return;
-     }
-   }
+ def _log_persona_applied(turn_id: str,
+                          trace: Optional[Dict[str, Any]],
+                          cfg: Optional[Dict[str, Any]],
+                          *,
+                          persona: Optional[Dict[str, Any]] = None,
+-                         meta: Optional[Dict[str, Any]] = None) -> None:
++                         meta: Optional[Dict[str, Any]] = None,
++                         telemetry: Optional[NluLoggingContext] = None) -> None:
+     try:
+         persona_level, persona_elements, guardrails = _summarize_persona_trace(
+             trace,
+             cfg,
+             persona=persona,
+             meta=meta,
+         )
+         _jlog(
+             "persona_applied",
+             turn_id=str(turn_id),
+             persona_level=persona_level,
+             persona_elements=persona_elements,
+             guardrails_suppressed=guardrails,
+         )
++        if telemetry:
++            if guardrails:
++                telemetry.log_guardrail(
++                    decision="deny",
++                    reason=",".join(str(item) for item in guardrails if item),
++                )
++            else:
++                telemetry.log_guardrail(decision="allow")
+     except Exception:
+         pass
  
-   if (type === 'barge_in' || event === 'barge_in') {
-     applyTtsState(ctx, frame?.phase || 'paused', frame);
-     return;
-   }
  
-   if (type === 'barge_resume' || event === 'barge_resume') {
-     applyTtsState(ctx, frame?.phase || 'assistant_speaking', frame);
-     return;
-   }
+ def _foundation_backoff_active(now: Optional[float] = None) -> bool:
+     global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
+     if now is None:
+         now = _t.time()
+     with _FOUNDATION_FAILURE_LOCK:
+         if _FOUNDATION_DISABLED_UNTIL <= 0:
+             return False
+         if now >= _FOUNDATION_DISABLED_UNTIL:
+             _FOUNDATION_DISABLED_UNTIL = 0.0
+             _FOUNDATION_LAST_ERROR = None
+             return False
+         return True
  
-   if (type === 'utteranceend' || event === 'utteranceend') {
-     applyTtsState(ctx, 'ended', frame);
-   }
-@@ -2433,53 +2444,54 @@ export function bargeIn(meta = {}) {
-   ctx.state.pendingCommitReason = null;
-   clearDualVadTimer(ctx);
-   clearPostTtsRearm(ctx);
-   ctx.state.vadShouldRearmAfterTts = false;
-   ctx.state.vadSuppressedForTts = false;
-   try { stopPlayback(); } catch {}
-   if (ctx.state.turnOpen) {
-     closeTurn(ctx, 'manual_barge_preempt');
-   }
-   const maskActive = isTtsMaskActive(ctx);
-   const whileTts = !!(ctx.state.ttsPlaying || maskActive);
-   const asrState = ctx.state?.asr;
-   const asrConf = Number.isFinite(asrState?.lastConf) ? Number(asrState.lastConf) : null;
-   const source = typeof meta?.source === 'string' && meta.source
-     ? meta.source
-     : (ctx.state.manualGate ? 'manual' : 'auto');
-   emitFlowBreadcrumb('barge_in', {
-     source,
-     while_tts: whileTts,
-     asr_conf_at_trigger: asrConf,
-     manual_gate: !!ctx.state.manualGate,
-     notify_server: !!shouldNotify,
-     mask_active: maskActive,
-   });
-   ctx.state.ttsPlaying = false;
-+  ctx.state.ttsPendingStart = false;
-   ctx.ttsEndedAtMs = nowMs();
-   ctx.ttsMask.clear();
--  releaseMicGate(ctx, MIC_GATE_TTS_REASON);  
-+  releaseMicGate(ctx, MIC_GATE_TTS_REASON);
-   if (shouldNotify) {
-     sendJSON({ type: 'manual_barge_in' });
-   }
-   ctx.evidenceGate.reset('manual_barge_in');
-   ctx.shadowBuffer.clear();
-   ctx.audio.lastTimecode = null;
-   emitVoiceEvent('barge_in', { reason: 'manual' });
-   return true;
- }
  
- export function setVadBoost(value) {
-   const ctx = ensureCtx();
-   const numeric = Number.isFinite(value) ? value : 0;
-   ctx.state.vadBoostDb = Math.max(0, numeric);
-   if (ctx.audio.vad) {
-     teardownVad(ctx); ensureVad(ctx, {});
-   }
- }
+ def _note_foundation_failure(exc: Optional[BaseException] = None,
+                              *,
+                              backoff_seconds: Optional[float] = None) -> None:
+     global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
+     duration = _FOUNDATION_BACKOFF_SECONDS if backoff_seconds is None else float(backoff_seconds or 0.0)
+     now = _t.time()
+     with _FOUNDATION_FAILURE_LOCK:
+@@ -2486,50 +2495,51 @@ def _make_foundation_frames(seed_text: str,
  
- export function setGreetGateActive(active = true) {
-   const ctx = ensureCtx();
-   ensureGreetGate(ctx, active);
-   emitVoiceEvent('greet_gate', { active: ctx.state.greetGateActive });
- }
+     meta['show_suggestions'] = show_suggestions
+     meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
+     meta[_DIALOG_POLICY_KEY] = dict(policy)
  
-@@ -2490,100 +2502,102 @@ export function forceBargeInStart(meta = {}) {
-     return false;
-   }
+     prompt_meta = dict(dialog_meta)
+     prompt_meta['intent'] = nlu_result.get('intent')
+     policy_action = _policy_action(policy)
+     if policy_action:
+         prompt_meta['teacher_move'] = policy_action
  
-   ctx.state.pttHeld = true;
-   const maskActive = isTtsMaskActive(ctx);
-   const whileTts = !!(ctx.state.ttsPlaying || maskActive);
-   const source = typeof meta?.source === 'string' && meta.source ? meta.source : 'manual';
-   lastPttDownAtMs = nowMs();
-   emitFlowBreadcrumb('ptt_down', {
-     source,
-     while_tts: whileTts,
-     manual_gate: true,
-     mask_active: maskActive,
-   });
-   clearPostTtsRearm(ctx);
-   ctx.state.vadShouldRearmAfterTts = false;
-   ctx.state.vadSuppressedForTts = false;
-   startRecorder(ctx);
-   ensureTransport(ctx).catch(() => {});
-   setManualGate(ctx, true);
+     examples = store.match_examples(persona['id'], seed_text)
+     messages, teacher_move, prompt_hash, persona_trace = build_messages(
+         persona=persona,
+         user_text=seed_text,
+         dialog_meta=prompt_meta,
+         examples=examples,
+     )
  
-   bargeIn(meta);
+     _log_persona_applied(
+         turn_id,
+         persona_trace,
+         cfg,
+         persona=persona,
+         meta=meta,
++        telemetry=telemetry,
+     )
  
-   ctx.state.manualBargeInUsed = true;
-   ctx.state.ttsPlaying = false;
-+  ctx.state.ttsPendingStart = false;
-   ctx.ttsMask.clear();
-   ctx.ttsEndedAtMs = nowMs();
+     kb_count = 0
+     try:
+         kb_candidates = meta.get('kb_snippets') if isinstance(meta, dict) else None
+         if isinstance(kb_candidates, (list, tuple)):
+             kb_count = len(kb_candidates)
+     except Exception:
+         kb_count = 0
+     telemetry.log_prompt_summary(messages=messages, prompt_hash=prompt_hash, kb_count=kb_count)
  
-   emitClientAudioEvent(ctx, 'ptt_open', { skip_vad: true });
+     use_llm = True
+     llm_info: Dict[str, Any] = {}
+     if use_llm:
+         model_name = _resolve_foundation_model(cfg)
+         llm_tracker = make_llm_flow_tracker(
+             session_id,
+             phase=phase_label,
+             turn_id=turn_id,
+             model=model_name,
+         )
+         llm_tracker.start()
  
-   const controlFrame = { type: 'Control', action: 'barge_in_start' };
-   const sent = sendJSON(controlFrame);
-   if (!sent) {
-     ensureTransport(ctx).then(() => {
-       try { sendJSON(controlFrame); } catch {}
-     }).catch(() => {});
-   }
+         def _llm_state_snapshot() -> Dict[str, Any]:
+             return {
+@@ -2788,50 +2798,51 @@ def _make_legacy_frames(seed_text: str,
+     if telemetry is None:
+         telemetry = _create_nlu_context(
+             turn_id=turn_id,
+             session_id=session_id,
+             correlation_user_msg_id=correlation_user_msg_id,
+             meta=meta,
+             settings=SETTINGS,
+             cfg=cfg,
+         )
+         telemetry.turn_id = turn_id
+         telemetry.log_start(seed_text, meta=meta)
+     else:
+         telemetry.turn_id = turn_id
  
-   dispatchTurnEvent(ctx, TurnEvent.SpeechStart, { reason: 'manual_start' });
-   emitVoiceEvent('barge_in_start', meta);
+     if labels is None:
+         labels = classify(seed_text, meta)
+     else:
+         labels = dict(labels)
+     telemetry.log_entities(labels.get("entities"))
+     _log_persona_applied(
+         turn_id,
+         persona_trace,
+         cfg,
+         persona=persona,
+         meta=meta,
++        telemetry=telemetry,
+     )
+     if policy is None:
+         policy = pick_dialog_policy(labels) or {}
+     else:
+         policy = dict(policy or {})
  
-   const open = openTurn(ctx, 'manual_start');
-   if (open && typeof open.then === 'function') {
-     open.catch(() => {});
-   }
+     policy_summary = summarize_policy_metadata(policy)
+     if policy_summary and isinstance(meta, dict):
+         for key, value in policy_summary.items():
+             meta.setdefault(key, value)
  
-   return true;
- }
+     try:
+         if isinstance(meta, dict):
+             meta_nlu = meta.setdefault('nlu', {})
+             meta_nlu.update(labels)
+             dialog_nlu = meta.setdefault(_DIALOG_NLU_KEY, {})
+             try:
+                 dialog_nlu.update(labels)
+             except Exception:
+                 meta[_DIALOG_NLU_KEY] = dict(labels)
+     except Exception:
+         pass
+     policy_action = _policy_action(policy)
+     teacher_move = policy_action
  
- export function forceBargeInEnd(opts = {}) {
-   const ctx = ensureCtx();
-   const wasActive = ctx.state.manualGate;
-   const stillHeld = !!opts?.pttHeld;
-   const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
-   const nowTs = nowMs();
-   let durationMs = null;
-   if (!stillHeld) {
-     if (Number.isFinite(lastPttDownAtMs)) {
-       durationMs = Math.max(0, Math.round(nowTs - lastPttDownAtMs));
-     } else {
-       durationMs = null;
-     }
-     lastPttDownAtMs = 0;
-   }
-   ctx.state.pttHeld = stillHeld;
-   if (!stillHeld) {
-     setManualGate(ctx, false);
-   }
-   if (!stillHeld) {
-     clearPostTtsRearm(ctx);
-     ctx.state.vadShouldRearmAfterTts = false;
-     ctx.state.vadSuppressedForTts = false;
-     rearmLocalVad(ctx);
-   }
-   ctx.state.ttsPlaying = false;
-+  ctx.state.ttsPendingStart = false;
-   ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });
-   ctx.ttsEndedAtMs = nowTs;
+@@ -3857,67 +3868,73 @@ def run_ws_greet(session_id: str) -> str:
+         if not suggestions_already_sent:
+             greet_legacy = hygienic_suggestions("")
+             base_suggestions = merge_suggestions(greet_legacy)
+             _log_suggestions_made(
+                 turn_id=tid,
+                 policy_chips=[],
+                 legacy_suggestions=greet_legacy,
+                 merged_suggestions=base_suggestions,
+                 cfg=cfg,
+                 session_id=session_id,
+             )
+             if base_suggestions:
+                 bus.broadcast(
+                     session_id,
+                     {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
+                 )
+     except Exception:
+         pass
+     return tid
  
-   const released = wasActive && !ctx.state.manualGate;
-   if (!stillHeld) {
-     emitFlowBreadcrumb('ptt_up', {
-       reason,
-       duration_ms: durationMs,
-       manual_gate: wasActive,
-       released,
-     });
-   }
-   if (released) {
-     emitClientAudioEvent(ctx, 'ptt_close', {});
-     const controlFrame = { type: 'Control', action: 'barge_in_end' };
-     const sent = sendJSON(controlFrame);
-     if (!sent) {
-       ensureTransport(ctx).then(() => {
-         try { sendJSON(controlFrame); } catch {}
-       }).catch(() => {});
-     }
  
-     if (ctx.state.turnOpen) {
-       closeTurn(ctx, reason);
-     }
+ def run_ws_user_turn(session_id: str,
+                      text: str,
+                      correlation_user_msg_id: Optional[str] = None,
+                      *,
+-                     meta_overrides: Optional[Dict[str, Any]] = None) -> str:
++                     meta_overrides: Optional[Dict[str, Any]] = None,
++                     telemetry: Optional[NluLoggingContext] = None) -> str:
+     """
+     Produce assistant text for a user turn and schedule both text pacing and TTS.
+     Mirrors HTTP /api_v1/chat behavior for consistency.
+     """
+     nudges.cancel_idle_timers(session_id, mark=False)
+     meta = {"source": "user_ws", "channel": "ws"}
+     if isinstance(meta_overrides, dict):
+         for key, value in meta_overrides.items():
+             try:
+                 meta[key] = copy.deepcopy(value)
+             except Exception:
+                 meta[key] = value
+ 
+     llm_started_at = _t.time()
+-    tid, frames = make_assistant_frames(text, session_id, meta=meta,
+-                                        correlation_user_msg_id=correlation_user_msg_id)
++    tid, frames = make_assistant_frames(
++        text,
++        session_id,
++        meta=meta,
++        correlation_user_msg_id=correlation_user_msg_id,
++        telemetry=telemetry,
++    )
+     llm_elapsed_ms = int(max(0.0, (_t.time() - llm_started_at) * 1000))
+     if tid:
+         _diag_note_llm_latency(session_id, tid, llm_elapsed_ms, correlation_user_msg_id)
+     if _ws_generation_failed(tid, frames):
+         tid = _allocate_turn_id(force_turn_id=None)
+         frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
+         try:
+             _apply_assistant_turn_state(session_id, frames)
+         except Exception:
+             pass
+         outage_payload = {"session_id": session_id, "phase": 'turn'}
+         try:
+             _admin_emit('ws_pipeline_outage', **outage_payload)
+         except Exception:
+             pass
+         _broadcast_admin_ws_event('ws_pipeline_outage', outage_payload)
+         return tid
+     try:
+         _apply_assistant_turn_state(session_id, frames)
+     except Exception:
+         pass
+     existing_frame_types = [
+         fr.get("type")
+         for fr in frames
+         if isinstance(fr, dict) and fr.get("type") is not None
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 059e986c6e61dc9d013cd0575489d97f1a5586fc..9e1b3ab1dc17658141b36e05eb0198bd7e4ca093 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -730,61 +730,64 @@ class DeepgramClient:
+         self._turn_start_ts: float = 0.0
+         self._turn_first_partial_ts: float = 0.0
+         self._turn_final_ts: float = 0.0
+         self._turn_bytes_baseline: int = 0
+         self._turn_metrics_recorded: bool = False
+         self._turn_saw_1011: bool = False
+         self._turn_last_close_code: Optional[int] = None
+         self._turn_first_partial_emitted: bool = False
+         self._turn_final_emitted: bool = False
+ 
+         # Deepgram feature toggles
+         self._desired_vad_state: bool = True
+         self._vad_events_enabled: bool = True
+ 
+     def _diag_payload(self, **extra: Any) -> dict:
+         payload: dict[str, Any] = {"provider": "deepgram"}
+         if self._diag_session_id:
+             payload["session_id"] = self._diag_session_id
+         tag = self._url_tag or self._diag_tag_hint
+         if tag:
+             payload["tag"] = tag
+         payload.update(extra)
+         return payload
+ 
+     def _emit_diag(self, label: str, **extra: Any) -> None:
+-        hook = self._diag_hook
+-        if not callable(hook):
+-            return
+         payload = self._diag_payload(**extra)
+-        try:
+-            hook(label, **payload)
+-        except TypeError:
++        hook = self._diag_hook
++        if callable(hook):
+             try:
+-                hook(label, payload)
++                hook(label, **payload)
++            except TypeError:
++                try:
++                    hook(label, payload)
++                except Exception:
++                    pass
+             except Exception:
+                 pass
++        try:
++            _admin_emit("asr:diag", label=label, **dict(payload))
+         except Exception:
+             pass
+ 
+     def _emit_transition_event(
+         self,
+         event: str,
+         *,
+         code: Optional[object] = None,
+         path: Optional[object] = None,
+     ) -> None:
+         sid = self._diag_session_id
+         if not sid or not event:
+             return
+         meta: dict[str, object] = {}
+         if code is not None:
+             try:
+                 meta["code"] = str(code)
+             except Exception:
+                 meta["code"] = "unknown"
+         if path is not None:
+             try:
+                 meta["path"] = str(path)
+             except Exception:
+                 meta["path"] = "unknown"
+         try:
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index 88fa1db56556a4beef4594a5e8640b397b1b57a4..b8610c580538dff23691b6662c2565ba13f68141 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -10,50 +10,51 @@ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple,
+ from collections import deque, defaultdict
+ from app.services.audio.container_sniffer import (
+     AudioContainerSniffer,
+     coerce_detection_from_meta,
+ )
+ 
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.config import load_settings
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.policy.loader import load_policy, load_policy_layers
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
+ from app.flow.emit import add_batch, emit as flow_emit
++from app.session_state import set_phase, should_emit_phase
+ 
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import (
+     run_ws_user_turn,
+     prepare_turn_metadata,
+     note_turn_commit_latency,
+     emit_watchdog_user_end,
+ )  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.confirm_window import ConfirmWindow
+ from app.ws.bus import bus
+ 
+ # Optional admin emitter
+ try:
+     from app.api_v1.admin import _emit as _admin_emit_base
+ except Exception:
+     _admin_emit_base = None
+ 
+ 
+ def _broadcast_admin_frame(event: str, payload: Dict[str, Any]) -> None:
+     """Mirror admin diagnostic breadcrumbs onto the session bus."""
+ 
+     try:
+         sid = payload.get("session_id") or payload.get("sid")
+@@ -3663,50 +3664,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             or last_user_final_text[0]
+             or last_partial_text[0]
+         )
+ 
+         payload = make_results(turn_id, transcript=text, is_final=True)
+         payload["type"] = "Results"
+         await _ws_send_json(send, payload)
+         utterance_payload = make_utterance_end(turn_id)
+         utterance_payload["type"] = "UtteranceEnd"
+         await _ws_send_json(send, utterance_payload)
+ 
+         with contextlib.suppress(Exception):
+             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
+ 
+         if _admin_emit:
+             final_payload: Dict[str, Any] = {
+                 "session_id": sid,
+                 "turn_id": turn_id,
+             }
+             if text:
+                 final_payload["text"] = text
+                 final_payload["text_preview"] = _clip_text(text)
+             with contextlib.suppress(Exception):
+                 _admin_emit("asr:final", **final_payload)
+ 
++        llm_scheduled = False
++
+         if text:
+             dialog_nlu_pre: Dict[str, Any] = {}
+             universal_pre: Dict[str, Any] = {}
+             meta_stub = {"source": "user_ws", "channel": "ws"}
+             try:
+                 prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
+                 if isinstance(dialog_nlu_raw, dict):
+                     dialog_nlu_pre = dict(dialog_nlu_raw)
+                 if isinstance(prepared_meta, dict):
+                     raw_universal = prepared_meta.get("universal") or {}
+                     if isinstance(raw_universal, dict):
+                         universal_pre = _ensure_universal_fields(raw_universal)
+             except Exception:
+                 dialog_nlu_pre = {}
+                 universal_pre = {}
+ 
+             _emit_admin_nlu_event(
+                 text,
+                 sid,
+                 dialog_nlu=dialog_nlu_pre,
+                 universal=universal_pre,
+             )
+ 
+             meta_overrides: Optional[Dict[str, Any]] = None
+             if dialog_nlu_pre or universal_pre:
+@@ -3715,58 +3718,82 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                     meta_overrides["nlu"] = dict(dialog_nlu_pre)
+                     meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
+                 if universal_pre:
+                     meta_overrides["universal"] = dict(universal_pre)
+ 
+             if turn_id not in completed_llm_turns:
+                 completed_llm_turns.add(turn_id)
+ 
+                 async def _bg_turn(meta_payload=meta_overrides, final_text=text):
+                     try:
+                         await asyncio.to_thread(
+                             run_ws_user_turn,
+                             sid,
+                             final_text,
+                             None,
+                             meta_overrides=meta_payload,
+                         )
+                     except Exception as e:
+                         with contextlib.suppress(Exception):
+                             await _ws_send_json(
+                                 send,
+                                 make_error("llm_turn_fail", e.__class__.__name__),
+                             )
+ 
+                 asyncio.create_task(_bg_turn())
++                llm_scheduled = True
+ 
+         _log_turn_finish(
+             turn_id,
+             reason=reason,
+             synthetic=True,
+             transcript_chars=len(text or ""),
+         )
+         completed_llm_turns.discard(turn_id)
++
++        if not llm_scheduled:
++            try:
++                cancel_target: Optional[str] = None
++                if turn_stream_committed[0] or (ws_configured and barge.is_paused()):
++                    try:
++                        cancel_target = bus.current_assistant_turn(sid)
++                    except Exception:
++                        cancel_target = None
++                    if cancel_target:
++                        with contextlib.suppress(Exception):
++                            bus.cancel_turn(sid, cancel_target)
++                if should_emit_phase(sid, "ready"):
++                    set_phase(sid, "ready", emitted=True)
++                    ready_payload = {"type": "state", "phase": "ready"}
++                    await _ws_send_json(send, ready_payload)
++                    with contextlib.suppress(Exception):
++                        bus.broadcast(sid, dict(ready_payload))
++                else:
++                    set_phase(sid, "ready")
++            except Exception:
++                pass
++
+         return True
+ 
+     async def _ensure_dg_connected() -> bool:
+         nonlocal dg, rx_task, dg_connect_task, dg_state
+ 
+         if not _has_deepgram_key():
+             with contextlib.suppress(Exception):
+                 _jlog("asr_connect_skip", sid=sid, reason="no_api_key")
+             return False
+ 
+         if dg_state == "open" and dg is not None:
+             asr_ready[0] = True            
+             return True
+ 
+         if dg_state == "connecting" and dg_connect_task is not None:
+             with contextlib.suppress(Exception):
+                 _jlog("asr_connect_wait", sid=sid, reason="existing_task")
+             with contextlib.suppress(Exception):
+                 await dg_connect_task
+             return dg_state == "open" and dg is not None
+ 
+         connect_result = {"ok": False}
+ 
+         async def _connect() -> None:
+             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
+diff --git a/templates/admin_flow.html b/templates/admin_flow.html
+index 699f05d9d72ceda54c13bb0e9b89062c39cb2056..49fa7ad4e7860133f187b8e578a565cffb9089af 100644
+--- a/templates/admin_flow.html
++++ b/templates/admin_flow.html
+@@ -123,28 +123,31 @@
+           <div class="timeline-col rail" aria-hidden="true"></div>
+           <div class="timeline-col time">Time (ms)</div>
+           <div class="timeline-col phase">Phase</div>
+           <div class="timeline-col who">Who</div>
+           <div class="timeline-col type">Type</div>
+           <div class="timeline-col blurb">Blurb</div>
+           <div class="timeline-col meta">Meta</div>
+         </div>
+         <div class="timeline-body" id="flowTimeline" role="treegrid" aria-live="polite"></div>
+       </div>
+       <aside class="flow-drawer" id="flowDrawer" aria-live="polite" aria-hidden="true">
+         <div class="drawer-header">
+           <h2 id="flowDrawerTitle">Event</h2>
+           <div class="drawer-actions">
+             <button type="button" id="flowDrawerCopy" class="icon-btn" title="Copy JSON">⧉</button>
+             <button type="button" id="flowDrawerClose" class="icon-btn" title="Close">✕</button>
+           </div>
+         </div>
+         <div class="drawer-meta" id="flowDrawerMeta"></div>
+         <div class="drawer-related" id="flowDrawerRelated"></div>
+         <pre class="drawer-json" id="flowDrawerJson"></pre>
+       </aside>
+     </main>
+   </div>
+ 
++  <script>
++    window.__FLOW_BREADCRUMBS_ENABLED = true;
++  </script>
+   <script type="module" src="/static/js/admin_flow.js"></script>
+ </body>
+ </html>

@@ -24,6 +24,23 @@ def _float_from_env(name: str, default: float) -> float:
     except (TypeError, ValueError):
         return default
 
+
+def _bool_from_env(default: bool, *names: str) -> bool:
+    for name in names:
+        raw = os.getenv(name)
+        if raw is None:
+            continue
+        lowered = raw.strip().lower()
+        return lowered not in ("0", "false", "no", "off")
+    return default
+
+
+_ADVANCED_LOGGING_DEFAULT = _bool_from_env(
+    True,
+    "VOICE_ADVANCED_LOGGING_ENABLED",
+    "ADVANCED_LOGGING_ENABLED",
+)
+
 @dataclass
 class Settings:
     admin_emails: str = os.getenv("ADMIN_EMAILS", "")
@@ -48,7 +65,7 @@ class Settings:
     enable_chip_foundation: bool = os.getenv("ENABLE_CHIP_FOUNDATION", "1").strip().lower() not in ("0", "false", "no")
     enable_policy_chips: bool = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
     enable_nlu_logging: Optional[bool] = _optional_bool_from_env("ENABLE_NLU_LOGGING")
-    advanced_logging_enabled: bool = os.getenv("ADVANCED_LOGGING_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+    advanced_logging_enabled: bool = _ADVANCED_LOGGING_DEFAULT
     suggestion_max: int = int(os.getenv("SUGGESTION_MAX", "4"))
     secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
     session_type: str = os.getenv("SESSION_TYPE", "filesystem")
@@ -61,8 +78,6 @@ class Settings:
 def load_settings() -> Settings:
     return Settings()
 
-
-import os
 
 # Usage caps / rate limits (Phase 3)
 MAX_TURN_SEC = int(os.getenv("MAX_TURN_SEC", "30"))

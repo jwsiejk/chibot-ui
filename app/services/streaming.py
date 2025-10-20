@@ -2110,7 +2110,8 @@ def _log_persona_applied(turn_id: str,
                          cfg: Optional[Dict[str, Any]],
                          *,
                          persona: Optional[Dict[str, Any]] = None,
-                         meta: Optional[Dict[str, Any]] = None) -> None:
+                         meta: Optional[Dict[str, Any]] = None,
+                         telemetry: Optional[NluLoggingContext] = None) -> None:
     try:
         persona_level, persona_elements, guardrails = _summarize_persona_trace(
             trace,
@@ -2125,6 +2126,14 @@ def _log_persona_applied(turn_id: str,
             persona_elements=persona_elements,
             guardrails_suppressed=guardrails,
         )
+        if telemetry:
+            if guardrails:
+                telemetry.log_guardrail(
+                    decision="deny",
+                    reason=",".join(str(item) for item in guardrails if item),
+                )
+            else:
+                telemetry.log_guardrail(decision="allow")
     except Exception:
         pass
 
@@ -2508,6 +2517,7 @@ def _make_foundation_frames(seed_text: str,
         cfg,
         persona=persona,
         meta=meta,
+        telemetry=telemetry,
     )
 
     kb_count = 0
@@ -2810,6 +2820,7 @@ def _make_legacy_frames(seed_text: str,
         cfg,
         persona=persona,
         meta=meta,
+        telemetry=telemetry,
     )
     if policy is None:
         policy = pick_dialog_policy(labels) or {}
@@ -3879,7 +3890,8 @@ def run_ws_user_turn(session_id: str,
                      text: str,
                      correlation_user_msg_id: Optional[str] = None,
                      *,
-                     meta_overrides: Optional[Dict[str, Any]] = None) -> str:
+                     meta_overrides: Optional[Dict[str, Any]] = None,
+                     telemetry: Optional[NluLoggingContext] = None) -> str:
     """
     Produce assistant text for a user turn and schedule both text pacing and TTS.
     Mirrors HTTP /api_v1/chat behavior for consistency.
@@ -3894,8 +3906,13 @@ def run_ws_user_turn(session_id: str,
                 meta[key] = value
 
     llm_started_at = _t.time()
-    tid, frames = make_assistant_frames(text, session_id, meta=meta,
-                                        correlation_user_msg_id=correlation_user_msg_id)
+    tid, frames = make_assistant_frames(
+        text,
+        session_id,
+        meta=meta,
+        correlation_user_msg_id=correlation_user_msg_id,
+        telemetry=telemetry,
+    )
     llm_elapsed_ms = int(max(0.0, (_t.time() - llm_started_at) * 1000))
     if tid:
         _diag_note_llm_latency(session_id, tid, llm_elapsed_ms, correlation_user_msg_id)

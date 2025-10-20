@@ -32,6 +32,7 @@ from app.policy.loader import load_policy, load_policy_layers
 from app.services.greet_idempotency import clear_greet_turn_cache
 from app.metrics import ws_metrics
 from app.flow.emit import add_batch, emit as flow_emit
+from app.session_state import set_phase, should_emit_phase
 
 # NEW: invoke LLM on final transcript
 from app.services.streaming import (
@@ -3685,6 +3686,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             with contextlib.suppress(Exception):
                 _admin_emit("asr:final", **final_payload)
 
+        llm_scheduled = False
+
         if text:
             dialog_nlu_pre: Dict[str, Any] = {}
             universal_pre: Dict[str, Any] = {}
@@ -3737,6 +3740,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                             )
 
                 asyncio.create_task(_bg_turn())
+                llm_scheduled = True
 
         _log_turn_finish(
             turn_id,
@@ -3745,6 +3749,29 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             transcript_chars=len(text or ""),
         )
         completed_llm_turns.discard(turn_id)
+
+        if not llm_scheduled:
+            try:
+                cancel_target: Optional[str] = None
+                if turn_stream_committed[0] or (ws_configured and barge.is_paused()):
+                    try:
+                        cancel_target = bus.current_assistant_turn(sid)
+                    except Exception:
+                        cancel_target = None
+                    if cancel_target:
+                        with contextlib.suppress(Exception):
+                            bus.cancel_turn(sid, cancel_target)
+                if should_emit_phase(sid, "ready"):
+                    set_phase(sid, "ready", emitted=True)
+                    ready_payload = {"type": "state", "phase": "ready"}
+                    await _ws_send_json(send, ready_payload)
+                    with contextlib.suppress(Exception):
+                        bus.broadcast(sid, dict(ready_payload))
+                else:
+                    set_phase(sid, "ready")
+            except Exception:
+                pass
+
         return True
 
     async def _ensure_dg_connected() -> bool:

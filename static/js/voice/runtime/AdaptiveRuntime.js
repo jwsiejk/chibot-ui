@@ -1248,6 +1248,7 @@ const ensureCtx = () => {
       ttsSuppressionMode: POLICY_SUPPRESS_NONE,
       ttsHoldStartedMs: 0,
       ttsPendingStart: false,
+      ttsCurrentTurnId: null,
       evidenceGate, shadowBuffer, ttsMask,
     },
     audio: {
@@ -1313,7 +1314,9 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
 
   if (['playing', 'assistant_speaking', 'speaking', 'paused'].includes(normalized)) {
     const pending = ctx.state?.ttsPendingStart === true;
-    if (!ctx.state.ttsPlaying && !pending) {
+    const hasActiveTurn = typeof ctx.state?.ttsCurrentTurnId === 'string'
+      && ctx.state.ttsCurrentTurnId.trim().length > 0;
+    if (!ctx.state.ttsPlaying && !pending && !hasActiveTurn) {
       return false;
     }
     ctx.state.ttsPendingStart = false;
@@ -1328,6 +1331,7 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
   if (['ended', 'stopped', 'done'].includes(normalized)) {
     ctx.state.ttsPlaying = false;
     ctx.state.ttsPendingStart = false;
+    ctx.state.ttsCurrentTurnId = null;
     ctx.ttsEndedAtMs = nowMs();
     ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
     handleTtsPlaybackEnded(ctx);
@@ -1338,6 +1342,7 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
   if (['ready', 'idle', 'listening', 'assistant_listening'].includes(normalized)) {
     ctx.state.ttsPlaying = false;
     ctx.state.ttsPendingStart = false;
+    ctx.state.ttsCurrentTurnId = null;
     ctx.ttsEndedAtMs = nowMs();
     ctx.ttsMask.clear();
     stopMaskLogging(ctx);
@@ -1482,6 +1487,14 @@ function handleWsFrame(ctx, frame) {
   if (isExplicitTtsStart || isAssistantAudio) {
     if (ctx?.state) {
       ctx.state.ttsPendingStart = true;
+      const turnId = frame?.turn_id;
+      if (turnId != null && turnId !== '') {
+        try {
+          ctx.state.ttsCurrentTurnId = String(turnId);
+        } catch {
+          ctx.state.ttsCurrentTurnId = turnId;
+        }
+      }
     }
     const phaseState = typeof frame?.phase === 'string' && frame.phase.trim()
       ? frame.phase
@@ -2422,10 +2435,11 @@ export function disarmVAD() {
   teardownVad(ctx); stopRecorder(ctx);
   closeTurn(ctx, 'manual_disarm');
   teardownTransport(ctx);
-  releaseMicGate(ctx, 'manual', { clearAll: true });  
+  releaseMicGate(ctx, 'manual', { clearAll: true });
   setManualGate(ctx, false);
   ctx.state.pttHeld = false;
   ctx.state.hasOpenedTurn = false;
+  ctx.state.ttsCurrentTurnId = null;
   stopMaskLogging(ctx);
   dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: 'manual_disarm' });
 }
@@ -2467,6 +2481,7 @@ export function bargeIn(meta = {}) {
   });
   ctx.state.ttsPlaying = false;
   ctx.state.ttsPendingStart = false;
+  ctx.state.ttsCurrentTurnId = null;
   ctx.ttsEndedAtMs = nowMs();
   ctx.ttsMask.clear();
   releaseMicGate(ctx, MIC_GATE_TTS_REASON);
