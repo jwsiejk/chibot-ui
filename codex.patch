@@ -1,80 +1,320 @@
-diff --git a/static/js/voice/guards/EvidenceGateGuard.js b/static/js/voice/guards/EvidenceGateGuard.js
+diff --git a/static/js/voice/controllers/AsrController.js b/static/js/voice/controllers/AsrController.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..4e39b76b65e69a4f284bc3157b19b9aea5567a3a
+index 0000000000000000000000000000000000000000..196efc9b4649f229788dce52b822782879f630ec
 --- /dev/null
-+++ b/static/js/voice/guards/EvidenceGateGuard.js
-@@ -0,0 +1,18 @@
-+import PolicyBus from '../policy/PolicyBus.js';
++++ b/static/js/voice/controllers/AsrController.js
+@@ -0,0 +1,144 @@
++import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
 +import { emitVoiceEvent } from '../ui/Events.js';
-+import { InteractionPolicyMode } from '../policy/InteractionPolicy.js';
 +
-+const SUPPRESSED_REASON = 'manual_only_during_tts';
-+
-+export function canOpenTurn() {
-+  const policy = PolicyBus.getPolicy();
-+  if (policy && policy.mode === InteractionPolicyMode.MANUAL_ONLY_DURING_TTS) {
-+    emitVoiceEvent('evidence:suppressed', { reason: SUPPRESSED_REASON, mode: policy.mode });
-+    return false;
++function sanitizeDetail(detail = {}) {
++  if (!detail || typeof detail !== 'object') {
++    return {};
 +  }
-+  return true;
++  const { emit, force, ...rest } = detail;
++  return { ...rest };
 +}
 +
-+export default {
-+  canOpenTurn,
-+};
-diff --git a/static/js/voice/guards/VadGuard.js b/static/js/voice/guards/VadGuard.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..78dc57f93150be6db8f46aaffffad2b8894e4d17
---- /dev/null
-+++ b/static/js/voice/guards/VadGuard.js
-@@ -0,0 +1,42 @@
-+import PolicyBus from '../policy/PolicyBus.js';
-+import { emitVoiceEvent } from '../ui/Events.js';
-+import { InteractionPolicyMode } from '../policy/InteractionPolicy.js';
-+
-+const BLOCK_REASON = 'assistant_speaking';
-+
-+const isManualOnlyDuringTts = (policy) => {
-+  if (!policy || typeof policy !== 'object') {
-+    return false;
++export default class AsrController {
++  constructor({ ctx, ensureTransport, stopTransport } = {}) {
++    this.ctx = ctx;
++    this._ensureTransport = typeof ensureTransport === 'function' ? ensureTransport : null;
++    this._stopTransport = typeof stopTransport === 'function' ? stopTransport : null;
++    this._readyCallbacks = new Set();
++    this._stopCallbacks = new Set();
++    this._active = false;
++    this._ready = false;
++    this._startToken = 0;
++    this._lastStartAt = 0;
++    this._lastReason = 'unknown';
 +  }
-+  const mode = policy.mode;
-+  return mode === InteractionPolicyMode.MANUAL_ONLY_DURING_TTS;
-+};
 +
-+export function shouldAllowAutoVAD(policySnapshot = PolicyBus.getPolicy()) {
-+  const policy = policySnapshot;
-+  if (!policy || typeof policy !== 'object') {
++  get active() {
++    return this._active;
++  }
++
++  get ready() {
++    return this._ready;
++  }
++
++  async ensureStarted(options = {}) {
++    const { reason = 'unknown', emit = true, detail = {} } = options;
++    const token = ++this._startToken;
++    const reused = this._active && this._ready;
++    this._active = true;
++    this._ready = false;
++    this._lastStartAt = Date.now();
++    this._lastReason = reason;
++    if (emit) {
++      const payload = sanitizeDetail({ reason, reused, ...detail });
++      emitFlowBreadcrumb('asr:start', payload);
++      emitVoiceEvent('asr_start', payload);
++    }
++    const transportPromise = this._ensureTransport ? Promise.resolve(this._ensureTransport()) : Promise.resolve();
++    transportPromise
++      .then(() => {
++        if (this._startToken === token) {
++          this._handleReady({ reason, reused, emit, detail });
++        }
++      })
++      .catch(() => {});
++    return transportPromise;
++  }
++
++  _handleReady(meta = {}) {
++    const { reason = 'unknown', reused = false, emit = true, detail = {} } = meta;
++    this._ready = true;
++    const latencyMs = Math.max(0, Date.now() - this._lastStartAt);
++    const payload = sanitizeDetail({ reason, reused, latency_ms: latencyMs, ...detail });
++    if (emit) {
++      emitFlowBreadcrumb('asr:ready', payload);
++      emitVoiceEvent('asr_ready', payload);
++    }
++    for (const cb of this._readyCallbacks) {
++      try { cb(payload); } catch {}
++    }
++  }
++
++  onReady(cb) {
++    if (typeof cb !== 'function') {
++      return () => {};
++    }
++    this._readyCallbacks.add(cb);
++    if (this._ready) {
++      try {
++        cb({ reason: this._lastReason, reused: true, latency_ms: Math.max(0, Date.now() - this._lastStartAt) });
++      } catch {}
++    }
++    return () => {
++      this._readyCallbacks.delete(cb);
++    };
++  }
++
++  onStop(cb) {
++    if (typeof cb !== 'function') {
++      return () => {};
++    }
++    this._stopCallbacks.add(cb);
++    return () => {
++      this._stopCallbacks.delete(cb);
++    };
++  }
++
++  notifyPartial(detail = {}) {
++    const payload = sanitizeDetail(detail);
++    emitFlowBreadcrumb('asr:partial', payload);
++    emitVoiceEvent('asr_partial', payload);
++  }
++
++  notifyFinal(detail = {}) {
++    const payload = sanitizeDetail(detail);
++    emitFlowBreadcrumb('asr:final', payload);
++    emitVoiceEvent('asr_final', payload);
++  }
++
++  notifyStop(detail = {}) {
++    const payload = sanitizeDetail(detail);
++    this._active = false;
++    this._ready = false;
++    emitFlowBreadcrumb('asr:stop', payload);
++    emitVoiceEvent('asr_stop', payload);
++    for (const cb of this._stopCallbacks) {
++      try { cb(payload); } catch {}
++    }
++  }
++
++  stopIfIdle(options = {}) {
++    const { reason = 'idle', emit = true, detail = {} } = options;
++    const ctxState = this.ctx?.state || {};
++    if (ctxState.turnOpen || ctxState.recording) {
++      return false;
++    }
++    if (this._stopTransport) {
++      try { this._stopTransport(); } catch {}
++    }
++    const alreadyIdle = !this._active && !this._ready;
++    if (emit) {
++      if (!alreadyIdle) {
++        this.notifyStop({ reason, idle: true, ...detail });
++      }
++    } else if (!alreadyIdle) {
++      this._active = false;
++      this._ready = false;
++      const payload = sanitizeDetail({ reason, idle: true, ...detail });
++      for (const cb of this._stopCallbacks) {
++        try { cb(payload); } catch {}
++      }
++    }
 +    return true;
 +  }
-+  if (isManualOnlyDuringTts(policy)) {
-+    return policy.allow_auto_vad !== false;
++}
+diff --git a/static/js/voice/controllers/RecorderController.js b/static/js/voice/controllers/RecorderController.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..5f6871db3a3b1e96fe92e4953dd84792909e1b9f
+--- /dev/null
++++ b/static/js/voice/controllers/RecorderController.js
+@@ -0,0 +1,94 @@
++import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
++import { emitVoiceEvent } from '../ui/Events.js';
++
++function sanitizeDetail(detail = {}) {
++  if (!detail || typeof detail !== 'object') {
++    return {};
 +  }
-+  if (Object.prototype.hasOwnProperty.call(policy, 'allow_auto_vad')) {
-+    return policy.allow_auto_vad !== false;
-+  }
-+  return true;
++  const { force, ...rest } = detail;
++  return { ...rest };
 +}
 +
-+export function guardBargeInDispatch(src) {
-+  const policy = PolicyBus.getPolicy();
-+  if (shouldAllowAutoVAD(policy)) {
-+    return true;
++export default class RecorderController {
++  constructor({ ctx, start, stop } = {}) {
++    this.ctx = ctx;
++    this._startImpl = typeof start === 'function' ? start : null;
++    this._stopImpl = typeof stop === 'function' ? stop : null;
++    this._active = false;
++    this._startToken = 0;
++    this._buffering = false;
++    this._ready = false;
++    this._lastStartAt = 0;
 +  }
-+  const mode = policy && typeof policy === 'object' ? policy.mode : null;
-+  emitVoiceEvent('barge_in:blocked', { src, reason: BLOCK_REASON, mode });
-+  return false;
++
++  get active() {
++    return this._active;
++  }
++
++  get buffering() {
++    return this._buffering;
++  }
++
++  start(options = {}) {
++    const { reason = 'unknown', emit = true, detail = {} } = options;
++    const wasActive = this._active;
++    const token = ++this._startToken;
++    this._lastStartAt = Date.now();
++    if (!this._active && this._startImpl) {
++      try {
++        this._startImpl();
++        this._active = true;
++      } catch (err) {
++        this._active = false;
++        throw err;
++      }
++    }
++    this._buffering = true;
++    this._ready = false;
++    if (emit) {
++      const payload = sanitizeDetail({ reason, reused: wasActive, ...detail });
++      emitFlowBreadcrumb('recorder:start', payload);
++      emitVoiceEvent('recorder_start', payload);
++    }
++    return { token, reused: wasActive };
++  }
++
++  stop(options = {}) {
++    const { reason = 'unknown', emit = true, detail = {} } = options;
++    const wasActive = this._active;
++    if (this._stopImpl) {
++      try {
++        this._stopImpl();
++      } catch {}
++    }
++    this._active = false;
++    this._buffering = false;
++    this._ready = false;
++    if (emit && wasActive) {
++      const payload = sanitizeDetail({ reason, ...detail });
++      emitFlowBreadcrumb('recorder:stop', payload);
++      emitVoiceEvent('recorder_stop', payload);
++    }
++    return wasActive;
++  }
++
++  notifyAsrReady(detail = {}) {
++    if (this._ready) {
++      return;
++    }
++    this._ready = true;
++    this._buffering = false;
++    const latencyMs = Math.max(0, Date.now() - this._lastStartAt);
++    const payload = sanitizeDetail({ ...detail, latency_ms: latencyMs });
++    emitFlowBreadcrumb('recorder:buffer_ready', payload);
++    emitVoiceEvent('recorder_buffer_ready', payload);
++  }
++
++  notifyAsrIdle(detail = {}) {
++    this._ready = false;
++    this._buffering = false;
++    const payload = sanitizeDetail({ ...detail });
++    emitFlowBreadcrumb('recorder:idle', payload);
++    emitVoiceEvent('recorder_idle', payload);
++  }
++}
+diff --git a/static/js/voice/controllers/TtsMaskController.js b/static/js/voice/controllers/TtsMaskController.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..567ef9d2e4af33bc731de79a2749e7366a001ff9
+--- /dev/null
++++ b/static/js/voice/controllers/TtsMaskController.js
+@@ -0,0 +1,56 @@
++import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
++import { emitVoiceEvent } from '../ui/Events.js';
++
++function sanitizeDetail(detail = {}) {
++  if (!detail || typeof detail !== 'object') {
++    return {};
++  }
++  const { clearAll, force, ...rest } = detail;
++  return { ...rest };
 +}
 +
-+export default {
-+  shouldAllowAutoVAD,
-+  guardBargeInDispatch,
-+};
++export default class TtsMaskController {
++  constructor({ ctx, engage, release } = {}) {
++    this.ctx = ctx;
++    this._engageImpl = typeof engage === 'function' ? engage : null;
++    this._releaseImpl = typeof release === 'function' ? release : null;
++    this._reasons = new Set();
++  }
++
++  engage(reason = 'tts', detail = {}) {
++    const tag = reason || 'tts';
++    const wasActive = this._reasons.size > 0;
++    this._reasons.add(tag);
++    if (this._engageImpl) {
++      try { this._engageImpl(tag, detail); } catch {}
++    }
++    if (!wasActive) {
++      const payload = sanitizeDetail({ reason: tag, ...detail });
++      emitFlowBreadcrumb('tts_mask:on', payload);
++      emitVoiceEvent('tts_mask_on', payload);
++      emitFlowBreadcrumb('mic_gate:engaged', payload);
++      emitVoiceEvent('mic_gate_engaged', payload);
++    }
++  }
++
++  release(reason = 'tts', detail = {}) {
++    const tag = reason || 'tts';
++    const clearAll = detail && detail.clearAll;
++    const hadReasons = this._reasons.size > 0;
++    if (clearAll) {
++      this._reasons.clear();
++    } else {
++      this._reasons.delete(tag);
++    }
++    if (this._releaseImpl) {
++      try { this._releaseImpl(tag, detail); } catch {}
++    }
++    if (hadReasons && this._reasons.size === 0) {
++      const payload = sanitizeDetail({ reason: tag, ...detail });
++      emitFlowBreadcrumb('tts_mask:off', payload);
++      emitVoiceEvent('tts_mask_off', payload);
++      emitFlowBreadcrumb('mic_gate:released', payload);
++      emitVoiceEvent('mic_gate_released', payload);
++    }
++  }
++}
 diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index 672f92d5d191ddfa5fc01a1464b54a5838c4c485..5d0aae3fc21424c170ec9eef0ccef681e759acea 100644
+index 5d0aae3fc21424c170ec9eef0ccef681e759acea..924de5129099b2cbb22fd449c42d25c753458b71 100644
 --- a/static/js/voice/runtime/AdaptiveRuntime.js
 +++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -1,38 +1,40 @@
+@@ -1,35 +1,38 @@
  console.log("[AdaptiveRuntime] build=2025-10-16T23:15Z");
  import {
    EvidenceGate,
@@ -85,11 +325,14 @@ index 672f92d5d191ddfa5fc01a1464b54a5838c4c485..5d0aae3fc21424c170ec9eef0ccef681
    flushShadowBuffer,
    getConfig,
  } from '../core/index.js';
++import RecorderController from '../controllers/RecorderController.js';
++import AsrController from '../controllers/AsrController.js';
++import TtsMaskController from '../controllers/TtsMaskController.js';
  import { ensurePolicy, getPolicySync, pget as policyGet, POLICY_NOT_SET } from '../policy/index.js';
  import { ensureInteractionPolicy } from '../policy/InteractionPolicy.js';
  import PolicyBus from '../policy/PolicyBus.js';
-+import { guardBargeInDispatch } from '../guards/VadGuard.js';
-+import { canOpenTurn as evidenceGateCanOpenTurn } from '../guards/EvidenceGateGuard.js';
+ import { guardBargeInDispatch } from '../guards/VadGuard.js';
+ import { canOpenTurn as evidenceGateCanOpenTurn } from '../guards/EvidenceGateGuard.js';
  import {
    POLICY_SUPPRESS_ALL,
    POLICY_SUPPRESS_NONE,
@@ -110,43 +353,675 @@ index 672f92d5d191ddfa5fc01a1464b54a5838c4c485..5d0aae3fc21424c170ec9eef0ccef681
  function safeCloseStream(reason = '') {
    try {
      const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
-     if (!opened) {
-       console.debug('[voice] skip CloseStream (no user turn yet)', { reason });
+@@ -99,103 +102,137 @@ function rearmLocalVad(ctx) {
+   }
+   const pendingOpts = ctx.state.pendingVadOpts;
+   const opts = pendingOpts || ctx.state.lastVadOpts || {};
+   try {
+     ensureVad(ctx, opts);
+     ctx.state.pendingVadOpts = null;
+   } catch (err) {
+     if (pendingOpts != null) {
+       ctx.state.pendingVadOpts = pendingOpts;
+     }
+     if (typeof console !== 'undefined' && console.warn) {
+       console.warn('[voice][vad] rearm failed', err);
+     }
+   }
+ }
+ 
+ function schedulePostTtsRearm(ctx) {
+   if (!ctx?.state) return;
+   if (!ctx.state.vadShouldRearmAfterTts || ctx.state.manualGate) {
+     ctx.state.vadShouldRearmAfterTts = false;
+     ctx.state.vadSuppressedForTts = false;
+     clearPostTtsRearm(ctx);
+     if (!ctx.state.manualGate) {
+       markReady(ctx, 'post_tts_release');
+     }
+-    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
++    ensureControllers(ctx).ttsMask.release(MIC_GATE_TTS_REASON);
+     return;
+   }
+   clearPostTtsRearm(ctx);
+   const holdMs = resolvePostTtsHoldMs(ctx);
+   const delay = Math.max(0, Number.isFinite(holdMs) ? holdMs : 0);
+   if (delay <= 0) {
+     ctx.state.vadShouldRearmAfterTts = false;
+     markReady(ctx, 'post_tts_hold_elapsed');
+-    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
++    ensureControllers(ctx).ttsMask.release(MIC_GATE_TTS_REASON);
+     rearmLocalVad(ctx);
+     return;
+   }
+   ctx.state.vadSuppressedForTts = true;
+   ctx.state.ttsHoldUntilMs = nowMs() + delay;
+   ctx.state.ttsRearmTimer = setTimeout(() => {
+     ctx.state.ttsRearmTimer = null;
+     ctx.state.ttsHoldUntilMs = 0;
+     ctx.state.vadShouldRearmAfterTts = false;
+     markReady(ctx, 'post_tts_hold_elapsed');
+-    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
++    ensureControllers(ctx).ttsMask.release(MIC_GATE_TTS_REASON);
+     rearmLocalVad(ctx);
+   }, delay);
+ }
+ 
+ function ensureMicGateReasons(audio) {
+   if (!audio) return null;
+   if (!audio.micGateReasons || typeof audio.micGateReasons.add !== 'function') {
+     try {
+       audio.micGateReasons = new Set();
+     } catch {
+       audio.micGateReasons = {
+         _values: Object.create(null),
+         add(value) { this._values[value] = true; },
+         delete(value) { delete this._values[value]; },
+         clear() { this._values = Object.create(null); },
+         get size() { return Object.keys(this._values).length; },
+         has(value) { return Object.prototype.hasOwnProperty.call(this._values, value); },
+       };
+     }
+   }
+   return audio.micGateReasons;
+ }
+ 
+ function logMicGateChange(ctx, action, reason) {
+   voiceLog('info', `[audio] mic_gate ${action}`, {
+     ts_ms: Date.now(),
+     session_id: ctx?.sessionId || null,
+     turn_id: ctx?.state?.activeTurnId || null,
+     reason: reason || null,
+   });
+ }
+ 
++function normalizeUserTurnDetail(detail = {}) {
++  if (!detail || typeof detail !== 'object') {
++    return {};
++  }
++  const { force, ...rest } = detail;
++  return { ...rest };
++}
++
++function emitUserTurnOpen(ctx, detail = {}) {
++  if (!ctx?.state) return false;
++  const force = detail && detail.force === true;
++  if (ctx.state.userTurnActive && !force) {
++    return false;
++  }
++  ctx.state.userTurnActive = true;
++  const payload = normalizeUserTurnDetail(detail);
++  emitFlowBreadcrumb('user_turn_open', payload);
++  emitVoiceEvent('user_turn_open', payload);
++  return true;
++}
++
++function emitUserTurnClose(ctx, detail = {}) {
++  if (!ctx?.state) return false;
++  const force = detail && detail.force === true;
++  if (!ctx.state.userTurnActive && !force) {
++    return false;
++  }
++  ctx.state.userTurnActive = false;
++  const payload = normalizeUserTurnDetail(detail);
++  emitFlowBreadcrumb('user_turn_close', payload);
++  emitVoiceEvent('user_turn_close', payload);
++  return true;
++}
++
+ function disconnectMicPipeline(ctx, reason) {
+   const audio = ctx?.audio;
+   if (!audio?.highpass) {
+     return;
+   }
+   if (!audio.micConnected) {
+     return;
+   }
+   try { audio.highpass.disconnect(audio.analyser); } catch {}
+   try { audio.highpass.disconnect(audio.encoderDestination); } catch {}
+   audio.micConnected = false;
+   logMicGateChange(ctx, 'engaged', reason);
+ }
+ 
+ function connectMicPipeline(ctx, reason) {
+   const audio = ctx?.audio;
+   if (!audio?.highpass) {
+     return;
+   }
+   const reasons = ensureMicGateReasons(audio);
+   if (reasons && reasons.size > 0) {
+     audio.micConnected = false;
+     return;
+   }
+   if (audio.micConnected) {
+@@ -308,51 +345,51 @@ function sampleIdleRms(ctx) {
+   }
+ }
+ 
+ function ensureRmsLogger(ctx) {
+   const audio = ctx?.audio;
+   if (!audio?.analyser) return;
+   if (audio.rmsSampleTimer) return;
+   audio.rmsStats = {
+     min: Number.POSITIVE_INFINITY,
+     max: Number.NEGATIVE_INFINITY,
+     count: 0,
+     lastLogTs: Date.now(),
+   };
+   audio.rmsSampleTimer = setInterval(() => {
+     try { sampleIdleRms(ctx); } catch {}
+   }, RMS_IDLE_SAMPLE_MS);
+ }
+ 
+ function handleTtsPlaybackStarted(ctx, detail) {
+   if (!ctx?.state) return;
+   dispatchTurnEvent(ctx, TurnEvent.TtsStarted, {
+     reason: normalizeVadLabel(detail?.state) || 'tts_started',
+     detail,
+   });
+   clearPostTtsRearm(ctx);
+-  engageMicGate(ctx, MIC_GATE_TTS_REASON);  
++  ensureControllers(ctx).ttsMask.engage(MIC_GATE_TTS_REASON, { state: detail?.state });
+   ctx.state.ttsSuppressionMode = resolveSuppressionMode(detail);
+   const ttsSuppressionMode =
+     typeof ctx.state.ttsSuppressionMode === 'string' && ctx.state.ttsSuppressionMode
+       ? ctx.state.ttsSuppressionMode
+       : POLICY_SUPPRESS_NONE;
+   const ttsHoldMs = resolvePostTtsHoldMs(ctx);
+   voiceLog('info', '[tts] playback_start', {
+     ts_ms: Date.now(),
+     session_id: ctx?.sessionId || null,
+     turn_id: ctx?.state?.activeTurnId || null,
+     suppress_mode: ttsSuppressionMode,
+     post_tts_hold_ms: Number.isFinite(ttsHoldMs) ? Math.max(0, Math.round(ttsHoldMs)) : 0,
+   });
+   const pendingRearm = ctx.state.pendingVadOpts != null || ctx.state.vadShouldRearmAfterTts === true;
+   if (!policyAllowLocalVad()) {
+     if (ctx.state.vadArmed) {
+       teardownVad(ctx);
+       ctx.state.vadRecording = false;
+     }
+     ctx.state.vadShouldRearmAfterTts = false;
+     ctx.state.vadSuppressedForTts = true;
+     ctx.state.pendingVadOpts = null;
+     return;
+   }
+   if (ctx.state.ttsSuppressionMode === POLICY_SUPPRESS_NONE) {
+@@ -371,51 +408,51 @@ function handleTtsPlaybackStarted(ctx, detail) {
+   }
+ }
+ 
+ function handleTtsPlaybackEnded(ctx) {
+   if (!ctx?.state) return;
+   dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason: 'tts_ended' });
+   const ttsSuppressionMode =
+     typeof ctx.state.ttsSuppressionMode === 'string' && ctx.state.ttsSuppressionMode
+       ? ctx.state.ttsSuppressionMode
+       : POLICY_SUPPRESS_NONE;
+   const ttsHoldMs = resolvePostTtsHoldMs(ctx);
+   voiceLog('info', '[tts] playback_end', {
+     ts_ms: Date.now(),
+     session_id: ctx?.sessionId || null,
+     turn_id: ctx?.state?.activeTurnId || null,
+     suppress_mode: ttsSuppressionMode,
+     post_tts_hold_ms: Number.isFinite(ttsHoldMs) ? Math.max(0, Math.round(ttsHoldMs)) : 0,
+   });
+   const shouldRearm = ctx.state.vadShouldRearmAfterTts || ctx.state.pendingVadOpts != null;
+   if (!shouldRearm) {
+     ctx.state.vadSuppressedForTts = false;
+     clearPostTtsRearm(ctx);
+     if (!ctx.state.manualGate) {
+       markReady(ctx, 'post_tts_release');
+     }
+-    releaseMicGate(ctx, MIC_GATE_TTS_REASON);    
++    ensureControllers(ctx).ttsMask.release(MIC_GATE_TTS_REASON, { reason: 'tts_end' });
+     return;
+   }
+   ctx.state.vadShouldRearmAfterTts = true;
+   schedulePostTtsRearm(ctx);
+ }
+ 
+ const PRE_ROLL_MS = 550,
+   SAFETY_CLOSE_DELAY_MS = 2200,
+   EVIDENCE_MIN_SPEECH_MS = 480,
+   EVIDENCE_MIN_BYTES = 8 * 1024,
+   MIN_VALID_BLOB_BYTES = 1,
+   BARGE_CONFIRM_MS = 420,
+   DUAL_VAD_SILENCE_DEBOUNCE_MS = 300,
+   MIN_TURN_OPEN_MS = 600;
+ 
+ const ctxRef = { current: null };
+ const MIC_AUDIO_CTX_HOOK_KEY = '__flowBreadcrumbMicCtx';
+ let lastPttDownAtMs = 0;
+ 
+ const attachMicAudioCtxBreadcrumb = (ctx, origin = 'mic_capture') => {
+   if (!ctx || typeof ctx !== 'object') return;
+   try {
+     if (ctx[MIC_AUDIO_CTX_HOOK_KEY]) {
        return;
      }
-   } catch {}
-@@ -2188,50 +2190,56 @@ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', a
-   const evidenceCfg = ctx.config?.evidence ?? {};
-   const snrDetail = Number.isFinite(detail?.snr)
-     ? detail.snr
-     : Number.isFinite(detail?.snrDb)
-       ? detail.snrDb
-       : 0;
-   const snr01 = clamp01(snrDetail / 20);
-   const voiced = Number.isFinite(detail?.voicedRatio) ? detail.voicedRatio : 0;
-   const asrConf = Number.isFinite(ctx.state?.asr?.lastConf) ? ctx.state.asr.lastConf : 0;
-   const w1 = Number.isFinite(evidenceCfg.w_snr) ? evidenceCfg.w_snr : 0.4;
-   const w2 = Number.isFinite(evidenceCfg.w_voiced) ? evidenceCfg.w_voiced : 0.2;
-   const w3 = Number.isFinite(evidenceCfg.w_asr) ? evidenceCfg.w_asr : 0.6;
-   const score = (w1 * snr01) + (w2 * voiced) + (w3 * asrConf);
-   const commitScore = Number.isFinite(evidenceCfg.commit_score) ? evidenceCfg.commit_score : 1.0;
+@@ -534,50 +571,54 @@ const markAsrActivity = (ctx, { via } = {}) => {
+ };
  
-   let commitReason = null;
-   if (score >= commitScore) {
-     ctx.evidenceGate.satisfy('score');
-     commitReason = 'evidence_gate_score';
+ const onAsrPartial = (ctx, partial = {}) => {
+   const asr = ensureAsrState(ctx);
+   const conf = Number.isFinite(partial?.confidence) ? partial.confidence : null;
+   if (Number.isFinite(conf)) {
+     asr.lastConf = Math.max(asr.lastConf ?? 0, conf);
    }
-   if (result.shouldCommit) {
-     ctx.evidenceGate.satisfy('commit');
-     commitReason = 'evidence_gate_commit';
+   const prevPartialTs = Number.isFinite(asr.lastPartialTs) ? asr.lastPartialTs : 0;
+   const nowLocal = nowMs();
+   const deltaMs = prevPartialTs ? Math.max(0, nowLocal - prevPartialTs) : null;
+   const logTs = Date.now();
+   if (!Number.isFinite(asr.lastPartialLogTs) || (logTs - asr.lastPartialLogTs) >= 150) {
+     voiceLog('info', '[asr] partial', {
+       ts_ms: logTs,
+       session_id: ctx?.sessionId || null,
+       turn_id: ctx?.state?.activeTurnId || null,
+       confidence: Number.isFinite(conf) ? Number.parseFloat(conf.toFixed(3)) : null,
+       delta_ms: deltaMs,
+     });
+     asr.lastPartialLogTs = logTs;
    }
-   if (commitReason) {
-+    if (!evidenceGateCanOpenTurn()) {
-+      if (ctx?.state && !ctx.state.pendingCommitReason) {
-+        ctx.state.pendingCommitReason = commitReason;
-+      }
-+      return;
-+    }
+   asr.lastPartialTs = nowLocal;
+   asr.lastActivityTs = nowLocal;
+   asr.speaking = true;
++  ensureControllers(ctx).asr.notifyPartial({
++    confidence: Number.isFinite(conf) ? Number.parseFloat(conf.toFixed(3)) : null,
++    delta_ms: deltaMs,
++  });
+ };
+ 
+ const onAsrVad = (ctx, event = {}) => {
+   const asr = ensureAsrState(ctx);
+   const type = (event?.type || '').toLowerCase();
+   if (type === 'speech_start' || type === 'start' || type === 'begin') {
+     const ts = markAsrActivity(ctx, { via: 'vad' });
+     asr.lastPartialTs = ts;
+   } else if (type === 'speech_end' || type === 'end' || type === 'stop') {
+     asr.speaking = false;
+     if (!Number.isFinite(asr.lastActivityTs) || asr.lastActivityTs <= 0) {
+       asr.lastActivityTs = nowMs();
+     }
+   }
+   const logTs = Date.now();
+   const normalized = type || 'unknown';
+   if (asr.lastVadLogType !== normalized || !Number.isFinite(asr.lastVadLogTs) || (logTs - asr.lastVadLogTs) >= 150) {
+     voiceLog('info', '[asr] vad', {
+       ts_ms: logTs,
+       session_id: ctx?.sessionId || null,
+       turn_id: ctx?.state?.activeTurnId || null,
+       event: normalized,
+       speaking: isAsrSpeakingNow(ctx),
+     });
+     asr.lastVadLogType = normalized;
+@@ -1231,85 +1272,119 @@ const ensureCtx = () => {
+       ttsPlaying: false, lastChunkAt: 0,
+       lastReadyLogAt: 0,
+       vadRecording: false,
+       lastUserAudioMs: 0,
+       dualVadBothSilentAt: null,
+       turnOpenedAtMs: 0,
+       preCommitASRFeed: false,
+       vadMasked: false,
+       pendingCommitReason: null,
+       readyPending: false,
+       readyForTurnSeq: 0,
+       asr: initAsrState(),
+       dualVadCloseTimer: null,
+       dualVadLogSnapshot: null,
+       lastDualVadLogTs: 0,
+       lastPreCommitFeedMode: 'shadow_only',
+       ttsRearmTimer: null,
+       ttsHeartbeatTimer: null,
+       ttsHoldUntilMs: 0,
+       vadShouldRearmAfterTts: false,
+       vadSuppressedForTts: false,
+       ttsSuppressionMode: POLICY_SUPPRESS_NONE,
+       ttsHoldStartedMs: 0,
+       ttsPendingStart: false,
+       ttsCurrentTurnId: null,
++      userTurnActive: false,
+       evidenceGate, shadowBuffer, ttsMask,
+     },
+     audio: {
+       stream: null, context: null, source: null, analyser: null,
+       highpass: null, encoderDestination: null, encoderStream: null,      
+       vad: null, recorder: null, recTimeslice: RECORD_TIMESLICE_MS,
+       lastTimecode: null,
+       micGateReasons: new Set(),
+       micConnected: false,
+       rmsSampleTimer: null,
+       rmsScratch: null,
+       rmsStats: null,      
+     },
+     transport: { wsPromise: null, connected: false, safetyTimer: null },
+     evidenceGate,
+     shadowBuffer,
+     ttsMask,
+     maskLogTimer: null,
+     policy: policySnapshot,
+   };
+ 
+   registerTtsListener(ctx);
+   registerWsListener(ctx);
+   ctx.ttsEndedAtMs = 0;
+   ctxRef.current = ctx;
++  ensureControllers(ctx);
+   try {
+     if (typeof window !== 'undefined') {
+       window.__askchip_voice_ctx = ctx;
+     }
+   } catch (err) {
+     console.warn('[AdaptiveRuntime] unable to attach __askchip_voice_ctx', err);
+   }
+   return ctx;
+ };
+ 
++function ensureControllers(ctx) {
++  if (!ctx) {
++    return {};
++  }
++  if (ctx.controllers) {
++    return ctx.controllers;
++  }
++  const recorder = new RecorderController({
++    ctx,
++    start: () => startRecorder(ctx),
++    stop: () => stopRecorder(ctx),
++  });
++  const asr = new AsrController({
++    ctx,
++    ensureTransport: () => ensureTransport(ctx),
++    stopTransport: () => teardownTransport(ctx),
++  });
++  const ttsMask = new TtsMaskController({
++    ctx,
++    engage: (reason) => engageMicGate(ctx, reason),
++    release: (reason, opts = {}) => releaseMicGate(ctx, reason, opts),
++  });
++  asr.onReady((detail) => {
++    try { recorder.notifyAsrReady(detail); } catch {}
++  });
++  asr.onStop((detail) => {
++    try { recorder.notifyAsrIdle(detail); } catch {}
++  });
++  ctx.controllers = { recorder, asr, ttsMask };
++  return ctx.controllers;
++}
++
+ const registerTtsListener = (ctx) => {
+   if (ctx.ttsListenerRegistered) return;
+   ctx.ttsListenerRegistered = true;
+   const win = typeof window !== 'undefined' ? window : null;
+   const listener = (ev) => {
+     const { detail } = ev || {};
+     const handled = applyTtsState(ctx, detail?.state, detail);
+     if (handled && normalizeVadLabel(detail?.state) === 'ended') {
+       try {
+         ctx.state.vadBoostDb = Math.max(0, (ctx.state.vadBoostDb ?? 0) - 3);
+         setTimeout(() => {
+           try {
+             ctx.state.vadBoostDb = 0;
+           } catch {}
+         }, 250);
+       } catch {}
+     }
+   };
+   try { win?.addEventListener?.('chip-tts', listener, { passive: true }); } catch {}
+ };
+ 
+ const normalizeVadLabel = (value) => (typeof value === 'string' ? value.toLowerCase() : '');
+ 
+ const applyTtsState = (ctx, rawState, detail = {}) => {
+   if (!ctx || !ctx.state || !ctx.ttsMask) return false;
+@@ -1328,51 +1403,51 @@ const applyTtsState = (ctx, rawState, detail = {}) => {
+     ctx.ttsEndedAtMs = undefined;
+     ctx.ttsMask.start();
+     handleTtsPlaybackStarted(ctx, detail);
+     startMaskLogging(ctx);
+     return true;
+   }
+ 
+   if (['ended', 'stopped', 'done'].includes(normalized)) {
+     ctx.state.ttsPlaying = false;
+     ctx.state.ttsPendingStart = false;
+     ctx.state.ttsCurrentTurnId = null;
+     ctx.ttsEndedAtMs = nowMs();
+     ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: detail?.snrBoost });
+     handleTtsPlaybackEnded(ctx);
+     startMaskLogging(ctx);
+     return true;
+   }
+ 
+   if (['ready', 'idle', 'listening', 'assistant_listening'].includes(normalized)) {
+     ctx.state.ttsPlaying = false;
+     ctx.state.ttsPendingStart = false;
+     ctx.state.ttsCurrentTurnId = null;
+     ctx.ttsEndedAtMs = nowMs();
+     ctx.ttsMask.clear();
+     stopMaskLogging(ctx);
+-    releaseMicGate(ctx, MIC_GATE_TTS_REASON);
++    ensureControllers(ctx).ttsMask.release(MIC_GATE_TTS_REASON, { state: normalized });
+     markReady(ctx, 'assistant_ready', { detail });
+     return true;
+   }
+ 
+   return false;
+ };
+ 
+ const resolveVadEventType = (frame) => {
+   if (!frame || typeof frame !== 'object') return null;
+   const metaVad = normalizeVadLabel(frame?.meta?.local_vad);
+   if (metaVad) {
+     if (['start', 'active', 'speech_start', 'begin'].includes(metaVad)) return 'speech_start';
+     if (['stop', 'end', 'inactive', 'speech_end'].includes(metaVad)) return 'speech_end';
+   }
+ 
+   const candidates = [
+     frame?.type,
+     frame?.event,
+     frame?.kind,
+     frame?.label,
+     frame?.state,
+     frame?.signal,
+     frame?.detail?.type,
+     frame?.detail?.event,
+     frame?.payload?.type,
+@@ -1545,50 +1620,53 @@ function handleWsFrame(ctx, frame) {
+   }
+ 
+   if (frameIndicatesAsrResult(frame)) {
+     const confidence = extractAsrConfidence(frame);
+     onAsrPartial(ctx, { confidence });
+     if (dualVadEnabled(ctx) && Number.isFinite(confidence) && confidence >= commitConfidenceThreshold(ctx)) {
+       if (!ctx.state.pendingCommitReason) {
+         ctx.state.pendingCommitReason = 'asr_confidence';
+       }
+     }
+     if (dualVadEnabled(ctx)) {
+       const attempt = maybeCommitSpeech(ctx);
+       if (attempt && typeof attempt.then === 'function') {
+         attempt.catch(() => {});
+       }
+     }
+     const isFinal = Boolean(
+       frame?.channel?.is_final ?? frame?.is_final ?? frame?.final ?? frame?.detail?.is_final
+     );
+     if (isFinal) {
+       const asrState = ensureAsrState(ctx);
+       asrState.speaking = false;
+       if (!Number.isFinite(asrState.lastActivityTs) || asrState.lastActivityTs <= 0) {
+         asrState.lastActivityTs = nowMs();
+       }
++      ensureControllers(ctx).asr.notifyFinal({
++        confidence: Number.isFinite(confidence) ? Number.parseFloat(confidence.toFixed(3)) : null,
++      });
+     }
+     return;
+   }
+ 
+   const vadType = resolveVadEventType(frame);
+   if (vadType) {
+     onAsrVad(ctx, { type: vadType });
+     if (dualVadEnabled(ctx) && vadType === 'speech_start') {
+       const attempt = maybeCommitSpeech(ctx);
+       if (attempt && typeof attempt.then === 'function') {
+         attempt.catch(() => {});
+       }
+     } else if (dualVadEnabled(ctx) && vadType === 'speech_end') {
+       if (!attemptCloseWithReason(ctx, 'asr_vad_end', 'asr_vad_end')) {
+         scheduleDualVadTimer(ctx);
+       }
+     }
+     return;
+   }
+ 
+   if (type === 'utteranceend' || event === 'utteranceend') {
+     const asrState = ensureAsrState(ctx);
+     asrState.speaking = false;
+     if (!Number.isFinite(asrState.lastActivityTs) || asrState.lastActivityTs <= 0) {
+       asrState.lastActivityTs = nowMs();
+@@ -1682,52 +1760,53 @@ const ensureAudioGraph = (ctx, stream) => {
+     try { audio.source.disconnect(); } catch {}
+   }
+   audio.source = audio.context.createMediaStreamSource(stream);
+   try { audio.source.connect(audio.highpass); } catch {}
+   ensureRmsLogger(ctx);
+   connectMicPipeline(ctx, 'graph_init');
+ };
+ 
+ const startRecorder = (ctx) => {
+   const { audio } = ctx;
+   if (audio.recorder) return;
+   const recorderStream = audio.encoderStream || audio.stream;
+   if (!recorderStream) {
+     return;
+   }  
+   let mimeType = 'audio/webm; codecs=opus';
+   try {
+     if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
+       && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
+       mimeType = 'audio/ogg; codecs=opus';
+     }
+   } catch {}
+   const recorder = new MediaRecorder(recorderStream, { mimeType });
+   recorder.addEventListener('dataavailable', (event) => handleRecorderData(ctx, event));
+   recorder.addEventListener('error', (event) => {
+-    emitVoiceEvent('recorder_error', { message: event?.error?.message || 'unknown' });
+-    stopRecorder(ctx);
++    const detail = { message: event?.error?.message || 'unknown' };
++    emitVoiceEvent('recorder_error', detail);
++    ensureControllers(ctx).recorder.stop({ reason: 'recorder_error', detail });
+   });
+   recorder.start(audio.recTimeslice);
+   voiceLog('info', '[recorder] started', {
+     ts_ms: Date.now(),
+     session_id: ctx.sessionId || null,
+     mime_type: mimeType,
+     timeslice_ms: audio.recTimeslice,
+     source: audio.encoderDestination ? 'processor' : 'raw_stream',    
+   });
+   audio.recorder = recorder;
+   ctx.state.recording = true;
+ };
+ 
+ const stopRecorder = (ctx) => {
+   const { recorder } = ctx.audio;
+   if (!recorder) return;
+   try { if (recorder.state !== 'inactive') recorder.stop(); } catch {}
+   ctx.audio.recorder = null;
+   ctx.state.recording = false;
+ };
+ 
+ const handleRecorderData = (ctx, event) => {
+   const blob = event?.data;
+   if (!blob || typeof blob.size !== 'number' || blob.size < MIN_VALID_BLOB_BYTES) return;
+   const timecode = Number.isFinite(event?.timecode) ? event.timecode : null;
+@@ -1847,73 +1926,76 @@ const openTurn = async (ctx, reason = 'speech_commit') => {
+     }
+     if (entry?.buffer) sendChunk(ctx, entry.buffer, { durationMs });
+   });
+   if (discardedTotalMs > 0) {
+     voiceLog('info', '[audio] pre_roll_discard', {
+       ts_ms: Date.now(),
+       session_id: ctx.sessionId || null,
+       turn_id: turnId,
+       requested_ms: PRE_ROLL_DISCARD_MS,
+       discarded_ms: discardedTotalMs,
+     });
+   }  
+   ctx.evidenceGate.setBufferStats(stats);
+ };
+ 
+ const closeTurn = (ctx, reason = 'vad_end') => {
+   if (!ctx.state.turnOpen) {
+     if (!ctx.state.hasOpenedTurn) {
+       voiceLog('info', '[ws] CloseStream suppressed: no user turn yet', {
+         ts_ms: Date.now(),
+         session_id: ctx.sessionId || null,
+       });
+     }
+     return;
+   }
++  const controllers = ensureControllers(ctx);
+   const turnId = ctx.state.activeTurnId || ctx.state.turnSeq || null;
++  emitUserTurnClose(ctx, { reason });
+   safeCloseStream('adaptive');
+   clearDualVadTimer(ctx);
+   ctx.state.turnOpen = false;
+   ctx.state.preCommitASRFeed = false;
+   logPreCommitMode(ctx, 'shadow_only', { reason: 'turn_close' });
+   ctx.state.pendingCommitReason = null;
+   ctx.state.vadRecording = false;
+   ctx.state.lastUserAudioMs = 0;
+   ctx.state.turnOpenedAtMs = 0;
+   ctx.state.dualVadBothSilentAt = null;
+   resetAsrState(ctx);
+   ctx.state.dualVadLogSnapshot = null;
+   ctx.state.lastDualVadLogTs = 0;
+   const ts = Date.now();
+   const stats = getShadowStats(ctx.state);
+   emitVoiceEvent('turn_close', {
+     reason,
+     stats,
+     turnId,
+     sessionId: ctx.sessionId || null,
+     ts_ms: ts,
+   });
++  controllers.asr.notifyStop({ reason, via: 'turn_close' });
+   voiceLog('info', '[turn] close', {
+     ts_ms: ts,
+     session_id: ctx.sessionId || null,
+     turn_id: turnId,
+     reason,
+   });
+   ctx.state.activeTurnId = null;
+   try {
+     if (typeof window !== 'undefined') {
+       window.__askchip_turn_trace_id = null;
+     }
+   } catch {}
+   scheduleSafetyClose(ctx);
+   onTurnClosed(ctx);
+   dispatchTurnEvent(ctx, TurnEvent.TurnClosed, { reason, detail: { stats } });
+ };
+ 
+ const median = (values) => {
+   if (!Array.isArray(values) || values.length === 0) {
+     return null;
+   }
+   const sorted = values.slice().sort((a, b) => a - b);
+   const mid = Math.floor(sorted.length / 2);
+   if (sorted.length % 2) {
+     return sorted[mid];
+@@ -2215,69 +2297,75 @@ const evaluateEvidenceGate = async (ctx, { detail = null, vadState = 'speech', a
+     if (!evidenceGateCanOpenTurn()) {
+       if (ctx?.state && !ctx.state.pendingCommitReason) {
+         ctx.state.pendingCommitReason = commitReason;
+       }
+       return;
+     }
      const pending = maybeCommitSpeech(ctx, commitReason);
      if (pending && typeof pending.then === 'function') {
        pending.catch(() => {});
@@ -166,67 +1041,319 @@ index 672f92d5d191ddfa5fc01a1464b54a5838c4c485..5d0aae3fc21424c170ec9eef0ccef681
      return;
    }
    clearDualVadTimer(ctx);
++  const controllers = ensureControllers(ctx);
++  const source = 'auto_vad';
++  controllers.recorder.start({ reason: 'auto_vad', detail: { source } });
++  controllers.asr.ensureStarted({ reason: 'auto_vad', detail: { source } }).catch(() => {});
++  emitUserTurnOpen(ctx, { source });
    ctx.state.bargeConfirmActive = true;
    ctx.state.bargeConfirmUntil = nowMs() + BARGE_CONFIRM_MS;
    dispatchTurnEvent(ctx, TurnEvent.SpeechStart, { reason: 'speech_start', detail });
    const stats = ctx.shadowBuffer.stats();
    ctx.evidenceGate.start({ startedAt: nowMs(), detail, bufferedMs: stats.durationMs, bufferedBytes: stats.totalBytes });
    emitVoiceEvent('speech_start', detail);
-@@ -2274,50 +2282,57 @@ const ensureVad = (ctx, opts = {}) => {
+   await evaluateEvidenceGate(ctx, { detail, vadState: 'speech' });
+   const commitAttempt = maybeCommitSpeech(ctx);
+   if (commitAttempt && typeof commitAttempt.then === 'function') {
+     commitAttempt.catch(() => {});
+   }
+ };
+ 
+ const handleSpeechEnd = async (ctx, detail) => {
+   if (ctx.state.manualGate) {
+     return;
+   }
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
++  emitUserTurnClose(ctx, { reason: 'speech_end' });
+   emitVoiceEvent('speech_end', detail);
+   await evaluateEvidenceGate(ctx, { detail, vadState: 'silence', asrCue: { type: 'vad_end' } });
+   if (attemptCloseWithReason(ctx, 'vad_end', 'vad_end')) {
+     return;
+   }
+   dispatchTurnEvent(ctx, TurnEvent.SpeechEnd, { reason: 'speech_end', detail });
+   scheduleDualVadTimer(ctx);
+ };
+ 
+ const ensureVad = (ctx, opts = {}) => {
+   const { audio } = ctx;
+   if (audio.vad) return;
+   const echoStateFn = () => isTtsMaskActive(ctx);
+   const minSpeechMs = Math.max(
+     HYSTERESIS_MIN_OPEN_MS,
+     Number.isFinite(opts.minSpeechMs) ? Number(opts.minSpeechMs) : HYSTERESIS_MIN_OPEN_MS,
+   );
+   const minSilenceMs = Math.max(
+     HYSTERESIS_MIN_OPEN_MS,
+     Number.isFinite(opts.minSilenceMs) ? Number(opts.minSilenceMs) : 300,
+   );
+   const minStartDb = Number.isFinite(opts.minStartDb)
+     ? Math.max(HYSTERESIS_OPEN_DB, Number(opts.minStartDb))
      : HYSTERESIS_OPEN_DB;
    const minStopDb = Number.isFinite(opts.minStopDb)
-     ? Math.max(HYSTERESIS_CLOSE_DB, Number(opts.minStopDb))
-     : HYSTERESIS_CLOSE_DB;
+@@ -2433,246 +2521,259 @@ export async function armVAD(stream = null, opts = {}) {
+     : false;
+   const ttsActive = !!(ctx.state.ttsPlaying || isTtsMaskActive(ctx));
+   const endedRecently = holdMs > 0
+     && Number.isFinite(ctx.ttsEndedAtMs)
+     && (nowTs - ctx.ttsEndedAtMs) < holdMs;
+   const shouldDeferVad = localVadAllowed
+     && !ctx.state.manualGate
+     && (ctx.state.vadSuppressedForTts || ttsActive || holdActive || endedRecently);
+   if (shouldDeferVad) {
+     try {
+       ctx.state.pendingVadOpts = { ...opts };
+     } catch {
+       ctx.state.pendingVadOpts = opts;
+     }
+     ctx.state.vadShouldRearmAfterTts = true;
+     ctx.state.vadSuppressedForTts = true;
+     if (!ttsActive && !holdActive && endedRecently) {
+       schedulePostTtsRearm(ctx);
+     }
+   } else if (localVadAllowed) {
+     ctx.state.pendingVadOpts = null;
+     ensureVad(ctx, opts);
+   } else {
+     ctx.state.pendingVadOpts = null;
+   }
+-  startRecorder(ctx);
+-  await ensureTransport(ctx).catch(() => {});
++  const controllers = ensureControllers(ctx);
++  controllers.recorder.start({ reason: 'arm_vad', emit: false });
++  await controllers.asr.ensureStarted({ reason: 'arm_vad', emit: false }).catch(() => {});
+   emitVoiceEvent('armed', { mode: 'adaptive' });
+   return mic;
+ }
  
-   audio.vad = new VAD(audio.analyser, {
-     startDbOffset: VAD_BASE_START_DB_OFFSET + ctx.state.vadBoostDb,
-     stopDbOffset: VAD_BASE_STOP_DB_OFFSET + ctx.state.vadBoostDb,
-     echoStateFn,
-     minSpeechMs,
-     minSilenceMs,
-     minStartDb,
-     minStopDb,
-     gateFn: () => !isTtsMaskActive(ctx),
-   }, {
-     onSpeechStart: (detail) => {
-       const masked = ctx.state.manualGate || ctx.state.ttsPlaying || isTtsMaskActive(ctx);
-       if (masked) {
-         ctx.state.vadMasked = true;
-         ctx.state.vadRecording = false;
-         ctx.state.preCommitASRFeed = false;
-         ctx.evidenceGate.reset('tts_mask_block');
-         logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_block' });
-         return;
-       }
-+      if (!guardBargeInDispatch('client_vad')) {
-+        ctx.state.vadRecording = false;
-+        ctx.state.preCommitASRFeed = false;
-+        ctx.evidenceGate.reset('policy_block');
-+        logPreCommitMode(ctx, 'shadow_only', { reason: 'policy_block' });
-+        return;
-+      }
-       ctx.state.vadMasked = false;
-       ctx.state.vadRecording = true;
-       ctx.state.preCommitASRFeed = true;
-       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'asr_priming', {
-         reason: 'speech_start',
-       });
-       handleSpeechStart(ctx, detail);
-     },
-     onSpeechEnd: (detail) => {
-       ctx.state.vadRecording = false;
-       if (!ctx.state.turnOpen) {
-         ctx.state.preCommitASRFeed = false;
-       }
-       if (ctx.state.vadMasked) {
-         ctx.state.vadMasked = false;
-         ctx.evidenceGate.reset('tts_mask_block');
-         logPreCommitMode(ctx, 'shadow_only', { reason: 'tts_mask_release' });
-         return;
-       }
-       logPreCommitMode(ctx, ctx.state.turnOpen ? 'streaming' : 'shadow_only', {
-         reason: 'speech_end',
-       });
-       handleSpeechEnd(ctx, detail);
-     },
+ export function disarmVAD() {
+   const ctx = ensureCtx();
++  const controllers = ensureControllers(ctx);
+   clearPostTtsRearm(ctx);
+   ctx.state.vadShouldRearmAfterTts = false;
+   ctx.state.vadSuppressedForTts = false;
+   ctx.state.pendingVadOpts = null;
+-  teardownVad(ctx); stopRecorder(ctx);
++  teardownVad(ctx);
++  controllers.recorder.stop({ reason: 'manual_disarm' });
+   closeTurn(ctx, 'manual_disarm');
+   teardownTransport(ctx);
+   releaseMicGate(ctx, 'manual', { clearAll: true });
+   setManualGate(ctx, false);
+   ctx.state.pttHeld = false;
+   ctx.state.hasOpenedTurn = false;
+   ctx.state.ttsCurrentTurnId = null;
++  ctx.state.userTurnActive = false;
+   stopMaskLogging(ctx);
+   dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: 'manual_disarm' });
+ }
+ 
+ export function isRecording() {
+   const ctx = ensureCtx();
+   return !!ctx.state.recording;
+ }
+ 
+ export function bargeIn(meta = {}) {
+   const ctx = ensureCtx();
++  const controllers = ensureControllers(ctx);
+   const shouldNotify = manualBargeAllowed(ctx);
+   ctx.state.manualBargeInUsed = true;
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
+   ctx.state.pendingCommitReason = null;
+   clearDualVadTimer(ctx);
+   clearPostTtsRearm(ctx);
+   ctx.state.vadShouldRearmAfterTts = false;
+   ctx.state.vadSuppressedForTts = false;
+   try { stopPlayback(); } catch {}
+   if (ctx.state.turnOpen) {
+     closeTurn(ctx, 'manual_barge_preempt');
+   }
+   const maskActive = isTtsMaskActive(ctx);
+   const whileTts = !!(ctx.state.ttsPlaying || maskActive);
+   const asrState = ctx.state?.asr;
+   const asrConf = Number.isFinite(asrState?.lastConf) ? Number(asrState.lastConf) : null;
+   const source = typeof meta?.source === 'string' && meta.source
+     ? meta.source
+     : (ctx.state.manualGate ? 'manual' : 'auto');
+   emitFlowBreadcrumb('barge_in', {
+     source,
+     while_tts: whileTts,
+     asr_conf_at_trigger: asrConf,
+     manual_gate: !!ctx.state.manualGate,
+     notify_server: !!shouldNotify,
+     mask_active: maskActive,
    });
+   ctx.state.ttsPlaying = false;
+   ctx.state.ttsPendingStart = false;
+   ctx.state.ttsCurrentTurnId = null;
+   ctx.ttsEndedAtMs = nowMs();
+   ctx.ttsMask.clear();
+-  releaseMicGate(ctx, MIC_GATE_TTS_REASON);
++  controllers.ttsMask.release(MIC_GATE_TTS_REASON, { reason: 'manual_barge_in' });
+   if (shouldNotify) {
+     sendJSON({ type: 'manual_barge_in' });
+   }
+   ctx.evidenceGate.reset('manual_barge_in');
+   ctx.shadowBuffer.clear();
+   ctx.audio.lastTimecode = null;
+   emitVoiceEvent('barge_in', { reason: 'manual' });
+   return true;
+ }
+ 
+ export function setVadBoost(value) {
+   const ctx = ensureCtx();
+   const numeric = Number.isFinite(value) ? value : 0;
+   ctx.state.vadBoostDb = Math.max(0, numeric);
+   if (ctx.audio.vad) {
+     teardownVad(ctx); ensureVad(ctx, {});
+   }
+ }
+ 
+ export function setGreetGateActive(active = true) {
+   const ctx = ensureCtx();
+   ensureGreetGate(ctx, active);
+   emitVoiceEvent('greet_gate', { active: ctx.state.greetGateActive });
+ }
+ 
+ export function forceBargeInStart(meta = {}) {
+   const ctx = ensureCtx();
++  const controllers = ensureControllers(ctx);
+   if (ctx.state.manualGate) {
+     ctx.state.pttHeld = true;
+     return false;
+   }
+ 
+   ctx.state.pttHeld = true;
+   const maskActive = isTtsMaskActive(ctx);
+   const whileTts = !!(ctx.state.ttsPlaying || maskActive);
+   const source = typeof meta?.source === 'string' && meta.source ? meta.source : 'manual';
+   lastPttDownAtMs = nowMs();
+   emitFlowBreadcrumb('ptt_down', {
+     source,
+     while_tts: whileTts,
+     manual_gate: true,
+     mask_active: maskActive,
+   });
+   clearPostTtsRearm(ctx);
+   ctx.state.vadShouldRearmAfterTts = false;
+   ctx.state.vadSuppressedForTts = false;
+-  startRecorder(ctx);
+-  ensureTransport(ctx).catch(() => {});
+   setManualGate(ctx, true);
+ 
+   bargeIn(meta);
+ 
++  controllers.recorder.start({ reason: 'ptt', detail: { source } });
++  controllers.asr.ensureStarted({ reason: 'ptt', detail: { source } }).catch(() => {});
++  emitUserTurnOpen(ctx, { override: 'ptt', source });
++
+   ctx.state.manualBargeInUsed = true;
+   ctx.state.ttsPlaying = false;
+   ctx.state.ttsPendingStart = false;
+   ctx.ttsMask.clear();
+   ctx.ttsEndedAtMs = nowMs();
+ 
+   emitClientAudioEvent(ctx, 'ptt_open', { skip_vad: true });
+ 
+   const controlFrame = { type: 'Control', action: 'barge_in_start' };
+   const sent = sendJSON(controlFrame);
+   if (!sent) {
+     ensureTransport(ctx).then(() => {
+       try { sendJSON(controlFrame); } catch {}
+     }).catch(() => {});
+   }
+ 
+   dispatchTurnEvent(ctx, TurnEvent.SpeechStart, { reason: 'manual_start' });
+   emitVoiceEvent('barge_in_start', meta);
+ 
+   const open = openTurn(ctx, 'manual_start');
+   if (open && typeof open.then === 'function') {
+     open.catch(() => {});
+   }
+ 
+   return true;
+ }
+ 
+ export function forceBargeInEnd(opts = {}) {
+   const ctx = ensureCtx();
++  const controllers = ensureControllers(ctx);
+   const wasActive = ctx.state.manualGate;
+   const stillHeld = !!opts?.pttHeld;
+   const reason = typeof opts?.reason === 'string' ? opts.reason : 'manual_release';
+   const nowTs = nowMs();
+   let durationMs = null;
+   if (!stillHeld) {
+     if (Number.isFinite(lastPttDownAtMs)) {
+       durationMs = Math.max(0, Math.round(nowTs - lastPttDownAtMs));
+     } else {
+       durationMs = null;
+     }
+     lastPttDownAtMs = 0;
+   }
+   ctx.state.pttHeld = stillHeld;
+   if (!stillHeld) {
+     setManualGate(ctx, false);
+   }
+   if (!stillHeld) {
+     clearPostTtsRearm(ctx);
+     ctx.state.vadShouldRearmAfterTts = false;
+     ctx.state.vadSuppressedForTts = false;
+     rearmLocalVad(ctx);
+   }
+   ctx.state.ttsPlaying = false;
+   ctx.state.ttsPendingStart = false;
+   ctx.ttsMask.end({ decayMs: resolvePostTtsHoldMs(ctx), snrBoost: opts.snrBoost });
+   ctx.ttsEndedAtMs = nowTs;
+ 
+   const released = wasActive && !ctx.state.manualGate;
+   if (!stillHeld) {
+     emitFlowBreadcrumb('ptt_up', {
+       reason,
+       duration_ms: durationMs,
+       manual_gate: wasActive,
+       released,
+     });
+   }
+   if (released) {
++    const overrideDetail = { override: 'ptt', reason };
++    emitUserTurnClose(ctx, overrideDetail);
++    controllers.recorder.stop({ reason, detail: overrideDetail });
+     emitClientAudioEvent(ctx, 'ptt_close', {});
+     const controlFrame = { type: 'Control', action: 'barge_in_end' };
+     const sent = sendJSON(controlFrame);
+     if (!sent) {
+       ensureTransport(ctx).then(() => {
+         try { sendJSON(controlFrame); } catch {}
+       }).catch(() => {});
+     }
+ 
+     if (ctx.state.turnOpen) {
+       closeTurn(ctx, reason);
+     }
++    controllers.asr.stopIfIdle({ reason, detail: overrideDetail, emit: false });
+     dispatchTurnEvent(ctx, TurnEvent.TtsEnded, { reason, force: true });
+     markReady(ctx, reason, { force: true });
+     dispatchTurnEvent(ctx, TurnEvent.VadArmed, { reason, force: true });
+   }
+ 
+   if (released) {
+     ctx.state.bargeConfirmActive = false;
+     ctx.state.bargeConfirmUntil = 0;
+     ctx.evidenceGate.reset('manual_release');
+     ctx.shadowBuffer.clear();
+     ctx.audio.lastTimecode = null;
+     emitFlowBreadcrumb('barge_in_end', {
+       reason,
+       duration_ms: durationMs,
+       manual_gate: wasActive,
+       mask_active: isTtsMaskActive(ctx),
+       released: true,
+     });
+     emitVoiceEvent('barge_in_end', opts);
+   }
+   return wasActive;
+ }
+ 
+ const getCtx = () => ctxRef.current;
+ 
