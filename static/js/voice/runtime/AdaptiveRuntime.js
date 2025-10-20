@@ -9,6 +9,8 @@ import {
   getConfig,
 } from '../core/index.js';
 import { ensurePolicy, getPolicySync, pget as policyGet, POLICY_NOT_SET } from '../policy/index.js';
+import { ensureInteractionPolicy } from '../policy/InteractionPolicy.js';
+import PolicyBus from '../policy/PolicyBus.js';
 import {
   POLICY_SUPPRESS_ALL,
   POLICY_SUPPRESS_NONE,
@@ -1466,6 +1468,24 @@ function handleWsFrame(ctx, frame) {
   if (!ctx?.state) return;
   const type = normalizeVadLabel(frame?.type);
   const event = normalizeVadLabel(frame?.event);
+  const scope = normalizeVadLabel(frame?.scope);
+
+  if (type === 'policy.interaction' || (type === 'policy' && scope === 'interaction')) {
+    const rawPolicy = frame && typeof frame === 'object' && frame.policy && typeof frame.policy === 'object'
+      ? frame.policy
+      : frame;
+    const normalizedPolicy = ensureInteractionPolicy(rawPolicy);
+    PolicyBus.setPolicy(normalizedPolicy);
+    const logPayload = {
+      event: 'policy:applied',
+      ts_ms: Date.now(),
+      session_id: ctx.sessionId || safeGetSid(),
+      mode: normalizedPolicy.mode,
+      policy: { ...normalizedPolicy },
+    };
+    postAdminLog(logPayload);
+    return;
+  }
 
   const isAssistantAudio = type === 'assistant_audio' || event === 'assistant_audio';
   const isExplicitTtsStart = (

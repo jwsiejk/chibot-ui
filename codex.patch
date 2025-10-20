@@ -1,618 +1,760 @@
-diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
-index 8c505f66fa683a1aecbc52805e22bd6d1dda641a..51e5db8b4bcfc84da0467c3946952a43e09332ca 100644
---- a/app/api_v1/flow.py
-+++ b/app/api_v1/flow.py
-@@ -1,58 +1,71 @@
- from __future__ import annotations
+diff --git a/app/policy/interaction_policy.py b/app/policy/interaction_policy.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..3032dbf8b238234678051d7dcb3b5340b2a9a2f6
+--- /dev/null
++++ b/app/policy/interaction_policy.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++from typing import Dict, Mapping
++
++MANUAL_ONLY_DURING_TTS = "manual_only_during_tts"
++AUTO_VAD_READY = "auto_vad_ready"
++
++_BASE_POLICIES: Dict[str, Dict[str, object]] = {
++    MANUAL_ONLY_DURING_TTS: {
++        "mode": MANUAL_ONLY_DURING_TTS,
++        "allow_auto_vad": False,
++        "auto_commit_when_ready": False,
++        "allow_ptt_barge": True,
++        "suppress_vad_during_tts": True,
++    },
++    AUTO_VAD_READY: {
++        "mode": AUTO_VAD_READY,
++        "allow_auto_vad": True,
++        "auto_commit_when_ready": False,
++        "allow_ptt_barge": True,
++        "suppress_vad_during_tts": False,
++    },
++}
++
++
++def _snapshot(mode: str, overrides: Mapping[str, object] | None = None) -> Dict[str, object]:
++    base = dict(_BASE_POLICIES[mode])
++    if overrides:
++        for key, value in overrides.items():
++            base[key] = value
++    return base
++
++
++def for_tts(overrides: Mapping[str, object] | None = None) -> Dict[str, object]:
++    """Snapshot used while assistant audio or confirmations are active."""
++
++    return _snapshot(MANUAL_ONLY_DURING_TTS, overrides)
++
++
++def for_idle(overrides: Mapping[str, object] | None = None) -> Dict[str, object]:
++    """Snapshot used when the client is idle and auto VAD is allowed."""
++
++    return _snapshot(AUTO_VAD_READY, overrides)
+diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
+index ad4c1e3d96d5109bd8d060d1b4b9d07d3d1d2a18..634444896a7a919cb6550fe5baf6d133378615fe 100644
+--- a/app/ws/ws_asgi.py
++++ b/app/ws/ws_asgi.py
+@@ -7,50 +7,54 @@ except Exception:  # pragma: no cover - optional dependency
+     audioop = None  # type: ignore[assignment]
+ from functools import partial
+ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
+ from collections import deque, defaultdict
+ from app.services.audio.container_sniffer import (
+     AudioContainerSniffer,
+     coerce_detection_from_meta,
+ )
  
- import copy
- import gzip
- import hashlib
- import io
- import ipaddress
- import json
- import re
- import zipfile
- from datetime import datetime, timezone
- import threading
- import time
- from collections import deque
--from typing import Any, Deque, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
-+from typing import (
-+    Any,
-+    Deque,
-+    Dict,
-+    Iterable,
-+    Iterator,
-+    List,
-+    Mapping,
-+    Optional,
-+    Set,
-+    Tuple,
+ from .schema_v1 import (
+     parse_client_json,
+     make_keepalive_ack,
+     make_results,
+     make_utterance_end,
+     make_error,
+ )
+ from .turn_buffer import TurnBuffer
+ from app.services.streaming_asr.deepgram_client import (
+     DeepgramClient,
+     DeepgramDrainTimeoutError,
+ )
+ from app.config import load_settings
+ from app.security.ws_token import verify as verify_ws_token
+ from app.db import db
+ from app.policy.loader import load_policy, load_policy_layers
++from app.policy.interaction_policy import (
++    for_idle as interaction_policy_idle,
++    for_tts as interaction_policy_tts,
 +)
+ from app.services.greet_idempotency import clear_greet_turn_cache
+ from app.metrics import ws_metrics
+ from app.flow.emit import add_batch, emit as flow_emit
+ from app.session_state import set_phase, should_emit_phase
  
- from flask import (
-     Blueprint,
-     Response,
-     abort,
-     jsonify,
-     request,
-     session as flask_session,
-     stream_with_context,
+ # NEW: invoke LLM on final transcript
+ from app.services.streaming import (
+     run_ws_user_turn,
+     prepare_turn_metadata,
+     note_turn_commit_latency,
+     emit_watchdog_user_end,
+ )  # NEW
+ from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
+ from app.ws.barge import BargeState
+ from app.ws.confirm_window import ConfirmWindow
+ from app.ws.bus import bus
+ from app.obs.source_tags import (
+     FLOW_SCHEMA_VERSION,
+     gate_snapshot,
+     make_source_meta,
+     ms_since,
+     resolve_barge_origin,
  )
+ from app.services.tts.flow_wrapper import make_tts_mask_meta
  
-+from app.db import db
- from app.flow import FlowStore
- from app.flow.trace import (
-     assemble_ws_frames,
-     slice_client_console_for_session,
-     slice_server_log_for_session,
- )
- from app.flow.catalog import FLOW_EVENT_CATALOG
-+from app.obs.source_tags import FLOW_SCHEMA_VERSION
- from app.security_state import get_user
- from app.utils.admin import is_admin_email
+@@ -1318,50 +1322,77 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+             )
+         except Exception:
+             return ""
  
- bp = Blueprint("flow", __name__)
+     def _ensure_ws_parent_id() -> Optional[str]:
+         if ws_transport_parent_id[0] is None:
+             try:
+                 ws_transport_parent_id[0] = (
+                     flow_emit(
+                         session_id=sid,
+                         type="ws_frames",
+                         phase="transport",
+                         who="server",
+                         meta={"dir": "pump_start"},
+                     )
+                     or None
+                 )
+             except Exception:
+                 ws_transport_parent_id[0] = None
+             if ws_transport_parent_id[0] is None and session_flow_event_id[0]:
+                 ws_transport_parent_id[0] = session_flow_event_id[0]
+         return ws_transport_parent_id[0]
  
- _CLIENT_BREADCRUMB_WINDOW_SEC = 60.0
- _CLIENT_BREADCRUMB_LIMIT = 30
- _CLIENT_BREADCRUMB_LOCK = threading.Lock()
- _CLIENT_BREADCRUMB_HITS: Dict[str, Deque[float]] = {}
- 
- 
- def _normalize_str(value: Optional[str]) -> Optional[str]:
-     if value is None:
-         return None
-     text = value.strip()
-     return text or None
- 
- 
- def _require_admin() -> None:
-     email = (
-         (flask_session.get("user") or {}).get("email")
-         or flask_session.get("email")
-         or request.headers.get("X-User-Email")
-         or (get_user() or "")
-     )
-@@ -196,51 +209,101 @@ def _extract_policy_snapshot(config_payload: Any) -> Optional[Dict[str, Any]]:
-     explicit_snapshot = _coerce_snapshot(config_payload.get("policy_snapshot"))
-     if explicit_snapshot:
-         return explicit_snapshot
- 
-     interaction_policy = config_payload.get("interaction_policy")
-     if not isinstance(interaction_policy, Mapping):
-         return None
- 
-     candidate_payload: Dict[str, Any] = {}
-     voice_runtime = interaction_policy.get("voice_runtime")
-     if isinstance(voice_runtime, Mapping):
-         candidate_payload.setdefault("voice_runtime", {})["barge_in"] = voice_runtime.get("barge_in")
- 
-     asr_policy = interaction_policy.get("asr")
-     if isinstance(asr_policy, Mapping):
-         candidate_payload.setdefault("asr", {})["vad"] = asr_policy.get("vad")
- 
-     return _coerce_snapshot(candidate_payload)
- 
- 
- DEFAULT_HANDOFF_PROMPT = (
-     "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), "
-     "smallest viable fix, and validation steps."
- )
- 
--_HANDOFF_TELEMETRY_SCHEMAS = ["barge_decision.v1"]
-+_HANDOFF_TELEMETRY_SCHEMAS = [
-+    schema
-+    for schema in {"barge_decision.v1", FLOW_SCHEMA_VERSION}
-+    if isinstance(schema, str) and schema.strip()
-+]
+     policy: Dict[str, Any] = {}
+     policy_version: str = "unknown"
++    current_interaction_policy_mode: List[Optional[str]] = [None]
 +
-+
-+def _json_compatible(value: Any) -> Any:
-+    if isinstance(value, Mapping):
-+        return {str(key): _json_compatible(val) for key, val in value.items()}
-+    if isinstance(value, (list, tuple, set)):
-+        return [_json_compatible(item) for item in value]
-+    if isinstance(value, (str, int, float, bool)) or value is None:
-+        return value
-+    return str(value)
-+
-+
-+def _json_bytes(payload: Any) -> bytes:
-+    normalized = _json_compatible(payload)
-+    return json.dumps(normalized, ensure_ascii=False, indent=2).encode("utf-8")
-+
-+
-+def _collect_audit_log_entries() -> List[Any]:
-+    try:
-+        memory = getattr(db, "memory", {})
-+    except Exception:  # pragma: no cover - extremely defensive
-+        memory = {}
-+    logs_bucket = memory.get("logs")
-+    if not isinstance(logs_bucket, list):
-+        return []
-+    entries: List[Any] = []
-+    for item in logs_bucket:
-+        if isinstance(item, Mapping):
-+            entries.append(dict(item))
++    def _push_interaction_policy(snapshot: Dict[str, Any]) -> None:
++        if not isinstance(snapshot, dict):
++            return
++        payload = dict(snapshot)
++        mode_value = payload.get("mode")
++        try:
++            mode_str = str(mode_value) if mode_value is not None else ""
++        except Exception:
++            mode_str = ""
++        if current_interaction_policy_mode[0] == mode_str:
++            pass
 +        else:
-+            entries.append(item)
-+    return entries
-+
-+
-+def _prepare_audit_logs(*, pii_scrub: bool) -> Tuple[bytes, Set[str], bool]:
-+    raw_entries = _collect_audit_log_entries()
-+    sanitized_entries: List[Any] = []
-+    schemas: Set[str] = set()
-+    for entry in raw_entries:
-+        processed = _scrub_node(entry) if pii_scrub else entry
-+        if isinstance(processed, Mapping):
-+            schema_value = processed.get("schema")
-+            if isinstance(schema_value, str) and schema_value.strip():
-+                schemas.add(schema_value.strip())
-+        sanitized_entries.append(_json_compatible(processed))
-+    return _json_bytes(sanitized_entries), schemas, bool(sanitized_entries)
- 
- _TEXT_EXACT_KEYS = {
-     "text",
-     "text_preview",
-     "user_text",
-     "assistant_text",
-     "tts_text",
-     "raw_text",
-     "message",
-     "body",
-     "delta",
-     "response",
-     "prompt",
-     "content",
- }
- _TEXT_SUFFIXES = ("_text", "_message", "_body", "_delta", "_content")
- _TEXT_SUBSTRINGS = ("transcript", "utterance")
- _DEVICE_KEYWORDS = ("device", "hardware", "microphone", "speaker", "headset")
- _DEVICE_CLASS_MAP = {
-     "iphone": "iphone",
-     "ipad": "ipad",
-     "macbook": "mac",
-     "imac": "mac",
-     "mac": "mac",
-     "pixel": "android",
-@@ -899,97 +962,110 @@ def flow_handoff():
-             abort(400, description="limits.max_bytes must be >= 0")
- 
-     store = FlowStore()
-     snapshot = store.snapshot(session_id=session_id, levels=levels, expand="all")
-     events = snapshot.events
-     event_count = len(events)
- 
-     generated_at = datetime.now(timezone.utc).isoformat()
- 
-     def _to_ndjson_bytes(items: Iterable[Dict[str, Any]]) -> bytes:
-         lines = [
-             json.dumps(item, ensure_ascii=False, separators=(",", ":"))
-             for item in items
-         ]
-         ndjson_text = "\n".join(lines)
-         if ndjson_text:
-             ndjson_text += "\n"
-         return ndjson_text.encode("utf-8")
- 
-     if not is_full:
-         redacted_events = [_redact_event(event) for event in events]
-         if pii_scrub_requested:
-             redacted_events = [_scrub_event(event) for event in redacted_events]
-         ndjson_bytes = _to_ndjson_bytes(redacted_events)
-         payload_sha = hashlib.sha1(ndjson_bytes).hexdigest()
-+        audit_bytes, audit_schemas, _ = _prepare_audit_logs(
-+            pii_scrub=pii_scrub_requested
-+        )
-+        telemetry_schemas = set(_HANDOFF_TELEMETRY_SCHEMAS)
-+        telemetry_schemas.update(audit_schemas)
-+
-         meta_payload = {
-             "session_id": session_id,
-             "levels": levels,
-             "generated_at": generated_at,
-             "event_count": len(redacted_events),
-             "payload_sig": {"bytes": len(ndjson_bytes), "sha1_8": payload_sha[:8]},
-             "mode": mode,
-         }
-         if pii_scrub_requested:
-             meta_payload["privacy"] = {"pii_scrub": True}
-+        if telemetry_schemas:
-+            meta_payload["telemetry_schemas"] = sorted(telemetry_schemas)
- 
-         buffer = io.BytesIO()
-         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-             archive.writestr("flow.ndjson", ndjson_bytes)
-             archive.writestr("prompt.txt", prompt_text)
-             archive.writestr(
-                 "meta.json",
-                 json.dumps(meta_payload, ensure_ascii=False, indent=2),
-             )
-+            archive.writestr("logs/audit.json", audit_bytes)
-         zip_bytes = buffer.getvalue()
-         if max_bytes is not None and len(zip_bytes) > max_bytes:
-             return _too_large_response()
-     else:
-         export_events = [copy.deepcopy(event) for event in events]
-         if pii_scrub_requested:
-             export_events = [_scrub_event(event) for event in export_events]
-         event_bytes = _to_ndjson_bytes(export_events)
-         gzip_buffer = io.BytesIO()
-         with gzip.GzipFile(fileobj=gzip_buffer, mode="wb") as gz_handle:
-             gz_handle.write(event_bytes)
-         events_gz_bytes = gzip_buffer.getvalue()
- 
-         config_payload = snapshot.config if isinstance(snapshot.config, dict) else {}
-         policy_snapshot = _extract_policy_snapshot(config_payload)
-         try:
-             config_text = json.dumps(
-                 config_payload, ensure_ascii=False, indent=2, sort_keys=True
-             )
-         except TypeError:
-             config_text = json.dumps({}, ensure_ascii=False, indent=2)
-         config_bytes = config_text.encode("utf-8")
- 
-         prompt_bytes = prompt_text.encode("utf-8")
- 
-         include_ws_requested = bool(include_options.get("ws"))
-         include_logs_requested = bool(include_options.get("logs"))
- 
-+        audit_bytes, audit_schemas, audit_has_entries = _prepare_audit_logs(
-+            pii_scrub=pii_scrub_requested
-+        )
-+
-         server_log_bytes_raw = slice_server_log_for_session(session_id)
-         if not server_log_bytes_raw:
-             server_log_bytes_raw = gzip.compress(b"")
-         server_log_bytes = (
-             _scrub_gzip_bytes(server_log_bytes_raw)
-             if pii_scrub_requested
-             else server_log_bytes_raw
-         )
-         server_log_entries = _decode_gzip_ndjson(server_log_bytes)
- 
-         timeline_payload = _build_timeline_payload(
-             session_id=session_id,
-             generated_at=generated_at,
-             flow_events=export_events,
-             server_events=server_log_entries,
-         )
-         timeline_bytes: Optional[bytes] = None
-         if timeline_payload:
-             timeline_bytes = json.dumps(
-                 timeline_payload, ensure_ascii=False, indent=2
-             ).encode("utf-8")
- 
-         include_meta: Dict[str, Any] = {}
-         privacy_meta: Dict[str, Any] = {}
-         for key, value in privacy_options.items():
-@@ -1038,133 +1114,144 @@ def flow_handoff():
-                         ws_bytes,
-                         "application/x-ndjson+gzip",
-                         "Sampled WebSocket frames",
-                     )
-                 )
- 
-         client_log_bytes = None
-         if include_logs_requested:
-             client_log_bytes = slice_client_console_for_session(session_id)
-             if client_log_bytes and pii_scrub_requested:
-                 client_log_bytes = _scrub_gzip_bytes(client_log_bytes)
-             if client_log_bytes:
-                 optional_files.append(
-                     (
-                         "client/console.log.gz",
-                         client_log_bytes,
-                         "text/plain+gzip",
-                         "Client console events",
-                     )
-                 )
- 
-         if include_ws_requested:
-             include_meta["ws"] = bool(ws_bytes)
-         if include_logs_requested:
-             include_meta["logs"] = bool(client_log_bytes or server_log_entries)
-+        include_meta["audit"] = audit_has_entries
- 
-         manifest_files = [
-             _manifest_entry(
-                 "prompt.txt",
-                 prompt_bytes,
-                 content_type="text/plain; charset=utf-8",
-                 description="Flow analysis prompt",
-             ),
-             _manifest_entry(
-                 "events/flow.ndjson.gz",
-                 events_gz_bytes,
-                 content_type="application/x-ndjson+gzip",
-                 description="Session events (gzipped NDJSON)",
-             ),
-             _manifest_entry(
-                 "config/config.json",
-                 config_bytes,
-                 content_type="application/json",
-                 description="Session configuration snapshot",
-             ),
-             _manifest_entry(
-                 "server/server.log.gz",
-                 server_log_bytes,
-                 content_type="text/plain+gzip",
-                 description="Server admin log slice",
-             ),
-+            _manifest_entry(
-+                "logs/audit.json",
-+                audit_bytes,
-+                content_type="application/json",
-+                description="Admin audit logs",
-+            ),
-         ]
- 
-         if timeline_bytes:
-             manifest_files.append(
-                 _manifest_entry(
-                     "events/flow.json",
-                     timeline_bytes,
-                     content_type="application/json",
-                     description="Key event timeline",
-                 )
-             )
- 
-         for path, data, content_type, description in optional_files:
-             manifest_files.append(
-                 _manifest_entry(
-                     path,
-                     data,
-                     content_type=content_type,
-                     description=description,
-                 )
-             )
- 
-         manifest_meta: Dict[str, Any] = {"mode": mode, "redacted": False}
-         if include_meta:
-             manifest_meta["include"] = include_meta
-         if privacy_meta:
-             manifest_meta["privacy"] = privacy_meta
-         if limits_meta:
-             manifest_meta["limits"] = limits_meta
-         if snapshot.started_at_iso:
-             manifest_meta["session_started_at"] = snapshot.started_at_iso
- 
-+        telemetry_schemas = set(_HANDOFF_TELEMETRY_SCHEMAS)
-+        telemetry_schemas.update(audit_schemas)
-+
-         manifest_payload = {
-             "schema_version": "1.0",
-             "exported_at": generated_at,
-             "session_id": session_id,
-             "levels": levels,
-             "event_count": event_count,
-             "files": manifest_files,
-         }
--        if _HANDOFF_TELEMETRY_SCHEMAS:
--            manifest_payload["telemetry_schemas"] = list(_HANDOFF_TELEMETRY_SCHEMAS)
-+        if telemetry_schemas:
-+            manifest_payload["telemetry_schemas"] = sorted(telemetry_schemas)
-         if manifest_meta:
-             manifest_payload["meta"] = manifest_meta
-         manifest_payload["policy_snapshot"] = policy_snapshot or {}
- 
-         manifest_bytes = json.dumps(
-             manifest_payload, ensure_ascii=False, indent=2
-         ).encode("utf-8")
- 
-         buffer = io.BytesIO()
-         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-             archive.writestr("prompt.txt", prompt_bytes)
-             archive.writestr("manifest.json", manifest_bytes)
-             archive.writestr("events/flow.ndjson.gz", events_gz_bytes)
-             archive.writestr("config/config.json", config_bytes)
-             archive.writestr("server/server.log.gz", server_log_bytes)
-+            archive.writestr("logs/audit.json", audit_bytes)
-             if timeline_bytes:
-                 archive.writestr("events/flow.json", timeline_bytes)
-             for path, data, _, _ in optional_files:
-                 archive.writestr(path, data)
-         zip_bytes = buffer.getvalue()
- 
-     if max_bytes is not None and len(zip_bytes) > max_bytes:
-         return _too_large_response()
- 
-     response = Response(zip_bytes, mimetype="application/zip")
-     safe_session = re.sub(r"[^a-zA-Z0-9_-]+", "_", session_id) or "session"
-     response.headers[
-         "Content-Disposition"
-     ] = f'attachment; filename="flow_handoff_{safe_session}.zip"'
-     response.headers["X-Flow-Redacted"] = "0" if is_full else "1"
-     response.headers["X-Flow-Payload-Bytes"] = str(len(zip_bytes))
-     response.headers["X-Flow-Payload-Sha1"] = hashlib.sha1(zip_bytes).hexdigest()
-     response.headers["X-Flow-Mode"] = mode
-     if pii_scrub_requested:
-         response.headers["X-Flow-PII-Scrubbed"] = "1"
-     response.headers["Cache-Control"] = "no-store"
-     return response
- 
- 
- __all__ = ["bp"]
-diff --git a/tests/test_flow_api.py b/tests/test_flow_api.py
-index 943ed56bf04e84b1e86f9dcff05af3399daa46ea..6653a8326ee923a1ce2ea4e2d97a7321d4e7b7ce 100644
---- a/tests/test_flow_api.py
-+++ b/tests/test_flow_api.py
-@@ -1,37 +1,38 @@
- import gzip
- import hashlib
- import io
- import json
- import zipfile
- 
- import pytest
- 
- from app.api_v1 import flow as flow_api
- from app.asgi_gateway import app as flask_app
- from app.flow.trace import FlowStore
- from app.admin_log import clear_admin_log_history_for_tests, emit as admin_log_emit
-+from app.obs.source_tags import FLOW_SCHEMA_VERSION
- 
- 
- @pytest.fixture(autouse=True)
- def reset_flow_store():
-     store = FlowStore()
-     store._init()
-     flow_api._CLIENT_BREADCRUMB_HITS.clear()
-     clear_admin_log_history_for_tests()
-     yield
-     store._init()
-     flow_api._CLIENT_BREADCRUMB_HITS.clear()
-     clear_admin_log_history_for_tests()
- 
- 
- @pytest.fixture
- def admin_env(monkeypatch):
-     monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
-     return {"X-User-Email": "admin@example.com"}
- 
- 
- @pytest.fixture
- def flow_clock(monkeypatch):
-     clock = {"now": 1000.0}
- 
-     def fake_monotonic():
-@@ -364,87 +365,134 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
-     resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
-     assert resp.status_code == 200
-     assert resp.headers["Content-Type"].startswith("application/zip")
-     assert resp.headers["X-Flow-Redacted"] == "0"
-     assert resp.headers["X-Flow-Mode"] == "full"
-     assert resp.headers["X-Flow-Payload-Bytes"] == str(len(resp.data))
-     assert resp.headers["X-Flow-Payload-Sha1"] == hashlib.sha1(resp.data).hexdigest()
- 
-     with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
-         names = set(archive.namelist())
-         assert {
-             "prompt.txt",
-             "manifest.json",
-             "events/flow.ndjson.gz",
-             "config/config.json",
-         } <= names
- 
-         prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
-         assert prompt_text == "Investigate deeply"
- 
-         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
-         assert manifest["schema_version"] == "1.0"
-         assert manifest["session_id"] == "sess-full"
-         assert manifest["meta"]["mode"] == "full"
-         assert manifest["meta"]["redacted"] is False
--        assert manifest["telemetry_schemas"] == ["barge_decision.v1"]
-+        assert set(manifest["telemetry_schemas"]) == {
-+            "barge_decision.v1",
-+            FLOW_SCHEMA_VERSION,
++            current_interaction_policy_mode[0] = mode_str
++        frame = {
++            "type": "policy.interaction",
++            "mode": mode_str or None,
++            "scope": "interaction",
++            "policy": payload,
 +        }
-         assert manifest["policy_snapshot"] == {
-             "voice_runtime": {
-                 "barge_in": {
-                     "suppress_during_tts": "partial",
-                     "post_tts_hold_ms": 150,
-                     "allow_ptt": False,
-                     "require_asr_evidence": True,
-                 }
-             },
-             "asr": {"vad": {"enabled": True}},
-         }
-         assert manifest["meta"]["include"]["ws"] is False
--        assert "logs" not in manifest["meta"]["include"]
-+        assert manifest["meta"]["include"].get("logs") is None
-+        assert manifest["meta"]["include"]["audit"] is False
-         assert manifest["meta"]["privacy"]["pii_scrub"] is True
-         assert manifest["meta"]["privacy"]["redaction"] == "minimal"
-         assert manifest["meta"]["limits"]["max_bytes"] == 5_000_000
-         assert manifest["event_count"] >= 2
++        try:
++            asyncio.create_task(_ws_send_json(send, frame))
++        except Exception:
++            pass
++        with contextlib.suppress(Exception):
++            _admin_emit("policy:applied", session_id=sid, mode=mode_str or None, policy=payload)
  
-         files_meta = {entry["path"]: entry for entry in manifest["files"]}
-         for path, entry in files_meta.items():
-             data = archive.read(path)
-             assert entry["bytes"] == len(data)
-             assert entry["sha1"] == hashlib.sha1(data).hexdigest()
-             assert entry["sha1_first8"] == entry["sha1"][:8]
+     # Auth
+     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in (
+         "0",
+         "false",
+         "no",
+     )
+     bearer_only = os.getenv("WS_BEARER_ONLY", "1").lower() not in ("0", "false", "no")
+     fail_limit = int(os.getenv("WS_FAIL_LIMIT", "10"))
+     fail_window_sec = float(os.getenv("WS_FAIL_WINDOW_SEC", "60"))
+     client_ip = _client_ip_from_scope(scope)
  
-         events_text = gzip.decompress(archive.read("events/flow.ndjson.gz")).decode("utf-8")
-         assert "Full transcript event" in events_text
-         assert "keep" in events_text
+     token = None
+     selected_subprotocol = "bearer"
+     try:
+         for _sp in scope.get("subprotocols") or []:
+             if not isinstance(_sp, str):
+                 continue
+             if _sp.startswith("bearer."):
+                 token = _sp.split(".", 1)[1].strip()
+                 selected_subprotocol = _sp
+                 break
+             if _sp == "bearer":
+                 selected_subprotocol = _sp
+     except Exception:
+@@ -1718,50 +1749,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         loop.call_soon(_start_bus_pump)
  
-         config_payload = json.loads(
-             archive.read("config/config.json").decode("utf-8")
+     voice_metrics_registered = False
+     try:
+         voice_metrics_registered = await _register_voice_metrics_subscriber(conn_id, send)
+     except Exception:
+         voice_metrics_registered = False
+ 
+     async def _ping_loop():
+         try:
+             while True:
+                 await asyncio.sleep(20)
+                 try:
+                     await _ws_send_json(
+                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
+                     )
+                 except Exception:
+                     break
+         except asyncio.CancelledError:
+             pass
+ 
+     ping_task = asyncio.create_task(_ping_loop())
+ 
+     try:
+         await _ws_send_json(send, {"type": "ready", "session_id": sid})
++        _push_interaction_policy(interaction_policy_idle())
+     except Exception as ex:
+         detail = str(ex).strip() or "initial ready failed"
+         with contextlib.suppress(Exception):
+             flow_emit(
+                 session_id=sid,
+                 type="ws_error",
+                 phase="transport",
+                 who="server",
+                 meta={
+                     "where": "initial_ready",
+                     "cause": ex.__class__.__name__,
+                     "msg": str(ex)[:300],
+                 },
+             )
+         with contextlib.suppress(Exception):
+             await _ws_send_json(
+                 send,
+                 {
+                     "type": "Error",
+                     "code": "INITIAL_READY_FAILED",
+                     "detail": detail[:200],
+                 },
+             )
+         with contextlib.suppress(Exception):
+             await _safe_close(1011, "initial_ready_failed")
+@@ -2986,50 +3018,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 elapsed_ms=data.get("elapsed_ms"),
+                 snr_db=data.get("snr_db"),
+                 partials=data.get("partial_tokens"),
+                 conf=data.get("partial_confidence"),
+             )
+ 
+     def _open_confirm_window(
+         now_ts: float,
+         *,
+         min_ms: int,
+         max_ms_local: int,
+         snr_threshold: float,
+         policy_until_asr_ready: bool,
+         is_first_turn: bool,
+     ) -> None:
+         window = ConfirmWindow(
+             min_duration_ms=min_ms,
+             max_duration_ms=max_ms_local,
+             max_gap_ms=confirm_gap_ms,
+             min_tokens=confirm_min_tokens,
+             min_confidence=confirm_min_conf,
+             snr_threshold_db=snr_threshold,
+             snr_slack_db=confirm_snr_slack_db,
+             snr_enabled=True,
          )
-         assert config_payload["foo"] == "bar"
-         assert config_payload["nested"]["value"] == 1
++        _push_interaction_policy(interaction_policy_tts())
+         try:
+             setattr(window, "policy_until_asr_ready", policy_until_asr_ready)
+         except Exception:
+             pass
+         window.start(now_ts)
+         confirm_window_ref[0] = window
+         pending_confirm_request[0] = None
+         local_vad_meta_sent[0] = False
+         _emit_local_vad_signal(now_ts)
+         _jlog(
+             "EVT_CONFIRM_OPEN",
+             sid=sid,
+             turn=turn_id_ref[0],
+             is_first=bool(is_first_turn),
+             min_ms=min_ms,
+             max_ms=max_ms_local,
+             until_asr_ready=policy_until_asr_ready,
+         )
+         _jlog(
+             "confirm_start",
+             sid=sid,
+             turn_id=turn_id_ref[0],
+             min_ms=min_ms,
+             max_ms=max_ms_local,
+             max_gap_ms=confirm_gap_ms,
+@@ -3111,50 +3144,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         if hold_ms > 0:
+             mask_source = "policy_hold"
+         elif manual_button_down[0]:
+             mask_source = "manual_override"
+         with contextlib.suppress(Exception):
+             mask_meta = make_tts_mask_meta(
+                 mask_source,
+                 gates=_current_gate_snapshot(),
+                 evidence={
+                     "utterance_id": str(turn_id)
+                     if turn_id not in (None, "", "greet")
+                     else None,
+                     "post_tts_hold_ms": max(0, hold_ms),
+                 },
+             )
+             _jlog(
+                 "EVT_TTS_MASK_OFF",
+                 sid=sid,
+                 turn_id=turn_id,
+                 post_hold_ms=max(0, hold_ms),
+                 **mask_meta,
+             )
+         if previously_active:
+             _maybe_start_pending_confirm()
+         _schedule_vad_state(True, "idle")
++        _push_interaction_policy(interaction_policy_idle())
  
+     async def _await_tts_mask_release(delay_ms: int, turn_id: Any) -> None:
+         try:
+             await asyncio.sleep(max(0.0, delay_ms / 1000.0))
+             _mark_tts_mask_off(turn_id, delay_ms)
+         except asyncio.CancelledError:
+             return
+         finally:
+             if tts_mask_release_task[0] is asyncio.current_task():
+                 tts_mask_release_task[0] = None
  
-+def test_flow_handoff_includes_admin_audit_logs(admin_env):
-+    from app.db import db as memory_db
-+    from app.logging import admin_log
-+
-+    store = FlowStore()
-+    session_id = "sess-audit"
-+    store.emit(session_id, "flow", "session", "session_open", "system")
-+
-+    logs_bucket = memory_db.memory.setdefault("logs", [])
-+    original_logs = list(logs_bucket)
-+    logs_bucket.clear()
-+    try:
-+        admin_log("Audit check", email="auditor@example.com", role="auditor")
-+
-+        client = flask_app.test_client()
-+        csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
-+        token = csrf_resp.headers.get("X-CSRF-Token")
-+        headers = dict(admin_env)
-+        if token:
-+            headers["X-CSRF-Token"] = token
-+
-+        body = {"session_id": session_id, "options": {"mode": "full"}}
-+
-+        resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
-+        assert resp.status_code == 200
-+
-+        with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
-+            names = set(archive.namelist())
-+            assert "logs/audit.json" in names
-+
-+            audit_payload = json.loads(archive.read("logs/audit.json").decode("utf-8"))
-+            assert isinstance(audit_payload, list)
-+            assert any(entry.get("message") == "Audit check" for entry in audit_payload)
-+            assert any(entry.get("schema") == FLOW_SCHEMA_VERSION for entry in audit_payload)
-+
-+            manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
-+            assert manifest["meta"]["include"]["audit"] is True
-+            assert FLOW_SCHEMA_VERSION in manifest["telemetry_schemas"]
-+    finally:
-+        logs_bucket.clear()
-+        logs_bucket.extend(original_logs)
-+
-+
- def test_flow_handoff_includes_optional_artifacts(admin_env):
-     store = FlowStore()
-     session_id = "sess-optional"
+     def _start_confirm_window(now_ts: float) -> None:
+         if not local_vad_allowed:
+             _jlog("confirm_skip_local_vad_disabled", sid=sid)
+             return
+         if _manual_mode_active():
+             try:
+                 active_turn = bus.current_assistant_turn(sid)
+             except Exception:
+                 active_turn = None
+             tts_state, _ = _lookup_tts_state(sid, active_turn)
+             if _is_tts_active(tts_state):
+                 _jlog(
+                     "confirm_skip_manual_mode_tts",
+                     sid=sid,
+@@ -3372,50 +3406,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                 _jlog(
+                     "asr_vad_toggle_error",
+                     sid=sid,
+                     enabled=desired,
+                     reason=reason_norm,
+                     err=exc.__class__.__name__,
+                 )
  
-     store.emit(session_id, "flow", "session", "session_open", "system")
-     store.emit(
-         session_id,
-         "debug",
-         "session",
-         "ws_frame_in",
-         "system",
-         meta={"type": "text", "bytes": 12, "route": "client"},
-     )
-     store.emit(
-         session_id,
-         "debug",
-         "session",
-         "ws_frame_out",
-         "system",
-         meta={"type": "binary", "bytes": 18, "route": "bus"},
-     )
-     store.emit(
-         session_id,
-         "debug",
-         "client",
+         task = vad_apply_task[0]
+         if task and not task.done():
+             task.cancel()
+         if loop.is_closed():
+             vad_apply_task[0] = None
+             return
+         new_task = asyncio.create_task(_apply())
+         vad_apply_task[0] = new_task
+ 
+         def _clear(done: asyncio.Task) -> None:
+             if vad_apply_task[0] is done:
+                 vad_apply_task[0] = None
+ 
+         new_task.add_done_callback(_clear)
+             
+     def _on_assistant_tts_start(turn_id: Any) -> None:
+         assistant_speaking[0] = True
++        _push_interaction_policy(interaction_policy_tts())
+         mode = (barge_suppress_mode or "none").strip() or "none"
+         mask_engaged = mode != "none"
+         tts_mask_mode[0] = mode
+         if mask_engaged:
+             tts_mask_active[0] = True
+         else:
+             tts_mask_active[0] = False
+         _cancel_tts_mask_release()
+         with contextlib.suppress(Exception):
+             mask_meta = make_tts_mask_meta(
+                 "assistant_audio_start",
+                 gates=_current_gate_snapshot(tts_override=True),
+                 evidence={
+                     "utterance_id": str(turn_id)
+                     if turn_id not in (None, "", "greet")
+                     else None,
+                 },
+             )
+             _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode, **mask_meta)
+         _schedule_vad_state(False, "tts")
+         _ensure_confirm_closed("tts_start")
+         if not manual_button_down[0]:
+             with contextlib.suppress(Exception):
+                 barge.cancel(_send_barge_state)
+ 
+@@ -5149,50 +5184,51 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                     except Exception:
+                                         manual_commit_pending[0] = False
+                                 continue
+                             if action == "barge_in_end":
+                                 if manual_feature_enabled:
+                                     manual_button_down[0] = False
+                                     manual_turn_active[0] = False
+                                     manual_commit_pending[0] = False
+                                     _note_manual_up()
+                                     ptt_turn_preopened[0] = False
+                                     turn_commit_mode_ref[0] = "vad"
+                                     buffered_bytes = _manual_buffered_bytes()
+                                     _manual_log_event(
+                                         "manual_barge_in_end",
+                                         bytes_buffered=buffered_bytes,
+                                         provider_open=dg_state == "open",
+                                     )
+                                     tts_active_now = _current_tts_active()
+                                     if ptt_down_emitted[0]:
+                                         _emit_transition_event(
+                                             "ptt_up",
+                                             meta={"during_tts": bool(tts_active_now)},
+                                             phase="ptt",
+                                         )
+                                     ptt_down_emitted[0] = False
++                                    _push_interaction_policy(interaction_policy_idle())
+                                 continue
+                             continue
+ 
+                         elif t == "Configure":
+                             try:
+                                 cfg.update(obj or {})
+                                 manual_feature_enabled = bool(
+                                     cfg.get("feature_manual_barge_in", manual_feature_enabled)
+                                 )
+                                 manual_mode_manual_only = bool(
+                                     cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+                                 )
+                                 auto_commit_when_ready = bool(
+                                     cfg.get("auto_commit_when_ready", auto_commit_when_ready)
+                                 )
+                                 ws_configured = True
+                                 _jlog(
+                                     "ws_configure",
+                                     sid=sid,
+                                     ts_ms=int(time.time() * 1000),
+                                     barge_in_mode_manual=manual_mode_manual_only,
+                                     feature_manual_barge_in=manual_feature_enabled,
+                                     auto_commit_when_ready=auto_commit_when_ready,
+                                 )
+                                 if not configure_ack_sent:
+diff --git a/static/js/voice/policy/InteractionPolicy.js b/static/js/voice/policy/InteractionPolicy.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..66b263437a7f9957a6ecfb22ab72827c22c61572
+--- /dev/null
++++ b/static/js/voice/policy/InteractionPolicy.js
+@@ -0,0 +1,130 @@
++const MODES = Object.freeze({
++  MANUAL_ONLY_DURING_TTS: 'manual_only_during_tts',
++  AUTO_VAD_READY: 'auto_vad_ready',
++});
++
++const SHAPE_KEYS = Object.freeze([
++  'mode',
++  'allow_auto_vad',
++  'auto_commit_when_ready',
++  'allow_ptt_barge',
++  'suppress_vad_during_tts',
++]);
++
++function coerceBoolean(value, fallback = false) {
++  if (typeof value === 'boolean') {
++    return value;
++  }
++  if (value == null) {
++    return fallback;
++  }
++  if (typeof value === 'string') {
++    const normalized = value.trim().toLowerCase();
++    if (normalized === 'true' || normalized === '1' || normalized === 'yes') {
++      return true;
++    }
++    if (normalized === 'false' || normalized === '0' || normalized === 'no') {
++      return false;
++    }
++  }
++  if (typeof value === 'number') {
++    if (!Number.isFinite(value)) {
++      return fallback;
++    }
++    return value !== 0;
++  }
++  return fallback;
++}
++
++function normalizeMode(rawMode, fallback) {
++  const normalized = typeof rawMode === 'string' ? rawMode.trim().toLowerCase() : '';
++  if (normalized === MODES.MANUAL_ONLY_DURING_TTS) {
++    return MODES.MANUAL_ONLY_DURING_TTS;
++  }
++  if (normalized === MODES.AUTO_VAD_READY) {
++    return MODES.AUTO_VAD_READY;
++  }
++  return fallback;
++}
++
++function baseShapeForMode(mode) {
++  if (mode === MODES.MANUAL_ONLY_DURING_TTS) {
++    return {
++      mode,
++      allow_auto_vad: false,
++      auto_commit_when_ready: false,
++      allow_ptt_barge: true,
++      suppress_vad_during_tts: true,
++    };
++  }
++  return {
++    mode,
++    allow_auto_vad: true,
++    auto_commit_when_ready: false,
++    allow_ptt_barge: true,
++    suppress_vad_during_tts: false,
++  };
++}
++
++function clonePolicy(policy) {
++  if (!policy || typeof policy !== 'object') {
++    return null;
++  }
++  const snapshot = {};
++  for (const key of SHAPE_KEYS) {
++    if (Object.prototype.hasOwnProperty.call(policy, key)) {
++      snapshot[key] = policy[key];
++    }
++  }
++  return snapshot;
++}
++
++export function ensureInteractionPolicy(rawPolicy, fallbackMode = MODES.AUTO_VAD_READY) {
++  const baseMode = normalizeMode(rawPolicy?.mode, fallbackMode);
++  const base = baseShapeForMode(baseMode);
++  if (!rawPolicy || typeof rawPolicy !== 'object') {
++    return Object.freeze({ ...base });
++  }
++  const normalized = { ...base };
++  if (Object.prototype.hasOwnProperty.call(rawPolicy, 'allow_auto_vad')) {
++    normalized.allow_auto_vad = coerceBoolean(rawPolicy.allow_auto_vad, base.allow_auto_vad);
++  }
++  if (Object.prototype.hasOwnProperty.call(rawPolicy, 'auto_commit_when_ready')) {
++    normalized.auto_commit_when_ready = coerceBoolean(
++      rawPolicy.auto_commit_when_ready,
++      base.auto_commit_when_ready,
++    );
++  }
++  if (Object.prototype.hasOwnProperty.call(rawPolicy, 'allow_ptt_barge')) {
++    normalized.allow_ptt_barge = coerceBoolean(rawPolicy.allow_ptt_barge, base.allow_ptt_barge);
++  }
++  if (Object.prototype.hasOwnProperty.call(rawPolicy, 'suppress_vad_during_tts')) {
++    normalized.suppress_vad_during_tts = coerceBoolean(
++      rawPolicy.suppress_vad_during_tts,
++      base.suppress_vad_during_tts,
++    );
++  }
++  normalized.mode = baseMode;
++  return Object.freeze(normalized);
++}
++
++export function cloneInteractionPolicy(rawPolicy) {
++  const snapshot = clonePolicy(rawPolicy);
++  if (!snapshot) {
++    return Object.freeze(baseShapeForMode(MODES.AUTO_VAD_READY));
++  }
++  snapshot.mode = normalizeMode(snapshot.mode, MODES.AUTO_VAD_READY);
++  return Object.freeze({ ...snapshot });
++}
++
++export function manualOnlyDuringTtsPolicy(overrides = {}) {
++  const base = baseShapeForMode(MODES.MANUAL_ONLY_DURING_TTS);
++  return ensureInteractionPolicy({ ...base, ...clonePolicy(overrides) }, MODES.MANUAL_ONLY_DURING_TTS);
++}
++
++export function autoVadReadyPolicy(overrides = {}) {
++  const base = baseShapeForMode(MODES.AUTO_VAD_READY);
++  return ensureInteractionPolicy({ ...base, ...clonePolicy(overrides) }, MODES.AUTO_VAD_READY);
++}
++
++export const InteractionPolicyMode = MODES;
+diff --git a/static/js/voice/policy/PolicyBus.js b/static/js/voice/policy/PolicyBus.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d5287d252c14a3e34adbb034e50f5a23e759a2b
+--- /dev/null
++++ b/static/js/voice/policy/PolicyBus.js
+@@ -0,0 +1,60 @@
++let currentPolicy = null;
++const listeners = new Set();
++
++function freezePolicy(policy) {
++  if (!policy || typeof policy !== 'object') {
++    return null;
++  }
++  const snapshot = { ...policy };
++  try {
++    return Object.freeze(snapshot);
++  } catch (err) {
++    return snapshot;
++  }
++}
++
++function notifyListeners(policy) {
++  for (const listener of Array.from(listeners)) {
++    if (typeof listener !== 'function') {
++      listeners.delete(listener);
++      continue;
++    }
++    try {
++      listener(policy);
++    } catch (err) {
++      if (typeof console !== 'undefined' && console.warn) {
++        console.warn('[voice][policy] listener error', err);
++      }
++    }
++  }
++}
++
++const PolicyBus = {
++  setPolicy(policy) {
++    currentPolicy = freezePolicy(policy);
++    notifyListeners(currentPolicy);
++    return currentPolicy;
++  },
++  getPolicy() {
++    return currentPolicy;
++  },
++  on(event, handler) {
++    if (event !== 'policy' || typeof handler !== 'function') {
++      return () => {};
++    }
++    listeners.add(handler);
++    return () => {
++      listeners.delete(handler);
++    };
++  },
++  off(handler) {
++    listeners.delete(handler);
++  },
++  clear() {
++    listeners.clear();
++    currentPolicy = null;
++  },
++};
++
++export default PolicyBus;
++export { PolicyBus };
+diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
+index b3b882095779d5759413fd2b582d68d6a7dac51d..672f92d5d191ddfa5fc01a1464b54a5838c4c485 100644
+--- a/static/js/voice/runtime/AdaptiveRuntime.js
++++ b/static/js/voice/runtime/AdaptiveRuntime.js
+@@ -1,36 +1,38 @@
+ console.log("[AdaptiveRuntime] build=2025-10-16T23:15Z");
+ import {
+   EvidenceGate,
+   ShadowBuffer,
+   TtsMask,
+   TurnState,
+   bufferPreRollFrame,
+   flushShadowBuffer,
+   getConfig,
+ } from '../core/index.js';
+ import { ensurePolicy, getPolicySync, pget as policyGet, POLICY_NOT_SET } from '../policy/index.js';
++import { ensureInteractionPolicy } from '../policy/InteractionPolicy.js';
++import PolicyBus from '../policy/PolicyBus.js';
+ import {
+   POLICY_SUPPRESS_ALL,
+   POLICY_SUPPRESS_NONE,
+   policyAllowLocalVad,
+   resolveSuppressionMode,
+ } from '../utils/policy.js';
+ import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
+ import { emitVoiceEvent } from '../ui/Events.js';
+ import {
+   openWS,
+   waitWSOpen,
+   sendAudioChunk,
+   sendJSON,
+ } from '../../ws_module.js';
+ // Guarded CloseStream wrapper so we never kill the session before the first user turn.
+ import { sendCloseStream as __sendCloseStream } from '../../ws.js';
+ 
+ function safeCloseStream(reason = '') {
+   try {
+     const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
+     if (!opened) {
+       console.debug('[voice] skip CloseStream (no user turn yet)', { reason });
+       return;
+     }
+   } catch {}
+@@ -1444,50 +1446,68 @@ function shouldCloseTurn(ctx) {
+       console.debug('[dual-vad] close?', {
+         clientSilent,
+         asrSilent,
+         quietMs: quietLogMs,
+         silentDebounceMs: silentSince,
+       });
+     } catch {}
+   }
+   const debounceReached = Number.isFinite(silentSince) && silentSince >= DUAL_VAD_SILENCE_DEBOUNCE_MS;
+   if (debounceReached) {
+     return true;
+   }
+   return quietMs > quietCloseMs(ctx);
+ }
+ 
+ const frameIndicatesAsrResult = (frame) => {
+   const type = normalizeVadLabel(frame?.type);
+   const event = normalizeVadLabel(frame?.event);
+   return type === 'result' || type === 'results' || event === 'result' || event === 'results';
+ };
+ 
+ function handleWsFrame(ctx, frame) {
+   if (!ctx?.state) return;
+   const type = normalizeVadLabel(frame?.type);
+   const event = normalizeVadLabel(frame?.event);
++  const scope = normalizeVadLabel(frame?.scope);
++
++  if (type === 'policy.interaction' || (type === 'policy' && scope === 'interaction')) {
++    const rawPolicy = frame && typeof frame === 'object' && frame.policy && typeof frame.policy === 'object'
++      ? frame.policy
++      : frame;
++    const normalizedPolicy = ensureInteractionPolicy(rawPolicy);
++    PolicyBus.setPolicy(normalizedPolicy);
++    const logPayload = {
++      event: 'policy:applied',
++      ts_ms: Date.now(),
++      session_id: ctx.sessionId || safeGetSid(),
++      mode: normalizedPolicy.mode,
++      policy: { ...normalizedPolicy },
++    };
++    postAdminLog(logPayload);
++    return;
++  }
+ 
+   const isAssistantAudio = type === 'assistant_audio' || event === 'assistant_audio';
+   const isExplicitTtsStart = (
+     type === 'tts:start'
+     || event === 'tts:start'
+     || type === 'tts_start'
+     || event === 'tts_start'
+   );
+ 
+   if (isExplicitTtsStart) {
+     try {
+       const maybePromise = handleClientTtsStartTelemetry(ctx, frame);
+       if (maybePromise && typeof maybePromise.catch === 'function') {
+         maybePromise.catch(() => {});
+       }
+     } catch {}
+   }
+ 
+   if (isExplicitTtsStart || isAssistantAudio) {
+     if (ctx?.state) {
+       ctx.state.ttsPendingStart = true;
+       const turnId = frame?.turn_id;
+       if (turnId != null && turnId !== '') {
+         try {
+           ctx.state.ttsCurrentTurnId = String(turnId);

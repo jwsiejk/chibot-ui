@@ -29,6 +29,10 @@ from app.config import load_settings
 from app.security.ws_token import verify as verify_ws_token
 from app.db import db
 from app.policy.loader import load_policy, load_policy_layers
+from app.policy.interaction_policy import (
+    for_idle as interaction_policy_idle,
+    for_tts as interaction_policy_tts,
+)
 from app.services.greet_idempotency import clear_greet_turn_cache
 from app.metrics import ws_metrics
 from app.flow.emit import add_batch, emit as flow_emit
@@ -1340,6 +1344,33 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     policy: Dict[str, Any] = {}
     policy_version: str = "unknown"
+    current_interaction_policy_mode: List[Optional[str]] = [None]
+
+    def _push_interaction_policy(snapshot: Dict[str, Any]) -> None:
+        if not isinstance(snapshot, dict):
+            return
+        payload = dict(snapshot)
+        mode_value = payload.get("mode")
+        try:
+            mode_str = str(mode_value) if mode_value is not None else ""
+        except Exception:
+            mode_str = ""
+        if current_interaction_policy_mode[0] == mode_str:
+            pass
+        else:
+            current_interaction_policy_mode[0] = mode_str
+        frame = {
+            "type": "policy.interaction",
+            "mode": mode_str or None,
+            "scope": "interaction",
+            "policy": payload,
+        }
+        try:
+            asyncio.create_task(_ws_send_json(send, frame))
+        except Exception:
+            pass
+        with contextlib.suppress(Exception):
+            _admin_emit("policy:applied", session_id=sid, mode=mode_str or None, policy=payload)
 
     # Auth
     require_token = os.getenv("WS_TOKEN_REQUIRED", "1").lower() not in (
@@ -1740,6 +1771,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     try:
         await _ws_send_json(send, {"type": "ready", "session_id": sid})
+        _push_interaction_policy(interaction_policy_idle())
     except Exception as ex:
         detail = str(ex).strip() or "initial ready failed"
         with contextlib.suppress(Exception):
@@ -3008,6 +3040,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             snr_slack_db=confirm_snr_slack_db,
             snr_enabled=True,
         )
+        _push_interaction_policy(interaction_policy_tts())
         try:
             setattr(window, "policy_until_asr_ready", policy_until_asr_ready)
         except Exception:
@@ -3133,6 +3166,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if previously_active:
             _maybe_start_pending_confirm()
         _schedule_vad_state(True, "idle")
+        _push_interaction_policy(interaction_policy_idle())
 
     async def _await_tts_mask_release(delay_ms: int, turn_id: Any) -> None:
         try:
@@ -3394,6 +3428,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             
     def _on_assistant_tts_start(turn_id: Any) -> None:
         assistant_speaking[0] = True
+        _push_interaction_policy(interaction_policy_tts())
         mode = (barge_suppress_mode or "none").strip() or "none"
         mask_engaged = mode != "none"
         tts_mask_mode[0] = mode
@@ -5171,6 +5206,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             phase="ptt",
                                         )
                                     ptt_down_emitted[0] = False
+                                    _push_interaction_policy(interaction_policy_idle())
                                 continue
                             continue
 
