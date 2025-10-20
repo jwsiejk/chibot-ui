@@ -557,6 +557,116 @@ def _scrub_gzip_bytes(data: Optional[bytes]) -> Optional[bytes]:
     return buffer.getvalue()
 
 
+def _decode_gzip_ndjson(data: Optional[bytes]) -> List[Dict[str, Any]]:
+    if not data:
+        return []
+    try:
+        text = gzip.decompress(data).decode("utf-8")
+    except (OSError, EOFError, UnicodeDecodeError):
+        return []
+    entries: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        chunk = line.strip()
+        if not chunk:
+            continue
+        try:
+            parsed = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            entries.append(parsed)
+    return entries
+
+
+def _strip_none_values(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+_TIMELINE_FLOW_TYPES = {
+    "tts_start",
+    "tts_end",
+    "barge_in",
+    "barge_pause",
+    "barge_resume",
+    "session_force_end",
+}
+_TIMELINE_FLOW_PREFIXES = ("client_audio_",)
+_TIMELINE_SERVER_EVENTS = {
+    "barge_decision",
+    "asr_vad_state",
+    "ptt_open",
+    "ptt_close",
+    "vad_arm",
+    "session_force_end",
+}
+_TIMELINE_SERVER_PREFIXES = ("client_audio_",)
+
+
+def _build_timeline_payload(
+    *,
+    session_id: str,
+    generated_at: str,
+    flow_events: List[Dict[str, Any]],
+    server_events: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    flow_timeline: List[Dict[str, Any]] = []
+    for event in flow_events:
+        if not isinstance(event, Mapping):
+            continue
+        event_type = str(event.get("type") or "")
+        include = event_type in _TIMELINE_FLOW_TYPES or any(
+            event_type.startswith(prefix) for prefix in _TIMELINE_FLOW_PREFIXES
+        )
+        if not include:
+            continue
+        entry: Dict[str, Any] = {
+            "id": event.get("id"),
+            "type": event_type,
+            "phase": event.get("phase"),
+            "who": event.get("who"),
+            "t_rel_ms": event.get("t_rel_ms"),
+            "turn_id": event.get("turn_id"),
+        }
+        meta_value = event.get("meta")
+        if isinstance(meta_value, Mapping) and meta_value:
+            entry["meta"] = dict(meta_value)
+        flow_timeline.append(_strip_none_values(entry))
+
+    flow_timeline.sort(key=lambda item: (item.get("t_rel_ms") or 0, item.get("id") or ""))
+
+    server_timeline: List[Dict[str, Any]] = []
+    for record in server_events:
+        if not isinstance(record, Mapping):
+            continue
+        event_name = str(record.get("event") or "")
+        include = event_name in _TIMELINE_SERVER_EVENTS or any(
+            event_name.startswith(prefix) for prefix in _TIMELINE_SERVER_PREFIXES
+        )
+        if not include:
+            continue
+        entry = {
+            key: value
+            for key, value in record.items()
+            if key not in {"session_id", "sid"}
+        }
+        server_timeline.append(entry)
+
+    server_timeline.sort(key=lambda item: (item.get("ts_ms") or 0, item.get("event") or ""))
+
+    if not flow_timeline and not server_timeline:
+        return None
+
+    payload: Dict[str, Any] = {
+        "session_id": session_id,
+        "generated_at": generated_at,
+    }
+    if flow_timeline:
+        payload["flow_events"] = flow_timeline
+    if server_timeline:
+        payload["server_events"] = server_timeline
+    return payload
+
+
 @bp.post("/flow/breadcrumb")
 def flow_breadcrumb():
     payload = request.get_json(silent=True) or {}
@@ -858,6 +968,28 @@ def flow_handoff():
         include_ws_requested = bool(include_options.get("ws"))
         include_logs_requested = bool(include_options.get("logs"))
 
+        server_log_bytes_raw = slice_server_log_for_session(session_id)
+        if not server_log_bytes_raw:
+            server_log_bytes_raw = gzip.compress(b"")
+        server_log_bytes = (
+            _scrub_gzip_bytes(server_log_bytes_raw)
+            if pii_scrub_requested
+            else server_log_bytes_raw
+        )
+        server_log_entries = _decode_gzip_ndjson(server_log_bytes)
+
+        timeline_payload = _build_timeline_payload(
+            session_id=session_id,
+            generated_at=generated_at,
+            flow_events=export_events,
+            server_events=server_log_entries,
+        )
+        timeline_bytes: Optional[bytes] = None
+        if timeline_payload:
+            timeline_bytes = json.dumps(
+                timeline_payload, ensure_ascii=False, indent=2
+            ).encode("utf-8")
+
         include_meta: Dict[str, Any] = {}
         privacy_meta: Dict[str, Any] = {}
         for key, value in privacy_options.items():
@@ -910,7 +1042,6 @@ def flow_handoff():
                 )
 
         client_log_bytes = None
-        server_log_bytes = None
         if include_logs_requested:
             client_log_bytes = slice_client_console_for_session(session_id)
             if client_log_bytes and pii_scrub_requested:
@@ -924,23 +1055,11 @@ def flow_handoff():
                         "Client console events",
                     )
                 )
-            server_log_bytes = slice_server_log_for_session(session_id)
-            if server_log_bytes and pii_scrub_requested:
-                server_log_bytes = _scrub_gzip_bytes(server_log_bytes)
-            if server_log_bytes:
-                optional_files.append(
-                    (
-                        "server/server.log.gz",
-                        server_log_bytes,
-                        "text/plain+gzip",
-                        "Server admin log slice",
-                    )
-                )
 
         if include_ws_requested:
             include_meta["ws"] = bool(ws_bytes)
         if include_logs_requested:
-            include_meta["logs"] = bool(client_log_bytes or server_log_bytes)
+            include_meta["logs"] = bool(client_log_bytes or server_log_entries)
 
         manifest_files = [
             _manifest_entry(
@@ -961,7 +1080,23 @@ def flow_handoff():
                 content_type="application/json",
                 description="Session configuration snapshot",
             ),
+            _manifest_entry(
+                "server/server.log.gz",
+                server_log_bytes,
+                content_type="text/plain+gzip",
+                description="Server admin log slice",
+            ),
         ]
+
+        if timeline_bytes:
+            manifest_files.append(
+                _manifest_entry(
+                    "events/flow.json",
+                    timeline_bytes,
+                    content_type="application/json",
+                    description="Key event timeline",
+                )
+            )
 
         for path, data, content_type, description in optional_files:
             manifest_files.append(
@@ -995,8 +1130,7 @@ def flow_handoff():
             manifest_payload["telemetry_schemas"] = list(_HANDOFF_TELEMETRY_SCHEMAS)
         if manifest_meta:
             manifest_payload["meta"] = manifest_meta
-        if policy_snapshot:
-            manifest_payload["policy_snapshot"] = policy_snapshot
+        manifest_payload["policy_snapshot"] = policy_snapshot or {}
 
         manifest_bytes = json.dumps(
             manifest_payload, ensure_ascii=False, indent=2
@@ -1008,6 +1142,9 @@ def flow_handoff():
             archive.writestr("manifest.json", manifest_bytes)
             archive.writestr("events/flow.ndjson.gz", events_gz_bytes)
             archive.writestr("config/config.json", config_bytes)
+            archive.writestr("server/server.log.gz", server_log_bytes)
+            if timeline_bytes:
+                archive.writestr("events/flow.json", timeline_bytes)
             for path, data, _, _ in optional_files:
                 archive.writestr(path, data)
         zip_bytes = buffer.getvalue()

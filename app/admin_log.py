@@ -71,7 +71,18 @@ def _coerce_event(payload: Mapping[str, Any]) -> HistoryItem:
     data["event"] = event_name
     data.setdefault("kind", event_name)
 
-    preserve_text = event_name == "barge_decision"
+    preserve_text_events = {
+        "barge_decision",
+        "asr_vad_state",
+        "ptt_open",
+        "ptt_close",
+        "vad_arm",
+        "session_force_end",
+    }
+    preserve_text_prefixes = ("client_audio_",)
+    preserve_text = event_name in preserve_text_events or any(
+        event_name.startswith(prefix) for prefix in preserve_text_prefixes
+    )
 
     version = data.get("v")
     try:

@@ -144,6 +144,141 @@ def test_flow_handoff_pii_scrub_full_includes_logs(admin_env):
         assert "[ip:" in server_text
 
 
+def test_flow_handoff_full_includes_server_log_and_timeline(admin_env):
+    store = FlowStore()
+    session_id = "sess-handoff-timeline"
+    long_text = "state-" * 1024
+
+    store.emit(session_id, "flow", "session", "session_open", "system")
+    store.emit(
+        session_id,
+        "flow",
+        "turn",
+        "tts_start",
+        "assistant",
+        meta={"turn_id": "turn-1"},
+    )
+    store.emit(
+        session_id,
+        "flow",
+        "turn",
+        "tts_end",
+        "assistant",
+        meta={"turn_id": "turn-1"},
+    )
+    store.emit(
+        session_id,
+        "debug",
+        "client",
+        "client_audio_play_ok",
+        "client",
+        meta={"turn_id": "turn-1", "device": "speaker"},
+    )
+
+    admin_log_emit(
+        {
+            "event": "asr_vad_state",
+            "session_id": session_id,
+            "text": long_text,
+            "state": "frozen",
+            "reason": "tts_active",
+        }
+    )
+    admin_log_emit(
+        {
+            "event": "ptt_open",
+            "session_id": session_id,
+            "text": long_text,
+            "by": "client",
+        }
+    )
+    admin_log_emit(
+        {
+            "event": "ptt_close",
+            "session_id": session_id,
+            "text": long_text,
+            "reason": "user_end",
+        }
+    )
+    admin_log_emit(
+        {
+            "event": "vad_arm",
+            "session_id": session_id,
+            "text": long_text,
+            "threshold": -38,
+            "hold_ms": 400,
+        }
+    )
+    admin_log_emit(
+        {
+            "event": "client_audio_play_ok",
+            "session_id": session_id,
+            "text": long_text,
+            "turn_id": "turn-1",
+        }
+    )
+    admin_log_emit(
+        {
+            "event": "session_force_end",
+            "session_id": session_id,
+            "text": long_text,
+            "by": "system",
+        }
+    )
+
+    client = flask_app.test_client()
+    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
+    token = csrf_resp.headers.get("X-CSRF-Token")
+    headers = dict(admin_env)
+    if token:
+        headers["X-CSRF-Token"] = token
+
+    body = {"session_id": session_id, "options": {"mode": "full"}}
+
+    resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
+    assert resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
+        names = set(archive.namelist())
+        assert "server/server.log.gz" in names
+        assert "events/flow.json" in names
+
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        assert manifest["policy_snapshot"] == {}
+
+        server_payload = archive.read("server/server.log.gz")
+        server_entries = [
+            json.loads(line)
+            for line in _decode_gzip_bytes(server_payload).splitlines()
+            if line.strip()
+        ]
+
+        for event_name in [
+            "asr_vad_state",
+            "ptt_open",
+            "ptt_close",
+            "vad_arm",
+            "client_audio_play_ok",
+            "session_force_end",
+        ]:
+            matches = [entry for entry in server_entries if entry.get("event") == event_name]
+            assert matches, f"expected {event_name} in server log"
+            assert matches[0].get("text") == long_text
+
+        timeline = json.loads(archive.read("events/flow.json").decode("utf-8"))
+        server_events = {entry["event"] for entry in timeline.get("server_events", [])}
+        assert {
+            "asr_vad_state",
+            "ptt_open",
+            "ptt_close",
+            "vad_arm",
+            "session_force_end",
+            "client_audio_play_ok",
+        } <= server_events
+        flow_types = {entry["type"] for entry in timeline.get("flow_events", [])}
+        assert {"tts_start", "tts_end"} <= flow_types
+
+
 def test_flow_handoff_includes_full_barge_decision_logs(admin_env):
     store = FlowStore()
     session_id = "sess-barge-log"

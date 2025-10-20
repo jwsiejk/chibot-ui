@@ -1,152 +1,664 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 9b1882e7287a7ac4efe1df712d6d445b7430d0be..9ed772a84a28135f0c53825a2f7c413bd03ea902 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -4869,74 +4869,76 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                     )
-                                 except Exception as e:
-                                     with contextlib.suppress(Exception):
-                                         await _ws_send_json(
-                                             send,
-                                             make_error(
-                                                 "user_fail", e.__class__.__name__
-                                             ),
-                                         )
-                                     _emit_ws_error("user_fail")
+diff --git a/app/admin_log.py b/app/admin_log.py
+index 1365430ced089d7f58adbeab2ba9807be48773dd..0e4fdb1d7805ddfe9562ff2e987c103cb38fdda8 100644
+--- a/app/admin_log.py
++++ b/app/admin_log.py
+@@ -49,51 +49,62 @@ def _normalize_session_id(value: Any) -> str | None:
+     except Exception:  # pragma: no cover - extremely defensive
+         return None
+     return text or None
  
-                             asyncio.create_task(_bg_user())
  
-                         elif t == "CloseStream":
-                             _jlog("ws_close_stream", sid=sid)
-                             manual_turn_active[0] = False
-                             manual_button_down[0] = False
-                             ptt_turn_preopened[0] = False
-                             turn_stream_committed[0] = False
-                             _cancel_asr_stream_activation()
-                             _cancel_asr_not_ready_timeout()
+ def _normalize_turn_id(value: Any) -> str | None:
+     if value is None:
+         return None
+     try:
+         text = str(value).strip()
+     except Exception:  # pragma: no cover - extremely defensive
+         return None
+     return text or None
  
-                             # Always define this first so later 'if synthetic_emitted' is safe
-                             synthetic_emitted = False
-                             asr_ready_wait_timed_out = False
-+                            force_end_due_to_asr_timeout = False
  
-                             async def _await_close_asr_ready(
-                                 timeout: float,
-                                 *,
-                                 mark_timeout: bool = True,
-                                 log_cb: Optional[Callable[[], None]] = None,
-                             ) -> bool:
--                                nonlocal asr_ready_wait_timed_out
-+                                nonlocal asr_ready_wait_timed_out, force_end_due_to_asr_timeout
-                                 if asr_ready_evt is None:
-                                     return False
-                                 if asr_ready_evt.is_set():
-                                     return True
-                                 if asr_ready_wait_timed_out:
-                                     return False
-                                 if timeout <= 0:
-                                     return False
-                                 try:
-                                     await asyncio.wait_for(
-                                         asr_ready_evt.wait(), timeout=timeout
-                                     )
-                                     return True
-                                 except asyncio.TimeoutError:
-                                     if mark_timeout:
-                                         asr_ready_wait_timed_out = True
-+                                        force_end_due_to_asr_timeout = True
-                                     if log_cb is not None:
-                                         with contextlib.suppress(Exception):
-                                             log_cb()
-                                     return False
+ def _coerce_event(payload: Mapping[str, Any]) -> HistoryItem:
+     data: HistoryItem = dict(payload)
  
-                             if callable(final_guard_local_vad_ref[0]):
-                                 with contextlib.suppress(Exception):
-                                     final_guard_local_vad_ref[0]("stop")
-                             _on_local_vad_stop()
+     event_name = data.get("event") or data.get("kind") or data.get("label")
+     if not isinstance(event_name, str) or not event_name.strip():
+         event_name = "log"
+     event_name = event_name.strip()
+     data["event"] = event_name
+     data.setdefault("kind", event_name)
  
-                             _ensure_confirm_closed("close_stream")
+-    preserve_text = event_name == "barge_decision"
++    preserve_text_events = {
++        "barge_decision",
++        "asr_vad_state",
++        "ptt_open",
++        "ptt_close",
++        "vad_arm",
++        "session_force_end",
++    }
++    preserve_text_prefixes = ("client_audio_",)
++    preserve_text = event_name in preserve_text_events or any(
++        event_name.startswith(prefix) for prefix in preserve_text_prefixes
++    )
  
-                             if buf.is_empty():
-                                 # Empty turn closure; synthesize ids + reset final tracking.
-                                 turn_id_ref[0] = buf.turn_seq + 1
-                                 final_seen[0] = False
-                                 _reset_turn_metrics(time.time())
-                                 with contextlib.suppress(Exception):
-                                     _jlog(
-                                         "turn_start",
-                                         sid=sid,
-                                         turn_id=turn_id_ref[0],
-                                         first_bytes=0,
-                                         empty_turn=True,
-                                     )
-@@ -5153,50 +5155,69 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                     ):
-                                         synthetic_emitted = True
-                                         with contextlib.suppress(ValueError):
-                                             pending_final_turns.remove(turn_id)
-                                         synthetic_final_turns.add(turn_id)
+     version = data.get("v")
+     try:
+         data["v"] = int(version)
+     except Exception:
+         data["v"] = 1
  
-                             _cancel_no_audio_watch()
-                             if (not sent_any_audio[0]) and not no_audio_notified[0]:
-                                 elapsed = None
-                                 if mic_first_ts[0]:
-                                     elapsed = time.time() - mic_first_ts[0]
-                                 should_emit = (not assistant_speaking[0]) and (
-                                     no_audio_window_s <= 0
-                                     or (
-                                         elapsed is not None
-                                         and elapsed >= no_audio_window_s
-                                     )
-                                 )
-                                 if should_emit:
-                                     _emit_no_audio_alert("close_stream")
+     ts_ms = data.get("ts_ms") or data.get("sent_at") or data.get("ts")
+     try:
+         ts_ms_int = int(ts_ms)
+     except Exception:
+         ts_ms_int = _now_ms()
+     data["ts_ms"] = ts_ms_int
+     data.setdefault("ts", ts_ms_int / 1000.0)
  
-                             if synthetic_emitted:
-                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
-                                 final_seen[0] = False
+     sid = _normalize_session_id(data.pop("session_id", None) or data.get("sid"))
+     if sid is not None:
+         data["session_id"] = sid
+         data["sid"] = sid
+     else:
+         data.pop("sid", None)
  
-+                            if force_end_due_to_asr_timeout:
-+                                _jlog(
-+                                    "session_force_end",
-+                                    sid=sid,
-+                                    reason="user_end_waiting_asr",
-+                                )
-+                                try:
-+                                    flow_emit(
-+                                        session_id=sid,
-+                                        type="session_force_end",
-+                                        phase="session",
-+                                        who="server",
-+                                        meta={"reason": "user_end_waiting_asr"},
-+                                    )
-+                                except Exception:
-+                                    pass
-+                                await _safe_close(4000, "user_end_waiting_asr")
-+                                return
+     turn_id = (
+         data.pop("turnId", None)
+         or data.pop("turn", None)
+diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
+index 7ff8a7b330ec5046865bf5ae38f0b0c2fa853190..8c6a4dc321b9e83001caf20ba184bf21def8fe80 100644
+--- a/app/api_v1/flow.py
++++ b/app/api_v1/flow.py
+@@ -535,50 +535,160 @@ def _scrub_event(event: Dict[str, Any]) -> Dict[str, Any]:
+         if isinstance(value, dict):
+             clone[key] = _scrub_node(value)
+         elif isinstance(value, list):
+             clone[key] = [_scrub_node(item) for item in value]
+         elif isinstance(value, tuple):
+             clone[key] = tuple(_scrub_node(item) for item in value)
+         elif isinstance(value, str):
+             clone[key] = _scrub_text(value)
+     return clone
+ 
+ 
+ def _scrub_gzip_bytes(data: Optional[bytes]) -> Optional[bytes]:
+     if not data:
+         return data
+     try:
+         text = gzip.decompress(data).decode("utf-8")
+     except (OSError, EOFError, UnicodeDecodeError):
+         return data
+     sanitized = _scrub_text(text)
+     buffer = io.BytesIO()
+     with gzip.GzipFile(fileobj=buffer, mode="wb") as gz_handle:
+         gz_handle.write(sanitized.encode("utf-8"))
+     return buffer.getvalue()
+ 
+ 
++def _decode_gzip_ndjson(data: Optional[bytes]) -> List[Dict[str, Any]]:
++    if not data:
++        return []
++    try:
++        text = gzip.decompress(data).decode("utf-8")
++    except (OSError, EOFError, UnicodeDecodeError):
++        return []
++    entries: List[Dict[str, Any]] = []
++    for line in text.splitlines():
++        chunk = line.strip()
++        if not chunk:
++            continue
++        try:
++            parsed = json.loads(chunk)
++        except json.JSONDecodeError:
++            continue
++        if isinstance(parsed, dict):
++            entries.append(parsed)
++    return entries
 +
-                             if barge.is_paused():
-                                 _ensure_confirm_closed("cleanup")
-                                 if not manual_button_down[0]:
-                                     with contextlib.suppress(Exception):
-                                         barge.cancel(_send_barge_state)
-                                 await asyncio.sleep(0)
++
++def _strip_none_values(payload: Dict[str, Any]) -> Dict[str, Any]:
++    return {key: value for key, value in payload.items() if value is not None}
++
++
++_TIMELINE_FLOW_TYPES = {
++    "tts_start",
++    "tts_end",
++    "barge_in",
++    "barge_pause",
++    "barge_resume",
++    "session_force_end",
++}
++_TIMELINE_FLOW_PREFIXES = ("client_audio_",)
++_TIMELINE_SERVER_EVENTS = {
++    "barge_decision",
++    "asr_vad_state",
++    "ptt_open",
++    "ptt_close",
++    "vad_arm",
++    "session_force_end",
++}
++_TIMELINE_SERVER_PREFIXES = ("client_audio_",)
++
++
++def _build_timeline_payload(
++    *,
++    session_id: str,
++    generated_at: str,
++    flow_events: List[Dict[str, Any]],
++    server_events: List[Dict[str, Any]],
++) -> Optional[Dict[str, Any]]:
++    flow_timeline: List[Dict[str, Any]] = []
++    for event in flow_events:
++        if not isinstance(event, Mapping):
++            continue
++        event_type = str(event.get("type") or "")
++        include = event_type in _TIMELINE_FLOW_TYPES or any(
++            event_type.startswith(prefix) for prefix in _TIMELINE_FLOW_PREFIXES
++        )
++        if not include:
++            continue
++        entry: Dict[str, Any] = {
++            "id": event.get("id"),
++            "type": event_type,
++            "phase": event.get("phase"),
++            "who": event.get("who"),
++            "t_rel_ms": event.get("t_rel_ms"),
++            "turn_id": event.get("turn_id"),
++        }
++        meta_value = event.get("meta")
++        if isinstance(meta_value, Mapping) and meta_value:
++            entry["meta"] = dict(meta_value)
++        flow_timeline.append(_strip_none_values(entry))
++
++    flow_timeline.sort(key=lambda item: (item.get("t_rel_ms") or 0, item.get("id") or ""))
++
++    server_timeline: List[Dict[str, Any]] = []
++    for record in server_events:
++        if not isinstance(record, Mapping):
++            continue
++        event_name = str(record.get("event") or "")
++        include = event_name in _TIMELINE_SERVER_EVENTS or any(
++            event_name.startswith(prefix) for prefix in _TIMELINE_SERVER_PREFIXES
++        )
++        if not include:
++            continue
++        entry = {
++            key: value
++            for key, value in record.items()
++            if key not in {"session_id", "sid"}
++        }
++        server_timeline.append(entry)
++
++    server_timeline.sort(key=lambda item: (item.get("ts_ms") or 0, item.get("event") or ""))
++
++    if not flow_timeline and not server_timeline:
++        return None
++
++    payload: Dict[str, Any] = {
++        "session_id": session_id,
++        "generated_at": generated_at,
++    }
++    if flow_timeline:
++        payload["flow_events"] = flow_timeline
++    if server_timeline:
++        payload["server_events"] = server_timeline
++    return payload
++
++
+ @bp.post("/flow/breadcrumb")
+ def flow_breadcrumb():
+     payload = request.get_json(silent=True) or {}
  
-                             if ws_configured and not turn_stream_committed[0]:
-                                 if manual_commit_pending[0] and not assistant_speaking[0]:
-                                     _on_barge_commit("manual")
-                                 elif _can_auto_commit_now():
-                                     _on_barge_commit("auto")
+     session_id = _normalize_str(
+         payload.get("session_id") or payload.get("sid")
+     )
+     meta_payload = payload.get("meta")
+     if not session_id and isinstance(meta_payload, dict):
+         session_id = _normalize_str(
+             meta_payload.get("session_id") or meta_payload.get("sid")
+         )
+     if not session_id:
+         abort(400, description="session_id is required")
  
-                             active_turn_mode_ref[0] = "vad"
-                             turn_commit_mode_ref[0] = "vad"
+     event_name = _normalize_str(payload.get("event"))
+     if not event_name:
+         abort(400, description="event is required")
  
-                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
+     if meta_payload is None:
+         meta: Dict[str, Any] = {}
+     elif isinstance(meta_payload, dict):
+         meta = dict(meta_payload)
+     else:
+         abort(400, description="meta must be an object")
+@@ -836,50 +946,72 @@ def flow_handoff():
+     else:
+         export_events = [copy.deepcopy(event) for event in events]
+         if pii_scrub_requested:
+             export_events = [_scrub_event(event) for event in export_events]
+         event_bytes = _to_ndjson_bytes(export_events)
+         gzip_buffer = io.BytesIO()
+         with gzip.GzipFile(fileobj=gzip_buffer, mode="wb") as gz_handle:
+             gz_handle.write(event_bytes)
+         events_gz_bytes = gzip_buffer.getvalue()
  
-                             _jlog(
-                                 "mic_capture_block_enter",
-                                 sid=sid,
-                                 turn_id=turn_id,
-                                 mic_chunks=len(mic_chunks),
-                             )
-                             if MIC_CAPTURE:
+         config_payload = snapshot.config if isinstance(snapshot.config, dict) else {}
+         policy_snapshot = _extract_policy_snapshot(config_payload)
+         try:
+             config_text = json.dumps(
+                 config_payload, ensure_ascii=False, indent=2, sort_keys=True
+             )
+         except TypeError:
+             config_text = json.dumps({}, ensure_ascii=False, indent=2)
+         config_bytes = config_text.encode("utf-8")
+ 
+         prompt_bytes = prompt_text.encode("utf-8")
+ 
+         include_ws_requested = bool(include_options.get("ws"))
+         include_logs_requested = bool(include_options.get("logs"))
+ 
++        server_log_bytes_raw = slice_server_log_for_session(session_id)
++        if not server_log_bytes_raw:
++            server_log_bytes_raw = gzip.compress(b"")
++        server_log_bytes = (
++            _scrub_gzip_bytes(server_log_bytes_raw)
++            if pii_scrub_requested
++            else server_log_bytes_raw
++        )
++        server_log_entries = _decode_gzip_ndjson(server_log_bytes)
++
++        timeline_payload = _build_timeline_payload(
++            session_id=session_id,
++            generated_at=generated_at,
++            flow_events=export_events,
++            server_events=server_log_entries,
++        )
++        timeline_bytes: Optional[bytes] = None
++        if timeline_payload:
++            timeline_bytes = json.dumps(
++                timeline_payload, ensure_ascii=False, indent=2
++            ).encode("utf-8")
++
+         include_meta: Dict[str, Any] = {}
+         privacy_meta: Dict[str, Any] = {}
+         for key, value in privacy_options.items():
+             key_str = str(key)
+             if isinstance(value, bool):
+                 privacy_meta[key_str] = value
+             elif isinstance(value, str):
+                 privacy_meta[key_str] = value.strip() or value
+         if pii_scrub_requested and "pii_scrub" not in privacy_meta:
+             privacy_meta["pii_scrub"] = True
+         limits_meta: Dict[str, Any] = {}
+         if max_bytes is not None:
+             limits_meta["max_bytes"] = max_bytes
+ 
+         def _manifest_entry(
+             path: str,
+             data: bytes,
+             *,
+             content_type: Optional[str] = None,
+             description: Optional[str] = None,
+         ) -> Dict[str, Any]:
+             digest = hashlib.sha1(data).hexdigest()
+             entry: Dict[str, Any] = {
+                 "path": path,
+                 "bytes": len(data),
+@@ -888,146 +1020,151 @@ def flow_handoff():
+             }
+             if content_type:
+                 entry["content_type"] = content_type
+             if description:
+                 entry["description"] = description
+             return entry
+ 
+         optional_files: List[Tuple[str, bytes, Optional[str], Optional[str]]] = []
+ 
+         ws_bytes = None
+         if include_ws_requested:
+             ws_bytes = assemble_ws_frames(session_id)
+             if ws_bytes and pii_scrub_requested:
+                 ws_bytes = _scrub_gzip_bytes(ws_bytes)
+             if ws_bytes:
+                 optional_files.append(
+                     (
+                         "ws/frames.ndjson.gz",
+                         ws_bytes,
+                         "application/x-ndjson+gzip",
+                         "Sampled WebSocket frames",
+                     )
+                 )
+ 
+         client_log_bytes = None
+-        server_log_bytes = None
+         if include_logs_requested:
+             client_log_bytes = slice_client_console_for_session(session_id)
+             if client_log_bytes and pii_scrub_requested:
+                 client_log_bytes = _scrub_gzip_bytes(client_log_bytes)
+             if client_log_bytes:
+                 optional_files.append(
+                     (
+                         "client/console.log.gz",
+                         client_log_bytes,
+                         "text/plain+gzip",
+                         "Client console events",
+                     )
+                 )
+-            server_log_bytes = slice_server_log_for_session(session_id)
+-            if server_log_bytes and pii_scrub_requested:
+-                server_log_bytes = _scrub_gzip_bytes(server_log_bytes)
+-            if server_log_bytes:
+-                optional_files.append(
+-                    (
+-                        "server/server.log.gz",
+-                        server_log_bytes,
+-                        "text/plain+gzip",
+-                        "Server admin log slice",
+-                    )
+-                )
+ 
+         if include_ws_requested:
+             include_meta["ws"] = bool(ws_bytes)
+         if include_logs_requested:
+-            include_meta["logs"] = bool(client_log_bytes or server_log_bytes)
++            include_meta["logs"] = bool(client_log_bytes or server_log_entries)
+ 
+         manifest_files = [
+             _manifest_entry(
+                 "prompt.txt",
+                 prompt_bytes,
+                 content_type="text/plain; charset=utf-8",
+                 description="Flow analysis prompt",
+             ),
+             _manifest_entry(
+                 "events/flow.ndjson.gz",
+                 events_gz_bytes,
+                 content_type="application/x-ndjson+gzip",
+                 description="Session events (gzipped NDJSON)",
+             ),
+             _manifest_entry(
+                 "config/config.json",
+                 config_bytes,
+                 content_type="application/json",
+                 description="Session configuration snapshot",
+             ),
++            _manifest_entry(
++                "server/server.log.gz",
++                server_log_bytes,
++                content_type="text/plain+gzip",
++                description="Server admin log slice",
++            ),
+         ]
+ 
++        if timeline_bytes:
++            manifest_files.append(
++                _manifest_entry(
++                    "events/flow.json",
++                    timeline_bytes,
++                    content_type="application/json",
++                    description="Key event timeline",
++                )
++            )
++
+         for path, data, content_type, description in optional_files:
+             manifest_files.append(
+                 _manifest_entry(
+                     path,
+                     data,
+                     content_type=content_type,
+                     description=description,
+                 )
+             )
+ 
+         manifest_meta: Dict[str, Any] = {"mode": mode, "redacted": False}
+         if include_meta:
+             manifest_meta["include"] = include_meta
+         if privacy_meta:
+             manifest_meta["privacy"] = privacy_meta
+         if limits_meta:
+             manifest_meta["limits"] = limits_meta
+         if snapshot.started_at_iso:
+             manifest_meta["session_started_at"] = snapshot.started_at_iso
+ 
+         manifest_payload = {
+             "schema_version": "1.0",
+             "exported_at": generated_at,
+             "session_id": session_id,
+             "levels": levels,
+             "event_count": event_count,
+             "files": manifest_files,
+         }
+         if _HANDOFF_TELEMETRY_SCHEMAS:
+             manifest_payload["telemetry_schemas"] = list(_HANDOFF_TELEMETRY_SCHEMAS)
+         if manifest_meta:
+             manifest_payload["meta"] = manifest_meta
+-        if policy_snapshot:
+-            manifest_payload["policy_snapshot"] = policy_snapshot
++        manifest_payload["policy_snapshot"] = policy_snapshot or {}
+ 
+         manifest_bytes = json.dumps(
+             manifest_payload, ensure_ascii=False, indent=2
+         ).encode("utf-8")
+ 
+         buffer = io.BytesIO()
+         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+             archive.writestr("prompt.txt", prompt_bytes)
+             archive.writestr("manifest.json", manifest_bytes)
+             archive.writestr("events/flow.ndjson.gz", events_gz_bytes)
+             archive.writestr("config/config.json", config_bytes)
++            archive.writestr("server/server.log.gz", server_log_bytes)
++            if timeline_bytes:
++                archive.writestr("events/flow.json", timeline_bytes)
+             for path, data, _, _ in optional_files:
+                 archive.writestr(path, data)
+         zip_bytes = buffer.getvalue()
+ 
+     if max_bytes is not None and len(zip_bytes) > max_bytes:
+         return _too_large_response()
+ 
+     response = Response(zip_bytes, mimetype="application/zip")
+     safe_session = re.sub(r"[^a-zA-Z0-9_-]+", "_", session_id) or "session"
+     response.headers[
+         "Content-Disposition"
+     ] = f'attachment; filename="flow_handoff_{safe_session}.zip"'
+     response.headers["X-Flow-Redacted"] = "0" if is_full else "1"
+     response.headers["X-Flow-Payload-Bytes"] = str(len(zip_bytes))
+     response.headers["X-Flow-Payload-Sha1"] = hashlib.sha1(zip_bytes).hexdigest()
+     response.headers["X-Flow-Mode"] = mode
+     if pii_scrub_requested:
+         response.headers["X-Flow-PII-Scrubbed"] = "1"
+     response.headers["Cache-Control"] = "no-store"
+     return response
+ 
+ 
+ __all__ = ["bp"]
+diff --git a/tests/test_flow_handoff_options.py b/tests/test_flow_handoff_options.py
+index 07e19be81bb9aa25d3ca575f74fc0ae563c63612..f95b6427000a956ec5b85cb49cc21b0151f0c08c 100644
+--- a/tests/test_flow_handoff_options.py
++++ b/tests/test_flow_handoff_options.py
+@@ -122,50 +122,185 @@ def test_flow_handoff_pii_scrub_full_includes_logs(admin_env):
+         },
+     }
+ 
+     resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
+     assert resp.status_code == 200
+     assert resp.headers.get("X-Flow-PII-Scrubbed") == "1"
+ 
+     with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
+         events_payload = archive.read("events/flow.ndjson.gz")
+         events_text = _decode_gzip_bytes(events_payload)
+         assert "sk-newtokenVALUE999" not in events_text
+         assert "198.51.100.44" not in events_text
+         assert "[token:" in events_text
+ 
+         client_log = archive.read("client/console.log.gz")
+         client_text = _decode_gzip_bytes(client_log)
+         assert "198.51.100.44" not in client_text
+         assert "[ip:" in client_text
+ 
+         server_log = archive.read("server/server.log.gz")
+         server_text = _decode_gzip_bytes(server_log)
+         assert "198.51.100.22" not in server_text
+         assert "[ip:" in server_text
+ 
+ 
++def test_flow_handoff_full_includes_server_log_and_timeline(admin_env):
++    store = FlowStore()
++    session_id = "sess-handoff-timeline"
++    long_text = "state-" * 1024
++
++    store.emit(session_id, "flow", "session", "session_open", "system")
++    store.emit(
++        session_id,
++        "flow",
++        "turn",
++        "tts_start",
++        "assistant",
++        meta={"turn_id": "turn-1"},
++    )
++    store.emit(
++        session_id,
++        "flow",
++        "turn",
++        "tts_end",
++        "assistant",
++        meta={"turn_id": "turn-1"},
++    )
++    store.emit(
++        session_id,
++        "debug",
++        "client",
++        "client_audio_play_ok",
++        "client",
++        meta={"turn_id": "turn-1", "device": "speaker"},
++    )
++
++    admin_log_emit(
++        {
++            "event": "asr_vad_state",
++            "session_id": session_id,
++            "text": long_text,
++            "state": "frozen",
++            "reason": "tts_active",
++        }
++    )
++    admin_log_emit(
++        {
++            "event": "ptt_open",
++            "session_id": session_id,
++            "text": long_text,
++            "by": "client",
++        }
++    )
++    admin_log_emit(
++        {
++            "event": "ptt_close",
++            "session_id": session_id,
++            "text": long_text,
++            "reason": "user_end",
++        }
++    )
++    admin_log_emit(
++        {
++            "event": "vad_arm",
++            "session_id": session_id,
++            "text": long_text,
++            "threshold": -38,
++            "hold_ms": 400,
++        }
++    )
++    admin_log_emit(
++        {
++            "event": "client_audio_play_ok",
++            "session_id": session_id,
++            "text": long_text,
++            "turn_id": "turn-1",
++        }
++    )
++    admin_log_emit(
++        {
++            "event": "session_force_end",
++            "session_id": session_id,
++            "text": long_text,
++            "by": "system",
++        }
++    )
++
++    client = flask_app.test_client()
++    csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
++    token = csrf_resp.headers.get("X-CSRF-Token")
++    headers = dict(admin_env)
++    if token:
++        headers["X-CSRF-Token"] = token
++
++    body = {"session_id": session_id, "options": {"mode": "full"}}
++
++    resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
++    assert resp.status_code == 200
++
++    with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
++        names = set(archive.namelist())
++        assert "server/server.log.gz" in names
++        assert "events/flow.json" in names
++
++        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
++        assert manifest["policy_snapshot"] == {}
++
++        server_payload = archive.read("server/server.log.gz")
++        server_entries = [
++            json.loads(line)
++            for line in _decode_gzip_bytes(server_payload).splitlines()
++            if line.strip()
++        ]
++
++        for event_name in [
++            "asr_vad_state",
++            "ptt_open",
++            "ptt_close",
++            "vad_arm",
++            "client_audio_play_ok",
++            "session_force_end",
++        ]:
++            matches = [entry for entry in server_entries if entry.get("event") == event_name]
++            assert matches, f"expected {event_name} in server log"
++            assert matches[0].get("text") == long_text
++
++        timeline = json.loads(archive.read("events/flow.json").decode("utf-8"))
++        server_events = {entry["event"] for entry in timeline.get("server_events", [])}
++        assert {
++            "asr_vad_state",
++            "ptt_open",
++            "ptt_close",
++            "vad_arm",
++            "session_force_end",
++            "client_audio_play_ok",
++        } <= server_events
++        flow_types = {entry["type"] for entry in timeline.get("flow_events", [])}
++        assert {"tts_start", "tts_end"} <= flow_types
++
++
+ def test_flow_handoff_includes_full_barge_decision_logs(admin_env):
+     store = FlowStore()
+     session_id = "sess-barge-log"
+     store.emit(session_id, "flow", "session", "session_open", "system")
+ 
+     long_text = "decide-" * 1200
+     admin_log_emit(
+         {
+             "event": "barge_decision",
+             "session_id": session_id,
+             "text": long_text,
+             "text_preview": long_text,
+         }
+     )
+ 
+     client = flask_app.test_client()
+     csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
+     token = csrf_resp.headers.get("X-CSRF-Token")
+     headers = dict(admin_env)
+     if token:
+         headers["X-CSRF-Token"] = token
+ 
+     body = {
+         "session_id": session_id,
+         "options": {"mode": "full", "include": {"logs": True}},
