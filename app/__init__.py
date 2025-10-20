@@ -127,6 +127,10 @@ def create_app():
             "barge_in_mode_manual": False,
             "auto_commit_when_ready": True,
         }
+        flow_config = {
+            "includeSources": True,
+            "evidenceDetail": "minimal",
+        }
         debug_config = {"vad": True}
         try:
             from .services import admin_settings as _admin_settings  # inline import to avoid cycles
@@ -176,6 +180,22 @@ def create_app():
         feature_flags["auto_commit_when_ready"] = _resolve_flag(
             "auto_commit_when_ready", True
         )
+        try:
+            flow_config["includeSources"] = bool(
+                getattr(_SETTINGS, "flow_include_sources", True)
+            )
+        except Exception:
+            flow_config["includeSources"] = True
+        try:
+            detail_value = getattr(_SETTINGS, "flow_evidence_detail", "minimal")
+            if isinstance(detail_value, str):
+                lowered = detail_value.strip().lower()
+                if lowered in {"off", "minimal", "full"}:
+                    flow_config["evidenceDetail"] = lowered
+                else:
+                    flow_config["evidenceDetail"] = "minimal"
+        except Exception:
+            flow_config["evidenceDetail"] = "minimal"
         return {
             "askchip_config": {
                 "logging": {"enabled": enabled},
@@ -186,6 +206,7 @@ def create_app():
                 "feature_manual_barge_in": feature_flags["feature_manual_barge_in"],
                 "barge_in_mode_manual": feature_flags["barge_in_mode_manual"],
                 "auto_commit_when_ready": feature_flags["auto_commit_when_ready"],
+                "flow": flow_config,
             }
         }
 

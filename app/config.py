@@ -35,6 +35,16 @@ def _bool_from_env(default: bool, *names: str) -> bool:
     return default
 
 
+def _choice_from_env(name: str, default: str, options: set[str]) -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    lowered = raw.strip().lower()
+    if lowered in options:
+        return lowered
+    return default
+
+
 _ADVANCED_LOGGING_DEFAULT = _bool_from_env(
     True,
     "VOICE_ADVANCED_LOGGING_ENABLED",
@@ -74,6 +84,12 @@ class Settings:
     vad_exit_threshold_db: float = _float_from_env("VAD_EXIT_THRESHOLD", 6.0)
     vad_tts_boost_db: float = _float_from_env("VAD_TTS_BOOST", 6.0)
     vad_min_speech_ms: int = int(os.getenv("VAD_MIN_SPEECH_MS", "360"))
+    flow_include_sources: bool = _bool_from_env(True, "FLOW_INCLUDE_SOURCES")
+    flow_evidence_detail: str = _choice_from_env(
+        "FLOW_EVIDENCE_DETAIL",
+        "minimal",
+        {"off", "minimal", "full"},
+    )
 
 def load_settings() -> Settings:
     return Settings()

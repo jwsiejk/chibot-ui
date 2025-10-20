@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from app.admin_log import get_admin_log_history
+from app.obs.source_tags import FLOW_SCHEMA_VERSION
 
 MAX_EVENTS = 5000
 DEDUP_WINDOW_MS = 100
@@ -512,6 +513,7 @@ class FlowStore:
             "who": who,
             "blurb": blurb,
             "meta": meta,
+            "schema": FLOW_SCHEMA_VERSION,
         }
         if parent_id:
             payload["parent_id"] = parent_id

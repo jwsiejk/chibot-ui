@@ -1,19 +1,171 @@
+diff --git a/app/__init__.py b/app/__init__.py
+index 98de00a076b6c61dfec02400e6c84994d9c90c35..5eeaf8e8a6ff660e3843e694b3c556ac44918c67 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -105,109 +105,130 @@ def create_app():
+         enabled = True
+         try:
+             enabled = bool(getattr(_SETTINGS, "advanced_logging_enabled", True))
+         except Exception:
+             enabled = True
+         auth_config = {}
+         auto_login_email = (os.environ.get("ASKCHIP_AUTO_LOGIN_EMAIL") or "").strip()
+         if auto_login_email:
+             auth_config["autoLoginEmail"] = auto_login_email
+         vad_config = {}
+         try:
+             vad_config = {
+                 "baseThresholdDb": float(getattr(_SETTINGS, "vad_base_threshold_db", 10.0)),
+                 "exitThresholdDb": float(getattr(_SETTINGS, "vad_exit_threshold_db", 6.0)),
+                 "ttsBoostDb": float(getattr(_SETTINGS, "vad_tts_boost_db", 6.0)),
+                 "minSpeechMs": int(getattr(_SETTINGS, "vad_min_speech_ms", 360)),
+             }
+         except Exception:
+             vad_config = {}
+ 
+         feature_flags = {
+             "feature_manual_barge_in": True,
+             "barge_in_mode_manual": False,
+             "auto_commit_when_ready": True,
+         }
++        flow_config = {
++            "includeSources": True,
++            "evidenceDetail": "minimal",
++        }
+         debug_config = {"vad": True}
+         try:
+             from .services import admin_settings as _admin_settings  # inline import to avoid cycles
+ 
+             settings = _admin_settings.get_settings()
+         except Exception:
+             settings = {}
+         try:
+             from .db import db as _db
+ 
+             db_cfg = _db.get_config()
+         except Exception:
+             db_cfg = {}
+ 
+         def _resolve_debug_vad(default: bool) -> bool:
+             try:
+                 if isinstance(settings, dict):
+                     debug_settings = settings.get("debug")
+                     if isinstance(debug_settings, dict) and "vad" in debug_settings:
+                         return bool(debug_settings.get("vad"))
+             except Exception:
+                 pass
+             try:
+                 if isinstance(db_cfg, dict):
+                     debug_settings = db_cfg.get("debug")
+                     if isinstance(debug_settings, dict) and "vad" in debug_settings:
+                         return bool(debug_settings.get("vad"))
+             except Exception:
+                 pass
+             return default
+ 
+         debug_config["vad"] = _resolve_debug_vad(debug_config["vad"])
+ 
+         def _resolve_flag(name: str, default: bool) -> bool:
+             if isinstance(settings, dict) and name in settings:
+                 return bool(settings.get(name))
+             if isinstance(db_cfg, dict) and name in db_cfg:
+                 return bool(db_cfg.get(name))
+             return default
+ 
+         feature_flags["feature_manual_barge_in"] = _resolve_flag(
+             "feature_manual_barge_in", True
+         )
+         feature_flags["barge_in_mode_manual"] = _resolve_flag(
+             "barge_in_mode_manual", False
+         )
+         feature_flags["auto_commit_when_ready"] = _resolve_flag(
+             "auto_commit_when_ready", True
+         )
++        try:
++            flow_config["includeSources"] = bool(
++                getattr(_SETTINGS, "flow_include_sources", True)
++            )
++        except Exception:
++            flow_config["includeSources"] = True
++        try:
++            detail_value = getattr(_SETTINGS, "flow_evidence_detail", "minimal")
++            if isinstance(detail_value, str):
++                lowered = detail_value.strip().lower()
++                if lowered in {"off", "minimal", "full"}:
++                    flow_config["evidenceDetail"] = lowered
++                else:
++                    flow_config["evidenceDetail"] = "minimal"
++        except Exception:
++            flow_config["evidenceDetail"] = "minimal"
+         return {
+             "askchip_config": {
+                 "logging": {"enabled": enabled},
+                 "auth": auth_config,
+                 "vad": vad_config,
+                 "debug": debug_config,
+                 "features": feature_flags,
+                 "feature_manual_barge_in": feature_flags["feature_manual_barge_in"],
+                 "barge_in_mode_manual": feature_flags["barge_in_mode_manual"],
+                 "auto_commit_when_ready": feature_flags["auto_commit_when_ready"],
++                "flow": flow_config,
+             }
+         }
+ 
+     @app.after_request
+     def maybe_allow_cors(resp):
+         allow = os.environ.get("CORS_ALLOW_ORIGINS", "")
+         if allow:
+             origins = [o.strip() for o in allow.split(",") if o.strip()]
+             ori = request.headers.get("Origin", "")
+             if ori in origins:
+                 resp.headers["Access-Control-Allow-Origin"] = ori
+                 resp.headers["Vary"] = "Origin"
+                 resp.headers["Access-Control-Allow-Credentials"] = "true"
+                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
+                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+         return resp
+ 
+     @app.route("/<path:_>", methods=["OPTIONS"])
+     def _cors_preflight(_):
+         return ("", 204)
+ 
+     @app.before_request
+     def _auth_gate():
+         p = request.path or "/"
+         allow = (
+diff --git a/app/admin_events.py b/app/admin_events.py
+index 712aa7eecf2c5ca4f8a0ef92784db7040f9727b5..9209dc3b77d2b6c0a4a289ee28dba266bb3f9c22 100644
+--- a/app/admin_events.py
++++ b/app/admin_events.py
+@@ -1,15 +1,22 @@
+ import threading
+ from queue import Queue
++
++from app.obs.source_tags import FLOW_SCHEMA_VERSION
+ class AdminEvents:
+     def __init__(self):
+         self._subs = []
+         self._lock = threading.Lock()
+     def subscribe(self):
+         q = Queue()
+         with self._lock:
+             self._subs.append(q)
+         return q
+     def emit(self, event, data):
++        payload = data
++        if isinstance(data, dict):
++            # Avoid mutating the caller's payload when we need to inject schema data.
++            payload = dict(data)
++            payload.setdefault("schema", FLOW_SCHEMA_VERSION)
+         for q in list(self._subs):
+-            q.put({"event": event, "data": data})
++            q.put({"event": event, "data": payload})
+ admin_events = AdminEvents()
 diff --git a/app/config.py b/app/config.py
-index 9549470c6d954761598fd174408baa9c28e32a43..6c5171b6f402540825a7cc2e31bd2f558a956033 100644
+index 6c5171b6f402540825a7cc2e31bd2f558a956033..90c72f6c8076d98d805dd4b96bc8b738723e4249 100644
 --- a/app/config.py
 +++ b/app/config.py
-@@ -2,69 +2,84 @@ import os
- from dataclasses import dataclass
- from typing import Optional
- 
- 
- def _optional_bool_from_env(name: str) -> Optional[bool]:
-     raw = os.getenv(name)
-     if raw is None:
-         return None
-     lowered = raw.strip().lower()
-     if lowered in ("1", "true", "yes", "on"):
-         return True
+@@ -13,73 +13,89 @@ def _optional_bool_from_env(name: str) -> Optional[bool]:
      if lowered in ("0", "false", "no", "off"):
          return False
      return None
@@ -28,23 +180,33 @@ index 9549470c6d954761598fd174408baa9c28e32a43..6c5171b6f402540825a7cc2e31bd2f55
      except (TypeError, ValueError):
          return default
  
-+
-+def _bool_from_env(default: bool, *names: str) -> bool:
-+    for name in names:
-+        raw = os.getenv(name)
-+        if raw is None:
-+            continue
-+        lowered = raw.strip().lower()
-+        return lowered not in ("0", "false", "no", "off")
+ 
+ def _bool_from_env(default: bool, *names: str) -> bool:
+     for name in names:
+         raw = os.getenv(name)
+         if raw is None:
+             continue
+         lowered = raw.strip().lower()
+         return lowered not in ("0", "false", "no", "off")
+     return default
+ 
+ 
++def _choice_from_env(name: str, default: str, options: set[str]) -> str:
++    raw = os.getenv(name)
++    if raw is None:
++        return default
++    lowered = raw.strip().lower()
++    if lowered in options:
++        return lowered
 +    return default
 +
 +
-+_ADVANCED_LOGGING_DEFAULT = _bool_from_env(
-+    True,
-+    "VOICE_ADVANCED_LOGGING_ENABLED",
-+    "ADVANCED_LOGGING_ENABLED",
-+)
-+
+ _ADVANCED_LOGGING_DEFAULT = _bool_from_env(
+     True,
+     "VOICE_ADVANCED_LOGGING_ENABLED",
+     "ADVANCED_LOGGING_ENABLED",
+ )
+ 
  @dataclass
  class Settings:
      admin_emails: str = os.getenv("ADMIN_EMAILS", "")
@@ -69,8 +231,7 @@ index 9549470c6d954761598fd174408baa9c28e32a43..6c5171b6f402540825a7cc2e31bd2f55
      enable_chip_foundation: bool = os.getenv("ENABLE_CHIP_FOUNDATION", "1").strip().lower() not in ("0", "false", "no")
      enable_policy_chips: bool = os.getenv("ENABLE_POLICY_CHIPS", "1").strip().lower() not in ("0", "false", "no")
      enable_nlu_logging: Optional[bool] = _optional_bool_from_env("ENABLE_NLU_LOGGING")
--    advanced_logging_enabled: bool = os.getenv("ADVANCED_LOGGING_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
-+    advanced_logging_enabled: bool = _ADVANCED_LOGGING_DEFAULT
+     advanced_logging_enabled: bool = _ADVANCED_LOGGING_DEFAULT
      suggestion_max: int = int(os.getenv("SUGGESTION_MAX", "4"))
      secret_key: str = os.getenv("SECRET_KEY", "dev-secret")
      session_type: str = os.getenv("SESSION_TYPE", "filesystem")
@@ -79,579 +240,274 @@ index 9549470c6d954761598fd174408baa9c28e32a43..6c5171b6f402540825a7cc2e31bd2f55
      vad_exit_threshold_db: float = _float_from_env("VAD_EXIT_THRESHOLD", 6.0)
      vad_tts_boost_db: float = _float_from_env("VAD_TTS_BOOST", 6.0)
      vad_min_speech_ms: int = int(os.getenv("VAD_MIN_SPEECH_MS", "360"))
++    flow_include_sources: bool = _bool_from_env(True, "FLOW_INCLUDE_SOURCES")
++    flow_evidence_detail: str = _choice_from_env(
++        "FLOW_EVIDENCE_DETAIL",
++        "minimal",
++        {"off", "minimal", "full"},
++    )
  
  def load_settings() -> Settings:
      return Settings()
  
  
--import os
--
  # Usage caps / rate limits (Phase 3)
  MAX_TURN_SEC = int(os.getenv("MAX_TURN_SEC", "30"))
  MAX_SESSION_MIN = int(os.getenv("MAX_SESSION_MIN", "15"))
  RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))  # requests per minute
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 177db05c55e48c1a8bd01bbff4b8e8c0715ba055..50419502c060ef71dadd7fd8c2cabf18b071607f 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -2088,65 +2088,74 @@ def _summarize_persona_trace(trace: Optional[Dict[str, Any]],
+diff --git a/app/flow/trace.py b/app/flow/trace.py
+index 1ddb78a2f0776574e4547f72af6eb72f3c1764cc..c478b808bd2782dcd110a881e262fb32b389aa35 100644
+--- a/app/flow/trace.py
++++ b/app/flow/trace.py
+@@ -1,39 +1,40 @@
+ from __future__ import annotations
  
-     quote_enabled_flag = quote_meta.get("enabled")
-     candidate_count = quote_meta.get("candidate_count")
-     try:
-         candidate_count_val = int(candidate_count)
-     except Exception:
-         candidate_count_val = 0
-     if quote_enabled_flag is False and (candidate_count_val or quote_meta.get("bank")):
-         guardrails.append("quote")
+ import copy
+ import gzip
+ import io
+ import json
+ import threading
+ import time
+ from collections import deque
+ from dataclasses import dataclass, field
+ from datetime import datetime, timezone
+ from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Set, Tuple
  
-     cfg_quote_enabled = _coerce_bool_flag(cfg.get("nebraska_quotes_enabled")) if isinstance(cfg, dict) else None
-     if cfg_quote_enabled is False:
-         guardrails.append("quote")
+ from app.admin_log import get_admin_log_history
++from app.obs.source_tags import FLOW_SCHEMA_VERSION
  
-     persona_elements = sorted({elem for elem in persona_elements if elem})
-     guardrails = sorted({g for g in guardrails if g})
+ MAX_EVENTS = 5000
+ DEDUP_WINDOW_MS = 100
+ ASR_PARTIAL_TYPE = "asr_partial_first"
+ BARGE_IN_TYPE = "barge_in"
+ BARGE_PAUSE_TYPES = {"barge_pause", "barge_hold"}
+ BARGE_RESUME_TYPE = "barge_resume"
+ TTS_START_TYPE = "tts_start"
+ TTS_END_TYPE = "tts_end"
+ LLM_START_TYPE = "llm_start"
+ LLM_FINAL_TYPE = "llm_final"
+ CONFIRM_OPEN_TYPE = "confirm_open"
+ CONFIRM_CLOSE_TYPE = "confirm_close"
  
-     return persona_level, persona_elements, guardrails
+ MAX_BATCH_ITEMS = 1000
+ MAX_BATCH_BYTES = 512 * 1024
+ FLOW_DROPPED_TYPE = "flow_dropped"
  
- 
- def _log_persona_applied(turn_id: str,
-                          trace: Optional[Dict[str, Any]],
-                          cfg: Optional[Dict[str, Any]],
-                          *,
-                          persona: Optional[Dict[str, Any]] = None,
--                         meta: Optional[Dict[str, Any]] = None) -> None:
-+                         meta: Optional[Dict[str, Any]] = None,
-+                         telemetry: Optional[NluLoggingContext] = None) -> None:
-     try:
-         persona_level, persona_elements, guardrails = _summarize_persona_trace(
-             trace,
-             cfg,
-             persona=persona,
-             meta=meta,
-         )
-         _jlog(
-             "persona_applied",
-             turn_id=str(turn_id),
-             persona_level=persona_level,
-             persona_elements=persona_elements,
-             guardrails_suppressed=guardrails,
-         )
-+        if telemetry:
-+            if guardrails:
-+                telemetry.log_guardrail(
-+                    decision="deny",
-+                    reason=",".join(str(item) for item in guardrails if item),
-+                )
-+            else:
-+                telemetry.log_guardrail(decision="allow")
-     except Exception:
-         pass
- 
- 
- def _foundation_backoff_active(now: Optional[float] = None) -> bool:
-     global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
-     if now is None:
-         now = _t.time()
-     with _FOUNDATION_FAILURE_LOCK:
-         if _FOUNDATION_DISABLED_UNTIL <= 0:
-             return False
-         if now >= _FOUNDATION_DISABLED_UNTIL:
-             _FOUNDATION_DISABLED_UNTIL = 0.0
-             _FOUNDATION_LAST_ERROR = None
-             return False
-         return True
- 
- 
- def _note_foundation_failure(exc: Optional[BaseException] = None,
-                              *,
-                              backoff_seconds: Optional[float] = None) -> None:
-     global _FOUNDATION_DISABLED_UNTIL, _FOUNDATION_LAST_ERROR
-     duration = _FOUNDATION_BACKOFF_SECONDS if backoff_seconds is None else float(backoff_seconds or 0.0)
-     now = _t.time()
-     with _FOUNDATION_FAILURE_LOCK:
-@@ -2486,50 +2495,51 @@ def _make_foundation_frames(seed_text: str,
- 
-     meta['show_suggestions'] = show_suggestions
-     meta[_DIALOG_SHOW_SUGGESTIONS_KEY] = show_suggestions
-     meta[_DIALOG_POLICY_KEY] = dict(policy)
- 
-     prompt_meta = dict(dialog_meta)
-     prompt_meta['intent'] = nlu_result.get('intent')
-     policy_action = _policy_action(policy)
-     if policy_action:
-         prompt_meta['teacher_move'] = policy_action
- 
-     examples = store.match_examples(persona['id'], seed_text)
-     messages, teacher_move, prompt_hash, persona_trace = build_messages(
-         persona=persona,
-         user_text=seed_text,
-         dialog_meta=prompt_meta,
-         examples=examples,
-     )
- 
-     _log_persona_applied(
-         turn_id,
-         persona_trace,
-         cfg,
-         persona=persona,
-         meta=meta,
-+        telemetry=telemetry,
-     )
- 
-     kb_count = 0
-     try:
-         kb_candidates = meta.get('kb_snippets') if isinstance(meta, dict) else None
-         if isinstance(kb_candidates, (list, tuple)):
-             kb_count = len(kb_candidates)
-     except Exception:
-         kb_count = 0
-     telemetry.log_prompt_summary(messages=messages, prompt_hash=prompt_hash, kb_count=kb_count)
- 
-     use_llm = True
-     llm_info: Dict[str, Any] = {}
-     if use_llm:
-         model_name = _resolve_foundation_model(cfg)
-         llm_tracker = make_llm_flow_tracker(
-             session_id,
-             phase=phase_label,
-             turn_id=turn_id,
-             model=model_name,
-         )
-         llm_tracker.start()
- 
-         def _llm_state_snapshot() -> Dict[str, Any]:
-             return {
-@@ -2788,50 +2798,51 @@ def _make_legacy_frames(seed_text: str,
-     if telemetry is None:
-         telemetry = _create_nlu_context(
-             turn_id=turn_id,
-             session_id=session_id,
-             correlation_user_msg_id=correlation_user_msg_id,
-             meta=meta,
-             settings=SETTINGS,
-             cfg=cfg,
-         )
-         telemetry.turn_id = turn_id
-         telemetry.log_start(seed_text, meta=meta)
-     else:
-         telemetry.turn_id = turn_id
- 
-     if labels is None:
-         labels = classify(seed_text, meta)
-     else:
-         labels = dict(labels)
-     telemetry.log_entities(labels.get("entities"))
-     _log_persona_applied(
-         turn_id,
-         persona_trace,
-         cfg,
-         persona=persona,
-         meta=meta,
-+        telemetry=telemetry,
-     )
-     if policy is None:
-         policy = pick_dialog_policy(labels) or {}
-     else:
-         policy = dict(policy or {})
- 
-     policy_summary = summarize_policy_metadata(policy)
-     if policy_summary and isinstance(meta, dict):
-         for key, value in policy_summary.items():
-             meta.setdefault(key, value)
- 
-     try:
-         if isinstance(meta, dict):
-             meta_nlu = meta.setdefault('nlu', {})
-             meta_nlu.update(labels)
-             dialog_nlu = meta.setdefault(_DIALOG_NLU_KEY, {})
-             try:
-                 dialog_nlu.update(labels)
-             except Exception:
-                 meta[_DIALOG_NLU_KEY] = dict(labels)
-     except Exception:
-         pass
-     policy_action = _policy_action(policy)
-     teacher_move = policy_action
- 
-@@ -3857,67 +3868,73 @@ def run_ws_greet(session_id: str) -> str:
-         if not suggestions_already_sent:
-             greet_legacy = hygienic_suggestions("")
-             base_suggestions = merge_suggestions(greet_legacy)
-             _log_suggestions_made(
-                 turn_id=tid,
-                 policy_chips=[],
-                 legacy_suggestions=greet_legacy,
-                 merged_suggestions=base_suggestions,
-                 cfg=cfg,
-                 session_id=session_id,
-             )
-             if base_suggestions:
-                 bus.broadcast(
-                     session_id,
-                     {"type": "suggestions", "turn_id": tid, "items": build_suggestion_items(base_suggestions)},
-                 )
-     except Exception:
-         pass
-     return tid
- 
- 
- def run_ws_user_turn(session_id: str,
-                      text: str,
-                      correlation_user_msg_id: Optional[str] = None,
-                      *,
--                     meta_overrides: Optional[Dict[str, Any]] = None) -> str:
-+                     meta_overrides: Optional[Dict[str, Any]] = None,
-+                     telemetry: Optional[NluLoggingContext] = None) -> str:
-     """
-     Produce assistant text for a user turn and schedule both text pacing and TTS.
-     Mirrors HTTP /api_v1/chat behavior for consistency.
-     """
-     nudges.cancel_idle_timers(session_id, mark=False)
-     meta = {"source": "user_ws", "channel": "ws"}
-     if isinstance(meta_overrides, dict):
-         for key, value in meta_overrides.items():
-             try:
-                 meta[key] = copy.deepcopy(value)
-             except Exception:
-                 meta[key] = value
- 
-     llm_started_at = _t.time()
--    tid, frames = make_assistant_frames(text, session_id, meta=meta,
--                                        correlation_user_msg_id=correlation_user_msg_id)
-+    tid, frames = make_assistant_frames(
-+        text,
-+        session_id,
-+        meta=meta,
-+        correlation_user_msg_id=correlation_user_msg_id,
-+        telemetry=telemetry,
-+    )
-     llm_elapsed_ms = int(max(0.0, (_t.time() - llm_started_at) * 1000))
-     if tid:
-         _diag_note_llm_latency(session_id, tid, llm_elapsed_ms, correlation_user_msg_id)
-     if _ws_generation_failed(tid, frames):
-         tid = _allocate_turn_id(force_turn_id=None)
-         frames = _emit_ws_outage(session_id, tid, correlation_user_msg_id=correlation_user_msg_id)
-         try:
-             _apply_assistant_turn_state(session_id, frames)
-         except Exception:
-             pass
-         outage_payload = {"session_id": session_id, "phase": 'turn'}
-         try:
-             _admin_emit('ws_pipeline_outage', **outage_payload)
-         except Exception:
-             pass
-         _broadcast_admin_ws_event('ws_pipeline_outage', outage_payload)
-         return tid
-     try:
-         _apply_assistant_turn_state(session_id, frames)
-     except Exception:
-         pass
-     existing_frame_types = [
-         fr.get("type")
-         for fr in frames
-         if isinstance(fr, dict) and fr.get("type") is not None
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 059e986c6e61dc9d013cd0575489d97f1a5586fc..9e1b3ab1dc17658141b36e05eb0198bd7e4ca093 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -730,61 +730,64 @@ class DeepgramClient:
-         self._turn_start_ts: float = 0.0
-         self._turn_first_partial_ts: float = 0.0
-         self._turn_final_ts: float = 0.0
-         self._turn_bytes_baseline: int = 0
-         self._turn_metrics_recorded: bool = False
-         self._turn_saw_1011: bool = False
-         self._turn_last_close_code: Optional[int] = None
-         self._turn_first_partial_emitted: bool = False
-         self._turn_final_emitted: bool = False
- 
-         # Deepgram feature toggles
-         self._desired_vad_state: bool = True
-         self._vad_events_enabled: bool = True
- 
-     def _diag_payload(self, **extra: Any) -> dict:
-         payload: dict[str, Any] = {"provider": "deepgram"}
-         if self._diag_session_id:
-             payload["session_id"] = self._diag_session_id
-         tag = self._url_tag or self._diag_tag_hint
-         if tag:
-             payload["tag"] = tag
-         payload.update(extra)
-         return payload
- 
-     def _emit_diag(self, label: str, **extra: Any) -> None:
--        hook = self._diag_hook
--        if not callable(hook):
--            return
-         payload = self._diag_payload(**extra)
--        try:
--            hook(label, **payload)
--        except TypeError:
-+        hook = self._diag_hook
-+        if callable(hook):
-             try:
--                hook(label, payload)
-+                hook(label, **payload)
-+            except TypeError:
-+                try:
-+                    hook(label, payload)
-+                except Exception:
-+                    pass
-             except Exception:
-                 pass
-+        try:
-+            _admin_emit("asr:diag", label=label, **dict(payload))
-         except Exception:
-             pass
- 
-     def _emit_transition_event(
-         self,
-         event: str,
+ # Simple static blurbs with light interpolation.
+ BLURBS: Dict[str, str] = {
+     CONFIRM_OPEN_TYPE: "Confirmation started",
+     CONFIRM_CLOSE_TYPE: "Confirmation closed",
+     BARGE_IN_TYPE: "Barge-in detected",
+     TTS_START_TYPE: "Assistant speech started",
+     TTS_END_TYPE: "Assistant speech ended",
+@@ -490,50 +491,51 @@ class FlowStore:
+         bucket: SessionBucket,
+         now: float,
          *,
-         code: Optional[object] = None,
-         path: Optional[object] = None,
+         level: str,
+         phase: str,
+         type_: str,
+         who: str,
+         meta: Dict[str, Any],
+         parent_id: Optional[str],
+         is_injection: bool,
+     ) -> EventRecord:
+         event_id = f"e_{bucket.seq:05d}"
+         bucket.seq += 1
+ 
+         t_rel_ms = int((now - bucket.t0_monotonic) * 1000)
+         blurb = self._build_blurb(type_, phase, who, meta)
+         payload: Dict[str, Any] = {
+             "id": event_id,
+             "t_rel_ms": t_rel_ms,
+             "level": level,
+             "phase": phase,
+             "type": type_,
+             "who": who,
+             "blurb": blurb,
+             "meta": meta,
++            "schema": FLOW_SCHEMA_VERSION,
+         }
+         if parent_id:
+             payload["parent_id"] = parent_id
+ 
+         record = EventRecord(data=payload, monotonic_ts=now)
+         self._append_event(bucket, record, record_drop=not is_injection)
+         if parent_id:
+             parent = bucket.event_index.get(parent_id)
+             if parent:
+                 parent.children_ids.append(event_id)
+         if not is_injection:
+             turn_id = self._extract_turn_id(meta)
+             key = (type_, who, turn_id)
+             bucket.dedupe[key] = (now, event_id)
+         self._event_sessions[event_id] = bucket.session_id
+         if not is_injection:
+             self._flush_drop_notices(bucket)
+         return record
+ 
+     def _append_event(
+         self, bucket: SessionBucket, record: EventRecord, *, record_drop: bool = True
      ) -> None:
-         sid = self._diag_session_id
-         if not sid or not event:
-             return
-         meta: dict[str, object] = {}
-         if code is not None:
-             try:
-                 meta["code"] = str(code)
-             except Exception:
-                 meta["code"] = "unknown"
-         if path is not None:
-             try:
-                 meta["path"] = str(path)
-             except Exception:
-                 meta["path"] = "unknown"
-         try:
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 88fa1db56556a4beef4594a5e8640b397b1b57a4..b8610c580538dff23691b6662c2565ba13f68141 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -10,50 +10,51 @@ from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple,
- from collections import deque, defaultdict
- from app.services.audio.container_sniffer import (
-     AudioContainerSniffer,
-     coerce_detection_from_meta,
- )
- 
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.config import load_settings
- from app.security.ws_token import verify as verify_ws_token
- from app.db import db
- from app.policy.loader import load_policy, load_policy_layers
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
- from app.flow.emit import add_batch, emit as flow_emit
-+from app.session_state import set_phase, should_emit_phase
- 
- # NEW: invoke LLM on final transcript
- from app.services.streaming import (
-     run_ws_user_turn,
-     prepare_turn_metadata,
-     note_turn_commit_latency,
-     emit_watchdog_user_end,
- )  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.confirm_window import ConfirmWindow
- from app.ws.bus import bus
- 
- # Optional admin emitter
- try:
-     from app.api_v1.admin import _emit as _admin_emit_base
- except Exception:
-     _admin_emit_base = None
+         if len(bucket.events) >= MAX_EVENTS:
+             old = bucket.events.popleft()
+             bucket.event_index.pop(old.data["id"], None)
+diff --git a/app/logging.py b/app/logging.py
+index 9ac53e786ab8657bebc22bbdd4921e98a2957e3d..43dd99f22ec5580b613a805f518211b085d59fb3 100644
+--- a/app/logging.py
++++ b/app/logging.py
+@@ -1,22 +1,28 @@
+ from .db import db
+ from .admin_events import admin_events
++from .obs.source_tags import FLOW_SCHEMA_VERSION
  
  
- def _broadcast_admin_frame(event: str, payload: Dict[str, Any]) -> None:
-     """Mirror admin diagnostic breadcrumbs onto the session bus."""
- 
+ def _emit_admin_log(message: str, email: str, role: str) -> None:
      try:
-         sid = payload.get("session_id") or payload.get("sid")
-@@ -3663,50 +3664,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             or last_user_final_text[0]
-             or last_partial_text[0]
-         )
+         from .admin_log import emit as admin_emit  # type: ignore
+     except Exception:
+         admin_emit = None
  
-         payload = make_results(turn_id, transcript=text, is_final=True)
-         payload["type"] = "Results"
-         await _ws_send_json(send, payload)
-         utterance_payload = make_utterance_end(turn_id)
-         utterance_payload["type"] = "UtteranceEnd"
-         await _ws_send_json(send, utterance_payload)
+     if callable(admin_emit):
+         try:
+             admin_emit("admin_log", email=email, role=role, message=message)
+         except Exception:
+             pass
  
-         with contextlib.suppress(Exception):
-             _jlog("ws_synthetic_final", sid=sid, turn_id=turn_id, reason=reason)
  
-         if _admin_emit:
-             final_payload: Dict[str, Any] = {
-                 "session_id": sid,
-                 "turn_id": turn_id,
-             }
-             if text:
-                 final_payload["text"] = text
-                 final_payload["text_preview"] = _clip_text(text)
-             with contextlib.suppress(Exception):
-                 _admin_emit("asr:final", **final_payload)
- 
-+        llm_scheduled = False
+ def admin_log(message: str, email: str = "system", role: str = "system"):
+-    payload = {"email": email, "role": role, "message": message}
++    payload = {
++        "email": email,
++        "role": role,
++        "message": message,
++        "schema": FLOW_SCHEMA_VERSION,
++    }
+     db.memory['logs'].append(payload)
+     admin_events.emit("audit", payload)
+     _emit_admin_log(message=message, email=email, role=role)
+diff --git a/app/obs/source_tags.py b/app/obs/source_tags.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c5113a2bc8bc110a5329d906a39bb0dd18c19bfd
+--- /dev/null
++++ b/app/obs/source_tags.py
+@@ -0,0 +1,119 @@
++"""Helpers for consistently tagging flow/admin events with sources and evidence."""
 +
-         if text:
-             dialog_nlu_pre: Dict[str, Any] = {}
-             universal_pre: Dict[str, Any] = {}
-             meta_stub = {"source": "user_ws", "channel": "ws"}
-             try:
-                 prepared_meta, dialog_nlu_raw, _ = prepare_turn_metadata(text, dict(meta_stub))
-                 if isinstance(dialog_nlu_raw, dict):
-                     dialog_nlu_pre = dict(dialog_nlu_raw)
-                 if isinstance(prepared_meta, dict):
-                     raw_universal = prepared_meta.get("universal") or {}
-                     if isinstance(raw_universal, dict):
-                         universal_pre = _ensure_universal_fields(raw_universal)
-             except Exception:
-                 dialog_nlu_pre = {}
-                 universal_pre = {}
- 
-             _emit_admin_nlu_event(
-                 text,
-                 sid,
-                 dialog_nlu=dialog_nlu_pre,
-                 universal=universal_pre,
-             )
- 
-             meta_overrides: Optional[Dict[str, Any]] = None
-             if dialog_nlu_pre or universal_pre:
-@@ -3715,58 +3718,82 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                     meta_overrides["nlu"] = dict(dialog_nlu_pre)
-                     meta_overrides["dialog_nlu"] = dict(dialog_nlu_pre)
-                 if universal_pre:
-                     meta_overrides["universal"] = dict(universal_pre)
- 
-             if turn_id not in completed_llm_turns:
-                 completed_llm_turns.add(turn_id)
- 
-                 async def _bg_turn(meta_payload=meta_overrides, final_text=text):
-                     try:
-                         await asyncio.to_thread(
-                             run_ws_user_turn,
-                             sid,
-                             final_text,
-                             None,
-                             meta_overrides=meta_payload,
-                         )
-                     except Exception as e:
-                         with contextlib.suppress(Exception):
-                             await _ws_send_json(
-                                 send,
-                                 make_error("llm_turn_fail", e.__class__.__name__),
-                             )
- 
-                 asyncio.create_task(_bg_turn())
-+                llm_scheduled = True
- 
-         _log_turn_finish(
-             turn_id,
-             reason=reason,
-             synthetic=True,
-             transcript_chars=len(text or ""),
-         )
-         completed_llm_turns.discard(turn_id)
++from __future__ import annotations
 +
-+        if not llm_scheduled:
-+            try:
-+                cancel_target: Optional[str] = None
-+                if turn_stream_committed[0] or (ws_configured and barge.is_paused()):
-+                    try:
-+                        cancel_target = bus.current_assistant_turn(sid)
-+                    except Exception:
-+                        cancel_target = None
-+                    if cancel_target:
-+                        with contextlib.suppress(Exception):
-+                            bus.cancel_turn(sid, cancel_target)
-+                if should_emit_phase(sid, "ready"):
-+                    set_phase(sid, "ready", emitted=True)
-+                    ready_payload = {"type": "state", "phase": "ready"}
-+                    await _ws_send_json(send, ready_payload)
-+                    with contextlib.suppress(Exception):
-+                        bus.broadcast(sid, dict(ready_payload))
-+                else:
-+                    set_phase(sid, "ready")
-+            except Exception:
-+                pass
++import json
++import time
++from typing import Any, Dict, Mapping, MutableMapping, Optional
 +
-         return True
- 
-     async def _ensure_dg_connected() -> bool:
-         nonlocal dg, rx_task, dg_connect_task, dg_state
- 
-         if not _has_deepgram_key():
-             with contextlib.suppress(Exception):
-                 _jlog("asr_connect_skip", sid=sid, reason="no_api_key")
-             return False
- 
-         if dg_state == "open" and dg is not None:
-             asr_ready[0] = True            
-             return True
- 
-         if dg_state == "connecting" and dg_connect_task is not None:
-             with contextlib.suppress(Exception):
-                 _jlog("asr_connect_wait", sid=sid, reason="existing_task")
-             with contextlib.suppress(Exception):
-                 await dg_connect_task
-             return dg_state == "open" and dg is not None
- 
-         connect_result = {"ok": False}
- 
-         async def _connect() -> None:
-             nonlocal dg, rx_task, dg_connect_task, dg_state, connect_result
-diff --git a/templates/admin_flow.html b/templates/admin_flow.html
-index 699f05d9d72ceda54c13bb0e9b89062c39cb2056..49fa7ad4e7860133f187b8e578a565cffb9089af 100644
---- a/templates/admin_flow.html
-+++ b/templates/admin_flow.html
-@@ -123,28 +123,31 @@
-           <div class="timeline-col rail" aria-hidden="true"></div>
-           <div class="timeline-col time">Time (ms)</div>
-           <div class="timeline-col phase">Phase</div>
-           <div class="timeline-col who">Who</div>
-           <div class="timeline-col type">Type</div>
-           <div class="timeline-col blurb">Blurb</div>
-           <div class="timeline-col meta">Meta</div>
-         </div>
-         <div class="timeline-body" id="flowTimeline" role="treegrid" aria-live="polite"></div>
-       </div>
-       <aside class="flow-drawer" id="flowDrawer" aria-live="polite" aria-hidden="true">
-         <div class="drawer-header">
-           <h2 id="flowDrawerTitle">Event</h2>
-           <div class="drawer-actions">
-             <button type="button" id="flowDrawerCopy" class="icon-btn" title="Copy JSON">⧉</button>
-             <button type="button" id="flowDrawerClose" class="icon-btn" title="Close">✕</button>
-           </div>
-         </div>
-         <div class="drawer-meta" id="flowDrawerMeta"></div>
-         <div class="drawer-related" id="flowDrawerRelated"></div>
-         <pre class="drawer-json" id="flowDrawerJson"></pre>
-       </aside>
-     </main>
-   </div>
- 
-+  <script>
-+    window.__FLOW_BREADCRUMBS_ENABLED = true;
-+  </script>
-   <script type="module" src="/static/js/admin_flow.js"></script>
- </body>
- </html>
++FLOW_SCHEMA_VERSION = "v2-source-tags"
++_MAX_EVIDENCE_BYTES = 400
++
++
++def now_ms() -> int:
++    """Return the current wall-clock time in milliseconds since the epoch."""
++
++    return int(time.time() * 1000)
++
++
++def ms_since(ts_ms: Optional[int]) -> Optional[int]:
++    """Return the number of milliseconds elapsed since ``ts_ms``.
++
++    ``None`` inputs or obviously invalid timestamps are ignored by returning ``None``.
++    ``ts_ms`` is assumed to be milliseconds since the epoch.
++    """
++
++    if ts_ms is None:
++        return None
++    try:
++        delta = now_ms() - int(ts_ms)
++    except (TypeError, ValueError, OverflowError):
++        return None
++    return max(delta, 0)
++
++
++def resolve_barge_origin(
++    manual_gate: bool,
++    client_vad_recent_ms: Optional[int],
++    asr_conf_recent: Optional[float],
++    policy_triggered: bool,
++) -> str:
++    """Resolve the barge-in origin string for downstream tagging.
++
++    Preference order is manual gate, server-side policy, client VAD activity, and
++    finally ASR evidence. The output is always one of the supported enumerations.
++    """
++
++    if manual_gate:
++        return "manual_ptt"
++    if policy_triggered:
++        return "server_policy"
++    if client_vad_recent_ms is not None and client_vad_recent_ms >= 0:
++        return "client_vad"
++    if asr_conf_recent is not None:
++        return "asr_evidence"
++    return "client_vad"
++
++
++def gate_snapshot(tts_active: bool, manual_gate: bool, vad_auto: bool) -> Dict[str, bool]:
++    """Return a normalized snapshot of relevant gate state."""
++
++    snapshot = {
++        "tts_active": bool(tts_active),
++        "manual_gate": bool(manual_gate),
++        "vad_auto": bool(vad_auto),
++    }
++    return snapshot
++
++
++def _encode_size_bytes(payload: Mapping[str, Any]) -> int:
++    try:
++        encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
++    except (TypeError, ValueError):
++        # Fall back to a conservative upper bound by stringifying the mapping.
++        encoded = str(payload)
++    return len(encoded.encode("utf-8", "ignore"))
++
++
++def clamp_evidence(evidence: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
++    """Return a copy of ``evidence`` constrained to ``_MAX_EVIDENCE_BYTES``.
++
++    Fields are added in a deterministic key order. Once the payload would exceed the
++    byte budget, remaining fields are dropped. Invalid inputs fall back to an empty
++    mapping to avoid raising.
++    """
++
++    if not evidence:
++        return {}
++    if not isinstance(evidence, Mapping):
++        return {}
++
++    trimmed: Dict[str, Any] = {}
++    for key in sorted(evidence.keys()):
++        value = evidence[key]
++        candidate: Dict[str, Any] = dict(trimmed)
++        candidate[key] = value
++        if _encode_size_bytes(candidate) <= _MAX_EVIDENCE_BYTES:
++            trimmed[key] = value
++        else:
++            continue
++    return trimmed
++
++
++def attach_evidence(target: MutableMapping[str, Any], evidence: Optional[Mapping[str, Any]]) -> None:
++    """Attach evidence to ``target`` in-place while respecting size constraints.
++
++    ``target`` is modified only when clamped evidence is non-empty. Errors during
++    processing are swallowed to honour the safety requirement of never throwing.
++    """
++
++    if not isinstance(target, MutableMapping):
++        return
++
++    try:
++        trimmed = clamp_evidence(evidence)
++        if trimmed:
++            target["evidence"] = trimmed
++    except Exception:
++        # Explicitly swallow unexpected errors to avoid breaking callers.
++        return

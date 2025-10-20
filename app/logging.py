@@ -1,5 +1,6 @@
 from .db import db
 from .admin_events import admin_events
+from .obs.source_tags import FLOW_SCHEMA_VERSION
 
 
 def _emit_admin_log(message: str, email: str, role: str) -> None:
@@ -16,7 +17,12 @@ def _emit_admin_log(message: str, email: str, role: str) -> None:
 
 
 def admin_log(message: str, email: str = "system", role: str = "system"):
-    payload = {"email": email, "role": role, "message": message}
+    payload = {
+        "email": email,
+        "role": role,
+        "message": message,
+        "schema": FLOW_SCHEMA_VERSION,
+    }
     db.memory['logs'].append(payload)
     admin_events.emit("audit", payload)
     _emit_admin_log(message=message, email=email, role=role)
