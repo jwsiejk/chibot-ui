@@ -4,7 +4,6 @@ import {
   ShadowBuffer,
   TtsMask,
   TurnState,
-  bufferPreRollFrame,
   flushShadowBuffer,
   getConfig,
 } from '../core/index.js';
@@ -22,14 +21,9 @@ import {
   policyAllowLocalVad,
   resolveSuppressionMode,
 } from '../utils/policy.js';
-import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
+import { getShadowStats } from '../loops/VadLoop.js';
 import { emitVoiceEvent } from '../ui/Events.js';
-import {
-  openWS,
-  waitWSOpen,
-  sendAudioChunk,
-  sendJSON,
-} from '../../ws_module.js';
+import { sendAudioChunk, sendJSON } from '../../ws_module.js';
 // Guarded CloseStream wrapper so we never kill the session before the first user turn.
 import { sendCloseStream as __sendCloseStream } from '../../ws.js';
 
@@ -914,7 +908,6 @@ const logPreCommitMode = (ctx, mode, extra = {}) => {
   });
 };
 
-const MASK_LOG_INTERVAL_MS = 180;
 const TTS_POST_PLAY_HOLD_MS = 180;
 const RMS_EPSILON = 1e-8;
 const MIC_GATE_TTS_REASON = 'tts_active';
@@ -1012,52 +1005,18 @@ const logReadyState = (ctx) => {
 };
 
 const stopMaskLogging = (ctx) => {
-  if (!ctx) return;
-  if (ctx.maskLogTimer) {
-    try { clearInterval(ctx.maskLogTimer); } catch {}
-  }
-  ctx.maskLogTimer = null;
-};
-
-const logMaskTick = (ctx) => {
-  if (!ctx) return;
-  const tsLocal = nowMs();
-  if (!ctx.ttsMask?.isMasked(tsLocal)) {
-    stopMaskLogging(ctx);
-    return;
-  }
-  const boost = ctx.ttsMask.snrBoost(tsLocal);
-  const decayUntil = ctx.ttsMask.decayUntil();
-  const remaining = Number.isFinite(decayUntil)
-    ? Math.max(0, Math.round(decayUntil - tsLocal))
-    : null;
-  const ts = Date.now();
-  voiceLog('info', '[mask] active', {
-    ts_ms: ts,
-    session_id: ctx.sessionId || null,
-    turn_id: ctx.state?.activeTurnId || null,
-    boost_db: Number.isFinite(boost) ? Number.parseFloat(boost.toFixed(2)) : null,
-    decay_remaining_ms: remaining,
-  });
+  const controller = ensureControllers(ctx).ttsMask;
+  controller?.stopLogging();
 };
 
 const startMaskLogging = (ctx) => {
-  if (!ctx) return;
-  if (!ctx.maskLogTimer) {
-    ctx.maskLogTimer = setInterval(() => {
-      logMaskTick(ctx);
-    }, MASK_LOG_INTERVAL_MS);
-  }
-  logMaskTick(ctx);
+  const controller = ensureControllers(ctx).ttsMask;
+  controller?.startLogging();
 };
 
 const resolveSnrBoost = (ctx, baseSnrDb = 3.5) => {
-  try {
-    const requirement = getEvidenceSnrRequirement(ctx.state, nowMs, baseSnrDb);
-    return Math.max(0, requirement - baseSnrDb);
-  } catch {
-    return 0;
-  }
+  const controller = ensureControllers(ctx).ttsMask;
+  return controller ? controller.resolveSnrBoost(baseSnrDb) : 0;
 };
 const TurnEvent = Object.freeze({
   Reset: 'reset',
@@ -1340,18 +1299,18 @@ function ensureControllers(ctx) {
   }
   const recorder = new RecorderController({
     ctx,
-    start: () => startRecorder(ctx),
-    stop: () => stopRecorder(ctx),
+    sendChunk: (blob, meta) => sendChunk(ctx, blob, meta),
+    logPreCommitMode: (mode, extra) => logPreCommitMode(ctx, mode, extra),
+    voiceLog,
+    constants: { PRE_ROLL_MS, MIN_VALID_BLOB_BYTES },
   });
-  const asr = new AsrController({
-    ctx,
-    ensureTransport: () => ensureTransport(ctx),
-    stopTransport: () => teardownTransport(ctx),
-  });
+  const asr = new AsrController({ ctx });
   const ttsMask = new TtsMaskController({
     ctx,
     engage: (reason) => engageMicGate(ctx, reason),
     release: (reason, opts = {}) => releaseMicGate(ctx, reason, opts),
+    voiceLog,
+    nowMs,
   });
   asr.onReady((detail) => {
     try { recorder.notifyAsrReady(detail); } catch {}
@@ -1690,34 +1649,10 @@ function registerWsListener(ctx) {
   ctx.wsListener = handler;
 }
 
-const ensureTransport = async (ctx) => {
-  if (ctx.transport.connected) {
-    return ctx.transport.wsPromise;
-  }
-  if (!ctx.transport.wsPromise) {
-    ctx.transport.wsPromise = openWS();
-  }
-  try {
-    const wsHandle = await waitWSOpen();
-    ctx.transport.connected = true;
-    ctx.state.wsReady = true;
-    return wsHandle;
-  } catch (err) {
-    ctx.transport.wsPromise = null;
-    ctx.transport.connected = false;
-    ctx.state.wsReady = false;
-    throw err;
-  }
-};
+const ensureTransport = (ctx) => ensureControllers(ctx).asr.ensureTransport();
 
 const teardownTransport = (ctx) => {
-  ctx.transport.connected = false;
-  ctx.state.wsReady = false;
-  ctx.transport.wsPromise = null;
-  if (ctx.transport.safetyTimer) {
-    try { clearTimeout(ctx.transport.safetyTimer); } catch {}
-    ctx.transport.safetyTimer = null;
-  }
+  ensureControllers(ctx).asr.teardownTransport();
 };
 const ensureAudioGraph = (ctx, stream) => {
   const audio = ctx.audio;
@@ -1763,86 +1698,6 @@ const ensureAudioGraph = (ctx, stream) => {
   try { audio.source.connect(audio.highpass); } catch {}
   ensureRmsLogger(ctx);
   connectMicPipeline(ctx, 'graph_init');
-};
-
-const startRecorder = (ctx) => {
-  const { audio } = ctx;
-  if (audio.recorder) return;
-  const recorderStream = audio.encoderStream || audio.stream;
-  if (!recorderStream) {
-    return;
-  }  
-  let mimeType = 'audio/webm; codecs=opus';
-  try {
-    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
-      && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
-      mimeType = 'audio/ogg; codecs=opus';
-    }
-  } catch {}
-  const recorder = new MediaRecorder(recorderStream, { mimeType });
-  recorder.addEventListener('dataavailable', (event) => handleRecorderData(ctx, event));
-  recorder.addEventListener('error', (event) => {
-    const detail = { message: event?.error?.message || 'unknown' };
-    emitVoiceEvent('recorder_error', detail);
-    ensureControllers(ctx).recorder.stop({ reason: 'recorder_error', detail });
-  });
-  recorder.start(audio.recTimeslice);
-  voiceLog('info', '[recorder] started', {
-    ts_ms: Date.now(),
-    session_id: ctx.sessionId || null,
-    mime_type: mimeType,
-    timeslice_ms: audio.recTimeslice,
-    source: audio.encoderDestination ? 'processor' : 'raw_stream',    
-  });
-  audio.recorder = recorder;
-  ctx.state.recording = true;
-};
-
-const stopRecorder = (ctx) => {
-  const { recorder } = ctx.audio;
-  if (!recorder) return;
-  try { if (recorder.state !== 'inactive') recorder.stop(); } catch {}
-  ctx.audio.recorder = null;
-  ctx.state.recording = false;
-};
-
-const handleRecorderData = (ctx, event) => {
-  const blob = event?.data;
-  if (!blob || typeof blob.size !== 'number' || blob.size < MIN_VALID_BLOB_BYTES) return;
-  const timecode = Number.isFinite(event?.timecode) ? event.timecode : null;
-  const { durationMs, nextTimecode } = bufferPreRollFrame({
-    shadowBuffer: ctx.shadowBuffer,
-    blob,
-    timecode,
-    timeslice: ctx.audio.recTimeslice,
-    fallbackMs: PRE_ROLL_MS,
-    lastTimecode: ctx.audio.lastTimecode,
-    onBuffered: ({ durationMs: dur, byteLength }) => {
-      ctx.evidenceGate.extendBuffer({ durationMs: dur, bytes: byteLength });
-    },
-  });
-  ctx.audio.lastTimecode = nextTimecode;
-  const feedMode = ctx.state.turnOpen
-    ? 'streaming'
-    : (ctx.state.preCommitASRFeed ? 'asr_priming' : 'shadow_only');
-  logPreCommitMode(ctx, feedMode, {
-    source: ctx.state.turnOpen ? 'turn_stream' : 'precommit_buffer',
-    chunk_bytes: blob.size,
-    duration_ms: durationMs,
-    timecode,
-  });
-  if (!ctx.state.turnOpen) {
-    if (ctx.state.preCommitASRFeed) {
-      try {
-        const maybePromise = sendAudioChunk(blob);
-        if (maybePromise && typeof maybePromise.catch === 'function') {
-          maybePromise.catch(() => {});
-        }
-      } catch {}
-    }
-    return;
-  }
-  if (ctx.state.turnOpen) sendChunk(ctx, blob, { durationMs });
 };
 
 const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {

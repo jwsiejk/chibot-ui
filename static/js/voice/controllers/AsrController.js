@@ -1,5 +1,7 @@
+// Moved from AdaptiveRuntime on 2025-10-20. No behavior change.
 import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
 import { emitVoiceEvent } from '../ui/Events.js';
+import { openWS, waitWSOpen } from '../../ws_module.js';
 
 function sanitizeDetail(detail = {}) {
   if (!detail || typeof detail !== 'object') {
@@ -10,10 +12,8 @@ function sanitizeDetail(detail = {}) {
 }
 
 export default class AsrController {
-  constructor({ ctx, ensureTransport, stopTransport } = {}) {
+  constructor({ ctx } = {}) {
     this.ctx = ctx;
-    this._ensureTransport = typeof ensureTransport === 'function' ? ensureTransport : null;
-    this._stopTransport = typeof stopTransport === 'function' ? stopTransport : null;
     this._readyCallbacks = new Set();
     this._stopCallbacks = new Set();
     this._active = false;
@@ -44,7 +44,7 @@ export default class AsrController {
       emitFlowBreadcrumb('asr:start', payload);
       emitVoiceEvent('asr_start', payload);
     }
-    const transportPromise = this._ensureTransport ? Promise.resolve(this._ensureTransport()) : Promise.resolve();
+    const transportPromise = Promise.resolve(this.ensureTransport());
     transportPromise
       .then(() => {
         if (this._startToken === token) {
@@ -123,9 +123,7 @@ export default class AsrController {
     if (ctxState.turnOpen || ctxState.recording) {
       return false;
     }
-    if (this._stopTransport) {
-      try { this._stopTransport(); } catch {}
-    }
+    try { this.teardownTransport(); } catch {}
     const alreadyIdle = !this._active && !this._ready;
     if (emit) {
       if (!alreadyIdle) {
@@ -140,5 +138,51 @@ export default class AsrController {
       }
     }
     return true;
+  }
+
+  async ensureTransport() {
+    const ctx = this.ctx;
+    if (!ctx) {
+      return null;
+    }
+    const transport = ctx.transport || {};
+    if (transport.connected) {
+      return transport.wsPromise;
+    }
+    if (!transport.wsPromise) {
+      transport.wsPromise = openWS();
+    }
+    try {
+      const wsHandle = await waitWSOpen();
+      transport.connected = true;
+      if (ctx.state) {
+        ctx.state.wsReady = true;
+      }
+      return wsHandle;
+    } catch (err) {
+      transport.wsPromise = null;
+      transport.connected = false;
+      if (ctx.state) {
+        ctx.state.wsReady = false;
+      }
+      throw err;
+    }
+  }
+
+  teardownTransport() {
+    const ctx = this.ctx;
+    if (!ctx) {
+      return;
+    }
+    const transport = ctx.transport || {};
+    transport.connected = false;
+    if (ctx.state) {
+      ctx.state.wsReady = false;
+    }
+    transport.wsPromise = null;
+    if (transport.safetyTimer) {
+      try { clearTimeout(transport.safetyTimer); } catch {}
+      transport.safetyTimer = null;
+    }
   }
 }

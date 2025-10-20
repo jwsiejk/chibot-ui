@@ -1,223 +1,1056 @@
-diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index 46ddf821223e173e15d48ff36ca157ad8f936e67..d37853f35b80c3d2039fa2bc961ce6236c6608ef 100644
---- a/static/js/bootstrap.js
-+++ b/static/js/bootstrap.js
-@@ -31,64 +31,53 @@ function _console(level, ...args) {
-     try {
-       const method = typeof console?.[level] === 'function' ? console[level] : console.log;
-       method?.apply(console, args);
-     } catch {}
-   });
+diff --git a/static/js/voice/controllers/AsrController.js b/static/js/voice/controllers/AsrController.js
+index 196efc9b4649f229788dce52b822782879f630ec..012b421dfdc6ecd58bf87c4dc1d771de6c6fe7d2 100644
+--- a/static/js/voice/controllers/AsrController.js
++++ b/static/js/voice/controllers/AsrController.js
+@@ -1,72 +1,72 @@
++// Moved from AdaptiveRuntime on 2025-10-20. No behavior change.
+ import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
+ import { emitVoiceEvent } from '../ui/Events.js';
++import { openWS, waitWSOpen } from '../../ws_module.js';
+ 
+ function sanitizeDetail(detail = {}) {
+   if (!detail || typeof detail !== 'object') {
+     return {};
+   }
+   const { emit, force, ...rest } = detail;
+   return { ...rest };
  }
  
- function _cfgValue(key, fallback) {
+ export default class AsrController {
+-  constructor({ ctx, ensureTransport, stopTransport } = {}) {
++  constructor({ ctx } = {}) {
+     this.ctx = ctx;
+-    this._ensureTransport = typeof ensureTransport === 'function' ? ensureTransport : null;
+-    this._stopTransport = typeof stopTransport === 'function' ? stopTransport : null;
+     this._readyCallbacks = new Set();
+     this._stopCallbacks = new Set();
+     this._active = false;
+     this._ready = false;
+     this._startToken = 0;
+     this._lastStartAt = 0;
+     this._lastReason = 'unknown';
+   }
+ 
+   get active() {
+     return this._active;
+   }
+ 
+   get ready() {
+     return this._ready;
+   }
+ 
+   async ensureStarted(options = {}) {
+     const { reason = 'unknown', emit = true, detail = {} } = options;
+     const token = ++this._startToken;
+     const reused = this._active && this._ready;
+     this._active = true;
+     this._ready = false;
+     this._lastStartAt = Date.now();
+     this._lastReason = reason;
+     if (emit) {
+       const payload = sanitizeDetail({ reason, reused, ...detail });
+       emitFlowBreadcrumb('asr:start', payload);
+       emitVoiceEvent('asr_start', payload);
+     }
+-    const transportPromise = this._ensureTransport ? Promise.resolve(this._ensureTransport()) : Promise.resolve();
++    const transportPromise = Promise.resolve(this.ensureTransport());
+     transportPromise
+       .then(() => {
+         if (this._startToken === token) {
+           this._handleReady({ reason, reused, emit, detail });
+         }
+       })
+       .catch(() => {});
+     return transportPromise;
+   }
+ 
+   _handleReady(meta = {}) {
+     const { reason = 'unknown', reused = false, emit = true, detail = {} } = meta;
+     this._ready = true;
+     const latencyMs = Math.max(0, Date.now() - this._lastStartAt);
+     const payload = sanitizeDetail({ reason, reused, latency_ms: latencyMs, ...detail });
+     if (emit) {
+       emitFlowBreadcrumb('asr:ready', payload);
+       emitVoiceEvent('asr_ready', payload);
+     }
+     for (const cb of this._readyCallbacks) {
+       try { cb(payload); } catch {}
+     }
+   }
+ 
+   onReady(cb) {
+@@ -101,44 +101,88 @@ export default class AsrController {
+   }
+ 
+   notifyFinal(detail = {}) {
+     const payload = sanitizeDetail(detail);
+     emitFlowBreadcrumb('asr:final', payload);
+     emitVoiceEvent('asr_final', payload);
+   }
+ 
+   notifyStop(detail = {}) {
+     const payload = sanitizeDetail(detail);
+     this._active = false;
+     this._ready = false;
+     emitFlowBreadcrumb('asr:stop', payload);
+     emitVoiceEvent('asr_stop', payload);
+     for (const cb of this._stopCallbacks) {
+       try { cb(payload); } catch {}
+     }
+   }
+ 
+   stopIfIdle(options = {}) {
+     const { reason = 'idle', emit = true, detail = {} } = options;
+     const ctxState = this.ctx?.state || {};
+     if (ctxState.turnOpen || ctxState.recording) {
+       return false;
+     }
+-    if (this._stopTransport) {
+-      try { this._stopTransport(); } catch {}
+-    }
++    try { this.teardownTransport(); } catch {}
+     const alreadyIdle = !this._active && !this._ready;
+     if (emit) {
+       if (!alreadyIdle) {
+         this.notifyStop({ reason, idle: true, ...detail });
+       }
+     } else if (!alreadyIdle) {
+       this._active = false;
+       this._ready = false;
+       const payload = sanitizeDetail({ reason, idle: true, ...detail });
+       for (const cb of this._stopCallbacks) {
+         try { cb(payload); } catch {}
+       }
+     }
+     return true;
+   }
++
++  async ensureTransport() {
++    const ctx = this.ctx;
++    if (!ctx) {
++      return null;
++    }
++    const transport = ctx.transport || {};
++    if (transport.connected) {
++      return transport.wsPromise;
++    }
++    if (!transport.wsPromise) {
++      transport.wsPromise = openWS();
++    }
++    try {
++      const wsHandle = await waitWSOpen();
++      transport.connected = true;
++      if (ctx.state) {
++        ctx.state.wsReady = true;
++      }
++      return wsHandle;
++    } catch (err) {
++      transport.wsPromise = null;
++      transport.connected = false;
++      if (ctx.state) {
++        ctx.state.wsReady = false;
++      }
++      throw err;
++    }
++  }
++
++  teardownTransport() {
++    const ctx = this.ctx;
++    if (!ctx) {
++      return;
++    }
++    const transport = ctx.transport || {};
++    transport.connected = false;
++    if (ctx.state) {
++      ctx.state.wsReady = false;
++    }
++    transport.wsPromise = null;
++    if (transport.safetyTimer) {
++      try { clearTimeout(transport.safetyTimer); } catch {}
++      transport.safetyTimer = null;
++    }
++  }
+ }
+diff --git a/static/js/voice/controllers/RecorderController.js b/static/js/voice/controllers/RecorderController.js
+index 5f6871db3a3b1e96fe92e4953dd84792909e1b9f..9f01994aa717a8319759b95936699f272a5ff784 100644
+--- a/static/js/voice/controllers/RecorderController.js
++++ b/static/js/voice/controllers/RecorderController.js
+@@ -1,94 +1,234 @@
++// Moved from AdaptiveRuntime on 2025-10-20. No behavior change.
+ import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
+ import { emitVoiceEvent } from '../ui/Events.js';
++import { bufferPreRollFrame } from '../core/index.js';
++import { sendAudioChunk } from '../../ws_module.js';
++
++const DEFAULT_PRE_ROLL_MS = 0;
++const DEFAULT_MIN_VALID_BLOB_BYTES = 1;
+ 
+ function sanitizeDetail(detail = {}) {
+   if (!detail || typeof detail !== 'object') {
+     return {};
+   }
+   const { force, ...rest } = detail;
+   return { ...rest };
+ }
+ 
+ export default class RecorderController {
+-  constructor({ ctx, start, stop } = {}) {
++  constructor({
++    ctx,
++    sendChunk,
++    logPreCommitMode,
++    voiceLog,
++    constants = {},
++  } = {}) {
+     this.ctx = ctx;
+-    this._startImpl = typeof start === 'function' ? start : null;
+-    this._stopImpl = typeof stop === 'function' ? stop : null;
++    this._sendChunk = typeof sendChunk === 'function' ? sendChunk : null;
++    this._logPreCommitMode = typeof logPreCommitMode === 'function' ? logPreCommitMode : null;
++    this._voiceLog = typeof voiceLog === 'function' ? voiceLog : null;
++    this._constants = {
++      PRE_ROLL_MS: Number.isFinite(constants.PRE_ROLL_MS) ? constants.PRE_ROLL_MS : DEFAULT_PRE_ROLL_MS,
++      MIN_VALID_BLOB_BYTES: Number.isFinite(constants.MIN_VALID_BLOB_BYTES)
++        ? constants.MIN_VALID_BLOB_BYTES
++        : DEFAULT_MIN_VALID_BLOB_BYTES,
++    };
+     this._active = false;
+     this._startToken = 0;
+     this._buffering = false;
+     this._ready = false;
+     this._lastStartAt = 0;
+   }
+ 
+   get active() {
+     return this._active;
+   }
+ 
+   get buffering() {
+     return this._buffering;
+   }
+ 
+   start(options = {}) {
+     const { reason = 'unknown', emit = true, detail = {} } = options;
+     const wasActive = this._active;
+     const token = ++this._startToken;
+     this._lastStartAt = Date.now();
+-    if (!this._active && this._startImpl) {
++    if (!this._active) {
+       try {
+-        this._startImpl();
++        this._startMediaRecorder();
+         this._active = true;
+       } catch (err) {
+         this._active = false;
+         throw err;
+       }
+     }
+     this._buffering = true;
+     this._ready = false;
+     if (emit) {
+       const payload = sanitizeDetail({ reason, reused: wasActive, ...detail });
+       emitFlowBreadcrumb('recorder:start', payload);
+       emitVoiceEvent('recorder_start', payload);
+     }
+     return { token, reused: wasActive };
+   }
+ 
+   stop(options = {}) {
+     const { reason = 'unknown', emit = true, detail = {} } = options;
+     const wasActive = this._active;
+-    if (this._stopImpl) {
+-      try {
+-        this._stopImpl();
+-      } catch {}
+-    }
++    this._stopMediaRecorder();
+     this._active = false;
+     this._buffering = false;
+     this._ready = false;
+     if (emit && wasActive) {
+       const payload = sanitizeDetail({ reason, ...detail });
+       emitFlowBreadcrumb('recorder:stop', payload);
+       emitVoiceEvent('recorder_stop', payload);
+     }
+     return wasActive;
+   }
+ 
+   notifyAsrReady(detail = {}) {
+     if (this._ready) {
+       return;
+     }
+     this._ready = true;
+     this._buffering = false;
+     const latencyMs = Math.max(0, Date.now() - this._lastStartAt);
+     const payload = sanitizeDetail({ ...detail, latency_ms: latencyMs });
+     emitFlowBreadcrumb('recorder:buffer_ready', payload);
+     emitVoiceEvent('recorder_buffer_ready', payload);
+   }
+ 
+   notifyAsrIdle(detail = {}) {
+     this._ready = false;
+     this._buffering = false;
+     const payload = sanitizeDetail({ ...detail });
+     emitFlowBreadcrumb('recorder:idle', payload);
+     emitVoiceEvent('recorder_idle', payload);
+   }
++
++  _startMediaRecorder() {
++    const ctx = this.ctx;
++    if (!ctx || !ctx.audio) {
++      return;
++    }
++    const { audio } = ctx;
++    if (audio.recorder) {
++      return;
++    }
++    const recorderStream = audio.encoderStream || audio.stream;
++    if (!recorderStream) {
++      return;
++    }
++    let mimeType = 'audio/webm; codecs=opus';
++    try {
++      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
++        && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
++        mimeType = 'audio/ogg; codecs=opus';
++      }
++    } catch {}
++    const recorder = new MediaRecorder(recorderStream, { mimeType });
++    recorder.addEventListener('dataavailable', (event) => {
++      this._handleRecorderData(event);
++    });
++    recorder.addEventListener('error', (event) => {
++      const detail = { message: event?.error?.message || 'unknown' };
++      emitVoiceEvent('recorder_error', detail);
++      this.stop({ reason: 'recorder_error', detail });
++    });
++    recorder.start(audio.recTimeslice);
++    this._log('info', '[recorder] started', {
++      ts_ms: Date.now(),
++      session_id: ctx.sessionId || null,
++      mime_type: mimeType,
++      timeslice_ms: audio.recTimeslice,
++      source: audio.encoderDestination ? 'processor' : 'raw_stream',
++    });
++    audio.recorder = recorder;
++    if (ctx.state) {
++      ctx.state.recording = true;
++    }
++  }
++
++  _stopMediaRecorder() {
++    const ctx = this.ctx;
++    if (!ctx || !ctx.audio) {
++      return;
++    }
++    const { audio } = ctx;
++    const { recorder } = audio;
++    if (!recorder) {
++      return;
++    }
++    try {
++      if (recorder.state !== 'inactive') {
++        recorder.stop();
++      }
++    } catch {}
++    audio.recorder = null;
++    if (ctx.state) {
++      ctx.state.recording = false;
++    }
++  }
++
++  _handleRecorderData(event) {
++    const ctx = this.ctx;
++    if (!ctx || !ctx.audio || !ctx.state) {
++      return;
++    }
++    const blob = event?.data;
++    if (!blob || typeof blob.size !== 'number'
++      || blob.size < this._constants.MIN_VALID_BLOB_BYTES) {
++      return;
++    }
++    const timecode = Number.isFinite(event?.timecode) ? event.timecode : null;
++    const { durationMs, nextTimecode } = bufferPreRollFrame({
++      shadowBuffer: ctx.shadowBuffer,
++      blob,
++      timecode,
++      timeslice: ctx.audio.recTimeslice,
++      fallbackMs: this._constants.PRE_ROLL_MS,
++      lastTimecode: ctx.audio.lastTimecode,
++      onBuffered: ({ durationMs: dur, byteLength }) => {
++        try {
++          ctx.evidenceGate.extendBuffer({ durationMs: dur, bytes: byteLength });
++        } catch {}
++      },
++    });
++    ctx.audio.lastTimecode = nextTimecode;
++    const feedMode = ctx.state.turnOpen
++      ? 'streaming'
++      : (ctx.state.preCommitASRFeed ? 'asr_priming' : 'shadow_only');
++    if (this._logPreCommitMode) {
++      this._logPreCommitMode(feedMode, {
++        source: ctx.state.turnOpen ? 'turn_stream' : 'precommit_buffer',
++        chunk_bytes: blob.size,
++        duration_ms: durationMs,
++        timecode,
++      });
++    }
++    if (!ctx.state.turnOpen) {
++      if (ctx.state.preCommitASRFeed) {
++        try {
++          const maybePromise = sendAudioChunk(blob);
++          if (maybePromise && typeof maybePromise.catch === 'function') {
++            maybePromise.catch(() => {});
++          }
++        } catch {}
++      }
++      return;
++    }
++    if (this._sendChunk) {
++      this._sendChunk(blob, { durationMs });
++    }
++  }
++
++  _log(level, message, payload) {
++    if (!this._voiceLog) {
++      return;
++    }
++    try {
++      this._voiceLog(level, message, payload);
++    } catch {}
++  }
+ }
+diff --git a/static/js/voice/controllers/TtsMaskController.js b/static/js/voice/controllers/TtsMaskController.js
+index 567ef9d2e4af33bc731de79a2749e7366a001ff9..9b80f5e0be878c4e26c1d16d40d4f5c5c2abb479 100644
+--- a/static/js/voice/controllers/TtsMaskController.js
++++ b/static/js/voice/controllers/TtsMaskController.js
+@@ -1,56 +1,131 @@
++// Moved from AdaptiveRuntime on 2025-10-20. No behavior change.
+ import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
+ import { emitVoiceEvent } from '../ui/Events.js';
++import { getEvidenceSnrRequirement } from '../loops/VadLoop.js';
++
++const MASK_LOG_INTERVAL_MS = 180;
+ 
+ function sanitizeDetail(detail = {}) {
+   if (!detail || typeof detail !== 'object') {
+     return {};
+   }
+   const { clearAll, force, ...rest } = detail;
+   return { ...rest };
+ }
+ 
+ export default class TtsMaskController {
+-  constructor({ ctx, engage, release } = {}) {
++  constructor({ ctx, engage, release, voiceLog, nowMs, getEvidenceSnrRequirement: snrRequirement } = {}) {
+     this.ctx = ctx;
+     this._engageImpl = typeof engage === 'function' ? engage : null;
+     this._releaseImpl = typeof release === 'function' ? release : null;
+     this._reasons = new Set();
++    this._voiceLog = typeof voiceLog === 'function' ? voiceLog : null;
++    this._nowMs = typeof nowMs === 'function' ? nowMs : (() => Date.now());
++    this._getEvidenceSnrRequirement = typeof snrRequirement === 'function'
++      ? snrRequirement
++      : getEvidenceSnrRequirement;
+   }
+ 
+   engage(reason = 'tts', detail = {}) {
+     const tag = reason || 'tts';
+     const wasActive = this._reasons.size > 0;
+     this._reasons.add(tag);
+     if (this._engageImpl) {
+       try { this._engageImpl(tag, detail); } catch {}
+     }
+     if (!wasActive) {
+       const payload = sanitizeDetail({ reason: tag, ...detail });
+       emitFlowBreadcrumb('tts_mask:on', payload);
+       emitVoiceEvent('tts_mask_on', payload);
+       emitFlowBreadcrumb('mic_gate:engaged', payload);
+       emitVoiceEvent('mic_gate_engaged', payload);
+     }
+   }
+ 
+   release(reason = 'tts', detail = {}) {
+     const tag = reason || 'tts';
+     const clearAll = detail && detail.clearAll;
+     const hadReasons = this._reasons.size > 0;
+     if (clearAll) {
+       this._reasons.clear();
+     } else {
+       this._reasons.delete(tag);
+     }
+     if (this._releaseImpl) {
+       try { this._releaseImpl(tag, detail); } catch {}
+     }
+     if (hadReasons && this._reasons.size === 0) {
+       const payload = sanitizeDetail({ reason: tag, ...detail });
+       emitFlowBreadcrumb('tts_mask:off', payload);
+       emitVoiceEvent('tts_mask_off', payload);
+       emitFlowBreadcrumb('mic_gate:released', payload);
+       emitVoiceEvent('mic_gate_released', payload);
+     }
+   }
++
++  startLogging() {
++    const ctx = this.ctx;
++    if (!ctx) {
++      return;
++    }
++    if (!ctx.maskLogTimer) {
++      ctx.maskLogTimer = setInterval(() => {
++        this._logMaskTick();
++      }, MASK_LOG_INTERVAL_MS);
++    }
++    this._logMaskTick();
++  }
++
++  stopLogging() {
++    const ctx = this.ctx;
++    if (!ctx) {
++      return;
++    }
++    if (ctx.maskLogTimer) {
++      try { clearInterval(ctx.maskLogTimer); } catch {}
++    }
++    ctx.maskLogTimer = null;
++  }
++
++  resolveSnrBoost(baseSnrDb = 3.5) {
++    try {
++      const requirement = this._getEvidenceSnrRequirement(this.ctx?.state, this._nowMs, baseSnrDb);
++      return Math.max(0, requirement - baseSnrDb);
++    } catch {
++      return 0;
++    }
++  }
++
++  _logMaskTick() {
++    const ctx = this.ctx;
++    if (!ctx) {
++      return;
++    }
++    const tsLocal = this._nowMs();
++    if (!ctx.ttsMask?.isMasked(tsLocal)) {
++      this.stopLogging();
++      return;
++    }
++    const boost = ctx.ttsMask.snrBoost(tsLocal);
++    const decayUntil = ctx.ttsMask.decayUntil();
++    const remaining = Number.isFinite(decayUntil)
++      ? Math.max(0, Math.round(decayUntil - tsLocal))
++      : null;
++    this._log('info', '[mask] active', {
++      ts_ms: Date.now(),
++      session_id: ctx.sessionId || null,
++      turn_id: ctx.state?.activeTurnId || null,
++      boost_db: Number.isFinite(boost) ? Number.parseFloat(boost.toFixed(2)) : null,
++      decay_remaining_ms: remaining,
++    });
++  }
++
++  _log(level, message, payload) {
++    if (!this._voiceLog) {
++      return;
++    }
++    try {
++      this._voiceLog(level, message, payload);
++    } catch {}
++  }
+ }
+diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
+index 924de5129099b2cbb22fd449c42d25c753458b71..3a022b1e6867e723a398ca7c859fce339d722b3d 100644
+--- a/static/js/voice/runtime/AdaptiveRuntime.js
++++ b/static/js/voice/runtime/AdaptiveRuntime.js
+@@ -1,57 +1,51 @@
+ console.log("[AdaptiveRuntime] build=2025-10-16T23:15Z");
+ import {
+   EvidenceGate,
+   ShadowBuffer,
+   TtsMask,
+   TurnState,
+-  bufferPreRollFrame,
+   flushShadowBuffer,
+   getConfig,
+ } from '../core/index.js';
+ import RecorderController from '../controllers/RecorderController.js';
+ import AsrController from '../controllers/AsrController.js';
+ import TtsMaskController from '../controllers/TtsMaskController.js';
+ import { ensurePolicy, getPolicySync, pget as policyGet, POLICY_NOT_SET } from '../policy/index.js';
+ import { ensureInteractionPolicy } from '../policy/InteractionPolicy.js';
+ import PolicyBus from '../policy/PolicyBus.js';
+ import { guardBargeInDispatch } from '../guards/VadGuard.js';
+ import { canOpenTurn as evidenceGateCanOpenTurn } from '../guards/EvidenceGateGuard.js';
+ import {
+   POLICY_SUPPRESS_ALL,
+   POLICY_SUPPRESS_NONE,
+   policyAllowLocalVad,
+   resolveSuppressionMode,
+ } from '../utils/policy.js';
+-import { getEvidenceSnrRequirement, getShadowStats } from '../loops/VadLoop.js';
++import { getShadowStats } from '../loops/VadLoop.js';
+ import { emitVoiceEvent } from '../ui/Events.js';
+-import {
+-  openWS,
+-  waitWSOpen,
+-  sendAudioChunk,
+-  sendJSON,
+-} from '../../ws_module.js';
++import { sendAudioChunk, sendJSON } from '../../ws_module.js';
+ // Guarded CloseStream wrapper so we never kill the session before the first user turn.
+ import { sendCloseStream as __sendCloseStream } from '../../ws.js';
+ 
+ function safeCloseStream(reason = '') {
    try {
-     const cfg = window.__askchip_config || {};
-     if (key in cfg) return cfg[key];
-     if (cfg.features && key in cfg.features) return cfg.features[key];
+     const opened = !!(globalThis.__askchip_has_opened_turn || globalThis.__askchip_turn_open);
+     if (!opened) {
+       console.debug('[voice] skip CloseStream (no user turn yet)', { reason });
+       return;
+     }
    } catch {}
-   return fallback;
+   __sendCloseStream();
  }
+ import { VAD } from '../vad.js';
+ import { stopPlayback, preparePlaybackElement } from '../../audio.js';
+ import { emitFlowBreadcrumb } from '../../flow_breadcrumbs.js';
+ import { logIfEnabled } from '../../util/logging.js';
+ import { getSID } from '../../util/sid.js';
  
- const manualState = {
-   button: null,
-   featureEnabled: !!_cfgValue('feature_manual_barge_in', true),
-   phase: 'ready',
-   pointerActive: false,
-   keyActive: false,
-   sessionActive: false,
+ const clamp01 = (value) => {
+   const num = Number(value);
+   if (!Number.isFinite(num)) {
+     return 0;
+   }
+   if (num <= 0) {
+@@ -892,51 +886,50 @@ const handleClientTtsStartTelemetry = async (ctx, frame) => {
+     rememberPlaybackElement(audioEl, ctx);
+   }
+   const turnId = frame?.turn_id != null ? frame.turn_id : null;
+   schedulePlaybackHeartbeat(ctx, turnId);
+   await resumeAudioContextForTts(ctx, turnId);
+   await attemptAudioPlay(ctx, turnId);
  };
  
--const TTS_REARM_DELAY_MS = 360; // ms delay before re-arming VAD after TTS completes
- let _lastMicStream = null;
- let _ttsHoldActive = false;
- let _ttsActiveTurnId = null;
--let _ttsRearmTimer = null;
--
--function _setVoiceMask(active) {
--  try {
--    const ctx = window.__askchip_voice_ctx;
--    if (ctx?.state) {
--      ctx.state.maskLocalBargeIn = !!active;
--    }
--  } catch {}
--}
- 
- function _updateManualButtonAvailability() {
-   const btn = manualState.button;
-   if (!btn) return;
-   if (!manualState.featureEnabled) {
-     btn.hidden = true;
-     btn.disabled = true;
+ const logPreCommitMode = (ctx, mode, extra = {}) => {
+   if (!ctx?.state) return;
+   const normalized = typeof mode === 'string' && mode ? mode : 'shadow_only';
+   const previous = ctx.state.lastPreCommitFeedMode;
+   if (previous === normalized) {
      return;
    }
-   btn.hidden = false;
-   const shouldEnable = manualState.sessionActive
-     && !manualState.pointerActive
-     && !manualState.keyActive;
-   btn.disabled = !shouldEnable;
- }
+   ctx.state.lastPreCommitFeedMode = normalized;
+   voiceLog('info', '[asr] pre-commit feed', {
+     ts_ms: Date.now(),
+     session_id: ctx.sessionId || null,
+     turn_id: ctx.state?.activeTurnId || null,
+     mode: normalized,
+     ...extra,
+   });
+ };
  
- function _setManualSessionActive(active) {
-   manualState.sessionActive = !!active;
-   _updateManualButtonAvailability();
- }
+-const MASK_LOG_INTERVAL_MS = 180;
+ const TTS_POST_PLAY_HOLD_MS = 180;
+ const RMS_EPSILON = 1e-8;
+ const MIC_GATE_TTS_REASON = 'tts_active';
+ const HPF_CUTOFF_HZ = 100;
+ const HPF_DEFAULT_Q = 0.707;
+ const RMS_IDLE_SAMPLE_MS = 250;
+ const RMS_IDLE_LOG_INTERVAL_MS = 2000;
+ const HYSTERESIS_OPEN_DB = -40;
+ const HYSTERESIS_CLOSE_DB = -46;
+ const HYSTERESIS_MIN_OPEN_MS = 200;
+ const RECORD_TIMESLICE_MS = 180;
+ const PRE_ROLL_DISCARD_MS = Math.max(120, Math.min(200, RECORD_TIMESLICE_MS));
+ const VAD_NOISE_SAMPLE_MS = 320;
+ const VAD_NOISE_SAMPLE_STEP_MS = 40;
+ const VAD_NOISE_DEADBAND_DB = 0.35;
+ const VAD_NOISE_DELTA_LIMIT_DB = 1.75;
+ const VAD_NOISE_SMOOTHING = 0.25;
+ const VAD_BASE_START_DB_OFFSET = 9;
+ const VAD_BASE_STOP_DB_OFFSET = 5;
  
- function _manualPhaseChanged(phase) {
-   manualState.phase = phase || 'ready';
-   _updateManualButtonAvailability();
- }
-@@ -264,81 +253,50 @@ function _handleMicVadFailure(err, { startBtn = null, endBtn = null } = {}) {
-   } catch {}
-   try { Visualizer.stop({ reset: true }); } catch {}
-   _disableButtons();
-   const resolvedStartBtn = startBtn || $('#startButton');
-   const resolvedEndBtn   = endBtn   || $('#endButton');
-   if (resolvedEndBtn) resolvedEndBtn.disabled = true;
-   if (resolvedStartBtn) resolvedStartBtn.disabled = false;
-   setDot('ready');
-   started = false;
-   try { window.__askchip_session_started = false; } catch {}
-   try { closeWS(1000, 'mic_unavailable'); } catch {}
-   startInFlight = false;
- }
+ const updateVadBoost = (ctx, boostDb) => {
+   if (!ctx?.state) return;
+   const clamped = clampRange(boostDb, -3, 3);
+   ctx.state.vadBoostDb = clamped;
+   if (ctx?.audio?.vad?.opts) {
+@@ -990,96 +983,62 @@ const setManualGate = (ctx, active) => {
+   if (value) {
+     clearPostTtsRearm(ctx);
+     ctx.state.vadShouldRearmAfterTts = false;
+     ctx.state.vadSuppressedForTts = false;
+     ctx.state.pendingVadOpts = null;
+   }
+ };
  
- function _ensureVoiceCtxLoaded() {
-   if (typeof window === 'undefined') return;
-   if (window.__askchip_voice_ctx != null) return;
-   import('./voice/runtime/AdaptiveRuntime.js')
-     .then((mod) => {
-       const ctx = mod?.__TEST_ONLY__?.getCtx?.();
-       if (ctx) window.__askchip_voice_ctx = ctx;
-     })
-     .catch(() => {});
- }
+ const logReadyState = (ctx) => {
+   if (!ctx || !ctx.state) return;
+   const tsLocal = nowMs();
+   const last = Number.isFinite(ctx.state.lastReadyLogAt) ? ctx.state.lastReadyLogAt : 0;
+   if (tsLocal - last < 25) {
+     return;
+   }
+   ctx.state.lastReadyLogAt = tsLocal;
+   const ts = Date.now();
+   voiceLog('info', "state { phase:'ready' }", {
+     ts_ms: ts,
+     session_id: ctx.sessionId || null,
+     turn_id: ctx.state.activeTurnId || null,
+   });
+ };
  
--function _cancelTtsRearmTimer() {
--  if (_ttsRearmTimer) {
--    try { clearTimeout(_ttsRearmTimer); } catch {}
--    _ttsRearmTimer = null;
+ const stopMaskLogging = (ctx) => {
+-  if (!ctx) return;
+-  if (ctx.maskLogTimer) {
+-    try { clearInterval(ctx.maskLogTimer); } catch {}
 -  }
--}
+-  ctx.maskLogTimer = null;
+-};
 -
--function _startTtsRearmTimer(delayMs = TTS_REARM_DELAY_MS, trigger = 'UtteranceEnd') {
--  _cancelTtsRearmTimer();
--  const waitMs = Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : TTS_REARM_DELAY_MS;  
--  _ttsRearmTimer = setTimeout(() => {
--    _ttsRearmTimer = null;
--    if (_ttsHoldActive) return;
--    try {
--      _console('log', `[bootstrap] VAD re-arming after TTS (trigger=${trigger})`);
--    } catch {}
--    armVAD(_lastMicStream ?? undefined)
--      .then(() => {
--        _ensureVoiceCtxLoaded();
--        try { _console('log', '[bootstrap] VAD armed — ready for user audio'); } catch {}
--      })
--      .catch((err) => {
--        try { _console('warn', '[bootstrap] VAD re-arm failed after TTS', err); } catch {}
--      });
--  }, waitMs);
--}
--
--function _scheduleVadRearmAfterTts(trigger = 'UtteranceEnd') {
--  _startTtsRearmTimer(TTS_REARM_DELAY_MS, trigger);
--}
--
- function wireWSEventsOnce(){
-   if (window.__askchip_ws_wired) return;
-   window.__askchip_ws_wired = true;
+-const logMaskTick = (ctx) => {
+-  if (!ctx) return;
+-  const tsLocal = nowMs();
+-  if (!ctx.ttsMask?.isMasked(tsLocal)) {
+-    stopMaskLogging(ctx);
+-    return;
+-  }
+-  const boost = ctx.ttsMask.snrBoost(tsLocal);
+-  const decayUntil = ctx.ttsMask.decayUntil();
+-  const remaining = Number.isFinite(decayUntil)
+-    ? Math.max(0, Math.round(decayUntil - tsLocal))
+-    : null;
+-  const ts = Date.now();
+-  voiceLog('info', '[mask] active', {
+-    ts_ms: ts,
+-    session_id: ctx.sessionId || null,
+-    turn_id: ctx.state?.activeTurnId || null,
+-    boost_db: Number.isFinite(boost) ? Number.parseFloat(boost.toFixed(2)) : null,
+-    decay_remaining_ms: remaining,
+-  });
++  const controller = ensureControllers(ctx).ttsMask;
++  controller?.stopLogging();
+ };
  
-   const normalizeCloseCode = (detail = {}) => {
-     if (!detail || typeof detail !== 'object') return null;
-     const raw = detail.code;
-     if (Number.isFinite(raw)) return raw;
-     if (typeof raw === 'string' && raw.trim()) {
-       const parsed = Number.parseInt(raw, 10);
-       return Number.isFinite(parsed) ? parsed : null;
+ const startMaskLogging = (ctx) => {
+-  if (!ctx) return;
+-  if (!ctx.maskLogTimer) {
+-    ctx.maskLogTimer = setInterval(() => {
+-      logMaskTick(ctx);
+-    }, MASK_LOG_INTERVAL_MS);
+-  }
+-  logMaskTick(ctx);
++  const controller = ensureControllers(ctx).ttsMask;
++  controller?.startLogging();
+ };
+ 
+ const resolveSnrBoost = (ctx, baseSnrDb = 3.5) => {
+-  try {
+-    const requirement = getEvidenceSnrRequirement(ctx.state, nowMs, baseSnrDb);
+-    return Math.max(0, requirement - baseSnrDb);
+-  } catch {
+-    return 0;
+-  }
++  const controller = ensureControllers(ctx).ttsMask;
++  return controller ? controller.resolveSnrBoost(baseSnrDb) : 0;
+ };
+ const TurnEvent = Object.freeze({
+   Reset: 'reset',
+   VadArmed: 'vad_armed',
+   SpeechStart: 'speech_start',
+   SpeechEnd: 'speech_end',
+   CommitStarted: 'commit_started',
+   TurnClosed: 'turn_closed',
+   TtsStarted: 'tts_started',
+   TtsEnded: 'tts_ended',
+   Ready: 'ready',
+ });
+ 
+ const applyTurnState = (ctx, stateName, detail = {}) => {
+   if (!ctx?.state) return stateName;
+   const previous = ctx.state.turnState || TurnState.Idle;
+   if (previous === stateName) {
+     return stateName;
+   }
+   ctx.state.turnState = stateName;
+   const ts = Date.now();
+   const reason = typeof detail?.reason === 'string' && detail.reason
+     ? detail.reason
+     : null;
+   const payload = {
+@@ -1318,62 +1277,62 @@ const ensureCtx = () => {
+ 
+   registerTtsListener(ctx);
+   registerWsListener(ctx);
+   ctx.ttsEndedAtMs = 0;
+   ctxRef.current = ctx;
+   ensureControllers(ctx);
+   try {
+     if (typeof window !== 'undefined') {
+       window.__askchip_voice_ctx = ctx;
      }
-     return null;
-   };
+   } catch (err) {
+     console.warn('[AdaptiveRuntime] unable to attach __askchip_voice_ctx', err);
+   }
+   return ctx;
+ };
  
-   const describeWsClose = (detail = {}) => {
-     const reason = typeof detail?.reason === 'string' ? detail.reason.trim() : '';
-     if (reason) return reason;
-     if (detail?.wasClean === true) return 'clean close';
-     const code = normalizeCloseCode(detail);
-     if (code === 1000 || code === 1001) return 'normal closure';
-     if (code === 1006) return 'network disconnect';
-     if (code === 1012) return 'service restart';
-     if (code === 1013) return 'service overload';
-     if (code === 1014) return 'bad gateway';
-@@ -348,71 +306,67 @@ function wireWSEventsOnce(){
+ function ensureControllers(ctx) {
+   if (!ctx) {
+     return {};
+   }
+   if (ctx.controllers) {
+     return ctx.controllers;
+   }
+   const recorder = new RecorderController({
+     ctx,
+-    start: () => startRecorder(ctx),
+-    stop: () => stopRecorder(ctx),
+-  });
+-  const asr = new AsrController({
+-    ctx,
+-    ensureTransport: () => ensureTransport(ctx),
+-    stopTransport: () => teardownTransport(ctx),
++    sendChunk: (blob, meta) => sendChunk(ctx, blob, meta),
++    logPreCommitMode: (mode, extra) => logPreCommitMode(ctx, mode, extra),
++    voiceLog,
++    constants: { PRE_ROLL_MS, MIN_VALID_BLOB_BYTES },
+   });
++  const asr = new AsrController({ ctx });
+   const ttsMask = new TtsMaskController({
+     ctx,
+     engage: (reason) => engageMicGate(ctx, reason),
+     release: (reason, opts = {}) => releaseMicGate(ctx, reason, opts),
++    voiceLog,
++    nowMs,
+   });
+   asr.onReady((detail) => {
+     try { recorder.notifyAsrReady(detail); } catch {}
+   });
+   asr.onStop((detail) => {
+     try { recorder.notifyAsrIdle(detail); } catch {}
+   });
+   ctx.controllers = { recorder, asr, ttsMask };
+   return ctx.controllers;
+ }
  
-   const isExpectedAbnormalClose = (detail = {}) => {
-     if (!detail || typeof detail !== 'object') return false;
-     if (detail.wasClean === true) return true;
-     if (detail.reconnectScheduled) return true;
-     const code = normalizeCloseCode(detail);
-     if (code === 1006) return true;
-     if (code === 1012 || code === 1013) return true;
-     return false;
-   };
- 
-   // Log first few frames to verify payload shape
-   let seen = 0;
-   const loggedTypes = new Set();
-   logWsListenerAttach('askchip-ws', 'bootstrap-wire');
-   window.addEventListener('askchip-ws', (ev) => {
-     const d = ev.detail || {};
-     const t = d.type || '';
-     const normalizedType = typeof t === 'string' ? t : '';
-     const frameTurnId = d && d.turn_id != null ? String(d.turn_id) : null;
- 
-     if (normalizedType === 'TTS_START' || normalizedType === 'assistant_audio' || normalizedType === 'tts:start') {
-       if (!_ttsHoldActive) {
-         _ttsHoldActive = true;
-         _ttsActiveTurnId = frameTurnId;
--        _cancelTtsRearmTimer();
-         try {
-           disarmVAD();
-           _console('log', '[bootstrap] VAD disarmed while TTS is active');
-         } catch (err) {
-           try { _console('warn', '[bootstrap] VAD disarm failed during TTS', err); } catch {}
-         }
-       } else if (!_ttsActiveTurnId && frameTurnId) {
-         _ttsActiveTurnId = frameTurnId;
+ const registerTtsListener = (ctx) => {
+   if (ctx.ttsListenerRegistered) return;
+   ctx.ttsListenerRegistered = true;
+   const win = typeof window !== 'undefined' ? window : null;
+   const listener = (ev) => {
+     const { detail } = ev || {};
+     const handled = applyTtsState(ctx, detail?.state, detail);
+     if (handled && normalizeVadLabel(detail?.state) === 'ended') {
+       try {
+         ctx.state.vadBoostDb = Math.max(0, (ctx.state.vadBoostDb ?? 0) - 3);
+         setTimeout(() => {
+           try {
+             ctx.state.vadBoostDb = 0;
+           } catch {}
+@@ -1668,205 +1627,101 @@ function handleWsFrame(ctx, frame) {
+   if (type === 'utteranceend' || event === 'utteranceend') {
+     const asrState = ensureAsrState(ctx);
+     asrState.speaking = false;
+     if (!Number.isFinite(asrState.lastActivityTs) || asrState.lastActivityTs <= 0) {
+       asrState.lastActivityTs = nowMs();
+     }
+     if (dualVadEnabled(ctx)) {
+       if (!attemptCloseWithReason(ctx, 'utterance_end', 'utterance_end')) {
+         scheduleDualVadTimer(ctx);
        }
--      _setVoiceMask(true);      
      }
+   }
+ }
  
-     if (normalizedType === 'UtteranceEnd' || normalizedType === 'utteranceend') {
-       const idsMatch =
-         !_ttsActiveTurnId || !frameTurnId || String(frameTurnId) === String(_ttsActiveTurnId);
-       if (_ttsHoldActive && idsMatch) {
-         _ttsHoldActive = false;
-         _ttsActiveTurnId = null;
--        _startTtsRearmTimer(280, 'UtteranceEnd');
--        _setVoiceMask(false);
-       }
+ function registerWsListener(ctx) {
+   if (!ctx || ctx.wsListenerRegistered) return;
+   const win = typeof window !== 'undefined' ? window : null;
+   const handler = (ev) => {
+     try { handleWsFrame(ctx, ev?.detail); } catch {}
+   };
+   try { win?.addEventListener?.('askchip-ws', handler, { passive: true }); } catch {}
+   ctx.wsListenerRegistered = true;
+   ctx.wsListener = handler;
+ }
+ 
+-const ensureTransport = async (ctx) => {
+-  if (ctx.transport.connected) {
+-    return ctx.transport.wsPromise;
+-  }
+-  if (!ctx.transport.wsPromise) {
+-    ctx.transport.wsPromise = openWS();
+-  }
+-  try {
+-    const wsHandle = await waitWSOpen();
+-    ctx.transport.connected = true;
+-    ctx.state.wsReady = true;
+-    return wsHandle;
+-  } catch (err) {
+-    ctx.transport.wsPromise = null;
+-    ctx.transport.connected = false;
+-    ctx.state.wsReady = false;
+-    throw err;
+-  }
+-};
++const ensureTransport = (ctx) => ensureControllers(ctx).asr.ensureTransport();
+ 
+ const teardownTransport = (ctx) => {
+-  ctx.transport.connected = false;
+-  ctx.state.wsReady = false;
+-  ctx.transport.wsPromise = null;
+-  if (ctx.transport.safetyTimer) {
+-    try { clearTimeout(ctx.transport.safetyTimer); } catch {}
+-    ctx.transport.safetyTimer = null;
+-  }
++  ensureControllers(ctx).asr.teardownTransport();
+ };
+ const ensureAudioGraph = (ctx, stream) => {
+   const audio = ctx.audio;
+   const AudioCtx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
+   if (!AudioCtx) throw new Error('AudioContext not supported');
+   if (!stream) {
+     return;
+   }
+   audio.stream = stream;
+   if (!audio.context) {
+     audio.context = new AudioCtx();
+   }
+   attachMicAudioCtxBreadcrumb(audio.context, 'mic_capture');
+   try {
+     if (typeof audio.context?.resume === 'function') {
+       audio.context.resume().catch(() => {});
      }
- 
-     if (seen < 5 || (!loggedTypes.has(t) && loggedTypes.size < 12)) {
-       try { _console('log', '[WS→UI]', JSON.stringify(d)); } catch {}
-       seen++;
-       if (t) loggedTypes.add(t);
+   } catch {}
+   try {
+     if (audio.context?.state === 'suspended' && typeof audio.context.resume === 'function') {
+       audio.context.resume().catch(() => {});
      }
+   } catch {}
+   if (!audio.analyser) {
+     audio.analyser = audio.context.createAnalyser();
+     audio.analyser.fftSize = 2048;
+     audio.analyser.smoothingTimeConstant = 0.4;
+   }
+   if (!audio.highpass) {
+     audio.highpass = audio.context.createBiquadFilter();
+     audio.highpass.type = 'highpass';
+     try { audio.highpass.frequency.value = HPF_CUTOFF_HZ; } catch {}
+     try { audio.highpass.Q.value = HPF_DEFAULT_Q; } catch {}
+   }
+   if (!audio.encoderDestination) {
+     audio.encoderDestination = audio.context.createMediaStreamDestination();
+     audio.encoderStream = audio.encoderDestination.stream;
+   }
+   if (audio.source) {
+     try { audio.source.disconnect(); } catch {}
+   }
+   audio.source = audio.context.createMediaStreamSource(stream);
+   try { audio.source.connect(audio.highpass); } catch {}
+   ensureRmsLogger(ctx);
+   connectMicPipeline(ctx, 'graph_init');
+ };
  
-     // Lightweight state dot hints (no UI regressions)
-     if (t === 'assistant_audio') setDot('speaking');
-     if (t === 'assistant_audio') _manualPhaseChanged('speaking');
-     if (t === 'UtteranceEnd')    setDot('ready');
-     if (t === 'UtteranceEnd')    _manualPhaseChanged('ready');
-     if (t === 'ready')           _manualPhaseChanged('ready');
-     if (t === 'state' && d.phase) {
-       if (d.phase === 'ready')    setDot('ready');
-       if (d.phase === 'thinking') setDot('thinking');
-       if (d.phase === 'speaking') setDot('speaking');
-       if (d.phase === 'listening')setDot('listening');
-       _manualPhaseChanged(String(d.phase));
-     }
+-const startRecorder = (ctx) => {
+-  const { audio } = ctx;
+-  if (audio.recorder) return;
+-  const recorderStream = audio.encoderStream || audio.stream;
+-  if (!recorderStream) {
+-    return;
+-  }  
+-  let mimeType = 'audio/webm; codecs=opus';
+-  try {
+-    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
+-      && MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
+-      mimeType = 'audio/ogg; codecs=opus';
+-    }
+-  } catch {}
+-  const recorder = new MediaRecorder(recorderStream, { mimeType });
+-  recorder.addEventListener('dataavailable', (event) => handleRecorderData(ctx, event));
+-  recorder.addEventListener('error', (event) => {
+-    const detail = { message: event?.error?.message || 'unknown' };
+-    emitVoiceEvent('recorder_error', detail);
+-    ensureControllers(ctx).recorder.stop({ reason: 'recorder_error', detail });
+-  });
+-  recorder.start(audio.recTimeslice);
+-  voiceLog('info', '[recorder] started', {
+-    ts_ms: Date.now(),
+-    session_id: ctx.sessionId || null,
+-    mime_type: mimeType,
+-    timeslice_ms: audio.recTimeslice,
+-    source: audio.encoderDestination ? 'processor' : 'raw_stream',    
+-  });
+-  audio.recorder = recorder;
+-  ctx.state.recording = true;
+-};
+-
+-const stopRecorder = (ctx) => {
+-  const { recorder } = ctx.audio;
+-  if (!recorder) return;
+-  try { if (recorder.state !== 'inactive') recorder.stop(); } catch {}
+-  ctx.audio.recorder = null;
+-  ctx.state.recording = false;
+-};
+-
+-const handleRecorderData = (ctx, event) => {
+-  const blob = event?.data;
+-  if (!blob || typeof blob.size !== 'number' || blob.size < MIN_VALID_BLOB_BYTES) return;
+-  const timecode = Number.isFinite(event?.timecode) ? event.timecode : null;
+-  const { durationMs, nextTimecode } = bufferPreRollFrame({
+-    shadowBuffer: ctx.shadowBuffer,
+-    blob,
+-    timecode,
+-    timeslice: ctx.audio.recTimeslice,
+-    fallbackMs: PRE_ROLL_MS,
+-    lastTimecode: ctx.audio.lastTimecode,
+-    onBuffered: ({ durationMs: dur, byteLength }) => {
+-      ctx.evidenceGate.extendBuffer({ durationMs: dur, bytes: byteLength });
+-    },
+-  });
+-  ctx.audio.lastTimecode = nextTimecode;
+-  const feedMode = ctx.state.turnOpen
+-    ? 'streaming'
+-    : (ctx.state.preCommitASRFeed ? 'asr_priming' : 'shadow_only');
+-  logPreCommitMode(ctx, feedMode, {
+-    source: ctx.state.turnOpen ? 'turn_stream' : 'precommit_buffer',
+-    chunk_bytes: blob.size,
+-    duration_ms: durationMs,
+-    timecode,
+-  });
+-  if (!ctx.state.turnOpen) {
+-    if (ctx.state.preCommitASRFeed) {
+-      try {
+-        const maybePromise = sendAudioChunk(blob);
+-        if (maybePromise && typeof maybePromise.catch === 'function') {
+-          maybePromise.catch(() => {});
+-        }
+-      } catch {}
+-    }
+-    return;
+-  }
+-  if (ctx.state.turnOpen) sendChunk(ctx, blob, { durationMs });
+-};
+-
+ const sendChunk = (ctx, blob, { durationMs = 0 } = {}) => {
+   if (!blob) {
+     return;
+   }
+   const tsNow = nowMs();
+   sendAudioChunk(blob);
+   ctx.state.lastChunkAt = tsNow;
+   ctx.state.lastUserAudioMs = tsNow;
+   ctx.evidenceGate.extendBuffer({ durationMs });
+   scheduleSafetyClose(ctx);
+ };
  
-     // De-dupe assistant text frames so greet can't double-render
-     if (_isAssistantTextFrame(d)) {
+ const scheduleSafetyClose = (ctx) => {
+   if (ctx.transport.safetyTimer) { try { clearTimeout(ctx.transport.safetyTimer); } catch {} }
+   ctx.transport.safetyTimer = null;
+   if (!ctx.state.hasOpenedTurn || ctx.state.manualGate) {
+     return;
+   }
+   ctx.transport.safetyTimer = setTimeout(() => {
+     if (!ctx.state.turnOpen) return;
+     safeCloseStream('adaptive');
+     ctx.state.turnOpen = false;
+     teardownTransport(ctx);
+   }, SAFETY_CLOSE_DELAY_MS);
+ };
