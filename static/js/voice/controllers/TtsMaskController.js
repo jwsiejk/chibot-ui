@@ -4,6 +4,18 @@ import { emitVoiceEvent } from '../ui/Events.js';
 import { getEvidenceSnrRequirement } from '../loops/VadLoop.js';
 
 const MASK_LOG_INTERVAL_MS = 180;
+const MASK_DECAY_MIN_MS = 0;
+const MASK_DECAY_MAX_MS = 600;
+
+export function clampMaskDecayMs(value, { min = MASK_DECAY_MIN_MS, max = MASK_DECAY_MAX_MS } = {}) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  const lowerBound = Number.isFinite(min) ? Math.max(MASK_DECAY_MIN_MS, min) : MASK_DECAY_MIN_MS;
+  const maxCandidate = Number.isFinite(max) && max > 0 ? max : MASK_DECAY_MAX_MS;
+  const upperBound = Math.min(MASK_DECAY_MAX_MS, Math.max(lowerBound || 0, maxCandidate));
+  return Math.min(upperBound, Math.max(lowerBound, value));
+}
 
 function sanitizeDetail(detail = {}) {
   if (!detail || typeof detail !== 'object') {
@@ -24,6 +36,20 @@ export default class TtsMaskController {
     this._getEvidenceSnrRequirement = typeof snrRequirement === 'function'
       ? snrRequirement
       : getEvidenceSnrRequirement;
+  }
+
+  clampDecayMs(value) {
+    const overrides = {};
+    const floor = this.ctx?.config?.tts?.mask_decay_floor_ms;
+    if (Number.isFinite(floor)) {
+      overrides.min = Math.max(MASK_DECAY_MIN_MS, floor);
+    }
+    const ceiling = this.ctx?.config?.tts?.mask_decay_ceiling_ms;
+    if (Number.isFinite(ceiling)) {
+      const min = overrides.min ?? MASK_DECAY_MIN_MS;
+      overrides.max = Math.max(min || 0, ceiling);
+    }
+    return clampMaskDecayMs(value, overrides);
   }
 
   engage(reason = 'tts', detail = {}) {

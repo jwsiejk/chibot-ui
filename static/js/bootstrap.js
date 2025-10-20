@@ -8,6 +8,8 @@ import { getSID } from '/static/js/util/sid.js';
 import * as App from '/static/js/app.js';
 import * as Visualizer from '/static/js/visualizer.js';
 import { logIfEnabled } from '/static/js/util/logging.js';
+import PolicyBus from '/static/js/voice/policy/PolicyBus.js';
+import { ensureInteractionPolicy as ensureInteractionPolicySnapshot } from '/static/js/voice/policy/InteractionPolicy.js';
 
 // /static/js/bootstrap.js — single owner of Start/End/Send + audio unlock + WS→UI wiring
 
@@ -35,18 +37,11 @@ function _console(level, ...args) {
   });
 }
 
-function _cfgValue(key, fallback) {
-  try {
-    const cfg = window.__askchip_config || {};
-    if (key in cfg) return cfg[key];
-    if (cfg.features && key in cfg.features) return cfg.features[key];
-  } catch {}
-  return fallback;
-}
-
 const manualState = {
   button: null,
-  featureEnabled: !!_cfgValue('feature_manual_barge_in', true),
+  featureEnabled: false,
+  allowAutoVad: true,
+  autoCommitAllowed: false,
   phase: 'ready',
   pointerActive: false,
   keyActive: false,
@@ -56,6 +51,29 @@ const manualState = {
 let _lastMicStream = null;
 let _ttsHoldActive = false;
 let _ttsActiveTurnId = null;
+
+function _applyInteractionPolicySnapshot(policy) {
+  const normalized = ensureInteractionPolicySnapshot(policy || {});
+  manualState.featureEnabled = normalized.allow_ptt_barge === true;
+  manualState.allowAutoVad = normalized.allow_auto_vad === true;
+  manualState.autoCommitAllowed = normalized.auto_commit_when_ready === true;
+  _updateManualButtonAvailability();
+}
+
+try {
+  const existingPolicy = PolicyBus.getPolicy();
+  if (existingPolicy) {
+    _applyInteractionPolicySnapshot(existingPolicy);
+  }
+} catch {}
+
+PolicyBus.on('policy', (policy) => {
+  try {
+    _applyInteractionPolicySnapshot(policy);
+  } catch (err) {
+    _console('warn', '[bootstrap] policy sync failed', err);
+  }
+});
 
 function _updateManualButtonAvailability() {
   const btn = manualState.button;
@@ -485,8 +503,7 @@ async function startOnce(){
   const endBtn   = $('#endButton');
 
   try{
-    const manualFeatureEnabled = !!_cfgValue('feature_manual_barge_in', true);
-    manualState.featureEnabled = manualFeatureEnabled;
+    const manualFeatureEnabled = manualState.featureEnabled;
     _updateManualButtonAvailability();
     if (startBtn) startBtn.disabled = true;
 
@@ -514,8 +531,8 @@ async function startOnce(){
     //    audio hardware comes online.
     const sid = getSID();
     try {
-      const manualMode = !!_cfgValue('barge_in_mode_manual', false);
-      const autoCommit = !!_cfgValue('auto_commit_when_ready', true);
+      const manualMode = !manualState.allowAutoVad;
+      const autoCommit = manualState.autoCommitAllowed;
       _console('log', '[bootstrap] startOnce sending greet configure');
       configure({
         greet: true,
@@ -624,12 +641,10 @@ function wireUI(){
   manualState.button = document.getElementById('pttButton');
 
   if (manualState.button) {
-    if (!manualState.featureEnabled) {
-      manualState.button.hidden = true;
-      manualState.button.disabled = true;
-    } else {
-      manualState.button.hidden = false;
-      manualState.button.disabled = true;
+    manualState.button.hidden = !manualState.featureEnabled;
+    manualState.button.disabled = true;
+    const dataset = manualState.button.dataset || {};
+    if (!dataset.askchipManualListenersAttached) {
       manualState.button.addEventListener('mousedown', _manualPointerDown);
       manualState.button.addEventListener('mouseup', _manualPointerUp);
       manualState.button.addEventListener('mouseleave', _manualPointerUp);
@@ -638,6 +653,9 @@ function wireUI(){
       manualState.button.addEventListener('touchcancel', (ev) => _manualPointerUp(ev));
       manualState.button.addEventListener('keydown', _manualKeyDown);
       manualState.button.addEventListener('keyup', _manualKeyUp);
+      try {
+        manualState.button.dataset.askchipManualListenersAttached = '1';
+      } catch {}
     }
   }
 

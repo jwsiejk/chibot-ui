@@ -1549,6 +1549,29 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     auto_commit_requires_dual = False
     auto_commit_requires_asr_ready = False
 
+    def _interaction_policy_idle_snapshot() -> Dict[str, Any]:
+        allow_ptt = bool(manual_feature_enabled and barge_allow_ptt)
+        allow_auto = bool(local_vad_allowed and not manual_mode_manual_only)
+        return interaction_policy_idle(
+            auto_commit_when_ready=bool(auto_commit_when_ready),
+            allow_ptt_barge=allow_ptt,
+            allow_auto_vad=allow_auto,
+        )
+
+    def _interaction_policy_tts_snapshot() -> Dict[str, Any]:
+        allow_ptt = bool(manual_feature_enabled and barge_allow_ptt)
+        return interaction_policy_tts(
+            auto_commit_when_ready=bool(auto_commit_when_ready),
+            allow_ptt_barge=allow_ptt,
+        )
+
+    def _reapply_interaction_policy() -> None:
+        mode = current_interaction_policy_mode[0] or ""
+        if mode == "manual_only_during_tts":
+            _push_interaction_policy(_interaction_policy_tts_snapshot())
+        else:
+            _push_interaction_policy(_interaction_policy_idle_snapshot())
+
     if not flow_session_open_emitted:
         meta = {"policy_version": policy_version}
         try:
@@ -1771,7 +1794,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     try:
         await _ws_send_json(send, {"type": "ready", "session_id": sid})
-        _push_interaction_policy(interaction_policy_idle())
+        _push_interaction_policy(_interaction_policy_idle_snapshot())
     except Exception as ex:
         detail = str(ex).strip() or "initial ready failed"
         with contextlib.suppress(Exception):
@@ -1893,6 +1916,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         post_hold_value = barge_policy.get("post_tts_hold_ms")
         if isinstance(post_hold_value, (int, float)):
             barge_post_tts_hold_ms = max(0, int(post_hold_value))
+
+    _reapply_interaction_policy()
 
     _jlog(
         "voice_runtime_config",
@@ -3040,7 +3065,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             snr_slack_db=confirm_snr_slack_db,
             snr_enabled=True,
         )
-        _push_interaction_policy(interaction_policy_tts())
+        _push_interaction_policy(_interaction_policy_tts_snapshot())
         try:
             setattr(window, "policy_until_asr_ready", policy_until_asr_ready)
         except Exception:
@@ -3166,7 +3191,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if previously_active:
             _maybe_start_pending_confirm()
         _schedule_vad_state(True, "idle")
-        _push_interaction_policy(interaction_policy_idle())
+        _push_interaction_policy(_interaction_policy_idle_snapshot())
 
     async def _await_tts_mask_release(delay_ms: int, turn_id: Any) -> None:
         try:
@@ -3428,7 +3453,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             
     def _on_assistant_tts_start(turn_id: Any) -> None:
         assistant_speaking[0] = True
-        _push_interaction_policy(interaction_policy_tts())
+        _push_interaction_policy(_interaction_policy_tts_snapshot())
         mode = (barge_suppress_mode or "none").strip() or "none"
         mask_engaged = mode != "none"
         tts_mask_mode[0] = mode
@@ -5206,7 +5231,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             phase="ptt",
                                         )
                                     ptt_down_emitted[0] = False
-                                    _push_interaction_policy(interaction_policy_idle())
+                                _push_interaction_policy(_interaction_policy_idle_snapshot())
                                 continue
                             continue
 
@@ -5222,6 +5247,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 auto_commit_when_ready = bool(
                                     cfg.get("auto_commit_when_ready", auto_commit_when_ready)
                                 )
+                                _reapply_interaction_policy()
                                 ws_configured = True
                                 _jlog(
                                     "ws_configure",

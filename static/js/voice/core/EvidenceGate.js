@@ -12,7 +12,7 @@ const DEFAULT_EVIDENCE_PARAMS = {
   w2: 0.3,
   w3: 0.2,
   threshold: 1.0,
-  asrInstantOpen: 0.7,
+  asrInstantOpen: 0.6,
 };
 
 const clampFinite = (value, fallback) => (Number.isFinite(value) ? value : fallback);
@@ -205,7 +205,7 @@ export class EvidenceGate {
       const threshold = Number.isFinite(asrCue.threshold)
         ? asrCue.threshold
         : (this.config.asrConf ?? 0.65);
-      const delta = Number.isFinite(asrCue.delta) ? asrCue.delta : 0.05;
+      const delta = Number.isFinite(asrCue.delta) ? asrCue.delta : 0.04;
       if (confidence !== null) {
         if (this.partialConfidence === null || !Number.isFinite(this.partialConfidence)) {
           this.partialConfidence = confidence;

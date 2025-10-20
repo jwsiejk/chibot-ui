@@ -22,6 +22,7 @@ const DEFAULT_CONFIG = {
   tts: {
     mask_auto_vad: true,
     decay_ms: 700,
+    mask_decay_ms: 450,
   },
   evidence: {
     snr_sigma: 2.5,
@@ -34,7 +35,7 @@ const DEFAULT_CONFIG = {
     w_voiced: 0.2,
     w_asr: 0.6,
     commit_score: 1.0,
-    asrInstantOpen: 0.7,
+    asrInstantOpen: 0.6,
   },
   shadow: {
     ms: 450,
@@ -47,8 +48,8 @@ const DEFAULT_CONFIG = {
   dual_vad: {
     enabled: true,
     commit_conf: 0.6,
-    asr_stale_ms: 800,
-    close_quiet_ms: 700,
+    asr_stale_ms: 720,
+    close_quiet_ms: 760,
   },
   transport: {
     close_on_turn_end: false,
@@ -85,6 +86,7 @@ export function getConfig() {
     tts: {
       mask_auto_vad: source.tts?.mask_auto_vad ?? DEFAULT_CONFIG.tts.mask_auto_vad,
       decay_ms: source.tts?.decay_ms ?? DEFAULT_CONFIG.tts.decay_ms,
+      mask_decay_ms: source.tts?.mask_decay_ms ?? DEFAULT_CONFIG.tts.mask_decay_ms,
     },
     evidence: {
       snr_sigma: source.evidence?.snr_sigma ?? DEFAULT_CONFIG.evidence.snr_sigma,

@@ -9,7 +9,7 @@ import {
 } from '../core/index.js';
 import RecorderController from '../controllers/RecorderController.js';
 import AsrController from '../controllers/AsrController.js';
-import TtsMaskController from '../controllers/TtsMaskController.js';
+import TtsMaskController, { clampMaskDecayMs } from '../controllers/TtsMaskController.js';
 import { ensurePolicy, getPolicySync, pget as policyGet, POLICY_NOT_SET } from '../policy/index.js';
 import { ensureInteractionPolicy } from '../policy/InteractionPolicy.js';
 import PolicyBus from '../policy/PolicyBus.js';
@@ -518,7 +518,8 @@ const dualVadDebugEnabled = (ctx) => ctx?.config?.debug?.vad === true;
 
 const asrStaleMs = (ctx) => {
   const raw = ctx?.config?.dual_vad?.asr_stale_ms;
-  return Number.isFinite(raw) && raw > 0 ? raw : 800;
+  const value = Number.isFinite(raw) && raw > 0 ? raw : FALLBACK_ASR_STALE_MS;
+  return clampRange(value, 600, 800);
 };
 
 const commitConfidenceThreshold = (ctx) => {
@@ -528,7 +529,8 @@ const commitConfidenceThreshold = (ctx) => {
 
 const quietCloseMs = (ctx) => {
   const raw = ctx?.config?.dual_vad?.close_quiet_ms;
-  return Number.isFinite(raw) && raw >= 0 ? raw : 700;
+  const value = Number.isFinite(raw) && raw >= 0 ? raw : FALLBACK_QUIET_CLOSE_MS;
+  return clampRange(value, 600, 900);
 };
 
 const lastAsrActivity = (asr) => {
@@ -909,6 +911,8 @@ const logPreCommitMode = (ctx, mode, extra = {}) => {
 };
 
 const TTS_POST_PLAY_HOLD_MS = 180;
+const FALLBACK_ASR_STALE_MS = 720;
+const FALLBACK_QUIET_CLOSE_MS = 760;
 const RMS_EPSILON = 1e-8;
 const MIC_GATE_TTS_REASON = 'tts_active';
 const HPF_CUTOFF_HZ = 100;
@@ -951,7 +955,14 @@ const resolvePostTtsHoldMs = (ctx) => {
   const policyHold = policyGet('voice_runtime.barge_in.post_tts_hold_ms', POLICY_NOT_SET);
   if (policyHold !== POLICY_NOT_SET && Number.isFinite(policyHold)) {
     const numeric = Math.max(0, Number(policyHold));
-    return numeric;
+    const controller = ctx?.controllers?.ttsMask;
+    if (controller?.clampDecayMs) {
+      return controller.clampDecayMs(numeric);
+    }
+    return clampMaskDecayMs(numeric, {
+      min: ctx?.config?.tts?.mask_decay_floor_ms,
+      max: ctx?.config?.tts?.mask_decay_ceiling_ms,
+    });
   }
   const cfg = ctx?.config?.tts ?? {};
   let value;
@@ -970,7 +981,14 @@ const resolvePostTtsHoldMs = (ctx) => {
   if (value <= 0) {
     return 0;
   }
-  return value;
+  const controller = ctx?.controllers?.ttsMask;
+  if (controller?.clampDecayMs) {
+    return controller.clampDecayMs(value);
+  }
+  return clampMaskDecayMs(value, {
+    min: ctx?.config?.tts?.mask_decay_floor_ms,
+    max: ctx?.config?.tts?.mask_decay_ceiling_ms,
+  });
 };
 
 const setManualGate = (ctx, active) => {
@@ -1171,13 +1189,22 @@ const markReady = (ctx, reason = 'ready', opts = {}) => {
 };
 
 const isTtsMaskActive = (ctx) => {
-  if (!ctx?.state) {
+  if (!ctx) {
     return false;
   }
-  const decayRaw = ctx.config?.tts?.mask_decay_ms ?? 200;
-  const decay = Math.min(200, Math.max(0, Number.isFinite(decayRaw) ? decayRaw : 200)); // keep ≤ 200ms
-  const endedAt = ctx.ttsEndedAtMs ?? 0;
-  return !!(ctx.state.ttsPlaying || (endedAt && (nowMs() - endedAt) < decay));
+  if (ctx.state?.ttsPlaying) {
+    return true;
+  }
+  try {
+    if (ctx.ttsMask?.isMasked?.()) {
+      return true;
+    }
+    const until = ctx.ttsMask?.decayUntil?.();
+    if (Number.isFinite(until)) {
+      return nowMs() < until;
+    }
+  } catch {}
+  return false;
 };
 
 const ensureCtx = () => {

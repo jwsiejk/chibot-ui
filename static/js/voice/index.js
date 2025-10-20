@@ -76,6 +76,12 @@ export function validateConfig(config) {
     label: 'tts.decay_ms',
   });
 
+  clampNumber(result.tts, 'mask_decay_ms', {
+    min: 0,
+    fallback: DEFAULT_CONFIG.tts.mask_decay_ms,
+    label: 'tts.mask_decay_ms',
+  });
+
   clampNumber(result.shadow, 'ms', {
     min: 0,
     fallback: DEFAULT_CONFIG.shadow.ms,
