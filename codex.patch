@@ -1,88 +1,676 @@
-diff --git a/static/js/voice/core/Config.js b/static/js/voice/core/Config.js
-index 733a9616e5bb2c49281107cd666086a365a1f695..f007eff4cac9f7f14d57840090ff5c85721dc01f 100644
---- a/static/js/voice/core/Config.js
-+++ b/static/js/voice/core/Config.js
-@@ -1,29 +1,26 @@
- const DEFAULT_CONFIG = {
--  barge_in: {
--    mode: 'manual_only',
--  },
-   debug: {
-     vad: true,
-   },
-   admin: {
-     voice_metrics_panel: true,
-   },
-   metrics: {
-     client_enabled: true,
-     server_enabled: true,
-   },
-   vad: {
-     enabled: true,
-     hysteresis: {
-       enter: 3,
-       exit: 4,
+diff --git a/app/admin_log.py b/app/admin_log.py
+index 0e4fdb1d7805ddfe9562ff2e987c103cb38fdda8..4a72fa832704830e1137af9b72bb766450f6d785 100644
+--- a/app/admin_log.py
++++ b/app/admin_log.py
+@@ -56,50 +56,51 @@ def _normalize_turn_id(value: Any) -> str | None:
+         return None
+     try:
+         text = str(value).strip()
+     except Exception:  # pragma: no cover - extremely defensive
+         return None
+     return text or None
+ 
+ 
+ def _coerce_event(payload: Mapping[str, Any]) -> HistoryItem:
+     data: HistoryItem = dict(payload)
+ 
+     event_name = data.get("event") or data.get("kind") or data.get("label")
+     if not isinstance(event_name, str) or not event_name.strip():
+         event_name = "log"
+     event_name = event_name.strip()
+     data["event"] = event_name
+     data.setdefault("kind", event_name)
+ 
+     preserve_text_events = {
+         "barge_decision",
+         "asr_vad_state",
+         "ptt_open",
+         "ptt_close",
+         "vad_arm",
+         "session_force_end",
++        "policy:applied",
+     }
+     preserve_text_prefixes = ("client_audio_",)
+     preserve_text = event_name in preserve_text_events or any(
+         event_name.startswith(prefix) for prefix in preserve_text_prefixes
+     )
+ 
+     version = data.get("v")
+     try:
+         data["v"] = int(version)
+     except Exception:
+         data["v"] = 1
+ 
+     ts_ms = data.get("ts_ms") or data.get("sent_at") or data.get("ts")
+     try:
+         ts_ms_int = int(ts_ms)
+     except Exception:
+         ts_ms_int = _now_ms()
+     data["ts_ms"] = ts_ms_int
+     data.setdefault("ts", ts_ms_int / 1000.0)
+ 
+     sid = _normalize_session_id(data.pop("session_id", None) or data.get("sid"))
+     if sid is not None:
+         data["session_id"] = sid
+         data["sid"] = sid
+     else:
+diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
+index 51e5db8b4bcfc84da0467c3946952a43e09332ca..2e65aeebb59ad5a00dbb568cf9d6c0a1149ec931 100644
+--- a/app/api_v1/flow.py
++++ b/app/api_v1/flow.py
+@@ -631,58 +631,67 @@ def _decode_gzip_ndjson(data: Optional[bytes]) -> List[Dict[str, Any]]:
+     for line in text.splitlines():
+         chunk = line.strip()
+         if not chunk:
+             continue
+         try:
+             parsed = json.loads(chunk)
+         except json.JSONDecodeError:
+             continue
+         if isinstance(parsed, dict):
+             entries.append(parsed)
+     return entries
+ 
+ 
+ def _strip_none_values(payload: Dict[str, Any]) -> Dict[str, Any]:
+     return {key: value for key, value in payload.items() if value is not None}
+ 
+ 
+ _TIMELINE_FLOW_TYPES = {
+     "tts_start",
+     "tts_end",
+     "barge_in",
+     "barge_pause",
+     "barge_resume",
+     "session_force_end",
+ }
+-_TIMELINE_FLOW_PREFIXES = ("client_audio_",)
++_TIMELINE_FLOW_PREFIXES = (
++    "client_audio_",
++    "client_policy:",
++    "client_tts_mask:",
++    "client_mic_gate:",
++    "client_recorder:",
++    "client_asr:",
++    "client_evidence:",
++)
+ _TIMELINE_SERVER_EVENTS = {
+     "barge_decision",
+     "asr_vad_state",
+     "ptt_open",
+     "ptt_close",
+     "vad_arm",
+     "session_force_end",
++    "policy:applied",
+ }
+ _TIMELINE_SERVER_PREFIXES = ("client_audio_",)
+ 
+ 
+ def _build_timeline_payload(
+     *,
+     session_id: str,
+     generated_at: str,
+     flow_events: List[Dict[str, Any]],
+     server_events: List[Dict[str, Any]],
+ ) -> Optional[Dict[str, Any]]:
+     flow_timeline: List[Dict[str, Any]] = []
+     for event in flow_events:
+         if not isinstance(event, Mapping):
+             continue
+         event_type = str(event.get("type") or "")
+         include = event_type in _TIMELINE_FLOW_TYPES or any(
+             event_type.startswith(prefix) for prefix in _TIMELINE_FLOW_PREFIXES
+         )
+         if not include:
+             continue
+         entry: Dict[str, Any] = {
+             "id": event.get("id"),
+             "type": event_type,
+             "phase": event.get("phase"),
+diff --git a/e2e/flow_export.spec.ts b/e2e/flow_export.spec.ts
+index 8d96baf308e5d1bd4338d658c2893eb670c9f5e4..29c20f12f14ce3c30f355060c9437eb2e44b9e95 100644
+--- a/e2e/flow_export.spec.ts
++++ b/e2e/flow_export.spec.ts
+@@ -100,50 +100,68 @@ async function adminHeaders(request: APIRequestContext): Promise<Record<string,
+   const token =
+     csrfResp.headers()['x-csrf-token'] ||
+     (await csrfResp.json().catch(() => ({ csrf: undefined }))).csrf;
+   if (token) {
+     baseHeaders['X-CSRF-Token'] = String(token);
+   }
+   return baseHeaders;
+ }
+ 
+ async function seedBreadcrumb(
+   request: APIRequestContext,
+   headers: Record<string, string>,
+   sessionId: string,
+ ) {
+   const payload = {
+     session_id: sessionId,
+     event: 'console',
+     meta: {
+       details: 'Contact support at hi@example.com with token sk-playwrightTOKEN123 and IP 198.51.100.77',
      },
-   },
-   tts: {
-     mask_auto_vad: true,
-     decay_ms: 700,
-   },
-   evidence: {
-     snr_sigma: 2.5,
-     asr_conf: 0.65,
-     w1: 0.4,
-@@ -37,53 +34,50 @@ const DEFAULT_CONFIG = {
-     asrInstantOpen: 0.7,
-   },
-   shadow: {
-     ms: 450,
-   },
-   commit: {
-     min_ms: 500,
-     drop_if_no_partial: true,
-     no_partial_timeout_ms: 1200,
-   },
-   dual_vad: {
-     enabled: true,
-     commit_conf: 0.6,
-     asr_stale_ms: 800,
-     close_quiet_ms: 700,
-   },
-   transport: {
-     close_on_turn_end: false,
+   };
+   const resp = await request.post('/api/v1/flow/breadcrumb', { headers, data: payload });
+   expect(resp.status()).toBe(204);
+ }
+ 
++async function emitClientBreadcrumb(
++  request: APIRequestContext,
++  headers: Record<string, string>,
++  sessionId: string,
++  event: string,
++  meta: Record<string, unknown> = {},
++) {
++  const resp = await request.post('/api/v1/flow/breadcrumb', {
++    headers,
++    data: {
++      session_id: sessionId,
++      event,
++      meta,
++    },
++  });
++  expect(resp.status()).toBe(204);
++}
++
+ test.describe('flow export handoff', () => {
+   test('redacted and full exports honor options', async ({ request }) => {
+     const headers = await adminHeaders(request);
+     const sessionId = `e2e-flow-${Date.now()}`;
+ 
+     await seedBreadcrumb(request, headers, sessionId);
+ 
+     const redactedResp = await request.post('/api/v1/flow/handoff', {
+       headers,
+       data: {
+         session_id: sessionId,
+         levels: ['debug'],
+         options: {
+           privacy: { pii_scrub: true },
+         },
+       },
+     });
+     expect(redactedResp.status()).toBe(200);
+     expect(redactedResp.headers()['x-flow-pii-scrubbed']).toBe('1');
+ 
+     const redactedZip = parseZipEntries(Buffer.from(await redactedResp.body()));
+     expect(redactedZip.has('flow.ndjson')).toBeTruthy();
+     expect(redactedZip.has('meta.json')).toBeTruthy();
+     const redactedNdjson = redactedZip.get('flow.ndjson')!.toString('utf-8');
+     expect(redactedNdjson).not.toContain('hi@example.com');
+@@ -164,26 +182,77 @@ test.describe('flow export handoff', () => {
+       },
+     });
+ 
+     expect(fullResp.status()).toBe(200);
+     expect(fullResp.headers()['x-flow-mode']).toBe('full');
+     expect(fullResp.headers()['x-flow-pii-scrubbed']).toBe('1');
+ 
+     const fullZip = parseZipEntries(Buffer.from(await fullResp.body()));
+     expect(fullZip.has('manifest.json')).toBeTruthy();
+     expect(fullZip.has('events/flow.ndjson.gz')).toBeTruthy();
+     expect(fullZip.has('client/console.log.gz')).toBeTruthy();
+ 
+     const manifest = JSON.parse(fullZip.get('manifest.json')!.toString('utf-8'));
+     expect(manifest.meta.include.logs).toBe(true);
+     expect(manifest.meta.privacy.pii_scrub).toBe(true);
+ 
+     const eventsText = gunzipSync(fullZip.get('events/flow.ndjson.gz')!).toString('utf-8');
+     expect(eventsText).not.toContain('hi@example.com');
+     expect(eventsText).toContain('[email:');
+     expect(eventsText).toContain('[token:');
+ 
+     const clientLogText = gunzipSync(fullZip.get('client/console.log.gz')!).toString('utf-8');
+     expect(clientLogText).not.toContain('198.51.100.77');
+     expect(clientLogText).toContain('[ip:');
+   });
++
++  test('voice breadcrumbs surface in flow timelines', async ({ request }) => {
++    const headers = await adminHeaders(request);
++    const sessionId = `e2e-voice-timeline-${Date.now()}`;
++
++    await emitClientBreadcrumb(request, headers, sessionId, 'policy:applied', {
++      mode: 'manual_only_during_tts',
++    });
++    await emitClientBreadcrumb(request, headers, sessionId, 'tts_mask:on', {
++      reason: 'tts_start',
++    });
++    await emitClientBreadcrumb(request, headers, sessionId, 'mic_gate:engaged', {
++      reason: 'tts',
++    });
++    await emitClientBreadcrumb(request, headers, sessionId, 'recorder:start', {
++      reason: 'auto_vad',
++    });
++    await emitClientBreadcrumb(request, headers, sessionId, 'asr:start', {
++      reason: 'auto_vad',
++    });
++    await emitClientBreadcrumb(request, headers, sessionId, 'evidence:score', {
++      score: 1.1,
++    });
++
++    const fullResp = await request.post('/api/v1/flow/handoff', {
++      headers,
++      data: {
++        session_id: sessionId,
++        levels: ['debug', 'flow'],
++        options: {
++          mode: 'full',
++          include: { logs: false },
++        },
++      },
++    });
++
++    expect(fullResp.status()).toBe(200);
++    const archive = parseZipEntries(Buffer.from(await fullResp.body()));
++    expect(archive.has('events/flow.json')).toBeTruthy();
++
++    const timeline = JSON.parse(archive.get('events/flow.json')!.toString('utf-8'));
++    expect(Array.isArray(timeline.flow_events)).toBe(true);
++    const types = new Set(timeline.flow_events.map((entry: { type: string }) => entry.type));
++
++    expect(types.has('client_policy:applied')).toBeTruthy();
++    expect(types.has('client_tts_mask:on')).toBeTruthy();
++    expect(types.has('client_mic_gate:engaged')).toBeTruthy();
++    expect(types.has('client_recorder:start')).toBeTruthy();
++    expect(types.has('client_asr:start')).toBeTruthy();
++    expect(types.has('client_evidence:score')).toBeTruthy();
++  });
+ });
+diff --git a/tests/js/helpers/voice-test-setup.mjs b/tests/js/helpers/voice-test-setup.mjs
+index 696c0f1392e7a2416ddfe3e997f101ad17a2e421..0d7a1b43ec5542d2e89eb59f314904964967b2f8 100644
+--- a/tests/js/helpers/voice-test-setup.mjs
++++ b/tests/js/helpers/voice-test-setup.mjs
+@@ -76,82 +76,133 @@ let analyserFactory = () => {
+ 
+ export function setAnalyserFactory(factory) {
+   analyserFactory = typeof factory === 'function'
+     ? () => {
+         const analyser = factory();
+         createdAnalysers.push(analyser);
+         return analyser;
+       }
+     : () => {
+         const analyser = new FakeAnalyser();
+         createdAnalysers.push(analyser);
+         return analyser;
+       };
+ }
+ 
+ export class FakeAudioContext {
+   constructor() {
+     this.state = 'running';
+     this.sampleRate = 48000;
+     this.destination = { channelCount: 1 };
+   }
+ 
+   async resume() {}
+   createMediaStreamSource() { return new FakeSource(); }
+   createAnalyser() { return analyserFactory(); }
+-  createGain() { return { gain: { value: 1 }, connect() {} }; }
++  createGain() {
++    return {
++      gain: { value: 1 },
++      connect() {},
++      disconnect() {},
++    };
++  }
++  createBiquadFilter() {
++    return {
++      type: 'highpass',
++      frequency: { value: 0 },
++      Q: { value: 0 },
++      connect() {},
++      disconnect() {},
++    };
++  }
++  createMediaStreamDestination() {
++    return {
++      stream: fakeStream,
++      connect() {},
++      disconnect() {},
++    };
++  }
+   close() {}
+ }
+ 
+ export const fakeStream = {
+   active: true,
+   getAudioTracks() {
+     return [{
+       label: 'Fake Mic',
+       getSettings: () => ({ sampleRate: 48000, channelCount: 1 }),
+     }];
    },
  };
  
- export function getConfig() {
-   const source = (typeof window !== 'undefined' && window.__askchip_config) || {};
+ class FakeMediaRecorder {
+   constructor() {
+     this.state = 'inactive';
+     this.mimeType = 'audio/ogg; codecs=opus';
++    this._handlers = new Map();
+   }
  
-   return {
--    barge_in: {
--      mode: source.barge_in?.mode ?? DEFAULT_CONFIG.barge_in.mode,
--    },
-     debug: {
-       vad: source.debug?.vad ?? DEFAULT_CONFIG.debug.vad,
-     },
-     admin: {
-       voice_metrics_panel:
-         source.admin?.voice_metrics_panel ?? DEFAULT_CONFIG.admin.voice_metrics_panel,
-     },
-     metrics: {
-       client_enabled:
-         source.metrics?.client_enabled ?? DEFAULT_CONFIG.metrics.client_enabled,
-       server_enabled:
-         source.metrics?.server_enabled ?? DEFAULT_CONFIG.metrics.server_enabled,
-     },
-     vad: {
-       enabled: source.vad?.enabled ?? DEFAULT_CONFIG.vad.enabled,
-       hysteresis: {
-         enter: source.vad?.hysteresis?.enter ?? DEFAULT_CONFIG.vad.hysteresis.enter,
-         exit: source.vad?.hysteresis?.exit ?? DEFAULT_CONFIG.vad.hysteresis.exit,
-       },
-     },
-     tts: {
-       mask_auto_vad: source.tts?.mask_auto_vad ?? DEFAULT_CONFIG.tts.mask_auto_vad,
-       decay_ms: source.tts?.decay_ms ?? DEFAULT_CONFIG.tts.decay_ms,
-     },
-     evidence: {
+   start() {
+     this.state = 'recording';
+     if (typeof this.onstart === 'function') {
+       setTimeout(() => this.onstart(), 0);
+     }
++    const handlers = this._handlers.get('start');
++    if (handlers) {
++      for (const handler of Array.from(handlers)) {
++        try { handler({ type: 'start' }); } catch {}
++      }
++    }
+   }
+ 
+   stop() {
+     this.state = 'inactive';
+     if (typeof this.onstop === 'function') {
+       setTimeout(() => this.onstop(), 0);
+     }
++    const handlers = this._handlers.get('stop');
++    if (handlers) {
++      for (const handler of Array.from(handlers)) {
++        try { handler({ type: 'stop' }); } catch {}
++      }
++    }
++  }
++
++  addEventListener(type, handler) {
++    if (!this._handlers.has(type)) {
++      this._handlers.set(type, new Set());
++    }
++    this._handlers.get(type).add(handler);
++  }
++
++  removeEventListener(type, handler) {
++    const handlers = this._handlers.get(type);
++    if (!handlers) return;
++    handlers.delete(handler);
++    if (handlers.size === 0) {
++      this._handlers.delete(type);
++    }
+   }
+ }
+ 
+ class FakeAudioElement {
+   constructor() {
+     this.volume = 1;
+     this.paused = true;
+     this._listeners = new Map();
+   }
+ 
+   get autoplay() { return this._autoplay; }
+   set autoplay(v) { this._autoplay = !!v; }
+ 
+   addEventListener(type, handler) {
+     if (!this._listeners.has(type)) this._listeners.set(type, new Set());
+     this._listeners.get(type).add(handler);
+   }
+ 
+   removeEventListener(type, handler) {
+     const set = this._listeners.get(type);
+     if (!set) return;
+     set.delete(handler);
+     if (set.size === 0) this._listeners.delete(type);
+   }
+ 
+diff --git a/tests/js/voice-ptt-flow.test.mjs b/tests/js/voice-ptt-flow.test.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..ba2f02c4fe039009cdc2c6b0a3c59b271fe1bb15
+--- /dev/null
++++ b/tests/js/voice-ptt-flow.test.mjs
+@@ -0,0 +1,251 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++
++import {
++  setupVoiceTestEnv,
++  windowStub,
++  fakeStream,
++} from './helpers/voice-test-setup.mjs';
++
++await setupVoiceTestEnv();
++
++globalThis.ADVANCED_LOGGING_ENABLED = true;
++windowStub.ADVANCED_LOGGING_ENABLED = true;
++
++const voice = await import(new URL('../../static/js/voice.js', import.meta.url));
++const audioModule = await import(new URL('../../static/js/audio.js', import.meta.url));
++const audioTeardown = audioModule.audioTeardown ?? (() => {});
++const hooks = voice.__TEST_ONLY__;
++
++const policyBusModule = await import(new URL('../../static/js/voice/policy/PolicyBus.js', import.meta.url));
++const PolicyBus = policyBusModule.default ?? policyBusModule.PolicyBus;
++const policyModule = await import(new URL('../../static/js/voice/policy/InteractionPolicy.js', import.meta.url));
++const { manualOnlyDuringTtsPolicy, autoVadReadyPolicy } = policyModule;
++const { TurnState } = await import(new URL('../../static/js/voice/core/TurnState.js', import.meta.url));
++const { guardBargeInDispatch } = await import(new URL('../../static/js/voice/guards/VadGuard.js', import.meta.url));
++
++const dispatchWsFrame = (frame) => {
++  const event = new windowStub.CustomEvent('askchip-ws', { detail: frame });
++  windowStub.dispatchEvent(event);
++};
++
++const clearBreadcrumbs = () => {
++  if (Array.isArray(window.__voice_breadcrumbs)) {
++    window.__voice_breadcrumbs.length = 0;
++  } else {
++    window.__voice_breadcrumbs = [];
++  }
++};
++
++const breadcrumbNames = () => (Array.isArray(window.__voice_breadcrumbs)
++  ? window.__voice_breadcrumbs.map((entry) => entry.name)
++  : []);
++
++const getCtx = () => hooks.getCtx?.();
++
++const flushMicrotasks = () => new Promise((resolve) => setTimeout(resolve, 0));
++
++const clearTimer = (handle) => {
++  if (!handle) return;
++  try { clearTimeout(handle); } catch {}
++  try { clearInterval(handle); } catch {}
++};
++
++function cleanupVoiceRuntime() {
++  try { voice.forceBargeInEnd({ reason: 'test_cleanup', pttHeld: false }); } catch {}
++  try { voice.disarmVAD(); } catch {}
++  try { PolicyBus.clear?.(); } catch {}
++
++  const ctx = getCtx();
++  if (!ctx) {
++    return;
++  }
++
++  const { state = {}, audio = {}, transport = {} } = ctx;
++
++  try { ctx.controllers?.recorder?.stop?.({ reason: 'test_cleanup', emit: false }); } catch {}
++  try { ctx.controllers?.asr?.stopIfIdle?.({ reason: 'test_cleanup', emit: false }); } catch {}
++  try { ctx.controllers?.asr?.teardownTransport?.(); } catch {}
++
++  if (audio.vad?.stop) {
++    try { audio.vad.stop(); } catch {}
++  }
++  audio.vad = null;
++
++  if (audio.recorder) {
++    try { audio.recorder.stop(); } catch {}
++    audio.recorder = null;
++  }
++
++  clearTimer(audio.rmsSampleTimer);
++  audio.rmsSampleTimer = null;
++
++  clearTimer(state.ttsHeartbeatTimer);
++  state.ttsHeartbeatTimer = null;
++
++  clearTimer(state.ttsRearmTimer);
++  state.ttsRearmTimer = null;
++
++  clearTimer(state.dualVadCloseTimer);
++  state.dualVadCloseTimer = null;
++
++  clearTimer(ctx.maskLogTimer);
++  ctx.maskLogTimer = null;
++
++  clearTimer(transport.safetyTimer);
++  transport.safetyTimer = null;
++
++  audio.stream = fakeStream;
++  if (typeof audio?.context?.close === 'function') {
++    try { audio.context.close(); } catch {}
++  }
++  audio.context = null;
++  audio.source = null;
++  audio.analyser = null;
++  audio.highpass = null;
++  audio.encoderDestination = null;
++  audio.encoderStream = null;
++  audio.lastTimecode = null;
++
++  try { ctx.shadowBuffer?.clear?.(); } catch {}
++  try { ctx.evidenceGate?.reset?.('test_cleanup'); } catch {}
++
++  try { audioTeardown(); } catch {}
++}
++
++async function armForTest() {
++  await voice.armVAD();
++  const ctx = getCtx();
++  if (!ctx) {
++    throw new Error('voice runtime context not initialised');
++  }
++  return ctx;
++}
++
++test('AT1_ptt_blocks_auto_vad_during_tts', async (t) => {
++  clearBreadcrumbs();
++
++  const ctx = await armForTest();
++  PolicyBus.setPolicy(manualOnlyDuringTtsPolicy());
++  clearBreadcrumbs();
++  t.after(cleanupVoiceRuntime);
++
++  ctx.state.ttsPlaying = false;
++  ctx.state.manualGate = false;
++
++  const allowed = guardBargeInDispatch('client_vad');
++  await flushMicrotasks();
++
++  const names = breadcrumbNames();
++  assert.equal(allowed, false, 'policy guard should block auto VAD while manual mode is active');
++  assert.ok(names.includes('barge_in:blocked'), 'guard should emit a blocked barge breadcrumb');
++  assert.equal(ctx.state.turnOpen, false, 'turn should remain closed after blocked auto VAD');
++});
++
++test('AT2_ptt_interrupts_and_opens_turn', async (t) => {
++  clearBreadcrumbs();
++
++  const ctx = await armForTest();
++  PolicyBus.setPolicy(manualOnlyDuringTtsPolicy());
++  t.after(cleanupVoiceRuntime);
++
++  ctx.state.ttsPlaying = true;
++  ctx.state.manualGate = false;
++
++  voice.forceBargeInStart({ source: 'test_ptt' });
++  await flushMicrotasks();
++
++  const names = breadcrumbNames();
++  assert.ok(names.includes('ptt_open'), 'PTT start should emit client ptt_open event');
++  assert.ok(names.includes('recorder_start'), 'Recorder should start when PTT engages');
++  assert.ok(names.includes('asr_start'), 'ASR should start when PTT engages');
++
++  ctx.controllers.asr.notifyPartial({ confidence: 0.82, transcript: 'hello' });
++  await flushMicrotasks();
++  const updatedNames = breadcrumbNames();
++  assert.ok(updatedNames.includes('asr_partial'), 'ASR partials should flow after PTT engages');
++  assert.equal(ctx.state.manualGate, true, 'manual gate should remain engaged while holding PTT');
++
++  voice.forceBargeInEnd({ reason: 'test_release' });
++  await flushMicrotasks();
++});
++
++test('AT3_auto_vad_idle_commit', async (t) => {
++  clearBreadcrumbs();
++
++  PolicyBus.setPolicy(autoVadReadyPolicy());
++  assert.equal(PolicyBus.getPolicy()?.mode, autoVadReadyPolicy().mode, 'auto VAD policy should be active');
++  const originalGetPolicy = PolicyBus.getPolicy?.bind(PolicyBus);
++  PolicyBus.getPolicy = () => autoVadReadyPolicy();
++  const ctx = await armForTest();
++  PolicyBus.setPolicy(autoVadReadyPolicy());
++  t.after(cleanupVoiceRuntime);
++  t.after(() => {
++    if (originalGetPolicy) {
++      PolicyBus.getPolicy = originalGetPolicy;
++    }
++  });
++
++  ctx.state.ttsPlaying = false;
++  ctx.state.manualGate = false;
++  voice.forceBargeInEnd({ reason: 'test_auto_rearm', pttHeld: false });
++  ctx.ttsMask?.clear?.();
++  ctx.state.ttsHoldUntilMs = 0;
++  voice.forceBargeInEnd({ reason: 'test_auto_rearm_final', pttHeld: false });
++  await new Promise((resolve) => setTimeout(resolve, 20));
++
++  PolicyBus.setPolicy(autoVadReadyPolicy());
++  const vad = ctx.audio?.vad;
++  assert.ok(vad, `VAD should be initialised for auto mode (pending=${JSON.stringify(ctx.state?.pendingVadOpts)}, suppressed=${ctx.state?.vadSuppressedForTts}, shouldRearm=${ctx.state?.vadShouldRearmAfterTts})`);
++  assert.equal(typeof vad?.cbs?.onSpeechStart, 'function', 'VAD speech start callback should exist');
++  vad.cbs.onSpeechStart?.({ snrDb: 14 });
++  await flushMicrotasks();
++
++  dispatchWsFrame({
++    type: 'result',
++    channel: {
++      alternatives: [{ confidence: 0.92 }],
++      is_final: false,
++    },
++  });
++  await flushMicrotasks();
++
++  const names = breadcrumbNames();
++  assert.ok(names.includes('asr_partial'), 'ASR partial should emit after auto VAD speech');
++
++  ctx.state.preCommitASRFeed = true;
++  ctx.state.turnState = TurnState.Confirming;
++});
++
++test('AT4_policy_pushes_on_transitions', async (t) => {
++  const adminEvents = [];
++  const previousLogger = globalThis.askchipLog;
++  const previousWindowLogger = windowStub.askchipLog;
++  globalThis.askchipLog = (payload) => {
++    adminEvents.push({ ...payload });
++  };
++  windowStub.askchipLog = globalThis.askchipLog;
++
++  t.after(() => {
++    globalThis.askchipLog = previousLogger;
++    windowStub.askchipLog = previousWindowLogger;
++    cleanupVoiceRuntime();
++  });
++
++  dispatchWsFrame({ type: 'policy.interaction', policy: manualOnlyDuringTtsPolicy() });
++  await flushMicrotasks();
++  assert.ok(adminEvents.some((evt) => evt.event === 'policy:applied'), 'policy frame should emit admin log entry');
++
++  adminEvents.length = 0;
++  const ctx = await armForTest();
++  PolicyBus.setPolicy(autoVadReadyPolicy());
++  voice.forceBargeInStart({ source: 'policy_ptt' });
++  voice.forceBargeInEnd({ reason: 'policy_ptt_release' });
++  dispatchWsFrame({ type: 'policy.interaction', policy: autoVadReadyPolicy() });
++  await flushMicrotasks();
++
++  const appliedModes = adminEvents
++    .filter((evt) => evt.event === 'policy:applied')
++    .map((evt) => evt.mode);
++  assert.ok(appliedModes.includes(autoVadReadyPolicy().mode), 'policy updates should push after transitions');
++});

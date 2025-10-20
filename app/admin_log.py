@@ -78,6 +78,7 @@ def _coerce_event(payload: Mapping[str, Any]) -> HistoryItem:
         "ptt_close",
         "vad_arm",
         "session_force_end",
+        "policy:applied",
     }
     preserve_text_prefixes = ("client_audio_",)
     preserve_text = event_name in preserve_text_events or any(

@@ -122,6 +122,24 @@ async function seedBreadcrumb(
   expect(resp.status()).toBe(204);
 }
 
+async function emitClientBreadcrumb(
+  request: APIRequestContext,
+  headers: Record<string, string>,
+  sessionId: string,
+  event: string,
+  meta: Record<string, unknown> = {},
+) {
+  const resp = await request.post('/api/v1/flow/breadcrumb', {
+    headers,
+    data: {
+      session_id: sessionId,
+      event,
+      meta,
+    },
+  });
+  expect(resp.status()).toBe(204);
+}
+
 test.describe('flow export handoff', () => {
   test('redacted and full exports honor options', async ({ request }) => {
     const headers = await adminHeaders(request);
@@ -185,5 +203,56 @@ test.describe('flow export handoff', () => {
     const clientLogText = gunzipSync(fullZip.get('client/console.log.gz')!).toString('utf-8');
     expect(clientLogText).not.toContain('198.51.100.77');
     expect(clientLogText).toContain('[ip:');
+  });
+
+  test('voice breadcrumbs surface in flow timelines', async ({ request }) => {
+    const headers = await adminHeaders(request);
+    const sessionId = `e2e-voice-timeline-${Date.now()}`;
+
+    await emitClientBreadcrumb(request, headers, sessionId, 'policy:applied', {
+      mode: 'manual_only_during_tts',
+    });
+    await emitClientBreadcrumb(request, headers, sessionId, 'tts_mask:on', {
+      reason: 'tts_start',
+    });
+    await emitClientBreadcrumb(request, headers, sessionId, 'mic_gate:engaged', {
+      reason: 'tts',
+    });
+    await emitClientBreadcrumb(request, headers, sessionId, 'recorder:start', {
+      reason: 'auto_vad',
+    });
+    await emitClientBreadcrumb(request, headers, sessionId, 'asr:start', {
+      reason: 'auto_vad',
+    });
+    await emitClientBreadcrumb(request, headers, sessionId, 'evidence:score', {
+      score: 1.1,
+    });
+
+    const fullResp = await request.post('/api/v1/flow/handoff', {
+      headers,
+      data: {
+        session_id: sessionId,
+        levels: ['debug', 'flow'],
+        options: {
+          mode: 'full',
+          include: { logs: false },
+        },
+      },
+    });
+
+    expect(fullResp.status()).toBe(200);
+    const archive = parseZipEntries(Buffer.from(await fullResp.body()));
+    expect(archive.has('events/flow.json')).toBeTruthy();
+
+    const timeline = JSON.parse(archive.get('events/flow.json')!.toString('utf-8'));
+    expect(Array.isArray(timeline.flow_events)).toBe(true);
+    const types = new Set(timeline.flow_events.map((entry: { type: string }) => entry.type));
+
+    expect(types.has('client_policy:applied')).toBeTruthy();
+    expect(types.has('client_tts_mask:on')).toBeTruthy();
+    expect(types.has('client_mic_gate:engaged')).toBeTruthy();
+    expect(types.has('client_recorder:start')).toBeTruthy();
+    expect(types.has('client_asr:start')).toBeTruthy();
+    expect(types.has('client_evidence:score')).toBeTruthy();
   });
 });

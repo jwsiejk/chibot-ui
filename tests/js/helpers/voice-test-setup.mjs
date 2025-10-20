@@ -98,7 +98,29 @@ export class FakeAudioContext {
   async resume() {}
   createMediaStreamSource() { return new FakeSource(); }
   createAnalyser() { return analyserFactory(); }
-  createGain() { return { gain: { value: 1 }, connect() {} }; }
+  createGain() {
+    return {
+      gain: { value: 1 },
+      connect() {},
+      disconnect() {},
+    };
+  }
+  createBiquadFilter() {
+    return {
+      type: 'highpass',
+      frequency: { value: 0 },
+      Q: { value: 0 },
+      connect() {},
+      disconnect() {},
+    };
+  }
+  createMediaStreamDestination() {
+    return {
+      stream: fakeStream,
+      connect() {},
+      disconnect() {},
+    };
+  }
   close() {}
 }
 
@@ -116,6 +138,7 @@ class FakeMediaRecorder {
   constructor() {
     this.state = 'inactive';
     this.mimeType = 'audio/ogg; codecs=opus';
+    this._handlers = new Map();
   }
 
   start() {
@@ -123,12 +146,40 @@ class FakeMediaRecorder {
     if (typeof this.onstart === 'function') {
       setTimeout(() => this.onstart(), 0);
     }
+    const handlers = this._handlers.get('start');
+    if (handlers) {
+      for (const handler of Array.from(handlers)) {
+        try { handler({ type: 'start' }); } catch {}
+      }
+    }
   }
 
   stop() {
     this.state = 'inactive';
     if (typeof this.onstop === 'function') {
       setTimeout(() => this.onstop(), 0);
+    }
+    const handlers = this._handlers.get('stop');
+    if (handlers) {
+      for (const handler of Array.from(handlers)) {
+        try { handler({ type: 'stop' }); } catch {}
+      }
+    }
+  }
+
+  addEventListener(type, handler) {
+    if (!this._handlers.has(type)) {
+      this._handlers.set(type, new Set());
+    }
+    this._handlers.get(type).add(handler);
+  }
+
+  removeEventListener(type, handler) {
+    const handlers = this._handlers.get(type);
+    if (!handlers) return;
+    handlers.delete(handler);
+    if (handlers.size === 0) {
+      this._handlers.delete(type);
     }
   }
 }

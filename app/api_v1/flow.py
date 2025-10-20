@@ -653,7 +653,15 @@ _TIMELINE_FLOW_TYPES = {
     "barge_resume",
     "session_force_end",
 }
-_TIMELINE_FLOW_PREFIXES = ("client_audio_",)
+_TIMELINE_FLOW_PREFIXES = (
+    "client_audio_",
+    "client_policy:",
+    "client_tts_mask:",
+    "client_mic_gate:",
+    "client_recorder:",
+    "client_asr:",
+    "client_evidence:",
+)
 _TIMELINE_SERVER_EVENTS = {
     "barge_decision",
     "asr_vad_state",
@@ -661,6 +669,7 @@ _TIMELINE_SERVER_EVENTS = {
     "ptt_close",
     "vad_arm",
     "session_force_end",
+    "policy:applied",
 }
 _TIMELINE_SERVER_PREFIXES = ("client_audio_",)
 
