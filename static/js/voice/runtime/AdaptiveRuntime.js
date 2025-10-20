@@ -1454,18 +1454,28 @@ function handleWsFrame(ctx, frame) {
   const type = normalizeVadLabel(frame?.type);
   const event = normalizeVadLabel(frame?.event);
 
-  if (
+  const isAssistantAudio = type === 'assistant_audio' || event === 'assistant_audio';
+  const isExplicitTtsStart = (
     type === 'tts:start'
     || event === 'tts:start'
     || type === 'tts_start'
     || event === 'tts_start'
-  ) {
+  );
+
+  if (isExplicitTtsStart) {
     try {
       const maybePromise = handleClientTtsStartTelemetry(ctx, frame);
       if (maybePromise && typeof maybePromise.catch === 'function') {
         maybePromise.catch(() => {});
       }
     } catch {}
+  }
+
+  if (isExplicitTtsStart || isAssistantAudio) {
+    const phaseState = typeof frame?.phase === 'string' && frame.phase.trim()
+      ? frame.phase
+      : 'assistant_speaking';
+    applyTtsState(ctx, phaseState, frame);
   }
 
   if (type === 'state') {
@@ -1482,6 +1492,10 @@ function handleWsFrame(ctx, frame) {
   if (type === 'barge_resume' || event === 'barge_resume') {
     applyTtsState(ctx, frame?.phase || 'assistant_speaking', frame);
     return;
+  }
+
+  if (type === 'utteranceend' || event === 'utteranceend') {
+    applyTtsState(ctx, 'ended', frame);
   }
 
   if (frameIndicatesAsrResult(frame)) {

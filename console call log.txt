@@ -1,203 +1,619 @@
-[ws] build=2025-10-16T23:15Z
+ws.js:1 [ws] build=2025-10-16T23:15Z
 AdaptiveRuntime.js:1 [AdaptiveRuntime] build=2025-10-16T23:15Z
-bootstrap.js?v=1760862012:1 [bootstrap] build=2025-10-16T23:15Z
-bootstrap.js?v=1760862012:33 [AskChip] bootstrap loaded
-debug.js?v=1760862012:4 [DBG] debug:on Object
-ws.js?v=1760862012:1 [ws] build=2025-10-16T23:15Z
-bootstrap.js?v=1760862012:33 [bootstrap] startOnce called N=1
-bootstrap.js?v=1760862012:515 [Violation] 'click' handler took 150ms
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: false}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws#1', event: 'askchip-ws', note: 'bootstrap-wire'}
-bootstrap.js?v=1760862012:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws-close#2', event: 'askchip-ws-close', note: 'bootstrap-wire'}
-bootstrap.js?v=1760862012:33 [bootstrap] startOnce sending greet configure
-ws.js?v=1760862012:744 [ws] [Configure OUT] {"type":"Configure","session_id":"64aa7bd9-6969-42f2-b693-9d03cbe7c0d8","greet":true,"reset":1,"feature_manual_barge_in":true,"barge_in_mode_manual":false,"auto_commit_when_ready":true,"greet_seq":1} {ts_ms: 1760862132015}
-debug.js?v=1760862012:4 [DBG] UI→WS {type: 'Configure', session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', greet: true, reset: 1, feature_manual_barge_in: true, …}
-bootstrap.js?v=1760862012:33 [bootstrap] startOnce greet configure sent — recorder setup will follow
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: false}
-bootstrap.js?v=1760862012:33 [bootstrap] startOnce mic initialized — arming VAD for voice turns
-AdaptiveRuntime.js:386 [audio] context state: running {ts_ms: 1760862132246, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760862132247, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Idle', to: 'Listening', …}
-AdaptiveRuntime.js:386 [recorder] started {ts_ms: 1760862132251, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', mime_type: 'audio/webm; codecs=opus', timeslice_ms: 150}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: false}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862131875, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-bootstrap.js?v=1760862012:33 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
-bootstrap.js?v=1760862012:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws#3', event: 'askchip-ws', note: 'bootstrap-markAssistant-once'}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'f038cc432ef640baa7c2eb96131ba43b', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760862132908, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760862132909, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Listening', to: 'Confirming', …}
-AdaptiveRuntime.js:1512 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
-AdaptiveRuntime.js:386 [dual-vad] decision {ts_ms: 1760862132912, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, client_speech: true, asr_speaking: false, …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862132579, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '1567c4aef0da4298969d41b580d8a8a7', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862133580, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'e54fe1e582604a398cc4d72b1ea516e4', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862134580, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'edd08f5510244a18b68bd1fe7def5b6d', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862135580, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'dc3ea9310e80455289c90f4901ab8bce', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-AdaptiveRuntime.js:386 [asr] pre-commit feed {ts_ms: 1760862135614, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, mode: 'shadow_only', reason: 'speech_end'}
-AdaptiveRuntime.js:386 EVT_STATE {ts_ms: 1760862135614, session_id: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', turn_id: null, from: 'Confirming', to: 'Listening', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862136582, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '6451a7d20d774016a56294a24bc4fd33', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862137583, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '7dbbd85718384ec1abd2ea1c7f89ccc6', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862138334, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'd3f4f5dda0d54e8cb9ed37a3873227be', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862139334, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'de986f63e94a4e4a96bfc4ce92b1fa1d', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862140335, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'de1b5663177044c8ab5b794d45a6b40f', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862141336, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'ceb36cfcb724438c83e5c1daea360b2e', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862142339, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '246124e0a8e24995a715cdb5f2173cb9', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862143339, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '1129a30dc845404ca865b10b0e752384', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862144340, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '90ddb9310c554d85ba27b906890375a7', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862145091, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '74bd06c686f146af8865a5914dfbdce5', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862145845, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '1952ee4f2884434182997553589c69a3', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862146853, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '69ee6052f51241a1af49b2f857697fdb', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862147855, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '03e9d192895e46699c12ab37761f7bf7', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862148605, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '49197474554040c58aeeb88636d2a23a', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862149606, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '9c09c508f5534a3fb5f2a2e1c2e09dac', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862150608, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'a7393663390d44efa394c57cff272462', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862151609, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '0a7a7f7a601a45f6aeda18db75424686', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862152360, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'cdd31969be044514990cff067e0f1955', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862153362, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '8d6c8cdb1c514ae0a96d49515d6907d7', …}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
-askchip_client_hooks.js?v=1760862012:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760862154363, …}
-askchip_client_hooks.js?v=1760862012:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '64aa7bd9-6969-42f2-b693-9d03cbe7c0d8', …}
-askchip_client_hooks.js?v=1760862012:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: '3d145fc833ef40e7b422494d9b3ac391', …}
-bootstrap.js?v=1760862012:33 [WS close] {code: 1011, reason: 'initial_ready_failed', wasClean: true, reconnectScheduled: true}
-ws.js?v=1760862012:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760862012', version: '1760862012', flags: undefined, reconnectEnabled: true, sessionStarted: true}
-ws.js?v=1760862012:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760936110:1 [bootstrap] build=2025-10-16T23:15Z
+bootstrap.js?v=1760936110:33 [AskChip] bootstrap loaded
+debug.js?v=1760936110:4 [DBG] debug:on Object
+ws.js?v=1760936110:1 [ws] build=2025-10-16T23:15Z
+ws.js:33 [ui] visibility=hidden
+ws.js:33 [ui] visibility=visible
+bootstrap.js?v=1760936110:33 [bootstrap] startOnce called N=1
+ws.js?v=1760936110:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760936110', version: '1760936110', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760936110:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760936110:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws#1', event: 'askchip-ws', note: 'bootstrap-wire'}
+bootstrap.js?v=1760936110:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws-close#2', event: 'askchip-ws-close', note: 'bootstrap-wire'}
+bootstrap.js?v=1760936110:33 [bootstrap] startOnce sending greet configure
+ws.js?v=1760936110:744 [ws] [Configure OUT] {"type":"Configure","session_id":"8bc1d200-8ada-4311-8364-a3c173775ced","greet":true,"reset":1,"feature_manual_barge_in":true,"barge_in_mode_manual":false,"auto_commit_when_ready":true,"greet_seq":1} {ts_ms: 1760936296021}
+debug.js?v=1760936110:4 [DBG] UI→WS {type: 'Configure', session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', greet: true, reset: 1, feature_manual_barge_in: true, …}
+bootstrap.js?v=1760936110:33 [bootstrap] startOnce greet configure sent — recorder setup will follow
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"ready","session_id":"8bc1d200-8ada-4311-8364-a3c173775ced"}
+AdaptiveRuntime.js:609 [audio] mic_gate released {ts_ms: 1760936296254, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, reason: 'graph_init'}
+bootstrap.js?v=1760936110:33 [bootstrap] startOnce mic initialized — arming VAD for voice turns
+AdaptiveRuntime.js:609 [audio] context state: running {ts_ms: 1760936296255, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced'}
+AdaptiveRuntime.js:609 [vad] arm {event: 'vad_arm', ts_ms: 1760936296256, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, open_db: -40, …}
+AdaptiveRuntime.js:609 EVT_STATE {ts_ms: 1760936296258, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, from: 'Idle', to: 'Listening', …}
+AdaptiveRuntime.js:609 [recorder] started {ts_ms: 1760936296266, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', mime_type: 'audio/webm; codecs=opus', timeslice_ms: 180, source: 'processor'}
+ws.js?v=1760936110:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760936110', version: '1760936110', flags: undefined, reconnectEnabled: true, sessionStarted: false}
+ws.js?v=1760936110:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760936110:33 [bootstrap] startOnce VAD armed — recorder priming should now observe greet flow state
+bootstrap.js?v=1760936110:33 [bootstrap] ws listener attached {listener_id: 'askchip-ws#3', event: 'askchip-ws', note: 'bootstrap-markAssistant-once'}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"ws_conn_open","event":"ws_conn_open","kind":"ws_conn_open","label":"ws_conn_open","route":null,"sid":"8bc1d200-8ada-4311-8364-a3c173775ced","conn_id":"c387d8b61e21448ba4d797d5f6a027f7","client_ip":"170.85.75.32","path":"/ws/v1/chat","query_string":"session_id=8bc1d200-8ada-4311-8364-a3c173775ced","v":1,"ts_ms":1760936296550,"ts":1760936296.55,"session_id":"8bc1d200-8ada-4311-8364-a3c173775ced","step":3}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"ws_conn_open","sid":"8bc1d200-8ada-4311-8364-a3c173775ced","conn_id":"c387d8b61e21448ba4d797d5f6a027f7","client_ip":"170.85.75.32","path":"/ws/v1/chat","query_string":"session_id=8bc1d200-8ada-4311-8364-a3c173775ced","session_id":"8bc1d200-8ada-4311-8364-a3c173775ced"}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"ConfigureAck","ok":true,"greet":true}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"Configure","event":"ws_json_recv","kind":"ws_json_recv","label":"ws_json_recv","route":null,"sid":"8bc1d200-8ada-4311-8364-a3c173775ced","v":1,"ts_ms":1760936297102,"ts":1760936297.102,"session_id":"8bc1d200-8ada-4311-8364-a3c173775ced","step":5}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"greet:reset","event":"greet:reset","kind":"greet:reset","label":"greet:reset /ws/v1/chat","route":"/ws/v1/chat","greet_seq":1,"v":1,"ts_ms":1760936297103,"ts":1760936297.103,"session_id":"8bc1d200-8ada-4311-8364-a3c173775ced","sid":"8bc1d200-8ada-4311-8364-a3c173775ced","step":6}
+askchip_client_hooks.js?v=1760936110:319 session_goal {type: 'session_goal', phase: 'clarify', depth: 'normal', delivery_pref: 'explain', working_intent: 'greet', …}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"session_goal","phase":"clarify","depth":"normal","delivery_pref":"explain","working_intent":"greet","entities":{"products":[],"keywords":[]},"confirmed":["phase","depth","delivery_pref","working_intent"],"event":"session_goal","session_id":"8bc1d200-8ada-4311-8364-a3c173775ced","sid":"8bc1d200-8ada-4311-8364-a3c173775ced"}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"vad_arm","event":"vad_arm","kind":"admin_diag","label":"admin_diag","route":null,"ts_ms":1760936296256,"open_db":-40,"close_db":-46,"min_open_ms":200,"preroll_ms":180,"payload":{"event":"vad_arm","ts_ms":1760936296256,"session_id":"8bc1d200-8ada-4311-8364-a3c173775ced","turn_id":null,"open_db":-40,"close_db":-46,"min_open_ms":200,"preroll_ms":180},"v":1,"ts":1760936296.256,"session_id":"8bc1d200-8ada-4311-8364-a3c173775ced","sid":"8bc1d200-8ada-4311-8364-a3c173775ced","step":8}
+askchip_client_hooks.js?v=1760936110:225 ws_scope_arrived {event: 'ws_scope_arrived', kind: 'ws_scope_arrived', path: '/ws/v1/chat', v: 1, ts_ms: 1760936296549, …}
+askchip_client_hooks.js?v=1760936110:225 ws_handshake_enter {event: 'ws_handshake_enter', kind: 'ws_handshake_enter', label: 'ws_handshake_enter', route: null, path: '/ws/v1/chat', …}
+askchip_client_hooks.js?v=1760936110:225 ws_conn_open {event: 'ws_conn_open', kind: 'ws_conn_open', label: 'ws_conn_open', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936298269, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -90.88, max_db: -55.96, …}
+askchip_client_hooks.js?v=1760936110:225 ws_conn_active {event: 'ws_conn_active', kind: 'ws_conn_active', label: 'ws_conn_active', route: null, conn_id: 'c387d8b61e21448ba4d797d5f6a027f7', …}
+askchip_client_hooks.js?v=1760936110:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+askchip_client_hooks.js?v=1760936110:225 greet:reset {event: 'greet:reset', kind: 'greet:reset', label: 'greet:reset /ws/v1/chat', route: '/ws/v1/chat', greet_seq: 1, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936300514, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.58, max_db: -57.78, …}
+askchip_client_hooks.js?v=1760936110:201 session_goal {event: 'session_goal', kind: 'session_goal', label: 'session_goal:normal', phase: 'clarify', depth: 'normal', …}
+askchip_client_hooks.js?v=1760936110:225 admin_diag {event: 'vad_arm', ts_ms: 1760936296256, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, open_db: -40, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936302516, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.99, max_db: -58.68, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936304766, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -76.78, max_db: -69.31, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936307017, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.77, max_db: -69.48, …}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"turn_action_metadata","turn_id":"051fcc7d95b747cbb52156f14c9038bb","is_greet":true,"nlu":{"intent":"fallback","topic":null,"needs_scoping":null,"wants_list":null,"expected_depth":null,"confidence":0.2},"policy":{"action":"offer_steps","verbosity":"brief","show_suggestions":true},"session_id":"8bc1d200-8ada-4311-8364-a3c173775ced","sid":"8bc1d200-8ada-4311-8364-a3c173775ced"}
+askchip_client_hooks.js?v=1760936110:313 policy_decision: unknown
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"policy_decision","sid":"8bc1d200-8ada-4311-8364-a3c173775ced","turn_id":"051fcc7d95b747cbb52156f14c9038bb","teacher_move":"offer_steps","teacher_move_family":"answer","reason":"meta_override","fallback_fired":false,"fallback_reason":null,"nlu_intent":"fallback","nlu_confidence":0.2,"session_id":"8bc1d200-8ada-4311-8364-a3c173775ced","meta_action":"offer_steps","policy_move":"check_understanding","persona_move":"deep_dive"}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"suggestions_made","turn_id":"051fcc7d95b747cbb52156f14c9038bb","items":[{"text":"Send me the email","source":"policy"},{"text":"Walk me through it live","source":"policy"},{"text":"Show install steps","source":"retrieval"}],"max_items":4,"max_words_per_item":7,"count":3,"sid":"8bc1d200-8ada-4311-8364-a3c173775ced","event":"suggestions_made","session_id":"8bc1d200-8ada-4311-8364-a3c173775ced"}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"assistant_chunk","turn_id":"051fcc7d95b747cbb52156f14c9038bb","text":"Hey James, what would you like to accomplish today?","kb_hits":0,"intent":"fallback","teacher_move":"offer_steps","policy_chips":["Send me the email","Walk me through it live"]}
+bootstrap.js?v=1760936110:33 [WS→UI] {"type":"suggestions","turn_id":"051fcc7d95b747cbb52156f14c9038bb","items":[{"text":"Send me the email"},{"text":"Walk me through it live"},{"text":"Show install steps"}]}
+askchip_client_hooks.js?v=1760936110:272 assistant_end
+askchip_client_hooks.js?v=1760936110:225 turn_action_metadata {event: 'turn_action_metadata', kind: 'turn_action_metadata', turn_id: '051fcc7d95b747cbb52156f14c9038bb', is_greet: true, nlu: {…}, …}
+askchip_client_hooks.js?v=1760936110:193 policy_decision: offer_steps
+AdaptiveRuntime.js:609 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760936309214, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced'}
+AdaptiveRuntime.js:609 EVT_STATE {ts_ms: 1760936309215, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, from: 'Listening', to: 'Idle', …}
+bootstrap.js?v=1760936110:33 [bootstrap] VAD disarmed while TTS is active
+AdaptiveRuntime.js:609 [client] client_audio_context_state {event: 'client_audio_context_state', ts_ms: 1760936309247, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: '051fcc7d95b747cbb52156f14c9038bb', state: 'running'}
+AdaptiveRuntime.js:609 [client] client_audio_context_state {event: 'client_audio_context_state', ts_ms: 1760936309252, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: '051fcc7d95b747cbb52156f14c9038bb', state: 'running'}
+audio.js:133 [tts] playing: true {ts_ms: 1760936309253, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null}
+AdaptiveRuntime.js:609 EVT_STATE {ts_ms: 1760936309254, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, from: 'Idle', to: 'AssistantSpeaking', …}
+AdaptiveRuntime.js:609 [audio] mic_gate engaged {ts_ms: 1760936309254, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, reason: 'tts_active'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309254, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309255, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [client] client_audio_play_error {event: 'client_audio_play_error', ts_ms: 1760936309256, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: '051fcc7d95b747cbb52156f14c9038bb', message: 'The play() request was interrupted by a new load request. https://goo.gl/LdLk22'}
+AdaptiveRuntime.js:609 [client] client_audio_play_error {event: 'client_audio_play_error', ts_ms: 1760936309257, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: '051fcc7d95b747cbb52156f14c9038bb', message: 'The play() request was interrupted by a new load request. https://goo.gl/LdLk22'}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936309269, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -77.48, max_db: -67.71, …}
+askchip_client_hooks.js?v=1760936110:272 UtteranceEnd
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'ready'}
+AdaptiveRuntime.js:609 [audio] mic_gate released {ts_ms: 1760936309300, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, reason: 'tts_active'}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [audio] mic_gate engaged {ts_ms: 1760936309300, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, reason: 'tts_active'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309300, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309301, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309301, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309301, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309301, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309301, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309302, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309302, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309302, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309302, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309303, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309303, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309303, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309303, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309304, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309304, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309467, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309468, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309469, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309469, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309470, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309470, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309471, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309471, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309471, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309471, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309472, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309472, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309473, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309473, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'assistant_speaking'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936309473, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309473, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309490, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 suggestions_made {event: 'suggestions_made', kind: 'suggestions_made', turn_id: '051fcc7d95b747cbb52156f14c9038bb', items: Array(3), max_items: 4, …}
+AdaptiveRuntime.js:609 [client] client_audio_heartbeat {event: 'client_audio_heartbeat', ts_ms: 1760936309554, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: '051fcc7d95b747cbb52156f14c9038bb', currentTime: 0.281542, …}
+bootstrap.js?v=1760936110:33 [bootstrap] VAD re-arming after TTS (trigger=UtteranceEnd)
+AdaptiveRuntime.js:609 [audio] context state: running {ts_ms: 1760936309580, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced'}
+AdaptiveRuntime.js:609 [recorder] started {ts_ms: 1760936309580, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', mime_type: 'audio/webm; codecs=opus', timeslice_ms: 180, source: 'processor'}
+ws.js?v=1760936110:144 [ws] openWS build {module: 'https://chibot-ui.onrender.com/static/js/ws.js?v=1760936110', version: '1760936110', flags: undefined, reconnectEnabled: true, sessionStarted: true}
+ws.js?v=1760936110:144 [ws] openWS options= {} reconnect= true
+bootstrap.js?v=1760936110:33 [bootstrap] VAD armed — ready for user audio
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309662, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936309845, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936310025, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 assistant_chunk {event: 'assistant_chunk', kind: 'assistant_chunk', turn_id: '051fcc7d95b747cbb52156f14c9038bb', v: 1, ts_ms: 1760936308690, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936310205, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936310381, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 assistant_end {event: 'assistant_end', kind: 'assistant_end', turn_id: '051fcc7d95b747cbb52156f14c9038bb', v: 1, ts_ms: 1760936308690, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936310561, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936310744, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936310921, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936311106, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936311281, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936311461, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936311508, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936311645, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 tts_latency {event: 'tts_latency', kind: 'tts_latency', voice_id: 'MIAWBMadvHL0ek6oJEXD', format: 'mp3_44100_128', attempt: 1, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936311827, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936312002, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936312188, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 tts:start {event: 'tts:start', kind: 'tts:start', turn_id: '051fcc7d95b747cbb52156f14c9038bb', v: 1, ts_ms: 1760936309828, …}
+audio.js:135 [tts] playing: false {ts_ms: 1760936312258, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null}
+AdaptiveRuntime.js:609 EVT_STATE {ts_ms: 1760936312259, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, from: 'AssistantSpeaking', to: 'PostTTSHold', …}
+AdaptiveRuntime.js:609 [tts] playback_end {ts_ms: 1760936312259, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936312260, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 199}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936312361, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 98}
+AdaptiveRuntime.js:609 EVT_STATE {ts_ms: 1760936312461, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, from: 'PostTTSHold', to: 'Ready', …}
+AdaptiveRuntime.js:609 state { phase:'ready' } {ts_ms: 1760936312461, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null}
+AdaptiveRuntime.js:609 [audio] mic_gate released {ts_ms: 1760936312462, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, reason: 'tts_active'}
+AdaptiveRuntime.js:609 [vad] arm {event: 'vad_arm', ts_ms: 1760936312462, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, open_db: -40, …}
+AdaptiveRuntime.js:609 EVT_STATE {ts_ms: 1760936312464, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, from: 'Ready', to: 'Listening', …}
+askchip_client_hooks.js?v=1760936110:225 tts:first_chunk {event: 'tts:first_chunk', kind: 'tts:first_chunk', turn_id: '051fcc7d95b747cbb52156f14c9038bb', v: 1, ts_ms: 1760936309828, …}
+askchip_client_hooks.js?v=1760936110:225 tts:done {event: 'tts:done', kind: 'tts:done', turn_id: '051fcc7d95b747cbb52156f14c9038bb', v: 1, ts_ms: 1760936309828, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936313519, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -28.77, …}
+askchip_client_hooks.js?v=1760936110:225 UtteranceEnd {event: 'UtteranceEnd', kind: 'UtteranceEnd', turn_id: '051fcc7d95b747cbb52156f14c9038bb', reason: 'finalizer', v: 1, …}
+askchip_client_hooks.js?v=1760936110:225 greet:resp {event: 'greet:resp', kind: 'greet:resp', label: 'greet:resp', route: null, turn_id: '051fcc7d95b747cbb52156f14c9038bb', …}
+askchip_client_hooks.js?v=1760936110:225 admin_diag {event: 'client_audio_context_state', ts_ms: 1760936309247, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: '051fcc7d95b747cbb52156f14c9038bb', state: 'running'}
+AdaptiveRuntime.js:609 [asr] pre-commit feed {ts_ms: 1760936314806, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, mode: 'asr_priming', reason: 'speech_start'}
+AdaptiveRuntime.js:609 EVT_STATE {ts_ms: 1760936314807, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, from: 'Listening', to: 'Confirming', …}
+AdaptiveRuntime.js:2056 [dual-vad] commit? {client: true, asrSpeaking: false, asrConf: 0}
+AdaptiveRuntime.js:609 [dual-vad] decision {ts_ms: 1760936314809, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, client_speech: true, asr_speaking: false, …}
+ws.js?v=1760936110:144 [ws] sending audio chunk {bytes: 2898, mime: 'audio/webm;codecs=opus', ts_ms: 1760936314862, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', chunk_seq: 1}
+debug.js?v=1760936110:4 [DBG] UI→WS ArrayBuffer(2898)
+ws.js?v=1760936110:144 [ws] sending audio chunk {bytes: 3864, mime: 'audio/webm;codecs=opus', ts_ms: 1760936315101, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', chunk_seq: 2}
+debug.js?v=1760936110:4 [DBG] UI→WS ArrayBuffer(3864)
+askchip_client_hooks.js?v=1760936110:225 admin_diag {event: 'client_audio_context_state', ts_ms: 1760936309252, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: '051fcc7d95b747cbb52156f14c9038bb', state: 'running'}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'paused'}
+AdaptiveRuntime.js:609 EVT_STATE {ts_ms: 1760936315308, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, from: 'Confirming', to: 'AssistantSpeaking', …}
+AdaptiveRuntime.js:609 [audio] mic_gate engaged {ts_ms: 1760936315308, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, reason: 'tts_active'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936315309, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936315309, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:272 barge_in
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936315310, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936315310, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:272 barge_in
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936315310, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936315311, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936315493, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:322 state {type: 'state', phase: 'paused'}
+AdaptiveRuntime.js:609 [tts] playback_start {ts_ms: 1760936315510, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, suppress_mode: 'all', post_tts_hold_ms: 200}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936315510, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936315676, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936315849, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936316035, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 admin_diag {event: 'client_audio_play_error', ts_ms: 1760936309257, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: '051fcc7d95b747cbb52156f14c9038bb', message: 'The play() request was interrupted by a new load request. https://goo.gl/LdLk22'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936316209, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936316392, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 admin_diag {event: 'client_audio_play_error', ts_ms: 1760936309256, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: '051fcc7d95b747cbb52156f14c9038bb', message: 'The play() request was interrupted by a new load request. https://goo.gl/LdLk22'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936316575, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936316750, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936316933, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 admin_diag {event: 'client_audio_heartbeat', ts_ms: 1760936309554, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: '051fcc7d95b747cbb52156f14c9038bb', currentTime: 0.281542, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936317109, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936317292, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936317473, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936317509, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936317660, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936317841, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936318011, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 admin_diag {event: 'vad_arm', ts_ms: 1760936312462, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, open_db: -40, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936318192, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936318372, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936318559, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 barge_decision {event: 'barge_decision', kind: 'barge_decision', label: 'barge_decision', route: null, schema: 'barge_decision.v1', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936318742, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+debug.js?v=1760936110:4 [DBG] UI→WS {type: 'KeepAlive'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936318909, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:221 barge_in {event: 'barge_in', kind: 'barge_in', label: 'barge_in', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936319091, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936319271, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936319456, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'provider_open', route: null, provider: 'deepgram', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936319642, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936319759, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936319811, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936319991, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 dg_connect {event: 'dg_connect', kind: 'dg_connect', dg_id: 134297840781024, safe_url: 'wss://api.deepgram.com/v1/listen?interim_results=t…3c173775ced&utterance_end_ms=1200&vad_events=true', containerized: true, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936320171, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936320355, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'asr_open', route: null, provider: 'deepgram', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936320534, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936320710, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936320890, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936321074, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936321253, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936321440, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936321610, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936321790, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936321973, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936322006, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936322153, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936322339, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936322510, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936322690, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+debug.js?v=1760936110:4 [DBG] UI→WS {type: 'KeepAlive'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936322873, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936323052, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936323236, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936323410, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936323590, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936323772, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936323952, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936324136, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936324256, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936324315, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936324489, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936324672, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936324850, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936325035, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936325220, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936325389, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936325571, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936325750, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936325930, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936326110, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936326290, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936326471, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936326505, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936326650, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+debug.js?v=1760936110:4 [DBG] UI→WS {type: 'KeepAlive'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936326829, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936327009, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936327190, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936327369, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936327551, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936327730, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936327909, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936328090, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936328269, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936328454, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936328630, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936328755, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936328810, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936328990, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936329170, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936329350, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936329530, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936329709, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936329890, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936330070, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936330250, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936330430, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936330609, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936330789, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+debug.js?v=1760936110:4 [DBG] UI→WS {type: 'KeepAlive'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936330971, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936331006, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936331150, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936331331, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936331510, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936331691, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936331870, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936332050, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936332230, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936332410, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936332590, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936332771, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936332950, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936333131, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936333254, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936333310, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936333489, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936333669, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936333850, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936334031, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936334209, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936334391, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936334571, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936334750, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+debug.js?v=1760936110:4 [DBG] UI→WS {type: 'KeepAlive'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936334930, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936335110, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936335255, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936335289, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936335470, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936335650, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936335829, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936336009, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936336189, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936336369, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936336550, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936336731, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936336910, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936337089, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936337255, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936337270, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936337451, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936337630, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936337810, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936337990, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936338170, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936338349, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936338530, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936338710, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+debug.js?v=1760936110:4 [DBG] UI→WS {type: 'KeepAlive'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936338890, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936339070, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936339249, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936339255, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936339430, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936339609, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936339790, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936339969, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936340149, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936340329, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936340511, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+ws.js:33 [ui] visibility=hidden
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936340690, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936340870, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936341050, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936341230, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936341410, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936341504, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936341590, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936341770, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936341949, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936342130, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936342310, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936342583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936343583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936343584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+debug.js?v=1760936110:4 [DBG] UI→WS {type: 'KeepAlive'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936344583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936345584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936345584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936346584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936347583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936347584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+debug.js?v=1760936110:4 [DBG] UI→WS {type: 'KeepAlive'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936348583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936348638, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936348790, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+askchip_client_hooks.js?v=1760936110:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936348970, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936349150, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+ws.js:33 [ui] visibility=visible
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936349329, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936349510, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936349690, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936349755, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936349870, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936350051, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936350229, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936350410, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936350589, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936350769, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936350951, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936351129, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936351310, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936351490, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936351670, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936351755, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -160, …}
+debug.js?v=1760936110:4 [DBG] UI→WS {type: 'KeepAlive'}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936351850, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936352030, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936352210, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936352389, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936352570, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936352750, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936352930, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [mask] active {ts_ms: 1760936353110, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, boost_db: 0, decay_remaining_ms: 0}
+AdaptiveRuntime.js:609 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760936353274, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced'}
+AdaptiveRuntime.js:609 [audio] mic_gate released {ts_ms: 1760936353275, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, reason: 'manual'}
+AdaptiveRuntime.js:609 EVT_STATE {ts_ms: 1760936353275, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, from: 'AssistantSpeaking', to: 'Idle', …}
+ws.js?v=1760936110:144 [ws] CloseStream suppressed: no user turn yet
+AdaptiveRuntime.js:609 [ws] CloseStream suppressed: no user turn yet {ts_ms: 1760936353279, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced'}
+askchip_client_hooks.js?v=1760936110:225 ws_json_recv {event: 'ws_json_recv', kind: 'ws_json_recv', label: 'ws_json_recv', route: null, sid: '8bc1d200-8ada-4311-8364-a3c173775ced', …}
+bootstrap.js?v=1760936110:33 [WS close] {code: 1000, reason: 'clean close', wasClean: true, reconnectScheduled: false}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936354004, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -160, max_db: -68.93, …}
+ws.js:33 [ui] visibility=hidden
+askchip_client_hooks.js?v=1760936110:225 ws_conn_disconnect {event: 'ws_conn_disconnect', kind: 'ws_conn_disconnect', label: 'ws_conn_disconnect', route: null, conn_id: 'c387d8b61e21448ba4d797d5f6a027f7', …}
+askchip_client_hooks.js?v=1760936110:225 ws_conn_close {event: 'ws_conn_close', kind: 'ws_conn_close', label: 'ws_conn_close', route: null, conn_id: 'c387d8b61e21448ba4d797d5f6a027f7', …}
+askchip_client_hooks.js?v=1760936110:225 ws_conn_cleanup {event: 'ws_conn_cleanup', kind: 'ws_conn_cleanup', label: 'ws_conn_cleanup', route: null, conn_id: 'c387d8b61e21448ba4d797d5f6a027f7', …}
+askchip_client_hooks.js?v=1760936110:225 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'CloseStream ack', route: null, provider: 'deepgram', …}
+askchip_client_hooks.js?v=1760936110:225 asr:diag {event: 'asr:diag', kind: 'asr:diag', label: 'end', route: null, provider: 'deepgram', …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936356583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.9, max_db: -70.52, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936358584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.52, max_db: -71.07, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936361583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.42, max_db: -72.25, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936363583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.17, max_db: -74.33, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936365583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.76, max_db: -70.63, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936368583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.03, max_db: -58.24, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936370583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.49, max_db: -64.15, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936372583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.82, max_db: -72, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936375583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.52, max_db: -49.2, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936377583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.99, max_db: -64.86, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936379583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -56.56, max_db: -54.83, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936381583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.01, max_db: -70.67, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936383583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.3, max_db: -47.18, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936385583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -69.26, max_db: -66.11, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936387583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.26, max_db: -40.39, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936389583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -76.65, max_db: -73.66, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936391583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.96, max_db: -47.69, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936393583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -69.53, max_db: -54.12, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936395583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -58.87, max_db: -55.95, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936397583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -69.89, max_db: -69.8, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936399583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.4, max_db: -73.25, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936401583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.93, max_db: -68.01, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936403583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.75, max_db: -72.86, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936405583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.36, max_db: -66.41, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936407583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.2, max_db: -72.24, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936409583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.82, max_db: -66.08, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936411583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.63, max_db: -69.87, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936413583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.26, max_db: -61.23, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936415584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -66.64, max_db: -64.75, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936418583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.48, max_db: -65.22, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936420583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -77.56, max_db: -72.04, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936422584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.86, max_db: -74.86, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936425583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.02, max_db: -58.49, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936427583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.57, max_db: -70.59, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936429583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.8, max_db: -64.56, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936431583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.63, max_db: -71.01, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936433584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.19, max_db: -62.25, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936436583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -58.88, max_db: -41.68, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936438584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -38.93, max_db: -36.88, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936440584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -51.35, max_db: -40.36, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936443583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.11, max_db: -29.92, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936445583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.55, max_db: -62.44, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936447583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.53, max_db: -49.01, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936449583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -59.45, max_db: -40.3, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936451583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.73, max_db: -71.3, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936453583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -40.54, max_db: -34.18, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936455583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -61.88, max_db: -55.08, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936457583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -60.6, max_db: -39.88, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936459584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.07, max_db: -72.71, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936462583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.39, max_db: -64.93, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936464584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -63.52, max_db: -60.42, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936467583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.9, max_db: -58.23, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936469583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.95, max_db: -67.44, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936471583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.63, max_db: -73.39, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936473583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -76.59, max_db: -71.68, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936475583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.63, max_db: -69.65, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936477583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.04, max_db: -68.68, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936479583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.98, max_db: -72.62, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936481583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.32, max_db: -67.93, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936483583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -66.6, max_db: -60.78, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936485584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -56.3, max_db: -55.44, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936488583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.76, max_db: -34.99, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936490583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.31, max_db: -63.33, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936492583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.26, max_db: -59.62, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936494583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.75, max_db: -64.88, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936496583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -65.65, max_db: -58.81, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936498583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.39, max_db: -67.06, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936500583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.53, max_db: -72.94, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936502583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.91, max_db: -67.81, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936504584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.34, max_db: -59.1, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936506584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.89, max_db: -58.23, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936508584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.45, max_db: -50.4, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936511583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.19, max_db: -72.9, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936513584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.81, max_db: -70.59, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936516582, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -68.84, max_db: -62.23, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936518583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.57, max_db: -72.95, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936520583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.95, max_db: -71.89, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936522583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.13, max_db: -73.73, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936524583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.39, max_db: -70.03, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936526584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.4, max_db: -70.62, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936529584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.3, max_db: -69.91, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936532583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74, max_db: -65.33, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936534583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.04, max_db: -73.28, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936536583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.45, max_db: -66.5, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936538583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71, max_db: -68.46, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936540583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.48, max_db: -61.16, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936542584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -64.65, max_db: -54.07, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936545584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.13, max_db: -62.37, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936548583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.61, max_db: -62.9, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936550584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -64.6, max_db: -62.55, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936552584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -77.01, max_db: -70.33, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936555583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.69, max_db: -70.31, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936557583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -66.79, max_db: -66.57, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936559584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.95, max_db: -72.45, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936562583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.93, max_db: -73.47, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936564583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.94, max_db: -72.13, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936566584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.71, max_db: -69.69, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936569583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.44, max_db: -67.01, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936571583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -76.47, max_db: -61.38, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936573584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.62, max_db: -73.45, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936576583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.19, max_db: -62.6, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936578583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -69.87, max_db: -62.22, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936580583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.3, max_db: -62.72, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936582583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.74, max_db: -71.55, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936584583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.69, max_db: -71.45, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936586583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.4, max_db: -70.04, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936588583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -68.66, max_db: -66.58, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936590583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -67.38, max_db: -63.24, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936592583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -65.44, max_db: -63.24, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936594583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -66.25, max_db: -57.03, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936596583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.63, max_db: -62.27, …}
+ws.js:33 [ui] visibility=visible
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936598755, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.5, max_db: -65.95, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936601004, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.49, max_db: -47.95, …}
+ws.js:33 [ui] visibility=hidden
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936603583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.25, max_db: -65.55, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936605583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -76.17, max_db: -68.27, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936607583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.53, max_db: -61.28, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936609583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -58.32, max_db: -57.23, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936611583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -68.19, max_db: -63.04, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936613583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.2, max_db: -67.34, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936615583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.12, max_db: -45.08, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936617583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -63.3, max_db: -45.01, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936619584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.15, max_db: -70.58, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936622583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.67, max_db: -57.89, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936624583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.97, max_db: -73.07, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936626584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.01, max_db: -44.19, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936628584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.54, max_db: -69.16, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936630584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -64.42, max_db: -40.65, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936632584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.46, max_db: -69.26, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936635584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -69.66, max_db: -63.76, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936638583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.72, max_db: -65.91, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936640583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.12, max_db: -61.93, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936642584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -69.11, max_db: -60.56, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936645584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.6, max_db: -60.19, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936648583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -69.48, max_db: -54.48, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936650584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -46.76, max_db: -41.35, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936653583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.26, max_db: -68.48, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936655584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -69.74, max_db: -69.7, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936658584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.66, max_db: -63.74, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936661582, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74, max_db: -73.52, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936663584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.63, max_db: -74.14, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936665584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.62, max_db: -69.95, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936667584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.08, max_db: -70.69, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936669584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.26, max_db: -70.48, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936672584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -79.08, max_db: -50.24, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936674584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.8, max_db: -60.36, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936676592, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -69.36, max_db: -68.32, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936679583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -66.59, max_db: -62.97, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936681583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.51, max_db: -73.84, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936683583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.01, max_db: -71.35, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936685584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.79, max_db: -65.59, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936688583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -69.89, max_db: -52.86, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936690583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.92, max_db: -72.32, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936692584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.19, max_db: -67.47, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936694584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.64, max_db: -70.75, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936696584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.86, max_db: -66.83, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936699584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -68.48, max_db: -61.88, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936702584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -67.08, max_db: -42.45, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936705592, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -75.92, max_db: -61.8, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936708583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.28, max_db: -70.55, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936710583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.96, max_db: -65.77, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936712583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.66, max_db: -71.78, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936714583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.57, max_db: -53.35, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936716583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -76.33, max_db: -58.3, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936718583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.39, max_db: -71.67, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936720583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.03, max_db: -70.95, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936722583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.93, max_db: -73.78, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936724583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.21, max_db: -58.63, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936726583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.25, max_db: -71.75, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936728584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.81, max_db: -57.91, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936731583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.21, max_db: -53.44, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936733583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.64, max_db: -67.44, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936735583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74, max_db: -53.06, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936737583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -70.38, max_db: -69.86, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936739583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.37, max_db: -67.96, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936741594, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -73.29, max_db: -67.66, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936744584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.07, max_db: -62.52, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936746584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -68.9, max_db: -61.66, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936748584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.6, max_db: -69.65, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936751583, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -72.96, max_db: -71.65, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936753584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.67, max_db: -69.25, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936755584, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -71.32, max_db: -70, …}
+ws.js:33 [ui] visibility=visible
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936758147, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -64.36, max_db: -62.75, …}
+AdaptiveRuntime.js:609 [audio] idle_rms_window {ts_ms: 1760936760255, session_id: '8bc1d200-8ada-4311-8364-a3c173775ced', turn_id: null, min_db: -74.71, max_db: -61.09, …}

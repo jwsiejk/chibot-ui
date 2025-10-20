@@ -1,80 +1,269 @@
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 9f7124f2d32e0330c4e9914c8dab7b6f0934a679..177db05c55e48c1a8bd01bbff4b8e8c0715ba055 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -3386,73 +3386,75 @@ def schedule_tts_audio(session_id: str,
-         utterance_end_sent = False
-         max_frames = 256  # guardrail
+diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
+index 202590066732660ba2b9bb49ee6cc9b36b4c5cc1..46146926f316730c2625b6291bdf4d0feb42d89e 100644
+--- a/static/js/voice/runtime/AdaptiveRuntime.js
++++ b/static/js/voice/runtime/AdaptiveRuntime.js
+@@ -1432,80 +1432,94 @@ function shouldCloseTurn(ctx) {
+         clientSilent,
+         asrSilent,
+         quietMs: quietLogMs,
+         silentDebounceMs: silentSince,
+       });
+     } catch {}
+   }
+   const debounceReached = Number.isFinite(silentSince) && silentSince >= DUAL_VAD_SILENCE_DEBOUNCE_MS;
+   if (debounceReached) {
+     return true;
+   }
+   return quietMs > quietCloseMs(ctx);
+ }
  
-         def _emit_utterance_end(reason: str) -> None:
-             nonlocal utterance_end_sent
-             if utterance_end_sent:
-                 _log("tts.utterance_end.skip", reason=reason, already_sent=True)
-                 return
-             _log("tts.utterance_end.emit", reason=reason, already_sent=utterance_end_sent)
-             end_payload = {
-                 "session_id": session_id,
-                 "turn_id": safe_turn_id,
-                 "reason": reason,
-             }
-             try:
-                 _admin_emit('UtteranceEnd', **end_payload)
-             except Exception:
-                 pass
-             try:
-                 bus.broadcast(session_id, {"type": "UtteranceEnd", "turn_id": safe_turn_id})
-             except Exception:
-                 pass
-             utterance_end_sent = True
+ const frameIndicatesAsrResult = (frame) => {
+   const type = normalizeVadLabel(frame?.type);
+   const event = normalizeVadLabel(frame?.event);
+   return type === 'result' || type === 'results' || event === 'result' || event === 'results';
+ };
  
-         stream_payload = audio_bytes if audio_override else payload_for_stream
-+        stream_start_ts: Optional[float] = None
-         try:
-             # Small pacing delay if requested
-             if delay_ms and delay_ms > 0:
-                 _t.sleep(max(0, delay_ms) / 1000.0)
+ function handleWsFrame(ctx, frame) {
+   if (!ctx?.state) return;
+   const type = normalizeVadLabel(frame?.type);
+   const event = normalizeVadLabel(frame?.event);
  
-             total_audio_bytes = len(stream_payload or b"")
+-  if (
++  const isAssistantAudio = type === 'assistant_audio' || event === 'assistant_audio';
++  const isExplicitTtsStart = (
+     type === 'tts:start'
+     || event === 'tts:start'
+     || type === 'tts_start'
+     || event === 'tts_start'
+-  ) {
++  );
++
++  if (isExplicitTtsStart) {
+     try {
+       const maybePromise = handleClientTtsStartTelemetry(ctx, frame);
+       if (maybePromise && typeof maybePromise.catch === 'function') {
+         maybePromise.catch(() => {});
+       }
+     } catch {}
+   }
  
-             start_payload = {"session_id": session_id, "turn_id": safe_turn_id}
-             try:
-                 _admin_emit('tts:start', **start_payload)
-             except Exception:
-                 pass
-             _broadcast_admin_ws_event('tts:start', start_payload)
++  if (isExplicitTtsStart || isAssistantAudio) {
++    const phaseState = typeof frame?.phase === 'string' && frame.phase.trim()
++      ? frame.phase
++      : 'assistant_speaking';
++    applyTtsState(ctx, phaseState, frame);
++  }
++
+   if (type === 'state') {
+     if (applyTtsState(ctx, frame?.phase, frame)) {
+       return;
+     }
+   }
  
-             start_frame: Dict[str, Any] = {"type": "TTS_START", "turn_id": safe_turn_id}
-             if correlation_user_msg_id:
-                 start_frame["correlation_user_msg_id"] = correlation_user_msg_id
-             try:
-                 bus.broadcast(session_id, start_frame)
-             except Exception:
-                 pass
+   if (type === 'barge_in' || event === 'barge_in') {
+     applyTtsState(ctx, frame?.phase || 'paused', frame);
+     return;
+   }
  
-             tracker.start()
-+            stream_start_ts = _t.time()
+   if (type === 'barge_resume' || event === 'barge_resume') {
+     applyTtsState(ctx, frame?.phase || 'assistant_speaking', frame);
+     return;
+   }
  
-             # Chunk and broadcast
-             mv = memoryview(stream_payload)
-             idx = 0
-             first_sent = False
-             first_chunk_ts: Optional[float] = None
-             last_chunk_ts: Optional[float] = None
-             prev_chunk_ts: Optional[float] = stream_start_ts
-             chunk_items: List[Dict[str, Any]] = []
- 
-             while idx < len(mv):
-                 # stop early if canceled
-                 try:
-                     from ..ws.bus import bus as _bus_ref
-                     if _bus_ref.is_canceled(session_id, safe_turn_id):
-                         canceled = True
-                         _log(
-                             "tts.chunks.cancelled",
-                             chunk_count=chunk_count,
-                             bytes_sent=chunk_bytes_sent,
-                             total_bytes=total_audio_bytes,
-                         )
-                         break
-                 except Exception:
-                     pass
++  if (type === 'utteranceend' || event === 'utteranceend') {
++    applyTtsState(ctx, 'ended', frame);
++  }
++
+   if (frameIndicatesAsrResult(frame)) {
+     const confidence = extractAsrConfidence(frame);
+     onAsrPartial(ctx, { confidence });
+     if (dualVadEnabled(ctx) && Number.isFinite(confidence) && confidence >= commitConfidenceThreshold(ctx)) {
+       if (!ctx.state.pendingCommitReason) {
+         ctx.state.pendingCommitReason = 'asr_confidence';
+       }
+     }
+     if (dualVadEnabled(ctx)) {
+       const attempt = maybeCommitSpeech(ctx);
+       if (attempt && typeof attempt.then === 'function') {
+         attempt.catch(() => {});
+       }
+     }
+     const isFinal = Boolean(
+       frame?.channel?.is_final ?? frame?.is_final ?? frame?.final ?? frame?.detail?.is_final
+     );
+     if (isFinal) {
+       const asrState = ensureAsrState(ctx);
+       asrState.speaking = false;
+       if (!Number.isFinite(asrState.lastActivityTs) || asrState.lastActivityTs <= 0) {
+         asrState.lastActivityTs = nowMs();
+       }
+     }
+     return;
+diff --git a/tests/js/voice-adaptive-ws-tts.test.mjs b/tests/js/voice-adaptive-ws-tts.test.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..3263e91e1fc2c55942c7a8a37b7397ed5bfe1aa1
+--- /dev/null
++++ b/tests/js/voice-adaptive-ws-tts.test.mjs
+@@ -0,0 +1,162 @@
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++
++const listenerMap = new Map();
++
++const windowStub = {
++  __askchip_config: {
++    tts: {
++      mask_decay_ms: 0,
++      post_play_hold_ms: 0,
++      decay_ms: 0,
++    },
++  },
++  addEventListener(type, handler) {
++    if (!listenerMap.has(type)) {
++      listenerMap.set(type, new Set());
++    }
++    listenerMap.get(type).add(handler);
++  },
++  removeEventListener(type, handler) {
++    const listeners = listenerMap.get(type);
++    if (!listeners) return;
++    listeners.delete(handler);
++    if (listeners.size === 0) {
++      listenerMap.delete(type);
++    }
++  },
++  dispatchEvent(event) {
++    const listeners = listenerMap.get(event.type);
++    if (!listeners) return true;
++    for (const handler of Array.from(listeners)) {
++      handler(event);
++    }
++    return true;
++  },
++};
++
++const performanceStub = {
++  now: () => 0,
++};
++
++const localStorageStore = new Map();
++
++const localStorageStub = {
++  getItem(key) {
++    return localStorageStore.has(key) ? localStorageStore.get(key) : null;
++  },
++  setItem(key, value) {
++    localStorageStore.set(key, String(value));
++  },
++  removeItem(key) {
++    localStorageStore.delete(key);
++  },
++  clear() {
++    localStorageStore.clear();
++  },
++};
++
++globalThis.localStorage = localStorageStub;
++
++const cryptoStub = { randomUUID: () => 'test-session-id' };
++try {
++  Object.defineProperty(globalThis, 'crypto', {
++    value: cryptoStub,
++    configurable: true,
++    writable: true,
++  });
++} catch {
++  globalThis.crypto = cryptoStub;
++}
++
++globalThis.window = windowStub;
++globalThis.performance = performanceStub;
++globalThis.console = {
++  log: () => {},
++  warn: () => {},
++  error: () => {},
++  info: () => {},
++  debug: () => {},
++};
++globalThis.__TEST_WS_MODULE = {
++  openWS: () => Promise.resolve(),
++  waitWSOpen: () => Promise.resolve({}),
++  isOpen: () => false,
++  isConnecting: () => false,
++  closeWS: () => {},
++  bufferedAmount: () => 0,
++  configure: () => {},
++  sendJSON: () => true,
++  sendAudioChunk: () => Promise.resolve(),
++  sendCloseStream: () => {},
++};
++globalThis.CustomEvent = class CustomEvent {
++  constructor(type, init = {}) {
++    this.type = type;
++    this.detail = init.detail;
++  }
++};
++
++const navigatorStub = {
++  mediaDevices: {
++    getUserMedia: async () => {
++      throw new Error('getUserMedia not available in tests');
++    },
++  },
++};
++
++try {
++  Object.defineProperty(globalThis, 'navigator', {
++    value: navigatorStub,
++    configurable: true,
++    writable: true,
++  });
++} catch {
++  globalThis.navigator = navigatorStub;
++}
++
++globalThis.ADVANCED_LOGGING_ENABLED = true;
++
++const voiceModule = await import('../../static/js/voice.js');
++const { setGreetGateActive, __TEST_ONLY__ } = voiceModule;
++
++const getCtx = () => {
++  const ctx = __TEST_ONLY__.getCtx?.();
++  if (!ctx) {
++    throw new Error('voice runtime context not initialized');
++  }
++  return ctx;
++};
++
++const dispatchWsFrame = (frame) => {
++  window.dispatchEvent({ type: 'askchip-ws', detail: frame });
++};
++
++test('assistant_audio WS frame engages TTS suppression until utterance end', () => {
++  setGreetGateActive(false);
++  const ctx = getCtx();
++
++  ctx.audio.micGateReasons.clear();
++  ctx.state.ttsPlaying = false;
++  if (ctx.maskLogTimer) {
++    clearInterval(ctx.maskLogTimer);
++    ctx.maskLogTimer = null;
++  }
++  ctx.ttsMask.clear();
++
++  dispatchWsFrame({ type: 'assistant_audio' });
++
++  assert.equal(ctx.state.ttsPlaying, true, 'ttsPlaying should be true while assistant audio is active');
++  assert.equal(ctx.audio.micGateReasons.has('tts_active'), true, 'mic gate should track active TTS reason');
++
++  dispatchWsFrame({ type: 'utteranceend' });
++
++  assert.equal(ctx.state.ttsPlaying, false, 'ttsPlaying should reset after utterance end');
++  assert.equal(ctx.audio.micGateReasons.has('tts_active'), false, 'mic gate reason should clear after TTS ends');
++
++  if (ctx.maskLogTimer) {
++    clearInterval(ctx.maskLogTimer);
++    ctx.maskLogTimer = null;
++  }
++  ctx.ttsMask.clear();
++});
