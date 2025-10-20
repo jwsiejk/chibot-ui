@@ -12,7 +12,18 @@ from datetime import datetime, timezone
 import threading
 import time
 from collections import deque
-from typing import Any, Deque, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
+from typing import (
+    Any,
+    Deque,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Set,
+    Tuple,
+)
 
 from flask import (
     Blueprint,
@@ -24,6 +35,7 @@ from flask import (
     stream_with_context,
 )
 
+from app.db import db
 from app.flow import FlowStore
 from app.flow.trace import (
     assemble_ws_frames,
@@ -31,6 +43,7 @@ from app.flow.trace import (
     slice_server_log_for_session,
 )
 from app.flow.catalog import FLOW_EVENT_CATALOG
+from app.obs.source_tags import FLOW_SCHEMA_VERSION
 from app.security_state import get_user
 from app.utils.admin import is_admin_email
 
@@ -218,7 +231,57 @@ DEFAULT_HANDOFF_PROMPT = (
     "smallest viable fix, and validation steps."
 )
 
-_HANDOFF_TELEMETRY_SCHEMAS = ["barge_decision.v1"]
+_HANDOFF_TELEMETRY_SCHEMAS = [
+    schema
+    for schema in {"barge_decision.v1", FLOW_SCHEMA_VERSION}
+    if isinstance(schema, str) and schema.strip()
+]
+
+
+def _json_compatible(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_compatible(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_compatible(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _json_bytes(payload: Any) -> bytes:
+    normalized = _json_compatible(payload)
+    return json.dumps(normalized, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _collect_audit_log_entries() -> List[Any]:
+    try:
+        memory = getattr(db, "memory", {})
+    except Exception:  # pragma: no cover - extremely defensive
+        memory = {}
+    logs_bucket = memory.get("logs")
+    if not isinstance(logs_bucket, list):
+        return []
+    entries: List[Any] = []
+    for item in logs_bucket:
+        if isinstance(item, Mapping):
+            entries.append(dict(item))
+        else:
+            entries.append(item)
+    return entries
+
+
+def _prepare_audit_logs(*, pii_scrub: bool) -> Tuple[bytes, Set[str], bool]:
+    raw_entries = _collect_audit_log_entries()
+    sanitized_entries: List[Any] = []
+    schemas: Set[str] = set()
+    for entry in raw_entries:
+        processed = _scrub_node(entry) if pii_scrub else entry
+        if isinstance(processed, Mapping):
+            schema_value = processed.get("schema")
+            if isinstance(schema_value, str) and schema_value.strip():
+                schemas.add(schema_value.strip())
+        sanitized_entries.append(_json_compatible(processed))
+    return _json_bytes(sanitized_entries), schemas, bool(sanitized_entries)
 
 _TEXT_EXACT_KEYS = {
     "text",
@@ -921,6 +984,12 @@ def flow_handoff():
             redacted_events = [_scrub_event(event) for event in redacted_events]
         ndjson_bytes = _to_ndjson_bytes(redacted_events)
         payload_sha = hashlib.sha1(ndjson_bytes).hexdigest()
+        audit_bytes, audit_schemas, _ = _prepare_audit_logs(
+            pii_scrub=pii_scrub_requested
+        )
+        telemetry_schemas = set(_HANDOFF_TELEMETRY_SCHEMAS)
+        telemetry_schemas.update(audit_schemas)
+
         meta_payload = {
             "session_id": session_id,
             "levels": levels,
@@ -931,6 +1000,8 @@ def flow_handoff():
         }
         if pii_scrub_requested:
             meta_payload["privacy"] = {"pii_scrub": True}
+        if telemetry_schemas:
+            meta_payload["telemetry_schemas"] = sorted(telemetry_schemas)
 
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -940,6 +1011,7 @@ def flow_handoff():
                 "meta.json",
                 json.dumps(meta_payload, ensure_ascii=False, indent=2),
             )
+            archive.writestr("logs/audit.json", audit_bytes)
         zip_bytes = buffer.getvalue()
         if max_bytes is not None and len(zip_bytes) > max_bytes:
             return _too_large_response()
@@ -967,6 +1039,10 @@ def flow_handoff():
 
         include_ws_requested = bool(include_options.get("ws"))
         include_logs_requested = bool(include_options.get("logs"))
+
+        audit_bytes, audit_schemas, audit_has_entries = _prepare_audit_logs(
+            pii_scrub=pii_scrub_requested
+        )
 
         server_log_bytes_raw = slice_server_log_for_session(session_id)
         if not server_log_bytes_raw:
@@ -1060,6 +1136,7 @@ def flow_handoff():
             include_meta["ws"] = bool(ws_bytes)
         if include_logs_requested:
             include_meta["logs"] = bool(client_log_bytes or server_log_entries)
+        include_meta["audit"] = audit_has_entries
 
         manifest_files = [
             _manifest_entry(
@@ -1085,6 +1162,12 @@ def flow_handoff():
                 server_log_bytes,
                 content_type="text/plain+gzip",
                 description="Server admin log slice",
+            ),
+            _manifest_entry(
+                "logs/audit.json",
+                audit_bytes,
+                content_type="application/json",
+                description="Admin audit logs",
             ),
         ]
 
@@ -1118,6 +1201,9 @@ def flow_handoff():
         if snapshot.started_at_iso:
             manifest_meta["session_started_at"] = snapshot.started_at_iso
 
+        telemetry_schemas = set(_HANDOFF_TELEMETRY_SCHEMAS)
+        telemetry_schemas.update(audit_schemas)
+
         manifest_payload = {
             "schema_version": "1.0",
             "exported_at": generated_at,
@@ -1126,8 +1212,8 @@ def flow_handoff():
             "event_count": event_count,
             "files": manifest_files,
         }
-        if _HANDOFF_TELEMETRY_SCHEMAS:
-            manifest_payload["telemetry_schemas"] = list(_HANDOFF_TELEMETRY_SCHEMAS)
+        if telemetry_schemas:
+            manifest_payload["telemetry_schemas"] = sorted(telemetry_schemas)
         if manifest_meta:
             manifest_payload["meta"] = manifest_meta
         manifest_payload["policy_snapshot"] = policy_snapshot or {}
@@ -1143,6 +1229,7 @@ def flow_handoff():
             archive.writestr("events/flow.ndjson.gz", events_gz_bytes)
             archive.writestr("config/config.json", config_bytes)
             archive.writestr("server/server.log.gz", server_log_bytes)
+            archive.writestr("logs/audit.json", audit_bytes)
             if timeline_bytes:
                 archive.writestr("events/flow.json", timeline_bytes)
             for path, data, _, _ in optional_files:

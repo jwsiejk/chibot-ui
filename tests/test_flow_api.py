@@ -10,6 +10,7 @@ from app.api_v1 import flow as flow_api
 from app.asgi_gateway import app as flask_app
 from app.flow.trace import FlowStore
 from app.admin_log import clear_admin_log_history_for_tests, emit as admin_log_emit
+from app.obs.source_tags import FLOW_SCHEMA_VERSION
 
 
 @pytest.fixture(autouse=True)
@@ -386,7 +387,10 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
         assert manifest["session_id"] == "sess-full"
         assert manifest["meta"]["mode"] == "full"
         assert manifest["meta"]["redacted"] is False
-        assert manifest["telemetry_schemas"] == ["barge_decision.v1"]
+        assert set(manifest["telemetry_schemas"]) == {
+            "barge_decision.v1",
+            FLOW_SCHEMA_VERSION,
+        }
         assert manifest["policy_snapshot"] == {
             "voice_runtime": {
                 "barge_in": {
@@ -399,7 +403,8 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
             "asr": {"vad": {"enabled": True}},
         }
         assert manifest["meta"]["include"]["ws"] is False
-        assert "logs" not in manifest["meta"]["include"]
+        assert manifest["meta"]["include"].get("logs") is None
+        assert manifest["meta"]["include"]["audit"] is False
         assert manifest["meta"]["privacy"]["pii_scrub"] is True
         assert manifest["meta"]["privacy"]["redaction"] == "minimal"
         assert manifest["meta"]["limits"]["max_bytes"] == 5_000_000
@@ -421,6 +426,49 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
         )
         assert config_payload["foo"] == "bar"
         assert config_payload["nested"]["value"] == 1
+
+
+def test_flow_handoff_includes_admin_audit_logs(admin_env):
+    from app.db import db as memory_db
+    from app.logging import admin_log
+
+    store = FlowStore()
+    session_id = "sess-audit"
+    store.emit(session_id, "flow", "session", "session_open", "system")
+
+    logs_bucket = memory_db.memory.setdefault("logs", [])
+    original_logs = list(logs_bucket)
+    logs_bucket.clear()
+    try:
+        admin_log("Audit check", email="auditor@example.com", role="auditor")
+
+        client = flask_app.test_client()
+        csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
+        token = csrf_resp.headers.get("X-CSRF-Token")
+        headers = dict(admin_env)
+        if token:
+            headers["X-CSRF-Token"] = token
+
+        body = {"session_id": session_id, "options": {"mode": "full"}}
+
+        resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
+        assert resp.status_code == 200
+
+        with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
+            names = set(archive.namelist())
+            assert "logs/audit.json" in names
+
+            audit_payload = json.loads(archive.read("logs/audit.json").decode("utf-8"))
+            assert isinstance(audit_payload, list)
+            assert any(entry.get("message") == "Audit check" for entry in audit_payload)
+            assert any(entry.get("schema") == FLOW_SCHEMA_VERSION for entry in audit_payload)
+
+            manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+            assert manifest["meta"]["include"]["audit"] is True
+            assert FLOW_SCHEMA_VERSION in manifest["telemetry_schemas"]
+    finally:
+        logs_bucket.clear()
+        logs_bucket.extend(original_logs)
 
 
 def test_flow_handoff_includes_optional_artifacts(admin_env):

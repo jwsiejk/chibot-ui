@@ -1,775 +1,618 @@
-diff --git a/app/services/llm/flow_wrapper.py b/app/services/llm/flow_wrapper.py
-index 0cec5f942ef0656e137f92e030488ca1cf7b8a34..2ef4d56b01e5f6b42f5f9ac580d1a457805356ce 100644
---- a/app/services/llm/flow_wrapper.py
-+++ b/app/services/llm/flow_wrapper.py
-@@ -1,34 +1,35 @@
- """Flow trace helpers for LLM interactions."""
- 
+diff --git a/app/api_v1/flow.py b/app/api_v1/flow.py
+index 8c505f66fa683a1aecbc52805e22bd6d1dda641a..51e5db8b4bcfc84da0467c3946952a43e09332ca 100644
+--- a/app/api_v1/flow.py
++++ b/app/api_v1/flow.py
+@@ -1,58 +1,71 @@
  from __future__ import annotations
  
+ import copy
+ import gzip
+ import hashlib
+ import io
+ import ipaddress
+ import json
+ import re
+ import zipfile
+ from datetime import datetime, timezone
+ import threading
  import time
- from dataclasses import dataclass
--from typing import Optional, Protocol, runtime_checkable
-+from typing import Dict, Optional, Protocol, runtime_checkable
+ from collections import deque
+-from typing import Any, Deque, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
++from typing import (
++    Any,
++    Deque,
++    Dict,
++    Iterable,
++    Iterator,
++    List,
++    Mapping,
++    Optional,
++    Set,
++    Tuple,
++)
  
- from app.flow.emit import add_batch, emit as flow_emit
-+from app.obs.source_tags import make_source_meta
+ from flask import (
+     Blueprint,
+     Response,
+     abort,
+     jsonify,
+     request,
+     session as flask_session,
+     stream_with_context,
+ )
+ 
++from app.db import db
+ from app.flow import FlowStore
+ from app.flow.trace import (
+     assemble_ws_frames,
+     slice_client_console_for_session,
+     slice_server_log_for_session,
+ )
+ from app.flow.catalog import FLOW_EVENT_CATALOG
++from app.obs.source_tags import FLOW_SCHEMA_VERSION
+ from app.security_state import get_user
+ from app.utils.admin import is_admin_email
+ 
+ bp = Blueprint("flow", __name__)
+ 
+ _CLIENT_BREADCRUMB_WINDOW_SEC = 60.0
+ _CLIENT_BREADCRUMB_LIMIT = 30
+ _CLIENT_BREADCRUMB_LOCK = threading.Lock()
+ _CLIENT_BREADCRUMB_HITS: Dict[str, Deque[float]] = {}
  
  
- @runtime_checkable
- class _Tracker(Protocol):
-     def start(self) -> bool:
-         ...
- 
-     def final(self, *, tokens_out: Optional[int] = None, text: Optional[str] = None, chars: Optional[int] = None) -> None:
-         ...
- 
-     def error(self, code: Optional[object] = None) -> None:
-         ...
- 
- 
- class _NullTracker:
-     """No-op tracker used when flow trace context is unavailable."""
- 
-     __slots__ = ()
- 
-     def queue(self) -> None:  # noqa: D401 - trivial
-         """Ignore queue notifications when tracing is disabled."""
-         return None
- 
-     def start(self) -> bool:  # noqa: D401 - trivial
-         """Pretend to start a span and report no work."""
-@@ -53,210 +54,252 @@ def _coerce_int(value: Optional[object]) -> Optional[int]:
+ def _normalize_str(value: Optional[str]) -> Optional[str]:
      if value is None:
          return None
-     try:
-         return int(value)  # type: ignore[arg-type]
-     except (TypeError, ValueError):
+     text = value.strip()
+     return text or None
+ 
+ 
+ def _require_admin() -> None:
+     email = (
+         (flask_session.get("user") or {}).get("email")
+         or flask_session.get("email")
+         or request.headers.get("X-User-Email")
+         or (get_user() or "")
+     )
+@@ -196,51 +209,101 @@ def _extract_policy_snapshot(config_payload: Any) -> Optional[Dict[str, Any]]:
+     explicit_snapshot = _coerce_snapshot(config_payload.get("policy_snapshot"))
+     if explicit_snapshot:
+         return explicit_snapshot
+ 
+     interaction_policy = config_payload.get("interaction_policy")
+     if not isinstance(interaction_policy, Mapping):
          return None
  
+     candidate_payload: Dict[str, Any] = {}
+     voice_runtime = interaction_policy.get("voice_runtime")
+     if isinstance(voice_runtime, Mapping):
+         candidate_payload.setdefault("voice_runtime", {})["barge_in"] = voice_runtime.get("barge_in")
  
- @dataclass
- class LLMFlowTracker:
-     """Manage ``llm_start``/``llm_final`` flow events for a single turn."""
+     asr_policy = interaction_policy.get("asr")
+     if isinstance(asr_policy, Mapping):
+         candidate_payload.setdefault("asr", {})["vad"] = asr_policy.get("vad")
  
-     session_id: str
-     phase: str
-     turn_id: Optional[str] = None
-     model: Optional[str] = None
-     who: str = "system"
+     return _coerce_snapshot(candidate_payload)
  
-     _started: bool = False
-     _start_event_id: Optional[str] = None
-     _start_monotonic: Optional[float] = None
-     _queue_start_monotonic: Optional[float] = None
-     _queue_end_monotonic: Optional[float] = None
-     _first_token_monotonic: Optional[float] = None
  
-+    def _annotate_meta(
-+        self,
-+        meta: Dict[str, object],
-+        *,
-+        extra: Optional[Dict[str, object]] = None,
-+    ) -> None:
-+        evidence: Dict[str, object] = {}
-+        if extra:
-+            for key, value in extra.items():
-+                if value is None:
-+                    continue
-+                evidence[key] = value
-+        if self.model and "model" not in evidence:
-+            try:
-+                evidence["model"] = str(self.model)
-+            except Exception:
-+                evidence["model"] = self.model  # type: ignore[assignment]
-+        try:
-+            meta["source_meta"] = make_source_meta(
-+                "llm_runtime",
-+                evidence=evidence or None,
-+            )
-+        except Exception:
-+            pass
-+
-     def queue(self) -> None:
-         """Mark the time at which the request entered the provider queue."""
- 
-         self._queue_start_monotonic = time.monotonic()
- 
-     def start(self) -> bool:
-         """Emit the ``llm_start`` event if possible."""
- 
-         if not self.session_id or not self.phase:
-             return False
-         meta: dict[str, object] = {}
-         if self.turn_id:
-             meta["turn_id"] = str(self.turn_id)
-         if self.model:
-             meta["model"] = str(self.model)
-+        self._annotate_meta(meta)
-         try:
-             event_id = flow_emit(
-                 session_id=self.session_id,
-                 level="flow",
-                 phase=self.phase,
-                 type="llm_start",
-                 who=self.who,
-                 meta=meta or None,
-             )
-         except Exception:
-             return False
-         self._started = True
-         self._start_event_id = event_id or None
-         now = time.monotonic()
-         self._start_monotonic = now
-         if self._queue_start_monotonic is None:
-             self._queue_start_monotonic = now
-         self._queue_end_monotonic = now
-         return True
- 
-     def first_token(self) -> None:
-         """Record when the first token was observed from the provider."""
- 
-         self._first_token_monotonic = time.monotonic()
- 
-     def final(
-         self,
-         *,
-         tokens_out: Optional[int] = None,
-         tokens_in: Optional[int] = None,
-         finish_reason: Optional[object] = None,
-         text: Optional[str] = None,
-         chars: Optional[int] = None,
-     ) -> None:
-         """Emit the ``llm_final`` event when output text is ready."""
- 
-         if not self._started or not self.session_id or not self.phase:
-             return
-         meta: dict[str, object] = {}
-         if self.turn_id:
-             meta["turn_id"] = str(self.turn_id)
-         prompt_tokens = _coerce_int(tokens_in)
-         if prompt_tokens is not None and prompt_tokens >= 0:
-             meta["tokens_in"] = prompt_tokens
-         token_count = _coerce_int(tokens_out)
-+        char_count: Optional[int] = None
-         if token_count is not None and token_count >= 0:
-             meta["tokens_out"] = token_count
-         else:
-             char_count = _coerce_int(chars)
-             if char_count is None:
-                 char_count = len(text or "")
-             if char_count < 0:
-                 char_count = 0
-             meta["chars"] = char_count
-+        extra_evidence: Dict[str, object] = {}
-+        if prompt_tokens is not None and prompt_tokens >= 0:
-+            extra_evidence["tokens_in"] = prompt_tokens
-+        if token_count is not None and token_count >= 0:
-+            extra_evidence["tokens_out"] = token_count
-+        if char_count is not None and char_count >= 0:
-+            extra_evidence["chars"] = char_count
-+        if finish_reason is not None:
-+            try:
-+                extra_evidence["finish_reason"] = str(finish_reason)
-+            except Exception:
-+                pass
-+        self._annotate_meta(meta, extra=extra_evidence)
-         try:
-             flow_emit(
-                 session_id=self.session_id,
-                 level="flow",
-                 phase=self.phase,
-                 type="llm_final",
-                 who=self.who,
-                 meta=meta or None,
-             )
-             if self._start_event_id:
-                 stream_items = []
-                 now = time.monotonic()
-                 if self._start_monotonic:
-                     dt_ms = int(max(0.0, (now - self._start_monotonic) * 1000))
-                 else:
-                     dt_ms = 0
-                 bytes_len = 0
-                 if text:
-                     try:
-                         bytes_len = len((text or "").encode("utf-8"))
-                     except Exception:
-                         bytes_len = len(text or "")
-                 stream_items.append({"dt_ms": dt_ms, "bytes": bytes_len})
-                 debug_meta: dict[str, object] = {}
-                 queue_start = self._queue_start_monotonic or self._start_monotonic
-                 queue_end = self._queue_end_monotonic or self._start_monotonic
-                 if queue_start is not None and queue_end is not None:
-                     queue_ms = int(max(0.0, (queue_end - queue_start) * 1000))
-                     debug_meta["queue_ms"] = queue_ms
-                 base = queue_end or queue_start or self._start_monotonic
-                 if base is not None:
-                     if self._first_token_monotonic is not None:
-                         first_token_ms = int(
-                             max(0.0, (self._first_token_monotonic - base) * 1000)
-                         )
-                         debug_meta["first_token_ms"] = first_token_ms
-                     full_ms = int(max(0.0, (now - base) * 1000))
-                     debug_meta["full_ms"] = full_ms
-                 if prompt_tokens is not None and prompt_tokens >= 0:
-                     debug_meta["tokens_in"] = prompt_tokens
-                 if token_count is not None and token_count >= 0:
-                     debug_meta["tokens_out"] = token_count
-                 if finish_reason is not None:
-                     try:
-                         reason_text = str(finish_reason)
-                     except Exception:
-                         reason_text = None
-                     if reason_text:
-                         debug_meta["finish_reason"] = reason_text
-                 if debug_meta:
-+                    self._annotate_meta(debug_meta)
-                     try:
-                         flow_emit(
-                             session_id=self.session_id,
-                             level="debug",
-                             phase=self.phase,
-                             type="llm_latency",
-                             who=self.who,
-                             meta=debug_meta,
-                             parent_id=self._start_event_id,
-                         )
-                     except Exception:
-                         pass
-                 try:
-                     add_batch(self._start_event_id, "llm_stream", stream_items)
-                 except Exception:
-                     pass
-         except Exception:
-             pass
-         self._started = False
-         self._start_event_id = None
-         self._start_monotonic = None
-         self._queue_start_monotonic = None
-         self._queue_end_monotonic = None
-         self._first_token_monotonic = None
- 
-     def error(
-         self,
-         code: Optional[object] = None,
-         *,
-         state: Optional[dict[str, object]] = None,
-     ) -> None:
-         """Emit an ``llm_error`` transition with the provided code."""
- 
-         if not self.session_id or not self.phase:
-             return
-         meta: dict[str, object] = {}
-         if code is not None:
-             try:
-                 meta["code"] = str(code)
-             except Exception:
-                 meta["code"] = "unknown"
-+        self._annotate_meta(meta, extra={"code": meta.get("code")})
-         try:
-             event_id = flow_emit(
-                 session_id=self.session_id,
-                 level="transition",
-                 phase=self.phase,
-                 type="llm_error",
-                 who=self.who,
-                 meta=meta or None,
-             )
-             if state:
-                 cleaned = {
-                     key: value
-                     for key, value in state.items()
-                     if value is not None
-                 }
-                 try:
-                     flow_emit(
-                         session_id=self.session_id,
-                         level="debug",
-                         phase=self.phase,
-                         type="state_snapshot",
-                         who=self.who,
-                         meta=cleaned or None,
-                         parent_id=event_id or None,
-                     )
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index 50419502c060ef71dadd7fd8c2cabf18b071607f..f8a15e27e01ae83bb2ae2adfc8d832f9f5647a32 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -1,47 +1,48 @@
- # app/services/streaming.py — Production-grade assistant framing
- # Guarantees assistant_* frames are broadcast even if the LLM provider fails.
- # Text-first design: generate/broadcast assistant text; TTS is optional elsewhere.
- 
- from __future__ import annotations
- from typing import List, Dict, Tuple, Optional, Any, Iterable, Callable, Mapping
- import base64
- import hashlib
- import threading, time as _t
- import os
- import re
- import copy
- import random
- 
- from ..security_state import get_profile, get_user
- from ..session_state import (
-     get as get_session_state,
-     note_utterance_end,
-     set_phase,
-     should_emit_phase,
+ DEFAULT_HANDOFF_PROMPT = (
+     "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), "
+     "smallest viable fix, and validation steps."
  )
- from app.flow.emit import emit as flow_emit
-+from app.obs.source_tags import make_source_meta
- from .llm.flow_wrapper import make_llm_flow_tracker
- from .tts.flow_wrapper import make_tts_flow_tracker
- def _display_name_from_profile_or_email(meta: Optional[dict]) -> str:
-     # 1) Profile name
-     try:
-         prof = get_profile() or {}
-         name = str(prof.get("name") or "").strip()
-         if name:
-             return name.split()[0]
-     except Exception:
-         pass
-     # 2) Email to first name
-     email = None
-     try:
-         email = (meta or {}).get("email")
-     except Exception:
-         email = None
-     if not email:
-         try:
-             email = get_user() or None
-         except Exception:
-             email = None
-     if isinstance(email, str) and "@" in email:
-         first = email.split("@",1)[0].split(".")[0].replace("_"," ").replace("-", " ").strip()
-         if first:
-@@ -318,50 +319,69 @@ def _emit_turn_action_metadata(turn_id: Optional[str],
-     payload: Dict[str, Any] = {
-         "turn_id": turn_id,
-         "is_greet": bool(is_greet),
-         "nlu": {
-             "intent": nlu_meta.get("intent"),
-             "topic": nlu_meta.get("topic"),
-             "needs_scoping": nlu_meta.get("needs_scoping"),
-             "wants_list": nlu_meta.get("wants_list"),
-             "expected_depth": nlu_meta.get("expected_depth"),
-             "confidence": nlu_meta.get("confidence"),
-         },
-         "policy": policy_payload,
-     }
-     session_id_value: Optional[str] = None
-     if session_id:
-         session_id_value = str(session_id)
-     elif isinstance(meta, dict):
-         sid_candidate = meta.get("session_id") or meta.get("sid")
-         if sid_candidate:
-             try:
-                 session_id_value = str(sid_candidate)
-             except Exception:
-                 session_id_value = sid_candidate  # type: ignore[assignment]
-     if session_id_value:
-         payload["session_id"] = session_id_value
-+    evidence_payload: Dict[str, Any] = {}
-+    intent_val = payload.get("nlu", {}).get("intent") if isinstance(payload.get("nlu"), dict) else None
-+    if intent_val:
-+        evidence_payload["intent"] = intent_val
-+    action_val = policy_payload.get("action")
-+    if action_val:
-+        evidence_payload["action"] = action_val
-+    show_suggestions_val = policy_payload.get("show_suggestions")
-+    if show_suggestions_val is not None:
-+        evidence_payload["show_suggestions"] = bool(show_suggestions_val)
-+    try:
-+        payload.update(
-+            make_source_meta(
-+                "turn_action_metadata",
-+                evidence=evidence_payload or None,
-+            )
-+        )
-+    except Exception:
-+        pass
-     try:
-         _admin_emit("turn_action_metadata", **payload)
-     except Exception:
-         pass
-     _broadcast_admin_ws_event("turn_action_metadata", payload)
  
- 
- def _get_persona_for_session(session_id: str) -> Dict:
-     try:
-         sess = db.memory.get('sessions', {}).get(session_id) or {}
-         persona_id = (sess.get('persona_id') or 'chip')
-         return db.memory.get('personas', {}).get(persona_id) or {'id': 'chip'}
-     except Exception:
-         return {'id': 'chip'}
- 
- 
- def _build_prompt(seed_text: str, persona: Dict, kb_snippets: List[str], teacher_move: Optional[str]) -> str:
-     parts = [build_persona_preamble(persona)]
-     if kb_snippets:
-         parts.append(format_kb_context(kb_snippets))
-     if teacher_move:
-         parts.append(f"Teacher move: {teacher_move}.")
-     parts.append(f"User said: {seed_text.strip()}")
-     return "\n\n".join(parts)
- 
-@@ -564,50 +584,67 @@ def _log_policy_decision(*,
- 
-         payload: Dict[str, Any] = {
-             "sid": session_id,
-             "turn_id": turn_id,
-             "teacher_move": resolved_move_name or None,
-             "teacher_move_family": _teacher_move_family(resolved_move_name),
-             "reason": reason,
-             "fallback_fired": bool(fallback_fired),
-             "fallback_reason": fallback_reason,
-             "nlu_intent": nlu_intent,
-             "nlu_confidence": nlu_confidence,
-         }
-         if session_id:
-             try:
-                 payload["session_id"] = str(session_id)
-             except Exception:
-                 payload["session_id"] = session_id  # type: ignore[assignment]
-         if normalized_action_name:
-             payload["meta_action"] = normalized_action_name
-         if policy_move_name:
-             payload["policy_move"] = policy_move_name
-         if seed_move_name and seed_move_name != resolved_move_name:
-             payload["persona_move"] = seed_move_name
-         if used_docs:
-             payload["used_docs"] = used_docs
-+        evidence_payload: Dict[str, Any] = {
-+            "reason": reason,
-+            "policy_move": policy_move_name,
-+            "meta_action": normalized_action_name,
-+        }
-+        teacher_move_val = resolved_move_name or seed_move_name
-+        if teacher_move_val:
-+            evidence_payload["teacher_move"] = teacher_move_val
-+        try:
-+            payload.update(
-+                make_source_meta(
-+                    "dialog_policy",
-+                    evidence={k: v for k, v in evidence_payload.items() if v},
-+                )
-+            )
-+        except Exception:
-+            pass
-         _jlog("policy.decision", **payload)
- 
-         if callable(_admin_emit):
-             label_move = (
-                 resolved_move_name
-                 or policy_move_name
-                 or normalized_action_name
-                 or seed_move_name
-                 or "unknown"
-             )
-             try:
-                 _admin_emit(
-                     "policy_decision",
-                     event="policy_decision",
-                     label=f"policy_decision: {label_move}",
-                     decision=label_move,
-                     **payload,
-                 )
-             except Exception:
-                 pass
-         _broadcast_admin_ws_event("policy_decision", payload)
-     except Exception:
-         pass
- 
- 
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 9e1b3ab1dc17658141b36e05eb0198bd7e4ca093..8ad7bb0031cd3046ecd3693f5e97f926927a0191 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -1,40 +1,41 @@
- from __future__ import annotations
- 
- import asyncio
- import json
- import logging
- import os
- import re
- import time
- import warnings
- from typing import AsyncGenerator, Optional, Any, Deque, Tuple, Callable
- from collections import deque
- 
- import websockets  # provided by uvicorn[standard]
- 
- from app.flow.emit import emit as flow_emit
-+from app.obs.source_tags import make_source_meta
- from app.ws.bus import bus as stream_bus
- 
- from .asr_metrics import record_turn_metrics
- 
- try:
-     from app.admin_log import emit as _admin_emit
- except Exception:  # pragma: no cover - extremely defensive
- 
-     def _admin_emit(*a, **k):  # type: ignore[empty-body]
-         pass
- 
- try:
-     from websockets import exceptions as _ws_exceptions  # type: ignore[attr-defined]
- except Exception:  # pragma: no cover - extremely defensive
-     _ws_exceptions = None  # type: ignore[assignment]
- else:
-     _invalid_types = []
-     with warnings.catch_warnings():
-         warnings.simplefilter("ignore", DeprecationWarning)
-         for _name in ("InvalidStatus", "InvalidStatusCode"):
-             _cls = getattr(_ws_exceptions, _name, None)
-             if isinstance(_cls, type):
-                 _invalid_types.append(_cls)
-     _INVALID_STATUS_TYPES = tuple(_invalid_types)
- if "_INVALID_STATUS_TYPES" not in globals():
-@@ -727,50 +728,56 @@ class DeepgramClient:
-         self._turn_counter: int = 0
-         self._turn_current_id: Optional[int] = None
-         self._turn_active: bool = False
-         self._turn_start_ts: float = 0.0
-         self._turn_first_partial_ts: float = 0.0
-         self._turn_final_ts: float = 0.0
-         self._turn_bytes_baseline: int = 0
-         self._turn_metrics_recorded: bool = False
-         self._turn_saw_1011: bool = False
-         self._turn_last_close_code: Optional[int] = None
-         self._turn_first_partial_emitted: bool = False
-         self._turn_final_emitted: bool = False
- 
-         # Deepgram feature toggles
-         self._desired_vad_state: bool = True
-         self._vad_events_enabled: bool = True
- 
-     def _diag_payload(self, **extra: Any) -> dict:
-         payload: dict[str, Any] = {"provider": "deepgram"}
-         if self._diag_session_id:
-             payload["session_id"] = self._diag_session_id
-         tag = self._url_tag or self._diag_tag_hint
-         if tag:
-             payload["tag"] = tag
-         payload.update(extra)
-+        provider = payload.get("provider")
-+        evidence = {"provider": provider} if provider else None
-+        try:
-+            payload.update(make_source_meta("asr_provider", evidence=evidence))
-+        except Exception:
-+            pass
-         return payload
- 
-     def _emit_diag(self, label: str, **extra: Any) -> None:
-         payload = self._diag_payload(**extra)
-         hook = self._diag_hook
-         if callable(hook):
-             try:
-                 hook(label, **payload)
-             except TypeError:
-                 try:
-                     hook(label, payload)
-                 except Exception:
-                     pass
-             except Exception:
-                 pass
-         try:
-             _admin_emit("asr:diag", label=label, **dict(payload))
-         except Exception:
-             pass
- 
-     def _emit_transition_event(
-         self,
-         event: str,
-         *,
-         code: Optional[object] = None,
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 724db037933af70987934db097c27e6301a818f1..ad4c1e3d96d5109bd8d060d1b4b9d07d3d1d2a18 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -446,50 +446,76 @@ def _emit_admin_nlu_event(text: str,
- 
-     if "products" not in entities_payload:
-         entities_payload["products"] = []
- 
-     if "product" not in entities_payload:
-         products = entities_payload.get("products")
-         if isinstance(products, list) and products:
-             entities_payload["product"] = products[0]
-         else:
-             entities_payload["product"] = None
- 
-     if "env" not in entities_payload:
-         env_candidate = None
-         if isinstance(dialog_entities, dict):
-             env_candidate = dialog_entities.get("env")
-         if env_candidate is None and isinstance(dialog_nlu, dict):
-             env_candidate = dialog_nlu.get("env")
-         entities_payload["env"] = env_candidate
- 
-     if "keywords" not in entities_payload:
-         keywords = canonical_universal.get("entities", {}).get("keywords") if isinstance(canonical_universal.get("entities"), dict) else None
-         entities_payload["keywords"] = list(keywords or [])
- 
-     payload["entities"] = _safe_copy(entities_payload)
- 
-+    evidence_payload: Dict[str, Any] = {}
-+    intent_val = dialog_nlu.get("intent") if isinstance(dialog_nlu, dict) else None
-+    if intent_val:
-+        evidence_payload["intent"] = intent_val
-+    confidence_val = dialog_nlu.get("confidence") if isinstance(dialog_nlu, dict) else None
-+    if confidence_val is not None:
-+        try:
-+            evidence_payload["confidence"] = float(confidence_val)
-+        except Exception:
-+            try:
-+                evidence_payload["confidence"] = str(confidence_val)
-+            except Exception:
-+                pass
-+    phase_val = payload.get("phase")
-+    if isinstance(phase_val, str) and phase_val:
-+        evidence_payload["phase"] = phase_val
-+    try:
-+        payload.update(
-+            make_source_meta(
-+                "nlu_runtime",
-+                evidence=evidence_payload or None,
-+            )
-+        )
-+    except Exception:
-+        pass
+-_HANDOFF_TELEMETRY_SCHEMAS = ["barge_decision.v1"]
++_HANDOFF_TELEMETRY_SCHEMAS = [
++    schema
++    for schema in {"barge_decision.v1", FLOW_SCHEMA_VERSION}
++    if isinstance(schema, str) and schema.strip()
++]
 +
-     try:
-         admin_cb("nlu", **payload)
-     except Exception:
-         pass
++
++def _json_compatible(value: Any) -> Any:
++    if isinstance(value, Mapping):
++        return {str(key): _json_compatible(val) for key, val in value.items()}
++    if isinstance(value, (list, tuple, set)):
++        return [_json_compatible(item) for item in value]
++    if isinstance(value, (str, int, float, bool)) or value is None:
++        return value
++    return str(value)
++
++
++def _json_bytes(payload: Any) -> bytes:
++    normalized = _json_compatible(payload)
++    return json.dumps(normalized, ensure_ascii=False, indent=2).encode("utf-8")
++
++
++def _collect_audit_log_entries() -> List[Any]:
++    try:
++        memory = getattr(db, "memory", {})
++    except Exception:  # pragma: no cover - extremely defensive
++        memory = {}
++    logs_bucket = memory.get("logs")
++    if not isinstance(logs_bucket, list):
++        return []
++    entries: List[Any] = []
++    for item in logs_bucket:
++        if isinstance(item, Mapping):
++            entries.append(dict(item))
++        else:
++            entries.append(item)
++    return entries
++
++
++def _prepare_audit_logs(*, pii_scrub: bool) -> Tuple[bytes, Set[str], bool]:
++    raw_entries = _collect_audit_log_entries()
++    sanitized_entries: List[Any] = []
++    schemas: Set[str] = set()
++    for entry in raw_entries:
++        processed = _scrub_node(entry) if pii_scrub else entry
++        if isinstance(processed, Mapping):
++            schema_value = processed.get("schema")
++            if isinstance(schema_value, str) and schema_value.strip():
++                schemas.add(schema_value.strip())
++        sanitized_entries.append(_json_compatible(processed))
++    return _json_bytes(sanitized_entries), schemas, bool(sanitized_entries)
  
+ _TEXT_EXACT_KEYS = {
+     "text",
+     "text_preview",
+     "user_text",
+     "assistant_text",
+     "tts_text",
+     "raw_text",
+     "message",
+     "body",
+     "delta",
+     "response",
+     "prompt",
+     "content",
+ }
+ _TEXT_SUFFIXES = ("_text", "_message", "_body", "_delta", "_content")
+ _TEXT_SUBSTRINGS = ("transcript", "utterance")
+ _DEVICE_KEYWORDS = ("device", "hardware", "microphone", "speaker", "headset")
+ _DEVICE_CLASS_MAP = {
+     "iphone": "iphone",
+     "ipad": "ipad",
+     "macbook": "mac",
+     "imac": "mac",
+     "mac": "mac",
+     "pixel": "android",
+@@ -899,97 +962,110 @@ def flow_handoff():
+             abort(400, description="limits.max_bytes must be >= 0")
  
- def _get_session_id(scope) -> str:
-     try:
-         raw = (scope.get("query_string") or b"").decode("utf-8", "ignore")
-         if raw:
-             for pair in raw.split("&"):
-                 if not pair or "=" not in pair:
-                     continue
-                 k, v = pair.split("=", 1)
-                 if k == "session_id":
-                     return v or "default"
-     except Exception:
-         pass
-     return "default"
+     store = FlowStore()
+     snapshot = store.snapshot(session_id=session_id, levels=levels, expand="all")
+     events = snapshot.events
+     event_count = len(events)
  
+     generated_at = datetime.now(timezone.utc).isoformat()
  
- def _has_deepgram_key() -> bool:
-     return bool((os.getenv("DEEPGRAM_API_KEY") or "").strip())
+     def _to_ndjson_bytes(items: Iterable[Dict[str, Any]]) -> bytes:
+         lines = [
+             json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+             for item in items
+         ]
+         ndjson_text = "\n".join(lines)
+         if ndjson_text:
+             ndjson_text += "\n"
+         return ndjson_text.encode("utf-8")
  
+     if not is_full:
+         redacted_events = [_redact_event(event) for event in events]
+         if pii_scrub_requested:
+             redacted_events = [_scrub_event(event) for event in redacted_events]
+         ndjson_bytes = _to_ndjson_bytes(redacted_events)
+         payload_sha = hashlib.sha1(ndjson_bytes).hexdigest()
++        audit_bytes, audit_schemas, _ = _prepare_audit_logs(
++            pii_scrub=pii_scrub_requested
++        )
++        telemetry_schemas = set(_HANDOFF_TELEMETRY_SCHEMAS)
++        telemetry_schemas.update(audit_schemas)
++
+         meta_payload = {
+             "session_id": session_id,
+             "levels": levels,
+             "generated_at": generated_at,
+             "event_count": len(redacted_events),
+             "payload_sig": {"bytes": len(ndjson_bytes), "sha1_8": payload_sha[:8]},
+             "mode": mode,
+         }
+         if pii_scrub_requested:
+             meta_payload["privacy"] = {"pii_scrub": True}
++        if telemetry_schemas:
++            meta_payload["telemetry_schemas"] = sorted(telemetry_schemas)
  
-@@ -1472,80 +1498,105 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             except Exception:
-                 policy_version = "unknown"
+         buffer = io.BytesIO()
+         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+             archive.writestr("flow.ndjson", ndjson_bytes)
+             archive.writestr("prompt.txt", prompt_text)
+             archive.writestr(
+                 "meta.json",
+                 json.dumps(meta_payload, ensure_ascii=False, indent=2),
+             )
++            archive.writestr("logs/audit.json", audit_bytes)
+         zip_bytes = buffer.getvalue()
+         if max_bytes is not None and len(zip_bytes) > max_bytes:
+             return _too_large_response()
+     else:
+         export_events = [copy.deepcopy(event) for event in events]
+         if pii_scrub_requested:
+             export_events = [_scrub_event(event) for event in export_events]
+         event_bytes = _to_ndjson_bytes(export_events)
+         gzip_buffer = io.BytesIO()
+         with gzip.GzipFile(fileobj=gzip_buffer, mode="wb") as gz_handle:
+             gz_handle.write(event_bytes)
+         events_gz_bytes = gzip_buffer.getvalue()
  
-     if not policy:
+         config_payload = snapshot.config if isinstance(snapshot.config, dict) else {}
+         policy_snapshot = _extract_policy_snapshot(config_payload)
          try:
-             policy = load_policy()
-         except Exception:
-             policy = {}
- 
-     if not isinstance(policy_version, str) or not policy_version:
-         policy_version = "unknown"
- 
-     manual_feature_enabled = True
-     manual_mode_manual_only = False
-     auto_commit_when_ready = True
-     local_vad_allowed = True
-     barge_require_asr_evidence = False
-     barge_suppress_mode = "none"
-     barge_post_tts_hold_ms = 0
-     barge_allow_ptt = True
-     auto_commit_requires_dual = False
-     auto_commit_requires_asr_ready = False
- 
-     if not flow_session_open_emitted:
-         meta = {"policy_version": policy_version}
-+        try:
-+            meta["source_meta"] = make_source_meta(
-+                "policy_loader",
-+                evidence={"policy_version": policy_version} if policy_version else None,
-+            )
-+        except Exception:
-+            pass
-         session_event_id = _emit_flow_event("session_open", phase="session", meta=meta)
-         flow_session_open_emitted = True
-         if session_event_id:
-             session_flow_event_id[0] = session_event_id
-             policy_meta: Dict[str, Any] = {"policy_version": policy_version}
-             if isinstance(policy, dict):
-                 try:
-                     policy_meta["policy"] = copy.deepcopy(policy)
-                 except Exception:
-                     try:
-                         policy_meta["policy"] = dict(policy)
-                     except Exception:
-                         policy_meta["policy"] = {}
-+            try:
-+                policy_meta["source_meta"] = make_source_meta(
-+                    "policy_loader",
-+                    evidence={"policy_version": policy_version} if policy_version else None,
-+                )
-+            except Exception:
-+                pass
-             _emit_debug_event(
-                 "policy_snapshot",
-                 phase="session",
-                 parent_id=session_event_id,
-                 meta=policy_meta,
+             config_text = json.dumps(
+                 config_payload, ensure_ascii=False, indent=2, sort_keys=True
              )
-             runtime_meta = {
-                 "manual_feature_enabled": bool(manual_feature_enabled),
-                 "manual_mode_manual_only": bool(manual_mode_manual_only),
-                 "auto_commit_when_ready": bool(auto_commit_when_ready),
-                 "local_vad_allowed": bool(local_vad_allowed),
-                 "barge_require_asr_evidence": bool(barge_require_asr_evidence),
-                 "barge_suppress_mode": barge_suppress_mode or "none",
-                 "barge_post_tts_hold_ms": int(barge_post_tts_hold_ms),
-                 "auto_commit_requires_dual": bool(auto_commit_requires_dual),
-                 "auto_commit_requires_asr_ready": bool(auto_commit_requires_asr_ready),
-             }
-+            try:
-+                runtime_meta["source_meta"] = make_source_meta(
-+                    "policy_runtime",
-+                    evidence={
-+                        "auto_commit_when_ready": bool(auto_commit_when_ready),
-+                        "auto_commit_requires_dual": bool(auto_commit_requires_dual),
-+                        "auto_commit_requires_asr_ready": bool(auto_commit_requires_asr_ready),
-+                    },
-+                )
-+            except Exception:
-+                pass
-             _emit_debug_event(
-                 "runtime_flags",
-                 phase="session",
-                 parent_id=session_event_id,
-                 meta=runtime_meta,
+         except TypeError:
+             config_text = json.dumps({}, ensure_ascii=False, indent=2)
+         config_bytes = config_text.encode("utf-8")
+ 
+         prompt_bytes = prompt_text.encode("utf-8")
+ 
+         include_ws_requested = bool(include_options.get("ws"))
+         include_logs_requested = bool(include_options.get("logs"))
+ 
++        audit_bytes, audit_schemas, audit_has_entries = _prepare_audit_logs(
++            pii_scrub=pii_scrub_requested
++        )
++
+         server_log_bytes_raw = slice_server_log_for_session(session_id)
+         if not server_log_bytes_raw:
+             server_log_bytes_raw = gzip.compress(b"")
+         server_log_bytes = (
+             _scrub_gzip_bytes(server_log_bytes_raw)
+             if pii_scrub_requested
+             else server_log_bytes_raw
+         )
+         server_log_entries = _decode_gzip_ndjson(server_log_bytes)
+ 
+         timeline_payload = _build_timeline_payload(
+             session_id=session_id,
+             generated_at=generated_at,
+             flow_events=export_events,
+             server_events=server_log_entries,
+         )
+         timeline_bytes: Optional[bytes] = None
+         if timeline_payload:
+             timeline_bytes = json.dumps(
+                 timeline_payload, ensure_ascii=False, indent=2
+             ).encode("utf-8")
+ 
+         include_meta: Dict[str, Any] = {}
+         privacy_meta: Dict[str, Any] = {}
+         for key, value in privacy_options.items():
+@@ -1038,133 +1114,144 @@ def flow_handoff():
+                         ws_bytes,
+                         "application/x-ndjson+gzip",
+                         "Sampled WebSocket frames",
+                     )
+                 )
+ 
+         client_log_bytes = None
+         if include_logs_requested:
+             client_log_bytes = slice_client_console_for_session(session_id)
+             if client_log_bytes and pii_scrub_requested:
+                 client_log_bytes = _scrub_gzip_bytes(client_log_bytes)
+             if client_log_bytes:
+                 optional_files.append(
+                     (
+                         "client/console.log.gz",
+                         client_log_bytes,
+                         "text/plain+gzip",
+                         "Client console events",
+                     )
+                 )
+ 
+         if include_ws_requested:
+             include_meta["ws"] = bool(ws_bytes)
+         if include_logs_requested:
+             include_meta["logs"] = bool(client_log_bytes or server_log_entries)
++        include_meta["audit"] = audit_has_entries
+ 
+         manifest_files = [
+             _manifest_entry(
+                 "prompt.txt",
+                 prompt_bytes,
+                 content_type="text/plain; charset=utf-8",
+                 description="Flow analysis prompt",
+             ),
+             _manifest_entry(
+                 "events/flow.ndjson.gz",
+                 events_gz_bytes,
+                 content_type="application/x-ndjson+gzip",
+                 description="Session events (gzipped NDJSON)",
+             ),
+             _manifest_entry(
+                 "config/config.json",
+                 config_bytes,
+                 content_type="application/json",
+                 description="Session configuration snapshot",
+             ),
+             _manifest_entry(
+                 "server/server.log.gz",
+                 server_log_bytes,
+                 content_type="text/plain+gzip",
+                 description="Server admin log slice",
+             ),
++            _manifest_entry(
++                "logs/audit.json",
++                audit_bytes,
++                content_type="application/json",
++                description="Admin audit logs",
++            ),
+         ]
+ 
+         if timeline_bytes:
+             manifest_files.append(
+                 _manifest_entry(
+                     "events/flow.json",
+                     timeline_bytes,
+                     content_type="application/json",
+                     description="Key event timeline",
+                 )
              )
  
-     transport_meta = {
-         "path": str(scope.get("path") or ""),
-         "client_ip": client_ip,
-     }
-     transport_event_id = _emit_flow_event(
-         "ws_transport",
-         phase="session",
-         meta=transport_meta,
+         for path, data, content_type, description in optional_files:
+             manifest_files.append(
+                 _manifest_entry(
+                     path,
+                     data,
+                     content_type=content_type,
+                     description=description,
+                 )
+             )
+ 
+         manifest_meta: Dict[str, Any] = {"mode": mode, "redacted": False}
+         if include_meta:
+             manifest_meta["include"] = include_meta
+         if privacy_meta:
+             manifest_meta["privacy"] = privacy_meta
+         if limits_meta:
+             manifest_meta["limits"] = limits_meta
+         if snapshot.started_at_iso:
+             manifest_meta["session_started_at"] = snapshot.started_at_iso
+ 
++        telemetry_schemas = set(_HANDOFF_TELEMETRY_SCHEMAS)
++        telemetry_schemas.update(audit_schemas)
++
+         manifest_payload = {
+             "schema_version": "1.0",
+             "exported_at": generated_at,
+             "session_id": session_id,
+             "levels": levels,
+             "event_count": event_count,
+             "files": manifest_files,
+         }
+-        if _HANDOFF_TELEMETRY_SCHEMAS:
+-            manifest_payload["telemetry_schemas"] = list(_HANDOFF_TELEMETRY_SCHEMAS)
++        if telemetry_schemas:
++            manifest_payload["telemetry_schemas"] = sorted(telemetry_schemas)
+         if manifest_meta:
+             manifest_payload["meta"] = manifest_meta
+         manifest_payload["policy_snapshot"] = policy_snapshot or {}
+ 
+         manifest_bytes = json.dumps(
+             manifest_payload, ensure_ascii=False, indent=2
+         ).encode("utf-8")
+ 
+         buffer = io.BytesIO()
+         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+             archive.writestr("prompt.txt", prompt_bytes)
+             archive.writestr("manifest.json", manifest_bytes)
+             archive.writestr("events/flow.ndjson.gz", events_gz_bytes)
+             archive.writestr("config/config.json", config_bytes)
+             archive.writestr("server/server.log.gz", server_log_bytes)
++            archive.writestr("logs/audit.json", audit_bytes)
+             if timeline_bytes:
+                 archive.writestr("events/flow.json", timeline_bytes)
+             for path, data, _, _ in optional_files:
+                 archive.writestr(path, data)
+         zip_bytes = buffer.getvalue()
+ 
+     if max_bytes is not None and len(zip_bytes) > max_bytes:
+         return _too_large_response()
+ 
+     response = Response(zip_bytes, mimetype="application/zip")
+     safe_session = re.sub(r"[^a-zA-Z0-9_-]+", "_", session_id) or "session"
+     response.headers[
+         "Content-Disposition"
+     ] = f'attachment; filename="flow_handoff_{safe_session}.zip"'
+     response.headers["X-Flow-Redacted"] = "0" if is_full else "1"
+     response.headers["X-Flow-Payload-Bytes"] = str(len(zip_bytes))
+     response.headers["X-Flow-Payload-Sha1"] = hashlib.sha1(zip_bytes).hexdigest()
+     response.headers["X-Flow-Mode"] = mode
+     if pii_scrub_requested:
+         response.headers["X-Flow-PII-Scrubbed"] = "1"
+     response.headers["Cache-Control"] = "no-store"
+     return response
+ 
+ 
+ __all__ = ["bp"]
+diff --git a/tests/test_flow_api.py b/tests/test_flow_api.py
+index 943ed56bf04e84b1e86f9dcff05af3399daa46ea..6653a8326ee923a1ce2ea4e2d97a7321d4e7b7ce 100644
+--- a/tests/test_flow_api.py
++++ b/tests/test_flow_api.py
+@@ -1,37 +1,38 @@
+ import gzip
+ import hashlib
+ import io
+ import json
+ import zipfile
+ 
+ import pytest
+ 
+ from app.api_v1 import flow as flow_api
+ from app.asgi_gateway import app as flask_app
+ from app.flow.trace import FlowStore
+ from app.admin_log import clear_admin_log_history_for_tests, emit as admin_log_emit
++from app.obs.source_tags import FLOW_SCHEMA_VERSION
+ 
+ 
+ @pytest.fixture(autouse=True)
+ def reset_flow_store():
+     store = FlowStore()
+     store._init()
+     flow_api._CLIENT_BREADCRUMB_HITS.clear()
+     clear_admin_log_history_for_tests()
+     yield
+     store._init()
+     flow_api._CLIENT_BREADCRUMB_HITS.clear()
+     clear_admin_log_history_for_tests()
+ 
+ 
+ @pytest.fixture
+ def admin_env(monkeypatch):
+     monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
+     return {"X-User-Email": "admin@example.com"}
+ 
+ 
+ @pytest.fixture
+ def flow_clock(monkeypatch):
+     clock = {"now": 1000.0}
+ 
+     def fake_monotonic():
+@@ -364,87 +365,134 @@ def test_flow_handoff_full_mode_includes_manifest(admin_env):
+     resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
+     assert resp.status_code == 200
+     assert resp.headers["Content-Type"].startswith("application/zip")
+     assert resp.headers["X-Flow-Redacted"] == "0"
+     assert resp.headers["X-Flow-Mode"] == "full"
+     assert resp.headers["X-Flow-Payload-Bytes"] == str(len(resp.data))
+     assert resp.headers["X-Flow-Payload-Sha1"] == hashlib.sha1(resp.data).hexdigest()
+ 
+     with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
+         names = set(archive.namelist())
+         assert {
+             "prompt.txt",
+             "manifest.json",
+             "events/flow.ndjson.gz",
+             "config/config.json",
+         } <= names
+ 
+         prompt_text = archive.read("prompt.txt").decode("utf-8").strip()
+         assert prompt_text == "Investigate deeply"
+ 
+         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+         assert manifest["schema_version"] == "1.0"
+         assert manifest["session_id"] == "sess-full"
+         assert manifest["meta"]["mode"] == "full"
+         assert manifest["meta"]["redacted"] is False
+-        assert manifest["telemetry_schemas"] == ["barge_decision.v1"]
++        assert set(manifest["telemetry_schemas"]) == {
++            "barge_decision.v1",
++            FLOW_SCHEMA_VERSION,
++        }
+         assert manifest["policy_snapshot"] == {
+             "voice_runtime": {
+                 "barge_in": {
+                     "suppress_during_tts": "partial",
+                     "post_tts_hold_ms": 150,
+                     "allow_ptt": False,
+                     "require_asr_evidence": True,
+                 }
+             },
+             "asr": {"vad": {"enabled": True}},
+         }
+         assert manifest["meta"]["include"]["ws"] is False
+-        assert "logs" not in manifest["meta"]["include"]
++        assert manifest["meta"]["include"].get("logs") is None
++        assert manifest["meta"]["include"]["audit"] is False
+         assert manifest["meta"]["privacy"]["pii_scrub"] is True
+         assert manifest["meta"]["privacy"]["redaction"] == "minimal"
+         assert manifest["meta"]["limits"]["max_bytes"] == 5_000_000
+         assert manifest["event_count"] >= 2
+ 
+         files_meta = {entry["path"]: entry for entry in manifest["files"]}
+         for path, entry in files_meta.items():
+             data = archive.read(path)
+             assert entry["bytes"] == len(data)
+             assert entry["sha1"] == hashlib.sha1(data).hexdigest()
+             assert entry["sha1_first8"] == entry["sha1"][:8]
+ 
+         events_text = gzip.decompress(archive.read("events/flow.ndjson.gz")).decode("utf-8")
+         assert "Full transcript event" in events_text
+         assert "keep" in events_text
+ 
+         config_payload = json.loads(
+             archive.read("config/config.json").decode("utf-8")
+         )
+         assert config_payload["foo"] == "bar"
+         assert config_payload["nested"]["value"] == 1
+ 
+ 
++def test_flow_handoff_includes_admin_audit_logs(admin_env):
++    from app.db import db as memory_db
++    from app.logging import admin_log
++
++    store = FlowStore()
++    session_id = "sess-audit"
++    store.emit(session_id, "flow", "session", "session_open", "system")
++
++    logs_bucket = memory_db.memory.setdefault("logs", [])
++    original_logs = list(logs_bucket)
++    logs_bucket.clear()
++    try:
++        admin_log("Audit check", email="auditor@example.com", role="auditor")
++
++        client = flask_app.test_client()
++        csrf_resp = client.get("/api/v1/csrf", headers=admin_env)
++        token = csrf_resp.headers.get("X-CSRF-Token")
++        headers = dict(admin_env)
++        if token:
++            headers["X-CSRF-Token"] = token
++
++        body = {"session_id": session_id, "options": {"mode": "full"}}
++
++        resp = client.post("/api/v1/flow/handoff", json=body, headers=headers)
++        assert resp.status_code == 200
++
++        with zipfile.ZipFile(io.BytesIO(resp.data)) as archive:
++            names = set(archive.namelist())
++            assert "logs/audit.json" in names
++
++            audit_payload = json.loads(archive.read("logs/audit.json").decode("utf-8"))
++            assert isinstance(audit_payload, list)
++            assert any(entry.get("message") == "Audit check" for entry in audit_payload)
++            assert any(entry.get("schema") == FLOW_SCHEMA_VERSION for entry in audit_payload)
++
++            manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
++            assert manifest["meta"]["include"]["audit"] is True
++            assert FLOW_SCHEMA_VERSION in manifest["telemetry_schemas"]
++    finally:
++        logs_bucket.clear()
++        logs_bucket.extend(original_logs)
++
++
+ def test_flow_handoff_includes_optional_artifacts(admin_env):
+     store = FlowStore()
+     session_id = "sess-optional"
+ 
+     store.emit(session_id, "flow", "session", "session_open", "system")
+     store.emit(
+         session_id,
+         "debug",
+         "session",
+         "ws_frame_in",
+         "system",
+         meta={"type": "text", "bytes": 12, "route": "client"},
      )
-     if transport_event_id:
-         ws_transport_parent_id[0] = transport_event_id
-     elif session_flow_event_id[0]:
-         ws_transport_parent_id[0] = session_flow_event_id[0]
- 
-     ws_frames_in = 0
-     ws_bytes_in = 0
-     ws_text_frames_in = 0
-     ws_frames_out = 0
+     store.emit(
+         session_id,
+         "debug",
+         "session",
+         "ws_frame_out",
+         "system",
+         meta={"type": "binary", "bytes": 18, "route": "bus"},
+     )
+     store.emit(
+         session_id,
+         "debug",
+         "client",
