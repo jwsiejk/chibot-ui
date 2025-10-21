@@ -2487,7 +2487,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         no_audio_window_s = 10.0
     if no_audio_window_s < 0:
         no_audio_window_s = 0.0
-    no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", True)
+    no_audio_broadcast_enabled = _env_truth("WS_NO_AUDIO_NUDGE", False)
     asr_ready_evt: asyncio.Event = asyncio.Event()
     asr_ready_wait_s: float = float(os.getenv("ASR_READY_WAIT_S", "3.0"))
     max_buffered_chunks = max(1, int(os.getenv("ASR_MAX_BUFFERED_CHUNKS", "16")))
