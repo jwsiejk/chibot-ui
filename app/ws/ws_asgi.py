@@ -1976,6 +1976,14 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     _reapply_interaction_policy()
 
     _jlog(
+        "voice_runtime_effective",
+        sid=sid,
+        feature_manual_barge_in=bool(manual_feature_enabled),
+        barge_in_mode_manual=bool(manual_mode_manual_only),
+        auto_commit_when_ready=bool(auto_commit_when_ready),
+    )
+
+    _jlog(
         "voice_runtime_config",
         sid=sid,
         suppress_during_tts=barge_suppress_mode or "none",
@@ -5620,9 +5628,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 )
                                 manual_mode_manual_only = bool(
                                     cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-                                )
-                                auto_commit_when_ready = bool(
-                                    cfg.get("auto_commit_when_ready", auto_commit_when_ready)
                                 )
                                 _reapply_interaction_policy()
                                 ws_configured = True

@@ -1,222 +1,117 @@
 diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 8b2de62e5c40b845873617f8a5e976003e163786..160d8f1eaf841dd44c4c741ad695e62bf4d2ec7b 100644
+index 160d8f1eaf841dd44c4c741ad695e62bf4d2ec7b..a5ba287f9e8a6b989470ed81f8feff54c818fb12 100644
 --- a/app/ws/ws_asgi.py
 +++ b/app/ws/ws_asgi.py
-@@ -2134,50 +2134,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         base: Dict[str, Any] = {}
-         existing = barge_pause_meta_ref[0]
-         if isinstance(existing, dict) and existing.get("src") == src:
-             base.update(existing)
-         base["src"] = src
-         if extra:
-             for key, value in extra.items():
-                 if key == "src":
-                     continue
-                 base[key] = value
-         if tts_active is None:
-             tts_active = _current_tts_active()
-         try:
-             base["tts_active"] = bool(tts_active)
-         except Exception:
-             base["tts_active"] = bool(tts_active)
-         barge_pause_meta_ref[0] = base
+@@ -1953,50 +1953,58 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+         allow_ptt_value = barge_policy.get("allow_ptt")
+         if isinstance(allow_ptt_value, bool):
+             barge_allow_ptt = allow_ptt_value
+         allow_local_vad_value = barge_policy.get("allow_local_vad")
+         if isinstance(allow_local_vad_value, bool):
+             local_vad_allowed = allow_local_vad_value
+         require_asr_value = barge_policy.get("require_asr_evidence")
+         if isinstance(require_asr_value, bool):
+             barge_require_asr_evidence = require_asr_value
+         suppress_mode_value = barge_policy.get("suppress_during_tts")
+         if isinstance(suppress_mode_value, str):
+             suppress_mode_value = suppress_mode_value.strip().lower()
+             if suppress_mode_value:
+                 barge_suppress_mode = suppress_mode_value
+         post_hold_value = barge_policy.get("post_tts_hold_ms")
+         if isinstance(post_hold_value, (int, float)):
+             barge_post_tts_hold_ms = max(0, int(post_hold_value))
  
-     def _send_barge_state(phase: str) -> None:
-         if not phase:
-             return
-         prev = last_barge_phase[0]
-         if phase == "paused":
-             pause_meta = dict(barge_pause_meta_ref[0] or {})
-             pause_meta.setdefault("src", "unknown")
-+            if pause_meta.get("src") == "client_vad":
-+                pause_meta["src"] = "unknown"
-             if "tts_active" not in pause_meta:
-                 pause_meta["tts_active"] = _current_tts_active()
-             _emit_transition_event("barge_in", meta=pause_meta)
-         elif prev == "paused":
-             if phase == "assistant_speaking":
-                 resume_meta: Dict[str, Any] = {}
-                 pause_meta = barge_pause_meta_ref[0] or {}
-                 src_val = pause_meta.get("src") if isinstance(pause_meta, dict) else None
-                 if src_val:
-                     resume_meta["src"] = src_val
-                 resume_meta["tts_active"] = _current_tts_active()
-                 _emit_transition_event("barge_resume", meta=resume_meta or None)
-             barge_pause_meta_ref[0] = None
+     manual_feature_enabled = bool(config_manual_feature_enabled and barge_allow_ptt)
+     auto_commit_when_ready = bool(
+         config_auto_commit_enabled and policy_auto_commit_enabled
+     )
  
-         frame = {"type": "state", "phase": phase}
-         try:
-             bus.broadcast(sid, frame)
-         except Exception:
-             pass
+     _reapply_interaction_policy()
  
-         try:
-             _emit_barge_admin_events(sid, phase, prev)
-             last_barge_phase[0] = phase
-         except Exception:
-             pass
-@@ -3158,52 +3160,50 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                         phase="turn",
-                         parent_id=confirm_flow_parent_id[0],
-                         meta={"name": "confirm_timeout"},
-                     )
-             else:
-                 confirm_timeout_cancelled.append(task)
-         confirm_timeout_task[0] = None
++    _jlog(
++        "voice_runtime_effective",
++        sid=sid,
++        feature_manual_barge_in=bool(manual_feature_enabled),
++        barge_in_mode_manual=bool(manual_mode_manual_only),
++        auto_commit_when_ready=bool(auto_commit_when_ready),
++    )
++
+     _jlog(
+         "voice_runtime_config",
+         sid=sid,
+         suppress_during_tts=barge_suppress_mode or "none",
+         post_tts_hold_ms=int(barge_post_tts_hold_ms),
+         allow_ptt=bool(barge_allow_ptt),
+     )
  
-     def _emit_local_vad_signal(now_ts: float) -> None:
-         if local_vad_meta_sent[0]:
-             return
-         allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt("vad")
-         if not allow_barge:
-             with contextlib.suppress(Exception):
-                 if allow_reason and allow_reason != "ok":
-                     _jlog(
-                         "local_vad_ignored",
-                         sid=sid,
-                         by=allow_src,
-                         state=allow_state,
-                         reason=allow_reason,
-                     )
-             return
-         local_vad_meta_sent[0] = True
-         _maybe_emit_evidence_gate()
--        if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
--            _set_barge_pause_meta("client_vad")
-         _on_local_vad_start()
-         if callable(final_guard_local_vad_ref[0]):
-             with contextlib.suppress(Exception):
-                 final_guard_local_vad_ref[0]("start")
-         payload = {
-             "type": "meta",
-             "turn_id": turn_id_ref[0],
-             "meta": {"local_vad": "start", "ts": int(now_ts * 1000)},
-         }
-         with contextlib.suppress(Exception):
-             _jlog(
-                 "local_vad_start",
-                 sid=sid,
-                 turn_id=turn_id_ref[0],
-                 ts_ms=int(now_ts * 1000),
-             )
-         with contextlib.suppress(Exception):
-             bus.broadcast(sid, payload)
-         try:
-             if loop.is_closed():
-                 return
-             try:
-                 running = asyncio.get_running_loop()
-             except RuntimeError:
-                 running = None
-@@ -5046,55 +5046,50 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                             confirm_ms = 420
-                         barge_started = False
-                         should_pause = not (
-                             manual_mode_manual_only and commit_mode == "auto_commit"
-                         )
-                         if should_pause:
-                             active_assistant_turn = current_assistant_turn_ref[0]
-                             tts_state, _tts_key = _lookup_tts_state(
-                                 sid, active_assistant_turn
-                             )
-                             if _is_tts_active(tts_state):
-                                 should_pause = False
-                                 try:
-                                     _jlog(
-                                         "barge_skip_tts_active",
-                                         sid=sid,
-                                         turn_hint=turn_hint,
+     resolved_policy_snapshot = {
+         "voice_runtime": {
+             "barge_in": {
+                 "suppress_during_tts": barge_suppress_mode or "none",
+                 "post_tts_hold_ms": int(barge_post_tts_hold_ms),
+                 "allow_ptt": bool(barge_allow_ptt),
+                 "require_asr_evidence": bool(barge_require_asr_evidence),
+             }
+         },
+         "asr": {"vad": {"enabled": bool(local_vad_allowed)}}
+     }
+ 
+     cfg["feature_manual_barge_in"] = manual_feature_enabled
+     cfg["barge_in_mode_manual"] = manual_mode_manual_only
+     cfg["auto_commit_when_ready"] = auto_commit_when_ready
+     cfg["policy_snapshot"] = resolved_policy_snapshot
+ 
+@@ -5599,53 +5607,50 @@ async def _ws_chat_asgi_impl(scope, receive, send):
+                                         "manual_barge_in_end",
+                                         bytes_buffered=buffered_bytes,
+                                         provider_open=dg_state == "open",
                                      )
-                                 except Exception:
-                                     pass
-                         if not manual_turn_active[0] and should_pause:
-                             allow_barge, allow_src, allow_state, allow_reason = _decide_barge_attempt(
-                                 "vad"
-                             )
-                             if allow_barge:
--                                if (
--                                    not barge_pause_meta_ref[0]
--                                    or barge_pause_meta_ref[0].get("src") != "ptt"
--                                ):
--                                    _set_barge_pause_meta("client_vad")
-                                 try:
-                                     barge_started = barge.start(
-                                         confirm_ms=confirm_ms,
-                                         on_commit=_on_barge_commit,
-                                         send_state=_send_barge_state,
-                                         auto_commit=False,
-                                     )
-                                 except Exception:
-                                     barge_started = False
-                             else:
-                                 barge_started = False
-                                 with contextlib.suppress(Exception):
-                                     if allow_reason and allow_reason != "ok":
-                                         _jlog(
-                                             "barge_attempt_ignored",
-                                             sid=sid,
-                                             by=allow_src,
-                                             state=allow_state,
-                                             reason=allow_reason,
+                                     tts_active_now = _current_tts_active()
+                                     if ptt_down_emitted[0]:
+                                         _emit_transition_event(
+                                             "ptt_up",
+                                             meta={"during_tts": bool(tts_active_now)},
+                                             phase="ptt",
                                          )
-                         turn_id_ref[0] = buf.turn_seq + 1
-                         pending_confirm_request[0] = None
-                         last_partial_conf[0] = None
-                         last_partial_speech_ms[0] = 0
-                         last_partial_text[0] = ""
-@@ -5482,55 +5477,50 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 )
-                                 if not allow_barge:
-                                     with contextlib.suppress(Exception):
-                                         if allow_reason and allow_reason != "ok":
-                                             _jlog(
-                                                 "remote_vad_ignored",
-                                                 sid=sid,
-                                                 by=allow_src,
-                                                 state=allow_state,
-                                                 reason=allow_reason,
-                                             )
-                                     continue
-                                 rms_val = meta_payload.get("rms")
-                                 if rms_val is None:
-                                     rms_val = obj.get("rms")
-                                 meta_out: Dict[str, Any] = {"reason": reason}
-                                 if rms_val is not None:
-                                     try:
-                                         meta_out["rms"] = float(rms_val)
-                                     except Exception:
-                                         pass
-                                 _emit_transition_event(
-                                     "vad_gate_open", meta=meta_out, phase="mic"
-                                 )
-                                 extra_meta = dict(meta_out)
--                                if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
--                                    _set_barge_pause_meta(
--                                        "client_vad",
--                                        extra=extra_meta,
--                                    )
-                                 _on_local_vad_start()
+                                     ptt_down_emitted[0] = False
+                                 _push_interaction_policy(_interaction_policy_idle_snapshot())
                                  continue
+                             continue
  
-                             if action == "vad_gate_close":
-                                 reason_val = meta_payload.get("reason")
-                                 if reason_val is None:
-                                     reason_val = obj.get("reason")
-                                 if isinstance(reason_val, str):
-                                     reason = reason_val.strip().lower()
-                                 elif reason_val is not None:
-                                     reason = str(reason_val).strip().lower()
-                                 else:
-                                     reason = ""
-                                 if not reason:
-                                     reason = "silence"
-                                 rms_val = meta_payload.get("rms")
-                                 if rms_val is None:
-                                     rms_val = obj.get("rms")
-                                 meta_out: Dict[str, Any] = {"reason": reason}
-                                 if rms_val is not None:
+                         elif t == "Configure":
+                             try:
+                                 cfg.update(obj or {})
+                                 manual_feature_enabled = bool(
+                                     cfg.get("feature_manual_barge_in", manual_feature_enabled)
+                                 )
+                                 manual_mode_manual_only = bool(
+                                     cfg.get("barge_in_mode_manual", manual_mode_manual_only)
+                                 )
+-                                auto_commit_when_ready = bool(
+-                                    cfg.get("auto_commit_when_ready", auto_commit_when_ready)
+-                                )
+                                 _reapply_interaction_policy()
+                                 ws_configured = True
+                                 _jlog(
+                                     "ws_configure",
+                                     sid=sid,
+                                     ts_ms=int(time.time() * 1000),
+                                     barge_in_mode_manual=manual_mode_manual_only,
+                                     feature_manual_barge_in=manual_feature_enabled,
+                                     auto_commit_when_ready=auto_commit_when_ready,
+                                 )
+                                 if not configure_ack_sent:
+                                     greet_flag = bool(cfg.get("greet"))
+                                     reset_val = cfg.get("reset", 0)
                                      try:
-                                         meta_out["rms"] = float(rms_val)
-                                     except Exception:
-                                         pass
-                                 _emit_transition_event(
+                                         flow_emit(
+                                             session_id=sid,
+                                             type="session_ready",
+                                             phase="ws",
+                                             who="server",
+                                             meta=_with_ws_component(
+                                                 {
+                                                     "greet": greet_flag,
+                                                     "reset": reset_val,
+                                                 }
+                                             ),
