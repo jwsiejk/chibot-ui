@@ -1,292 +1,160 @@
-diff --git a/app/telemetry/bus.py b/app/telemetry/bus.py
-index 9c05ea576a7739b9c2893693a293101997bceea3..931488c7b877369cfa1ab7df212889411bea8a0c 100644
---- a/app/telemetry/bus.py
-+++ b/app/telemetry/bus.py
-@@ -1,82 +1,202 @@
- """In-process telemetry bus with publish/subscribe support."""
- from __future__ import annotations
- 
-+import re
- import time
- import uuid
--from typing import Callable, Dict, Tuple
-+from typing import Any, Callable, Dict, Tuple
-+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
- 
- Subscription = Tuple[str, Callable[[dict], None]]
- 
- # Internal registries keyed by subscription token.
- _subscriptions: Dict[str, Subscription] = {}
- # Index mapping event type to tokens for quick lookup.
- _event_index: Dict[str, set[str]] = {}
- 
- 
- def _now_ms() -> int:
-     """Return the current time in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
-+_TOKEN_KEYWORDS = {"token", "key", "sig", "secret", "auth"}
-+_AUTH_KEYWORDS = {"authorization", "auth"}
-+_BEARER_RE = re.compile(r"(Bearer\s+)([A-Za-z0-9._\-+/=]+)")
-+_EMAIL_RE = re.compile(r"([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
-+_OPAQUE_RE = re.compile(r"^[A-Za-z0-9+/=_-]{32,64}$")
+diff --git a/tests/test_bus_publish_basics.py b/tests/test_bus_publish_basics.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..71014fb617a4458cd8bb2e40fc1d2d21f178cdf2
+--- /dev/null
++++ b/tests/test_bus_publish_basics.py
+@@ -0,0 +1,60 @@
++import copy
++import time
++import unittest
++
++from app.telemetry.bus import publish, reset, subscribe, unsubscribe
 +
 +
-+def _mask_tail(value: str, keep: int = 4) -> str:
-+    """Return a masked token preserving only the last characters."""
-+    if keep <= 0:
-+        return "****"
-+    if len(value) <= keep:
-+        return "****"
-+    return "****" + value[-keep:]
++class TestBusPublishBasics(unittest.TestCase):
++    def setUp(self) -> None:
++        reset()
 +
++    def tearDown(self) -> None:
++        reset()
 +
-+def _shorten_opaque(value: str) -> str:
-+    """Collapse long opaque secrets to a short representation."""
-+    if len(value) < 6:
-+        return value
-+    return f"{value[:3]}…{value[-3:]}"
++    def test_defaults_are_filled(self) -> None:
++        delivered: list[dict] = []
 +
-+
-+def _shorten_generic(value: str) -> str:
-+    """Collapse overly long strings while preserving edges."""
-+    return f"{value[:8]}…{value[-8:]}"
-+
-+
-+def _redact_string(raw: str, key_hint: str | None = None) -> str:
-+    """Apply best-effort redaction rules to a string value."""
-+    value = raw
-+
-+    # Mask sensitive query parameters in URLs.
-+    try:
-+        split = urlsplit(value)
-+        query = split.query
-+        source_value = value
-+        if not query and "?" not in value and "=" in value and " " not in value:
-+            # Treat bare query strings (e.g., "token=abc") as the query payload.
-+            query = value
-+            source_value = ""
-+        if query:
-+            pairs = parse_qsl(query, keep_blank_values=True)
-+            masked = False
-+            new_pairs = []
-+            for k, v in pairs:
-+                if k.lower() in _TOKEN_KEYWORDS:
-+                    masked = True
-+                    new_pairs.append((k, "****"))
-+                else:
-+                    new_pairs.append((k, v))
-+            if masked:
-+                redacted_query = urlencode(new_pairs, doseq=True)
-+                if source_value:
-+                    value = urlunsplit(
-+                        (
-+                            split.scheme,
-+                            split.netloc,
-+                            split.path,
-+                            redacted_query,
-+                            split.fragment,
-+                        )
-+                    )
-+                else:
-+                    value = redacted_query
-+    except Exception:
-+        # Ignore URL parsing failures; fall back to other rules.
-+        pass
-+
-+    # Authorization/Bearer token masking.
-+    if _BEARER_RE.search(value):
-+        def _replace(match: re.Match[str]) -> str:
-+            token = match.group(2)
-+            return match.group(1) + _mask_tail(token)
-+
-+        value = _BEARER_RE.sub(_replace, value)
-+    elif key_hint and key_hint.lower() in _AUTH_KEYWORDS:
-+        stripped = value.strip()
-+        masked = _mask_tail(stripped)
-+        prefix_len = len(value) - len(value.lstrip())
-+        suffix_len = len(value) - len(value.rstrip())
-+        value = value[:prefix_len] + masked + value[len(value) - suffix_len :]
-+
-+    # Email masking.
-+    value = _EMAIL_RE.sub(lambda match: f"***@{match.group(2)}", value)
-+
-+    # Opaque secret masking.
-+    if _OPAQUE_RE.match(value):
-+        value = _shorten_opaque(value)
-+
-+    # Generic long string collapse.
-+    if len(value) > 128:
-+        value = _shorten_generic(value)
-+
-+    return value
-+
-+
-+def _redact_meta(meta: Any, key_hint: str | None = None) -> Any:
-+    """Return a deep-redacted copy of the provided meta payload."""
-+    if isinstance(meta, dict):
-+        return {key: _redact_meta(value, key) for key, value in meta.items()}
-+    if isinstance(meta, list):
-+        return [_redact_meta(item) for item in meta]
-+    if isinstance(meta, tuple):
-+        return tuple(_redact_meta(item) for item in meta)
-+    if isinstance(meta, str):
-+        return _redact_string(meta, key_hint)
-+    return meta
-+
-+
- def subscribe(event_type: str, handler: Callable[[dict], None]) -> str:
-     """Register a handler for a specific event type or wildcard."""
-     if not isinstance(event_type, str) or not event_type:
-         raise ValueError("event_type must be a non-empty string")
-     if not callable(handler):
-         raise ValueError("handler must be callable")
- 
-     token = f"sub_{uuid.uuid4().hex}"
-     _subscriptions[token] = (event_type, handler)
-     _event_index.setdefault(event_type, set()).add(token)
-     return token
- 
- 
- def unsubscribe(token: str) -> bool:
-     """Remove a previously registered subscription."""
-     subscription = _subscriptions.pop(token, None)
-     if not subscription:
-         return False
- 
-     event_type, _ = subscription
-     tokens = _event_index.get(event_type)
-     if tokens is not None:
-         tokens.discard(token)
-         if not tokens:
-             _event_index.pop(event_type, None)
-     return True
- 
- 
- def publish(event: dict) -> None:
-     """Normalize and dispatch an event to registered handlers."""
-     if not isinstance(event, dict):
-         raise ValueError("event must be a dict")
- 
-     normalized = dict(event)
-     event_type = normalized.get("type")
-     if not isinstance(event_type, str) or not event_type:
-         raise ValueError("event['type'] must be a non-empty string")
- 
-     if "ts_ms" not in normalized or not isinstance(normalized["ts_ms"], int):
-         normalized["ts_ms"] = _now_ms()
-     if "level" not in normalized or not isinstance(normalized["level"], str):
-         normalized["level"] = "debug"
- 
-+    if "meta" in normalized:
-+        original_meta = normalized["meta"]
++        token = subscribe("*", lambda event: delivered.append(event))
 +        try:
-+            normalized["meta"] = _redact_meta(original_meta)
-+        except Exception as exc:  # pylint: disable=broad-except
-+            print(f"WARN telemetry redaction failed: {exc}")
-+            normalized["meta"] = original_meta
++            publish({"type": "EVT_WS_OPEN"})
++        finally:
++            unsubscribe(token)
 +
-     tokens = set()
-     tokens.update(_event_index.get(event_type, set()))
-     tokens.update(_event_index.get("*", set()))
- 
-     for token in list(tokens):
-         subscription = _subscriptions.get(token)
-         if not subscription:
-             continue
-         _, handler = subscription
-         try:
-             handler(dict(normalized))
-         except Exception as exc:  # pylint: disable=broad-except
-             print(f"Telemetry handler error for token {token}: {exc}")
- 
- 
- def reset() -> None:
-     """Clear all subscriptions (primarily for testing)."""
-     _subscriptions.clear()
-     _event_index.clear()
-diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
-index 0ce50c2e97f44304ab81165350f997264723b0bc..799dc3492ee0a883a72f8e6629f400112b49cdf1 100644
---- a/docs/10_CONTRACT_WS.md
-+++ b/docs/10_CONTRACT_WS.md
-@@ -40,57 +40,59 @@ Copy code
-     }
-   }
- }
- {"type":"tts.start","utt_id":"u-123","post_hold_ms":200}
- 
- {"type":"tts.end","utt_id":"u-123"}
- 
- {"type":"asr.ready":true}
- 
- {"type":"asr.partial","text":"...","confidence":0.73}
- 
- {"type":"asr.final","text":"...","confidence":0.91}
- 
- {"type":"error","code":"bad_subprotocol","detail":"use chat.v2"}
- 
- Behavioral rules
- While mode="assistant_speaking":
- 
- If barge_in_enabled=true, auto-VAD + ASR evidence may interrupt TTS.
- 
- If barge_in_enabled=false, ignore speech until tts.end + post_hold_ms.
- 
- In mode="idle", allow_auto_vad MUST be true and ACWR effective (subject to admin kill).
- 
- Telemetry event envelope (both sides)
--All events (client/server) share this shape:
-+All events (client/server) use envelope **v1** and share this shape:
- 
- json
- Copy code
- {
-+  "schema_version":"1",
-   "type":"EVT_*",
-   "ts_ms":1730000000000,
-   "sid":"session-uuid",
-   "turn_id":"turn-idx-or-uuid",
-   "who":"client|server|asr|tts|llm",
-   "source":"webapp|ws_server|deepgram|speechmatics|elevenlabs|openai|policy",
-   "level":"debug",
-   "meta":{ ... }
- }
-+Server normalization fills missing `ts_ms` and `level` and applies best-effort redaction to `meta` string fields (emails, authorization/bearer tokens, query secrets, opaque tokens, oversized blobs) so downstream consumers never receive raw PII/secrets. Optional fields may be added without a schema bump; required-field changes mandate a new `schema_version`.
- Common meta fields by category
- policy.diff → { "allow_auto_vad":[old,new], "barge_in_enabled":[old,new], "auto_commit_when_ready":[old,new], "mode":[old,new], "telemetry.level":[old,new] }
- 
- gate → { "state":"on|off", "reason":"tts|post_hold|policy", "mask":true|false }
- 
--barge → { "source":"auto_vad|asr_evidence", "granted":true|false }
-+barge → { "source":"auto_vad|asr_evidence|manual", "granted":true|false }
- 
- tts → { "utt_id":"...", "post_hold_ms":200 }
- 
- asr → { "req_id":"...", "partial":true|false, "confidence":0.83 }
- 
-+ws taps → { "dir":"in|out", "size":1234, "preview":"{...}" }
++        self.assertEqual(len(delivered), 1)
++        event = delivered[0]
 +
- nlu → full NLU object (see docs/15_NLU_NLG.md)
- 
- nlg → full NLG object (see docs/15_NLU_NLG.md)
- 
--ws → { "dir":"in|out", "size":1234, "preview":"{...}" }
--
- error → { "code":"...", "detail":"...", "stack":"(optional)" }
-diff --git a/docs/30_ADR.md b/docs/30_ADR.md
-index 26dd5d72e3d563fec6214e38f07ae1f88edf2856..225cb37af5957df5681bde11bcaed630caee7f0b 100644
---- a/docs/30_ADR.md
-+++ b/docs/30_ADR.md
-@@ -1,10 +1,11 @@
- # Architecture Decision Records (append-only)
- 
- - **ADR-0001 (2025-10-21)** — Single-path v2 only: `/ws/v2/chat` (subprotocol `chat.v2`). v1 removed.
- - **ADR-0002 (2025-10-21)** — ASR vendors: Deepgram primary, Speechmatics secondary (switchable). Whisper not used.
- - **ADR-0003 (2025-10-21)** — Barge-in model: automatic only; toggle `barge_in_enabled` via policy.
- - **ADR-0004 (2025-10-21)** — Policy frames must always include: `mode`, `allow_auto_vad`, `barge_in_enabled`, `auto_commit_when_ready`, and `telemetry`.
- - **ADR-0005 (2025-10-21)** — ACWR precedence: `effective = policy_state AND admin_switch`. No runtime cfg input.
- - **ADR-0006 (2025-10-21)** — Templates root standardized to `app/templates/` only.
- - **ADR-0007 (2025-10-21)** — NLU/NLG contracts added; exactly one NLU & one NLG object per turn; persona-driven templates later.
- - **ADR-0008 (2025-10-21)** — Telemetry policy block controls runtime logging (enabled, level, categories, redaction, sampling).
-+- **ADR-0009 (2025-10-21)** — Telemetry Envelope v1 & Redaction: events declare `schema_version: "1"` and follow a stable envelope (`type`, `ts_ms`, optional context fields, `meta`). Optional fields may be added without a new version; changes to required fields demand a new schema_version. The telemetry bus normalizes timestamps/levels and redacts PII/secrets within `meta` (emails, bearer tokens, URL secrets, opaque tokens, and overlong blobs) before dispatching to subscribers to ensure privacy-by-default across engine/exporter/admin consumers.
++        self.assertEqual(event["type"], "EVT_WS_OPEN")
++        self.assertEqual(event["level"], "debug")
++        self.assertIsInstance(event["ts_ms"], int)
++
++        now_ms = int(time.time() * 1000)
++        self.assertLessEqual(abs(event["ts_ms"] - now_ms), 5000)
++
++    def test_non_mutation_of_caller(self) -> None:
++        event = {"type": "EVT_WS_JSON_RECV", "meta": {"a": "b"}}
++        before = copy.deepcopy(event)
++
++        publish(event)
++
++        self.assertEqual(event, before)
++
++    def test_handler_isolation(self) -> None:
++        delivered: list[dict] = []
++
++        def boom_handler(_: dict) -> None:
++            raise RuntimeError("boom")
++
++        token1 = subscribe("EVT_WS_OPEN", boom_handler)
++        token2 = subscribe("EVT_WS_OPEN", lambda event: delivered.append(event))
++        try:
++            publish({"type": "EVT_WS_OPEN"})
++        finally:
++            unsubscribe(token1)
++            unsubscribe(token2)
++
++        self.assertEqual(len(delivered), 1)
++
++
++if __name__ == "__main__":  # pragma: no cover
++    unittest.main()
+diff --git a/tests/test_bus_redaction.py b/tests/test_bus_redaction.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..5ba5af9f5d5a80a0063465c0a8ec86ec19886019
+--- /dev/null
++++ b/tests/test_bus_redaction.py
+@@ -0,0 +1,88 @@
++import unittest
++
++from app.telemetry.bus import publish, reset, subscribe, unsubscribe
++
++
++class TestBusRedaction(unittest.TestCase):
++    def setUp(self) -> None:
++        reset()
++
++    def tearDown(self) -> None:
++        reset()
++
++    def _capture_event(self, meta: dict | None = None, **extra: object) -> dict:
++        delivered: list[dict] = []
++
++        token = subscribe("EVT_WS_JSON_RECV", lambda event: delivered.append(event))
++        try:
++            payload: dict = {"type": "EVT_WS_JSON_RECV"}
++            if meta is not None:
++                payload["meta"] = meta
++            if extra:
++                payload.update(extra)
++            publish(payload)
++        finally:
++            unsubscribe(token)
++
++        self.assertEqual(len(delivered), 1)
++        return delivered[0]
++
++    def test_email_masking(self) -> None:
++        event = self._capture_event({"user": "user@example.com"})
++        self.assertEqual(event["meta"], {"user": "***@example.com"})
++
++    def test_bearer_token_masking(self) -> None:
++        event = self._capture_event({"auth": "Bearer abc123def456"})
++        self.assertEqual(event["meta"], {"auth": "Bearer ****f456"})
++
++    def test_secret_opaque_masking(self) -> None:
++        secret_value = "abc" + ("d" * 42) + "xyz"
++        event = self._capture_event({"secret": secret_value})
++        self.assertEqual(event["meta"], {"secret": "abc…xyz"})
++
++    def test_url_query_param_masking(self) -> None:
++        event = self._capture_event({"callback": "https://x.y/cb?token=abcdef&ok=1"})
++        self.assertEqual(
++            event["meta"],
++            {"callback": "https://x.y/cb?token=%2A%2A%2A%2A&ok=1"},
++        )
++
++    def test_generic_long_string_collapse(self) -> None:
++        event = self._capture_event({"blob": "A" * 140})
++        self.assertEqual(event["meta"], {"blob": "AAAAAAAA…AAAAAAAA"})
++
++    def test_nested_container_redaction(self) -> None:
++        event = self._capture_event(
++            {
++                "outer": [
++                    {"email": "user@example.com"},
++                    {"auth": "Bearer zzz999888777"},
++                ]
++            }
++        )
++        self.assertEqual(
++            event["meta"],
++            {
++                "outer": [
++                    {"email": "***@example.com"},
++                    {"auth": "Bearer ****8777"},
++                ]
++            },
++        )
++
++    def test_schema_top_level_untouched(self) -> None:
++        event = self._capture_event({"user": "user@example.com"}, sid="SESSION-123")
++        self.assertEqual(event["type"], "EVT_WS_JSON_RECV")
++        self.assertEqual(event["sid"], "SESSION-123")
++        self.assertEqual(event["level"], "debug")
++        self.assertIsInstance(event["ts_ms"], int)
++
++    def test_redaction_is_deterministic(self) -> None:
++        meta_payload = {"auth": "Bearer tokenXYZ123456"}
++        first = self._capture_event(dict(meta_payload))
++        second = self._capture_event(dict(meta_payload))
++        self.assertEqual(first["meta"], second["meta"])
++
++
++if __name__ == "__main__":  # pragma: no cover
++    unittest.main()
