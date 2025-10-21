@@ -471,7 +471,27 @@ export function audioEnd() {
 
 export function audioTeardown() {
   try { _player?.teardown(); } catch {}
+  _player = null;
+  try {
+    if (_el) {
+      try { _el.pause(); } catch {}
+      try { _el.removeAttribute('src'); } catch {}
+      try { _el.load?.(); } catch {}
+    }
+  } catch {}
   try { _teardownSignatureTracker(); } catch {}
+  try {
+    if (typeof window !== 'undefined') {
+      window.__askchip_last_audio_el = null;
+    }
+  } catch {}
+  try {
+    if (typeof globalThis !== 'undefined') {
+      globalThis.__askchip_last_audio_el = null;
+    }
+  } catch {}
+  _el = null;
+  _lastTtsState = 'ended';
 }
 
 export function stopPlayback() {

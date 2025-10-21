@@ -1,142 +1,76 @@
-diff --git a/static/js/app.js b/static/js/app.js
-index ecbab07210bffba898e2ad7aa06d50e34b0d0d61..d091f7a1160bf7b3dd35481b4869f6372da29f97 100644
---- a/static/js/app.js
-+++ b/static/js/app.js
-@@ -1,30 +1,31 @@
- // /static/js/app.js — chat helpers only (imports constrained by spec)
- import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
- import { getSID } from '/static/js/util/sid.js';
- import { renderSuggestions } from '/static/js/suggestions.js';
- import { logIfEnabled } from './util/logging.js';
-+import { stopPlayback, audioTeardown } from './audio.js';
- 
- // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
- // Exports: onEnd, onSend, handleAssistantFrame
- 
- const $  = (s)=>document.querySelector(s);
- 
- const ASR_TIMEOUT_MS = 10_000;
- const ASR_FINALIZATION_TIMEOUT_MS = 2_000;
- let _sessionReadyAt = 0;
- let _awaitingFirstAsr = false;
- let _noAsrTimeout = null;
- let _noAsrNotified = false;
- let _lastAsrLatencyMs = null;
- let _ttsPlaying = false;
- const _asrTurnState = {
-   activeId: null,
-   complete: false,
-   utteranceEnded: false,
- };
- const _asrCompletionWaiters = new Set();
- 
- function _getActiveTurnTraceId() {
-   try {
-     if (typeof window === 'undefined') return null;
-     const id = window.__askchip_turn_trace_id;
-@@ -229,50 +230,52 @@ function setDot(state){
-   const nextClass = DOT_CLASSES[state] || 'dot-idle';
-   dot.className = 'dot ' + nextClass;
- }
- 
- function showBanner(msg){ const el=$('#statusText'); if(el) el.textContent = msg || ''; }
- function disableForEnded(){
-   const input = $('#composer');
-   const sendA = $('#composerSend');
-   const sendB = $('#sendBtn');
-   const endBtn= $('#endButton');
-   if (input) input.value = '';
-   [sendA, sendB].forEach(b=>{ if(b) b.disabled = true; });
-   if (endBtn) endBtn.disabled = true;
-   setDot('ready');
- }
- 
- // Optional safety: strip legacy debug stamps like "[KB:0]" if any slip through
- const _KB_TAG_RE = /\s*\[(?:KB|kb)\s*:\s*\d+\]\s*/g;
- function _cleanText(s){ return (s||'').replace(_KB_TAG_RE,' ').trim(); }
- 
- function _handleSessionEnd(frame){
-   const reason = String(frame?.reason || '').toLowerCase();
-   const message = reason === 'silence_auto_close'
-     ? 'Closing for now—start a new session whenever you’re ready.'
-     : 'Session ended. Press Start to begin a new one.';
-+  try { stopPlayback(); } catch {}
-+  try { audioTeardown(); } catch {}
-   _resetAsrTracking();
-   disableForEnded();
-   try { _clearSuggestions(); } catch {}
-   showBanner(message);
-   try { window.__askchip_session_started = false; } catch {}
-   try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
-   try { closeWS(1000, reason || 'session_end'); } catch {}
- }
- 
- /* ---------------- Rendering of assistant frames ---------------- */
- 
- // Accept WS assistant text frames
- function _isAssistantTextFrame(d){
-   return d && (
-     (d.type === 'assistant_chunk' && (d.text || d.delta || d.content)) ||
-     (d.type === 'assistant_text' && (d.text || d.delta || d.content)) ||
-     (d.type === 'assistant_final' && (d.text || d.delta || d.content))
-   );
- }
- 
- const _userPreviewState = {
-   active: false,
-   latestTranscript: '',
-   lastFinalText: '',
-   ignoring: false,
-@@ -591,50 +594,52 @@ export async function onSend(overrideText){
-       }
-       showBanner('Message failed to send over WebSocket.');
-       return;
+diff --git a/static/js/audio.js b/static/js/audio.js
+index b1241f9edd6c86011fa29795687fb9487240002d..0698aee3792eaa813471aa56cfa8d2808bc387bf 100644
+--- a/static/js/audio.js
++++ b/static/js/audio.js
+@@ -449,51 +449,71 @@ export function playStream(frameOrChunks, maybeMime) {
+     // --- Legacy call signature ----------------------------------------------
+     const list = Array.isArray(frameOrChunks) ? frameOrChunks : [frameOrChunks];
+     if (!list.length) return;
+     const mime = maybeMime || DEFAULT_MIME;
+     const p = ensurePlayer(mime);
+     if (list.some((c) => c)) {
+       _emitTtsState('playing');
+     }    
+     for (const c of list) {
+       if (!c) continue;
+       if (typeof c === 'string') p.appendBase64(c);
+       else if (c instanceof Uint8Array) p.appendBytes(c);
+       else if (Array.isArray(c)) p.appendBytes(new Uint8Array(c));
      }
- 
-     setDot('thinking');
- 
-     // Clear composer after send
-     if (input){
-       try { input.value = ''; } catch {}
-     }
- 
-   } catch (e){
-     _console('warn', '[onSend] error', e);
+   } catch (e) {
+     console.warn('[audio] playStream error', e);
    }
  }
  
- /* ---------------- End session (graceful) ---------------- */
- 
- let ending = false;
- 
- export async function onEnd(){
-   if (ending) return;
-   ending = true;
-   try {
-+    try { stopPlayback(); } catch {}
-+    try { audioTeardown(); } catch {}
-     _clearSuggestions();
-     const finalFrameWait = _waitForAsrCompletion(ASR_FINALIZATION_TIMEOUT_MS);
-     // Politely signal end of stream over WS, then close with code 1000
-     try { await sendCloseStream(); } catch {}
-     try { await finalFrameWait; } catch {}
- 
-     try { closeWS(1000, 'user_end'); } catch {}
- 
-     // Rotate the session so the next Start is clean (correct key)
-     try { localStorage.removeItem('chip.sid'); } catch {}
- 
-     // Notify others (bootstrap etc.)
-     try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
- 
-     // Update UI
-     disableForEnded();
-     showBanner('Session ended. Press Start to begin a new one.');
- 
-     // Clear any bootstrap “session started” latch
-     window.__askchip_session_started = false;
- 
-   } finally {
-     ending = false;
-   }
+ export function audioEnd() {
+   try { _player?.end(); } catch {}
  }
+ 
+ export function audioTeardown() {
+   try { _player?.teardown(); } catch {}
++  _player = null;
++  try {
++    if (_el) {
++      try { _el.pause(); } catch {}
++      try { _el.removeAttribute('src'); } catch {}
++      try { _el.load?.(); } catch {}
++    }
++  } catch {}
+   try { _teardownSignatureTracker(); } catch {}
++  try {
++    if (typeof window !== 'undefined') {
++      window.__askchip_last_audio_el = null;
++    }
++  } catch {}
++  try {
++    if (typeof globalThis !== 'undefined') {
++      globalThis.__askchip_last_audio_el = null;
++    }
++  } catch {}
++  _el = null;
++  _lastTtsState = 'ended';
+ }
+ 
+ export function stopPlayback() {
+   try { _player?.stop(); } catch {}
+   try { ensureEl().pause(); } catch {}
+   try { ensureEl().volume = TTS_IDLE_VOLUME; } catch {}
+   _emitTtsState('ended');
+ }
+ 
+ export function isPlaying() {
+   try { return !!(_el && !_el.paused); } catch { return false; }
+ }
+ 
+ export function pausePlayback() {
+   try {
+     const el = ensureEl();
+     if (!el.paused) {
+       el.pause();
+       el.volume = TTS_IDLE_VOLUME;
+       _emitTtsState('ended');
+     }
+   } catch {}
+ }
+ 
+ export function resumePlayback() {
