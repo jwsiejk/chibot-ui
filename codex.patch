@@ -1,0 +1,137 @@
+diff --git a/app/telemetry/bus.py b/app/telemetry/bus.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..9c05ea576a7739b9c2893693a293101997bceea3
+--- /dev/null
++++ b/app/telemetry/bus.py
+@@ -0,0 +1,82 @@
++"""In-process telemetry bus with publish/subscribe support."""
++from __future__ import annotations
++
++import time
++import uuid
++from typing import Callable, Dict, Tuple
++
++Subscription = Tuple[str, Callable[[dict], None]]
++
++# Internal registries keyed by subscription token.
++_subscriptions: Dict[str, Subscription] = {}
++# Index mapping event type to tokens for quick lookup.
++_event_index: Dict[str, set[str]] = {}
++
++
++def _now_ms() -> int:
++    """Return the current time in milliseconds."""
++    return int(time.time() * 1000)
++
++
++def subscribe(event_type: str, handler: Callable[[dict], None]) -> str:
++    """Register a handler for a specific event type or wildcard."""
++    if not isinstance(event_type, str) or not event_type:
++        raise ValueError("event_type must be a non-empty string")
++    if not callable(handler):
++        raise ValueError("handler must be callable")
++
++    token = f"sub_{uuid.uuid4().hex}"
++    _subscriptions[token] = (event_type, handler)
++    _event_index.setdefault(event_type, set()).add(token)
++    return token
++
++
++def unsubscribe(token: str) -> bool:
++    """Remove a previously registered subscription."""
++    subscription = _subscriptions.pop(token, None)
++    if not subscription:
++        return False
++
++    event_type, _ = subscription
++    tokens = _event_index.get(event_type)
++    if tokens is not None:
++        tokens.discard(token)
++        if not tokens:
++            _event_index.pop(event_type, None)
++    return True
++
++
++def publish(event: dict) -> None:
++    """Normalize and dispatch an event to registered handlers."""
++    if not isinstance(event, dict):
++        raise ValueError("event must be a dict")
++
++    normalized = dict(event)
++    event_type = normalized.get("type")
++    if not isinstance(event_type, str) or not event_type:
++        raise ValueError("event['type'] must be a non-empty string")
++
++    if "ts_ms" not in normalized or not isinstance(normalized["ts_ms"], int):
++        normalized["ts_ms"] = _now_ms()
++    if "level" not in normalized or not isinstance(normalized["level"], str):
++        normalized["level"] = "debug"
++
++    tokens = set()
++    tokens.update(_event_index.get(event_type, set()))
++    tokens.update(_event_index.get("*", set()))
++
++    for token in list(tokens):
++        subscription = _subscriptions.get(token)
++        if not subscription:
++            continue
++        _, handler = subscription
++        try:
++            handler(dict(normalized))
++        except Exception as exc:  # pylint: disable=broad-except
++            print(f"Telemetry handler error for token {token}: {exc}")
++
++
++def reset() -> None:
++    """Clear all subscriptions (primarily for testing)."""
++    _subscriptions.clear()
++    _event_index.clear()
+diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c13f6e07c631f7863f101c908d02290fd8b6ba73
+--- /dev/null
++++ b/app/voice_v2/__init__.py
+@@ -0,0 +1,43 @@
++"""Event constants for AskChip voice v2 telemetry."""
++
++EVT_WS_OPEN = "EVT_WS_OPEN"
++EVT_WS_CLOSE = "EVT_WS_CLOSE"
++EVT_WS_JSON_RECV = "EVT_WS_JSON_RECV"
++EVT_WS_JSON_SEND = "EVT_WS_JSON_SEND"
++EVT_WS_AUDIO_RECV = "EVT_WS_AUDIO_RECV"
++EVT_WS_AUDIO_SEND = "EVT_WS_AUDIO_SEND"
++
++EVT_TTS_START = "EVT_TTS_START"
++EVT_TTS_END = "EVT_TTS_END"
++
++EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
++EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
++
++EVT_MIC_GATE = "EVT_MIC_GATE"
++EVT_BARGE_IN = "EVT_BARGE_IN"
++
++EVT_ASR_READY = "EVT_ASR_READY"
++EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
++EVT_ASR_FINAL = "EVT_ASR_FINAL"
++EVT_NLU = "EVT_NLU"
++EVT_NLG = "EVT_NLG"
++
++__all__ = [
++    "EVT_WS_OPEN",
++    "EVT_WS_CLOSE",
++    "EVT_WS_JSON_RECV",
++    "EVT_WS_JSON_SEND",
++    "EVT_WS_AUDIO_RECV",
++    "EVT_WS_AUDIO_SEND",
++    "EVT_TTS_START",
++    "EVT_TTS_END",
++    "EVT_POLICY_APPLIED",
++    "EVT_ACWR_RECOMPUTE",
++    "EVT_MIC_GATE",
++    "EVT_BARGE_IN",
++    "EVT_ASR_READY",
++    "EVT_ASR_PARTIAL",
++    "EVT_ASR_FINAL",
++    "EVT_NLU",
++    "EVT_NLG",
++]
