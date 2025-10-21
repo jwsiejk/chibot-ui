@@ -815,6 +815,7 @@ async def _pump_dg_to_client(
     turn_timing: Optional[Dict[str, List[float]]] = None,
     on_turn_finish: Optional[Callable[[int, str, bool, int], None]] = None,
     on_asr_partial: Optional[Callable[[Dict[str, Any]], None]] = None,
+    on_evidence: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     final_guard_hooks: Optional[Dict[str, Any]] = None,
     on_transport_error: Optional[Callable[[str], None]] = None,
 ):
@@ -824,6 +825,7 @@ async def _pump_dg_to_client(
         cfg_ref = getattr(dg, "cfg", {}) or {}
     else:
         cfg_ref = cfg_ref or {}
+    close_reason_payload: Dict[str, Any] = {"reason": "loop_exit"}
     try:
         guard_env_raw = os.getenv("WS_FINAL_GUARD_MS", "1500")
         guard_env_ms = int(guard_env_raw)
@@ -1105,6 +1107,9 @@ async def _emit_user_final_payload(
                     turn_id=turn_id_ref[0],
                     delta_from_turn_ms=delta_ms,
                 )
+                if on_evidence:
+                    with contextlib.suppress(Exception):
+                        on_evidence("open", dict(ev))
                 with contextlib.suppress(Exception):
                     if asr_ready_evt and not asr_ready_evt.is_set():
                         asr_ready_evt.set()
@@ -1163,6 +1168,9 @@ async def _emit_user_final_payload(
                         on_asr_partial(ev)
 
                 preview_text = _clip_text(text)
+                if on_evidence:
+                    with contextlib.suppress(Exception):
+                        on_evidence("final" if is_final else "partial", dict(ev))
                 _jlog(
                     "dg_transcript",
                     sid=sid,
@@ -1212,6 +1220,10 @@ async def _emit_user_final_payload(
             if et == "asr_error":
                 err = _clip_text(str(ev.get("error") or "unknown"), 160)
                 _jlog("dg_asr_error", sid=sid, turn_id=turn_id_ref[0], error=err)
+                close_reason_payload = {"reason": "error", "error": err}
+                if on_evidence:
+                    with contextlib.suppress(Exception):
+                        on_evidence("error", {"error": err})
                 with contextlib.suppress(Exception):
                     if _admin_emit:
                         _admin_emit(
@@ -1223,14 +1235,25 @@ async def _emit_user_final_payload(
                         )
                 await _ws_send_json(send, make_error("asr_error", err))
     except asyncio.CancelledError:
+        close_reason_payload = {"reason": "cancelled"}
         return
     except Exception as e:
+        close_reason_payload = {"reason": "error", "error": e.__class__.__name__}
         with contextlib.suppress(Exception):
             await _ws_send_json(send, make_error("relay_fail", e.__class__.__name__))
         if callable(on_transport_error):
             with contextlib.suppress(Exception):
                 on_transport_error("relay_fail")
     finally:
+        if on_evidence:
+            with contextlib.suppress(Exception):
+                payload = dict(close_reason_payload)
+                if (
+                    payload.get("reason") == "loop_exit"
+                    and asr_evidence_ref[0].get("final_received")
+                ):
+                    payload["reason"] = "normal"
+                on_evidence("close", payload)
         task = guard_state.get("task")
         if task and not task.done():
             task.cancel()
@@ -2489,12 +2512,36 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     turn_timing: Dict[str, List[float]] = {
         "start": [0.0],
         "dg_open": [0.0],
+        "vad_open": [0.0],
+        "asr_start": [0.0],
         "first_partial": [0.0],
+        "final_received": [0.0],
         "final": [0.0],
+        "llm_final": [0.0],
+        "tts_start": [0.0],
         "tts_end": [0.0],
     }
     turn_finish_logged = [False]
     last_partial_ts: List[float] = [0.0]
+    timing_summary_emitted = [False]
+
+    asr_evidence_ref: List[Dict[str, Any]] = [
+        {
+            "turn_id": None,
+            "open": False,
+            "bytes_forwarded": 0,
+            "partials_count": 0,
+            "final_received": False,
+            "final_reason": None,
+            "vendor_status": "pending",
+            "vendor_status_detail": None,
+            "vendor_fault": None,
+            "close_reason": None,
+            "faults_emitted": set(),
+            "emitted": False,
+            "auto_skip_emitted": False,
+        }
+    ]
 
     final_guard_reset_ref: List[Optional[Callable[[str], None]]] = [None]
     final_guard_local_vad_ref: List[Optional[Callable[[str], None]]] = [None]
@@ -2533,6 +2580,255 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     mic_chunks: List[bytes] = []
     mic_first_ts = [0.0]
     mic_last_ts = [0.0]
+
+    def _normalize_turn_id(value: Optional[Any]) -> Optional[str]:
+        if value in (None, "", "greet"):
+            return None
+        try:
+            return str(int(value))
+        except Exception:
+            try:
+                return str(value)
+            except Exception:
+                return None
+
+    def _reset_asr_evidence(turn_id: Optional[Any]) -> None:
+        turn_value = _normalize_turn_id(turn_id)
+        asr_evidence_ref[0] = {
+            "turn_id": turn_value,
+            "open": bool(turn_value),
+            "bytes_forwarded": 0,
+            "partials_count": 0,
+            "final_received": False,
+            "final_reason": None,
+            "vendor_status": "pending",
+            "vendor_status_detail": None,
+            "vendor_fault": None,
+            "close_reason": None,
+            "faults_emitted": set(),
+            "emitted": False,
+            "auto_skip_emitted": False,
+        }
+
+    def _note_asr_bytes(count: int) -> None:
+        if count <= 0:
+            return
+        state = asr_evidence_ref[0]
+        if not state.get("open"):
+            return
+        prev = int(state.get("bytes_forwarded", 0) or 0)
+        new_total = prev + int(count)
+        state["bytes_forwarded"] = new_total
+        if new_total > 0 and prev <= 0 and turn_timing is not None:
+            with contextlib.suppress(Exception):
+                holder = turn_timing.setdefault("asr_start", [0.0])
+                if not holder[0]:
+                    holder[0] = time.time()
+
+    def _emit_asr_evidence(reason: Optional[str]) -> None:
+        state = asr_evidence_ref[0]
+        if state.get("emitted"):
+            return
+        turn_id_str = state.get("turn_id")
+        if not turn_id_str:
+            return
+        bytes_forwarded = int(state.get("bytes_forwarded", 0) or 0)
+        partials = int(state.get("partials_count", 0) or 0)
+        final_received = bool(state.get("final_received"))
+        vendor_status = state.get("vendor_status") or ("ok" if final_received else "pending")
+        vendor_detail = state.get("vendor_status_detail")
+        close_reason = reason or state.get("close_reason") or (
+            "normal" if final_received else "no_final"
+        )
+        final_reason = state.get("final_reason")
+        meta: Dict[str, Any] = {
+            "turn_id": turn_id_str,
+            "bytes_forwarded": bytes_forwarded,
+            "partials_count": partials,
+            "final_received": final_received,
+            "vendor_status": vendor_status,
+            "close_reason": close_reason,
+            "src": "server_asr",
+            "component": "server_asr",
+            "missing_source": False,
+        }
+        if vendor_detail:
+            meta["vendor_status_detail"] = vendor_detail
+        if final_reason:
+            meta["final_reason"] = final_reason
+        _emit_flow_event("asr_evidence", phase="turn", meta=meta)
+        faults_to_emit: Set[str] = set()
+        if bytes_forwarded > 0 and partials == 0:
+            faults_to_emit.add("no_partials")
+        if state.get("vendor_fault"):
+            faults_to_emit.add("vendor_close")
+        emitted_faults: Set[str] = set(state.get("faults_emitted") or set())
+        for fault in faults_to_emit:
+            if fault in emitted_faults:
+                continue
+            fault_meta = {
+                "turn_id": turn_id_str,
+                "fault": fault,
+                "src": "server_asr",
+                "component": "server_asr",
+                "missing_source": False,
+            }
+            _emit_flow_event("asr_path_fault", phase="turn", meta=fault_meta)
+            emitted_faults.add(fault)
+        state["faults_emitted"] = emitted_faults
+        state["emitted"] = True
+
+    def _note_asr_evidence_event(
+        kind: str, payload: Optional[Dict[str, Any]] = None
+    ) -> None:
+        state = asr_evidence_ref[0]
+        info: Dict[str, Any] = {}
+        if isinstance(payload, dict):
+            info = dict(payload)
+        if kind == "open":
+            state["open"] = True
+            state["vendor_status"] = "open"
+            if turn_timing is not None:
+                with contextlib.suppress(Exception):
+                    holder = turn_timing.setdefault("dg_open", [0.0])
+                    if not holder[0]:
+                        holder[0] = time.time()
+            return
+        if kind == "partial":
+            state["partials_count"] = int(state.get("partials_count", 0) or 0) + 1
+            return
+        if kind == "final":
+            state["final_received"] = True
+            state["final_reason"] = info.get("final_reason") or info.get(
+                "final_reason_detail"
+            )
+            if turn_timing is not None:
+                with contextlib.suppress(Exception):
+                    holder = turn_timing.setdefault("final_received", [0.0])
+                    if not holder[0]:
+                        holder[0] = time.time()
+            if state.get("vendor_status") in {"pending", "open"}:
+                state["vendor_status"] = "ok"
+            return
+        if kind == "error":
+            err_txt = info.get("error") or info.get("code") or "error"
+            state["vendor_status"] = "error"
+            state["vendor_status_detail"] = err_txt
+            state["vendor_fault"] = "vendor_close"
+            state["close_reason"] = "vendor_error"
+            return
+        if kind == "timeout":
+            state["vendor_status"] = "timeout"
+            state["vendor_status_detail"] = info.get("reason") or info.get("error")
+            state["vendor_fault"] = "vendor_close"
+            state["close_reason"] = "vendor_timeout"
+            return
+        if kind == "vendor_close":
+            state["vendor_fault"] = "vendor_close"
+            state["vendor_status_detail"] = info.get("reason") or info.get("error")
+            if state.get("vendor_status") in {"pending", "open"}:
+                state["vendor_status"] = info.get("status") or "error"
+            return
+        if kind == "close":
+            reason = info.get("reason") or state.get("close_reason")
+            state["open"] = False
+            _emit_asr_evidence(reason)
+            return
+
+    def _asr_evidence_ready_for_auto() -> bool:
+        state = asr_evidence_ref[0]
+        turn_id_norm = _normalize_turn_id(turn_id_ref[0])
+        if not turn_id_norm or state.get("turn_id") != turn_id_norm:
+            return False
+        if not state.get("final_received"):
+            return False
+        return bool(int(state.get("partials_count", 0) or 0) > 0)
+
+    def _emit_policy_decision_skip(reason: str) -> None:
+        state = asr_evidence_ref[0]
+        if state.get("auto_skip_emitted"):
+            return
+        turn_id_norm = _normalize_turn_id(turn_id_ref[0])
+        if not turn_id_norm:
+            return
+        decision_meta = {
+            "turn_id": turn_id_norm,
+            "decision": "skip_auto_commit",
+            "reason": reason,
+            "src": "policy",
+            "component": "policy",
+            "missing_source": False,
+        }
+        _emit_flow_event("policy_decision", phase="policy", meta=decision_meta)
+        fault_meta = {
+            "turn_id": turn_id_norm,
+            "fault": "evidence_missing",
+            "src": "policy",
+            "component": "policy",
+            "missing_source": False,
+        }
+        _emit_flow_event("policy_fault", phase="policy", meta=fault_meta)
+        state["auto_skip_emitted"] = True
+
+    def _emit_timing_summary(turn_id_value: Optional[Any]) -> None:
+        if timing_summary_emitted[0]:
+            return
+        summary_turn = _normalize_turn_id(turn_id_value)
+        if not summary_turn:
+            return
+        if turn_timing is None:
+            return
+        holder = turn_timing.get("tts_end")
+        if not holder or not holder[0]:
+            return
+        times: Dict[str, float] = {}
+        for key in (
+            "vad_open",
+            "asr_start",
+            "first_partial",
+            "final_received",
+            "llm_final",
+            "tts_start",
+            "tts_end",
+        ):
+            slot = turn_timing.get(key, [0.0])
+            ts = slot[0] if slot else 0.0
+            if ts:
+                times[key] = ts
+
+        def _delta_ms(start_key: str, end_key: str) -> Optional[int]:
+            start_ts = times.get(start_key)
+            end_ts = times.get(end_key)
+            if not start_ts or not end_ts:
+                return None
+            return int(max(0.0, (end_ts - start_ts) * 1000))
+
+        metrics: Dict[str, int] = {}
+        for label, start_key, end_key in (
+            ("vad_to_asr_start_ms", "vad_open", "asr_start"),
+            ("asr_start_to_first_partial_ms", "asr_start", "first_partial"),
+            ("first_partial_to_final_ms", "first_partial", "final_received"),
+            ("final_to_llm_final_ms", "final_received", "llm_final"),
+            ("llm_final_to_tts_start_ms", "llm_final", "tts_start"),
+            ("tts_start_to_tts_end_ms", "tts_start", "tts_end"),
+        ):
+            delta = _delta_ms(start_key, end_key)
+            if delta is not None:
+                metrics[label] = delta
+        roundtrip = _delta_ms("vad_open", "tts_end")
+        if roundtrip is not None:
+            metrics["roundtrip_latency_ms"] = roundtrip
+        if not metrics:
+            return
+        summary_meta = {
+            "turn_id": summary_turn,
+            "metrics": metrics,
+            "src": "policy",
+            "component": "policy",
+            "missing_source": False,
+        }
+        _emit_flow_event("timing_summary", phase="policy", meta=summary_meta)
+        timing_summary_emitted[0] = True
 
     # Local confirmation gating
     try:
@@ -3488,6 +3784,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         new_task.add_done_callback(_clear)
             
     def _on_assistant_tts_start(turn_id: Any) -> None:
+        now_ts = time.time()
+        if turn_timing is not None:
+            with contextlib.suppress(Exception):
+                holder = turn_timing.setdefault("tts_start", [0.0])
+                if not holder[0]:
+                    holder[0] = now_ts
         assistant_speaking[0] = True
         _push_interaction_policy(_interaction_policy_tts_snapshot())
         mode = (barge_suppress_mode or "none").strip() or "none"
@@ -3524,6 +3826,10 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             with contextlib.suppress(Exception):
                 holder = turn_timing.setdefault("tts_end", [0.0])
                 holder[0] = now_ts
+        summary_turn = turn_id
+        if summary_turn in (None, "", "greet"):
+            summary_turn = turn_id_ref[0]
+        _emit_timing_summary(summary_turn)
         tts_last_end_ts[0] = now_ts
         if turn_id in (None, "", "greet"):
             _maybe_emit_greet_end(via="tts_end")
@@ -3555,6 +3861,11 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         local_vad_open[0] = True
         _note_client_vad_start(time.time())
         _maybe_emit_evidence_gate()
+        if turn_timing is not None:
+            with contextlib.suppress(Exception):
+                holder = turn_timing.setdefault("vad_open", [0.0])
+                if not holder[0]:
+                    holder[0] = time.time()
 
     def _on_local_vad_stop() -> None:
         local_vad_open[0] = False
@@ -3638,6 +3949,20 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     def _handle_bus_frame(frame: Dict[str, Any]) -> None:
         ftype_raw = frame.get("type")
         ftype = (ftype_raw or "").lower()
+        if ftype == "results":
+            role_like = (
+                frame.get("role")
+                or frame.get("source")
+                or frame.get("speaker")
+                or ""
+            )
+            is_assistant = str(role_like).strip().lower() == "assistant"
+            is_final = bool(frame.get("is_final"))
+            if is_assistant and is_final and turn_timing is not None:
+                with contextlib.suppress(Exception):
+                    holder = turn_timing.setdefault("llm_final", [0.0])
+                    if not holder[0]:
+                        holder[0] = time.time()
         if not ftype:
             return
         turn_id = frame.get("turn_id")
@@ -3667,16 +3992,26 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
     def _reset_turn_metrics(start_ts: float) -> None:
         turn_timing["start"][0] = start_ts
-        turn_timing["dg_open"][0] = 0.0
-        turn_timing["first_partial"][0] = 0.0
-        turn_timing["final"][0] = 0.0
-        turn_timing["tts_end"][0] = 0.0
+        for key in (
+            "dg_open",
+            "vad_open",
+            "asr_start",
+            "first_partial",
+            "final_received",
+            "final",
+            "llm_final",
+            "tts_start",
+            "tts_end",
+        ):
+            turn_timing[key][0] = 0.0
         turn_finish_logged[0] = False
+        timing_summary_emitted[0] = False
         asr_partial_counter[0] = 0
         asr_partial_first_emitted[0] = False
         evidence_gate_emitted[0] = False
         last_confident_partial_conf[0] = None
         last_partial_ts[0] = 0.0
+        _reset_asr_evidence(turn_id_ref[0])
 
     def _emit_no_audio_alert(reason: str) -> None:
         if no_audio_notified[0]:
@@ -3897,6 +4232,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         turn_commit_mode_ref[0] = "vad"
         active_turn_mode_ref[0] = mode or "vad"
         event_mode = "manual" if (mode == "manual" or pending_manual) else "auto"
+        if event_mode == "auto" and not _asr_evidence_ready_for_auto():
+            _emit_policy_decision_skip("no_asr_evidence")
+            return
         dual_evidence = True if event_mode == "manual" else _has_dual_evidence()
         asr_ready_flag = bool(asr_ready[0])
         target_turn = current_assistant_turn_ref[0]
@@ -4261,6 +4599,15 @@ async def _ws_chat_asgi_impl(scope, receive, send):
 
                 def _diag_hook(label: str, **payload: Any) -> None:
                     payload_copy = dict(payload) if payload else {}
+                    try:
+                        if label == "asr_error":
+                            _note_asr_evidence_event("error", payload_copy)
+                        elif label == "asr_timeout":
+                            _note_asr_evidence_event("timeout", payload_copy)
+                        elif label == "connection_closed":
+                            _note_asr_evidence_event("vendor_close", payload_copy)
+                    except Exception:
+                        pass
                     admin_cb = _admin_emit if callable(_admin_emit) else None
                     if admin_cb:
                         try:
@@ -4307,6 +4654,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         turn_timing,
                         _log_turn_finish,
                         _handle_asr_partial_with_flow,
+                        on_evidence=_note_asr_evidence_event,
                         final_guard_hooks={
                             "reset_ref": final_guard_reset_ref,
                             "local_vad_ref": final_guard_local_vad_ref,
@@ -4475,6 +4823,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             return False
         try:
             await dg.send(data)
+            _note_asr_bytes(len(data) if isinstance(data, (bytes, bytearray)) else 0)
             sent_any_audio[0] = True
             _cancel_no_audio_watch()
             _jlog("ws_audio_forward", sid=sid, bytes=len(data), buffered=from_buffer)

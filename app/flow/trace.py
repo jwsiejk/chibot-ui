@@ -134,6 +134,7 @@ class SessionBucket:
     open_llm: Dict[str, EventRecord] = field(default_factory=dict)
     tts_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     drop_buffer: List[Dict[str, Any]] = field(default_factory=list)
+    asr_fault_counts: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -424,6 +425,7 @@ class FlowStore:
                 "events": events,
                 "next_since_ms": next_since,
                 "hints": hints,
+                "asr_faults_session": dict(bucket.asr_fault_counts),
             }
 
     def sessions(
@@ -457,6 +459,7 @@ class FlowStore:
                         "last_phase": last_phase,
                         "last_who": last_who,
                         "last_event_id": last_event_id,
+                        "asr_faults_session": dict(bucket.asr_fault_counts),
                     }
                 )
 
@@ -565,8 +568,7 @@ class FlowStore:
         }
         src, missing = _resolve_event_source(who, meta)
         payload["src"] = src
-        if missing:
-            payload["missing_source"] = True
+        payload["missing_source"] = bool(missing)
         if parent_id:
             payload["parent_id"] = parent_id
 
@@ -710,6 +712,21 @@ class FlowStore:
             bucket.open_llm[key] = record
         elif type_ == LLM_FINAL_TYPE:
             bucket.open_llm.pop(key, None)
+
+        if type_.startswith("asr_path_fault"):
+            fault_key: Optional[str] = None
+            if isinstance(meta, dict):
+                raw_fault = meta.get("fault") or meta.get("tag") or meta.get("kind")
+                if raw_fault is not None:
+                    try:
+                        fault_key = str(raw_fault)
+                    except Exception:
+                        fault_key = None
+            if not fault_key and ":" in type_:
+                fault_key = type_.split(":", 1)[1]
+            if fault_key:
+                current = bucket.asr_fault_counts.get(fault_key, 0)
+                bucket.asr_fault_counts[fault_key] = current + 1
 
     def _confirm_key(self, meta: Dict[str, Any]) -> str:
         confirm_id = meta.get("confirm_id") if isinstance(meta, dict) else None

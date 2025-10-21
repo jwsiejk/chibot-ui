@@ -54,6 +54,12 @@
           </label>
           <div class="filter-chips" id="flowFilterChips" aria-live="polite"></div>
         </div>
+        <div class="flow-health" id="flowHealth" aria-live="polite">
+          <span class="health-label">ASR faults</span>
+          <span class="health-count" data-kind="no_partials">No partials: <strong>0</strong></span>
+          <span class="health-count" data-kind="vendor_close">Vendor close: <strong>0</strong></span>
+          <span class="health-badge" id="flowHealthBadge" hidden></span>
+        </div>
         <div class="tail" data-ref="tail">
           <div class="tail-state" id="flowTailState" role="status">Paused</div>
           <div class="tail-actions">

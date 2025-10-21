@@ -7,6 +7,7 @@ const FORENSIC_DURATION_MS = 10_000;
 const HANDOFF_PROMPT =
   "Analyze the redacted conversational flow; identify root cause(s), evidence (event IDs), smallest viable fix, and validation steps.";
 const HANDOFF_STORAGE_KEY = "askchip.flow.handoffOptions";
+const FAULT_BADGE_THRESHOLD = 3;
 
 const defaultFetchImpl =
   typeof fetch === "function"
@@ -74,6 +75,7 @@ const state = {
     redaction: "minimal",
     maxSizeMb: "",
   },
+  asrFaults: { no_partials: 0, vendor_close: 0 },
 };
 
 const els = {};
@@ -97,6 +99,8 @@ function init() {
   els.filterInput = document.getElementById("flowFilterInput");
   els.turnInput = document.getElementById("flowTurnInput");
   els.filterChips = document.getElementById("flowFilterChips");
+  els.health = document.getElementById("flowHealth");
+  els.healthBadge = document.getElementById("flowHealthBadge");
   els.tailState = document.getElementById("flowTailState");
   els.tailToggle = document.getElementById("flowTailToggle");
   els.tailStep = document.getElementById("flowTailStep");
@@ -133,6 +137,7 @@ function init() {
   renderDrawer();
   renderHints();
   renderForensicButton();
+  renderHealth();
 
   if (state.sessionId) {
     fetchTrace({ reset: true });
@@ -623,6 +628,33 @@ function renderSessionListItem(item) {
     </li>`;
 }
 
+function renderHealth() {
+  const container = els.health;
+  if (!container) return;
+  const counts = container.querySelectorAll('[data-kind]');
+  counts.forEach((node) => {
+    const kind = node.getAttribute('data-kind');
+    if (!kind) return;
+    const value = Number(state.asrFaults?.[kind]) || 0;
+    const strong = node.querySelector('strong');
+    if (strong) strong.textContent = String(value);
+  });
+  const badge = els.healthBadge;
+  const total = Object.values(state.asrFaults || {}).reduce(
+    (acc, value) => acc + (Number(value) || 0),
+    0,
+  );
+  if (badge) {
+    if (total > FAULT_BADGE_THRESHOLD) {
+      badge.hidden = false;
+      container.classList.add('badge-active');
+    } else {
+      badge.hidden = true;
+      container.classList.remove('badge-active');
+    }
+  }
+}
+
 function selectSession(sessionId) {
   if (!sessionId) return;
   if (state.forensicActive) {
@@ -636,6 +668,7 @@ function selectSession(sessionId) {
   state.matchedIds = new Set();
   state.visibleIds = new Set();
   state.drawerEventId = null;
+  state.asrFaults = { no_partials: 0, vendor_close: 0 };
   updateHints([]);
   renderForensicButton();
   if (els.sessionInput) {
@@ -645,6 +678,7 @@ function selectSession(sessionId) {
   renderSessions();
   renderTimeline();
   renderDrawer();
+  renderHealth();
   fetchTrace({ reset: true }).then(() => {
     goLive(true);
   });
@@ -677,6 +711,15 @@ function fetchTrace({ reset }) {
       const events = Array.isArray(payload.events) ? payload.events : [];
       ingestEvents(events);
       updateHints(payload.hints);
+      const faultsPayload = payload.asr_faults_session;
+      if (faultsPayload && typeof faultsPayload === "object") {
+        state.asrFaults = {
+          no_partials: Number(faultsPayload.no_partials) || 0,
+          vendor_close: Number(faultsPayload.vendor_close) || 0,
+        };
+      } else if (reset) {
+        state.asrFaults = { no_partials: 0, vendor_close: 0 };
+      }
       const nextSince = payload.next_since_ms;
       if (typeof nextSince === "number" && nextSince >= 0) {
         state.pollSinceMs = nextSince;
@@ -685,6 +728,7 @@ function fetchTrace({ reset }) {
       applyPendingExpandedRestore();
       renderTimeline();
       renderDrawer();
+      renderHealth();
     })
     .catch((err) => {
       console.warn("[flow] trace fetch failed", err);
