@@ -17,7 +17,9 @@ def make_tts_mask_meta(
 ) -> Dict[str, object]:
     """Return a normalized metadata payload for TTS mask events."""
 
-    return make_source_meta(source, gates=gates, evidence=evidence)
+    meta = make_source_meta(source, gates=gates, evidence=evidence)
+    meta.setdefault("component", "server_tts")
+    return meta
 
 
 @runtime_checkable
@@ -74,11 +76,20 @@ class TTSFlowTracker:
     _ended: bool = False
     _start_event_id: Optional[str] = None
 
+    def _augment_meta(self, base: Optional[dict[str, object]] = None) -> dict[str, object]:
+        payload: Dict[str, object] = {}
+        if base:
+            payload.update(base)
+        payload.setdefault("component", "server_tts")
+        if self.phase == "greet":
+            payload.setdefault("phase", "greet")
+        return payload
+
     def _meta(self) -> Optional[dict[str, object]]:
         meta: Dict[str, object] = {"schema": FLOW_SCHEMA_VERSION}
         if self.include_turn_meta and self.turn_id:
             meta["turn_id"] = self.turn_id
-        return meta
+        return self._augment_meta(meta)
 
     def _emit_debug(
         self,
@@ -90,13 +101,14 @@ class TTSFlowTracker:
         if not parent_id:
             return
         try:
+            debug_meta = self._augment_meta(meta)
             flow_emit(
                 session_id=self.session_id,
                 level="debug",
                 phase=self.phase,
                 type=type_,
                 who=self.who,
-                meta=meta,
+                meta=debug_meta,
                 parent_id=parent_id,
             )
         except Exception:
@@ -192,13 +204,14 @@ class TTSFlowTracker:
             except Exception:
                 meta["code"] = "unknown"
         try:
+            error_meta = self._augment_meta(meta)
             event_id = flow_emit(
                 session_id=self.session_id,
                 level="transition",
                 phase=self.phase,
                 type="tts_error",
                 who=self.who,
-                meta=meta or None,
+                meta=error_meta,
             )
             if state:
                 cleaned = {

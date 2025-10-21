@@ -82,6 +82,7 @@ class LLMFlowTracker:
         *,
         extra: Optional[Dict[str, object]] = None,
     ) -> None:
+        meta.setdefault("component", "policy")
         evidence: Dict[str, object] = {}
         if extra:
             for key, value in extra.items():

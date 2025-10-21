@@ -797,6 +797,7 @@ class DeepgramClient:
                 meta["path"] = str(path)
             except Exception:
                 meta["path"] = "unknown"
+        meta.setdefault("component", "server_asr")
         try:
             flow_emit(
                 session_id=sid,

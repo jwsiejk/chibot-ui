@@ -1,6 +1,6 @@
 # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
 from __future__ import annotations
-import asyncio, os, contextlib, time, io, struct, base64, uuid, copy, json, hashlib
+import asyncio, os, contextlib, time, io, struct, base64, uuid, copy, json, hashlib, logging
 try:
     import audioop  # type: ignore[import-not-found]
 except Exception:  # pragma: no cover - optional dependency
@@ -58,6 +58,9 @@ from app.obs.source_tags import (
 )
 from app.services.tts.flow_wrapper import make_tts_mask_meta
 
+
+logger = logging.getLogger(__name__)
+
 # Optional admin emitter
 try:
     from app.api_v1.admin import _emit as _admin_emit_base
@@ -104,6 +107,20 @@ def _admin_emit(event: str, **payload: Any) -> None:
             pass
 
     _broadcast_admin_frame(event, payload)
+
+
+def _with_ws_component(meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    if isinstance(meta, dict):
+        payload.update(meta)
+    elif meta is not None:
+        try:
+            payload.update(dict(meta))  # type: ignore[arg-type]
+        except Exception:
+            pass
+    payload.setdefault("component", "ws_server")
+    return payload
+
 
 def _current_assistant_turn_id(sid: str) -> Optional[str]:
     try:
@@ -240,6 +257,8 @@ _SETTINGS = load_settings()
 _ADVANCED_LOGGING_ENABLED = bool(
     getattr(_SETTINGS, "advanced_logging_enabled", True)
 )
+
+logger.info("server_source_components: enabled")
 
 # ------------------------------ small helpers ------------------------------
 
@@ -1283,6 +1302,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         phase: str,
         meta: Optional[Dict[str, Any]] = None,
     ) -> str:
+        payload = _with_ws_component(meta)
         try:
             return (
                 flow_emit(
@@ -1291,7 +1311,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     phase=phase,
                     type=type_,
                     who="system",
-                    meta=meta,
+                    meta=payload,
                 )
                 or ""
             )
@@ -1307,6 +1327,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
     ) -> str:
         if not parent_id:
             return ""
+        payload = _with_ws_component(meta)
         try:
             return (
                 flow_emit(
@@ -1315,7 +1336,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     phase=phase,
                     type=type_,
                     who="system",
-                    meta=meta,
+                    meta=payload,
                     parent_id=parent_id,
                 )
                 or ""
@@ -1332,7 +1353,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                         type="ws_frames",
                         phase="transport",
                         who="server",
-                        meta={"dir": "pump_start"},
+                        meta=_with_ws_component({"dir": "pump_start"}),
                     )
                     or None
                 )
@@ -1711,7 +1732,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 type="ws_close",
                 phase="transport",
                 who="server",
-                meta={"code": code, "reason": reason},
+                meta=_with_ws_component({"code": code, "reason": reason}),
             )
         except Exception:
             pass
@@ -1729,10 +1750,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 type="ws_error",
                 phase="transport",
                 who="server",
-                meta={
+                meta=_with_ws_component(
+                    {
                     "where": "_ws_chat_asgi_impl",
                     "message": str(ex)[:500],
-                },
+                    }
+                ),
             )
         except Exception:
             pass
@@ -1803,11 +1826,13 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                 type="ws_error",
                 phase="transport",
                 who="server",
-                meta={
+                meta=_with_ws_component(
+                    {
                     "where": "initial_ready",
                     "cause": ex.__class__.__name__,
                     "msg": str(ex)[:300],
-                },
+                    }
+                ),
             )
         with contextlib.suppress(Exception):
             await _ws_send_json(
@@ -2038,6 +2063,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         meta: Optional[Dict[str, Any]] = None,
         phase: str = "barge",
     ) -> str:
+        payload = _with_ws_component(meta)
         try:
             return (
                 flow_emit(
@@ -2046,7 +2072,7 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     phase=phase,
                     type=type_,
                     who="system",
-                    meta=meta,
+                    meta=payload,
                 )
                 or ""
             )
@@ -3189,6 +3215,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     "post_tts_hold_ms": max(0, hold_ms),
                 },
             )
+            if turn_id in (None, "", "greet"):
+                mask_meta.setdefault("phase", "greet")
             _jlog(
                 "EVT_TTS_MASK_OFF",
                 sid=sid,
@@ -3480,6 +3508,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                     else None,
                 },
             )
+            if turn_id in (None, "", "greet"):
+                mask_meta.setdefault("phase", "greet")
             _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode, **mask_meta)
         _schedule_vad_state(False, "tts")
         _ensure_confirm_closed("tts_start")
@@ -5274,10 +5304,12 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                             type="session_ready",
                                             phase="ws",
                                             who="server",
-                                            meta={
-                                                "greet": greet_flag,
-                                                "reset": reset_val,
-                                            },
+                                            meta=_with_ws_component(
+                                                {
+                                                    "greet": greet_flag,
+                                                    "reset": reset_val,
+                                                }
+                                            ),
                                         )
                                     except Exception:
                                         pass
@@ -5845,7 +5877,9 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                         type="session_force_end",
                                         phase="session",
                                         who="server",
-                                        meta={"reason": "user_end_waiting_asr"},
+                                        meta=_with_ws_component(
+                                            {"reason": "user_end_waiting_asr"}
+                                        ),
                                     )
                                 except Exception:
                                     pass
@@ -6046,11 +6080,13 @@ async def ws_chat(websocket):
                 type="ws_error",
                 phase="transport",
                 who="server",
-                meta={
+                meta=_with_ws_component(
+                    {
                     "where": "initial_ready",
                     "cause": ex.__class__.__name__,
                     "msg": str(ex)[:300],
-                },
+                    }
+                ),
             )
         with contextlib.suppress(Exception):
             await websocket.send_text(

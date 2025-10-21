@@ -810,6 +810,7 @@ def _diag_maybe_emit(session_id: str, turn_id: str, *, force: bool = False) -> N
     correlation = snapshot.get("correlation_user_msg_id")
     if correlation:
         meta["correlation_user_msg_id"] = correlation
+    meta["component"] = "server_core"
     clean_meta = {key: value for key, value in meta.items() if value is not None}
     try:
         flow_emit(
@@ -916,7 +917,7 @@ def emit_watchdog_user_end(session_id: str,
     if not session_id:
         return
     tid = _diag_coerce_turn_id(turn_id)
-    meta: Dict[str, Any] = {"source": source}
+    meta: Dict[str, Any] = {"source": source, "component": "server_core"}
     if tid:
         meta["turn_id"] = tid
     if correlation_user_msg_id is not None:
