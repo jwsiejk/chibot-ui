@@ -347,7 +347,7 @@ function wireWSEventsOnce(){
         _ttsHoldActive = true;
         _ttsActiveTurnId = frameTurnId;
         try {
-          disarmVAD();
+          disarmVAD({ reason: 'tts' });
           _console('log', '[bootstrap] VAD disarmed while TTS is active');
         } catch (err) {
           try { _console('warn', '[bootstrap] VAD disarm failed during TTS', err); } catch {}

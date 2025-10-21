@@ -1,76 +1,240 @@
-diff --git a/static/js/audio.js b/static/js/audio.js
-index b1241f9edd6c86011fa29795687fb9487240002d..0698aee3792eaa813471aa56cfa8d2808bc387bf 100644
---- a/static/js/audio.js
-+++ b/static/js/audio.js
-@@ -449,51 +449,71 @@ export function playStream(frameOrChunks, maybeMime) {
-     // --- Legacy call signature ----------------------------------------------
-     const list = Array.isArray(frameOrChunks) ? frameOrChunks : [frameOrChunks];
-     if (!list.length) return;
-     const mime = maybeMime || DEFAULT_MIME;
-     const p = ensurePlayer(mime);
-     if (list.some((c) => c)) {
-       _emitTtsState('playing');
-     }    
-     for (const c of list) {
-       if (!c) continue;
-       if (typeof c === 'string') p.appendBase64(c);
-       else if (c instanceof Uint8Array) p.appendBytes(c);
-       else if (Array.isArray(c)) p.appendBytes(new Uint8Array(c));
+diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
+index 606b345d57ab34f128cfa121c4fd17d312ebab1f..05f45bcb27a60feed31dbf69ee7d01774c3dddde 100644
+--- a/static/js/bootstrap.js
++++ b/static/js/bootstrap.js
+@@ -325,51 +325,51 @@ function wireWSEventsOnce(){
+   const isExpectedAbnormalClose = (detail = {}) => {
+     if (!detail || typeof detail !== 'object') return false;
+     if (detail.wasClean === true) return true;
+     if (detail.reconnectScheduled) return true;
+     const code = normalizeCloseCode(detail);
+     if (code === 1006) return true;
+     if (code === 1012 || code === 1013) return true;
+     return false;
+   };
+ 
+   // Log first few frames to verify payload shape
+   let seen = 0;
+   const loggedTypes = new Set();
+   logWsListenerAttach('askchip-ws', 'bootstrap-wire');
+   window.addEventListener('askchip-ws', (ev) => {
+     const d = ev.detail || {};
+     const t = d.type || '';
+     const normalizedType = typeof t === 'string' ? t : '';
+     const frameTurnId = d && d.turn_id != null ? String(d.turn_id) : null;
+ 
+     if (normalizedType === 'TTS_START' || normalizedType === 'assistant_audio' || normalizedType === 'tts:start') {
+       if (!_ttsHoldActive) {
+         _ttsHoldActive = true;
+         _ttsActiveTurnId = frameTurnId;
+         try {
+-          disarmVAD();
++          disarmVAD({ reason: 'tts' });
+           _console('log', '[bootstrap] VAD disarmed while TTS is active');
+         } catch (err) {
+           try { _console('warn', '[bootstrap] VAD disarm failed during TTS', err); } catch {}
+         }
+       } else if (!_ttsActiveTurnId && frameTurnId) {
+         _ttsActiveTurnId = frameTurnId;
+       }
      }
-   } catch (e) {
-     console.warn('[audio] playStream error', e);
+ 
+     if (normalizedType === 'UtteranceEnd' || normalizedType === 'utteranceend') {
+       const idsMatch =
+         !_ttsActiveTurnId || !frameTurnId || String(frameTurnId) === String(_ttsActiveTurnId);
+       if (_ttsHoldActive && idsMatch) {
+         _ttsHoldActive = false;
+         _ttsActiveTurnId = null;
+       }
+     }
+ 
+     if (seen < 5 || (!loggedTypes.has(t) && loggedTypes.size < 12)) {
+       try { _console('log', '[WS→UI]', JSON.stringify(d)); } catch {}
+       seen++;
+       if (t) loggedTypes.add(t);
+     }
+ 
+     // Lightweight state dot hints (no UI regressions)
+diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
+index ea072e93756f0c19790250debb0e9302e879f9c0..2da14ff3015e0ba592da8387e2875b57c5a57fe6 100644
+--- a/static/js/voice/runtime/AdaptiveRuntime.js
++++ b/static/js/voice/runtime/AdaptiveRuntime.js
+@@ -84,51 +84,65 @@ function rearmLocalVad(ctx) {
+     return;
    }
- }
- 
- export function audioEnd() {
-   try { _player?.end(); } catch {}
- }
- 
- export function audioTeardown() {
-   try { _player?.teardown(); } catch {}
-+  _player = null;
-+  try {
-+    if (_el) {
-+      try { _el.pause(); } catch {}
-+      try { _el.removeAttribute('src'); } catch {}
-+      try { _el.load?.(); } catch {}
-+    }
-+  } catch {}
-   try { _teardownSignatureTracker(); } catch {}
-+  try {
-+    if (typeof window !== 'undefined') {
-+      window.__askchip_last_audio_el = null;
-+    }
-+  } catch {}
-+  try {
-+    if (typeof globalThis !== 'undefined') {
-+      globalThis.__askchip_last_audio_el = null;
-+    }
-+  } catch {}
-+  _el = null;
-+  _lastTtsState = 'ended';
- }
- 
- export function stopPlayback() {
-   try { _player?.stop(); } catch {}
-   try { ensureEl().pause(); } catch {}
-   try { ensureEl().volume = TTS_IDLE_VOLUME; } catch {}
-   _emitTtsState('ended');
- }
- 
- export function isPlaying() {
-   try { return !!(_el && !_el.paused); } catch { return false; }
- }
- 
- export function pausePlayback() {
+   ctx.state.vadSuppressedForTts = false;
+   if (!policyAllowLocalVad()) {
+     ctx.state.vadShouldRearmAfterTts = false;
+     return;
+   }
+   if (ctx.state.manualGate) {
+     return;
+   }
+   if (ctx.state.vadArmed) {
+     return;
+   }
+   const pendingOpts = ctx.state.pendingVadOpts;
+   const opts = pendingOpts || ctx.state.lastVadOpts || {};
    try {
-     const el = ensureEl();
-     if (!el.paused) {
-       el.pause();
-       el.volume = TTS_IDLE_VOLUME;
-       _emitTtsState('ended');
+     ensureVad(ctx, opts);
+     ctx.state.pendingVadOpts = null;
+   } catch (err) {
+     if (pendingOpts != null) {
+       ctx.state.pendingVadOpts = pendingOpts;
      }
-   } catch {}
+     if (typeof console !== 'undefined' && console.warn) {
+       console.warn('[voice][vad] rearm failed', err);
+     }
++    return;
++  }
++  if (!ctx.state.vadArmed) {
++    return;
++  }
++  const controllers = ensureControllers(ctx);
++  const startDetail = { source: 'auto_rearm' };
++  try {
++    controllers.recorder.start({ reason: 'auto_rearm', detail: startDetail });
++  } catch (err) {
++    if (typeof console !== 'undefined' && console.warn) {
++      console.warn('[voice][recorder] auto rearm start failed', err);
++    }
+   }
++  controllers.asr.ensureStarted({ reason: 'auto_rearm', detail: startDetail }).catch(() => {});
  }
  
- export function resumePlayback() {
+ function schedulePostTtsRearm(ctx) {
+   if (!ctx?.state) return;
+   if (!ctx.state.vadShouldRearmAfterTts || ctx.state.manualGate) {
+     ctx.state.vadShouldRearmAfterTts = false;
+     ctx.state.vadSuppressedForTts = false;
+     clearPostTtsRearm(ctx);
+     if (!ctx.state.manualGate) {
+       markReady(ctx, 'post_tts_release');
+     }
+     ensureControllers(ctx).ttsMask.release(MIC_GATE_TTS_REASON);
+     return;
+   }
+   clearPostTtsRearm(ctx);
+   const holdMs = resolvePostTtsHoldMs(ctx);
+   const delay = Math.max(0, Number.isFinite(holdMs) ? holdMs : 0);
+   if (delay <= 0) {
+     ctx.state.vadShouldRearmAfterTts = false;
+     markReady(ctx, 'post_tts_hold_elapsed');
+     ensureControllers(ctx).ttsMask.release(MIC_GATE_TTS_REASON);
+     rearmLocalVad(ctx);
+     return;
+   }
+   ctx.state.vadSuppressedForTts = true;
+@@ -2410,69 +2424,100 @@ export async function armVAD(stream = null, opts = {}) {
+     && (ctx.state.vadSuppressedForTts || ttsActive || holdActive || endedRecently);
+   if (shouldDeferVad) {
+     try {
+       ctx.state.pendingVadOpts = { ...opts };
+     } catch {
+       ctx.state.pendingVadOpts = opts;
+     }
+     ctx.state.vadShouldRearmAfterTts = true;
+     ctx.state.vadSuppressedForTts = true;
+     if (!ttsActive && !holdActive && endedRecently) {
+       schedulePostTtsRearm(ctx);
+     }
+   } else if (localVadAllowed) {
+     ctx.state.pendingVadOpts = null;
+     ensureVad(ctx, opts);
+   } else {
+     ctx.state.pendingVadOpts = null;
+   }
+   const controllers = ensureControllers(ctx);
+   controllers.recorder.start({ reason: 'arm_vad', emit: false });
+   await controllers.asr.ensureStarted({ reason: 'arm_vad', emit: false }).catch(() => {});
+   emitVoiceEvent('armed', { mode: 'adaptive' });
+   return mic;
+ }
+ 
+-export function disarmVAD() {
++export function disarmVAD(options = {}) {
++  const opts = typeof options === 'string' ? { reason: options } : options || {};
++  const reasonValue = typeof opts.reason === 'string' ? opts.reason.trim() : '';
++  const normalizedReason = reasonValue ? reasonValue.toLowerCase() : 'manual';
++  const autoRearm = opts?.autoRearm === true
++    || normalizedReason === 'tts'
++    || normalizedReason === 'assistant_tts';
++
+   const ctx = ensureCtx();
+   const controllers = ensureControllers(ctx);
+   clearPostTtsRearm(ctx);
+-  ctx.state.vadShouldRearmAfterTts = false;
+-  ctx.state.vadSuppressedForTts = false;
+-  ctx.state.pendingVadOpts = null;
++
++  if (autoRearm) {
++    ctx.state.vadShouldRearmAfterTts = true;
++    ctx.state.vadSuppressedForTts = true;
++    if (!ctx.state.pendingVadOpts && ctx.state.lastVadOpts) {
++      try {
++        ctx.state.pendingVadOpts = { ...ctx.state.lastVadOpts };
++      } catch {
++        ctx.state.pendingVadOpts = ctx.state.lastVadOpts;
++      }
++    }
++  } else {
++    ctx.state.vadShouldRearmAfterTts = false;
++    ctx.state.vadSuppressedForTts = false;
++    ctx.state.pendingVadOpts = null;
++  }
++
+   teardownVad(ctx);
+-  controllers.recorder.stop({ reason: 'manual_disarm' });
+-  closeTurn(ctx, 'manual_disarm');
++  const recorderReason = autoRearm ? 'tts_pause' : 'manual_disarm';
++  controllers.recorder.stop({ reason: recorderReason });
++  closeTurn(ctx, recorderReason);
+   teardownTransport(ctx);
+-  releaseMicGate(ctx, 'manual', { clearAll: true });
++
++  const gateReason = autoRearm ? MIC_GATE_TTS_REASON : 'manual';
++  if (autoRearm) {
++    releaseMicGate(ctx, gateReason);
++  } else {
++    releaseMicGate(ctx, gateReason, { clearAll: true });
++  }
+   setManualGate(ctx, false);
+   ctx.state.pttHeld = false;
+-  ctx.state.hasOpenedTurn = false;
+-  ctx.state.ttsCurrentTurnId = null;
+-  ctx.state.userTurnActive = false;
+-  stopMaskLogging(ctx);
+-  dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: 'manual_disarm' });
++
++  if (!autoRearm) {
++    ctx.state.hasOpenedTurn = false;
++    ctx.state.ttsCurrentTurnId = null;
++    ctx.state.userTurnActive = false;
++    stopMaskLogging(ctx);
++    dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: recorderReason });
++  }
+ }
+ 
+ export function isRecording() {
+   const ctx = ensureCtx();
+   return !!ctx.state.recording;
+ }
+ 
+ export function bargeIn(meta = {}) {
+   const ctx = ensureCtx();
+   const controllers = ensureControllers(ctx);
+   const shouldNotify = manualBargeAllowed(ctx);
+   ctx.state.manualBargeInUsed = true;
+   ctx.state.bargeConfirmActive = false;
+   ctx.state.bargeConfirmUntil = 0;
+   ctx.state.pendingCommitReason = null;
+   clearDualVadTimer(ctx);
+   clearPostTtsRearm(ctx);
+   ctx.state.vadShouldRearmAfterTts = false;
+   ctx.state.vadSuppressedForTts = false;
+   try { stopPlayback(); } catch {}
+   if (ctx.state.turnOpen) {
+     closeTurn(ctx, 'manual_barge_preempt');
+   }
+   const maskActive = isTtsMaskActive(ctx);
+   const whileTts = !!(ctx.state.ttsPlaying || maskActive);

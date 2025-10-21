@@ -106,7 +106,21 @@ function rearmLocalVad(ctx) {
     if (typeof console !== 'undefined' && console.warn) {
       console.warn('[voice][vad] rearm failed', err);
     }
+    return;
   }
+  if (!ctx.state.vadArmed) {
+    return;
+  }
+  const controllers = ensureControllers(ctx);
+  const startDetail = { source: 'auto_rearm' };
+  try {
+    controllers.recorder.start({ reason: 'auto_rearm', detail: startDetail });
+  } catch (err) {
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[voice][recorder] auto rearm start failed', err);
+    }
+  }
+  controllers.asr.ensureStarted({ reason: 'auto_rearm', detail: startDetail }).catch(() => {});
 }
 
 function schedulePostTtsRearm(ctx) {
@@ -2432,25 +2446,56 @@ export async function armVAD(stream = null, opts = {}) {
   return mic;
 }
 
-export function disarmVAD() {
+export function disarmVAD(options = {}) {
+  const opts = typeof options === 'string' ? { reason: options } : options || {};
+  const reasonValue = typeof opts.reason === 'string' ? opts.reason.trim() : '';
+  const normalizedReason = reasonValue ? reasonValue.toLowerCase() : 'manual';
+  const autoRearm = opts?.autoRearm === true
+    || normalizedReason === 'tts'
+    || normalizedReason === 'assistant_tts';
+
   const ctx = ensureCtx();
   const controllers = ensureControllers(ctx);
   clearPostTtsRearm(ctx);
-  ctx.state.vadShouldRearmAfterTts = false;
-  ctx.state.vadSuppressedForTts = false;
-  ctx.state.pendingVadOpts = null;
+
+  if (autoRearm) {
+    ctx.state.vadShouldRearmAfterTts = true;
+    ctx.state.vadSuppressedForTts = true;
+    if (!ctx.state.pendingVadOpts && ctx.state.lastVadOpts) {
+      try {
+        ctx.state.pendingVadOpts = { ...ctx.state.lastVadOpts };
+      } catch {
+        ctx.state.pendingVadOpts = ctx.state.lastVadOpts;
+      }
+    }
+  } else {
+    ctx.state.vadShouldRearmAfterTts = false;
+    ctx.state.vadSuppressedForTts = false;
+    ctx.state.pendingVadOpts = null;
+  }
+
   teardownVad(ctx);
-  controllers.recorder.stop({ reason: 'manual_disarm' });
-  closeTurn(ctx, 'manual_disarm');
+  const recorderReason = autoRearm ? 'tts_pause' : 'manual_disarm';
+  controllers.recorder.stop({ reason: recorderReason });
+  closeTurn(ctx, recorderReason);
   teardownTransport(ctx);
-  releaseMicGate(ctx, 'manual', { clearAll: true });
+
+  const gateReason = autoRearm ? MIC_GATE_TTS_REASON : 'manual';
+  if (autoRearm) {
+    releaseMicGate(ctx, gateReason);
+  } else {
+    releaseMicGate(ctx, gateReason, { clearAll: true });
+  }
   setManualGate(ctx, false);
   ctx.state.pttHeld = false;
-  ctx.state.hasOpenedTurn = false;
-  ctx.state.ttsCurrentTurnId = null;
-  ctx.state.userTurnActive = false;
-  stopMaskLogging(ctx);
-  dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: 'manual_disarm' });
+
+  if (!autoRearm) {
+    ctx.state.hasOpenedTurn = false;
+    ctx.state.ttsCurrentTurnId = null;
+    ctx.state.userTurnActive = false;
+    stopMaskLogging(ctx);
+    dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: recorderReason });
+  }
 }
 
 export function isRecording() {
