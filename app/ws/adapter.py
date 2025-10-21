@@ -9,12 +9,11 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, Protocol, runtime_checkable
 
 from app.telemetry import bus
+from app.telemetry.exporter import FileExporter
 from app.voice_v2 import (
     EVT_WS_AUDIO_RECV,
-    EVT_WS_CLOSE,
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
-    EVT_WS_OPEN,
 )
 
 CHAT_V2_SUBPROTOCOL = "chat.v2"
@@ -62,11 +61,13 @@ class ChatV2Adapter:
     def __init__(
         self,
         engine: EngineHooks | None = None,
+        exporter: FileExporter | None = None,
         *,
         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
     ) -> None:
         self.engine = engine
+        self.exporter = exporter
         self.text_limit_bytes = text_limit_bytes
         self.binary_limit_bytes = binary_limit_bytes
 
@@ -88,7 +89,8 @@ class ChatV2Adapter:
         headers = self._decode_headers(scope.get("headers", ()))
         ctx = AdapterContext(sid=uuid.uuid4().hex, headers=headers)
 
-        await self._publish(EVT_WS_OPEN, ctx.sid, {"headers": dict(headers)})
+        if self.exporter:
+            self.exporter.begin(ctx.sid)
         await self._invoke_engine("on_open", ctx.sid, headers)
 
         close_code = 1000
@@ -124,8 +126,9 @@ class ChatV2Adapter:
             await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
             raise
         finally:
-            await self._publish(EVT_WS_CLOSE, ctx.sid, {"code": close_code, "reason": close_reason})
             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
+            if self.exporter:
+                self.exporter.end(ctx.sid, {"close_code": close_code})
 
     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
         body = json.dumps({"error": "unsupported_subprotocol", "expected": CHAT_V2_SUBPROTOCOL}).encode("utf-8")
@@ -189,7 +192,6 @@ class ChatV2Adapter:
             await self._send_error(send, ctx.sid, "unknown_type", f"Unsupported frame type '{frame_type}'")
             return True
 
-        await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
         await self._invoke_engine("on_json", ctx.sid, frame)
         return True
 
@@ -208,7 +210,6 @@ class ChatV2Adapter:
 
         ctx.audio_seq += 1
         meta = {"byte_count": byte_count, "seq": ctx.audio_seq, "dir": "in"}
-        await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
         await self._invoke_engine("on_audio", ctx.sid, data, ctx.audio_seq)
         return True
 
