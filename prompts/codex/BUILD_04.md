@@ -1,23 +1,33 @@
-# BUILD 04 — Gate & Barge (auto only)
+# BUILD 04 — Gate Model, TTS Mask, and Turn State Machine
 
 **Alignment guard (do not omit):**
-- This build MUST align with the SSOT docs in `/docs` and all previous builds.
-- Do not touch files outside the listed scope.
-- Do not rename routes, env vars, or policy keys.
-- Every new/changed file ≤ 500 lines. Keep changes small and isolated.
-- Preserve the `chat.v2` contract and include the telemetry block in policy frames.
+- Align with SSOT in `/docs`. Touch only listed files. ≤ 500 LOC/file; ≤ 3 files/task.
+- Preserve `chat.v2`; all gating reflected by telemetry.
 
-## Tasks
-### B4-A: GateController
-**Files:** app/voice_v2/gate_controller.py
-**Non-goals:** No PTT; auto-only.
-**Acceptance:**
-- Gate on/off events include reasons (tts|post_hold|policy).
-- Respects telemetry categories and levels.
+---
 
-### B4-B: Auto barge-in decision
-**Files:** app/voice_v2/engine.py, app/telemetry/exporter.py
-**Non-goals:** No client changes.
-**Acceptance:**
-- If `barge_in_enabled=false` during TTS, ignore speech; if true, allow interrupt and emit `EVT_BARGE_IN {source}`.
+### B4-A: Mic Gate Reason Model
+**Files:** `app/voice_v2/gate.py` (new), `app/voice_v2/engine.py` (update)  
+**Non-goals:** ASR  
+**Acceptance:**  
+- Reasons: `tts_active`, `manual_gate`, `system_hold`; effective computed; telemetry includes reasons[] + effective boolean.
 
+---
+
+### B4-B: TTS Mask Lifecycle Hooks
+**Files:** `app/voice_v2/engine.py` (update)  
+**Non-goals:** Playback implementation  
+**Acceptance:**  
+- Server “assistant speaking” sets `tts_active`; cleared on end; emits `EVT_MIC_GATE` breadcrumbs.
+
+---
+
+### B4-C: Engine Turn State Machine
+**Files:** `app/voice_v2/engine.py` (update), `docs/15_NLU_NLG.md` (update)  
+**Non-goals:** Vendor integration  
+**Acceptance:**  
+- States: `Ready → Listening → Thinking → Responding → Ready`; emits `EVT_TURN_BEGIN/EVT_TURN_END` with `turn_id`.  
+- Idle/timeout transitions emit `EVT_TIMEOUT` with reason (`asr_stall`, `llm_timeout`, `tts_start_delay`).  
+- Barge-in during `Responding` sets cancellation flag for TTS (hook added, actual cancellation in Build 05).
+
+> “Return only diffs for the files listed above. Do not modify or create any other files.”

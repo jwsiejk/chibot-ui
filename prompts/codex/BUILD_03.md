@@ -1,23 +1,35 @@
-# BUILD 03 — TTS Tracker
+# BUILD 03 — WebSocket Framing, Routing, and Versioning
 
 **Alignment guard (do not omit):**
-- This build MUST align with the SSOT docs in `/docs` and all previous builds.
-- Do not touch files outside the listed scope.
-- Do not rename routes, env vars, or policy keys.
-- Every new/changed file ≤ 500 lines. Keep changes small and isolated.
-- Preserve the `chat.v2` contract and include the telemetry block in policy frames.
+- Align with SSOT in `/docs`. Touch only listed files. ≤ 500 LOC/file; ≤ 3 files/task.
+- Preserve `chat.v2` contract; extend spec with version negotiation and error taxonomy.
 
-## Tasks
-### B3-A: Tracker module
-**Files:** app/voice_v2/tts_tracker.py
-**Non-goals:** No player integration yet.
-**Acceptance:**
-- `start(utt_id, now_ms)` and `end(utt_id, now_ms)` publish EVT_TTS_START/END.
-- `release_at_ms = end + post_hold_ms`.
+---
 
-### B3-B: Engine integration
-**Files:** app/voice_v2/engine.py, app/telemetry/exporter.py
-**Non-goals:** No ASR yet.
-**Acceptance:**
-- `tts.start … (seconds) … tts.end` recorded; after post-hold, policy sets idle with `acwr:true`.
+### B3-A: JSON Frame Contract (Spec Parity)
+**Files:** `docs/10_CONTRACT_WS.md` (update), `app/ws/adapter.py` (update)  
+**Non-goals:** ASR/TTS logic  
+**Acceptance:**  
+- All documented frame types/required fields enforced; unknown types → error frame.  
+- Clean Ping/Pong; strict separation of text vs binary with telemetry taps.
 
+---
+
+### B3-B: Binary Routing Guard
+**Files:** `app/ws/adapter.py` (update)  
+**Non-goals:** Decoding; resampling  
+**Acceptance:**  
+- Binary accepted only when engine expects audio (engine flag or mode); otherwise 409 + error frame; `EVT_WS_AUDIO_RECV` includes `byte_count` and `seq`.
+
+---
+
+### B3-C: Version Negotiation & Error Taxonomy
+**Files:** `docs/10_CONTRACT_WS.md` (update), `app/ws/adapter.py` (update), `app/voice_v2/engine.py` (update)  
+**Non-goals:** Support for legacy `v1` behavior  
+**Acceptance:**  
+- Server advertises `supported_subprotocols: ["chat.v2"]` and optional `min_version`.  
+- If mismatched, HTTP 426 with structured JSON: `{supported:["chat.v2"], reason:"..."}`.  
+- Standard error frame schema `{type:"error", code, hint?, retryable?}` documented and used by adapter/engine.  
+- Backpressure telemetry `EVT_BACKPRESSURE_ON/OFF` with thresholds and queue depth fields.
+
+> “Return only diffs for the files listed above. Do not modify or create any other files.”

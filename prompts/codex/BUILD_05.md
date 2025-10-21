@@ -1,34 +1,55 @@
-# BUILD 05 — ASR Manager + NLU/NLG seams
+# BUILD 05 — Audio/ASR, LLM, TTS Foundations
 
 **Alignment guard (do not omit):**
-- This build MUST align with the SSOT docs in `/docs` and all previous builds.
-- Do not touch files outside the listed scope.
-- Do not rename routes, env vars, or policy keys.
-- Every new/changed file ≤ 500 lines. Keep changes small and isolated.
-- Preserve the `chat.v2` contract and include the telemetry block in policy frames.
+- Align with SSOT in `/docs`. Touch only listed files. ≤ 500 LOC/file; ≤ 3 files/task.
+- Preserve `chat.v2`; adapters are pluggable and stubbed where noted.
 
-## Tasks
-### B5-A: ASRManager (Deepgram)
-**Files:** app/voice_v2/asr_manager.py
-**Non-goals:** No Speechmatics yet.
-**Acceptance:**
-- `warm_up()` emits `EVT_ASR_READY`; partial/final events carry `req_id`.
+---
 
-### B5-B: Speechmatics adapter + selection
-**Files:** app/voice_v2/asr_manager.py
-**Non-goals:** Do not break Deepgram path.
-**Acceptance:**
-- Admin/env can switch vendor; event shapes remain identical.
+### B5-A: ASR Adapter (Stub)
+**Files:** `app/voice_v2/asr.py` (new)  
+**Non-goals:** Vendor decode  
+**Acceptance:**  
+- Accepts PCM/Opus boundaries; raises partial/final callbacks (stub); telemetry `EVT_ASR_PARTIAL/EVT_ASR_FINAL`.
 
-### B5-C: NLU hook
-**Files:** app/voice_v2/engine.py, app/voice_v2/nlu.py, app/telemetry/exporter.py
-**Non-goals:** No heavy ML; placeholder is ok.
-**Acceptance:**
-- After `asr.final`, exactly one NLU object per turn is logged to `nlu/turns.ndjson.gz`.
+---
 
-### B5-D: Dialog policy + NLG hook
-**Files:** app/voice_v2/dialog_policy.py, app/voice_v2/nlg.py, app/voice_v2/engine.py, app/telemetry/exporter.py
-**Non-goals:** No tools/workflows yet.
-**Acceptance:**
-- Decision logged with reason; one NLG object per turn to `nlg/turns.ndjson.gz`.
+### B5-B: LLM Adapter (Stub)
+**Files:** `app/voice_v2/llm.py` (new)  
+**Non-goals:** Provider calls  
+**Acceptance:**  
+- Returns canned reply + timing; telemetry `EVT_NLG` (final).
 
+---
+
+### B5-C: TTS Adapter (Stub)
+**Files:** `app/voice_v2/tts.py` (new)  
+**Non-goals:** Synthesis  
+**Acceptance:**  
+- Accepts text; returns envelope with fake duration/size; telemetry `EVT_TTS_START/EVT_TTS_END`.
+
+---
+
+### B5-D: Cancellation Hooks (Barge-in)
+**Files:** `app/voice_v2/engine.py` (update), `app/voice_v2/tts.py` (update)  
+**Non-goals:** Client UI; vendor cancellation  
+**Acceptance:**  
+- `cancel_current_tts()` implemented; barge-in during `Responding` triggers mask teardown + cancel hook; emits `EVT_BARGE_IN` + `EVT_TTS_END` (reason=`canceled`).
+
+---
+
+### B5-E: Audio Envelope & Jitter Buffer
+**Files:** `docs/10_CONTRACT_WS.md` (update), `app/ws/adapter.py` (update), `app/voice_v2/asr.py` (update)  
+**Non-goals:** Advanced PLC  
+**Acceptance:**  
+- Header frame documents sample rate/channels/codec; per-sid seq reordering window; gaps flagged as `EVT_AUDIO_GAP`; size/sequence checks enforced.
+
+---
+
+### B5-F: Provider Interfaces & Circuit Breakers
+**Files:** `app/voice_v2/asr_base.py` (new), `app/voice_v2/tts_base.py` (new), `app/voice_v2/llm_base.py` (new), `docs/30_ADR.md` (update)  
+**Non-goals:** Concrete vendors  
+**Acceptance:**  
+- Abstract base classes with timeouts/retries; provider registry; breaker emits `EVT_PROVIDER_OPEN/EVT_PROVIDER_TRIP/EVT_PROVIDER_CLOSE`; tests simulate fail/open.
+
+> “Return only diffs for the files listed above. Do not modify or create any other files.”
