@@ -1,7 +1,0 @@
-[
-  {
-    "ok": true,
-    "selector": "--start-eval",
-    "text": "window.startCall && window.startCall()"
-  }
-]

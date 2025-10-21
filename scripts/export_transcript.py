@@ -1,1 +1,0 @@
-print('Exporting transcript (mock).')

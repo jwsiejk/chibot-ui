@@ -1,2 +1,0 @@
-{"id":"e_00001","t_rel_ms":0,"level":"flow","phase":"session","type":"session_open","who":"system","meta":{}}
-{"id":"e_00002","t_rel_ms":120,"level":"transition","phase":"turn","type":"asr_partial_first","who":"client","meta":{"turn_id":"1"}}

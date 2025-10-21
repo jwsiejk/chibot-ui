@@ -1,7 +1,0 @@
-from starlette.testclient import TestClient
-from app.asgi_gateway import asgi
-
-def test_no_batch_stt_route():
-    c = TestClient(asgi)
-    r = c.post("/api/v1/voice/stt")  # batch lane must not exist
-    assert r.status_code in (404, 405)

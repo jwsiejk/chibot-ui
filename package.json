@@ -1,6 +1,0 @@
-{
-  "devDependencies": {
-    "eventsource-parser": "^3.0.6",
-    "playwright": "^1.56.0"
-  }
-}
