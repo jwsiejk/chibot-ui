@@ -4,6 +4,7 @@ import copy
 import gzip
 import io
 import json
+import logging
 import threading
 import time
 from collections import deque
@@ -11,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-from app.admin_log import get_admin_log_history
+from app.admin_log import emit as admin_log_emit, get_admin_log_history
 from app.obs.source_tags import FLOW_SCHEMA_VERSION
 
 MAX_EVENTS = 5000
@@ -57,6 +58,34 @@ def _ensure_meta(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 def _words(text: str) -> List[str]:
     return [word for word in text.split() if word]
+
+
+def _coerce_source_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        text = str(value).strip()
+    except Exception:
+        return None
+    return text or None
+
+
+def _resolve_event_source(who: Any, meta: Mapping[str, Any]) -> Tuple[str, bool]:
+    if isinstance(meta, Mapping):
+        direct = _coerce_source_text(meta.get("src"))
+        if direct:
+            return direct, False
+        component = _coerce_source_text(meta.get("component"))
+        if component:
+            return component, False
+
+    who_text = _coerce_source_text(who) or ""
+    lower_who = who_text.lower()
+    if lower_who in {"server", "system"}:
+        return "server_core", False
+    if lower_who == "client":
+        return "client_ui", False
+    return "unknown", True
 
 
 @dataclass
@@ -117,6 +146,9 @@ class FlowStore:
 
     _instance: Optional["FlowStore"] = None
     _singleton_lock = threading.Lock()
+    _normalization_logged = False
+
+    _logger = logging.getLogger(__name__)
 
     @classmethod
     def instance(cls) -> "FlowStore":
@@ -134,6 +166,14 @@ class FlowStore:
         self._lock = threading.RLock()
         self._sessions: Dict[str, SessionBucket] = {}
         self._event_sessions: Dict[str, str] = {}
+        if not FlowStore._normalization_logged:
+            try:
+                admin_log_emit("flow_source_normalization", message="enabled")
+            except Exception:
+                FlowStore._logger.info("flow_source_normalization: enabled")
+            else:
+                FlowStore._logger.info("flow_source_normalization: enabled")
+            FlowStore._normalization_logged = True
 
     # ------------------------------------------------------------------
     # Public API
@@ -515,6 +555,10 @@ class FlowStore:
             "meta": meta,
             "schema": FLOW_SCHEMA_VERSION,
         }
+        src, missing = _resolve_event_source(who, meta)
+        payload["src"] = src
+        if missing:
+            payload["missing_source"] = True
         if parent_id:
             payload["parent_id"] = parent_id
 

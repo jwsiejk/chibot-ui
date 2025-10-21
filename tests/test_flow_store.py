@@ -52,6 +52,63 @@ def test_emit_and_list_basic(flow_env):
     assert data["next_since_ms"] > events[-1]["t_rel_ms"]
 
 
+def test_emit_includes_normalized_source(flow_env):
+    store, _, _ = flow_env
+    session_id = "sess-src"
+
+    store.emit(
+        session_id,
+        "flow",
+        "session",
+        "explicit_src",
+        "system",
+        meta={"src": "ingress_gateway"},
+    )
+    store.emit(
+        session_id,
+        "flow",
+        "session",
+        "component_src",
+        "system",
+        meta={"component": "tts_engine"},
+    )
+    store.emit(
+        session_id,
+        "flow",
+        "session",
+        "default_server",
+        "system",
+    )
+    store.emit(
+        session_id,
+        "flow",
+        "session",
+        "default_client",
+        "client",
+    )
+    store.emit(
+        session_id,
+        "flow",
+        "session",
+        "unknown_src",
+        "assistant",
+    )
+
+    events = {evt["type"]: evt for evt in store.list(session_id, expand="all")["events"]}
+
+    assert events["explicit_src"]["src"] == "ingress_gateway"
+    assert "missing_source" not in events["explicit_src"]
+    assert events["component_src"]["src"] == "tts_engine"
+    assert "missing_source" not in events["component_src"]
+    assert events["default_server"]["src"] == "server_core"
+    assert "missing_source" not in events["default_server"]
+    assert events["default_client"]["src"] == "client_ui"
+    assert "missing_source" not in events["default_client"]
+    assert events["unknown_src"]["src"] == "unknown"
+    assert events["unknown_src"]["missing_source"] is True
+    assert events["unknown_src"]["who"] == "assistant"
+
+
 def test_emit_dedupe_window(flow_env):
     store, advance, _ = flow_env
     session_id = "sess-dedupe"

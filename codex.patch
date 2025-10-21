@@ -1,240 +1,367 @@
-diff --git a/static/js/bootstrap.js b/static/js/bootstrap.js
-index 606b345d57ab34f128cfa121c4fd17d312ebab1f..05f45bcb27a60feed31dbf69ee7d01774c3dddde 100644
---- a/static/js/bootstrap.js
-+++ b/static/js/bootstrap.js
-@@ -325,51 +325,51 @@ function wireWSEventsOnce(){
-   const isExpectedAbnormalClose = (detail = {}) => {
-     if (!detail || typeof detail !== 'object') return false;
-     if (detail.wasClean === true) return true;
-     if (detail.reconnectScheduled) return true;
-     const code = normalizeCloseCode(detail);
-     if (code === 1006) return true;
-     if (code === 1012 || code === 1013) return true;
-     return false;
-   };
+diff --git a/app/flow/trace.py b/app/flow/trace.py
+index c478b808bd2782dcd110a881e262fb32b389aa35..fc2076fe0e1929b162a1443c55e48253d744418b 100644
+--- a/app/flow/trace.py
++++ b/app/flow/trace.py
+@@ -1,86 +1,115 @@
+ from __future__ import annotations
  
-   // Log first few frames to verify payload shape
-   let seen = 0;
-   const loggedTypes = new Set();
-   logWsListenerAttach('askchip-ws', 'bootstrap-wire');
-   window.addEventListener('askchip-ws', (ev) => {
-     const d = ev.detail || {};
-     const t = d.type || '';
-     const normalizedType = typeof t === 'string' ? t : '';
-     const frameTurnId = d && d.turn_id != null ? String(d.turn_id) : null;
+ import copy
+ import gzip
+ import io
+ import json
++import logging
+ import threading
+ import time
+ from collections import deque
+ from dataclasses import dataclass, field
+ from datetime import datetime, timezone
+ from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Set, Tuple
  
-     if (normalizedType === 'TTS_START' || normalizedType === 'assistant_audio' || normalizedType === 'tts:start') {
-       if (!_ttsHoldActive) {
-         _ttsHoldActive = true;
-         _ttsActiveTurnId = frameTurnId;
-         try {
--          disarmVAD();
-+          disarmVAD({ reason: 'tts' });
-           _console('log', '[bootstrap] VAD disarmed while TTS is active');
-         } catch (err) {
-           try { _console('warn', '[bootstrap] VAD disarm failed during TTS', err); } catch {}
+-from app.admin_log import get_admin_log_history
++from app.admin_log import emit as admin_log_emit, get_admin_log_history
+ from app.obs.source_tags import FLOW_SCHEMA_VERSION
+ 
+ MAX_EVENTS = 5000
+ DEDUP_WINDOW_MS = 100
+ ASR_PARTIAL_TYPE = "asr_partial_first"
+ BARGE_IN_TYPE = "barge_in"
+ BARGE_PAUSE_TYPES = {"barge_pause", "barge_hold"}
+ BARGE_RESUME_TYPE = "barge_resume"
+ TTS_START_TYPE = "tts_start"
+ TTS_END_TYPE = "tts_end"
+ LLM_START_TYPE = "llm_start"
+ LLM_FINAL_TYPE = "llm_final"
+ CONFIRM_OPEN_TYPE = "confirm_open"
+ CONFIRM_CLOSE_TYPE = "confirm_close"
+ 
+ MAX_BATCH_ITEMS = 1000
+ MAX_BATCH_BYTES = 512 * 1024
+ FLOW_DROPPED_TYPE = "flow_dropped"
+ 
+ # Simple static blurbs with light interpolation.
+ BLURBS: Dict[str, str] = {
+     CONFIRM_OPEN_TYPE: "Confirmation started",
+     CONFIRM_CLOSE_TYPE: "Confirmation closed",
+     BARGE_IN_TYPE: "Barge-in detected",
+     TTS_START_TYPE: "Assistant speech started",
+     TTS_END_TYPE: "Assistant speech ended",
+     LLM_START_TYPE: "LLM thinking",
+     LLM_FINAL_TYPE: "LLM response ready",
+ }
+ 
+ 
+ def _utc_now_iso() -> str:
+     return datetime.now(timezone.utc).isoformat()
+ 
+ 
+ def _ensure_meta(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+     if meta is None:
+         return {}
+     if not isinstance(meta, dict):
+         raise TypeError("meta must be a mapping")
+     return dict(meta)
+ 
+ 
+ def _words(text: str) -> List[str]:
+     return [word for word in text.split() if word]
+ 
+ 
++def _coerce_source_text(value: Any) -> Optional[str]:
++    if value is None:
++        return None
++    try:
++        text = str(value).strip()
++    except Exception:
++        return None
++    return text or None
++
++
++def _resolve_event_source(who: Any, meta: Mapping[str, Any]) -> Tuple[str, bool]:
++    if isinstance(meta, Mapping):
++        direct = _coerce_source_text(meta.get("src"))
++        if direct:
++            return direct, False
++        component = _coerce_source_text(meta.get("component"))
++        if component:
++            return component, False
++
++    who_text = _coerce_source_text(who) or ""
++    lower_who = who_text.lower()
++    if lower_who in {"server", "system"}:
++        return "server_core", False
++    if lower_who == "client":
++        return "client_ui", False
++    return "unknown", True
++
++
+ @dataclass
+ class EventRecord:
+     data: Dict[str, Any]
+     monotonic_ts: float
+     children_ids: List[str] = field(default_factory=list)
+     batches: List[Dict[str, Any]] = field(default_factory=list)
+ 
+     def to_dict(self, children: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+         payload = dict(self.data)
+         parent_id = payload.get("parent_id")
+         if parent_id is None:
+             payload.pop("parent_id", None)
+         if children is not None:
+             if children:
+                 payload["children"] = children
+         elif self.children_ids:
+             payload["children"] = list(self.children_ids)
+         if self.batches:
+             payload["batches"] = [dict(batch) for batch in self.batches]
+         return payload
+ 
+ 
+ @dataclass
+ class SessionBucket:
+     session_id: str
+@@ -95,67 +124,78 @@ class SessionBucket:
+     open_confirms: Dict[str, EventRecord] = field(default_factory=dict)
+     open_tts: Dict[str, EventRecord] = field(default_factory=dict)
+     open_llm: Dict[str, EventRecord] = field(default_factory=dict)
+     tts_state: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+     drop_buffer: List[Dict[str, Any]] = field(default_factory=list)
+ 
+ 
+ @dataclass
+ class FlowSessionSnapshot:
+     session_id: str
+     started_at_iso: Optional[str]
+     levels: List[str]
+     events: List[Dict[str, Any]]
+     config: Optional[Dict[str, Any]]
+ 
+     @property
+     def event_count(self) -> int:
+         return len(self.events)
+ 
+ 
+ class FlowStore:
+     """Thread-safe, singleton flow trace store."""
+ 
+     _instance: Optional["FlowStore"] = None
+     _singleton_lock = threading.Lock()
++    _normalization_logged = False
++
++    _logger = logging.getLogger(__name__)
+ 
+     @classmethod
+     def instance(cls) -> "FlowStore":
+         """Return the singleton FlowStore instance."""
+         return cls()
+ 
+     def __new__(cls) -> "FlowStore":
+         with cls._singleton_lock:
+             if cls._instance is None:
+                 cls._instance = super().__new__(cls)
+                 cls._instance._init()
+         return cls._instance
+ 
+     def _init(self) -> None:
+         self._lock = threading.RLock()
+         self._sessions: Dict[str, SessionBucket] = {}
+         self._event_sessions: Dict[str, str] = {}
++        if not FlowStore._normalization_logged:
++            try:
++                admin_log_emit("flow_source_normalization", message="enabled")
++            except Exception:
++                FlowStore._logger.info("flow_source_normalization: enabled")
++            else:
++                FlowStore._logger.info("flow_source_normalization: enabled")
++            FlowStore._normalization_logged = True
+ 
+     # ------------------------------------------------------------------
+     # Public API
+     # ------------------------------------------------------------------
+     def emit(
+         self,
+         session_id: str,
+         level: str,
+         phase: str,
+         type_: str,
+         who: str,
+         meta: Optional[Dict[str, Any]] = None,
+         parent_id: Optional[str] = None,
+     ) -> Optional[str]:
+         meta_copy = _ensure_meta(meta)
+         with self._lock:
+             bucket = self._ensure_bucket(session_id)
+             now = time.monotonic()
+             turn_id = self._extract_turn_id(meta_copy)
+ 
+             suppressed = self._should_suppress(bucket, now, type_, who, turn_id)
+             if suppressed is not None:
+                 return suppressed
+ 
+             if type_ == BARGE_IN_TYPE and bucket.barge_paused:
+@@ -493,50 +533,54 @@ class FlowStore:
+         *,
+         level: str,
+         phase: str,
+         type_: str,
+         who: str,
+         meta: Dict[str, Any],
+         parent_id: Optional[str],
+         is_injection: bool,
+     ) -> EventRecord:
+         event_id = f"e_{bucket.seq:05d}"
+         bucket.seq += 1
+ 
+         t_rel_ms = int((now - bucket.t0_monotonic) * 1000)
+         blurb = self._build_blurb(type_, phase, who, meta)
+         payload: Dict[str, Any] = {
+             "id": event_id,
+             "t_rel_ms": t_rel_ms,
+             "level": level,
+             "phase": phase,
+             "type": type_,
+             "who": who,
+             "blurb": blurb,
+             "meta": meta,
+             "schema": FLOW_SCHEMA_VERSION,
          }
-       } else if (!_ttsActiveTurnId && frameTurnId) {
-         _ttsActiveTurnId = frameTurnId;
-       }
-     }
++        src, missing = _resolve_event_source(who, meta)
++        payload["src"] = src
++        if missing:
++            payload["missing_source"] = True
+         if parent_id:
+             payload["parent_id"] = parent_id
  
-     if (normalizedType === 'UtteranceEnd' || normalizedType === 'utteranceend') {
-       const idsMatch =
-         !_ttsActiveTurnId || !frameTurnId || String(frameTurnId) === String(_ttsActiveTurnId);
-       if (_ttsHoldActive && idsMatch) {
-         _ttsHoldActive = false;
-         _ttsActiveTurnId = null;
-       }
-     }
+         record = EventRecord(data=payload, monotonic_ts=now)
+         self._append_event(bucket, record, record_drop=not is_injection)
+         if parent_id:
+             parent = bucket.event_index.get(parent_id)
+             if parent:
+                 parent.children_ids.append(event_id)
+         if not is_injection:
+             turn_id = self._extract_turn_id(meta)
+             key = (type_, who, turn_id)
+             bucket.dedupe[key] = (now, event_id)
+         self._event_sessions[event_id] = bucket.session_id
+         if not is_injection:
+             self._flush_drop_notices(bucket)
+         return record
  
-     if (seen < 5 || (!loggedTypes.has(t) && loggedTypes.size < 12)) {
-       try { _console('log', '[WS→UI]', JSON.stringify(d)); } catch {}
-       seen++;
-       if (t) loggedTypes.add(t);
-     }
+     def _append_event(
+         self, bucket: SessionBucket, record: EventRecord, *, record_drop: bool = True
+     ) -> None:
+         if len(bucket.events) >= MAX_EVENTS:
+             old = bucket.events.popleft()
+             bucket.event_index.pop(old.data["id"], None)
+             if record_drop:
+diff --git a/tests/test_flow_store.py b/tests/test_flow_store.py
+index 09c652fc77b87aac90ce260b7f89faf502f06b8a..6cc1fd0a8d44aa9fdf5d5353d91929c9e68971fc 100644
+--- a/tests/test_flow_store.py
++++ b/tests/test_flow_store.py
+@@ -30,50 +30,107 @@ def flow_env(monkeypatch):
  
-     // Lightweight state dot hints (no UI regressions)
-diff --git a/static/js/voice/runtime/AdaptiveRuntime.js b/static/js/voice/runtime/AdaptiveRuntime.js
-index ea072e93756f0c19790250debb0e9302e879f9c0..2da14ff3015e0ba592da8387e2875b57c5a57fe6 100644
---- a/static/js/voice/runtime/AdaptiveRuntime.js
-+++ b/static/js/voice/runtime/AdaptiveRuntime.js
-@@ -84,51 +84,65 @@ function rearmLocalVad(ctx) {
-     return;
-   }
-   ctx.state.vadSuppressedForTts = false;
-   if (!policyAllowLocalVad()) {
-     ctx.state.vadShouldRearmAfterTts = false;
-     return;
-   }
-   if (ctx.state.manualGate) {
-     return;
-   }
-   if (ctx.state.vadArmed) {
-     return;
-   }
-   const pendingOpts = ctx.state.pendingVadOpts;
-   const opts = pendingOpts || ctx.state.lastVadOpts || {};
-   try {
-     ensureVad(ctx, opts);
-     ctx.state.pendingVadOpts = null;
-   } catch (err) {
-     if (pendingOpts != null) {
-       ctx.state.pendingVadOpts = pendingOpts;
-     }
-     if (typeof console !== 'undefined' && console.warn) {
-       console.warn('[voice][vad] rearm failed', err);
-     }
-+    return;
-+  }
-+  if (!ctx.state.vadArmed) {
-+    return;
-+  }
-+  const controllers = ensureControllers(ctx);
-+  const startDetail = { source: 'auto_rearm' };
-+  try {
-+    controllers.recorder.start({ reason: 'auto_rearm', detail: startDetail });
-+  } catch (err) {
-+    if (typeof console !== 'undefined' && console.warn) {
-+      console.warn('[voice][recorder] auto rearm start failed', err);
-+    }
-   }
-+  controllers.asr.ensureStarted({ reason: 'auto_rearm', detail: startDetail }).catch(() => {});
- }
+     def advance(ms: int) -> None:
+         clock["now"] += ms / 1000.0
  
- function schedulePostTtsRearm(ctx) {
-   if (!ctx?.state) return;
-   if (!ctx.state.vadShouldRearmAfterTts || ctx.state.manualGate) {
-     ctx.state.vadShouldRearmAfterTts = false;
-     ctx.state.vadSuppressedForTts = false;
-     clearPostTtsRearm(ctx);
-     if (!ctx.state.manualGate) {
-       markReady(ctx, 'post_tts_release');
-     }
-     ensureControllers(ctx).ttsMask.release(MIC_GATE_TTS_REASON);
-     return;
-   }
-   clearPostTtsRearm(ctx);
-   const holdMs = resolvePostTtsHoldMs(ctx);
-   const delay = Math.max(0, Number.isFinite(holdMs) ? holdMs : 0);
-   if (delay <= 0) {
-     ctx.state.vadShouldRearmAfterTts = false;
-     markReady(ctx, 'post_tts_hold_elapsed');
-     ensureControllers(ctx).ttsMask.release(MIC_GATE_TTS_REASON);
-     rearmLocalVad(ctx);
-     return;
-   }
-   ctx.state.vadSuppressedForTts = true;
-@@ -2410,69 +2424,100 @@ export async function armVAD(stream = null, opts = {}) {
-     && (ctx.state.vadSuppressedForTts || ttsActive || holdActive || endedRecently);
-   if (shouldDeferVad) {
-     try {
-       ctx.state.pendingVadOpts = { ...opts };
-     } catch {
-       ctx.state.pendingVadOpts = opts;
-     }
-     ctx.state.vadShouldRearmAfterTts = true;
-     ctx.state.vadSuppressedForTts = true;
-     if (!ttsActive && !holdActive && endedRecently) {
-       schedulePostTtsRearm(ctx);
-     }
-   } else if (localVadAllowed) {
-     ctx.state.pendingVadOpts = null;
-     ensureVad(ctx, opts);
-   } else {
-     ctx.state.pendingVadOpts = null;
-   }
-   const controllers = ensureControllers(ctx);
-   controllers.recorder.start({ reason: 'arm_vad', emit: false });
-   await controllers.asr.ensureStarted({ reason: 'arm_vad', emit: false }).catch(() => {});
-   emitVoiceEvent('armed', { mode: 'adaptive' });
-   return mic;
- }
+     yield store, advance, clock
  
--export function disarmVAD() {
-+export function disarmVAD(options = {}) {
-+  const opts = typeof options === 'string' ? { reason: options } : options || {};
-+  const reasonValue = typeof opts.reason === 'string' ? opts.reason.trim() : '';
-+  const normalizedReason = reasonValue ? reasonValue.toLowerCase() : 'manual';
-+  const autoRearm = opts?.autoRearm === true
-+    || normalizedReason === 'tts'
-+    || normalizedReason === 'assistant_tts';
+     store._init()
+ 
+ 
+ def test_emit_and_list_basic(flow_env):
+     store, advance, _ = flow_env
+     session_id = "sess-basic"
+ 
+     first_id = store.emit(session_id, "flow", "session", "session_open", "client")
+     assert first_id
+     advance(10)
+     second_id = store.emit(session_id, "transition", "session", "asr_ready", "system")
+     assert second_id and second_id != first_id
+ 
+     data = store.list(session_id, expand="all")
+     events = data["events"]
+     assert [evt["id"] for evt in events] == [first_id, second_id]
+     assert data["next_since_ms"] > events[-1]["t_rel_ms"]
+ 
+ 
++def test_emit_includes_normalized_source(flow_env):
++    store, _, _ = flow_env
++    session_id = "sess-src"
 +
-   const ctx = ensureCtx();
-   const controllers = ensureControllers(ctx);
-   clearPostTtsRearm(ctx);
--  ctx.state.vadShouldRearmAfterTts = false;
--  ctx.state.vadSuppressedForTts = false;
--  ctx.state.pendingVadOpts = null;
++    store.emit(
++        session_id,
++        "flow",
++        "session",
++        "explicit_src",
++        "system",
++        meta={"src": "ingress_gateway"},
++    )
++    store.emit(
++        session_id,
++        "flow",
++        "session",
++        "component_src",
++        "system",
++        meta={"component": "tts_engine"},
++    )
++    store.emit(
++        session_id,
++        "flow",
++        "session",
++        "default_server",
++        "system",
++    )
++    store.emit(
++        session_id,
++        "flow",
++        "session",
++        "default_client",
++        "client",
++    )
++    store.emit(
++        session_id,
++        "flow",
++        "session",
++        "unknown_src",
++        "assistant",
++    )
 +
-+  if (autoRearm) {
-+    ctx.state.vadShouldRearmAfterTts = true;
-+    ctx.state.vadSuppressedForTts = true;
-+    if (!ctx.state.pendingVadOpts && ctx.state.lastVadOpts) {
-+      try {
-+        ctx.state.pendingVadOpts = { ...ctx.state.lastVadOpts };
-+      } catch {
-+        ctx.state.pendingVadOpts = ctx.state.lastVadOpts;
-+      }
-+    }
-+  } else {
-+    ctx.state.vadShouldRearmAfterTts = false;
-+    ctx.state.vadSuppressedForTts = false;
-+    ctx.state.pendingVadOpts = null;
-+  }
++    events = {evt["type"]: evt for evt in store.list(session_id, expand="all")["events"]}
 +
-   teardownVad(ctx);
--  controllers.recorder.stop({ reason: 'manual_disarm' });
--  closeTurn(ctx, 'manual_disarm');
-+  const recorderReason = autoRearm ? 'tts_pause' : 'manual_disarm';
-+  controllers.recorder.stop({ reason: recorderReason });
-+  closeTurn(ctx, recorderReason);
-   teardownTransport(ctx);
--  releaseMicGate(ctx, 'manual', { clearAll: true });
++    assert events["explicit_src"]["src"] == "ingress_gateway"
++    assert "missing_source" not in events["explicit_src"]
++    assert events["component_src"]["src"] == "tts_engine"
++    assert "missing_source" not in events["component_src"]
++    assert events["default_server"]["src"] == "server_core"
++    assert "missing_source" not in events["default_server"]
++    assert events["default_client"]["src"] == "client_ui"
++    assert "missing_source" not in events["default_client"]
++    assert events["unknown_src"]["src"] == "unknown"
++    assert events["unknown_src"]["missing_source"] is True
++    assert events["unknown_src"]["who"] == "assistant"
 +
-+  const gateReason = autoRearm ? MIC_GATE_TTS_REASON : 'manual';
-+  if (autoRearm) {
-+    releaseMicGate(ctx, gateReason);
-+  } else {
-+    releaseMicGate(ctx, gateReason, { clearAll: true });
-+  }
-   setManualGate(ctx, false);
-   ctx.state.pttHeld = false;
--  ctx.state.hasOpenedTurn = false;
--  ctx.state.ttsCurrentTurnId = null;
--  ctx.state.userTurnActive = false;
--  stopMaskLogging(ctx);
--  dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: 'manual_disarm' });
 +
-+  if (!autoRearm) {
-+    ctx.state.hasOpenedTurn = false;
-+    ctx.state.ttsCurrentTurnId = null;
-+    ctx.state.userTurnActive = false;
-+    stopMaskLogging(ctx);
-+    dispatchTurnEvent(ctx, TurnEvent.Reset, { reason: recorderReason });
-+  }
- }
+ def test_emit_dedupe_window(flow_env):
+     store, advance, _ = flow_env
+     session_id = "sess-dedupe"
  
- export function isRecording() {
-   const ctx = ensureCtx();
-   return !!ctx.state.recording;
- }
+     eid1 = store.emit(session_id, "flow", "session", "session_open", "system")
+     advance(50)  # 50 ms < dedupe window
+     eid2 = store.emit(session_id, "flow", "session", "session_open", "system")
+     assert eid1 == eid2
+     advance(200)  # outside dedupe window
+     eid3 = store.emit(session_id, "flow", "session", "session_open", "system")
+     assert eid3 != eid1
  
- export function bargeIn(meta = {}) {
-   const ctx = ensureCtx();
-   const controllers = ensureControllers(ctx);
-   const shouldNotify = manualBargeAllowed(ctx);
-   ctx.state.manualBargeInUsed = true;
-   ctx.state.bargeConfirmActive = false;
-   ctx.state.bargeConfirmUntil = 0;
-   ctx.state.pendingCommitReason = null;
-   clearDualVadTimer(ctx);
-   clearPostTtsRearm(ctx);
-   ctx.state.vadShouldRearmAfterTts = false;
-   ctx.state.vadSuppressedForTts = false;
-   try { stopPlayback(); } catch {}
-   if (ctx.state.turnOpen) {
-     closeTurn(ctx, 'manual_barge_preempt');
-   }
-   const maskActive = isTtsMaskActive(ctx);
-   const whileTts = !!(ctx.state.ttsPlaying || maskActive);
+ 
+ def test_asr_partial_once_per_turn(flow_env):
+     store, advance, _ = flow_env
+     session_id = "sess-asr"
+ 
+     meta = {"turn_id": "turn-1"}
+     first = store.emit(
+         session_id,
+         "transition",
+         "turn",
+         ASR_PARTIAL_TYPE,
+         "client",
+         meta=meta,
