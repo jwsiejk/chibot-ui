@@ -1,0 +1,1 @@
+chat.v2 contract with telemetry block.
