@@ -28,7 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 
 def _enabled() -> bool:
     cfg = db.get_config()
-    return bool(cfg.get("nudges_enabled", True))
+    return bool(cfg.get("nudges_enabled", False))
 
 
 def _nudge_delay_ms() -> int:
