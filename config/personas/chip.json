@@ -23,7 +23,7 @@
   },
   "features": {
     "suggestions": true,
-    "nudges": true,
+    "nudges": false,
     "email_transcript": true
   }
 }
