@@ -1,437 +1,292 @@
-diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..04f782fe10a7e4d3ee30f96192f226e599e0c69e
---- /dev/null
-+++ b/app/telemetry/exporter.py
-@@ -0,0 +1,85 @@
-+"""Minimal NDJSON file exporter for session telemetry."""
-+from __future__ import annotations
-+
-+import json
-+from dataclasses import dataclass, field
-+from pathlib import Path
-+from typing import Any, Dict, Optional
-+
-+
-+@dataclass
-+class _SessionStats:
-+    """In-memory counters tracked for each active session."""
-+
-+    directory: Path
-+    events_path: Path
-+    manifest_path: Path
-+    events_written: int = 0
-+    by_type: Dict[str, int] = field(default_factory=dict)
-+    started_ms: Optional[int] = None
-+    ended_ms: Optional[int] = None
-+
-+
-+class FileExporter:
-+    """Write session telemetry to disk in a restart-friendly manner."""
-+
-+    def __init__(self, root: Path | str = "exports") -> None:
-+        self._root = Path(root)
-+        self._sessions: Dict[str, _SessionStats] = {}
-+
-+    def begin(self, sid: str) -> None:
-+        """Prepare an export directory for the session."""
-+        session_dir = self._root / sid
-+        session_dir.mkdir(parents=True, exist_ok=True)
-+        stats = _SessionStats(
-+            directory=session_dir,
-+            events_path=session_dir / "events.ndjson",
-+            manifest_path=session_dir / "manifest.json",
-+        )
-+        stats.events_path.write_text("", encoding="utf-8")
-+        self._sessions[sid] = stats
-+
-+    def write(self, sid: str, event: Dict[str, Any]) -> None:
-+        """Append a single event line to the NDJSON log."""
-+        stats = self._sessions.get(sid)
-+        if not stats:
-+            return
-+
-+        event_copy = dict(event)
-+        event_type = event_copy.get("type", "")
-+        ts_ms = event_copy.get("ts_ms")
-+        if isinstance(ts_ms, int):
-+            if stats.started_ms is None:
-+                stats.started_ms = ts_ms
-+            stats.ended_ms = ts_ms
-+
-+        with stats.events_path.open("a", encoding="utf-8") as handle:
-+            json.dump(event_copy, handle, separators=(",", ":"), ensure_ascii=False)
-+            handle.write("\n")
-+
-+        stats.events_written += 1
-+        if isinstance(event_type, str) and event_type:
-+            stats.by_type[event_type] = stats.by_type.get(event_type, 0) + 1
-+
-+    def end(self, sid: str, summary: Optional[Dict[str, Any]] = None) -> None:
-+        """Finalize a session by writing manifest metadata."""
-+        stats = self._sessions.pop(sid, None)
-+        if not stats:
-+            return
-+
-+        manifest = {
-+            "sid": sid,
-+            "started_ms": stats.started_ms,
-+            "ended_ms": stats.ended_ms,
-+            "events_written": stats.events_written,
-+            "by_type": dict(stats.by_type),
-+            "extra": dict(summary or {}),
-+        }
-+
-+        stats.manifest_path.write_text(
-+            json.dumps(manifest, separators=(",", ":"), ensure_ascii=False, indent=None),
-+            encoding="utf-8",
-+        )
-+
-+
-+__all__ = ["FileExporter"]
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..43432fafeaf25749132d992f0ebfdac20ea04e55
---- /dev/null
-+++ b/app/voice_v2/engine.py
-@@ -0,0 +1,104 @@
-+"""Minimal Engine v2 shell with telemetry hooks and session exporting."""
-+from __future__ import annotations
-+
-+from dataclasses import dataclass
-+import json
-+import time
-+from typing import Any, Dict, Mapping, Optional
-+
-+from app.telemetry import bus
-+from app.telemetry.exporter import FileExporter
-+from app.voice_v2 import (
-+    EVT_WS_AUDIO_RECV,
-+    EVT_WS_CLOSE,
-+    EVT_WS_JSON_RECV,
-+    EVT_WS_OPEN,
-+)
-+
-+
-+def _now_ms() -> int:
-+    """Return the current epoch timestamp in milliseconds."""
-+    return int(time.time() * 1000)
-+
-+
-+@dataclass
-+class _Envelope:
-+    """Normalized telemetry envelope returned by the engine hooks."""
-+
-+    type: str
-+    sid: str
-+    payload: Dict[str, Any]
-+
-+    def to_dict(self) -> Dict[str, Any]:
-+        data = {"type": self.type, "sid": self.sid}
-+        data.update(self.payload)
-+        if "meta" in data and isinstance(data["meta"], Mapping):
-+            data["meta"] = dict(data["meta"])
-+        if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
-+            data["ts_ms"] = _now_ms()
-+        data.setdefault("who", "server")
-+        data.setdefault("source", "voice_engine")
-+        data.setdefault("level", "debug")
-+        return data
-+
-+
-+class EngineV2:
-+    """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
-+
-+    def __init__(self, exporter: FileExporter, *, telemetry_bus=bus) -> None:
-+        if exporter is None:
-+            raise ValueError("exporter is required")
-+        self._exporter = exporter
-+        self._bus = telemetry_bus
-+
-+    def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
-+        """Capture a successful WebSocket upgrade."""
-+        meta = {"headers": dict(headers), "dir": "in"}
-+        event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
-+        self._publish(event)
-+
-+    def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
-+        """Capture a validated JSON frame from the adapter."""
-+        turn_id: Optional[Any] = None
-+        meta: Dict[str, Any] = {"dir": "in"}
-+        if isinstance(frame, Mapping):
-+            frame_type = frame.get("type")
-+            if isinstance(frame_type, str):
-+                meta["frame_type"] = frame_type
-+            turn_id = frame.get("turn_id")
-+        else:
-+            frame = {}
-+        try:
-+            serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-+        except (TypeError, ValueError):
-+            serialized = "{}"
-+        meta["byte_count"] = len(serialized.encode("utf-8"))
-+        payload: Dict[str, Any] = {"meta": meta}
-+        if turn_id is not None:
-+            payload["turn_id"] = turn_id
-+        event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
-+        self._publish(event)
-+
-+    def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
-+        """Capture an incoming audio chunk."""
-+        byte_count = len(chunk)
-+        meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
-+        event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
-+        self._publish(event)
-+
-+    def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
-+        """Capture the WebSocket closing handshake."""
-+        meta = {"code": code, "reason": reason}
-+        event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
-+        self._publish(event)
-+
-+    def _envelope(self, sid: str, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-+        envelope = _Envelope(event_type, sid, dict(payload))
-+        return envelope.to_dict()
-+
-+    def _publish(self, event: Dict[str, Any]) -> None:
-+        self._bus.publish(dict(event))
-+        self._exporter.write(event["sid"], dict(event))
-+
-+
-+__all__ = ["EngineV2"]
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 02ba4aa2d300929daef8b5bbe570b998869b7c39..74a84003944923d25cff70b269b2d48e9ac40541 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1,153 +1,156 @@
- """chat.v2 WebSocket adapter for AskChip."""
+diff --git a/app/telemetry/bus.py b/app/telemetry/bus.py
+index 9c05ea576a7739b9c2893693a293101997bceea3..931488c7b877369cfa1ab7df212889411bea8a0c 100644
+--- a/app/telemetry/bus.py
++++ b/app/telemetry/bus.py
+@@ -1,82 +1,202 @@
+ """In-process telemetry bus with publish/subscribe support."""
  from __future__ import annotations
  
- import inspect
- import json
++import re
  import time
  import uuid
- from dataclasses import dataclass
- from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, Protocol, runtime_checkable
+-from typing import Callable, Dict, Tuple
++from typing import Any, Callable, Dict, Tuple
++from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
  
- from app.telemetry import bus
-+from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_WS_AUDIO_RECV,
--    EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
--    EVT_WS_OPEN,
- )
+ Subscription = Tuple[str, Callable[[dict], None]]
  
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- PING_MIN_INTERVAL_MS = 500
+ # Internal registries keyed by subscription token.
+ _subscriptions: Dict[str, Subscription] = {}
+ # Index mapping event type to tokens for quick lookup.
+ _event_index: Dict[str, set[str]] = {}
  
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
+ 
+ def _now_ms() -> int:
+     """Return the current time in milliseconds."""
+     return int(time.time() * 1000)
+ 
+ 
++_TOKEN_KEYWORDS = {"token", "key", "sig", "secret", "auth"}
++_AUTH_KEYWORDS = {"authorization", "auth"}
++_BEARER_RE = re.compile(r"(Bearer\s+)([A-Za-z0-9._\-+/=]+)")
++_EMAIL_RE = re.compile(r"([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
++_OPAQUE_RE = re.compile(r"^[A-Za-z0-9+/=_-]{32,64}$")
++
++
++def _mask_tail(value: str, keep: int = 4) -> str:
++    """Return a masked token preserving only the last characters."""
++    if keep <= 0:
++        return "****"
++    if len(value) <= keep:
++        return "****"
++    return "****" + value[-keep:]
++
++
++def _shorten_opaque(value: str) -> str:
++    """Collapse long opaque secrets to a short representation."""
++    if len(value) < 6:
++        return value
++    return f"{value[:3]}…{value[-3:]}"
++
++
++def _shorten_generic(value: str) -> str:
++    """Collapse overly long strings while preserving edges."""
++    return f"{value[:8]}…{value[-8:]}"
++
++
++def _redact_string(raw: str, key_hint: str | None = None) -> str:
++    """Apply best-effort redaction rules to a string value."""
++    value = raw
++
++    # Mask sensitive query parameters in URLs.
++    try:
++        split = urlsplit(value)
++        query = split.query
++        source_value = value
++        if not query and "?" not in value and "=" in value and " " not in value:
++            # Treat bare query strings (e.g., "token=abc") as the query payload.
++            query = value
++            source_value = ""
++        if query:
++            pairs = parse_qsl(query, keep_blank_values=True)
++            masked = False
++            new_pairs = []
++            for k, v in pairs:
++                if k.lower() in _TOKEN_KEYWORDS:
++                    masked = True
++                    new_pairs.append((k, "****"))
++                else:
++                    new_pairs.append((k, v))
++            if masked:
++                redacted_query = urlencode(new_pairs, doseq=True)
++                if source_value:
++                    value = urlunsplit(
++                        (
++                            split.scheme,
++                            split.netloc,
++                            split.path,
++                            redacted_query,
++                            split.fragment,
++                        )
++                    )
++                else:
++                    value = redacted_query
++    except Exception:
++        # Ignore URL parsing failures; fall back to other rules.
++        pass
++
++    # Authorization/Bearer token masking.
++    if _BEARER_RE.search(value):
++        def _replace(match: re.Match[str]) -> str:
++            token = match.group(2)
++            return match.group(1) + _mask_tail(token)
++
++        value = _BEARER_RE.sub(_replace, value)
++    elif key_hint and key_hint.lower() in _AUTH_KEYWORDS:
++        stripped = value.strip()
++        masked = _mask_tail(stripped)
++        prefix_len = len(value) - len(value.lstrip())
++        suffix_len = len(value) - len(value.rstrip())
++        value = value[:prefix_len] + masked + value[len(value) - suffix_len :]
++
++    # Email masking.
++    value = _EMAIL_RE.sub(lambda match: f"***@{match.group(2)}", value)
++
++    # Opaque secret masking.
++    if _OPAQUE_RE.match(value):
++        value = _shorten_opaque(value)
++
++    # Generic long string collapse.
++    if len(value) > 128:
++        value = _shorten_generic(value)
++
++    return value
++
++
++def _redact_meta(meta: Any, key_hint: str | None = None) -> Any:
++    """Return a deep-redacted copy of the provided meta payload."""
++    if isinstance(meta, dict):
++        return {key: _redact_meta(value, key) for key, value in meta.items()}
++    if isinstance(meta, list):
++        return [_redact_meta(item) for item in meta]
++    if isinstance(meta, tuple):
++        return tuple(_redact_meta(item) for item in meta)
++    if isinstance(meta, str):
++        return _redact_string(meta, key_hint)
++    return meta
++
++
+ def subscribe(event_type: str, handler: Callable[[dict], None]) -> str:
+     """Register a handler for a specific event type or wildcard."""
+     if not isinstance(event_type, str) or not event_type:
+         raise ValueError("event_type must be a non-empty string")
+     if not callable(handler):
+         raise ValueError("handler must be callable")
+ 
+     token = f"sub_{uuid.uuid4().hex}"
+     _subscriptions[token] = (event_type, handler)
+     _event_index.setdefault(event_type, set()).add(token)
+     return token
+ 
+ 
+ def unsubscribe(token: str) -> bool:
+     """Remove a previously registered subscription."""
+     subscription = _subscriptions.pop(token, None)
+     if not subscription:
+         return False
+ 
+     event_type, _ = subscription
+     tokens = _event_index.get(event_type)
+     if tokens is not None:
+         tokens.discard(token)
+         if not tokens:
+             _event_index.pop(event_type, None)
+     return True
+ 
+ 
+ def publish(event: dict) -> None:
+     """Normalize and dispatch an event to registered handlers."""
+     if not isinstance(event, dict):
+         raise ValueError("event must be a dict")
+ 
+     normalized = dict(event)
+     event_type = normalized.get("type")
+     if not isinstance(event_type, str) or not event_type:
+         raise ValueError("event['type'] must be a non-empty string")
+ 
+     if "ts_ms" not in normalized or not isinstance(normalized["ts_ms"], int):
+         normalized["ts_ms"] = _now_ms()
+     if "level" not in normalized or not isinstance(normalized["level"], str):
+         normalized["level"] = "debug"
+ 
++    if "meta" in normalized:
++        original_meta = normalized["meta"]
++        try:
++            normalized["meta"] = _redact_meta(original_meta)
++        except Exception as exc:  # pylint: disable=broad-except
++            print(f"WARN telemetry redaction failed: {exc}")
++            normalized["meta"] = original_meta
++
+     tokens = set()
+     tokens.update(_event_index.get(event_type, set()))
+     tokens.update(_event_index.get("*", set()))
+ 
+     for token in list(tokens):
+         subscription = _subscriptions.get(token)
+         if not subscription:
+             continue
+         _, handler = subscription
+         try:
+             handler(dict(normalized))
+         except Exception as exc:  # pylint: disable=broad-except
+             print(f"Telemetry handler error for token {token}: {exc}")
+ 
+ 
+ def reset() -> None:
+     """Clear all subscriptions (primarily for testing)."""
+     _subscriptions.clear()
+     _event_index.clear()
+diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
+index 0ce50c2e97f44304ab81165350f997264723b0bc..799dc3492ee0a883a72f8e6629f400112b49cdf1 100644
+--- a/docs/10_CONTRACT_WS.md
++++ b/docs/10_CONTRACT_WS.md
+@@ -40,57 +40,59 @@ Copy code
+     }
+   }
  }
+ {"type":"tts.start","utt_id":"u-123","post_hold_ms":200}
  
+ {"type":"tts.end","utt_id":"u-123"}
  
- @runtime_checkable
- class EngineHooks(Protocol):
-     """Engine surface used by the WebSocket adapter."""
+ {"type":"asr.ready":true}
  
-     def on_open(self, sid: str, headers: Dict[str, str]) -> Any:  # pragma: no cover - signature stub
-         """Called when a new WebSocket connection is established."""
+ {"type":"asr.partial","text":"...","confidence":0.73}
  
-     def on_json(self, sid: str, frame: Dict[str, Any]) -> Any:  # pragma: no cover - signature stub
-         """Handle a validated JSON frame from the client."""
+ {"type":"asr.final","text":"...","confidence":0.91}
  
-     def on_audio(self, sid: str, chunk: bytes, seq: int) -> Any:  # pragma: no cover - signature stub
-         """Handle a binary audio chunk from the client."""
+ {"type":"error","code":"bad_subprotocol","detail":"use chat.v2"}
  
-     def on_close(self, sid: str, code: int, reason: Optional[str]) -> Any:  # pragma: no cover - signature stub
-         """Handle the WebSocket closing."""
+ Behavioral rules
+ While mode="assistant_speaking":
  
+ If barge_in_enabled=true, auto-VAD + ASR evidence may interrupt TTS.
  
- @dataclass
- class AdapterContext:
-     """Per-connection state."""
+ If barge_in_enabled=false, ignore speech until tts.end + post_hold_ms.
  
-     sid: str
-     headers: Dict[str, str]
-     audio_seq: int = 0
-     last_pong_sent_ms: int = 0
+ In mode="idle", allow_auto_vad MUST be true and ACWR effective (subject to admin kill).
  
+ Telemetry event envelope (both sides)
+-All events (client/server) share this shape:
++All events (client/server) use envelope **v1** and share this shape:
  
- class ChatV2Adapter:
-     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
+ json
+ Copy code
+ {
++  "schema_version":"1",
+   "type":"EVT_*",
+   "ts_ms":1730000000000,
+   "sid":"session-uuid",
+   "turn_id":"turn-idx-or-uuid",
+   "who":"client|server|asr|tts|llm",
+   "source":"webapp|ws_server|deepgram|speechmatics|elevenlabs|openai|policy",
+   "level":"debug",
+   "meta":{ ... }
+ }
++Server normalization fills missing `ts_ms` and `level` and applies best-effort redaction to `meta` string fields (emails, authorization/bearer tokens, query secrets, opaque tokens, oversized blobs) so downstream consumers never receive raw PII/secrets. Optional fields may be added without a schema bump; required-field changes mandate a new `schema_version`.
+ Common meta fields by category
+ policy.diff → { "allow_auto_vad":[old,new], "barge_in_enabled":[old,new], "auto_commit_when_ready":[old,new], "mode":[old,new], "telemetry.level":[old,new] }
  
-     def __init__(
-         self,
-         engine: EngineHooks | None = None,
-+        exporter: FileExporter | None = None,
-         *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
-     ) -> None:
-         self.engine = engine
-+        self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
+ gate → { "state":"on|off", "reason":"tts|post_hold|policy", "mask":true|false }
  
-     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-         if scope.get("type") != "websocket":
-             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
+-barge → { "source":"auto_vad|asr_evidence", "granted":true|false }
++barge → { "source":"auto_vad|asr_evidence|manual", "granted":true|false }
  
-         connect_event = await receive()
-         if connect_event.get("type") != "websocket.connect":
-             return
+ tts → { "utt_id":"...", "post_hold_ms":200 }
  
-         subprotocols = scope.get("subprotocols") or []
-         if CHAT_V2_SUBPROTOCOL not in subprotocols:
-             await self._reject_subprotocol(send)
-             return
+ asr → { "req_id":"...", "partial":true|false, "confidence":0.83 }
  
-         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
++ws taps → { "dir":"in|out", "size":1234, "preview":"{...}" }
++
+ nlu → full NLU object (see docs/15_NLU_NLG.md)
  
-         headers = self._decode_headers(scope.get("headers", ()))
-         ctx = AdapterContext(sid=uuid.uuid4().hex, headers=headers)
+ nlg → full NLG object (see docs/15_NLU_NLG.md)
  
--        await self._publish(EVT_WS_OPEN, ctx.sid, {"headers": dict(headers)})
-+        if self.exporter:
-+            self.exporter.begin(ctx.sid)
-         await self._invoke_engine("on_open", ctx.sid, headers)
+-ws → { "dir":"in|out", "size":1234, "preview":"{...}" }
+-
+ error → { "code":"...", "detail":"...", "stack":"(optional)" }
+diff --git a/docs/30_ADR.md b/docs/30_ADR.md
+index 26dd5d72e3d563fec6214e38f07ae1f88edf2856..225cb37af5957df5681bde11bcaed630caee7f0b 100644
+--- a/docs/30_ADR.md
++++ b/docs/30_ADR.md
+@@ -1,10 +1,11 @@
+ # Architecture Decision Records (append-only)
  
-         close_code = 1000
-         close_reason: Optional[str] = None
- 
-         try:
-             while True:
-                 message = await receive()
-                 msg_type = message.get("type")
- 
-                 if msg_type == "websocket.receive":
-                     if message.get("text") is not None:
-                         should_continue = await self._handle_text(message["text"], ctx, send)
-                         if not should_continue:
-                             close_code = 1009
-                             close_reason = "frame_too_large"
-                             await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
-                             break
-                     elif message.get("bytes") is not None:
-                         should_continue = await self._handle_binary(message["bytes"], ctx, send)
-                         if not should_continue:
-                             close_code = 1009
-                             close_reason = "frame_too_large"
-                             await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
-                             break
-                 elif msg_type == "websocket.disconnect":
-                     close_code = message.get("code", 1000)
-                     close_reason = message.get("reason")
-                     break
-         except Exception:  # pragma: no cover - defensive guard
-             close_code = 1011
-             close_reason = "internal_error"
-             await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
-             raise
-         finally:
--            await self._publish(EVT_WS_CLOSE, ctx.sid, {"code": close_code, "reason": close_reason})
-             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
-+            if self.exporter:
-+                self.exporter.end(ctx.sid, {"close_code": close_code})
- 
-     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
-         body = json.dumps({"error": "unsupported_subprotocol", "expected": CHAT_V2_SUBPROTOCOL}).encode("utf-8")
-         headers = [
-             (b"content-type", b"application/json"),
-             (b"content-length", str(len(body)).encode("ascii")),
-         ]
-         await send({"type": "websocket.http.response.start", "status": 426, "headers": headers})
-         await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
- 
-     async def _handle_text(self, data: str, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]) -> bool:
-         payload_bytes = data.encode("utf-8")
-         byte_count = len(payload_bytes)
-         frame_type: Optional[str] = None
-         meta: Dict[str, Any] = {"byte_count": byte_count, "dir": "in"}
- 
-         if byte_count > self.text_limit_bytes:
-             meta["error"] = "frame_too_large"
-             meta["frame_type"] = None
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "frame_too_large", "Text frame exceeds limit")
-             return False
- 
-         try:
-             frame = json.loads(data)
-@@ -167,70 +170,68 @@ class ChatV2Adapter:
-             meta["error"] = "unknown_type"
-             meta["frame_type"] = None
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "unknown_type", "Frame missing type field")
-             return True
- 
-         meta["frame_type"] = frame_type
- 
-         if frame_type == "ping":
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             now_ms = int(time.time() * 1000)
-             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
-                 ctx.last_pong_sent_ms = now_ms
-                 reply_ts = frame.get("t")
-                 if not isinstance(reply_ts, int):
-                     reply_ts = now_ms
-                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
-             return True
- 
-         if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
-             meta["error"] = "unknown_type"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "unknown_type", f"Unsupported frame type '{frame_type}'")
-             return True
- 
--        await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-         await self._invoke_engine("on_json", ctx.sid, frame)
-         return True
- 
-     async def _handle_binary(
-         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> bool:
-         byte_count = len(data)
-         if byte_count > self.binary_limit_bytes:
-             await self._publish(
-                 EVT_WS_AUDIO_RECV,
-                 ctx.sid,
-                 {"byte_count": byte_count, "error": "frame_too_large", "dir": "in"},
-             )
-             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
-             return False
- 
-         ctx.audio_seq += 1
-         meta = {"byte_count": byte_count, "seq": ctx.audio_seq, "dir": "in"}
--        await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-         await self._invoke_engine("on_audio", ctx.sid, data, ctx.audio_seq)
-         return True
- 
-     async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
-         text = json.dumps(payload, separators=(",", ":"))
-         await send({"type": "websocket.send", "text": text})
-         meta = {
-             "byte_count": len(text.encode("utf-8")),
-             "frame_type": payload.get("type"),
-             "dir": "out",
-         }
-         await self._publish(EVT_WS_JSON_SEND, sid, meta)
- 
-     async def _send_error(self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, message: str) -> None:
-         payload = {"type": "error", "code": code, "message": message}
-         await self._send_json(send, sid, payload)
- 
-     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
-         event = {
-             "type": event_type,
-             "sid": sid,
-             "who": "server",
-             "source": "ws_server",
-             "meta": dict(meta),
-         }
+ - **ADR-0001 (2025-10-21)** — Single-path v2 only: `/ws/v2/chat` (subprotocol `chat.v2`). v1 removed.
+ - **ADR-0002 (2025-10-21)** — ASR vendors: Deepgram primary, Speechmatics secondary (switchable). Whisper not used.
+ - **ADR-0003 (2025-10-21)** — Barge-in model: automatic only; toggle `barge_in_enabled` via policy.
+ - **ADR-0004 (2025-10-21)** — Policy frames must always include: `mode`, `allow_auto_vad`, `barge_in_enabled`, `auto_commit_when_ready`, and `telemetry`.
+ - **ADR-0005 (2025-10-21)** — ACWR precedence: `effective = policy_state AND admin_switch`. No runtime cfg input.
+ - **ADR-0006 (2025-10-21)** — Templates root standardized to `app/templates/` only.
+ - **ADR-0007 (2025-10-21)** — NLU/NLG contracts added; exactly one NLU & one NLG object per turn; persona-driven templates later.
+ - **ADR-0008 (2025-10-21)** — Telemetry policy block controls runtime logging (enabled, level, categories, redaction, sampling).
++- **ADR-0009 (2025-10-21)** — Telemetry Envelope v1 & Redaction: events declare `schema_version: "1"` and follow a stable envelope (`type`, `ts_ms`, optional context fields, `meta`). Optional fields may be added without a new version; changes to required fields demand a new schema_version. The telemetry bus normalizes timestamps/levels and redacts PII/secrets within `meta` (emails, bearer tokens, URL secrets, opaque tokens, and overlong blobs) before dispatching to subscribers to ensure privacy-by-default across engine/exporter/admin consumers.

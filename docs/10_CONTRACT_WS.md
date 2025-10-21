@@ -62,11 +62,12 @@ If barge_in_enabled=false, ignore speech until tts.end + post_hold_ms.
 In mode="idle", allow_auto_vad MUST be true and ACWR effective (subject to admin kill).
 
 Telemetry event envelope (both sides)
-All events (client/server) share this shape:
+All events (client/server) use envelope **v1** and share this shape:
 
 json
 Copy code
 {
+  "schema_version":"1",
   "type":"EVT_*",
   "ts_ms":1730000000000,
   "sid":"session-uuid",
@@ -76,21 +77,22 @@ Copy code
   "level":"debug",
   "meta":{ ... }
 }
+Server normalization fills missing `ts_ms` and `level` and applies best-effort redaction to `meta` string fields (emails, authorization/bearer tokens, query secrets, opaque tokens, oversized blobs) so downstream consumers never receive raw PII/secrets. Optional fields may be added without a schema bump; required-field changes mandate a new `schema_version`.
 Common meta fields by category
 policy.diff → { "allow_auto_vad":[old,new], "barge_in_enabled":[old,new], "auto_commit_when_ready":[old,new], "mode":[old,new], "telemetry.level":[old,new] }
 
 gate → { "state":"on|off", "reason":"tts|post_hold|policy", "mask":true|false }
 
-barge → { "source":"auto_vad|asr_evidence", "granted":true|false }
+barge → { "source":"auto_vad|asr_evidence|manual", "granted":true|false }
 
 tts → { "utt_id":"...", "post_hold_ms":200 }
 
 asr → { "req_id":"...", "partial":true|false, "confidence":0.83 }
 
+ws taps → { "dir":"in|out", "size":1234, "preview":"{...}" }
+
 nlu → full NLU object (see docs/15_NLU_NLG.md)
 
 nlg → full NLG object (see docs/15_NLU_NLG.md)
-
-ws → { "dir":"in|out", "size":1234, "preview":"{...}" }
 
 error → { "code":"...", "detail":"...", "stack":"(optional)" }
