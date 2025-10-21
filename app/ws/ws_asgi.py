@@ -2156,6 +2156,8 @@ async def _ws_chat_asgi_impl(scope, receive, send):
         if phase == "paused":
             pause_meta = dict(barge_pause_meta_ref[0] or {})
             pause_meta.setdefault("src", "unknown")
+            if pause_meta.get("src") == "client_vad":
+                pause_meta["src"] = "unknown"
             if "tts_active" not in pause_meta:
                 pause_meta["tts_active"] = _current_tts_active()
             _emit_transition_event("barge_in", meta=pause_meta)
@@ -3180,8 +3182,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
             return
         local_vad_meta_sent[0] = True
         _maybe_emit_evidence_gate()
-        if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
-            _set_barge_pause_meta("client_vad")
         _on_local_vad_start()
         if callable(final_guard_local_vad_ref[0]):
             with contextlib.suppress(Exception):
@@ -5068,11 +5068,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                 "vad"
                             )
                             if allow_barge:
-                                if (
-                                    not barge_pause_meta_ref[0]
-                                    or barge_pause_meta_ref[0].get("src") != "ptt"
-                                ):
-                                    _set_barge_pause_meta("client_vad")
                                 try:
                                     barge_started = barge.start(
                                         confirm_ms=confirm_ms,
@@ -5504,11 +5499,6 @@ async def _ws_chat_asgi_impl(scope, receive, send):
                                     "vad_gate_open", meta=meta_out, phase="mic"
                                 )
                                 extra_meta = dict(meta_out)
-                                if not barge_pause_meta_ref[0] or barge_pause_meta_ref[0].get("src") != "ptt":
-                                    _set_barge_pause_meta(
-                                        "client_vad",
-                                        extra=extra_meta,
-                                    )
                                 _on_local_vad_start()
                                 continue
 
