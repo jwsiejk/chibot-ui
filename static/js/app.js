@@ -3,6 +3,7 @@ import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
 import { getSID } from '/static/js/util/sid.js';
 import { renderSuggestions } from '/static/js/suggestions.js';
 import { logIfEnabled } from './util/logging.js';
+import { stopPlayback, audioTeardown } from './audio.js';
 
 // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
 // Exports: onEnd, onSend, handleAssistantFrame
@@ -251,6 +252,8 @@ function _handleSessionEnd(frame){
   const message = reason === 'silence_auto_close'
     ? 'Closing for now—start a new session whenever you’re ready.'
     : 'Session ended. Press Start to begin a new one.';
+  try { stopPlayback(); } catch {}
+  try { audioTeardown(); } catch {}
   _resetAsrTracking();
   disableForEnded();
   try { _clearSuggestions(); } catch {}
@@ -613,6 +616,8 @@ export async function onEnd(){
   if (ending) return;
   ending = true;
   try {
+    try { stopPlayback(); } catch {}
+    try { audioTeardown(); } catch {}
     _clearSuggestions();
     const finalFrameWait = _waitForAsrCompletion(ASR_FINALIZATION_TIMEOUT_MS);
     // Politely signal end of stream over WS, then close with code 1000

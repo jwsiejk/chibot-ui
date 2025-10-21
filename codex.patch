@@ -1,115 +1,142 @@
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index 0bb97f5bd82dfe63aeb49afec5d42e63d375f1e1..1e41cfd9cf01fd6fedf18665391d0a3a0c11883c 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1847,98 +1847,106 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             )
-             manual_mode_manual_only = bool(
-                 runtime_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-             )
-             auto_commit_when_ready = bool(
-                 runtime_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-             )
-     except Exception:
-         pass
-     try:
-         from app.services import admin_settings as _admin_settings  # type: ignore
+diff --git a/static/js/app.js b/static/js/app.js
+index ecbab07210bffba898e2ad7aa06d50e34b0d0d61..d091f7a1160bf7b3dd35481b4869f6372da29f97 100644
+--- a/static/js/app.js
++++ b/static/js/app.js
+@@ -1,30 +1,31 @@
+ // /static/js/app.js — chat helpers only (imports constrained by spec)
+ import { closeWS, sendCloseStream, sendJSON } from './ws_module.js';
+ import { getSID } from '/static/js/util/sid.js';
+ import { renderSuggestions } from '/static/js/suggestions.js';
+ import { logIfEnabled } from './util/logging.js';
++import { stopPlayback, audioTeardown } from './audio.js';
  
-         admin_cfg = _admin_settings.get_settings()
-         if isinstance(admin_cfg, dict):
-             manual_feature_enabled = bool(
-                 admin_cfg.get("feature_manual_barge_in", manual_feature_enabled)
-             )
-             manual_mode_manual_only = bool(
-                 admin_cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-             )
-             auto_commit_when_ready = bool(
-                 admin_cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-             )
-     except Exception:
-         pass
-+
-+    config_manual_feature_enabled = bool(manual_feature_enabled)
-+    config_auto_commit_enabled = bool(auto_commit_when_ready)
-     voice_policy = policy.get("voice_runtime") if isinstance(policy, dict) else {}
-     confirm_policy = (
-         voice_policy.get("confirm_window") if isinstance(voice_policy, dict) else {}
-     )
-     confirm_first_policy = (
-         confirm_policy.get("first_turn") if isinstance(confirm_policy, dict) else {}
-     )
-     confirm_warm_policy = (
-         confirm_policy.get("warm_turn") if isinstance(confirm_policy, dict) else {}
-     )
-     snr_policy = voice_policy.get("snr_threshold_db") if isinstance(voice_policy, dict) else {}
-     barge_policy = voice_policy.get("barge_in") if isinstance(voice_policy, dict) else {}
-     auto_commit_policy = (
-         voice_policy.get("auto_commit") if isinstance(voice_policy, dict) else {}
-     )
+ // /static/js/app.js — side-effect-free chat helpers + WS→UI rendering
+ // Exports: onEnd, onSend, handleAssistantFrame
  
-+    policy_auto_commit_enabled = True
-+
-     if isinstance(auto_commit_policy, dict):
-         enabled_value = auto_commit_policy.get("enabled")
--        if isinstance(enabled_value, bool) and not enabled_value:
--            auto_commit_when_ready = False
-+        if isinstance(enabled_value, bool):
-+            policy_auto_commit_enabled = enabled_value
-         requires_dual_value = auto_commit_policy.get("requires_dual_evidence")
-         if isinstance(requires_dual_value, bool):
-             auto_commit_requires_dual = requires_dual_value
-         requires_asr_value = auto_commit_policy.get("asr_ready_required")
-         if isinstance(requires_asr_value, bool):
-             auto_commit_requires_asr_ready = requires_asr_value
+ const $  = (s)=>document.querySelector(s);
  
-     if isinstance(barge_policy, dict):
-         allow_ptt_value = barge_policy.get("allow_ptt")
-         if isinstance(allow_ptt_value, bool):
-             barge_allow_ptt = allow_ptt_value
--            if not allow_ptt_value:
--                manual_feature_enabled = False
-         allow_local_vad_value = barge_policy.get("allow_local_vad")
-         if isinstance(allow_local_vad_value, bool):
-             local_vad_allowed = allow_local_vad_value
-         require_asr_value = barge_policy.get("require_asr_evidence")
-         if isinstance(require_asr_value, bool):
-             barge_require_asr_evidence = require_asr_value
-         suppress_mode_value = barge_policy.get("suppress_during_tts")
-         if isinstance(suppress_mode_value, str):
-             suppress_mode_value = suppress_mode_value.strip().lower()
-             if suppress_mode_value:
-                 barge_suppress_mode = suppress_mode_value
-         post_hold_value = barge_policy.get("post_tts_hold_ms")
-         if isinstance(post_hold_value, (int, float)):
-             barge_post_tts_hold_ms = max(0, int(post_hold_value))
+ const ASR_TIMEOUT_MS = 10_000;
+ const ASR_FINALIZATION_TIMEOUT_MS = 2_000;
+ let _sessionReadyAt = 0;
+ let _awaitingFirstAsr = false;
+ let _noAsrTimeout = null;
+ let _noAsrNotified = false;
+ let _lastAsrLatencyMs = null;
+ let _ttsPlaying = false;
+ const _asrTurnState = {
+   activeId: null,
+   complete: false,
+   utteranceEnded: false,
+ };
+ const _asrCompletionWaiters = new Set();
  
-+    manual_feature_enabled = bool(config_manual_feature_enabled and barge_allow_ptt)
-+    auto_commit_when_ready = bool(
-+        config_auto_commit_enabled and policy_auto_commit_enabled
-+    )
-+
-     _reapply_interaction_policy()
+ function _getActiveTurnTraceId() {
+   try {
+     if (typeof window === 'undefined') return null;
+     const id = window.__askchip_turn_trace_id;
+@@ -229,50 +230,52 @@ function setDot(state){
+   const nextClass = DOT_CLASSES[state] || 'dot-idle';
+   dot.className = 'dot ' + nextClass;
+ }
  
-     _jlog(
-         "voice_runtime_config",
-         sid=sid,
-         suppress_during_tts=barge_suppress_mode or "none",
-         post_tts_hold_ms=int(barge_post_tts_hold_ms),
-         allow_ptt=bool(barge_allow_ptt),
-     )
+ function showBanner(msg){ const el=$('#statusText'); if(el) el.textContent = msg || ''; }
+ function disableForEnded(){
+   const input = $('#composer');
+   const sendA = $('#composerSend');
+   const sendB = $('#sendBtn');
+   const endBtn= $('#endButton');
+   if (input) input.value = '';
+   [sendA, sendB].forEach(b=>{ if(b) b.disabled = true; });
+   if (endBtn) endBtn.disabled = true;
+   setDot('ready');
+ }
  
-     resolved_policy_snapshot = {
-         "voice_runtime": {
-             "barge_in": {
-                 "suppress_during_tts": barge_suppress_mode or "none",
-                 "post_tts_hold_ms": int(barge_post_tts_hold_ms),
-                 "allow_ptt": bool(barge_allow_ptt),
-                 "require_asr_evidence": bool(barge_require_asr_evidence),
-             }
-         },
-         "asr": {"vad": {"enabled": bool(local_vad_allowed)}}
+ // Optional safety: strip legacy debug stamps like "[KB:0]" if any slip through
+ const _KB_TAG_RE = /\s*\[(?:KB|kb)\s*:\s*\d+\]\s*/g;
+ function _cleanText(s){ return (s||'').replace(_KB_TAG_RE,' ').trim(); }
+ 
+ function _handleSessionEnd(frame){
+   const reason = String(frame?.reason || '').toLowerCase();
+   const message = reason === 'silence_auto_close'
+     ? 'Closing for now—start a new session whenever you’re ready.'
+     : 'Session ended. Press Start to begin a new one.';
++  try { stopPlayback(); } catch {}
++  try { audioTeardown(); } catch {}
+   _resetAsrTracking();
+   disableForEnded();
+   try { _clearSuggestions(); } catch {}
+   showBanner(message);
+   try { window.__askchip_session_started = false; } catch {}
+   try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
+   try { closeWS(1000, reason || 'session_end'); } catch {}
+ }
+ 
+ /* ---------------- Rendering of assistant frames ---------------- */
+ 
+ // Accept WS assistant text frames
+ function _isAssistantTextFrame(d){
+   return d && (
+     (d.type === 'assistant_chunk' && (d.text || d.delta || d.content)) ||
+     (d.type === 'assistant_text' && (d.text || d.delta || d.content)) ||
+     (d.type === 'assistant_final' && (d.text || d.delta || d.content))
+   );
+ }
+ 
+ const _userPreviewState = {
+   active: false,
+   latestTranscript: '',
+   lastFinalText: '',
+   ignoring: false,
+@@ -591,50 +594,52 @@ export async function onSend(overrideText){
+       }
+       showBanner('Message failed to send over WebSocket.');
+       return;
      }
  
-     cfg["feature_manual_barge_in"] = manual_feature_enabled
-     cfg["barge_in_mode_manual"] = manual_mode_manual_only
-     cfg["auto_commit_when_ready"] = auto_commit_when_ready
+     setDot('thinking');
+ 
+     // Clear composer after send
+     if (input){
+       try { input.value = ''; } catch {}
+     }
+ 
+   } catch (e){
+     _console('warn', '[onSend] error', e);
+   }
+ }
+ 
+ /* ---------------- End session (graceful) ---------------- */
+ 
+ let ending = false;
+ 
+ export async function onEnd(){
+   if (ending) return;
+   ending = true;
+   try {
++    try { stopPlayback(); } catch {}
++    try { audioTeardown(); } catch {}
+     _clearSuggestions();
+     const finalFrameWait = _waitForAsrCompletion(ASR_FINALIZATION_TIMEOUT_MS);
+     // Politely signal end of stream over WS, then close with code 1000
+     try { await sendCloseStream(); } catch {}
+     try { await finalFrameWait; } catch {}
+ 
+     try { closeWS(1000, 'user_end'); } catch {}
+ 
+     // Rotate the session so the next Start is clean (correct key)
+     try { localStorage.removeItem('chip.sid'); } catch {}
+ 
+     // Notify others (bootstrap etc.)
+     try { window.dispatchEvent(new CustomEvent('askchip-session-ended')); } catch {}
+ 
+     // Update UI
+     disableForEnded();
+     showBanner('Session ended. Press Start to begin a new one.');
+ 
+     // Clear any bootstrap “session started” latch
+     window.__askchip_session_started = false;
+ 
+   } finally {
+     ending = false;
+   }
+ }
