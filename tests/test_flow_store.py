@@ -93,6 +93,14 @@ def test_emit_includes_normalized_source(flow_env):
         "unknown_src",
         "assistant",
     )
+    store.emit(
+        session_id,
+        "flow",
+        "session",
+        "detail_src",
+        "client",
+        meta={"detail": {"src": "client_audio"}},
+    )
 
     events = {evt["type"]: evt for evt in store.list(session_id, expand="all")["events"]}
 
@@ -107,6 +115,8 @@ def test_emit_includes_normalized_source(flow_env):
     assert events["unknown_src"]["src"] == "unknown"
     assert events["unknown_src"]["missing_source"] is True
     assert events["unknown_src"]["who"] == "assistant"
+    assert events["detail_src"]["src"] == "client_audio"
+    assert "missing_source" not in events["detail_src"]
 
 
 def test_emit_dedupe_window(flow_env):

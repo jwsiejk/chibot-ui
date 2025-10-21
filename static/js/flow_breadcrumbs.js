@@ -1,5 +1,54 @@
 const BREADCRUMB_URL = '/api/v1/flow/breadcrumbs';
 
+try {
+  console.log('client_source_components: enabled');
+} catch {}
+
+const AUDIO_PREFIXES = ['client_audio', 'audio_', 'playback_', 'play_'];
+const AUDIO_EVENT_NAMES = new Set(['playback_start', 'playback_end', 'playing', 'ended']);
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function inferClientSource(name) {
+  if (!isNonEmptyString(name)) {
+    return 'client_ui';
+  }
+  const lowered = name.toLowerCase();
+  if (lowered.startsWith('client_vad')) {
+    return 'client_vad';
+  }
+  if (AUDIO_EVENT_NAMES.has(lowered)) {
+    return 'client_audio';
+  }
+  if (AUDIO_PREFIXES.some((prefix) => lowered.startsWith(prefix))) {
+    return 'client_audio';
+  }
+  return 'client_ui';
+}
+
+function enrichDetail(name, detail) {
+  let payload = {};
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    payload = { ...detail };
+  }
+
+  if (!isNonEmptyString(payload.src)) {
+    payload.src = inferClientSource(name);
+  } else {
+    payload.src = payload.src.trim();
+  }
+
+  if (!isNonEmptyString(payload.component)) {
+    payload.component = payload.src;
+  } else {
+    payload.component = payload.component.trim();
+  }
+
+  return payload;
+}
+
 function isEnabled() {
   try {
     return Boolean(globalThis?.__FLOW_BREADCRUMBS_ENABLED);
@@ -84,12 +133,14 @@ export function emitFlowBreadcrumb(name, detail = {}) {
     return;
   }
 
+  const enrichedDetail = enrichDetail(name, detail);
+
   const envelope = {
     name,
     ts_ms: Date.now(),
     session_id: getSessionId(),
     turn_id: getTurnId(),
-    detail: sanitizeDetail(detail),
+    detail: sanitizeDetail(enrichedDetail),
   };
 
   try {

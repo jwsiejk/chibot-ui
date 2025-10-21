@@ -78,6 +78,14 @@ def _resolve_event_source(who: Any, meta: Mapping[str, Any]) -> Tuple[str, bool]
         component = _coerce_source_text(meta.get("component"))
         if component:
             return component, False
+        detail_value = meta.get("detail")
+        if isinstance(detail_value, Mapping):
+            nested_direct = _coerce_source_text(detail_value.get("src"))
+            if nested_direct:
+                return nested_direct, False
+            nested_component = _coerce_source_text(detail_value.get("component"))
+            if nested_component:
+                return nested_component, False
 
     who_text = _coerce_source_text(who) or ""
     lower_who = who_text.lower()

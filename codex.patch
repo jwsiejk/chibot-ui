@@ -1,1210 +1,281 @@
-diff --git a/app/services/llm/flow_wrapper.py b/app/services/llm/flow_wrapper.py
-index 2ef4d56b01e5f6b42f5f9ac580d1a457805356ce..a07fed849de8b43ba8f6160d85d843448c4a7077 100644
---- a/app/services/llm/flow_wrapper.py
-+++ b/app/services/llm/flow_wrapper.py
-@@ -60,50 +60,51 @@ def _coerce_int(value: Optional[object]) -> Optional[int]:
+diff --git a/app/flow/trace.py b/app/flow/trace.py
+index fc2076fe0e1929b162a1443c55e48253d744418b..326ea55a7a0732159d4dc01d9f5e73606055542f 100644
+--- a/app/flow/trace.py
++++ b/app/flow/trace.py
+@@ -56,50 +56,58 @@ def _ensure_meta(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+     return dict(meta)
+ 
+ 
+ def _words(text: str) -> List[str]:
+     return [word for word in text.split() if word]
+ 
+ 
+ def _coerce_source_text(value: Any) -> Optional[str]:
+     if value is None:
+         return None
+     try:
+         text = str(value).strip()
+     except Exception:
+         return None
+     return text or None
+ 
+ 
+ def _resolve_event_source(who: Any, meta: Mapping[str, Any]) -> Tuple[str, bool]:
+     if isinstance(meta, Mapping):
+         direct = _coerce_source_text(meta.get("src"))
+         if direct:
+             return direct, False
+         component = _coerce_source_text(meta.get("component"))
+         if component:
+             return component, False
++        detail_value = meta.get("detail")
++        if isinstance(detail_value, Mapping):
++            nested_direct = _coerce_source_text(detail_value.get("src"))
++            if nested_direct:
++                return nested_direct, False
++            nested_component = _coerce_source_text(detail_value.get("component"))
++            if nested_component:
++                return nested_component, False
+ 
+     who_text = _coerce_source_text(who) or ""
+     lower_who = who_text.lower()
+     if lower_who in {"server", "system"}:
+         return "server_core", False
+     if lower_who == "client":
+         return "client_ui", False
+     return "unknown", True
  
  
  @dataclass
- class LLMFlowTracker:
-     """Manage ``llm_start``/``llm_final`` flow events for a single turn."""
+ class EventRecord:
+     data: Dict[str, Any]
+     monotonic_ts: float
+     children_ids: List[str] = field(default_factory=list)
+     batches: List[Dict[str, Any]] = field(default_factory=list)
  
-     session_id: str
-     phase: str
-     turn_id: Optional[str] = None
-     model: Optional[str] = None
-     who: str = "system"
+     def to_dict(self, children: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+         payload = dict(self.data)
+         parent_id = payload.get("parent_id")
+         if parent_id is None:
+             payload.pop("parent_id", None)
+         if children is not None:
+             if children:
+                 payload["children"] = children
+diff --git a/static/js/flow_breadcrumbs.js b/static/js/flow_breadcrumbs.js
+index 0e77552c123f434172de8b803721a23db149bb4c..22c2bef8f4da368ca5186c0a7c2444de47242822 100644
+--- a/static/js/flow_breadcrumbs.js
++++ b/static/js/flow_breadcrumbs.js
+@@ -1,27 +1,76 @@
+ const BREADCRUMB_URL = '/api/v1/flow/breadcrumbs';
  
-     _started: bool = False
-     _start_event_id: Optional[str] = None
-     _start_monotonic: Optional[float] = None
-     _queue_start_monotonic: Optional[float] = None
-     _queue_end_monotonic: Optional[float] = None
-     _first_token_monotonic: Optional[float] = None
++try {
++  console.log('client_source_components: enabled');
++} catch {}
++
++const AUDIO_PREFIXES = ['client_audio', 'audio_', 'playback_', 'play_'];
++const AUDIO_EVENT_NAMES = new Set(['playback_start', 'playback_end', 'playing', 'ended']);
++
++function isNonEmptyString(value) {
++  return typeof value === 'string' && value.trim() !== '';
++}
++
++function inferClientSource(name) {
++  if (!isNonEmptyString(name)) {
++    return 'client_ui';
++  }
++  const lowered = name.toLowerCase();
++  if (lowered.startsWith('client_vad')) {
++    return 'client_vad';
++  }
++  if (AUDIO_EVENT_NAMES.has(lowered)) {
++    return 'client_audio';
++  }
++  if (AUDIO_PREFIXES.some((prefix) => lowered.startsWith(prefix))) {
++    return 'client_audio';
++  }
++  return 'client_ui';
++}
++
++function enrichDetail(name, detail) {
++  let payload = {};
++  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
++    payload = { ...detail };
++  }
++
++  if (!isNonEmptyString(payload.src)) {
++    payload.src = inferClientSource(name);
++  } else {
++    payload.src = payload.src.trim();
++  }
++
++  if (!isNonEmptyString(payload.component)) {
++    payload.component = payload.src;
++  } else {
++    payload.component = payload.component.trim();
++  }
++
++  return payload;
++}
++
+ function isEnabled() {
+   try {
+     return Boolean(globalThis?.__FLOW_BREADCRUMBS_ENABLED);
+   } catch {
+     return false;
+   }
+ }
  
-     def _annotate_meta(
-         self,
-         meta: Dict[str, object],
-         *,
-         extra: Optional[Dict[str, object]] = None,
-     ) -> None:
-+        meta.setdefault("component", "policy")
-         evidence: Dict[str, object] = {}
-         if extra:
-             for key, value in extra.items():
-                 if value is None:
-                     continue
-                 evidence[key] = value
-         if self.model and "model" not in evidence:
-             try:
-                 evidence["model"] = str(self.model)
-             except Exception:
-                 evidence["model"] = self.model  # type: ignore[assignment]
-         try:
-             meta["source_meta"] = make_source_meta(
-                 "llm_runtime",
-                 evidence=evidence or None,
-             )
-         except Exception:
-             pass
+ function getSessionId() {
+   try {
+     return globalThis?.__askchip_voice_session_id || null;
+   } catch {
+     return null;
+   }
+ }
  
-     def queue(self) -> None:
-         """Mark the time at which the request entered the provider queue."""
+ function getTurnId() {
+   try {
+     const turn = globalThis?.__askchip_turn_trace_id;
+     if (typeof turn === 'string' && turn) return turn;
+     if (Number.isFinite(turn)) return String(turn);
+   } catch {}
+   return null;
+ }
  
-         self._queue_start_monotonic = time.monotonic()
- 
-     def start(self) -> bool:
-diff --git a/app/services/streaming.py b/app/services/streaming.py
-index f8a15e27e01ae83bb2ae2adfc8d832f9f5647a32..dc08f90911b8607684b4c261b589d2c8f368e861 100644
---- a/app/services/streaming.py
-+++ b/app/services/streaming.py
-@@ -788,50 +788,51 @@ def _diag_maybe_emit(session_id: str, turn_id: str, *, force: bool = False) -> N
-     if not snapshot:
-         return
-     if snapshot.get("mic_to_final_ms") is None or snapshot.get("llm_total_ms") is None:
-         return
-     tts_ready = snapshot.get("tts_total_ms") is not None or snapshot.get("tts_skipped")
-     if not tts_ready and not force:
-         return
-     meta: Dict[str, Any] = {
-         "turn_id": turn_id,
-         "mic_to_first_partial_ms": snapshot.get("mic_to_first_partial_ms"),
-         "mic_to_final_ms": snapshot.get("mic_to_final_ms"),
-         "final_from_dg_open_ms": snapshot.get("final_from_dg_open_ms"),
-         "final_from_first_partial_ms": snapshot.get("final_from_first_partial_ms"),
-         "dg_connect_ms": snapshot.get("dg_connect_ms"),
-         "llm_total_ms": snapshot.get("llm_total_ms"),
-         "tts_total_ms": snapshot.get("tts_total_ms"),
-         "tts_first_byte_ms": snapshot.get("tts_first_byte_ms"),
-         "tts_stream_ms": snapshot.get("tts_stream_ms"),
-         "tts_synth_ms": snapshot.get("tts_synth_ms"),
+@@ -62,54 +111,56 @@ function sanitizeDetail(detail) {
+           .filter((item) => item !== undefined);
+         continue;
+       }
+       if (typeof value === 'object') {
+         safe[key] = sanitizeDetail(value);
+         continue;
+       }
+       try {
+         safe[key] = String(value);
+       } catch {
+         safe[key] = null;
+       }
      }
-     if snapshot.get("tts_skipped"):
-         meta["tts_skipped"] = True
-     correlation = snapshot.get("correlation_user_msg_id")
-     if correlation:
-         meta["correlation_user_msg_id"] = correlation
-+    meta["component"] = "server_core"
-     clean_meta = {key: value for key, value in meta.items() if value is not None}
-     try:
-         flow_emit(
-             session_id=session_id,
-             level="flow",
-             phase="turn",
-             type="diag_latency",
-             who="system",
-             meta=clean_meta or None,
-         )
-     except Exception:
-         pass
-     payload = {"session_id": session_id}
-     payload.update(clean_meta)
-     _broadcast_admin_ws_event("diag_latency", payload)
-     _diag_clear(session_id, turn_id)
+     return safe;
+   }
+ }
  
+ export function emitFlowBreadcrumb(name, detail = {}) {
+   if (typeof name !== 'string' || !name) {
+     return;
+   }
+   if (!isEnabled()) {
+     return;
+   }
  
- def note_turn_commit_latency(session_id: str,
-                              turn_id: object,
-                              metrics: Mapping[str, Any]) -> None:
-     tid = _diag_coerce_turn_id(turn_id)
-     if not session_id or not tid:
-         return
-     if not isinstance(metrics, Mapping):
-@@ -894,51 +895,51 @@ def _diag_note_tts_metrics(session_id: str,
-             updates["correlation_user_msg_id"] = str(correlation_user_msg_id)
-         except Exception:
-             updates["correlation_user_msg_id"] = correlation_user_msg_id
-     if not updates:
-         return
-     _diag_store(session_id, tid, updates)
-     _diag_maybe_emit(session_id, tid)
- 
- 
- def _diag_finalize_no_tts(session_id: str, turn_id: object) -> None:
-     tid = _diag_coerce_turn_id(turn_id)
-     if not session_id or not tid:
-         return
-     _diag_store(session_id, tid, {"tts_skipped": True})
-     _diag_maybe_emit(session_id, tid, force=True)
- 
- 
- def emit_watchdog_user_end(session_id: str,
-                            *,
-                            turn_id: Optional[object] = None,
-                            source: str = "watchdog",
-                            correlation_user_msg_id: Optional[str] = None) -> None:
-     if not session_id:
-         return
-     tid = _diag_coerce_turn_id(turn_id)
--    meta: Dict[str, Any] = {"source": source}
-+    meta: Dict[str, Any] = {"source": source, "component": "server_core"}
-     if tid:
-         meta["turn_id"] = tid
-     if correlation_user_msg_id is not None:
-         try:
-             meta["correlation_user_msg_id"] = str(correlation_user_msg_id)
-         except Exception:
-             meta["correlation_user_msg_id"] = correlation_user_msg_id
-     try:
-         flow_emit(
-             session_id=session_id,
-             level="flow",
-             phase="turn",
-             type="u_end",
-             who="system",
-             meta=meta,
-         )
-     except Exception:
-         pass
-     admin_payload: Dict[str, Any] = {"session_id": session_id, "source": source}
-     if tid:
-         admin_payload["turn_id"] = tid
-     if "correlation_user_msg_id" in meta:
-         admin_payload["correlation_user_msg_id"] = meta["correlation_user_msg_id"]
-     _broadcast_admin_ws_event("u_end", admin_payload)
- 
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 8ad7bb0031cd3046ecd3693f5e97f926927a0191..726a1bc19ee909ff7bdfff3e472cfc87a9f2b69b 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -775,50 +775,51 @@ class DeepgramClient:
-             _admin_emit("asr:diag", label=label, **dict(payload))
-         except Exception:
-             pass
- 
-     def _emit_transition_event(
-         self,
-         event: str,
-         *,
-         code: Optional[object] = None,
-         path: Optional[object] = None,
-     ) -> None:
-         sid = self._diag_session_id
-         if not sid or not event:
-             return
-         meta: dict[str, object] = {}
-         if code is not None:
-             try:
-                 meta["code"] = str(code)
-             except Exception:
-                 meta["code"] = "unknown"
-         if path is not None:
-             try:
-                 meta["path"] = str(path)
-             except Exception:
-                 meta["path"] = "unknown"
-+        meta.setdefault("component", "server_asr")
-         try:
-             flow_emit(
-                 session_id=sid,
-                 level="transition",
-                 phase="asr",
-                 type=event,
-                 who="system",
-                 meta=meta or None,
-             )
-         except Exception:
-             pass
- 
-     def _record_error(self, code: Optional[object]) -> None:
-         self._recover_pending = True
-         self._emit_transition_event("asr_error", code=code)
- 
-     def _ws_is_open(self, ws: Optional[Any] = None) -> bool:
-         """Best-effort detection for whether the websocket is open."""
- 
-         target = ws if ws is not None else self._ws
-         if not target:
-             return False
- 
-         try:
-             open_attr = getattr(target, "open", None)
-diff --git a/app/services/tts/flow_wrapper.py b/app/services/tts/flow_wrapper.py
-index eafa8b63853df145e66eebe6af61213a8df37cee..6e360c721da76d19b56390bcf60df2ead327d62a 100644
---- a/app/services/tts/flow_wrapper.py
-+++ b/app/services/tts/flow_wrapper.py
-@@ -1,45 +1,47 @@
- """Flow trace helpers for TTS playback."""
- 
- from __future__ import annotations
- 
- from dataclasses import dataclass
- from typing import Dict, Iterable, Mapping, Optional, Protocol, runtime_checkable
- 
- from app.flow.emit import add_batch, emit as flow_emit
- from app.obs.source_tags import FLOW_SCHEMA_VERSION, make_source_meta
- 
- 
- def make_tts_mask_meta(
-     source: str,
-     *,
-     gates: Optional[Mapping[str, bool]] = None,
-     evidence: Optional[Mapping[str, object]] = None,
- ) -> Dict[str, object]:
-     """Return a normalized metadata payload for TTS mask events."""
- 
--    return make_source_meta(source, gates=gates, evidence=evidence)
-+    meta = make_source_meta(source, gates=gates, evidence=evidence)
-+    meta.setdefault("component", "server_tts")
-+    return meta
- 
- 
- @runtime_checkable
- class _Tracker(Protocol):
-     """Protocol describing the minimal TTS flow tracker."""
- 
-     def queue(self) -> None:
-         ...
- 
-     def start(self) -> None:
-         ...
- 
-     def end(self) -> None:
-         ...
- 
-     def error(self, code: Optional[object] = None) -> None:
-         ...
- 
- 
- class _NullTracker:
-     """No-op tracker when flow context is unavailable."""
- 
-     __slots__ = ()
- 
-     def queue(self) -> None:  # noqa: D401 - trivial
-@@ -52,73 +54,83 @@ class _NullTracker:
- 
-     def end(self) -> None:  # noqa: D401 - trivial
-         """Ignore end events."""
-         return None
- 
-     def error(self, code: Optional[object] = None) -> None:  # noqa: D401 - trivial
-         """Ignore error events."""
-         return None
- 
- 
- @dataclass
- class TTSFlowTracker:
-     """Emit ``tts_*`` flow events for a single synthesis request."""
- 
-     session_id: str
-     phase: str
-     who: str = "system"
-     turn_id: Optional[str] = None
-     include_turn_meta: bool = True
- 
-     _queued: bool = False
-     _started: bool = False
-     _ended: bool = False
-     _start_event_id: Optional[str] = None
- 
-+    def _augment_meta(self, base: Optional[dict[str, object]] = None) -> dict[str, object]:
-+        payload: Dict[str, object] = {}
-+        if base:
-+            payload.update(base)
-+        payload.setdefault("component", "server_tts")
-+        if self.phase == "greet":
-+            payload.setdefault("phase", "greet")
-+        return payload
++  const enrichedDetail = enrichDetail(name, detail);
 +
-     def _meta(self) -> Optional[dict[str, object]]:
-         meta: Dict[str, object] = {"schema": FLOW_SCHEMA_VERSION}
-         if self.include_turn_meta and self.turn_id:
-             meta["turn_id"] = self.turn_id
--        return meta
-+        return self._augment_meta(meta)
- 
-     def _emit_debug(
-         self,
-         type_: str,
-         *,
-         parent_id: Optional[str],
-         meta: Optional[dict[str, object]] = None,
-     ) -> None:
-         if not parent_id:
-             return
-         try:
-+            debug_meta = self._augment_meta(meta)
-             flow_emit(
-                 session_id=self.session_id,
-                 level="debug",
-                 phase=self.phase,
-                 type=type_,
-                 who=self.who,
--                meta=meta,
-+                meta=debug_meta,
-                 parent_id=parent_id,
-             )
-         except Exception:
-             pass
- 
-     def queue(self) -> None:
-         if self._queued:
-             return
-         self._queued = True
-         try:
-             flow_emit(
-                 session_id=self.session_id,
-                 level="flow",
-                 phase=self.phase,
-                 type="tts_queue",
-                 who=self.who,
-                 meta=self._meta(),
-             )
-         except Exception:
-             pass
- 
-     def start(self) -> None:
-         if self._started:
-             return
-         self._started = True
-@@ -170,57 +182,58 @@ class TTSFlowTracker:
-                         add_batch(self._start_event_id, "tts_chunks", items)
-                     except Exception:
-                         pass
-         except Exception:
-             pass
-         finally:
-             self._start_event_id = None
- 
-     def error(
-         self,
-         code: Optional[object] = None,
-         *,
-         state: Optional[dict[str, object]] = None,
-     ) -> None:
-         """Emit a ``tts_error`` transition for diagnostics."""
- 
-         if not self.session_id or not self.phase:
-             return
-         meta: dict[str, object] = {}
-         if code is not None:
-             try:
-                 meta["code"] = str(code)
-             except Exception:
-                 meta["code"] = "unknown"
-         try:
-+            error_meta = self._augment_meta(meta)
-             event_id = flow_emit(
-                 session_id=self.session_id,
-                 level="transition",
-                 phase=self.phase,
-                 type="tts_error",
-                 who=self.who,
--                meta=meta or None,
-+                meta=error_meta,
-             )
-             if state:
-                 cleaned = {
-                     key: value
-                     for key, value in state.items()
-                     if value is not None
-                 }
-                 self._emit_debug(
-                     "state_snapshot",
-                     parent_id=event_id or None,
-                     meta=cleaned or None,
-                 )
-         except Exception:
-             pass
- 
- 
- def _normalize_turn_id(turn_id: Optional[object]) -> Optional[str]:
-     if turn_id in (None, ""):
-         return None
-     try:
-         tid = str(turn_id)
-     except Exception:
-         return None
-     return tid or None
- 
-diff --git a/app/ws/ws_asgi.py b/app/ws/ws_asgi.py
-index b88f331c0907b762fa7426523d422c42fef881b2..b57c42c89d9575facb82c7e9862a7e5644cc9de1 100644
---- a/app/ws/ws_asgi.py
-+++ b/app/ws/ws_asgi.py
-@@ -1,28 +1,28 @@
- # app/ws/ws_asgi.py — Phase 2+ (Deepgram wired; WS protocol + delegation; WS-only greet + typed turns)
- from __future__ import annotations
--import asyncio, os, contextlib, time, io, struct, base64, uuid, copy, json, hashlib
-+import asyncio, os, contextlib, time, io, struct, base64, uuid, copy, json, hashlib, logging
- try:
-     import audioop  # type: ignore[import-not-found]
- except Exception:  # pragma: no cover - optional dependency
-     audioop = None  # type: ignore[assignment]
- from functools import partial
- from typing import Optional, Dict, Any, Deque, Callable, Awaitable, List, Tuple, Set
- from collections import deque, defaultdict
- from app.services.audio.container_sniffer import (
-     AudioContainerSniffer,
-     coerce_detection_from_meta,
- )
- 
- from .schema_v1 import (
-     parse_client_json,
-     make_keepalive_ack,
-     make_results,
-     make_utterance_end,
-     make_error,
- )
- from .turn_buffer import TurnBuffer
- from app.services.streaming_asr.deepgram_client import (
-     DeepgramClient,
-     DeepgramDrainTimeoutError,
- )
- from app.config import load_settings
-@@ -36,97 +36,114 @@ from app.policy.interaction_policy import (
- from app.services.greet_idempotency import clear_greet_turn_cache
- from app.metrics import ws_metrics
- from app.flow.emit import add_batch, emit as flow_emit
- from app.session_state import set_phase, should_emit_phase
- 
- # NEW: invoke LLM on final transcript
- from app.services.streaming import (
-     run_ws_user_turn,
-     prepare_turn_metadata,
-     note_turn_commit_latency,
-     emit_watchdog_user_end,
- )  # NEW
- from app.nlu.universal_interpreter import ensure_all_fields as _ensure_universal_fields
- from app.ws.barge import BargeState
- from app.ws.confirm_window import ConfirmWindow
- from app.ws.bus import bus
- from app.obs.source_tags import (
-     FLOW_SCHEMA_VERSION,
-     gate_snapshot,
-     make_source_meta,
-     ms_since,
-     resolve_barge_origin,
- )
- from app.services.tts.flow_wrapper import make_tts_mask_meta
- 
-+
-+logger = logging.getLogger(__name__)
-+
- # Optional admin emitter
- try:
-     from app.api_v1.admin import _emit as _admin_emit_base
- except Exception:
-     _admin_emit_base = None
- 
- 
- def _broadcast_admin_frame(event: str, payload: Dict[str, Any]) -> None:
-     """Mirror admin diagnostic breadcrumbs onto the session bus."""
- 
-     try:
-         sid = payload.get("session_id") or payload.get("sid")
-     except Exception:
-         sid = None
- 
-     if not sid:
-         return
- 
-     try:
-         sid_str = str(sid)
-     except Exception:
-         sid_str = sid  # type: ignore[assignment]
- 
-     frame: Dict[str, Any] = {"type": event}
-     try:
-         frame.update(dict(payload))
-     except Exception:
-         frame.update(payload)  # type: ignore[arg-type]
- 
-     frame.setdefault("session_id", sid_str)
-     frame.setdefault("sid", sid_str)
- 
-     try:
-         bus.broadcast(sid_str, frame)
-     except Exception:
-         pass
- 
- 
- def _admin_emit(event: str, **payload: Any) -> None:
-     if callable(_admin_emit_base):
-         try:
-             _admin_emit_base(event, **payload)
-         except Exception:
-             pass
- 
-     _broadcast_admin_frame(event, payload)
- 
-+
-+def _with_ws_component(meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-+    payload: Dict[str, Any] = {}
-+    if isinstance(meta, dict):
-+        payload.update(meta)
-+    elif meta is not None:
-+        try:
-+            payload.update(dict(meta))  # type: ignore[arg-type]
-+        except Exception:
-+            pass
-+    payload.setdefault("component", "ws_server")
-+    return payload
-+
-+
- def _current_assistant_turn_id(sid: str) -> Optional[str]:
-     try:
-         turn = bus.current_assistant_turn(sid)
-     except Exception:
-         return None
-     if turn is None:
-         return None
-     try:
-         return str(turn)
-     except Exception:
-         return None
- 
- def _lookup_tts_state(sid: str, turn_id: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-     try:
-         tts_tbl = db.memory.get("tts_status") or {}
-         session_tbl = tts_tbl.get(sid) or {}
-     except Exception:
-         return None, None
- 
-     keys_to_try = []
-     if turn_id:
-         keys_to_try.append(str(turn_id))
-     else:
-         keys_to_try.append("greet")
- 
-@@ -219,50 +236,52 @@ def _emit_barge_admin_events(sid: str,
-     elif phase == "assistant_speaking" and previous_phase == "paused":
-         admin_cb("barge_resume", **payload)
-         if _is_tts_active(tts_state):
-             admin_cb("tts_resume", **payload)
-     elif phase == "ready" and previous_phase == "paused":
-         admin_cb("barge_commit", **payload)
-         if _is_tts_active(tts_state):
-             admin_cb("tts_cancel", **payload)
- 
-  
- _BARGE_EVENT_STATE: Dict[str, Dict[str, Any]] = defaultdict(dict)
- 
- ACTIVE_WS: dict[str, dict[str, Any]] = {}
- ACTIVE_WS_LOCK = asyncio.Lock()
- 
- GREET_SEQ_CACHE: dict[str, Set[int]] = defaultdict(set)
- GREET_SEQ_CACHE_LOCK = asyncio.Lock()
- 
- WS_ASGI_BUILD = "miccap-v4"  # bump when you redeploy
- 
- _SETTINGS = load_settings()
- _ADVANCED_LOGGING_ENABLED = bool(
-     getattr(_SETTINGS, "advanced_logging_enabled", True)
- )
- 
-+logger.info("server_source_components: enabled")
-+
- # ------------------------------ small helpers ------------------------------
- 
- 
- def _client_ip_from_scope(scope) -> str:
-     try:
-         c = scope.get("client") or ()
-         if isinstance(c, (list, tuple)) and c:
-             return str(c[0])
-     except Exception:
-         pass
-     try:
-         hdrs = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
-         xff = hdrs.get("x-forwarded-for", "").split(",")[0].strip()
-         if xff:
-             return xff
-     except Exception:
-         pass
-     return "unknown"
- 
- 
- async def _greet_seq_mark_if_new(sid: str, seq: int) -> bool:
-     sid_key = str(sid or "") or "default"
-     async with GREET_SEQ_CACHE_LOCK:
-         seen = GREET_SEQ_CACHE[sid_key]
-         if seq in seen:
-@@ -1261,100 +1280,102 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-     ws_open_ts = start_ts
-     last_msg_ts = start_ts
-     had_disconnect = False
-     active_ws_registered = False
-     active_ws_closed = False
-     _jlog("mic_capture_cfg", sid=sid, enabled=MIC_CAPTURE, echo_ws=MIC_ECHO_WS)
- 
-     flow_session_open_emitted = False
-     flow_session_ready_emitted = False
-     flow_session_close_emitted = False
-     flow_session_config_emitted = False
-     session_flow_event_id: List[Optional[str]] = [None]
-     ws_transport_parent_id: List[Optional[str]] = [None]
-     post_greet_phase_active = [False]
-     flow_turn_commit_emitted: Set[int] = set()
-     flow_turn_abort_emitted: Set[int] = set()
-     greet_end_pending = False
-     greet_end_emitted = False
- 
-     def _emit_flow_event(
-         type_: str,
-         *,
-         phase: str,
-         meta: Optional[Dict[str, Any]] = None,
-     ) -> str:
-+        payload = _with_ws_component(meta)
-         try:
-             return (
-                 flow_emit(
-                     session_id=sid,
-                     level="flow",
-                     phase=phase,
-                     type=type_,
-                     who="system",
--                    meta=meta,
-+                    meta=payload,
-                 )
-                 or ""
-             )
-         except Exception:
-             return ""
- 
-     def _emit_debug_event(
-         type_: str,
-         *,
-         phase: str,
-         parent_id: Optional[str],
-         meta: Optional[Dict[str, Any]] = None,
-     ) -> str:
-         if not parent_id:
-             return ""
-+        payload = _with_ws_component(meta)
-         try:
-             return (
-                 flow_emit(
-                     session_id=sid,
-                     level="debug",
-                     phase=phase,
-                     type=type_,
-                     who="system",
--                    meta=meta,
-+                    meta=payload,
-                     parent_id=parent_id,
-                 )
-                 or ""
-             )
-         except Exception:
-             return ""
- 
-     def _ensure_ws_parent_id() -> Optional[str]:
-         if ws_transport_parent_id[0] is None:
-             try:
-                 ws_transport_parent_id[0] = (
-                     flow_emit(
-                         session_id=sid,
-                         type="ws_frames",
-                         phase="transport",
-                         who="server",
--                        meta={"dir": "pump_start"},
-+                        meta=_with_ws_component({"dir": "pump_start"}),
-                     )
-                     or None
-                 )
-             except Exception:
-                 ws_transport_parent_id[0] = None
-             if ws_transport_parent_id[0] is None and session_flow_event_id[0]:
-                 ws_transport_parent_id[0] = session_flow_event_id[0]
-         return ws_transport_parent_id[0]
- 
-     policy: Dict[str, Any] = {}
-     policy_version: str = "unknown"
-     current_interaction_policy_mode: List[Optional[str]] = [None]
- 
-     def _push_interaction_policy(snapshot: Dict[str, Any]) -> None:
-         if not isinstance(snapshot, dict):
-             return
-         payload = dict(snapshot)
-         mode_value = payload.get("mode")
-         try:
-             mode_str = str(mode_value) if mode_value is not None else ""
-         except Exception:
-             mode_str = ""
-         if current_interaction_policy_mode[0] == mode_str:
-             pass
-         else:
-@@ -1689,72 +1710,74 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             ws_frames_out += 1
-             ws_bytes_out += payload_bytes
-             parent_id = _ensure_ws_parent_id()
-             if parent_id and ws_frames_out % _WS_FRAME_SAMPLE == 0:
-                 _emit_debug_event(
-                     "ws_frame_out",
-                     phase="session",
-                     parent_id=parent_id,
-                     meta={
-                         "type": frame_kind,
-                         "bytes": payload_bytes,
-                         "route": route,
-                     },
-                 )
-         await _raw_send(message)
- 
-     send = _send_instrumented
- 
-     async def _safe_close(code: int, reason: str) -> None:
-         try:
-             flow_emit(
-                 session_id=sid,
-                 type="ws_close",
-                 phase="transport",
-                 who="server",
--                meta={"code": code, "reason": reason},
-+                meta=_with_ws_component({"code": code, "reason": reason}),
-             )
-         except Exception:
-             pass
-         try:
-             await send({"type": "websocket.close", "code": code, "reason": reason})
-         except Exception:
-             pass
- 
-     async def _handle_startup_failure(ex: Exception) -> None:
-         if isinstance(ex, asyncio.CancelledError):
-             raise
-         try:
-             flow_emit(
-                 session_id=sid,
-                 type="ws_error",
-                 phase="transport",
-                 who="server",
--                meta={
-+                meta=_with_ws_component(
-+                    {
-                     "where": "_ws_chat_asgi_impl",
-                     "message": str(ex)[:500],
--                },
-+                    }
-+                ),
-             )
-         except Exception:
-             pass
-         try:
-             await _ws_send_json(
-                 send,
-                 {
-                     "type": "Error",
-                     "code": "WS_INIT_FAILED",
-                     "message": "server error during WS init",
-                 },
-             )
-         except Exception:
-             pass
-         await _safe_close(1011, "server error")
- 
-     with contextlib.suppress(Exception):
-         clear_greet_turn_cache(sid)
- 
-     bus_task: Optional[asyncio.Task] = None
- 
-     def _ensure_bus_task_started() -> None:
-         nonlocal bus_task
-         if bus_task is not None:
-             return
-@@ -1781,55 +1804,57 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         try:
-             while True:
-                 await asyncio.sleep(20)
-                 try:
-                     await _ws_send_json(
-                         send, {"type": "keepalive", "ts": int(time.time() * 1000)}
-                     )
-                 except Exception:
-                     break
-         except asyncio.CancelledError:
-             pass
- 
-     ping_task = asyncio.create_task(_ping_loop())
- 
-     try:
-         await _ws_send_json(send, {"type": "ready", "session_id": sid})
-         _push_interaction_policy(_interaction_policy_idle_snapshot())
-     except Exception as ex:
-         detail = str(ex).strip() or "initial ready failed"
-         with contextlib.suppress(Exception):
-             flow_emit(
-                 session_id=sid,
-                 type="ws_error",
-                 phase="transport",
-                 who="server",
--                meta={
-+                meta=_with_ws_component(
-+                    {
-                     "where": "initial_ready",
-                     "cause": ex.__class__.__name__,
-                     "msg": str(ex)[:300],
--                },
-+                    }
-+                ),
-             )
-         with contextlib.suppress(Exception):
-             await _ws_send_json(
-                 send,
-                 {
-                     "type": "Error",
-                     "code": "INITIAL_READY_FAILED",
-                     "detail": detail[:200],
-                 },
-             )
-         with contextlib.suppress(Exception):
-             await _safe_close(1011, "initial_ready_failed")
-         return
- 
-     _ensure_bus_task_started()
- 
-     cfg: Dict[str, Any] = {"advanced_logging_enabled": _ADVANCED_LOGGING_ENABLED}
-     ws_configured = False
-     configure_ack_sent = False
-     if not isinstance(policy, dict):
-         policy = {}
-     if isinstance(policy, dict):
-         cfg["interaction_policy"] = policy
-         with contextlib.suppress(Exception):
-             _jlog(
-@@ -2016,59 +2041,60 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-         if flow_session_ready_emitted:
-             return
-         _emit_flow_event("session_ready", phase="session")
-         flow_session_ready_emitted = True
-         _emit_session_config_if_ready()
- 
-     def _maybe_emit_greet_end(*, via: str = "") -> None:
-         nonlocal greet_end_pending, greet_end_emitted
-         if greet_end_emitted or not greet_end_pending:
-             return
-         _emit_flow_event("greet_end", phase="greet")
-         greet_end_emitted = True
-         greet_end_pending = False
- 
-     loop = asyncio.get_running_loop()
-     barge = BargeState()
-     last_barge_phase = [None]
-     barge_pause_meta_ref: List[Optional[Dict[str, Any]]] = [None]
- 
-     def _emit_transition_event(
-         type_: str,
-         *,
-         meta: Optional[Dict[str, Any]] = None,
-         phase: str = "barge",
-     ) -> str:
-+        payload = _with_ws_component(meta)
-         try:
-             return (
-                 flow_emit(
-                     session_id=sid,
-                     level="transition",
-                     phase=phase,
-                     type=type_,
-                     who="system",
--                    meta=meta,
-+                    meta=payload,
-                 )
-                 or ""
-             )
-         except Exception:
-             return ""
- 
-     def _emit_ws_error(code: Optional[object]) -> None:
-         try:
-             code_str = str(code) if code is not None else "unknown"
-         except Exception:
-             code_str = "unknown"
-         event_id = _emit_transition_event(
-             "ws_error",
-             meta={"code": code_str},
-             phase="transport",
-         )
-         try:
-             _emit_state_snapshot(event_id, "transport")
-         except NameError:
-             pass
- 
-     def _current_tts_active() -> bool:
-         try:
-             current_turn_id = _current_assistant_turn_id(sid)
-         except Exception:
-@@ -3167,50 +3193,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-             task.cancel()
-         tts_mask_release_task[0] = None
-         tts_mask_release_deadline[0] = 0.0
- 
-     def _mark_tts_mask_off(turn_id: Any, hold_ms: int) -> None:
-         previously_active = tts_mask_active[0]
-         tts_mask_active[0] = False
-         tts_mask_mode[0] = barge_suppress_mode or "none"
-         tts_mask_release_deadline[0] = 0.0
-         mask_source = "assistant_audio_end"
-         if hold_ms > 0:
-             mask_source = "policy_hold"
-         elif manual_button_down[0]:
-             mask_source = "manual_override"
-         with contextlib.suppress(Exception):
-             mask_meta = make_tts_mask_meta(
-                 mask_source,
-                 gates=_current_gate_snapshot(),
-                 evidence={
-                     "utterance_id": str(turn_id)
-                     if turn_id not in (None, "", "greet")
-                     else None,
-                     "post_tts_hold_ms": max(0, hold_ms),
-                 },
-             )
-+            if turn_id in (None, "", "greet"):
-+                mask_meta.setdefault("phase", "greet")
-             _jlog(
-                 "EVT_TTS_MASK_OFF",
-                 sid=sid,
-                 turn_id=turn_id,
-                 post_hold_ms=max(0, hold_ms),
-                 **mask_meta,
-             )
-         if previously_active:
-             _maybe_start_pending_confirm()
-         _schedule_vad_state(True, "idle")
-         _push_interaction_policy(_interaction_policy_idle_snapshot())
- 
-     async def _await_tts_mask_release(delay_ms: int, turn_id: Any) -> None:
-         try:
-             await asyncio.sleep(max(0.0, delay_ms / 1000.0))
-             _mark_tts_mask_off(turn_id, delay_ms)
-         except asyncio.CancelledError:
-             return
-         finally:
-             if tts_mask_release_task[0] is asyncio.current_task():
-                 tts_mask_release_task[0] = None
- 
-     def _start_confirm_window(now_ts: float) -> None:
-         if not local_vad_allowed:
-             _jlog("confirm_skip_local_vad_disabled", sid=sid)
-@@ -3458,50 +3486,52 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                 vad_apply_task[0] = None
- 
-         new_task.add_done_callback(_clear)
-             
-     def _on_assistant_tts_start(turn_id: Any) -> None:
-         assistant_speaking[0] = True
-         _push_interaction_policy(_interaction_policy_tts_snapshot())
-         mode = (barge_suppress_mode or "none").strip() or "none"
-         mask_engaged = mode != "none"
-         tts_mask_mode[0] = mode
-         if mask_engaged:
-             tts_mask_active[0] = True
-         else:
-             tts_mask_active[0] = False
-         _cancel_tts_mask_release()
-         with contextlib.suppress(Exception):
-             mask_meta = make_tts_mask_meta(
-                 "assistant_audio_start",
-                 gates=_current_gate_snapshot(tts_override=True),
-                 evidence={
-                     "utterance_id": str(turn_id)
-                     if turn_id not in (None, "", "greet")
-                     else None,
-                 },
-             )
-+            if turn_id in (None, "", "greet"):
-+                mask_meta.setdefault("phase", "greet")
-             _jlog("EVT_TTS_MASK_ON", sid=sid, turn_id=turn_id, mode=mode, **mask_meta)
-         _schedule_vad_state(False, "tts")
-         _ensure_confirm_closed("tts_start")
-         if not manual_button_down[0]:
-             with contextlib.suppress(Exception):
-                 barge.cancel(_send_barge_state)
- 
-     def _on_assistant_tts_end(turn_id: Any) -> None:
-         assistant_speaking[0] = False
-         now_ts = time.time()
-         if turn_timing is not None:
-             with contextlib.suppress(Exception):
-                 holder = turn_timing.setdefault("tts_end", [0.0])
-                 holder[0] = now_ts
-         tts_last_end_ts[0] = now_ts
-         if turn_id in (None, "", "greet"):
-             _maybe_emit_greet_end(via="tts_end")
-         if tts_mask_active[0] and barge_post_tts_hold_ms > 0:
-             delay_ms = barge_post_tts_hold_ms
-             _cancel_tts_mask_release()
-             tts_mask_release_deadline[0] = time.time() + (delay_ms / 1000.0)
-             tts_mask_release_task[0] = asyncio.create_task(
-                 _await_tts_mask_release(delay_ms, turn_id)
-             )
-             _schedule_vad_state(False, "hold", force=True)
-@@ -5252,54 +5282,56 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                 manual_mode_manual_only = bool(
-                                     cfg.get("barge_in_mode_manual", manual_mode_manual_only)
-                                 )
-                                 auto_commit_when_ready = bool(
-                                     cfg.get("auto_commit_when_ready", auto_commit_when_ready)
-                                 )
-                                 _reapply_interaction_policy()
-                                 ws_configured = True
-                                 _jlog(
-                                     "ws_configure",
-                                     sid=sid,
-                                     ts_ms=int(time.time() * 1000),
-                                     barge_in_mode_manual=manual_mode_manual_only,
-                                     feature_manual_barge_in=manual_feature_enabled,
-                                     auto_commit_when_ready=auto_commit_when_ready,
-                                 )
-                                 if not configure_ack_sent:
-                                     greet_flag = bool(cfg.get("greet"))
-                                     reset_val = cfg.get("reset", 0)
-                                     try:
-                                         flow_emit(
-                                             session_id=sid,
-                                             type="session_ready",
-                                             phase="ws",
-                                             who="server",
--                                            meta={
--                                                "greet": greet_flag,
--                                                "reset": reset_val,
--                                            },
-+                                            meta=_with_ws_component(
-+                                                {
-+                                                    "greet": greet_flag,
-+                                                    "reset": reset_val,
-+                                                }
-+                                            ),
-                                         )
-                                     except Exception:
-                                         pass
-                                     await _ws_send_json(
-                                         send,
-                                         {
-                                             "type": "ConfigureAck",
-                                             "ok": True,
-                                             "greet": greet_flag,
-                                         },
-                                     )
-                                     configure_ack_sent = True
-                                 if not manual_feature_enabled:
-                                     manual_button_down[0] = False
-                                     manual_turn_active[0] = False
-                                     manual_commit_pending[0] = False
-                                     ptt_turn_preopened[0] = False
-                                     _note_manual_up()
-                                 greet_seq_raw = obj.get("greet_seq")
-                                 greet_seq: Optional[int] = None
-                                 is_new_greet_seq = True
-                                 if greet_seq_raw is not None:
-                                     try:
-                                         greet_seq = int(greet_seq_raw)
-                                     except Exception:
-@@ -5823,51 +5855,53 @@ async def _ws_chat_asgi_impl(scope, receive, send):
-                                     no_audio_window_s <= 0
-                                     or (
-                                         elapsed is not None
-                                         and elapsed >= no_audio_window_s
-                                     )
-                                 )
-                                 if should_emit:
-                                     _emit_no_audio_alert("close_stream")
- 
-                             if synthetic_emitted:
-                                 # Reset so the next turn starts fresh even if no audio chunk arrives.
-                                 final_seen[0] = False
- 
-                             if force_end_due_to_asr_timeout:
-                                 _jlog(
-                                     "session_force_end",
-                                     sid=sid,
-                                     reason="user_end_waiting_asr",
-                                 )
-                                 try:
-                                     flow_emit(
-                                         session_id=sid,
-                                         type="session_force_end",
-                                         phase="session",
-                                         who="server",
--                                        meta={"reason": "user_end_waiting_asr"},
-+                                        meta=_with_ws_component(
-+                                            {"reason": "user_end_waiting_asr"}
-+                                        ),
-                                     )
-                                 except Exception:
-                                     pass
-                                 await _safe_close(4000, "user_end_waiting_asr")
-                                 return
- 
-                             if barge.is_paused():
-                                 _ensure_confirm_closed("cleanup")
-                                 if not manual_button_down[0]:
-                                     with contextlib.suppress(Exception):
-                                         barge.cancel(_send_barge_state)
-                                 await asyncio.sleep(0)
- 
-                             if ws_configured and not turn_stream_committed[0]:
-                                 if manual_commit_pending[0] and not assistant_speaking[0]:
-                                     _on_barge_commit("manual")
-                                 elif _can_auto_commit_now():
-                                     _on_barge_commit("auto")
- 
-                             active_turn_mode_ref[0] = "vad"
-                             turn_commit_mode_ref[0] = "vad"
- 
-                             # ---- NEW: mic-capture summary, save to /tmp (or $TMPDIR), and optional WS echo ----
- 
-                             _jlog(
-@@ -6024,55 +6058,57 @@ async def _ws_chat_asgi_impl(scope, receive, send):
- try:
-     from starlette.websockets import WebSocket as _StarletteWebSocket  # noqa
- except Exception:
-     _StarletteWebSocket = None
- 
- 
- async def ws_chat(websocket):
-     """Accept, validate, send ready, then pump frames to keep the connection alive."""
-     _jlog("ws_chat_compat_invoked")
-     await websocket.accept()
-     try:
-         sid = _get_session_id(websocket.scope)
-     except Exception:
-         sid = "default"
- 
-     try:
-         await websocket.send_text(_dumps({"type": "ready", "session_id": sid}))
-     except Exception as ex:
-         detail = str(ex).strip() or "initial ready failed"
-         with contextlib.suppress(Exception):
-             flow_emit(
-                 session_id=sid,
-                 type="ws_error",
-                 phase="transport",
-                 who="server",
--                meta={
-+                meta=_with_ws_component(
-+                    {
-                     "where": "initial_ready",
-                     "cause": ex.__class__.__name__,
-                     "msg": str(ex)[:300],
--                },
-+                    }
-+                ),
-             )
-         with contextlib.suppress(Exception):
-             await websocket.send_text(
-                 _dumps(
-                     {
-                         "type": "Error",
-                         "code": "INITIAL_READY_FAILED",
-                         "detail": detail[:200],
-                     }
-                 )
-             )
-         with contextlib.suppress(Exception):
-             await websocket.close(code=1011, reason="initial_ready_failed")
-             await asyncio.sleep(0.05)
-         return
- 
-     try:
-         await _pump_bus_to_client(
-             sid, lambda msg: websocket.send_text(msg.get("text") or "")
-         )
-     except Exception:
-         pass
-     finally:
-         with contextlib.suppress(Exception):
-             await websocket.close(code=1000, reason="normal_shutdown")
+   const envelope = {
+     name,
+     ts_ms: Date.now(),
+     session_id: getSessionId(),
+     turn_id: getTurnId(),
+-    detail: sanitizeDetail(detail),
++    detail: sanitizeDetail(enrichedDetail),
+   };
+ 
+   try {
+     const body = JSON.stringify(envelope);
+     if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+       try {
+         const blob = new Blob([body], { type: 'application/json' });
+         if (navigator.sendBeacon(BREADCRUMB_URL, blob)) {
+           return;
+         }
+       } catch {}
+     }
+     if (typeof fetch === 'function') {
+       fetch(BREADCRUMB_URL, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body,
+         keepalive: true,
+         credentials: 'same-origin',
+       }).catch(() => {});
+     }
+   } catch {}
+ }
+diff --git a/tests/test_flow_store.py b/tests/test_flow_store.py
+index 6cc1fd0a8d44aa9fdf5d5353d91929c9e68971fc..f315ef689982187facc3c25243f767308903bf52 100644
+--- a/tests/test_flow_store.py
++++ b/tests/test_flow_store.py
+@@ -71,64 +71,74 @@ def test_emit_includes_normalized_source(flow_env):
+         "component_src",
+         "system",
+         meta={"component": "tts_engine"},
+     )
+     store.emit(
+         session_id,
+         "flow",
+         "session",
+         "default_server",
+         "system",
+     )
+     store.emit(
+         session_id,
+         "flow",
+         "session",
+         "default_client",
+         "client",
+     )
+     store.emit(
+         session_id,
+         "flow",
+         "session",
+         "unknown_src",
+         "assistant",
+     )
++    store.emit(
++        session_id,
++        "flow",
++        "session",
++        "detail_src",
++        "client",
++        meta={"detail": {"src": "client_audio"}},
++    )
+ 
+     events = {evt["type"]: evt for evt in store.list(session_id, expand="all")["events"]}
+ 
+     assert events["explicit_src"]["src"] == "ingress_gateway"
+     assert "missing_source" not in events["explicit_src"]
+     assert events["component_src"]["src"] == "tts_engine"
+     assert "missing_source" not in events["component_src"]
+     assert events["default_server"]["src"] == "server_core"
+     assert "missing_source" not in events["default_server"]
+     assert events["default_client"]["src"] == "client_ui"
+     assert "missing_source" not in events["default_client"]
+     assert events["unknown_src"]["src"] == "unknown"
+     assert events["unknown_src"]["missing_source"] is True
+     assert events["unknown_src"]["who"] == "assistant"
++    assert events["detail_src"]["src"] == "client_audio"
++    assert "missing_source" not in events["detail_src"]
+ 
+ 
+ def test_emit_dedupe_window(flow_env):
+     store, advance, _ = flow_env
+     session_id = "sess-dedupe"
+ 
+     eid1 = store.emit(session_id, "flow", "session", "session_open", "system")
+     advance(50)  # 50 ms < dedupe window
+     eid2 = store.emit(session_id, "flow", "session", "session_open", "system")
+     assert eid1 == eid2
+     advance(200)  # outside dedupe window
+     eid3 = store.emit(session_id, "flow", "session", "session_open", "system")
+     assert eid3 != eid1
+ 
+ 
+ def test_asr_partial_once_per_turn(flow_env):
+     store, advance, _ = flow_env
+     session_id = "sess-asr"
+ 
+     meta = {"turn_id": "turn-1"}
+     first = store.emit(
+         session_id,
+         "transition",
+         "turn",
+         ASR_PARTIAL_TYPE,
