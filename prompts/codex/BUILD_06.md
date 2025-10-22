@@ -39,3 +39,10 @@
 ### B6-F — Local Tests & Runner (Exporter/Zip/Perf API)
 **Files:** `tests/test_exporter_packaging.py` (new), `scripts/run_build06_tests.sh` (new; executable)  
 **Acceptance:** Runner executes exporter/zip perf smoke and prints `BUILD_06_TESTS: PASS`.
+
+
+**Smoke acceptance (minimal trace):**
+- Generate an export and verify ZIP contains: `manifest.json`, `server.log`, `ws_in.ndjson`, `ws_out.ndjson`, `flow_timeline.ndjson`, `nlu.ndjson`, `nlg.ndjson`.
+- `server.log` shows an applied `EVT_TELEMETRY_POLICY` and at least one `EVT_VENDOR_DEBUG` with sensitive fields redacted per `redaction.py`.
+
+> "Return only diffs for the files listed above. Do not modify or create any other files."

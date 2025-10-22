@@ -15,3 +15,10 @@
 ### B8-B — CI Checks (Schema & Info Gates)
 **Files:** `ops/ci_checks.md` (new), `ops/schema_check.py` (new)  
 **Acceptance:** Script asserts: (1) `/api/v1/info` responds, (2) sample frames in `docs/10_CONTRACT_WS.md` validate via `app/ws/validator.py`, (3) no references to `/ws/v1/chat` or top-level `/templates`.
+
+
+**Smoke acceptance (minimal trace):**
+- Calling `/ws/v1/chat` returns HTTP 410 with JSON `{"error":"gone"}` (or equivalent) while `/ws/v2/chat` connects successfully.
+- Running `ops/schema_check.py` exits 0 when no v1 references or top-level `/templates` are present; exits non-zero if they are.
+
+> "Return only diffs for the files listed above. Do not modify or create any other files."

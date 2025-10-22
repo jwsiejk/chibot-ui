@@ -39,3 +39,11 @@
 ### B5-F — Provider Interfaces & Circuit Breakers
 **Files:** `app/voice_v2/asr_base.py` (new), `app/voice_v2/tts_base.py` (new), `app/voice_v2/llm_base.py` (new), `docs/30_ADR.md` (update)  
 **Acceptance:** Abstract base classes with timeouts/retries; provider registry; breaker emits `EVT_PROVIDER_OPEN/TRIP/CLOSE`; tests simulate fail/open.
+
+
+**Smoke acceptance (minimal trace):**
+- On startup, log `EVT_ASR_READY {vendor}`.
+- Simulate a user turn: partials → `EVT_ASR_FINAL` (exactly once) → `EVT_NLU` (exactly once) → `EVT_POLICY_DECISION` → `EVT_NLG` (exactly once), all with the same `req_id`.
+- Switch `ASR_VENDOR` to `speechmatics` and observe identical event shapes with `vendor:"speechmatics"`.
+
+> "Return only diffs for the files listed above. Do not modify or create any other files."

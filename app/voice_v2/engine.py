@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass
 import json
 import time
+import uuid
 from typing import Any, Dict, Mapping, Optional
 
 from app.policy.loader import load_interaction_policy
@@ -30,6 +31,16 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+READY = "Ready"
+LISTENING = "Listening"
+THINKING = "Thinking"
+RESPONDING = "Responding"
+
+EVT_TURN_STATE = "EVT_TURN_STATE"
+EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
+EVT_TURN_END = "EVT_TURN_END"
+
+
 @dataclass
 class _Envelope:
     """Normalized telemetry envelope returned by the engine hooks."""
@@ -51,6 +62,13 @@ class _Envelope:
         return data
 
 
+@dataclass
+class _TurnSession:
+    state: str = READY
+    turn_id: Optional[str] = None
+    turn_started_ms: Optional[int] = None
+
+
 class EngineV2:
     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
 
@@ -62,6 +80,7 @@ class EngineV2:
         self._policy_snapshot: Dict[str, Any] | None = None
         self._last_sid: Optional[str] = None
         self._gate = GateController(publish=self._publish_gate_event)
+        self._sessions: Dict[str, _TurnSession] = {}
 
     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
         """Capture a successful WebSocket upgrade."""
@@ -71,6 +90,8 @@ class EngineV2:
 
         self._last_sid = sid
         self._policy_snapshot = None
+        self._ensure_session(sid)
+        self._set_state(sid, READY, reason="ws_open")
         self.reapply_policy()
 
     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
@@ -97,6 +118,9 @@ class EngineV2:
 
     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
         """Capture an incoming audio chunk."""
+        session = self._ensure_session(sid)
+        if session.state != LISTENING:
+            self._set_state(sid, LISTENING, reason="audio_rx")
         byte_count = len(chunk)
         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
@@ -110,6 +134,7 @@ class EngineV2:
         if self._last_sid == sid:
             self._last_sid = None
             self._policy_snapshot = None
+        self._sessions.pop(sid, None)
 
     def on_tts_start(
         self, sid: str, utt_id: str, post_hold_ms: int | None = None
@@ -128,6 +153,7 @@ class EngineV2:
         payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
         event = self._envelope(sid, EVT_TTS_START, payload)
         self._publish(event)
+        self._set_state(sid, RESPONDING, reason="tts_start")
 
     def on_tts_end(
         self, sid: str, utt_id: str, post_hold_ms: int | None = None
@@ -150,9 +176,16 @@ class EngineV2:
                 meta={"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}},
             )
             asyncio.create_task(self._release_system_hold_after(sid, hold_ms))
+        else:
+            self._set_state(sid, READY, reason="tts_end")
 
         event = self._envelope(sid, EVT_TTS_END, {"meta": {"tts": {"utt_id": utt_id}}})
         self._publish(event)
+
+    def on_asr_final(self, sid: str, text: str) -> None:
+        """Observe the final ASR transcript for a turn."""
+
+        self._set_state(sid, THINKING, reason="asr_final")
 
     def reapply_policy(self, overrides: Dict[str, Any] | None = None) -> bool:
         """Reload and re-emit the interaction policy when it changes."""
@@ -200,6 +233,62 @@ class EngineV2:
 
         await asyncio.sleep(post_hold_ms / 1000)
         self._gate.set_reason("system_hold", False, sid=sid)
+        self._set_state(sid, READY, reason="tts_end")
+
+    def _ensure_session(self, sid: str) -> _TurnSession:
+        session = self._sessions.get(sid)
+        if session is None:
+            session = _TurnSession()
+            self._sessions[sid] = session
+        return session
+
+    def _set_state(self, sid: str, new_state: str, *, reason: str | None = None) -> None:
+        """Transition the session state machine and emit telemetry breadcrumbs."""
+
+        session = self._ensure_session(sid)
+        previous = session.state
+        if previous == new_state:
+            return
+
+        now_ms = _now_ms()
+
+        if new_state == LISTENING:
+            session.turn_id = str(uuid.uuid4())
+            session.turn_started_ms = now_ms
+            begin_payload = {
+                "meta": {"turn_id": session.turn_id, "state": LISTENING}
+            }
+            begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
+            self._publish(begin_event)
+
+        if (
+            new_state == READY
+            and previous in {LISTENING, THINKING, RESPONDING}
+            and session.turn_id
+        ):
+            start_ms = session.turn_started_ms or now_ms
+            duration_ms = now_ms - start_ms
+            if duration_ms <= 0:
+                duration_ms = 1
+            end_payload = {
+                "meta": {
+                    "turn_id": session.turn_id,
+                    "duration_ms": duration_ms,
+                }
+            }
+            end_event = self._envelope(sid, EVT_TURN_END, end_payload)
+            self._publish(end_event)
+            session.turn_id = None
+            session.turn_started_ms = None
+
+        session.state = new_state
+
+        breadcrumb_meta: Dict[str, Any] = {"state": new_state}
+        if reason is not None:
+            breadcrumb_meta["reason"] = reason
+        breadcrumb_payload = {"meta": breadcrumb_meta}
+        breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
+        self._publish(breadcrumb_event)
 
     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
         frame = {"type": "policy.interaction", "policy": snapshot}
@@ -256,4 +345,13 @@ class EngineV2:
         return summary
 
 
-__all__ = ["EngineV2"]
+__all__ = [
+    "EngineV2",
+    "EVT_TURN_BEGIN",
+    "EVT_TURN_END",
+    "EVT_TURN_STATE",
+    "READY",
+    "LISTENING",
+    "THINKING",
+    "RESPONDING",
+]

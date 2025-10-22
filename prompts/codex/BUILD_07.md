@@ -45,3 +45,11 @@
 ### B7-E — Policy Inspector (Read-only)
 **File:** `static/js/admin/policy_inspector.js` (new)  
 **Acceptance:** Shows current applied snapshot + diffs; indicates default vs override sources.
+
+
+**Smoke acceptance (minimal trace):**
+- Client connects to `/ws/v2/chat`; `PolicyBus.current()` reflects latest `EVT_POLICY_DECISION`.
+- Playback of an assistant utterance emits client `EVT_PLAYBACK {phase:"start"}` then `{phase:"end"}` and badges transition with `EVT_ENGINE_STATE`.
+- Recorder sends audio; round-trip observed as ASR partials → final → NLU → NLG in server logs.
+
+> "Return only diffs for the files listed above. Do not modify or create any other files."

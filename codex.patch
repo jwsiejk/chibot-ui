@@ -1,15 +1,16 @@
 diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6faa7127c19 100644
+index 73d558e64126d41eb816004f73a0f6faa7127c19..da93efa130d8548171121ec226d1cfdece0bde2c 100644
 --- a/app/voice_v2/engine.py
 +++ b/app/voice_v2/engine.py
-@@ -1,162 +1,228 @@
+@@ -1,227 +1,316 @@
  """Minimal Engine v2 shell with telemetry hooks and session exporting."""
  from __future__ import annotations
  
-+import asyncio
+ import asyncio
  from dataclasses import dataclass
  import json
  import time
++import uuid
  from typing import Any, Dict, Mapping, Optional
  
  from app.policy.loader import load_interaction_policy
@@ -19,15 +20,15 @@ index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6fa
  from app.voice_v2 import (
      EVT_ACWR_RECOMPUTE,
      EVT_POLICY_APPLIED,
-+    EVT_TTS_END,
-+    EVT_TTS_START,
+     EVT_TTS_END,
+     EVT_TTS_START,
      EVT_WS_AUDIO_RECV,
      EVT_WS_CLOSE,
      EVT_WS_JSON_RECV,
      EVT_WS_JSON_SEND,
      EVT_WS_OPEN,
  )
-+from app.voice_v2.gate import GateController
+ from app.voice_v2.gate import GateController
  
  
  def _now_ms() -> int:
@@ -35,6 +36,16 @@ index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6fa
      return int(time.time() * 1000)
  
  
++READY = "Ready"
++LISTENING = "Listening"
++THINKING = "Thinking"
++RESPONDING = "Responding"
++
++EVT_TURN_STATE = "EVT_TURN_STATE"
++EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
++EVT_TURN_END = "EVT_TURN_END"
++
++
  @dataclass
  class _Envelope:
      """Normalized telemetry envelope returned by the engine hooks."""
@@ -56,6 +67,13 @@ index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6fa
          return data
  
  
++@dataclass
++class _TurnSession:
++    state: str = READY
++    turn_id: Optional[str] = None
++    turn_started_ms: Optional[int] = None
++
++
  class EngineV2:
      """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
  
@@ -66,7 +84,8 @@ index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6fa
          self._bus = telemetry_bus
          self._policy_snapshot: Dict[str, Any] | None = None
          self._last_sid: Optional[str] = None
-+        self._gate = GateController(publish=self._publish_gate_event)
+         self._gate = GateController(publish=self._publish_gate_event)
++        self._sessions: Dict[str, _TurnSession] = {}
  
      def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
          """Capture a successful WebSocket upgrade."""
@@ -76,6 +95,8 @@ index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6fa
  
          self._last_sid = sid
          self._policy_snapshot = None
++        self._ensure_session(sid)
++        self._set_state(sid, READY, reason="ws_open")
          self.reapply_policy()
  
      def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
@@ -102,6 +123,9 @@ index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6fa
  
      def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
          """Capture an incoming audio chunk."""
++        session = self._ensure_session(sid)
++        if session.state != LISTENING:
++            self._set_state(sid, LISTENING, reason="audio_rx")
          byte_count = len(chunk)
          meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
          event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
@@ -115,49 +139,58 @@ index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6fa
          if self._last_sid == sid:
              self._last_sid = None
              self._policy_snapshot = None
++        self._sessions.pop(sid, None)
  
-+    def on_tts_start(
-+        self, sid: str, utt_id: str, post_hold_ms: int | None = None
-+    ) -> None:
-+        """Engage the TTS mask and emit a telemetry breadcrumb."""
+     def on_tts_start(
+         self, sid: str, utt_id: str, post_hold_ms: int | None = None
+     ) -> None:
+         """Engage the TTS mask and emit a telemetry breadcrumb."""
+ 
+         hold_ms = post_hold_ms or 0
+         tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
+         self._gate.set_reason(
+             "tts_active",
+             True,
+             sid=sid,
+             meta=tts_meta,
+         )
+ 
+         payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
+         event = self._envelope(sid, EVT_TTS_START, payload)
+         self._publish(event)
++        self._set_state(sid, RESPONDING, reason="tts_start")
+ 
+     def on_tts_end(
+         self, sid: str, utt_id: str, post_hold_ms: int | None = None
+     ) -> None:
+         """Release the TTS mask and optionally engage a post-hold."""
+ 
+         self._gate.set_reason(
+             "tts_active",
+             False,
+             sid=sid,
+             meta={"tts": {"utt_id": utt_id}},
+         )
+ 
+         hold_ms = post_hold_ms or 0
+         if hold_ms > 0:
+             self._gate.set_reason(
+                 "system_hold",
+                 True,
+                 sid=sid,
+                 meta={"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}},
+             )
+             asyncio.create_task(self._release_system_hold_after(sid, hold_ms))
++        else:
++            self._set_state(sid, READY, reason="tts_end")
+ 
+         event = self._envelope(sid, EVT_TTS_END, {"meta": {"tts": {"utt_id": utt_id}}})
+         self._publish(event)
+ 
++    def on_asr_final(self, sid: str, text: str) -> None:
++        """Observe the final ASR transcript for a turn."""
 +
-+        hold_ms = post_hold_ms or 0
-+        tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
-+        self._gate.set_reason(
-+            "tts_active",
-+            True,
-+            sid=sid,
-+            meta=tts_meta,
-+        )
-+
-+        payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
-+        event = self._envelope(sid, EVT_TTS_START, payload)
-+        self._publish(event)
-+
-+    def on_tts_end(
-+        self, sid: str, utt_id: str, post_hold_ms: int | None = None
-+    ) -> None:
-+        """Release the TTS mask and optionally engage a post-hold."""
-+
-+        self._gate.set_reason(
-+            "tts_active",
-+            False,
-+            sid=sid,
-+            meta={"tts": {"utt_id": utt_id}},
-+        )
-+
-+        hold_ms = post_hold_ms or 0
-+        if hold_ms > 0:
-+            self._gate.set_reason(
-+                "system_hold",
-+                True,
-+                sid=sid,
-+                meta={"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}},
-+            )
-+            asyncio.create_task(self._release_system_hold_after(sid, hold_ms))
-+
-+        event = self._envelope(sid, EVT_TTS_END, {"meta": {"tts": {"utt_id": utt_id}}})
-+        self._publish(event)
++        self._set_state(sid, THINKING, reason="asr_final")
 +
      def reapply_policy(self, overrides: Dict[str, Any] | None = None) -> bool:
          """Reload and re-emit the interaction policy when it changes."""
@@ -188,24 +221,80 @@ index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6fa
          self._bus.publish(dict(event))
          self._exporter.write(event["sid"], dict(event))
  
-+    def _publish_gate_event(self, event: Dict[str, Any]) -> None:
-+        """Publish gate controller events through the standard telemetry path."""
+     def _publish_gate_event(self, event: Dict[str, Any]) -> None:
+         """Publish gate controller events through the standard telemetry path."""
+ 
+         envelope = dict(event)
+         sid = envelope.get("sid") or self._last_sid
+         if not isinstance(sid, str) or not sid:
+             return
+         envelope.setdefault("sid", sid)
+         envelope.setdefault("who", "server")
+         envelope.setdefault("source", "voice_engine")
+         self._publish(envelope)
+ 
+     async def _release_system_hold_after(self, sid: str, post_hold_ms: int) -> None:
+         """Release the system_hold reason after the requested delay."""
+ 
+         await asyncio.sleep(post_hold_ms / 1000)
+         self._gate.set_reason("system_hold", False, sid=sid)
++        self._set_state(sid, READY, reason="tts_end")
 +
-+        envelope = dict(event)
-+        sid = envelope.get("sid") or self._last_sid
-+        if not isinstance(sid, str) or not sid:
++    def _ensure_session(self, sid: str) -> _TurnSession:
++        session = self._sessions.get(sid)
++        if session is None:
++            session = _TurnSession()
++            self._sessions[sid] = session
++        return session
++
++    def _set_state(self, sid: str, new_state: str, *, reason: str | None = None) -> None:
++        """Transition the session state machine and emit telemetry breadcrumbs."""
++
++        session = self._ensure_session(sid)
++        previous = session.state
++        if previous == new_state:
 +            return
-+        envelope.setdefault("sid", sid)
-+        envelope.setdefault("who", "server")
-+        envelope.setdefault("source", "voice_engine")
-+        self._publish(envelope)
 +
-+    async def _release_system_hold_after(self, sid: str, post_hold_ms: int) -> None:
-+        """Release the system_hold reason after the requested delay."""
++        now_ms = _now_ms()
 +
-+        await asyncio.sleep(post_hold_ms / 1000)
-+        self._gate.set_reason("system_hold", False, sid=sid)
++        if new_state == LISTENING:
++            session.turn_id = str(uuid.uuid4())
++            session.turn_started_ms = now_ms
++            begin_payload = {
++                "meta": {"turn_id": session.turn_id, "state": LISTENING}
++            }
++            begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
++            self._publish(begin_event)
 +
++        if (
++            new_state == READY
++            and previous in {LISTENING, THINKING, RESPONDING}
++            and session.turn_id
++        ):
++            start_ms = session.turn_started_ms or now_ms
++            duration_ms = now_ms - start_ms
++            if duration_ms <= 0:
++                duration_ms = 1
++            end_payload = {
++                "meta": {
++                    "turn_id": session.turn_id,
++                    "duration_ms": duration_ms,
++                }
++            }
++            end_event = self._envelope(sid, EVT_TURN_END, end_payload)
++            self._publish(end_event)
++            session.turn_id = None
++            session.turn_started_ms = None
++
++        session.state = new_state
++
++        breadcrumb_meta: Dict[str, Any] = {"state": new_state}
++        if reason is not None:
++            breadcrumb_meta["reason"] = reason
++        breadcrumb_payload = {"meta": breadcrumb_meta}
++        breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
++        self._publish(breadcrumb_event)
+ 
      def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
          frame = {"type": "policy.interaction", "policy": snapshot}
          preview = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
@@ -230,32 +319,67 @@ index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6fa
          policy_acwr = (
              snapshot["auto_commit_when_ready"]
              if "auto_commit_when_ready" in snapshot
-             else None
+@@ -234,26 +323,35 @@ class EngineV2:
+             "effective": effective,
+         }
+         event = self._envelope(sid, EVT_ACWR_RECOMPUTE, {"meta": meta})
+         self._publish(event)
+ 
+     @staticmethod
+     def _summarize_policy_diff(
+         previous: Dict[str, Any] | None,
+         diff: Dict[str, Dict[str, Any]],
+     ) -> Dict[str, list[Any]]:
+         summary: Dict[str, list[Any]] = {}
+         before = dict(previous or {})
+ 
+         for key, value in diff.get("added", {}).items():
+             summary[key] = [before.get(key), value]
+ 
+         for key, value in diff.get("changed", {}).items():
+             summary[key] = [before.get(key), value]
+ 
+         for key, value in diff.get("removed", {}).items():
+             summary[key] = [value, None]
+ 
+         return summary
+ 
+ 
+-__all__ = ["EngineV2"]
++__all__ = [
++    "EngineV2",
++    "EVT_TURN_BEGIN",
++    "EVT_TURN_END",
++    "EVT_TURN_STATE",
++    "READY",
++    "LISTENING",
++    "THINKING",
++    "RESPONDING",
++]
 diff --git a/scripts/run_build04_tests.sh b/scripts/run_build04_tests.sh
-index d5cc712372825965ad13018cab616ee067446f9a..5f72b21d2c14059e339494a3f1a9b68e83d681ff 100644
+index 5f72b21d2c14059e339494a3f1a9b68e83d681ff..f8d69d35041bcb8788ff1670aebea16963fdd6c1 100644
 --- a/scripts/run_build04_tests.sh
 +++ b/scripts/run_build04_tests.sh
-@@ -1,6 +1,8 @@
+@@ -1,8 +1,9 @@
  #!/usr/bin/env bash
  set -euo pipefail
  export PYTHONPATH="${PYTHONPATH:-.}:."
  PY="${PYTHON:=python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python
--"$PY" -m unittest -v tests.test_gate_controller
-+"$PY" -m unittest -v \
-+  tests.test_gate_controller \
-+  tests.test_tts_mask_lifecycle
+ "$PY" -m unittest -v \
+   tests.test_gate_controller \
+-  tests.test_tts_mask_lifecycle
++  tests.test_tts_mask_lifecycle \
++  tests.test_turn_state_machine
  echo "BUILD_04_TESTS: PASS"
-diff --git a/tests/test_tts_mask_lifecycle.py b/tests/test_tts_mask_lifecycle.py
+diff --git a/tests/test_turn_state_machine.py b/tests/test_turn_state_machine.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..279d1f3b7ad170558e25daf6cb4b91a30d9980aa
+index 0000000000000000000000000000000000000000..889be5eacc1cb2a70b36d33addab0b9e6f59cb88
 --- /dev/null
-+++ b/tests/test_tts_mask_lifecycle.py
-@@ -0,0 +1,87 @@
-+import asyncio
++++ b/tests/test_turn_state_machine.py
+@@ -0,0 +1,80 @@
 +import unittest
 +
-+from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END, EVT_TTS_START
-+from app.voice_v2.engine import EngineV2
++from app.voice_v2.engine import EngineV2, EVT_TURN_BEGIN, EVT_TURN_END
 +
 +
 +class _FakeExporter:
@@ -274,66 +398,61 @@ index 0000000000000000000000000000000000000000..279d1f3b7ad170558e25daf6cb4b91a3
 +        self.events.append(dict(event))
 +
 +
-+class TtsMaskLifecycleTests(unittest.IsolatedAsyncioTestCase):
-+    async def test_tts_start_end_with_post_hold(self) -> None:
-+        bus = _FakeBus()
-+        exporter = _FakeExporter()
-+        engine = EngineV2(exporter, telemetry_bus=bus)
++class TurnStateMachineTests(unittest.TestCase):
++    def setUp(self) -> None:
++        self.bus = _FakeBus()
++        self.exporter = _FakeExporter()
++        self.engine = EngineV2(self.exporter, telemetry_bus=self.bus)
++        self.sid = "sid-turn"
 +
-+        sid = "sid-123"
-+        utt_id = "utt-1"
++    def _turn_events(self, event_type: str) -> list[dict]:
++        return [evt for evt in self.bus.events if evt["type"] == event_type]
 +
-+        engine.on_tts_start(sid, utt_id, post_hold_ms=200)
-+        engine.on_tts_end(sid, utt_id, post_hold_ms=200)
++    def test_basic_turn_flow(self) -> None:
++        self.engine.on_open(self.sid, {})
++        self.engine.on_audio(self.sid, b"abc", seq=1)
++        self.engine.on_asr_final(self.sid, "hi")
++        self.engine.on_tts_start(self.sid, "utt-1")
++        self.engine.on_tts_end(self.sid, "utt-1")
 +
-+        await asyncio.sleep(0.25)
++        begin_events = self._turn_events(EVT_TURN_BEGIN)
++        end_events = self._turn_events(EVT_TURN_END)
 +
-+        gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
-+        tts_start_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_START]
-+        tts_end_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_END]
++        self.assertEqual(len(begin_events), 1)
++        self.assertEqual(len(end_events), 1)
 +
-+        self.assertGreaterEqual(len(gate_events), 3)
++        begin_event = begin_events[0]
++        end_event = end_events[0]
 +
-+        first_gate = gate_events[0]["meta"]["gate"]
-+        self.assertEqual(first_gate["state"], "on")
-+        self.assertEqual(first_gate["reason"], "tts_active")
++        self.assertIn("turn_id", begin_event["meta"])
++        self.assertIn("turn_id", end_event["meta"])
++        self.assertEqual(begin_event["meta"]["turn_id"], end_event["meta"]["turn_id"])
 +
-+        self.assertTrue(
-+            any(evt["meta"]["gate"]["reason"] == "system_hold" for evt in gate_events)
-+        )
-+        self.assertEqual(gate_events[-1]["meta"]["gate"]["state"], "off")
++        self.assertGreater(end_event["meta"]["duration_ms"], 0)
 +
-+        self.assertEqual(len(tts_start_events), 1)
-+        start_meta = tts_start_events[0]["meta"]["tts"]
-+        self.assertEqual(start_meta["utt_id"], utt_id)
-+        self.assertEqual(start_meta["post_hold_ms"], 200)
++        begin_index = self.bus.events.index(begin_event)
++        end_index = self.bus.events.index(end_event)
++        self.assertLess(begin_index, end_index)
 +
-+        self.assertEqual(len(tts_end_events), 1)
-+        end_meta = tts_end_events[0]["meta"]["tts"]
-+        self.assertEqual(end_meta["utt_id"], utt_id)
++    def test_new_turn_id_on_second_listening(self) -> None:
++        self.engine.on_open(self.sid, {})
++        self.engine.on_audio(self.sid, b"abc", seq=1)
++        self.engine.on_asr_final(self.sid, "hi")
++        self.engine.on_tts_start(self.sid, "utt-1")
++        self.engine.on_tts_end(self.sid, "utt-1")
 +
-+    async def test_tts_end_no_post_hold(self) -> None:
-+        bus = _FakeBus()
-+        exporter = _FakeExporter()
-+        engine = EngineV2(exporter, telemetry_bus=bus)
++        first_turn_id = self._turn_events(EVT_TURN_BEGIN)[0]["meta"]["turn_id"]
 +
-+        sid = "sid-456"
-+        utt_id = "utt-2"
++        self.engine.on_audio(self.sid, b"def", seq=1)
++        self.engine.on_asr_final(self.sid, "hello")
++        self.engine.on_tts_start(self.sid, "utt-2")
++        self.engine.on_tts_end(self.sid, "utt-2")
 +
-+        engine.on_tts_start(sid, utt_id, post_hold_ms=0)
-+        engine.on_tts_end(sid, utt_id, post_hold_ms=0)
++        begin_events = self._turn_events(EVT_TURN_BEGIN)
++        self.assertEqual(len(begin_events), 2)
++        second_turn_id = begin_events[-1]["meta"]["turn_id"]
 +
-+        await asyncio.sleep(0)
-+
-+        gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
-+        reasons = [evt["meta"]["gate"]["reason"] for evt in gate_events]
-+
-+        self.assertFalse(any(reason == "system_hold" for reason in reasons))
-+        self.assertEqual(gate_events[-1]["meta"]["gate"]["state"], "off")
-+
-+        tts_end_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_END]
-+        self.assertEqual(len(tts_end_events), 1)
-+        self.assertEqual(tts_end_events[0]["meta"]["tts"]["utt_id"], utt_id)
++        self.assertNotEqual(first_turn_id, second_turn_id)
 +
 +
 +if __name__ == "__main__":

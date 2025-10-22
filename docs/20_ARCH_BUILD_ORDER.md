@@ -38,23 +38,32 @@
 - **B4-A:** `voice_v2/gate_controller.py` (gate on/off reasons; respects telemetry).
 - **B4-B:** Engine honors `barge_in_enabled` during TTS (ignore vs interrupt).
 - **B4-C:** `EVT_BARGE_IN {source:"auto_vad|asr_evidence", granted:true|false}`.
+- **B4-D:** Auto Barge Event Schema & Decision
 
 ## Build 5 — ASR Manager + NLU/NLG seams
 - **B5-A:** `voice_v2/asr_manager.py` (Deepgram first): warm_up → `EVT_ASR_READY`; partial/final with `req_id`.
 - **B5-B:** Add Speechmatics adapter + selection; identical event shapes.
 - **B5-C:** NLU hook: after `asr.final`, log exactly one NLU per turn.
 - **B5-D:** Dialog Policy + NLG hook: log decision + exactly one NLG per turn.
+  **B5-E:** Audio Envelope & Jitter Buffer
+  **B5-F:** Provider Interfaces & Circuit Breakers
 
 ## Build 6 — Telemetry Exporter (full)
 - **B6-A:** Bundle structure & redaction (manifest, server log, ws taps, flow timeline).
 - **B6-B:** Levels/categories/sampling → policy toggles apply immediately.
-- **B6-C:** Provider debug channels (IDs + timings, never secrets).
+- **B6-C:** Provider debug channels (IDs + timings, never secrets).'
+- **B6-D:** Admin Flow Trace API
+  **B6-E:** Performance Telemetry & Budgets
+  **B6-F:** Local Tests & Runner (Exporter/Zip/Perf API)
 
 ## Build 7 — Client v2 Minimal
 - **C7-A:** WS layer + PolicyBus (ACWR stickiness if omitted).
 - **C7-B:** Waveform + state badges (reflect policy & TTS in real time).
 - **C7-C:** Playback truth + auto barge (onplay/onended; client telemetry).
 - **C7-D:** Recorder + sender (format header; partial/final round-trip).
+- **C7-E:** Recorder Contract & StartOnce
+- **C7-F:** Reconnect UX + Resume
+- **B7-E:** Policy Inspector (Read-only)
 
 ## Build 8 — Cutover & Guards
 - **B8-A:** Single-path v2: `/ws/v1/chat` returns 410; `/ws/v2/chat` only.
