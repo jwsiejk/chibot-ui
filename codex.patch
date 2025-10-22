@@ -1,215 +1,169 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index f441aab1b2027b18a219cdeaafbd04a0edd1233f..8bb762181578e1e4e94309abdc104ac5c0dab294 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -1,89 +1,186 @@
--"""ASGI gateway mounting the chat.v2 adapter and health probe."""
-+"""ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
- from __future__ import annotations
- 
- import json
--from typing import Any, Awaitable, Callable, Optional
-+import logging
-+import os
-+import time
-+from dataclasses import dataclass
-+from datetime import datetime, timezone
-+from pathlib import Path
-+from tempfile import NamedTemporaryFile
-+from typing import Any, Awaitable, Callable, Dict, Optional
- 
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- 
-+logger = logging.getLogger(__name__)
+diff --git a/app/policy/loader.py b/app/policy/loader.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ff73dd534bc830fa676c102c4c3bb7c068b02b14
+--- /dev/null
++++ b/app/policy/loader.py
+@@ -0,0 +1,66 @@
++"""Utilities for loading the interaction policy snapshot."""
++from __future__ import annotations
 +
++from copy import deepcopy
++from typing import Any, Dict
 +
-+@dataclass(frozen=True)
-+class Response:
-+    """Immutable container describing a serialized HTTP response."""
-+
-+    status: int
-+    body: bytes
-+    headers: tuple[tuple[bytes, bytes], ...]
-+
-+
-+def json_response(*, status: int = 200, **payload: Any) -> Response:
-+    """Serialize a payload to JSON using a compact representation."""
-+
-+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-+    headers = (
-+        (b"content-type", b"application/json; charset=utf-8"),
-+        (b"content-length", str(len(body)).encode("ascii")),
-+    )
-+    return Response(status=status, body=body, headers=headers)
-+
-+
- WS_ROUTE = "/ws/v2/chat"
- HEALTH_ROUTE = "/api/v1/health"
-+LIVE_ROUTE = "/api/v1/live"
-+READY_ROUTE = "/api/v1/ready"
-+INFO_ROUTE = "/api/v1/info"
-+EXPORT_ROOT = Path("exports")
-+
-+
-+HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
- 
- _adapter: Optional[ChatV2Adapter] = None
- 
- 
- async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
-     scope_type = scope.get("type")
-     path = (scope.get("root_path") or "") + scope.get("path", "")
- 
-     if scope_type == "websocket":
-         if path == WS_ROUTE:
-             await _get_adapter()(scope, receive, send)
-         else:
-             await _reject_websocket(receive, send)
-         return
- 
-     if scope_type == "http":
--        if path == HEALTH_ROUTE:
--            await _handle_health(scope, receive, send)
--        else:
-+        handler = _HTTP_ROUTES.get(path)
-+        if handler is None:
-             await _drain_request_body(receive)
--            await _send_json_response(send, {"error": "not_found"}, status=404)
-+            await _send_response(send, json_response(status=404, error="not_found"))
-+        else:
-+            response = await handler(scope, receive)
-+            await _send_response(send, response)
-         return
- 
-     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
- 
- 
--async def _handle_health(
--    scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]
--) -> None:
-+async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Return a static JSON document for health checks."""
--    method = scope.get("method", "GET").upper()
--    if method != "GET":
-+    if not _method_is_get(scope):
-         await _drain_request_body(receive)
--        await _send_json_response(send, {"error": "method_not_allowed"}, status=405)
--        return
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    await _drain_request_body(receive)
-+    return json_response(ok=True, engine="v2", ws_subprotocol=CHAT_V2_SUBPROTOCOL)
-+
-+
-+async def _handle_live(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-+    """Expose a lightweight pulse indicating the event loop is responsive."""
-+    if not _method_is_get(scope):
-+        await _drain_request_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    await _drain_request_body(receive)
-+    ts_ms = int(time.time() * 1000)
-+    return json_response(ok=True, ts_ms=ts_ms)
-+
-+
-+async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-+    """Report readiness by verifying the export directory is writable."""
-+    if not _method_is_get(scope):
-+        await _drain_request_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
--    payload = {"ok": True, "engine": "v2", "ws_subprotocol": CHAT_V2_SUBPROTOCOL}
--    await _send_json_response(send, payload, status=200)
-+    try:
-+        EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
-+        with NamedTemporaryFile(dir=EXPORT_ROOT, prefix=".ready-", delete=True) as tmp:
-+            tmp.write(b"ok")
-+            tmp.flush()
-+        logger.debug("Readiness probe succeeded for %s", EXPORT_ROOT)
-+        return json_response(ok=True, export_path=str(EXPORT_ROOT))
-+    except OSError as exc:
-+        logger.warning("Readiness probe failed: %s", exc)
-+        return json_response(
-+            status=503,
-+            ok=False,
-+            reason="export_path_unwritable",
-+            export_path=str(EXPORT_ROOT),
-+        )
-+
-+
-+async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-+    """Return build metadata derived from environment configuration."""
-+    if not _method_is_get(scope):
-+        await _drain_request_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    await _drain_request_body(receive)
-+
-+    version = os.getenv("APP_VERSION") or "0.0.0+dev"
-+    raw_sha = os.getenv("GIT_SHA") or ""
-+    git_sha = raw_sha[:7] if raw_sha else "unknown"
-+    built_at = os.getenv("BUILD_TIME") or datetime.now(timezone.utc).isoformat()
-+
-+    payload = {"version": version, "git_sha": git_sha, "built_at": built_at}
-+    return json_response(**payload)
- 
- 
- async def _drain_request_body(receive: Callable[[], Awaitable[dict]]) -> None:
-     """Consume and discard the HTTP request body if present."""
-     while True:
-         message = await receive()
-         if message.get("type") != "http.request":
-             break
-         if not message.get("more_body"):
-             break
- 
- 
- async def _reject_websocket(receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-     """Politely refuse WebSocket connections on unsupported routes."""
-     message = await receive()
-     if message.get("type") == "websocket.connect":
-         await send({"type": "websocket.close", "code": 1000})
- 
- 
--async def _send_json_response(send: Callable[[dict], Awaitable[None]], payload: Any, *, status: int) -> None:
--    """Serialize JSON payload and emit a minimal HTTP response."""
--    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
--    headers = [
--        (b"content-type", b"application/json"),
--        (b"content-length", str(len(body)).encode("ascii")),
--    ]
--    await send({"type": "http.response.start", "status": status, "headers": headers})
--    await send({"type": "http.response.body", "body": body, "more_body": False})
-+async def _send_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
-+    """Emit a prepared HTTP response through the ASGI channel."""
-+
-+    headers = list(response.headers)
-+    await send({"type": "http.response.start", "status": response.status, "headers": headers})
-+    await send({"type": "http.response.body", "body": response.body, "more_body": False})
-+
-+
-+def _method_is_get(scope: dict) -> bool:
-+    """Return True when the incoming HTTP scope uses the GET method."""
-+
-+    return scope.get("method", "GET").upper() == "GET"
- 
- 
- __all__ = ["app"]
- 
- 
- def _get_adapter() -> ChatV2Adapter:
-     """Return a lazily instantiated ChatV2Adapter singleton."""
-     global _adapter
-     if _adapter is None:
-         _adapter = ChatV2Adapter()
-     return _adapter
-+
-+
-+_HTTP_ROUTES: Dict[str, HttpHandler] = {
-+    HEALTH_ROUTE: _handle_health,
-+    LIVE_ROUTE: _handle_live,
-+    READY_ROUTE: _handle_ready,
-+    INFO_ROUTE: _handle_info,
++# NOTE: These defaults represent the deterministic policy snapshot returned by
++# ``load_interaction_policy`` when no overrides are provided. The structure is
++# intentionally shallow so that overrides replace entire child objects rather
++# than performing recursive merges.
++_DEFAULT_INTERACTION_POLICY: Dict[str, Any] = {
++    "mode": "idle",
++    "allow_auto_vad": True,
++    "barge_in_enabled": True,
++    "auto_commit_when_ready": True,
++    "telemetry": {
++        "enabled": True,
++        "level": "debug",
++        "categories": {
++            "ws": True,
++            "audio": True,
++            "policy": True,
++            "tts": True,
++            "gate": True,
++            "barge": True,
++            "asr": True,
++            "nlu": True,
++            "nlg": True,
++            "client_ui": True,
++            "provider_debug": True,
++        },
++        "redaction": {"pii": True, "secrets": True, "text": False},
++        "sampling": {"percent": 100},
++    },
 +}
++
++
++def load_interaction_policy(overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
++    """Return a deterministic interaction policy snapshot.
++
++    The returned snapshot matches the defaults defined by the system of record
++    for the `chat.v2` contract. When ``overrides`` are provided, they are merged
++    shallowly on top of the defaults—each top-level key in ``overrides``
++    replaces the corresponding value entirely.
++
++    Args:
++        overrides: Optional dictionary with top-level keys to replace in the
++            default policy snapshot. Nested merges are not performed; providing
++            a key overrides the whole value at that key.
++
++    Returns:
++        A new dictionary containing the policy snapshot with any specified
++        overrides applied. Mutating the returned dictionary will not affect the
++        stored defaults.
++    """
++
++    policy = deepcopy(_DEFAULT_INTERACTION_POLICY)
++
++    if overrides:
++        for key, value in overrides.items():
++            policy[key] = value
++
++    return policy
++
++
++__all__ = ["load_interaction_policy"]
+diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
+index 799dc3492ee0a883a72f8e6629f400112b49cdf1..25e9f59f77f3add2b6344b4f4863642b4767e325 100644
+--- a/docs/10_CONTRACT_WS.md
++++ b/docs/10_CONTRACT_WS.md
+@@ -1,67 +1,76 @@
+ # WebSocket Contract — `chat.v2`
+ 
+ **Endpoint:** `/ws/v2/chat` (ASGI WS)  
+ **Required subprotocol:** `chat.v2`
+ 
+ ## Client → Server frames
+ - `{"type":"ping"}`
+ - `{"type":"client.ready"}`
+ - **Audio:** binary frames (Opus or PCM). If format changes, send a header JSON first:
+   ```json
+   {"type":"audio.header","format":"opus","sample_rate":48000,"channels":1}
+ Optional admin toggle (if exposed):
+ 
+ json
+ Copy code
+ {"type":"admin.toggle","asr":"deepgram","barge_in_enabled":true}
+ Server → Client frames
+ {"type":"pong","t":1730000000000}
+ 
+ Policy (always complete):
+ 
+-json
+-Copy code
++```json
+ {
+-  "type":"policy.interaction",
+-  "policy":{
+-    "mode":"assistant_speaking"|"idle",
+-    "allow_auto_vad":true,
+-    "barge_in_enabled":true,
+-    "auto_commit_when_ready":true,
+-    "telemetry":{
+-      "enabled":true,
+-      "level":"debug",               // trace|debug|info|warn|error
+-      "categories":{
+-        "ws":true,"audio":true,"policy":true,"tts":true,"gate":true,
+-        "barge":true,"asr":true,"nlu":true,"nlg":true,"client_ui":true,"provider_debug":true
++  "type": "policy.interaction",
++  "policy": {
++    "mode": "idle",
++    "allow_auto_vad": true,
++    "barge_in_enabled": true,
++    "auto_commit_when_ready": true,
++    "telemetry": {
++      "enabled": true,
++      "level": "debug",               // trace|debug|info|warn|error
++      "categories": {
++        "ws": true,
++        "audio": true,
++        "policy": true,
++        "tts": true,
++        "gate": true,
++        "barge": true,
++        "asr": true,
++        "nlu": true,
++        "nlg": true,
++        "client_ui": true,
++        "provider_debug": true
+       },
+-      "redaction":{"pii":true,"secrets":true,"text":false},
+-      "sampling":{"percent":100}
++      "redaction": { "pii": true, "secrets": true, "text": false },
++      "sampling": { "percent": 100 }
+     }
+   }
+ }
++```
+ {"type":"tts.start","utt_id":"u-123","post_hold_ms":200}
+ 
+ {"type":"tts.end","utt_id":"u-123"}
+ 
+ {"type":"asr.ready":true}
+ 
+ {"type":"asr.partial","text":"...","confidence":0.73}
+ 
+ {"type":"asr.final","text":"...","confidence":0.91}
+ 
+ {"type":"error","code":"bad_subprotocol","detail":"use chat.v2"}
+ 
+ Behavioral rules
+ While mode="assistant_speaking":
+ 
+ If barge_in_enabled=true, auto-VAD + ASR evidence may interrupt TTS.
+ 
+ If barge_in_enabled=false, ignore speech until tts.end + post_hold_ms.
+ 
+ In mode="idle", allow_auto_vad MUST be true and ACWR effective (subject to admin kill).
+ 
+ Telemetry event envelope (both sides)
+ All events (client/server) use envelope **v1** and share this shape:
+ 
+ json

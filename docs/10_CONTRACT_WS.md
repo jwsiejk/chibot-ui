@@ -19,27 +19,36 @@ Server → Client frames
 
 Policy (always complete):
 
-json
-Copy code
+```json
 {
-  "type":"policy.interaction",
-  "policy":{
-    "mode":"assistant_speaking"|"idle",
-    "allow_auto_vad":true,
-    "barge_in_enabled":true,
-    "auto_commit_when_ready":true,
-    "telemetry":{
-      "enabled":true,
-      "level":"debug",               // trace|debug|info|warn|error
-      "categories":{
-        "ws":true,"audio":true,"policy":true,"tts":true,"gate":true,
-        "barge":true,"asr":true,"nlu":true,"nlg":true,"client_ui":true,"provider_debug":true
+  "type": "policy.interaction",
+  "policy": {
+    "mode": "idle",
+    "allow_auto_vad": true,
+    "barge_in_enabled": true,
+    "auto_commit_when_ready": true,
+    "telemetry": {
+      "enabled": true,
+      "level": "debug",               // trace|debug|info|warn|error
+      "categories": {
+        "ws": true,
+        "audio": true,
+        "policy": true,
+        "tts": true,
+        "gate": true,
+        "barge": true,
+        "asr": true,
+        "nlu": true,
+        "nlg": true,
+        "client_ui": true,
+        "provider_debug": true
       },
-      "redaction":{"pii":true,"secrets":true,"text":false},
-      "sampling":{"percent":100}
+      "redaction": { "pii": true, "secrets": true, "text": false },
+      "sampling": { "percent": 100 }
     }
   }
 }
+```
 {"type":"tts.start","utt_id":"u-123","post_hold_ms":200}
 
 {"type":"tts.end","utt_id":"u-123"}
