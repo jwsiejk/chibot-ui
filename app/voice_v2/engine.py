@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import json
+import logging
+import threading
 import time
 import uuid
 from typing import Any, Dict, Mapping, Optional
@@ -35,6 +37,7 @@ READY = "Ready"
 LISTENING = "Listening"
 THINKING = "Thinking"
 RESPONDING = "Responding"
+CONFIRMING_BARGE = "ConfirmingBarge"
 
 EVT_TURN_STATE = "EVT_TURN_STATE"
 EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
@@ -69,18 +72,42 @@ class _TurnSession:
     turn_started_ms: Optional[int] = None
 
 
+class _NullExporter:
+    """Exporter stub used when no exporter is provided."""
+
+    def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
+        return
+
+
 class EngineV2:
     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
 
-    def __init__(self, exporter: FileExporter, *, telemetry_bus=bus) -> None:
+    def __init__(
+        self,
+        exporter: FileExporter | None = None,
+        *,
+        telemetry_bus=bus,
+        fake_exporter: FileExporter | None = None,
+    ) -> None:
         if exporter is None:
-            raise ValueError("exporter is required")
+            exporter = fake_exporter
+        if exporter is None:
+            exporter = _NullExporter()
         self._exporter = exporter
         self._bus = telemetry_bus
         self._policy_snapshot: Dict[str, Any] | None = None
         self._last_sid: Optional[str] = None
         self._gate = GateController(publish=self._publish_gate_event)
         self._sessions: Dict[str, _TurnSession] = {}
+        self._barge_handles: Dict[str, object] = {}
+
+    @property
+    def policy_snapshot(self) -> Dict[str, Any] | None:
+        return self._policy_snapshot
+
+    @policy_snapshot.setter
+    def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
+        self._policy_snapshot = dict(snapshot) if snapshot is not None else None
 
     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
         """Capture a successful WebSocket upgrade."""
@@ -187,6 +214,40 @@ class EngineV2:
 
         self._set_state(sid, THINKING, reason="asr_final")
 
+    def on_auto_barge_attempt(
+        self, sid: str, source: str, *, reason: str | None = None
+    ) -> None:
+        """Handle an automatic barge-in attempt during assistant speech."""
+
+        if source not in {"auto_vad", "asr_evidence"}:
+            return
+
+        session = self._ensure_session(sid)
+        current_state = session.state
+
+        policy = self.policy_snapshot or {}
+        policy_enabled = bool(policy.get("barge_in_enabled"))
+
+        granted = bool(policy_enabled and current_state == RESPONDING)
+
+        deny_reason = reason
+        if current_state != RESPONDING:
+            granted = False
+            deny_reason = deny_reason or "state_not_responding"
+        elif not policy_enabled:
+            granted = False
+            deny_reason = deny_reason or "policy_disabled"
+
+        self._publish_barge(sid, source, granted, reason if granted else deny_reason)
+
+        if granted:
+            self._set_state(sid, CONFIRMING_BARGE, reason="auto_barge")
+            self._schedule_barge_confirmation(sid)
+        else:
+            logging.getLogger(__name__).info(
+                "Auto barge denied", extra={"sid": sid, "source": source, "reason": deny_reason}
+            )
+
     def reapply_policy(self, overrides: Dict[str, Any] | None = None) -> bool:
         """Reload and re-emit the interaction policy when it changes."""
 
@@ -227,6 +288,57 @@ class EngineV2:
         envelope.setdefault("who", "server")
         envelope.setdefault("source", "voice_engine")
         self._publish(envelope)
+
+    def _publish_barge(
+        self, sid: str, source: str, granted: bool, reason: str | None = None
+    ) -> None:
+        """Publish EVT_BARGE_IN envelope with meta.barge.{source,granted,reason}."""
+
+        if source not in {"auto_vad", "asr_evidence"}:
+            return
+
+        meta: Dict[str, Any] = {"barge": {"source": source, "granted": granted}}
+        if reason is not None:
+            meta["barge"]["reason"] = reason
+        event = self._envelope(sid, "EVT_BARGE_IN", {"meta": meta})
+        self._publish(event)
+
+    def _schedule_barge_confirmation(self, sid: str) -> None:
+        """Transition from confirming to listening after a short delay."""
+
+        async def _confirm() -> None:
+            await asyncio.sleep(0.5)
+            self._complete_auto_barge(sid)
+
+        self._cancel_barge_confirmation(sid)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None:
+            task = loop.create_task(_confirm())
+            self._barge_handles[sid] = task
+        else:
+            timer = threading.Timer(0.5, self._complete_auto_barge, args=(sid,))
+            timer.daemon = True
+            timer.start()
+            self._barge_handles[sid] = timer
+
+    def _cancel_barge_confirmation(self, sid: str) -> None:
+        handle = self._barge_handles.pop(sid, None)
+        if handle is None:
+            return
+        if isinstance(handle, asyncio.Task) and not handle.done():
+            handle.cancel()
+        elif isinstance(handle, threading.Timer):
+            handle.cancel()
+
+    def _complete_auto_barge(self, sid: str) -> None:
+        self._barge_handles.pop(sid, None)
+        self._set_state(sid, LISTENING, reason="auto_barge_confirmed")
+        self._gate.set_reason("tts_active", False, sid=sid)
 
     async def _release_system_hold_after(self, sid: str, post_hold_ms: int) -> None:
         """Release the system_hold reason after the requested delay."""
