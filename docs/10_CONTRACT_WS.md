@@ -59,7 +59,7 @@ Policy (always complete):
 
 {"type":"asr.final","text":"...","confidence":0.91}
 
-{"type":"error","code":"bad_subprotocol","detail":"use chat.v2"}
+{"type":"error","code":"bad_subprotocol","detail":"subprotocol chat.v2 required"}
 
 Behavioral rules
 While mode="assistant_speaking":

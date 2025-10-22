@@ -2,61 +2,60 @@
 
 **Alignment guard (do not omit):**
 - Align with SSOT in `/docs` (`00_CONTEXT.md`, `10_CONTRACT_WS.md`, `15_NLU_NLG.md`, `20_ARCH_BUILD_ORDER.md`, `30_ADR.md`).
-- Touch only listed files; ≤ 500 LOC/file; ≤ 3 files/task.
-- Preserve `chat.v2`; all policy frames must include the policy telemetry block.
+- Touch only the files listed per task. Do **not** rename routes, env vars, or policy keys.
+- Keep each new/changed file ≤ **500 lines**; ≤ **3 files per task**.
+- Preserve the `chat.v2` contract and telemetry envelope (error frame uses `detail`; ws taps use `meta.ws.{dir,size,preview}`).
 
 ---
 
-### B2-A: Policy Defaults incl. Telemetry
-**Files:** `app/policy/loader.py` (new), `docs/10_CONTRACT_WS.md` (update examples)  
-**Non-goals:** Engine wiring beyond snapshot return; ASR/TTS logic  
-**Acceptance:**  
-- Loader returns snapshot with: `mode`, `allow_auto_vad`, `barge_in_enabled`, `auto_commit_when_ready`, `telemetry` (enabled, level, categories, redaction, sampling).  
-- Deterministic defaults; typed; unit smoke returns stable keys.
+### B2-A — Policy Defaults incl. Telemetry
+**Files:** `app/policy/loader.py` (new), `docs/10_CONTRACT_WS.md` (examples update)  
+**Non-goals:** Engine wiring; admin UI; DB  
+**Requirements:** `load_interaction_policy(overrides: dict|None) -> dict` returns deterministic snapshot with:  
+- `mode`, `allow_auto_vad`, `barge_in_enabled`, `auto_commit_when_ready`, and `telemetry{enabled, level, categories{…}, redaction, sampling}`  
+- Shallow override semantics (replace child object).  
+**Acceptance:** Snapshot keys/types match spec; overrides replace (no deep merge).
 
 ---
 
-### B2-B: Policy Snapshot, Diffs, Hot-Reload
-**Files:** `app/policy/loader.py` (update), `app/policy/watch.py` (new), `app/voice_v2/engine.py` (update)  
-**Non-goals:** Admin UI; DB-backed policies  
-**Acceptance:**  
-- On open, engine emits `policy:applied` frame with `snapshot` and `diff:{added,changed,removed}` (empty `diff` on first apply).  
-- Hot-reload via env/file watch toggles re-apply; precedence: admin override > env > defaults (documented).  
-- Telemetry: `EVT_POLICY_APPLIED` with diff synopsis.
+### B2-B — Policy Snapshot, Diffs, Hot-Reload
+**Files:** `app/policy/watch.py` (new), `app/policy/loader.py` (upd), `app/voice_v2/engine.py` (upd)  
+**Non-goals:** Admin UI; DB persistence  
+**Requirements:**  
+- `compute_diff(prev,curr) -> {added,changed,removed}` (top-level).  
+- Engine `on_open` loads snapshot, emits one `policy.interaction` (incl telemetry block), publishes `EVT_POLICY_APPLIED` with diff synopsis.  
+- `reapply_policy(overrides)` recomputes and re-emits only if changed.  
+**Acceptance:** Initial apply emits once; unchanged reapply emits none; changed reapply emits once with correct diff.
 
 ---
 
-### B2-C: Engine pushes `policy.interaction` (initial apply)
-**Files:** `app/voice_v2/engine.py` (update), `app/telemetry/exporter.py` (no functional change)  
-**Non-goals:** Gates/ASR/TTS behavior changes  
-**Acceptance:**  
-- Exactly one `policy:applied` after `EVT_WS_OPEN`, includes telemetry block and core policy keys; captured to exporter.
+### B2-C — Engine pushes `policy.interaction` (initial apply)
+**Files:** `app/voice_v2/engine.py` (upd), `app/telemetry/exporter.py` (no-op)  
+**Acceptance:** Exactly one `policy:applied` frame after `EVT_WS_OPEN`; exporter captures.
 
 ---
 
-### B2-D: ACWR Recompute Breadcrumb
-**Files:** `app/voice_v2/engine.py` (update)  
-**Non-goals:** Changing final ACWR behavior  
-**Acceptance:**  
-- Emits breadcrumb `EVT_ACWR_RECOMPUTE` with `{policy_acwr, admin_enabled, effective}` on each apply or override.
+### B2-D — ACWR Recompute Breadcrumb
+**File:** `app/voice_v2/engine.py` (upd)  
+**Requirements:** Publish `EVT_ACWR_RECOMPUTE` with `meta={"policy_acwr": snapshot.get("auto_commit_when_ready", None), "admin_enabled": None, "effective": bool(snapshot.get("auto_commit_when_ready", True))}` on apply/reapply.  
+**Acceptance:** Breadcrumb present on initial apply and any effective change.
 
 ---
 
-### B2.5-A: WS Auth Gate + Rate Limits
-**Files:** `app/security/auth.py` (new), `app/ws/adapter.py` (update), `docs/10_CONTRACT_WS.md` (update)  
-**Non-goals:** OAuth flows; DB users; UI  
-**Acceptance:**  
-- Adapter validates bearer or signed cookie (pluggable in `auth.py` stub); unauth → 4401 JSON error frame + close.  
-- Simple per-IP and per-sid token bucket (config constants) → on exceed, error `rate_limited` + close; publish `EVT_RATE_LIMIT`.  
-- Telemetry `EVT_AUTH_DENIED` on auth failure. Typed; ≤ 500 LOC/file.
+### B2.5-A — WS Auth Gate + Rate Limits (Minimal)
+**Files:** `app/security/auth.py` (new), `app/ws/adapter.py` (upd), `docs/10_CONTRACT_WS.md` (examples only)  
+**Non-goals:** OAuth; user DB; deps  
+**Acceptance:** Missing/invalid auth → unauthorized error; `EVT_AUTH_DENIED`; simple per-sid/IP token-bucket → `rate_limited` error then close on exceed.
 
 ---
 
-### B2.5-B: Frame JSON Schema Validation
-**Files:** `app/ws/validator.py` (new), `app/ws/adapter.py` (update), `docs/10_CONTRACT_WS.md` (update schemas)  
-**Non-goals:** Vendor-specific payload schemas  
-**Acceptance:**  
-- Validate text frames against minimal schemas; invalid → `{"type":"error","code":"schema_invalid","hint":"<field> missing"}` (no drop unless spec says).  
-- Unit smoke covering valid/invalid; adapter calls validator before forwarding.
+### B2.5-B — Frame JSON Schema Validation (Minimal)
+**Files:** `app/ws/validator.py` (new), `app/ws/adapter.py` (upd), `docs/10_CONTRACT_WS.md` (examples only)  
+**Non-goals:** Full JSON Schema; vendor payloads  
+**Acceptance:** Invalid frames → `{type:"error","code":"schema_invalid","detail":"..."}` (no drop).
 
-> “Return only diffs for the files listed above. Do not modify or create any other files.”
+---
+
+### T2 — Local Tests & Runner (Build 02)
+**Files:** `tests/test_policy_loader.py` (new), `tests/test_policy_apply_and_diff.py` (new), `tests/test_acwr_breadcrumb.py` (new), `scripts/run_build02_tests.sh` (new; executable)  
+**Acceptance:** Runner executes the three test modules and prints `BUILD_02_TESTS: PASS` on success.

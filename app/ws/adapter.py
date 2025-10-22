@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, Protocol,
 
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
+from app.security.auth import authorize
 from app.voice_v2 import (
     EVT_WS_AUDIO_RECV,
     EVT_WS_JSON_RECV,
@@ -20,12 +21,42 @@ CHAT_V2_SUBPROTOCOL = "chat.v2"
 TEXT_FRAME_LIMIT_BYTES = 64 * 1024
 BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
 PING_MIN_INTERVAL_MS = 500
+RATE_LIMIT_CAPACITY = 25
+RATE_LIMIT_WINDOW_SECONDS = 2.0
+RATE_LIMIT_CLOSE_CODE = 1013
+
+EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
+EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
 
 _ALLOWED_TEXT_FRAME_TYPES = {
     "client.ready",
     "audio.header",
     "admin.toggle",
 }
+
+
+class TokenBucket:
+    """Simple in-memory token bucket."""
+
+    def __init__(self, capacity: int, refill_seconds: float) -> None:
+        self.capacity = capacity
+        self.tokens = float(capacity)
+        self.refill_seconds = refill_seconds
+        self.last_refill = time.monotonic()
+
+    def consume(self, count: int, now: Optional[float] = None) -> bool:
+        if now is None:
+            now = time.monotonic()
+        elapsed = max(0.0, now - self.last_refill)
+        if elapsed > 0:
+            refill = (self.capacity / self.refill_seconds) * elapsed
+            if refill > 0:
+                self.tokens = min(self.capacity, self.tokens + refill)
+                self.last_refill = now
+        if self.tokens < count:
+            return False
+        self.tokens -= count
+        return True
 
 
 @runtime_checkable
@@ -53,6 +84,9 @@ class AdapterContext:
     headers: Dict[str, str]
     audio_seq: int = 0
     last_pong_sent_ms: int = 0
+    ip: Optional[str] = None
+    sid_bucket: Optional[TokenBucket] = None
+    ip_bucket: Optional[TokenBucket] = None
 
 
 class ChatV2Adapter:
@@ -70,6 +104,7 @@ class ChatV2Adapter:
         self.exporter = exporter
         self.text_limit_bytes = text_limit_bytes
         self.binary_limit_bytes = binary_limit_bytes
+        self._ip_buckets: Dict[str, TokenBucket] = {}
 
     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
         if scope.get("type") != "websocket":
@@ -84,10 +119,29 @@ class ChatV2Adapter:
             await self._reject_subprotocol(send)
             return
 
+        sid = uuid.uuid4().hex
+        headers = self._decode_headers(scope.get("headers", ()))
+        allowed, reason = authorize(headers)
+        if not allowed:
+            await self._publish(
+                EVT_AUTH_DENIED,
+                sid,
+                {"reason": reason or "missing or invalid auth"},
+            )
+            await self._deny_http(send, "missing or invalid auth")
+            return
+
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
 
-        headers = self._decode_headers(scope.get("headers", ()))
-        ctx = AdapterContext(sid=uuid.uuid4().hex, headers=headers)
+        ctx = AdapterContext(sid=sid, headers=headers)
+        ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+        client = scope.get("client")
+        ctx.ip = client[0] if isinstance(client, tuple) and client else None
+        if ctx.ip:
+            ctx.ip_bucket = self._ip_buckets.setdefault(
+                ctx.ip,
+                TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+            )
 
         if self.exporter:
             self.exporter.begin(ctx.sid)
@@ -103,18 +157,30 @@ class ChatV2Adapter:
 
                 if msg_type == "websocket.receive":
                     if message.get("text") is not None:
-                        should_continue = await self._handle_text(message["text"], ctx, send)
-                        if not should_continue:
-                            close_code = 1009
-                            close_reason = "frame_too_large"
-                            await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
+                        result = await self._handle_text(message["text"], ctx, send)
+                        if not result.should_continue:
+                            close_code = result.close_code or 1000
+                            close_reason = result.close_reason
+                            await send(
+                                {
+                                    "type": "websocket.close",
+                                    "code": close_code,
+                                    "reason": close_reason,
+                                }
+                            )
                             break
                     elif message.get("bytes") is not None:
-                        should_continue = await self._handle_binary(message["bytes"], ctx, send)
-                        if not should_continue:
-                            close_code = 1009
-                            close_reason = "frame_too_large"
-                            await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
+                        result = await self._handle_binary(message["bytes"], ctx, send)
+                        if not result.should_continue:
+                            close_code = result.close_code or 1000
+                            close_reason = result.close_reason
+                            await send(
+                                {
+                                    "type": "websocket.close",
+                                    "code": close_code,
+                                    "reason": close_reason,
+                                }
+                            )
                             break
                 elif msg_type == "websocket.disconnect":
                     close_code = message.get("code", 1000)
@@ -139,18 +205,30 @@ class ChatV2Adapter:
         await send({"type": "websocket.http.response.start", "status": 426, "headers": headers})
         await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
 
-    async def _handle_text(self, data: str, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]) -> bool:
+    @dataclass
+    class _HandleResult:
+        should_continue: bool
+        close_code: Optional[int] = None
+        close_reason: Optional[str] = None
+
+    async def _handle_text(
+        self, data: str, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+    ) -> _HandleResult:
         payload_bytes = data.encode("utf-8")
         byte_count = len(payload_bytes)
         frame_type: Optional[str] = None
         meta: Dict[str, Any] = {"byte_count": byte_count, "dir": "in"}
+
+        limited = await self._check_rate_limit(ctx, send)
+        if limited is not None:
+            return limited
 
         if byte_count > self.text_limit_bytes:
             meta["error"] = "frame_too_large"
             meta["frame_type"] = None
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
             await self._send_error(send, ctx.sid, "frame_too_large", "Text frame exceeds limit")
-            return False
+            return self._HandleResult(False, 1009, "frame_too_large")
 
         try:
             frame = json.loads(data)
@@ -164,14 +242,14 @@ class ChatV2Adapter:
             meta["frame_type"] = None
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
             await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
-            return True
+            return self._HandleResult(True)
 
         if frame_type is None:
             meta["error"] = "unknown_type"
             meta["frame_type"] = None
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
             await self._send_error(send, ctx.sid, "unknown_type", "Frame missing type field")
-            return True
+            return self._HandleResult(True)
 
         meta["frame_type"] = frame_type
 
@@ -184,21 +262,26 @@ class ChatV2Adapter:
                 if not isinstance(reply_ts, int):
                     reply_ts = now_ms
                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
-            return True
+            return self._HandleResult(True)
 
         if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
             meta["error"] = "unknown_type"
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
             await self._send_error(send, ctx.sid, "unknown_type", f"Unsupported frame type '{frame_type}'")
-            return True
+            return self._HandleResult(True)
 
         await self._invoke_engine("on_json", ctx.sid, frame)
-        return True
+        return self._HandleResult(True)
 
     async def _handle_binary(
         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-    ) -> bool:
+    ) -> _HandleResult:
         byte_count = len(data)
+
+        limited = await self._check_rate_limit(ctx, send)
+        if limited is not None:
+            return limited
+
         if byte_count > self.binary_limit_bytes:
             await self._publish(
                 EVT_WS_AUDIO_RECV,
@@ -206,12 +289,38 @@ class ChatV2Adapter:
                 {"byte_count": byte_count, "error": "frame_too_large", "dir": "in"},
             )
             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
-            return False
+            return self._HandleResult(False, 1009, "frame_too_large")
 
         ctx.audio_seq += 1
         meta = {"byte_count": byte_count, "seq": ctx.audio_seq, "dir": "in"}
         await self._invoke_engine("on_audio", ctx.sid, data, ctx.audio_seq)
-        return True
+        return self._HandleResult(True)
+
+    async def _check_rate_limit(
+        self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+    ) -> Optional[_HandleResult]:
+        if ctx.sid_bucket is None:
+            return None
+
+        now = time.monotonic()
+        if not ctx.sid_bucket.consume(1, now):
+            return await self._handle_rate_limit(ctx, send, "sid")
+
+        if ctx.ip_bucket is not None and not ctx.ip_bucket.consume(1, now):
+            return await self._handle_rate_limit(ctx, send, "ip")
+
+        return None
+
+    async def _handle_rate_limit(
+        self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]], scope: str
+    ) -> "ChatV2Adapter._HandleResult":
+        await self._publish(
+            EVT_RATE_LIMIT,
+            ctx.sid,
+            {"scope": scope, "ip": ctx.ip},
+        )
+        await self._send_error(send, ctx.sid, "rate_limited", "try later")
+        return self._HandleResult(False, RATE_LIMIT_CLOSE_CODE, "rate_limited")
 
     async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
         text = json.dumps(payload, separators=(",", ":"))
@@ -223,8 +332,10 @@ class ChatV2Adapter:
         }
         await self._publish(EVT_WS_JSON_SEND, sid, meta)
 
-    async def _send_error(self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, message: str) -> None:
-        payload = {"type": "error", "code": code, "message": message}
+    async def _send_error(
+        self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
+    ) -> None:
+        payload = {"type": "error", "code": code, "detail": detail}
         await self._send_json(send, sid, payload)
 
     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
@@ -236,6 +347,15 @@ class ChatV2Adapter:
             "meta": dict(meta),
         }
         bus.publish(event)
+
+    async def _deny_http(self, send: Callable[[dict], Awaitable[None]], detail: str) -> None:
+        body = json.dumps({"type": "error", "code": "unauthorized", "detail": detail}).encode("utf-8")
+        headers = [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ]
+        await send({"type": "websocket.http.response.start", "status": 401, "headers": headers})
+        await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
 
     async def _invoke_engine(self, hook: str, *args: Any) -> None:
         if not self.engine:
