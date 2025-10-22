@@ -52,6 +52,9 @@ _PCM_DESCRIPTOR = {
     "channels": _PCM_CHANNELS,
 }
 
+_DEFAULT_VOICE_ID = "alloy-en-US-001"
+_DEFAULT_LOCALE = "en-US"
+
 _INFO_SLO = {
     "first_partial_ms": {"target": 450, "p95": 750},
     "final_ms": {"target": 2000, "p95": 3000},
@@ -263,7 +266,12 @@ class EngineV2:
             session.perf_tts_start_ms = elapsed
 
         hold_ms = post_hold_ms or 0
-        tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
+        voice_id, locale = self._voice_profile()
+        tts_meta = {
+            "tts": {"utt_id": utt_id, "post_hold_ms": hold_ms},
+            "voice_id": voice_id,
+            "locale": locale,
+        }
         self._gate.set_reason(
             "tts_active",
             True,
@@ -273,7 +281,7 @@ class EngineV2:
 
         self._publish_tts_mask(sid, "engaged")
 
-        payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
+        payload = {"meta": tts_meta}
         event = self._envelope(sid, EVT_TTS_START, payload)
         self._publish(event)
         self._set_state(sid, RESPONDING, reason="tts_start")
@@ -469,10 +477,13 @@ class EngineV2:
         self._conversation_buffer.append(sid, frame)
 
     def _emit_info_frame(self, sid: str) -> None:
+        voice_id, locale = self._voice_profile()
         frame = {
             "type": "info",
             "audio": dict(_PCM_DESCRIPTOR),
             "slo": json.loads(json.dumps(_INFO_SLO)),
+            "voice_id": voice_id,
+            "locale": locale,
         }
         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
         meta = {
@@ -694,6 +705,44 @@ class EngineV2:
             return None
 
         return {"turn_id": session.turn_id, "req_id": session.req_id}
+
+    def _voice_profile(self) -> tuple[str, str]:
+        """Return the active voice identifier and locale.
+
+        Preference order:
+
+        1. Current policy snapshot voice block (``policy["voice"]``).
+        2. Top-level ``voice_id``/``locale`` keys in the snapshot.
+        3. Static server defaults when the policy omits the fields.
+        """
+
+        snapshot = self.policy_snapshot or {}
+        voice_id: Optional[str] = None
+        locale: Optional[str] = None
+
+        voice_block = snapshot.get("voice")
+        if isinstance(voice_block, Mapping):
+            voice_candidate = voice_block.get("voice_id")
+            if isinstance(voice_candidate, str) and voice_candidate:
+                voice_id = voice_candidate
+            locale_candidate = voice_block.get("locale")
+            if isinstance(locale_candidate, str) and locale_candidate:
+                locale = locale_candidate
+
+        top_level_voice = snapshot.get("voice_id")
+        if isinstance(top_level_voice, str) and top_level_voice:
+            voice_id = voice_id or top_level_voice
+
+        top_level_locale = snapshot.get("locale")
+        if isinstance(top_level_locale, str) and top_level_locale:
+            locale = locale or top_level_locale
+
+        if not voice_id:
+            voice_id = _DEFAULT_VOICE_ID
+        if not locale:
+            locale = _DEFAULT_LOCALE
+
+        return voice_id, locale
 
     def _publish_tts_mask(self, sid: str, phase: str) -> None:
         mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})

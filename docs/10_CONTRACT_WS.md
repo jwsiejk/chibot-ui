@@ -128,13 +128,13 @@ Copy code
     "final_ms":         { "target": 2000, "p95": 3000 },
     "tts_start_ms":     { "target": 350,  "p95": 600 }
   },
+  "voice_id": "alloy-en-US-001",
+  "locale": "en-US",
   "meta": {
     "sid": "a1b2c3",
     "version": "2",
     "features": ["tts","asr","barge_in"],
-    "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000,
-    "voice_id": "alloy-en-US-001",
-    "locale": "en-US"
+    "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000
   }
 }
 info.audio describes server→client playback format (binary WS messages, see “Binary audio framing”).
@@ -143,6 +143,18 @@ slo provides advisory UI thresholds. The block is optional; clients MUST handle
 connections where it is absent.
 
 voice_id/locale let the client label playback.
+
+- `voice_id` is a stable string slug that identifies the TTS configuration. It
+  follows the `<provider>-<locale>-<variant>` pattern (for example
+  `alloy-en-US-001`).
+- `locale` is a BCP 47 language tag constrained to `ll-CC` casing (`en-US`,
+  `fr-FR`, `es-ES`, …). This is the locale the server will narrate in and
+  should inform captioning or playback labels.
+
+The server **always** populates `info.voice_id` and `info.locale`. Every
+`tts.start` telemetry envelope mirrors the same identifiers in
+`meta.voice_id`/`meta.locale` so the client can update UI state when playback
+begins.
 
 ### Binary audio framing (server → client TTS)
 

@@ -1,9 +1,8 @@
 diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 923db641b865f182da1485c01b0543693f4b62ee..242f1d0d47736ee380a1c85db67638ff94277e1b 100644
+index 242f1d0d47736ee380a1c85db67638ff94277e1b..eb99c99ca8fcd8a912e961798f795606d0c14e52 100644
 --- a/app/voice_v2/engine.py
 +++ b/app/voice_v2/engine.py
-@@ -29,50 +29,56 @@ from app.voice_v2 import (
- )
+@@ -30,50 +30,53 @@ from app.voice_v2 import (
  from app.voice_v2.gate import GateController
  from app.voice_v2.conversation_buffer import ConversationBuffer
  from app.voice_v2.vad import VADAggregator
@@ -28,12 +27,15 @@ index 923db641b865f182da1485c01b0543693f4b62ee..242f1d0d47736ee380a1c85db67638ff
      "rate_hz": _PCM_RATE_HZ,
      "channels": _PCM_CHANNELS,
  }
+ 
++_DEFAULT_VOICE_ID = "alloy-en-US-001"
++_DEFAULT_LOCALE = "en-US"
 +
-+_INFO_SLO = {
-+    "first_partial_ms": {"target": 450, "p95": 750},
-+    "final_ms": {"target": 2000, "p95": 3000},
-+    "tts_start_ms": {"target": 350, "p95": 600},
-+}
+ _INFO_SLO = {
+     "first_partial_ms": {"target": 450, "p95": 750},
+     "final_ms": {"target": 2000, "p95": 3000},
+     "tts_start_ms": {"target": 350, "p95": 600},
+ }
  _PCM_SAMPLE_BYTES = 2 * _PCM_CHANNELS
  
  EVT_TURN_STATE = "EVT_TURN_STATE"
@@ -54,12 +56,76 @@ index 923db641b865f182da1485c01b0543693f4b62ee..242f1d0d47736ee380a1c85db67638ff
          data = {"type": self.type, "sid": self.sid}
          data.update(self.payload)
          if "meta" in data and isinstance(data["meta"], Mapping):
-             data["meta"] = dict(data["meta"])
-         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
-             data["ts_ms"] = _now_ms()
-         data.setdefault("who", "server")
-         data.setdefault("source", "voice_engine")
-@@ -441,51 +447,55 @@ class EngineV2:
+@@ -241,61 +244,66 @@ class EngineV2:
+     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
+         """Capture the WebSocket closing handshake."""
+         meta = {"code": code, "reason": reason}
+         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
+         self._publish(event)
+         if self._last_sid == sid:
+             self._last_sid = None
+             self._policy_snapshot = None
+         self._sessions.pop(sid, None)
+         self._aggregators.pop(sid, None)
+ 
+     def on_tts_start(
+         self, sid: str, utt_id: str, post_hold_ms: int | None = None
+     ) -> None:
+         """Engage the TTS mask and emit a telemetry breadcrumb."""
+ 
+         session = self._ensure_session(sid)
+         session.tts_utt_id = utt_id
+         if session.turn_started_ms is not None and session.perf_tts_start_ms is None:
+             elapsed = _now_ms() - session.turn_started_ms
+             if elapsed < 0:
+                 elapsed = 0
+             session.perf_tts_start_ms = elapsed
+ 
+         hold_ms = post_hold_ms or 0
+-        tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
++        voice_id, locale = self._voice_profile()
++        tts_meta = {
++            "tts": {"utt_id": utt_id, "post_hold_ms": hold_ms},
++            "voice_id": voice_id,
++            "locale": locale,
++        }
+         self._gate.set_reason(
+             "tts_active",
+             True,
+             sid=sid,
+             meta=tts_meta,
+         )
+ 
+         self._publish_tts_mask(sid, "engaged")
+ 
+-        payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
++        payload = {"meta": tts_meta}
+         event = self._envelope(sid, EVT_TTS_START, payload)
+         self._publish(event)
+         self._set_state(sid, RESPONDING, reason="tts_start")
+ 
+         aggregator = self._aggregators.get(sid)
+         if aggregator is not None:
+             aggregator.on_tts_start()
+ 
+     def on_tts_end(
+         self, sid: str, utt_id: str, post_hold_ms: int | None = None
+     ) -> None:
+         """Release the TTS mask and optionally engage a post-hold."""
+ 
+         hold_ms = post_hold_ms or 0
+         self._teardown_tts(sid, utt_id, post_hold_ms=hold_ms, transition_to_ready=True)
+ 
+     def emit_tts_audio_chunk(self, sid: str, chunk: bytes | bytearray | memoryview) -> None:
+         """Emit a PCM chunk for server-to-client playback."""
+ 
+         if not isinstance(sid, str) or not sid:
+             raise ValueError("sid must be a non-empty string")
+ 
+         self._ensure_session(sid)
+ 
+         if isinstance(chunk, (bytes, bytearray, memoryview)):
+@@ -447,54 +455,57 @@ class EngineV2:
          self._bus.publish(dict(event))
  
      def _handle_outbound_chat_frame(self, event: Dict[str, Any]) -> None:
@@ -85,12 +151,14 @@ index 923db641b865f182da1485c01b0543693f4b62ee..242f1d0d47736ee380a1c85db67638ff
          self._conversation_buffer.append(sid, frame)
  
      def _emit_info_frame(self, sid: str) -> None:
--        frame = {"type": "info", "audio": dict(_PCM_DESCRIPTOR)}
-+        frame = {
-+            "type": "info",
-+            "audio": dict(_PCM_DESCRIPTOR),
-+            "slo": json.loads(json.dumps(_INFO_SLO)),
-+        }
++        voice_id, locale = self._voice_profile()
+         frame = {
+             "type": "info",
+             "audio": dict(_PCM_DESCRIPTOR),
+             "slo": json.loads(json.dumps(_INFO_SLO)),
++            "voice_id": voice_id,
++            "locale": locale,
+         }
          serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
          meta = {
              "ws": {
@@ -115,18 +183,100 @@ index 923db641b865f182da1485c01b0543693f4b62ee..242f1d0d47736ee380a1c85db67638ff
              }
          }
          payload = {"meta": meta, "frame": frame}
-         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+@@ -673,50 +684,88 @@ class EngineV2:
+         aggregator = self._aggregators.get(sid)
+         if aggregator is not None:
+             aggregator.on_engine_mode_change(new_state)
+ 
+         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
+         if reason is not None:
+             breadcrumb_meta["reason"] = reason
+         breadcrumb_payload = {"meta": breadcrumb_meta}
+         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
+         self._publish(breadcrumb_event)
+ 
+     def turn_context(self, sid: str) -> Optional[Dict[str, str]]:
+         """Return the active turn context for ``sid`` if a turn is in progress."""
+ 
+         session = self._sessions.get(sid)
+         if (
+             session is None
+             or session.turn_id is None
+             or session.req_id is None
+             or session.state == READY
+         ):
+             return None
+ 
+         return {"turn_id": session.turn_id, "req_id": session.req_id}
+ 
++    def _voice_profile(self) -> tuple[str, str]:
++        """Return the active voice identifier and locale.
++
++        Preference order:
++
++        1. Current policy snapshot voice block (``policy["voice"]``).
++        2. Top-level ``voice_id``/``locale`` keys in the snapshot.
++        3. Static server defaults when the policy omits the fields.
++        """
++
++        snapshot = self.policy_snapshot or {}
++        voice_id: Optional[str] = None
++        locale: Optional[str] = None
++
++        voice_block = snapshot.get("voice")
++        if isinstance(voice_block, Mapping):
++            voice_candidate = voice_block.get("voice_id")
++            if isinstance(voice_candidate, str) and voice_candidate:
++                voice_id = voice_candidate
++            locale_candidate = voice_block.get("locale")
++            if isinstance(locale_candidate, str) and locale_candidate:
++                locale = locale_candidate
++
++        top_level_voice = snapshot.get("voice_id")
++        if isinstance(top_level_voice, str) and top_level_voice:
++            voice_id = voice_id or top_level_voice
++
++        top_level_locale = snapshot.get("locale")
++        if isinstance(top_level_locale, str) and top_level_locale:
++            locale = locale or top_level_locale
++
++        if not voice_id:
++            voice_id = _DEFAULT_VOICE_ID
++        if not locale:
++            locale = _DEFAULT_LOCALE
++
++        return voice_id, locale
++
+     def _publish_tts_mask(self, sid: str, phase: str) -> None:
+         mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})
+         self._publish(mask_event)
+ 
+     def _teardown_tts(
+         self,
+         sid: str,
+         utt_id: str,
+         *,
+         reason: str | None = None,
+         post_hold_ms: int = 0,
+         transition_to_ready: bool,
+     ) -> None:
+         session = self._ensure_session(sid)
+         if session.tts_utt_id == utt_id:
+             session.tts_utt_id = None
+ 
+         aggregator = self._aggregators.get(sid)
+         if aggregator is not None:
+             aggregator.on_tts_end()
+ 
+         payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
+         if reason:
+             payload["reason"] = reason
+ 
 diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
-index b0b196ddb20edce0a48684cbfa68cbe080a4d784..eb6edd52135d1bdde428d4a4ef4db07105a5448c 100644
+index eb6edd52135d1bdde428d4a4ef4db07105a5448c..23656ebf117f0babf56f946cfe7ecf8c3dcee714 100644
 --- a/docs/10_CONTRACT_WS.md
 +++ b/docs/10_CONTRACT_WS.md
-@@ -100,68 +100,69 @@ The server may push policy updates. Client-visible frames follow the telemetry
- envelope (`type`, `ts_ms`, `level`, …) and the server **strips any policy keys
- outside the stable subset** before sending to browsers. The client‑stable subset
- is:
- 
- json
- Copy code
+@@ -106,66 +106,78 @@ Copy code
  {
    "type": "policy.interaction",
    "ts_ms": 1730000000000,
@@ -146,35 +296,43 @@ index b0b196ddb20edce0a48684cbfa68cbe080a4d784..eb6edd52135d1bdde428d4a4ef4db071
  Copy code
  {
    "type": "info",
--  "audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },  
-+  "audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },
-+  "slo": {
-+    "first_partial_ms": { "target": 450, "p95": 750 },
-+    "final_ms":         { "target": 2000, "p95": 3000 },
-+    "tts_start_ms":     { "target": 350,  "p95": 600 }
-+  },
+   "audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },
+   "slo": {
+     "first_partial_ms": { "target": 450, "p95": 750 },
+     "final_ms":         { "target": 2000, "p95": 3000 },
+     "tts_start_ms":     { "target": 350,  "p95": 600 }
+   },
++  "voice_id": "alloy-en-US-001",
++  "locale": "en-US",
    "meta": {
      "sid": "a1b2c3",
      "version": "2",
      "features": ["tts","asr","barge_in"],
-     "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000,
--    "slo": {
--      "first_partial_ms": { "target": 450, "p95": 750 },
--      "final_ms":         { "target": 2000, "p95": 3000 },
--      "tts_start_ms":     { "target": 350,  "p95": 600 }
--    },
-     "voice_id": "alloy-en-US-001",
-     "locale": "en-US"
+-    "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000,
+-    "voice_id": "alloy-en-US-001",
+-    "locale": "en-US"
++    "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000
    }
  }
  info.audio describes server→client playback format (binary WS messages, see “Binary audio framing”).
  
--slo provides advisory UI thresholds.
-+slo provides advisory UI thresholds. The block is optional; clients MUST handle
-+connections where it is absent.
+ slo provides advisory UI thresholds. The block is optional; clients MUST handle
+ connections where it is absent.
  
  voice_id/locale let the client label playback.
  
++- `voice_id` is a stable string slug that identifies the TTS configuration. It
++  follows the `<provider>-<locale>-<variant>` pattern (for example
++  `alloy-en-US-001`).
++- `locale` is a BCP 47 language tag constrained to `ll-CC` casing (`en-US`,
++  `fr-FR`, `es-ES`, …). This is the locale the server will narrate in and
++  should inform captioning or playback labels.
++
++The server **always** populates `info.voice_id` and `info.locale`. Every
++`tts.start` telemetry envelope mirrors the same identifiers in
++`meta.voice_id`/`meta.locale` so the client can update UI state when playback
++begins.
++
  ### Binary audio framing (server → client TTS)
  
  - Codec: **PCM s16le**, mono, **16 kHz** (`info.audio` announces the descriptor).
@@ -197,17 +355,18 @@ index b0b196ddb20edce0a48684cbfa68cbe080a4d784..eb6edd52135d1bdde428d4a4ef4db071
  
    const buffer = audioCtx.createBuffer(1, float32.length, sampleRate);
    buffer.copyToChannel(float32, 0);
-diff --git a/tests/test_info_slo.py b/tests/test_info_slo.py
+ 
+   const source = audioCtx.createBufferSource();
+   source.buffer = buffer;
+diff --git a/tests/test_voice_locale.py b/tests/test_voice_locale.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..52e8a4683422ee53e0b06ac759009771e8e23000
+index 0000000000000000000000000000000000000000..02d2870c20ec95770d0cbe17336187075fc14ce2
 --- /dev/null
-+++ b/tests/test_info_slo.py
-@@ -0,0 +1,52 @@
-+from __future__ import annotations
-+
++++ b/tests/test_voice_locale.py
+@@ -0,0 +1,83 @@
 +import unittest
 +
-+from app.voice_v2 import EVT_WS_JSON_SEND
++from app.voice_v2 import EVT_TTS_START, EVT_WS_JSON_SEND
 +from app.voice_v2.engine import EngineV2
 +
 +
@@ -215,15 +374,15 @@ index 0000000000000000000000000000000000000000..52e8a4683422ee53e0b06ac759009771
 +    def __init__(self) -> None:
 +        self.events: list[dict] = []
 +
-+    def publish(self, event: dict) -> None:  # pragma: no cover - helper
++    def publish(self, event: dict) -> None:  # pragma: no cover - helper used in tests
 +        self.events.append(dict(event))
 +
 +
-+class TestInfoSLO(unittest.TestCase):
++class TestVoiceLocale(unittest.TestCase):
 +    def setUp(self) -> None:
 +        self.bus = _RecordingBus()
 +        self.engine = EngineV2(telemetry_bus=self.bus)
-+        self.sid = "info-slo"
++        self.sid = "voice-locale"
 +
 +    def _info_frames(self) -> list[dict]:
 +        frames: list[dict] = []
@@ -235,22 +394,55 @@ index 0000000000000000000000000000000000000000..52e8a4683422ee53e0b06ac759009771
 +                frames.append(frame)
 +        return frames
 +
-+    def test_info_frame_contains_slo_targets(self) -> None:
++    def _tts_start_events(self) -> list[dict]:
++        return [evt for evt in self.bus.events if evt.get("type") == EVT_TTS_START]
++
++    def test_info_frame_includes_voice_and_locale(self) -> None:
 +        self.engine.on_open(self.sid, {})
 +
 +        info_frames = self._info_frames()
 +        self.assertTrue(info_frames, "expected at least one info frame")
 +
-+        slo = info_frames[-1].get("slo")
-+        self.assertIsInstance(slo, dict)
++        frame = info_frames[-1]
++        self.assertEqual(frame.get("voice_id"), "alloy-en-US-001")
++        self.assertEqual(frame.get("locale"), "en-US")
 +
-+        expected = {
-+            "first_partial_ms": {"target": 450, "p95": 750},
-+            "final_ms": {"target": 2000, "p95": 3000},
-+            "tts_start_ms": {"target": 350, "p95": 600},
++    def test_tts_start_meta_matches_info(self) -> None:
++        self.engine.on_open(self.sid, {})
++        self.engine.on_tts_start(self.sid, "utt-1")
++
++        info_frames = self._info_frames()
++        self.assertTrue(info_frames, "expected an info frame before tts.start")
++        info_voice = info_frames[-1].get("voice_id")
++        info_locale = info_frames[-1].get("locale")
++
++        tts_events = self._tts_start_events()
++        self.assertTrue(tts_events, "expected a tts.start event")
++        meta = tts_events[-1].get("meta") or {}
++
++        self.assertEqual(meta.get("voice_id"), info_voice)
++        self.assertEqual(meta.get("locale"), info_locale)
++
++        tts_meta = meta.get("tts")
++        self.assertIsInstance(tts_meta, dict)
++        self.assertEqual(tts_meta.get("utt_id"), "utt-1")
++
++    def test_policy_snapshot_overrides_defaults(self) -> None:
++        self.engine.on_open(self.sid, {})
++
++        self.engine.policy_snapshot = {
++            "voice": {"voice_id": "nova-en-GB-002", "locale": "en-GB"}
 +        }
++        self.engine._emit_info_frame(self.sid)
++        self.engine.on_tts_start(self.sid, "utt-policy")
 +
-+        self.assertEqual(slo, expected)
++        info_frame = self._info_frames()[-1]
++        tts_meta = self._tts_start_events()[-1].get("meta") or {}
++
++        self.assertEqual(info_frame.get("voice_id"), "nova-en-GB-002")
++        self.assertEqual(info_frame.get("locale"), "en-GB")
++        self.assertEqual(tts_meta.get("voice_id"), "nova-en-GB-002")
++        self.assertEqual(tts_meta.get("locale"), "en-GB")
 +
 +
 +if __name__ == "__main__":  # pragma: no cover - convenience
