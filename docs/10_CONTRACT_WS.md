@@ -122,24 +122,25 @@ json
 Copy code
 {
   "type": "info",
-  "audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },  
+  "audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },
+  "slo": {
+    "first_partial_ms": { "target": 450, "p95": 750 },
+    "final_ms":         { "target": 2000, "p95": 3000 },
+    "tts_start_ms":     { "target": 350,  "p95": 600 }
+  },
   "meta": {
     "sid": "a1b2c3",
     "version": "2",
     "features": ["tts","asr","barge_in"],
     "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000,
-    "slo": {
-      "first_partial_ms": { "target": 450, "p95": 750 },
-      "final_ms":         { "target": 2000, "p95": 3000 },
-      "tts_start_ms":     { "target": 350,  "p95": 600 }
-    },
     "voice_id": "alloy-en-US-001",
     "locale": "en-US"
   }
 }
 info.audio describes server→client playback format (binary WS messages, see “Binary audio framing”).
 
-slo provides advisory UI thresholds.
+slo provides advisory UI thresholds. The block is optional; clients MUST handle
+connections where it is absent.
 
 voice_id/locale let the client label playback.
 

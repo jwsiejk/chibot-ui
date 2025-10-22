@@ -1,257 +1,257 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 09289335a982030afd44b47b75121a3a86111c0c..2cfb41f088a36dea0baf5c152c6117b9cbe9fe99 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -294,30 +294,105 @@ def _validate_ws_origin(scope: dict) -> tuple[bool, Optional[str]]:
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index 923db641b865f182da1485c01b0543693f4b62ee..242f1d0d47736ee380a1c85db67638ff94277e1b 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -29,50 +29,56 @@ from app.voice_v2 import (
+ )
+ from app.voice_v2.gate import GateController
+ from app.voice_v2.conversation_buffer import ConversationBuffer
+ from app.voice_v2.vad import VADAggregator
  
- _HTTP_ROUTES: Dict[str, HttpHandler] = {
-     HEALTH_ROUTE: _handle_health,
-     LIVE_ROUTE: _handle_live,
-     READY_ROUTE: _handle_ready,
-     INFO_ROUTE: _handle_info,
+ 
+ def _now_ms() -> int:
+     """Return the current epoch timestamp in milliseconds."""
+     return int(time.time() * 1000)
+ 
+ 
+ READY = "Ready"
+ LISTENING = "Listening"
+ THINKING = "Thinking"
+ RESPONDING = "Responding"
+ CONFIRMING_BARGE = "ConfirmingBarge"
+ 
+ _PCM_CODEC = "pcm_s16le"
+ _PCM_RATE_HZ = 16000
+ _PCM_CHANNELS = 1
+ _PCM_DESCRIPTOR = {
+     "codec": _PCM_CODEC,
+     "rate_hz": _PCM_RATE_HZ,
+     "channels": _PCM_CHANNELS,
  }
++
++_INFO_SLO = {
++    "first_partial_ms": {"target": 450, "p95": 750},
++    "final_ms": {"target": 2000, "p95": 3000},
++    "tts_start_ms": {"target": 350, "p95": 600},
++}
+ _PCM_SAMPLE_BYTES = 2 * _PCM_CHANNELS
+ 
+ EVT_TURN_STATE = "EVT_TURN_STATE"
+ EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
+ EVT_TURN_END = "EVT_TURN_END"
+ EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
  
  
- def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
-     if not path.startswith(_ADMIN_FLOW_PREFIX):
-         return None
+ @dataclass
+ class _Envelope:
+     """Normalized telemetry envelope returned by the engine hooks."""
  
-     suffix = path[len(_ADMIN_FLOW_PREFIX) :]
-     if not suffix:
-         return None
+     type: str
+     sid: str
+     payload: Dict[str, Any]
  
-     segments = suffix.split("/")
-     if len(segments) != 2:
-         return None
+     def to_dict(self) -> Dict[str, Any]:
+         data = {"type": self.type, "sid": self.sid}
+         data.update(self.payload)
+         if "meta" in data and isinstance(data["meta"], Mapping):
+             data["meta"] = dict(data["meta"])
+         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
+             data["ts_ms"] = _now_ms()
+         data.setdefault("who", "server")
+         data.setdefault("source", "voice_engine")
+@@ -441,51 +447,55 @@ class EngineV2:
+         self._bus.publish(dict(event))
  
-     sid, action = segments
-     if not sid:
-         return None
+     def _handle_outbound_chat_frame(self, event: Dict[str, Any]) -> None:
+         if event.get("type") != EVT_WS_JSON_SEND:
+             return
+         sid = event.get("sid")
+         if not isinstance(sid, str) or not sid:
+             return
+         frame: Mapping[str, Any] | None = None
+         raw_frame = event.get("frame")
+         if isinstance(raw_frame, Mapping):
+             frame = raw_frame
+         else:
+             payload = event.get("payload")
+             if isinstance(payload, Mapping):
+                 candidate = payload.get("frame")
+                 if isinstance(candidate, Mapping):
+                     frame = candidate
+         if frame is None:
+             return
+         if frame.get("type") != "chat.message":
+             return
+         self._conversation_buffer.append(sid, frame)
  
-+    handler: Optional[HttpHandler]
-     if action == _TRACE_SEGMENT:
--        return partial(handle_flow_trace, sid=sid)
--    if action == _ZIP_SEGMENT:
--        return partial(handle_flow_zip, sid=sid)
-+        handler = partial(handle_flow_trace, sid=sid)
-+    elif action == _ZIP_SEGMENT:
-+        handler = partial(handle_flow_zip, sid=sid)
-+    else:
-+        handler = None
-+
-+    if handler is None:
-+        return None
-+
-+    if _admin_cors_enabled():
-+        return partial(_apply_admin_cors, handler)
-+
-+    return handler
-+
-+
-+async def _apply_admin_cors(
-+    handler: HttpHandler,
-+    scope: dict,
-+    receive: Callable[[], Awaitable[dict]],
-+) -> Response:
-+    response = await handler(scope, receive)
-+    allow_origin = _resolve_admin_cors_origin(scope)
-+    if allow_origin is None:
-+        return response
-+
-+    encoded_origin = _encode_header_value(allow_origin)
-+    if encoded_origin is None:
-+        return response
-+
-+    headers = tuple(response.headers) + (
-+        (b"access-control-allow-origin", encoded_origin),
-+        (b"access-control-allow-methods", b"GET"),
-+    )
-+    return Response(status=response.status, body=response.body, headers=headers)
-+
-+
-+def _admin_cors_enabled() -> bool:
-+    env = (os.getenv("ASKCHIP_ENV") or "").strip().lower()
-+    return env in {"dev", "staging"}
-+
-+
-+def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
-+    allowed = _parse_admin_cors_origins()
-+    if not allowed:
-+        return None
-+
-+    if "*" in allowed:
-+        return "*"
-+
-+    origin = _decode_header(scope.get("headers", ()), b"origin")
-+    if origin is None:
-+        return None
-+
-+    normalized = origin.strip()
-+    for entry in allowed:
-+        if normalized == entry:
-+            return normalized
-     return None
-+
-+
-+def _parse_admin_cors_origins() -> tuple[str, ...]:
-+    raw = os.getenv("ASKCHIP_ADMIN_CORS_ORIGINS")
-+    if not raw:
-+        return ()
-+
-+    entries = []
-+    for item in raw.split(","):
-+        value = item.strip()
-+        if value:
-+            entries.append(value)
-+    return tuple(entries)
-+
-+
-+def _encode_header_value(value: str) -> Optional[bytes]:
-+    try:
-+        return value.encode("latin1")
-+    except UnicodeEncodeError:  # pragma: no cover - defensive
-+        return None
+     def _emit_info_frame(self, sid: str) -> None:
+-        frame = {"type": "info", "audio": dict(_PCM_DESCRIPTOR)}
++        frame = {
++            "type": "info",
++            "audio": dict(_PCM_DESCRIPTOR),
++            "slo": json.loads(json.dumps(_INFO_SLO)),
++        }
+         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {
+             "ws": {
+                 "dir": "out",
+                 "size": len(serialized.encode("utf-8")),
+                 "preview": serialized,
+             }
+         }
+         payload = {"meta": meta, "frame": frame}
+         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+         self._publish(event)
+ 
+     def _publish_chat_history(self, sid: str) -> None:
+         messages = self._conversation_buffer.messages(sid)
+         frame = {"type": "chat.history", "messages": messages, "next_cursor": None}
+         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {
+             "ws": {
+                 "dir": "out",
+                 "size": len(serialized.encode("utf-8")),
+                 "preview": serialized,
+             }
+         }
+         payload = {"meta": meta, "frame": frame}
+         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
 diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
-index a890dfd7414d42ded904701f5690eb639509fa6a..b0b196ddb20edce0a48684cbfa68cbe080a4d784 100644
+index b0b196ddb20edce0a48684cbfa68cbe080a4d784..eb6edd52135d1bdde428d4a4ef4db07105a5448c 100644
 --- a/docs/10_CONTRACT_WS.md
 +++ b/docs/10_CONTRACT_WS.md
-@@ -12,50 +12,51 @@
+@@ -100,68 +100,69 @@ The server may push policy updates. Client-visible frames follow the telemetry
+ envelope (`type`, `ts_ms`, `level`, …) and the server **strips any policy keys
+ outside the stable subset** before sending to browsers. The client‑stable subset
+ is:
  
- wss://<host>/ws/v2/chat?access_token=<JWT>
- Sec-WebSocket-Protocol: chat.v2
- Origin: https://app.askchip.ai
- 
- csharp
+ json
  Copy code
+ {
+   "type": "policy.interaction",
+   "ts_ms": 1730000000000,
+   "level": "info",  
+   "policy": {
+     "mode": "idle",                  // "idle" | "assistant_speaking" | ...
+     "allow_auto_vad": true,
+     "barge_in_enabled": true
+   }
+ }
+ Other internal policy keys (e.g., telemetry, sampling) may be present in server telemetry/export, but MUST NOT be sent over WS to browsers as part of policy.interaction. (See ADR notes.)
  
- - **Origin allow‑list:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
+ Initial info frame (emitted after handshake)
+ The server emits a single info frame containing connection/session hints:
  
- ### Origin allow‑list configuration
+ json
+ Copy code
+ {
+   "type": "info",
+-  "audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },  
++  "audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },
++  "slo": {
++    "first_partial_ms": { "target": 450, "p95": 750 },
++    "final_ms":         { "target": 2000, "p95": 3000 },
++    "tts_start_ms":     { "target": 350,  "p95": 600 }
++  },
+   "meta": {
+     "sid": "a1b2c3",
+     "version": "2",
+     "features": ["tts","asr","barge_in"],
+     "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000,
+-    "slo": {
+-      "first_partial_ms": { "target": 450, "p95": 750 },
+-      "final_ms":         { "target": 2000, "p95": 3000 },
+-      "tts_start_ms":     { "target": 350,  "p95": 600 }
+-    },
+     "voice_id": "alloy-en-US-001",
+     "locale": "en-US"
+   }
+ }
+ info.audio describes server→client playback format (binary WS messages, see “Binary audio framing”).
  
- - `ASKCHIP_WS_ALLOWED_ORIGINS` — comma‑separated list of exact origins (`https://app.askchip.ai`, `https://console.askchip.ai`).
-   - Origins are matched case‑insensitively after normalizing scheme + host + optional port.
-   - Do **not** include wildcard (`*`) entries; they are ignored.
- - If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, the server looks at `ASKCHIP_ENV`:
-   - `ASKCHIP_ENV=production` (or `prod`) → reject every browser Origin by default.
-   - Any other value (or unset) → allow only localhost loopback origins (host `localhost`/`127.0.0.1`).
- - Missing `Origin` headers (non‑browser clients) are accepted.
+-slo provides advisory UI thresholds.
++slo provides advisory UI thresholds. The block is optional; clients MUST handle
++connections where it is absent.
  
- Deployment guidance:
+ voice_id/locale let the client label playback.
  
- - Production deployments **must** set `ASKCHIP_WS_ALLOWED_ORIGINS` to the exact list of UI origins.
- - Development builds can omit the variable to allow local tooling (`http://localhost:3000`, `https://127.0.0.1:5173`, etc.).
- - When a connection is rejected the HTTP response is `403` with `{ "code": "origin_blocked" }`; browsers should surface this clearly to the user.
-+- Admin flow exports (`/api/v1/admin/flow/*`) stay server-side in production; dev/staging builds enable CORS for these routes via `ASKCHIP_ADMIN_CORS_ORIGINS` so the browser Inspector can call them.
+ ### Binary audio framing (server → client TTS)
  
- - **Version negotiation:** if the subprotocol is missing/mismatched, the server replies **426** with a JSON body `{ "code": "bad_subprotocol" }`.
+ - Codec: **PCM s16le**, mono, **16 kHz** (`info.audio` announces the descriptor).
+ - The server emits one PCM buffer per **binary WebSocket message**. No frame headers or chunk counters are prepended.
+ - Each chunk length MUST be a multiple of `channels * 2` bytes (16‑bit samples).
+ - The existing binary routing guard still rejects non-audio payloads.
  
- On successful upgrade, the server emits an initial `info` frame with connection metadata (see “Initial `info` frame”).
+ Client decoding example (WebAudio):
  
- ---
+ ```js
+ const sampleRate = 16000;
+ const audioCtx = new AudioContext({ sampleRate });
  
- ## Client → Server frames
+ function playPcmChunk(arrayBuffer) {
+   const int16 = new Int16Array(arrayBuffer);
+   const float32 = new Float32Array(int16.length);
+   for (let i = 0; i < int16.length; i += 1) {
+     float32[i] = Math.max(-1, Math.min(1, int16[i] / 32768));
+   }
  
- - `{"type":"ping"}`
- - `{"type":"client.ready"}`
- 
- - **Audio (binary frames):**  
-   The **server policy** selects the ASR provider and **required input audio**. Clients **MUST** follow the descriptor the server announces (see `asr.ready`). The client **MUST NOT** change codecs/containers; format is controlled by policy (Deepgram primary, Speechmatics secondary).  
- 
-   - **Primary (Deepgram):** **WebM containerized Opus**, mono, **48 kHz**.  
-     The browser typically produces this via `MediaRecorder('audio/webm;codecs=opus')`.  
-   - **Secondary (Speechmatics):** **RAW PCM s16le**, mono, **16 kHz**.
- 
-   The server signals readiness and the required input descriptor via:
- 
-   ```json
-   {
-     "type": "asr.ready",
-     "vendor": "deepgram",
-diff --git a/tests/test_admin_cors.py b/tests/test_admin_cors.py
+   const buffer = audioCtx.createBuffer(1, float32.length, sampleRate);
+   buffer.copyToChannel(float32, 0);
+diff --git a/tests/test_info_slo.py b/tests/test_info_slo.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..345786ac5ce962a14ef4b62d39a51d8def12e20e
+index 0000000000000000000000000000000000000000..52e8a4683422ee53e0b06ac759009771e8e23000
 --- /dev/null
-+++ b/tests/test_admin_cors.py
-@@ -0,0 +1,82 @@
++++ b/tests/test_info_slo.py
+@@ -0,0 +1,52 @@
 +from __future__ import annotations
 +
-+import asyncio
-+from typing import Awaitable, Callable, Dict, Tuple
++import unittest
 +
-+import pytest
-+
-+from app import asgi_gateway
++from app.voice_v2 import EVT_WS_JSON_SEND
++from app.voice_v2.engine import EngineV2
 +
 +
-+def _make_scope(path: str, origin: str | None) -> Dict[str, object]:
-+    headers: list[Tuple[bytes, bytes]] = []
-+    if origin is not None:
-+        headers.append((b"origin", origin.encode("latin1")))
-+    return {
-+        "type": "http",
-+        "method": "GET",
-+        "path": path,
-+        "query_string": b"",
-+        "headers": headers,
-+    }
++class _RecordingBus:
++    def __init__(self) -> None:
++        self.events: list[dict] = []
++
++    def publish(self, event: dict) -> None:  # pragma: no cover - helper
++        self.events.append(dict(event))
 +
 +
-+def _make_receive() -> Callable[[], Awaitable[Dict[str, object]]]:
-+    messages = [
-+        {"type": "http.request", "body": b"", "more_body": False},
-+    ]
++class TestInfoSLO(unittest.TestCase):
++    def setUp(self) -> None:
++        self.bus = _RecordingBus()
++        self.engine = EngineV2(telemetry_bus=self.bus)
++        self.sid = "info-slo"
 +
-+    async def _receive() -> Dict[str, object]:
-+        if messages:
-+            return messages.pop(0)
-+        return {"type": "http.disconnect"}
++    def _info_frames(self) -> list[dict]:
++        frames: list[dict] = []
++        for event in self.bus.events:
++            if event.get("type") != EVT_WS_JSON_SEND:
++                continue
++            frame = event.get("frame")
++            if isinstance(frame, dict) and frame.get("type") == "info":
++                frames.append(frame)
++        return frames
 +
-+    return _receive
++    def test_info_frame_contains_slo_targets(self) -> None:
++        self.engine.on_open(self.sid, {})
 +
++        info_frames = self._info_frames()
++        self.assertTrue(info_frames, "expected at least one info frame")
 +
-+@pytest.mark.parametrize(
-+    "env",
-+    ["dev", "staging"],
-+)
-+def test_admin_cors_enabled_for_non_prod(monkeypatch: pytest.MonkeyPatch, env: str) -> None:
-+    monkeypatch.setenv("ASKCHIP_ENV", env)
-+    monkeypatch.setenv("ASKCHIP_ADMIN_CORS_ORIGINS", "http://localhost:3000")
++        slo = info_frames[-1].get("slo")
++        self.assertIsInstance(slo, dict)
 +
-+    handler = asgi_gateway._resolve_admin_route("/api/v1/admin/flow/sid-123/trace")
-+    assert handler is not None
++        expected = {
++            "first_partial_ms": {"target": 450, "p95": 750},
++            "final_ms": {"target": 2000, "p95": 3000},
++            "tts_start_ms": {"target": 350, "p95": 600},
++        }
 +
-+    scope = _make_scope("/api/v1/admin/flow/sid-123/trace", "http://localhost:3000")
-+    response = asyncio.run(handler(scope, _make_receive()))
-+
-+    header_map = dict(response.headers)
-+    assert header_map[b"access-control-allow-origin"] == b"http://localhost:3000"
-+    assert header_map[b"access-control-allow-methods"] == b"GET"
-+
-+
-+def test_admin_cors_respects_origin_allow_list(monkeypatch: pytest.MonkeyPatch) -> None:
-+    monkeypatch.setenv("ASKCHIP_ENV", "dev")
-+    monkeypatch.setenv("ASKCHIP_ADMIN_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
-+
-+    handler = asgi_gateway._resolve_admin_route("/api/v1/admin/flow/sid-123/trace")
-+    assert handler is not None
-+
-+    scope = _make_scope("/api/v1/admin/flow/sid-123/trace", "http://127.0.0.1:3000")
-+    response = asyncio.run(handler(scope, _make_receive()))
-+
-+    header_map = dict(response.headers)
-+    assert header_map[b"access-control-allow-origin"] == b"http://127.0.0.1:3000"
++        self.assertEqual(slo, expected)
 +
 +
-+def test_admin_cors_disabled_in_prod(monkeypatch: pytest.MonkeyPatch) -> None:
-+    monkeypatch.setenv("ASKCHIP_ENV", "prod")
-+    monkeypatch.setenv("ASKCHIP_ADMIN_CORS_ORIGINS", "http://localhost:3000")
-+
-+    handler = asgi_gateway._resolve_admin_route("/api/v1/admin/flow/sid-123/trace")
-+    assert handler is not None
-+
-+    scope = _make_scope("/api/v1/admin/flow/sid-123/trace", "http://localhost:3000")
-+    response = asyncio.run(handler(scope, _make_receive()))
-+
-+    header_map = dict(response.headers)
-+    assert b"access-control-allow-origin" not in header_map
-+    assert b"access-control-allow-methods" not in header_map
++if __name__ == "__main__":  # pragma: no cover - convenience
++    unittest.main()

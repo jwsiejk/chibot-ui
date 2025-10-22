@@ -51,6 +51,12 @@ _PCM_DESCRIPTOR = {
     "rate_hz": _PCM_RATE_HZ,
     "channels": _PCM_CHANNELS,
 }
+
+_INFO_SLO = {
+    "first_partial_ms": {"target": 450, "p95": 750},
+    "final_ms": {"target": 2000, "p95": 3000},
+    "tts_start_ms": {"target": 350, "p95": 600},
+}
 _PCM_SAMPLE_BYTES = 2 * _PCM_CHANNELS
 
 EVT_TURN_STATE = "EVT_TURN_STATE"
@@ -463,7 +469,11 @@ class EngineV2:
         self._conversation_buffer.append(sid, frame)
 
     def _emit_info_frame(self, sid: str) -> None:
-        frame = {"type": "info", "audio": dict(_PCM_DESCRIPTOR)}
+        frame = {
+            "type": "info",
+            "audio": dict(_PCM_DESCRIPTOR),
+            "slo": json.loads(json.dumps(_INFO_SLO)),
+        }
         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
         meta = {
             "ws": {
