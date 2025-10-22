@@ -11,6 +11,7 @@ from app.policy.watch import compute_diff, should_reapply
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
 from app.voice_v2 import (
+    EVT_ACWR_RECOMPUTE,
     EVT_POLICY_APPLIED,
     EVT_WS_AUDIO_RECV,
     EVT_WS_CLOSE,
@@ -123,6 +124,7 @@ class EngineV2:
 
         self._emit_policy_frame(sid, snapshot)
         self._emit_policy_applied(sid, previous, diff)
+        self._emit_acwr_recompute(sid, snapshot)
         return True
 
     def _envelope(self, sid: str, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -149,6 +151,17 @@ class EngineV2:
     ) -> None:
         meta = {"policy": {"diff": self._summarize_policy_diff(previous, diff)}}
         event = self._envelope(sid, EVT_POLICY_APPLIED, {"meta": meta})
+        self._publish(event)
+
+    def _emit_acwr_recompute(self, sid: str, snapshot: Dict[str, Any]) -> None:
+        policy_acwr = snapshot.get("auto_commit_when_ready")
+        effective = bool(snapshot.get("auto_commit_when_ready", True))
+        meta = {
+            "policy_acwr": policy_acwr,
+            "admin_enabled": None,
+            "effective": effective,
+        }
+        event = self._envelope(sid, EVT_ACWR_RECOMPUTE, {"meta": meta})
         self._publish(event)
 
     @staticmethod
