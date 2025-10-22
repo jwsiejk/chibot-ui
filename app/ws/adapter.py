@@ -65,6 +65,10 @@ _OUTBOUND_ALLOWED_TYPES = {
 
 _OUTBOX_MAXSIZE = 256
 
+_RESUME_TTL_MS = 10_000
+_RESUME_MARKER_TYPES = {"tts.start", "tts.end", "asr.final"}
+_RESUME_MARKER_LIMIT = 10
+
 _logger = logging.getLogger(__name__)
 
 _ALLOWED_TEXT_FRAME_TYPES = {
@@ -143,6 +147,16 @@ class AdapterContext:
     asr_subscription_token: Optional[str] = None
     server_keepalive_task: asyncio.Task[None] | None = None
     last_policy_interaction: Optional[Dict[str, Any]] = None
+    resume_token: Optional[str] = None
+    resume_expiry_ms: int = 0
+    recent_markers: list[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class _ResumeState:
+    sid: str
+    expiry_ms: int
+    markers: list[Dict[str, Any]]
 
 
 class ChatV2Adapter:
@@ -162,6 +176,7 @@ class ChatV2Adapter:
         self.binary_limit_bytes = binary_limit_bytes
         self._ip_buckets: Dict[str, TokenBucket] = {}
         self._contexts: Dict[str, AdapterContext] = {}
+        self._resume_tokens: Dict[str, _ResumeState] = {}
         self._ping_interval_ms = max(
             0,
             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
@@ -180,7 +195,21 @@ class ChatV2Adapter:
             await self._reject_subprotocol(send)
             return
 
+        self._purge_expired_resume_tokens()
+
+        resume_token_param, resume_error = self._extract_resume_token(scope)
+        resume_state: Optional[_ResumeState] = None
+        resume_replay: list[Dict[str, Any]] = []
+
         sid = uuid.uuid4().hex
+        if resume_error is None and resume_token_param:
+            resume_state = self._consume_resume_token(resume_token_param)
+            if resume_state is None:
+                resume_error = "resume_invalid"
+            else:
+                sid = resume_state.sid
+                resume_replay = [self._clone_frame(marker) for marker in resume_state.markers]
+
         headers = self._decode_headers(scope.get("headers", ()))
         auth_headers, detail = self._prepare_authorization_headers(scope, headers)
         if detail:
@@ -204,6 +233,20 @@ class ChatV2Adapter:
 
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
 
+        if resume_error is not None:
+            await self._send_json(
+                send,
+                sid,
+                {
+                    "type": "error",
+                    "code": "resume_invalid",
+                    "detail": "Resume token expired or invalid",
+                    "retryable": False,
+                },
+            )
+            await send({"type": "websocket.close", "code": 1008, "reason": "resume_invalid"})
+            return
+
         ctx = AdapterContext(sid=sid, headers=auth_headers)
         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
         client = scope.get("client")
@@ -219,9 +262,15 @@ class ChatV2Adapter:
         self._start_outbound_bridge(ctx, send)
         self._start_server_keepalive(ctx, send)
 
+        if resume_replay:
+            ctx.recent_markers = [self._clone_frame(marker) for marker in resume_replay]
+
         if self.exporter:
             self.exporter.begin(ctx.sid)
         await self._invoke_engine("on_open", ctx.sid, auth_headers)
+
+        for marker in resume_replay:
+            await self._send_json(send, ctx.sid, marker)
 
         close_code = 1000
         close_reason: Optional[str] = None
@@ -833,6 +882,13 @@ class ChatV2Adapter:
             ctx.last_policy_interaction = json.loads(
                 json.dumps(normalized, separators=(",", ":"))
             )
+        if frame_type == "info":
+            self._ensure_resume_token(ctx)
+            if ctx.resume_token:
+                normalized["resume_token"] = ctx.resume_token
+                normalized["resume_ttl_ms"] = _RESUME_TTL_MS
+        if frame_type in _RESUME_MARKER_TYPES:
+            self._record_resume_marker(ctx, normalized)
         return normalized
 
     @staticmethod
@@ -949,6 +1005,86 @@ class ChatV2Adapter:
         for key, value in headers:
             decoded[key.decode("latin1").lower()] = value.decode("latin1")
         return decoded
+
+    def _purge_expired_resume_tokens(self) -> None:
+        now = self._now_ms()
+        for token, state in list(self._resume_tokens.items()):
+            if state.expiry_ms < now:
+                self._resume_tokens.pop(token, None)
+
+    def _extract_resume_token(self, scope: dict) -> tuple[Optional[str], Optional[str]]:
+        raw_query = scope.get("query_string", b"")
+        if not raw_query:
+            return None, None
+
+        if isinstance(raw_query, bytes):
+            try:
+                query = raw_query.decode("utf-8")
+            except UnicodeDecodeError:
+                return None, "resume_invalid"
+        else:
+            query = str(raw_query)
+
+        params = parse_qs(query, keep_blank_values=True)
+        values = params.get("resume")
+        if not values:
+            return None, None
+        if len(values) != 1:
+            return None, "resume_invalid"
+
+        token = values[0]
+        if not token:
+            return None, "resume_invalid"
+
+        return token, None
+
+    def _consume_resume_token(self, token: str) -> Optional[_ResumeState]:
+        state = self._resume_tokens.get(token)
+        if state is None:
+            return None
+        now = self._now_ms()
+        if state.expiry_ms < now:
+            self._resume_tokens.pop(token, None)
+            return None
+        return self._resume_tokens.pop(token)
+
+    def _ensure_resume_token(self, ctx: AdapterContext) -> None:
+        self._purge_expired_resume_tokens()
+        token = ctx.resume_token
+        if token is not None and token in self._resume_tokens:
+            state = self._resume_tokens[token]
+            state.markers = [self._clone_frame(marker) for marker in ctx.recent_markers]
+            return
+
+        token = uuid.uuid4().hex
+        expiry = self._now_ms() + _RESUME_TTL_MS
+        ctx.resume_token = token
+        ctx.resume_expiry_ms = expiry
+        self._resume_tokens[token] = _ResumeState(
+            sid=ctx.sid,
+            expiry_ms=expiry,
+            markers=[self._clone_frame(marker) for marker in ctx.recent_markers],
+        )
+
+    def _record_resume_marker(self, ctx: AdapterContext, payload: Dict[str, Any]) -> None:
+        clone = self._clone_frame(payload)
+        ctx.recent_markers.append(clone)
+        if len(ctx.recent_markers) > _RESUME_MARKER_LIMIT:
+            ctx.recent_markers = ctx.recent_markers[-_RESUME_MARKER_LIMIT :]
+
+        token = ctx.resume_token
+        if token:
+            state = self._resume_tokens.get(token)
+            if state:
+                state.markers = [self._clone_frame(marker) for marker in ctx.recent_markers]
+
+    @staticmethod
+    def _clone_frame(payload: Dict[str, Any]) -> Dict[str, Any]:
+        return json.loads(json.dumps(payload, separators=(",", ":")))
+
+    @staticmethod
+    def _now_ms() -> int:
+        return int(time.time() * 1000)
 
     @staticmethod
     def _extract_browser_token(scope: dict) -> tuple[Optional[str], Optional[str]]:
