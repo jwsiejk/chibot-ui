@@ -26,6 +26,7 @@ from app.voice_v2 import (
     EVT_WS_OPEN,
 )
 from app.voice_v2.gate import GateController
+from app.voice_v2.vad import VADAggregator
 
 
 def _now_ms() -> int:
@@ -101,6 +102,7 @@ class EngineV2:
         self._gate = GateController(publish=self._publish_gate_event)
         self._sessions: Dict[str, _TurnSession] = {}
         self._barge_handles: Dict[str, object] = {}
+        self._aggregators: Dict[str, VADAggregator] = {}
 
     @property
     def policy_snapshot(self) -> Dict[str, Any] | None:
@@ -163,6 +165,7 @@ class EngineV2:
             self._last_sid = None
             self._policy_snapshot = None
         self._sessions.pop(sid, None)
+        self._aggregators.pop(sid, None)
 
     def on_tts_start(
         self, sid: str, utt_id: str, post_hold_ms: int | None = None
@@ -188,6 +191,10 @@ class EngineV2:
         self._publish(event)
         self._set_state(sid, RESPONDING, reason="tts_start")
 
+        aggregator = self._aggregators.get(sid)
+        if aggregator is not None:
+            aggregator.on_tts_start()
+
     def on_tts_end(
         self, sid: str, utt_id: str, post_hold_ms: int | None = None
     ) -> None:
@@ -200,6 +207,17 @@ class EngineV2:
         """Observe the final ASR transcript for a turn."""
 
         self._set_state(sid, THINKING, reason="asr_final")
+
+    def on_asr_partial(
+        self,
+        sid: str,
+        req_id: str,
+        confidence: float,
+        partial_text: Optional[str] = None,
+    ) -> None:
+        aggregator = self._aggregators.get(sid)
+        if aggregator is not None:
+            aggregator.feed_asr_evidence(req_id, confidence, partial_text)
 
     def on_auto_barge_attempt(
         self, sid: str, source: str, *, reason: str | None = None
@@ -357,7 +375,29 @@ class EngineV2:
         if session is None:
             session = _TurnSession()
             self._sessions[sid] = session
+            self._install_vad_aggregator(sid)
         return session
+
+    def _install_vad_aggregator(self, sid: str) -> None:
+        if sid in self._aggregators:
+            return
+
+        def _policy_supplier() -> Dict[str, Any]:
+            snapshot = self.policy_snapshot or {}
+            return dict(snapshot)
+
+        aggregator = VADAggregator(sid, self._bus, _policy_supplier)
+        aggregator.set_grant_handler(
+            lambda source, info, *, _sid=sid: self._handle_vad_grant(_sid, source, info)
+        )
+        self._aggregators[sid] = aggregator
+
+    def _handle_vad_grant(self, sid: str, source: str, info: Dict[str, Any]) -> None:
+        reason = "vad_grant"
+        mode = info.get("mode") if isinstance(info, Mapping) else None
+        if mode == "and":
+            reason = "vad_grant_dual"
+        self.on_auto_barge_attempt(sid, source, reason=reason)
 
     def _set_state(self, sid: str, new_state: str, *, reason: str | None = None) -> None:
         """Transition the session state machine and emit telemetry breadcrumbs."""
@@ -401,6 +441,10 @@ class EngineV2:
 
         session.state = new_state
 
+        aggregator = self._aggregators.get(sid)
+        if aggregator is not None:
+            aggregator.on_engine_mode_change(new_state)
+
         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
         if reason is not None:
             breadcrumb_meta["reason"] = reason
@@ -425,6 +469,10 @@ class EngineV2:
         if session.tts_utt_id == utt_id:
             session.tts_utt_id = None
 
+        aggregator = self._aggregators.get(sid)
+        if aggregator is not None:
+            aggregator.on_tts_end()
+
         payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
         if reason:
             payload["reason"] = reason
@@ -432,8 +480,8 @@ class EngineV2:
         event = self._envelope(sid, EVT_TTS_END, payload)
         self._publish(event)
 
-        self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
         self._publish_tts_mask(sid, "cleared")
+        self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
 
         if transition_to_ready:
             if post_hold_ms > 0:

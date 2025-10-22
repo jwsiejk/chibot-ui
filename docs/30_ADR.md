@@ -36,3 +36,12 @@
   after **3 consecutive errors** or **2 timeouts in 30 seconds**, move to half-open after **15 seconds**, and fully reset on a
   successful probe. Telemetry emits `EVT_PROVIDER_TRIP`, `EVT_PROVIDER_OPEN`, and `EVT_PROVIDER_CLOSE` with vendor metadata, and
   provider-specific opaque identifiers remain confined to `EVT_VENDOR_DEBUG`.
+
+
+- **ADR-0016 (2025-10-22)** — **Outbound WS allow‑list includes chat frames**  
+  Extend the adapter's allow‑list to include `chat.message` and `chat.history` for the active session. This **supersedes** the “allow‑list unchanged” note in ADR‑0013; backpressure semantics remain (bounded outbox, drop‑newest, `EVT_WS_OUTBOX_DROP`).
+
+- **ADR-0017 (2025-10-22)** — **Dual‑VAD Aggregator & Policy (production)**  
+  A per‑session VAD aggregator fuses **auto‑VAD** (energy/activity) and **ASR evidence** into a single barge decision while `assistant_speaking`. Policy adds `vad.mode`, `vad.priority`, `min_speech_ms`, `energy_threshold_dbfs`, `hold_ms`, `echo_suppression_ms`, and `barge_cooldown_ms`.  
+  The aggregator enforces echo‑suppression, hysteresis, cooldown, and one‑grant‑per‑TTS. It adapts thresholds using noise‑floor tracking and SNR margins and may adjust behavior based on environment classification (quiet/normal/noisy).  
+  Telemetry adds diagnostic `EVT_VAD` and `EVT_VAD_DECISION`; outcomes proceed via `EVT_BARGE_IN`. Provider and client contracts remain unchanged.

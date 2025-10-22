@@ -207,52 +207,58 @@ To handle network reordering and loss, the server maintains a **per-session** se
 
 ---
 
-## Build 6 updates (Exporter, Admin Flow, Backpressure clarifications)
+## Chat frames (Build 5 server support)
 
-### Server → Client frames (allow‑list unchanged)
-Build 6 **does not expand** the set of server→client messages. Only these JSON frames are ever sent from server to client over the `chat.v2` socket:
+### Client → Server (typed user input)
 
-- `"policy.interaction"`
-- `"info"`
-- `"tts.start"`, `"tts.end"`
-- `"asr.ready"`, `"asr.partial"`, `"asr.final"`
-- `"error"`
+The client may send a typed message at any time (including while the assistant is speaking):
+```json
+{"type":"chat.user","text":"<utf8 text>","client_msg_id":"<optional client UUID>"}
+```
+- Max size: **64 KiB** (same as JSON text frame limit).
+- Bad UTF‑8 ⇒ close **1007**. Other schema issues ⇒ `{"type":"error","code":"schema_invalid"}` then close **1003**.
+- If `barge_in_enabled:true` and the assistant is speaking, `chat.user` is treated as **barge‑in** with `source:"text"`.
 
-All other events are **server‑side telemetry only** (available via the Admin Flow endpoints below) and **will never be sent over WS**.
+### Server → Client (messages & history)
 
-### Outbound WS bridge & backpressure semantics
-The adapter maintains a bounded outbox queue (default **256**). On overflow the newest message is dropped and a telemetry event
-`EVT_WS_OUTBOX_DROP` is recorded (not emitted to the client). Implementations **may coalesce** `asr.partial` messages under sustained load;
-clients **must not** assume every partial is delivered.
+**Single message:**
+```json
+{"type":"chat.message","id":"<uuid>","role":"user|assistant","text":"<utf8>","origin":"voice|text","turn_id":"<uuid>","req_id":"<uuid>","ts_ms":1730000000000}
+```
 
-### Telemetry privacy & redaction
-Telemetry is normalized and redacted **before** it is written to disk or streamed via admin APIs. Sensitive fields (auth tokens, emails,
-opaque provider IDs) are masked. WS frames never include these fields.
+**History snapshot (sent on connect/resume):**
+```json
+{"type":"chat.history","messages":[ /* array of chat.message */ ], "next_cursor": null}
+```
 
-### Admin Flow (HTTP, not WS)
-Build 6 introduces read‑only Admin Flow endpoints for observability. These are **not** part of the WS contract, but are included here for clarity:
+---
 
-- `GET /api/v1/admin/flow/{sid}/trace?type=EVT_X,EVT_Y&since_ms=<ts>&limit=<n>`  
-  Responds with **application/x-ndjson**; lines are redacted telemetry for the session. Requires `Authorization: Bearer ...`.
-- `GET /api/v1/admin/flow/{sid}/zip`  
-  Responds with **application/zip** containing a deterministic package of redacted artifacts.
+## Dual‑VAD policy & diagnostics (Build 5)
 
-### Export artifacts (for reference)
-The packaged zip contains exactly:
-- `manifest.json` (stable key order; includes `sha256` of packaged files and a `summary` block)
-- `events.redacted.ndjson` (full redacted stream)
-- `flow_timeline.ndjson` (turn/flow markers only)
-- `nlu.ndjson`, `nlg.ndjson` (may be empty)
-- `README.txt`
+The server fuses **auto‑VAD** (energy/activity) and **ASR evidence** into a single barge decision during `policy.mode:"assistant_speaking"`.
+Clients do not need to change behavior; this section documents server‑side policy and diagnostic telemetry.
 
-Total package size is capped (default **25 MB**). If truncation occurs, `manifest.json` includes a `truncated` section describing what was dropped.
+**Policy (server‑side) — `policy.interaction.vad` block:**
+```json
+"vad": {
+  "mode": "or",                 // "or" | "and" | "priority"
+  "priority": "asr",            // "asr" | "auto" (used when mode=="priority")
+  "min_speech_ms": 200,         // speech must persist >= this to count
+  "energy_threshold_dbfs": -45, // baseline; may adapt per session via SNR
+  "hold_ms": 200,               // hysteresis to avoid flapping
+  "echo_suppression_ms": 350,   // ignore mic after tts.start
+  "barge_cooldown_ms": 250      // avoid re‑barge storms
+}
+```
 
-### Performance telemetry (server‑side)
-For each turn the engine records:
-- `t_first_partial_ms` — time from turn begin to first ASR partial
-- `t_final_ms` — time to ASR final
-- `t_tts_start_ms` — time to first TTS audio
+**Diagnostic telemetry (server‑emitted; not WS contract frames):**
+```json
+{"type":"EVT_VAD","source":"auto_vad","phase":"start","metric":{"dbfs":-28.0,"active_ms":220},"ts_ms":1730000000000}
+{"type":"EVT_VAD","source":"asr_evidence","phase":"start","metric":{"confidence":0.82},"ts_ms":1730000000500}
+{"type":"EVT_VAD_DECISION","mode":"or","granted":true,"reasons":["asr_conf>=0.75","auto_active>=200ms"],"ts_ms":1730000000550}
+```
 
-These appear in telemetry as `EVT_PERF_SUMMARY` and in `manifest.json.summary` in the exported zip. They are **not** sent over WS.
+**Text barge‑in:** If a `{"type":"chat.user"}` arrives while `policy.mode:"assistant_speaking"` and `barge_in_enabled:true`, the server treats it as barge‑in with `source:"text"` and follows the standard mask/gate/tts‑cancel path.
 
-*Document last updated:* 2025-10-22T07:21:07Z
+
+*Document last updated:* 2025-10-22T08:40:45.378425Z

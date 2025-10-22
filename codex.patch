@@ -1,560 +1,1155 @@
-diff --git a/app/voice_v2/asr_base.py b/app/voice_v2/asr_base.py
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index 2dcbb723a833868251c12a095785f51c45843214..d3c5e035dca73d4e805914da47fe2b09cacf35ed 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -4,50 +4,51 @@ from __future__ import annotations
+ import asyncio
+ from dataclasses import dataclass
+ import json
+ import logging
+ import threading
+ import time
+ import uuid
+ from typing import Any, Dict, Mapping, Optional
+ 
+ from app.policy.loader import load_interaction_policy
+ from app.policy.watch import compute_diff, should_reapply
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ACWR_RECOMPUTE,
+     EVT_POLICY_APPLIED,
+     EVT_TTS_END,
+     EVT_TTS_START,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_CLOSE,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+     EVT_WS_OPEN,
+ )
+ from app.voice_v2.gate import GateController
++from app.voice_v2.vad import VADAggregator
+ 
+ 
+ def _now_ms() -> int:
+     """Return the current epoch timestamp in milliseconds."""
+     return int(time.time() * 1000)
+ 
+ 
+ READY = "Ready"
+ LISTENING = "Listening"
+ THINKING = "Thinking"
+ RESPONDING = "Responding"
+ CONFIRMING_BARGE = "ConfirmingBarge"
+ 
+ EVT_TURN_STATE = "EVT_TURN_STATE"
+ EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
+ EVT_TURN_END = "EVT_TURN_END"
+ 
+ 
+ @dataclass
+ class _Envelope:
+     """Normalized telemetry envelope returned by the engine hooks."""
+ 
+     type: str
+     sid: str
+     payload: Dict[str, Any]
+@@ -79,50 +80,51 @@ class _NullExporter:
+     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
+         return
+ 
+ 
+ class EngineV2:
+     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
+ 
+     def __init__(
+         self,
+         exporter: FileExporter | None = None,
+         *,
+         telemetry_bus=bus,
+         fake_exporter: FileExporter | None = None,
+     ) -> None:
+         if exporter is None:
+             exporter = fake_exporter
+         if exporter is None:
+             exporter = _NullExporter()
+         self._exporter = exporter
+         self._bus = telemetry_bus
+         self._policy_snapshot: Dict[str, Any] | None = None
+         self._last_sid: Optional[str] = None
+         self._gate = GateController(publish=self._publish_gate_event)
+         self._sessions: Dict[str, _TurnSession] = {}
+         self._barge_handles: Dict[str, object] = {}
++        self._aggregators: Dict[str, VADAggregator] = {}
+ 
+     @property
+     def policy_snapshot(self) -> Dict[str, Any] | None:
+         return self._policy_snapshot
+ 
+     @policy_snapshot.setter
+     def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
+         self._policy_snapshot = dict(snapshot) if snapshot is not None else None
+ 
+     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
+         """Capture a successful WebSocket upgrade."""
+         meta = {"headers": dict(headers), "dir": "in"}
+         event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
+         self._publish(event)
+ 
+         self._last_sid = sid
+         self._policy_snapshot = None
+         self._ensure_session(sid)
+         self._set_state(sid, READY, reason="ws_open")
+         self.reapply_policy()
+ 
+     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
+         """Capture a validated JSON frame from the adapter."""
+         turn_id: Optional[Any] = None
+         meta: Dict[str, Any] = {"dir": "in"}
+@@ -141,88 +143,104 @@ class EngineV2:
+         payload: Dict[str, Any] = {"meta": meta}
+         if turn_id is not None:
+             payload["turn_id"] = turn_id
+         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
+         self._publish(event)
+ 
+     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
+         """Capture an incoming audio chunk."""
+         session = self._ensure_session(sid)
+         if session.state != LISTENING:
+             self._set_state(sid, LISTENING, reason="audio_rx")
+         byte_count = len(chunk)
+         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
+         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
+         self._publish(event)
+ 
+     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
+         """Capture the WebSocket closing handshake."""
+         meta = {"code": code, "reason": reason}
+         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
+         self._publish(event)
+         if self._last_sid == sid:
+             self._last_sid = None
+             self._policy_snapshot = None
+         self._sessions.pop(sid, None)
++        self._aggregators.pop(sid, None)
+ 
+     def on_tts_start(
+         self, sid: str, utt_id: str, post_hold_ms: int | None = None
+     ) -> None:
+         """Engage the TTS mask and emit a telemetry breadcrumb."""
+ 
+         session = self._ensure_session(sid)
+         session.tts_utt_id = utt_id
+ 
+         hold_ms = post_hold_ms or 0
+         tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
+         self._gate.set_reason(
+             "tts_active",
+             True,
+             sid=sid,
+             meta=tts_meta,
+         )
+ 
+         self._publish_tts_mask(sid, "engaged")
+ 
+         payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
+         event = self._envelope(sid, EVT_TTS_START, payload)
+         self._publish(event)
+         self._set_state(sid, RESPONDING, reason="tts_start")
+ 
++        aggregator = self._aggregators.get(sid)
++        if aggregator is not None:
++            aggregator.on_tts_start()
++
+     def on_tts_end(
+         self, sid: str, utt_id: str, post_hold_ms: int | None = None
+     ) -> None:
+         """Release the TTS mask and optionally engage a post-hold."""
+ 
+         hold_ms = post_hold_ms or 0
+         self._teardown_tts(sid, utt_id, post_hold_ms=hold_ms, transition_to_ready=True)
+ 
+     def on_asr_final(self, sid: str, text: str) -> None:
+         """Observe the final ASR transcript for a turn."""
+ 
+         self._set_state(sid, THINKING, reason="asr_final")
+ 
++    def on_asr_partial(
++        self,
++        sid: str,
++        req_id: str,
++        confidence: float,
++        partial_text: Optional[str] = None,
++    ) -> None:
++        aggregator = self._aggregators.get(sid)
++        if aggregator is not None:
++            aggregator.feed_asr_evidence(req_id, confidence, partial_text)
++
+     def on_auto_barge_attempt(
+         self, sid: str, source: str, *, reason: str | None = None
+     ) -> None:
+         """Handle an automatic barge-in attempt during assistant speech."""
+ 
+         if source not in {"auto_vad", "asr_evidence"}:
+             return
+ 
+         session = self._ensure_session(sid)
+         current_state = session.state
+ 
+         policy = self.policy_snapshot or {}
+         policy_enabled = bool(policy.get("barge_in_enabled"))
+ 
+         granted = bool(policy_enabled and current_state == RESPONDING)
+ 
+         deny_reason = reason
+         if current_state != RESPONDING:
+             granted = False
+             deny_reason = deny_reason or "state_not_responding"
+         elif not policy_enabled:
+             granted = False
+             deny_reason = deny_reason or "policy_disabled"
+ 
+         self._publish_barge(sid, source, granted, reason if granted else deny_reason)
+@@ -335,127 +353,157 @@ class EngineV2:
+         handle = self._barge_handles.pop(sid, None)
+         if handle is None:
+             return
+         if isinstance(handle, asyncio.Task) and not handle.done():
+             handle.cancel()
+         elif isinstance(handle, threading.Timer):
+             handle.cancel()
+ 
+     def _complete_auto_barge(self, sid: str) -> None:
+         self._barge_handles.pop(sid, None)
+         self._set_state(sid, LISTENING, reason="auto_barge_confirmed")
+         self._gate.set_reason("tts_active", False, sid=sid)
+ 
+     async def _release_system_hold_after(self, sid: str, post_hold_ms: int) -> None:
+         """Release the system_hold reason after the requested delay."""
+ 
+         await asyncio.sleep(post_hold_ms / 1000)
+         self._gate.set_reason("system_hold", False, sid=sid)
+         self._set_state(sid, READY, reason="tts_end")
+ 
+     def _ensure_session(self, sid: str) -> _TurnSession:
+         session = self._sessions.get(sid)
+         if session is None:
+             session = _TurnSession()
+             self._sessions[sid] = session
++            self._install_vad_aggregator(sid)
+         return session
+ 
++    def _install_vad_aggregator(self, sid: str) -> None:
++        if sid in self._aggregators:
++            return
++
++        def _policy_supplier() -> Dict[str, Any]:
++            snapshot = self.policy_snapshot or {}
++            return dict(snapshot)
++
++        aggregator = VADAggregator(sid, self._bus, _policy_supplier)
++        aggregator.set_grant_handler(
++            lambda source, info, *, _sid=sid: self._handle_vad_grant(_sid, source, info)
++        )
++        self._aggregators[sid] = aggregator
++
++    def _handle_vad_grant(self, sid: str, source: str, info: Dict[str, Any]) -> None:
++        reason = "vad_grant"
++        mode = info.get("mode") if isinstance(info, Mapping) else None
++        if mode == "and":
++            reason = "vad_grant_dual"
++        self.on_auto_barge_attempt(sid, source, reason=reason)
++
+     def _set_state(self, sid: str, new_state: str, *, reason: str | None = None) -> None:
+         """Transition the session state machine and emit telemetry breadcrumbs."""
+ 
+         session = self._ensure_session(sid)
+         previous = session.state
+         if previous == new_state:
+             return
+ 
+         now_ms = _now_ms()
+ 
+         if new_state == LISTENING:
+             session.turn_id = str(uuid.uuid4())
+             session.turn_started_ms = now_ms
+             begin_payload = {
+                 "meta": {"turn_id": session.turn_id, "state": LISTENING}
+             }
+             begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
+             self._publish(begin_event)
+ 
+         if (
+             new_state == READY
+             and previous in {LISTENING, THINKING, RESPONDING}
+             and session.turn_id
+         ):
+             start_ms = session.turn_started_ms or now_ms
+             duration_ms = now_ms - start_ms
+             if duration_ms <= 0:
+                 duration_ms = 1
+             end_payload = {
+                 "meta": {
+                     "turn_id": session.turn_id,
+                     "duration_ms": duration_ms,
+                 }
+             }
+             end_event = self._envelope(sid, EVT_TURN_END, end_payload)
+             self._publish(end_event)
+             session.turn_id = None
+             session.turn_started_ms = None
+             session.tts_utt_id = None
+ 
+         session.state = new_state
+ 
++        aggregator = self._aggregators.get(sid)
++        if aggregator is not None:
++            aggregator.on_engine_mode_change(new_state)
++
+         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
+         if reason is not None:
+             breadcrumb_meta["reason"] = reason
+         breadcrumb_payload = {"meta": breadcrumb_meta}
+         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
+         self._publish(breadcrumb_event)
+ 
+     def _publish_tts_mask(self, sid: str, phase: str) -> None:
+         mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})
+         self._publish(mask_event)
+ 
+     def _teardown_tts(
+         self,
+         sid: str,
+         utt_id: str,
+         *,
+         reason: str | None = None,
+         post_hold_ms: int = 0,
+         transition_to_ready: bool,
+     ) -> None:
+         session = self._ensure_session(sid)
+         if session.tts_utt_id == utt_id:
+             session.tts_utt_id = None
+ 
++        aggregator = self._aggregators.get(sid)
++        if aggregator is not None:
++            aggregator.on_tts_end()
++
+         payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
+         if reason:
+             payload["reason"] = reason
+ 
+         event = self._envelope(sid, EVT_TTS_END, payload)
+         self._publish(event)
+ 
+-        self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
+         self._publish_tts_mask(sid, "cleared")
++        self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
+ 
+         if transition_to_ready:
+             if post_hold_ms > 0:
+                 self._gate.set_reason(
+                     "system_hold",
+                     True,
+                     sid=sid,
+                     meta={"tts": {"utt_id": utt_id, "post_hold_ms": post_hold_ms}},
+                 )
+                 asyncio.create_task(self._release_system_hold_after(sid, post_hold_ms))
+             else:
+                 self._set_state(sid, READY, reason="tts_end")
+ 
+     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
+         frame = {"type": "policy.interaction", "policy": snapshot}
+         preview = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {"ws": {"dir": "out", "size": len(preview.encode("utf-8")), "preview": preview}}
+         payload = {"meta": meta, "frame": frame}
+         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+         self._publish(event)
+ 
+     def _emit_policy_applied(
+         self,
+         sid: str,
+         previous: Dict[str, Any] | None,
+diff --git a/app/voice_v2/vad.py b/app/voice_v2/vad.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..9c271c202328fa5e441bb068ddea959912c7ddf9
+index 0000000000000000000000000000000000000000..e152a7e5a200ff2e1c817f424d6cc9f8a9f19599
 --- /dev/null
-+++ b/app/voice_v2/asr_base.py
-@@ -0,0 +1,281 @@
-+"""Abstract ASR provider base with retry and circuit breaker support."""
++++ b/app/voice_v2/vad.py
+@@ -0,0 +1,389 @@
++"""Dual-VAD aggregator with adaptive policy controls."""
 +from __future__ import annotations
 +
-+import abc
-+import asyncio
-+import inspect
++import math
 +import time
-+from collections import deque
-+from typing import Awaitable, Callable, Deque, Optional
-+
-+from app.telemetry import bus
-+
-+EVT_PROVIDER_OPEN = "EVT_PROVIDER_OPEN"
-+EVT_PROVIDER_TRIP = "EVT_PROVIDER_TRIP"
-+EVT_PROVIDER_CLOSE = "EVT_PROVIDER_CLOSE"
-+
-+ClockFn = Callable[[], float]
-+EventCallback = Callable[[str, Optional[dict]], None]
++from array import array
++from typing import Callable, Dict, List, Mapping, MutableMapping, Optional
 +
 +
-+class ProviderCircuitOpenError(RuntimeError):
-+    """Raised when the circuit breaker is open and rejecting calls."""
++def rms_dbfs_from_pcm16(samples: bytes) -> float:
++    """Return the RMS level in dBFS for 16-bit PCM samples."""
++
++    if not samples:
++        return -96.0
++
++    pcm = array("h")
++    pcm.frombytes(samples)
++    if not pcm:
++        return -96.0
++
++    total = 0.0
++    for value in pcm:
++        total += float(value * value)
++
++    rms = math.sqrt(total / len(pcm)) if pcm else 0.0
++    if rms <= 0.0:
++        return -96.0
++
++    peak = float(1 << 15)
++    dbfs = 20.0 * math.log10(rms / peak)
++    return max(-96.0, min(0.0, dbfs))
 +
 +
-+class ProviderTimeoutError(TimeoutError):
-+    """Raised when a provider invocation exceeds the allotted timeout."""
++class VADAggregator:
++    """Fuse auto energy and ASR evidence into a single decision stream."""
 +
++    DEFAULTS: Mapping[str, float | int | str] = {
++        "mode": "or",
++        "priority": "asr",
++        "min_speech_ms": 200,
++        "energy_threshold_dbfs": -45.0,
++        "hold_ms": 200,
++        "echo_suppression_ms": 350,
++        "barge_cooldown_ms": 250,
++        "asr_conf_threshold": 0.75,
++    }
 +
-+class ProviderCircuitBreaker:
-+    """Simple circuit breaker with error/timeout thresholds."""
++    MIN_MARGIN_DB = 10.0
++    MAX_MARGIN_DB = 18.0
++    NOISE_ALPHA = 0.05
 +
 +    def __init__(
 +        self,
-+        *,
-+        on_event: EventCallback,
-+        clock: ClockFn | None = None,
-+        error_threshold: int = 3,
-+        timeout_threshold: int = 2,
-+        timeout_window_s: float = 30.0,
-+        half_open_after_s: float = 15.0,
++        sid: str,
++        bus,
++        policy_supplier: Callable[[], MutableMapping[str, object] | Mapping[str, object] | None],
 +    ) -> None:
-+        if error_threshold < 1:
-+            raise ValueError("error_threshold must be >= 1")
-+        if timeout_threshold < 1:
-+            raise ValueError("timeout_threshold must be >= 1")
-+        if timeout_window_s <= 0:
-+            raise ValueError("timeout_window_s must be > 0")
-+        if half_open_after_s <= 0:
-+            raise ValueError("half_open_after_s must be > 0")
++        self._sid = sid
++        self._bus = bus
++        self._policy_supplier = policy_supplier
++        self._policy: Dict[str, float | int | str] = {}
 +
-+        self._state = "closed"
-+        self._on_event = on_event
-+        self._clock = clock or time.monotonic
-+        self._error_threshold = error_threshold
-+        self._timeout_threshold = timeout_threshold
-+        self._timeout_window_s = timeout_window_s
-+        self._half_open_after_s = half_open_after_s
-+        self._opened_at: float | None = None
-+        self._consecutive_errors = 0
-+        self._timeouts: Deque[float] = deque()
-+        self._probe_active = False
++        self._engine_mode: Optional[str] = None
++        self._in_tts = False
++        self._echo_suppressed_until_ms = 0
++        self._grant_locked = False
++        self._last_grant_ms = 0
 +
-+    # ------------------------------------------------------------------
-+    # Properties
-+    # ------------------------------------------------------------------
-+    @property
-+    def state(self) -> str:
-+        """Return the current breaker state (closed/open/half_open)."""
++        self._auto_contiguous_ms = 0
++        self._auto_inactive_ms = 0
++        self._auto_active_duration_ms = 0
++        self._auto_active = False
++        self._auto_last_dbfs = -96.0
 +
-+        return self._state
++        self._asr_active = False
++        self._asr_confidence = 0.0
++        self._asr_last_update_ms = 0
 +
-+    # ------------------------------------------------------------------
-+    # Lifecycle management
-+    # ------------------------------------------------------------------
-+    def before_call(self) -> None:
-+        """Raise if the breaker is open; transition to half-open when ready."""
++        baseline = float(self.DEFAULTS["energy_threshold_dbfs"])
++        self._margin_db = (self.MIN_MARGIN_DB + self.MAX_MARGIN_DB) / 2.0
++        self._nf_dbfs = baseline - self._margin_db
++        self._environment = "normal"
++        self._false_positive_events: List[int] = []
 +
-+        now = self._clock()
-+        if self._state == "open":
-+            if self._opened_at is not None and now - self._opened_at >= self._half_open_after_s:
-+                self._state = "half_open"
-+                self._probe_active = True
-+                self._on_event(EVT_PROVIDER_OPEN, {"state": "half_open"})
-+                return
-+            raise ProviderCircuitOpenError("provider circuit is open")
++        self._grant_handler: Optional[Callable[[str, Dict[str, object]], None]] = None
 +
-+        if self._state == "half_open":
-+            if self._probe_active:
-+                raise ProviderCircuitOpenError("half-open probe already active")
-+            self._probe_active = True
-+            return
-+
-+        self._probe_active = True
-+
-+    def record_success(self) -> None:
-+        """Reset error counters and close the breaker if necessary."""
-+
-+        self._probe_active = False
-+        self._consecutive_errors = 0
-+        self._timeouts.clear()
-+        if self._state != "closed":
-+            self._state = "closed"
-+            self._opened_at = None
-+            self._on_event(EVT_PROVIDER_CLOSE, {"state": "closed"})
-+
-+    def record_failure(self, *, is_timeout: bool) -> bool:
-+        """Register a failure and return whether another attempt is allowed."""
-+
-+        self._probe_active = False
-+        now = self._clock()
-+        self._consecutive_errors += 1
-+        if is_timeout:
-+            self._timeouts.append(now)
-+        self._trim_timeouts(now)
-+
-+        if self._state == "half_open":
-+            self._trip(now, reason="half_open_failure")
-+            return False
-+
-+        if self._consecutive_errors >= self._error_threshold:
-+            self._trip(now, reason="error_threshold")
-+            return False
-+
-+        if len(self._timeouts) >= self._timeout_threshold:
-+            self._trip(now, reason="timeout_threshold")
-+            return False
-+
-+        return True
-+
-+    # ------------------------------------------------------------------
-+    # Internal helpers
-+    # ------------------------------------------------------------------
-+    def _trim_timeouts(self, now: float) -> None:
-+        window = self._timeout_window_s
-+        while self._timeouts and now - self._timeouts[0] > window:
-+            self._timeouts.popleft()
-+
-+    def _trip(self, now: float, *, reason: str) -> None:
-+        self._state = "open"
-+        self._opened_at = now
-+        self._on_event(EVT_PROVIDER_TRIP, {"state": "open", "reason": reason})
++        self._refresh_policy()
 +
 +    # ------------------------------------------------------------------
 +    # Public API
 +    # ------------------------------------------------------------------
-+    def reset(self) -> None:
-+        """Force-close the breaker and clear counters."""
++    def set_grant_handler(self, handler: Callable[[str, Dict[str, object]], None]) -> None:
++        self._grant_handler = handler
 +
-+        self._state = "closed"
-+        self._opened_at = None
-+        self._consecutive_errors = 0
-+        self._timeouts.clear()
-+        self._probe_active = False
++    def feed_auto_energy(self, dbfs: float, frame_ms: int = 20) -> None:
++        self._refresh_policy()
++        now_ms = self._now_ms()
++        self._expire_asr(now_ms)
 +
++        threshold = self.dynamic_threshold_dbfs()
++        effective_mode, _, min_speech_ms = self._effective_settings()
 +
-+class ProviderAdapterBase(abc.ABC):
-+    """Shared plumbing for provider adapters with retry & breaker logic."""
++        suppressed = self._in_tts and now_ms < self._echo_suppressed_until_ms
 +
-+    def __init__(
++        if dbfs < threshold:
++            self._update_noise_floor(dbfs)
++
++        if suppressed:
++            if self._auto_active:
++                self._auto_inactive_ms += frame_ms
++                self._auto_active_duration_ms += frame_ms
++                if self._auto_inactive_ms >= self._policy_hold_ms():
++                    self._set_auto_active(False, dbfs)
++            return
++
++        if dbfs >= threshold:
++            self._auto_contiguous_ms += frame_ms
++            self._auto_inactive_ms = 0
++            if not self._auto_active and self._auto_contiguous_ms >= min_speech_ms:
++                self._auto_active_duration_ms = self._auto_contiguous_ms
++                self._set_auto_active(True, dbfs)
++            elif self._auto_active:
++                self._auto_active_duration_ms += frame_ms
++        else:
++            if self._auto_active:
++                self._auto_active_duration_ms += frame_ms
++                self._auto_inactive_ms += frame_ms
++                if self._auto_inactive_ms >= self._policy_hold_ms():
++                    self._set_auto_active(False, dbfs)
++            self._auto_contiguous_ms = 0
++
++        self._attempt_grant("auto_vad", effective_mode, now_ms)
++
++    def feed_asr_evidence(
 +        self,
-+        *,
-+        vendor: str,
-+        provider_type: str,
-+        telemetry_bus=bus,
-+        retries: int = 1,
-+        timeout_s: float = 10.0,
-+        clock: ClockFn | None = None,
++        req_id: str,
++        confidence: float,
++        partial_text: Optional[str] = None,
 +    ) -> None:
-+        if not vendor:
-+            raise ValueError("vendor must be provided")
-+        if retries < 0:
-+            raise ValueError("retries must be >= 0")
-+        if timeout_s <= 0:
-+            raise ValueError("timeout_s must be > 0")
++        self._refresh_policy()
++        now_ms = self._now_ms()
++        self._expire_asr(now_ms)
 +
-+        self._vendor = vendor
-+        self._provider_type = provider_type
-+        self._bus = telemetry_bus
-+        self._timeout_s = float(timeout_s)
-+        self._max_attempts = int(retries) + 1
-+        self._breaker = ProviderCircuitBreaker(on_event=self._emit_breaker_event, clock=clock)
++        threshold = float(self._policy["asr_conf_threshold"])
++        if confidence >= threshold:
++            if not self._asr_active:
++                self._set_asr_active(True, confidence)
++            self._asr_confidence = confidence
++            self._asr_last_update_ms = now_ms
++        else:
++            if self._asr_active:
++                self._set_asr_active(False, confidence)
++            self._asr_confidence = confidence
++            self._asr_last_update_ms = now_ms
 +
-+    @property
-+    def vendor(self) -> str:
-+        return self._vendor
++        effective_mode, _, _ = self._effective_settings()
++        self._attempt_grant("asr_evidence", effective_mode, now_ms)
 +
-+    @property
-+    def breaker_state(self) -> str:
-+        return self._breaker.state
++    def on_tts_start(self) -> None:
++        self._refresh_policy()
++        now_ms = self._now_ms()
++        self._in_tts = True
++        self._echo_suppressed_until_ms = now_ms + int(self._policy["echo_suppression_ms"])
++        self._grant_locked = False
++        self._auto_contiguous_ms = 0
++        self._auto_inactive_ms = 0
 +
-+    async def _invoke_with_breaker(
-+        self,
-+        operation: Callable[..., Awaitable[object]],
-+        *args,
-+        **kwargs,
-+    ) -> object:
-+        attempt = 0
-+        last_error: BaseException | None = None
-+        while attempt < self._max_attempts:
-+            self._breaker.before_call()
-+            try:
-+                result = operation(*args, **kwargs)
-+                if not inspect.isawaitable(result):
-+                    raise TypeError("provider operations must return an awaitable")
-+                outcome = await asyncio.wait_for(result, timeout=self._timeout_s)
-+            except asyncio.TimeoutError as exc:
-+                last_error = ProviderTimeoutError(
-+                    f"{self._provider_type} provider '{self._vendor}' timed out"
-+                )
-+                retry_allowed = self._breaker.record_failure(is_timeout=True)
-+                attempt += 1
-+                if retry_allowed and attempt < self._max_attempts:
-+                    continue
-+                raise last_error from exc
-+            except Exception as exc:  # pragma: no cover - broad but intentional
-+                last_error = exc
-+                retry_allowed = self._breaker.record_failure(is_timeout=False)
-+                attempt += 1
-+                if retry_allowed and attempt < self._max_attempts:
-+                    continue
-+                raise
++    def on_tts_end(self) -> None:
++        self._in_tts = False
++        self._echo_suppressed_until_ms = 0
++        self._grant_locked = False
++        self._auto_contiguous_ms = 0
++        self._auto_inactive_ms = 0
++        if self._auto_active:
++            self._set_auto_active(False, self._auto_last_dbfs)
++
++    def on_engine_mode_change(self, mode: str) -> None:
++        self._engine_mode = mode
++        if mode not in {"AssistantSpeaking", "Responding", "RESPONDING"}:
++            self._grant_locked = False
++
++    def dynamic_threshold_dbfs(self) -> float:
++        baseline = float(self._policy["energy_threshold_dbfs"])
++        return max(baseline, self._nf_dbfs + self._margin_db)
++
++    # ------------------------------------------------------------------
++    # Internal helpers
++    # ------------------------------------------------------------------
++    def _now_ms(self) -> int:
++        return int(time.monotonic() * 1000)
++
++    def _refresh_policy(self) -> None:
++        snapshot: Mapping[str, object] | None
++        try:
++            snapshot = self._policy_supplier() or {}
++        except Exception:  # pragma: no cover - defensive
++            snapshot = {}
++
++        vad_block: Mapping[str, object] = {}
++        if isinstance(snapshot, Mapping):
++            maybe_vad = snapshot.get("vad")
++            if isinstance(maybe_vad, Mapping):
++                vad_block = maybe_vad
++
++        combined: Dict[str, float | int | str] = dict(self.DEFAULTS)
++        for key, value in vad_block.items():
++            if key in combined:
++                combined[key] = value
++
++        if combined == self._policy:
++            return
++
++        self._policy = combined
++        baseline = float(combined["energy_threshold_dbfs"])
++        if self._nf_dbfs + self._margin_db < baseline:
++            self._nf_dbfs = baseline - self._margin_db
++
++    def _policy_hold_ms(self) -> int:
++        return int(self._policy["hold_ms"])
++
++    def _effective_settings(self) -> tuple[str, str, int]:
++        mode = str(self._policy["mode"]).lower()
++        priority = str(self._policy["priority"]).lower()
++        min_speech_ms = int(self._policy["min_speech_ms"])
++
++        self._prune_false_positive_events(self._now_ms())
++
++        nf = self._nf_dbfs
++        margin = self._margin_db
++        environment = "normal"
++        if nf > -38 or len(self._false_positive_events) >= 2:
++            environment = "noisy"
++        elif nf < -60 and not self._false_positive_events:
++            environment = "quiet"
++
++        self._environment = environment
++
++        if environment == "noisy":
++            min_speech_ms = min(500, max(200, min_speech_ms + 100))
++        elif environment == "quiet":
++            if mode == "or":
++                min_speech_ms = max(200, int(self.DEFAULTS["min_speech_ms"]))
 +            else:
-+                self._breaker.record_success()
-+                return outcome
-+        if last_error is not None:
-+            raise last_error
-+        raise RuntimeError("provider invocation aborted without executing")
++                min_speech_ms = max(200, min_speech_ms)
 +
-+    def _emit_breaker_event(self, event_type: str, meta: Optional[dict]) -> None:
-+        event = {
-+            "type": event_type,
-+            "vendor": self._vendor,
-+            "provider_type": self._provider_type,
-+            "source": f"{self._provider_type}_breaker",
++        return mode, priority, min_speech_ms
++
++    def _expire_asr(self, now_ms: int) -> None:
++        if not self._asr_active:
++            return
++        timeout = max(self._policy_hold_ms(), 400)
++        if now_ms - self._asr_last_update_ms >= timeout:
++            self._set_asr_active(False, self._asr_confidence)
++
++    def _set_auto_active(self, active: bool, dbfs: float) -> None:
++        if self._auto_active == active:
++            return
++
++        self._auto_active = active
++        self._auto_last_dbfs = dbfs
++        phase = "start" if active else "stop"
++        payload = {
++            "type": "EVT_VAD",
++            "sid": self._sid,
++            "phase": phase,
++            "metric": {"dbfs": float(dbfs), "active_ms": int(self._auto_active_duration_ms)},
++            "who": "server",
++            "source": "auto_vad",
 +        }
-+        if meta:
-+            event["meta"] = meta
-+        self._bus.publish(event)
++        self._bus.publish(payload)
++        if not active:
++            self._auto_active_duration_ms = 0
 +
++    def _set_asr_active(self, active: bool, confidence: float) -> None:
++        if self._asr_active == active and active:
++            return
 +
-+class ASRProviderBase(ProviderAdapterBase):
-+    """Abstract base class for streaming ASR providers."""
++        self._asr_active = active
++        phase = "start" if active else "stop"
++        payload = {
++            "type": "EVT_VAD",
++            "sid": self._sid,
++            "phase": phase,
++            "metric": {"confidence": float(confidence)},
++            "who": "server",
++            "source": "asr_evidence",
++        }
++        self._bus.publish(payload)
 +
-+    def __init__(
-+        self,
-+        *,
-+        vendor: str,
-+        telemetry_bus=bus,
-+        retries: int = 1,
-+        timeout_s: float = 10.0,
-+        clock: ClockFn | None = None,
-+    ) -> None:
-+        super().__init__(
-+            vendor=vendor,
-+            provider_type="asr",
-+            telemetry_bus=telemetry_bus,
-+            retries=retries,
-+            timeout_s=timeout_s,
-+            clock=clock,
-+        )
++    def _attempt_grant(self, trigger: str, effective_mode: str, now_ms: int) -> None:
++        reasons: List[str] = []
 +
-+    async def recognize(self, *args, **kwargs) -> object:
-+        """Invoke the provider-specific recognition implementation."""
++        allowed_modes = {"AssistantSpeaking", "Responding", "RESPONDING"}
++        if self._engine_mode not in allowed_modes:
++            reasons.append("engine_not_assistant_speaking")
 +
-+        return await self._invoke_with_breaker(self._recognize_impl, *args, **kwargs)
++        cooldown_ms = int(self._policy["barge_cooldown_ms"])
++        in_cooldown = now_ms - self._last_grant_ms < cooldown_ms
++        if in_cooldown:
++            reasons.append("cooldown_active")
 +
-+    @abc.abstractmethod
-+    async def _recognize_impl(self, *args, **kwargs) -> object:
-+        """Concrete providers must implement this coroutine."""
++        if self._grant_locked:
++            reasons.append("single_grant_lock")
 +
++        if self._in_tts and now_ms < self._echo_suppressed_until_ms:
++            reasons.append("echo_suppression_active")
 +
-+__all__ = [
-+    "ASRProviderBase",
-+    "ProviderAdapterBase",
-+    "EVT_PROVIDER_CLOSE",
-+    "EVT_PROVIDER_OPEN",
-+    "EVT_PROVIDER_TRIP",
-+    "ProviderCircuitBreaker",
-+    "ProviderCircuitOpenError",
-+    "ProviderTimeoutError",
-+]
-diff --git a/app/voice_v2/llm_base.py b/app/voice_v2/llm_base.py
++        auto_active = self._auto_active
++        asr_active = self._asr_active
++
++        reasons.append("auto_vad_active" if auto_active else "auto_vad_inactive")
++        reasons.append("asr_evidence_active" if asr_active else "asr_evidence_inactive")
++
++        granted = False
++        grant_source = trigger
++
++        if not self._in_tts:
++            reasons.append("tts_inactive")
++        else:
++            if effective_mode == "and":
++                granted = auto_active and asr_active
++                if granted:
++                    grant_source = "auto_vad" if trigger == "auto_vad" else "asr_evidence"
++            elif effective_mode == "or":
++                if auto_active or asr_active:
++                    grant_source = "auto_vad" if auto_active else "asr_evidence"
++                    granted = True
++            elif effective_mode == "priority":
++                priority = str(self._policy["priority"]).lower()
++                if priority == "auto":
++                    granted = auto_active
++                    grant_source = "auto_vad"
++                else:
++                    granted = asr_active
++                    grant_source = "asr_evidence"
++
++        if reasons and granted:
++            reasons.append("mode:" + effective_mode)
++
++        if granted:
++            if in_cooldown or self._grant_locked:
++                granted = False
++                reasons.append("grant_blocked")
++
++        if granted and self._engine_mode not in allowed_modes:
++            granted = False
++
++        decision_payload = {
++            "type": "EVT_VAD_DECISION",
++            "sid": self._sid,
++            "mode": effective_mode,
++            "granted": bool(granted),
++            "reasons": list(reasons),
++            "nf_dbfs": float(self._nf_dbfs),
++            "margin_db": float(self._margin_db),
++            "environment": self._environment,
++            "who": "server",
++            "source": "policy",
++        }
++        self._bus.publish(decision_payload)
++
++        if not granted:
++            if asr_active and not auto_active and effective_mode in {"and", "priority"}:
++                self._register_miss()
++            return
++
++        self._grant_locked = True
++        self._last_grant_ms = now_ms
++
++        if grant_source == "auto_vad" and self._asr_confidence < float(self._policy["asr_conf_threshold"]) - 0.1:
++            self._register_false_positive(now_ms)
++
++        if self._grant_handler is not None:
++            self._grant_handler(grant_source, {"mode": effective_mode, "reasons": reasons})
++
++    def _register_false_positive(self, now_ms: int) -> None:
++        self._margin_db = min(self.MAX_MARGIN_DB, self._margin_db + 1.5)
++        self._false_positive_events.append(now_ms)
++
++    def _register_miss(self) -> None:
++        self._margin_db = max(self.MIN_MARGIN_DB, self._margin_db - 1.0)
++
++    def _prune_false_positive_events(self, now_ms: int) -> None:
++        window_ms = 5000
++        self._false_positive_events = [ts for ts in self._false_positive_events if now_ms - ts < window_ms]
++
++    def _update_noise_floor(self, dbfs: float) -> None:
++        self._nf_dbfs = (1.0 - self.NOISE_ALPHA) * self._nf_dbfs + self.NOISE_ALPHA * float(dbfs)
++
+diff --git a/scripts/run_build05_tests.sh b/scripts/run_build05_tests.sh
+index 11ba13ba1ed81fd0d5625e480245c3ce84d7da6f..810193f22acbaf342384abb9320d92ed30a55396 100644
+--- a/scripts/run_build05_tests.sh
++++ b/scripts/run_build05_tests.sh
+@@ -1,9 +1,10 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ export PYTHONPATH="${PYTHONPATH:-.}:."
+ PY="${PYTHON:=python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python
+ "$PY" -m unittest -v \
+   tests.test_asr_adapter_basic \
+   tests.test_llm_stub \
++  tests.test_dual_vad_arbiter \
+   tests.test_tts_stub
+ echo "BUILD_05_TESTS: PASS"
+diff --git a/tests/test_dual_vad_arbiter.py b/tests/test_dual_vad_arbiter.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e56588abef6b8fe5f9a1b355809e33a441d1b5e3
+index 0000000000000000000000000000000000000000..fc9e96ac10054d87837da0ea833e5b5598379483
 --- /dev/null
-+++ b/app/voice_v2/llm_base.py
-@@ -0,0 +1,59 @@
-+"""Abstract LLM provider base built on the shared circuit breaker plumbing."""
++++ b/tests/test_dual_vad_arbiter.py
+@@ -0,0 +1,367 @@
 +from __future__ import annotations
 +
-+import abc
++import unittest
++from typing import Any, Dict, List, Optional
 +
-+from app.telemetry import bus
-+
-+from .asr_base import (
-+    EVT_PROVIDER_CLOSE,
-+    EVT_PROVIDER_OPEN,
-+    EVT_PROVIDER_TRIP,
-+    ClockFn,
-+    ProviderAdapterBase,
-+    ProviderCircuitBreaker,
-+    ProviderCircuitOpenError,
-+    ProviderTimeoutError,
-+)
++from app.voice_v2.engine import CONFIRMING_BARGE, LISTENING, RESPONDING, EngineV2
++from app.voice_v2.vad import VADAggregator
 +
 +
-+class LLMProviderBase(ProviderAdapterBase):
-+    """Base class for LLM providers with retry and breaker semantics."""
++class _FakeBus:
++    def __init__(self) -> None:
++        self.events: List[Dict[str, Any]] = []
 +
-+    def __init__(
++    def publish(self, event: Dict[str, Any]) -> None:
++        self.events.append(dict(event))
++
++
++class _FakeExporter:
++    def __init__(self) -> None:
++        self.events: List[Dict[str, Any]] = []
++
++    def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - exercised indirectly
++        payload = dict(event)
++        payload.setdefault("sid", sid)
++        self.events.append(payload)
++
++
++def _base_policy(mode: str = "or", priority: str = "asr", overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
++    policy = {
++        "barge_in_enabled": True,
++        "vad": {
++            "mode": mode,
++            "priority": priority,
++            "min_speech_ms": 200,
++            "energy_threshold_dbfs": -45.0,
++            "hold_ms": 200,
++            "echo_suppression_ms": 350,
++            "barge_cooldown_ms": 250,
++            "asr_conf_threshold": 0.75,
++        },
++    }
++    if overrides:
++        policy["vad"].update(overrides)
++    return policy
++
++
++class DualVADAggregatorTests(unittest.TestCase):
++    def setUp(self) -> None:
++        self.bus = _FakeBus()
++        self.current_time = 0
++
++    def _create_aggregator(
 +        self,
 +        *,
-+        vendor: str,
-+        telemetry_bus=bus,
-+        retries: int = 1,
-+        timeout_s: float = 10.0,
-+        clock: ClockFn | None = None,
-+    ) -> None:
-+        super().__init__(
-+            vendor=vendor,
-+            provider_type="llm",
-+            telemetry_bus=telemetry_bus,
-+            retries=retries,
-+            timeout_s=timeout_s,
-+            clock=clock,
++        sid: str = "sid-a",
++        mode: str = "or",
++        priority: str = "asr",
++        overrides: Optional[Dict[str, Any]] = None,
++    ) -> tuple[VADAggregator, Dict[str, Any]]:
++        snapshot = _base_policy(mode, priority, overrides)
++
++        def supplier() -> Dict[str, Any]:
++            return snapshot
++
++        aggregator = VADAggregator(sid, self.bus, supplier)
++        aggregator._now_ms = lambda: int(self.current_time)  # type: ignore[attr-defined]
++        return aggregator, snapshot
++
++    def _advance(self, delta_ms: int) -> None:
++        self.current_time += delta_ms
++
++    def _collect_events(self, event_type: str) -> List[Dict[str, Any]]:
++        return [evt for evt in self.bus.events if evt.get("type") == event_type]
++
++    def test_or_mode_grants_from_auto_or_asr(self) -> None:
++        aggregator, _ = self._create_aggregator()
++        grants: List[tuple[str, Dict[str, Any]]] = []
++        aggregator.set_grant_handler(lambda source, info: grants.append((source, dict(info))))
++        aggregator.on_engine_mode_change(RESPONDING)
++        self.current_time = 0
++        aggregator.on_tts_start()
++
++        self.current_time = 400
++        for _ in range(12):
++            aggregator.feed_auto_energy(-28.0)
++            self._advance(20)
++        for _ in range(12):
++            aggregator.feed_auto_energy(-70.0)
++            self._advance(20)
++
++        self.assertEqual(len(grants), 1)
++        self.assertEqual(grants[0][0], "auto_vad")
++
++        auto_events = self._collect_events("EVT_VAD")
++        phases = [evt.get("phase") for evt in auto_events if evt.get("source") == "auto_vad"]
++        self.assertIn("start", phases)
++        self.assertIn("stop", phases)
++
++        decisions = [
++            evt
++            for evt in self.bus.events
++            if evt.get("type") == "EVT_VAD_DECISION" and evt.get("granted")
++        ]
++        self.assertTrue(decisions)
++        self.bus.events.clear()
++
++        # ASR-only path still grants in OR mode.
++        last_grant = aggregator._last_grant_ms  # type: ignore[attr-defined]
++        aggregator.on_tts_end()
++        self.current_time = last_grant
++        aggregator.on_tts_start()
++        self.current_time = last_grant + 500
++        grants.clear()
++        aggregator.feed_asr_evidence("req-1", 0.85, "hi")
++        self.assertEqual(len(grants), 1)
++        self.assertEqual(grants[0][0], "asr_evidence")
++
++    def test_and_mode_requires_both_sources(self) -> None:
++        aggregator, _ = self._create_aggregator(mode="and")
++        grants: List[tuple[str, Dict[str, Any]]] = []
++        aggregator.set_grant_handler(lambda source, info: grants.append((source, dict(info))))
++        aggregator.on_engine_mode_change(RESPONDING)
++        self.current_time = 0
++        aggregator.on_tts_start()
++        self.current_time = 400
++
++        for _ in range(12):
++            aggregator.feed_auto_energy(-28.0)
++            self._advance(20)
++        for _ in range(12):
++            aggregator.feed_auto_energy(-70.0)
++            self._advance(20)
++        self.assertFalse(grants)
++
++        aggregator.feed_asr_evidence("req-2", 0.9, "hello")
++        self.assertFalse(grants)
++
++        for _ in range(12):
++            aggregator.feed_auto_energy(-27.0)
++            self._advance(20)
++        aggregator.feed_auto_energy(-65.0)
++
++        self.assertEqual(len(grants), 1)
++        reasons = grants[0][1].get("reasons", [])
++        joined = " ".join(reasons)
++        self.assertIn("auto_vad_active", joined)
++        self.assertIn("asr_evidence_active", joined)
++
++    def test_priority_modes_respect_requested_source(self) -> None:
++        asr_priority, _ = self._create_aggregator(mode="priority", priority="asr")
++        asr_priority.set_grant_handler(lambda source, info: self.fail("auto path should not grant"))
++        asr_priority.on_engine_mode_change(RESPONDING)
++        self.current_time = 0
++        asr_priority.on_tts_start()
++        self.current_time = 400
++        for _ in range(12):
++            asr_priority.feed_auto_energy(-28.0)
++            self._advance(20)
++        asr_priority.feed_auto_energy(-70.0)
++
++        asr_grants: List[str] = []
++        asr_priority.set_grant_handler(lambda source, info: asr_grants.append(source))
++        asr_priority.feed_asr_evidence("req-3", 0.85, "hi")
++        self.assertEqual(asr_grants, ["asr_evidence"])
++
++        auto_priority, _ = self._create_aggregator(mode="priority", priority="auto")
++        auto_priority.on_engine_mode_change(RESPONDING)
++        self.current_time = 0
++        auto_priority.on_tts_start()
++        self.current_time = 400
++        auto_grants: List[str] = []
++        auto_priority.set_grant_handler(lambda source, info: auto_grants.append(source))
++        auto_priority.feed_asr_evidence("req-4", 0.9, "no grant")
++        self.assertFalse(auto_grants)
++
++        for _ in range(12):
++            auto_priority.feed_auto_energy(-28.0)
++            self._advance(20)
++        auto_priority.feed_auto_energy(-55.0)
++        self.assertEqual(auto_grants, ["auto_vad"])
++
++    def test_echo_suppression_blocks_initial_energy(self) -> None:
++        aggregator, _ = self._create_aggregator()
++        aggregator.on_engine_mode_change(RESPONDING)
++        self.current_time = 0
++        aggregator.on_tts_start()
++        grants: List[str] = []
++        aggregator.set_grant_handler(lambda source, info: grants.append(source))
++
++        self.current_time = 100
++        for _ in range(10):
++            aggregator.feed_auto_energy(-26.0)
++            self._advance(20)
++        self.assertFalse(grants)
++
++        self.current_time = 400
++        for _ in range(12):
++            aggregator.feed_auto_energy(-28.0)
++            self._advance(20)
++        aggregator.feed_auto_energy(-60.0)
++        self.assertEqual(grants, ["auto_vad"])
++
++    def test_hysteresis_and_cooldown_behavior(self) -> None:
++        aggregator, _ = self._create_aggregator()
++        aggregator.on_engine_mode_change(RESPONDING)
++        self.current_time = 0
++        aggregator.on_tts_start()
++        grants: List[str] = []
++        aggregator.set_grant_handler(lambda source, info: grants.append(source))
++        self.current_time = 400
++
++        for _ in range(5):
++            aggregator.feed_auto_energy(-28.0)
++            self._advance(20)
++        self.assertFalse(grants)
++        aggregator.feed_auto_energy(-70.0)
++
++        for _ in range(12):
++            aggregator.feed_auto_energy(-27.0)
++            self._advance(20)
++        aggregator.feed_auto_energy(-65.0)
++        self.assertEqual(grants, ["auto_vad"])
++        last_grant = aggregator._last_grant_ms  # type: ignore[attr-defined]
++
++        aggregator.on_tts_end()
++        self.current_time = last_grant
++        aggregator.on_tts_start()
++        self.current_time = last_grant + 100
++        aggregator.feed_asr_evidence("req-5", 0.9, "hi")
++        self.assertEqual(len(grants), 1)
++
++        self.current_time = last_grant + 500
++        aggregator.feed_asr_evidence("req-6", 0.9, "hi again")
++        self.assertEqual(len(grants), 2)
++
++    def test_single_grant_per_tts(self) -> None:
++        aggregator, _ = self._create_aggregator()
++        grants: List[str] = []
++        aggregator.set_grant_handler(lambda source, info: grants.append(source))
++        aggregator.on_engine_mode_change(RESPONDING)
++        self.current_time = 0
++        aggregator.on_tts_start()
++        self.current_time = 400
++        aggregator.feed_asr_evidence("req-7", 0.9, "hi")
++        self.assertEqual(grants, ["asr_evidence"])
++        aggregator.feed_auto_energy(-25.0)
++        aggregator.feed_auto_energy(-25.0)
++        self.assertEqual(grants, ["asr_evidence"])
++
++        aggregator.on_tts_end()
++        self.current_time = 0
++        aggregator.on_tts_start()
++        self.current_time = 1000
++        aggregator.feed_auto_energy(-27.0)
++        aggregator.feed_auto_energy(-27.0)
++        for _ in range(10):
++            aggregator.feed_auto_energy(-27.0)
++        aggregator.feed_auto_energy(-60.0)
++        self.assertEqual(grants[-1], "auto_vad")
++
++    def test_adaptation_adjusts_margin_and_threshold(self) -> None:
++        aggregator, _ = self._create_aggregator()
++        aggregator.on_engine_mode_change(RESPONDING)
++        self.current_time = 0
++        aggregator.on_tts_start()
++        self.current_time = 400
++        aggregator.feed_asr_evidence("req-low", 0.2, "noise")
++        initial_margin = aggregator._margin_db  # type: ignore[attr-defined]
++        initial_threshold = aggregator.dynamic_threshold_dbfs()
++
++        for _ in range(12):
++            aggregator.feed_auto_energy(-28.0)
++            self._advance(20)
++        aggregator.feed_auto_energy(-60.0)
++        self.assertGreaterEqual(aggregator._margin_db, initial_margin)
++        self.assertGreaterEqual(aggregator.dynamic_threshold_dbfs(), initial_threshold)
++
++        aggregator.on_tts_end()
++        for _ in range(200):
++            aggregator.feed_auto_energy(-52.0)
++
++        noisy_nf = aggregator._nf_dbfs  # type: ignore[attr-defined]
++        self.assertLess(noisy_nf, -40.0)
++
++        miss_agg, _ = self._create_aggregator(mode="and")
++        miss_agg.on_engine_mode_change(RESPONDING)
++        self.current_time = 0
++        miss_agg.on_tts_start()
++        self.current_time = 400
++        baseline_margin = miss_agg._margin_db  # type: ignore[attr-defined]
++        for _ in range(50):
++            miss_agg.feed_auto_energy(-70.0)
++        miss_agg.feed_asr_evidence("req-hi", 0.9, "hello")
++        self.assertLessEqual(miss_agg._margin_db, baseline_margin)
++        miss_agg.feed_auto_energy(-70.0)
++        self.assertGreaterEqual(miss_agg.dynamic_threshold_dbfs(), miss_agg._nf_dbfs + miss_agg._margin_db)  # type: ignore[attr-defined]
++
++    def test_per_session_isolation(self) -> None:
++        aggregator_a, _ = self._create_aggregator(sid="sid-a")
++        aggregator_b, _ = self._create_aggregator(sid="sid-b")
++        grants_a: List[str] = []
++        grants_b: List[str] = []
++        aggregator_a.set_grant_handler(lambda source, info: grants_a.append(source))
++        aggregator_b.set_grant_handler(lambda source, info: grants_b.append(source))
++
++        aggregator_a.on_engine_mode_change(RESPONDING)
++        aggregator_a.on_tts_start()
++        self.current_time = 400
++        for _ in range(12):
++            aggregator_a.feed_auto_energy(-28.0)
++            self._advance(20)
++        aggregator_a.feed_auto_energy(-60.0)
++
++        self.assertEqual(grants_a, ["auto_vad"])
++        self.assertFalse(grants_b)
++
++    def test_engine_integration_path(self) -> None:
++        bus = _FakeBus()
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter, telemetry_bus=bus)
++        sid = "sid-eng"
++        engine.policy_snapshot = _base_policy()
++        engine._schedule_barge_confirmation = lambda _: None  # type: ignore[assignment]
++        engine.reapply_policy = lambda overrides=None: False  # type: ignore[assignment]
++
++        engine._ensure_session(sid)
++        aggregator = engine._aggregators[sid]
++        self.current_time = 0
++        aggregator._now_ms = lambda: int(self.current_time)  # type: ignore[attr-defined]
++
++        engine.on_tts_start(sid, "utt-1")
++        session = engine._ensure_session(sid)
++        self.assertEqual(session.state, RESPONDING)
++
++        self.current_time = 400
++        engine.on_asr_partial(sid, "req-10", 0.85, "go")
++
++        self.assertEqual(session.state, CONFIRMING_BARGE)
++
++        types = [evt.get("type") for evt in bus.events]
++        barge_index = types.index("EVT_BARGE_IN")
++        tts_end_index = types.index("EVT_TTS_END")
++        mask_index = next(
++            i
++            for i, evt in enumerate(bus.events)
++            if evt.get("type") == "EVT_TTS_MASK" and evt.get("phase") == "cleared"
++        )
++        mic_index = next(
++            i
++            for i, evt in enumerate(bus.events)
++            if evt.get("type") == "EVT_MIC_GATE"
++            and not evt.get("meta", {}).get("gate", {}).get("reasons", {}).get("tts_active", True)
 +        )
 +
-+    async def generate(self, *args, **kwargs) -> object:
-+        """Execute the LLM request with retry and breaker protections."""
++        self.assertLess(barge_index, tts_end_index)
++        self.assertLess(tts_end_index, mask_index)
++        self.assertLess(mask_index, mic_index)
 +
-+        return await self._invoke_with_breaker(self._generate_impl, *args, **kwargs)
++        tts_end_event = bus.events[tts_end_index]
++        self.assertEqual(tts_end_event.get("reason"), "canceled")
 +
-+    @abc.abstractmethod
-+    async def _generate_impl(self, *args, **kwargs) -> object:
-+        """Concrete providers must implement this coroutine."""
-+
-+
-+__all__ = [
-+    "LLMProviderBase",
-+    "EVT_PROVIDER_CLOSE",
-+    "EVT_PROVIDER_OPEN",
-+    "EVT_PROVIDER_TRIP",
-+    "ProviderCircuitBreaker",
-+    "ProviderCircuitOpenError",
-+    "ProviderTimeoutError",
-+]
-diff --git a/app/voice_v2/tts_base.py b/app/voice_v2/tts_base.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..82ad5af1bd297eb09c8a6a152d4085d87d7535bc
---- /dev/null
-+++ b/app/voice_v2/tts_base.py
-@@ -0,0 +1,59 @@
-+"""Abstract TTS provider base leveraging the shared circuit breaker."""
-+from __future__ import annotations
-+
-+import abc
-+
-+from app.telemetry import bus
-+
-+from .asr_base import (
-+    EVT_PROVIDER_CLOSE,
-+    EVT_PROVIDER_OPEN,
-+    EVT_PROVIDER_TRIP,
-+    ClockFn,
-+    ProviderAdapterBase,
-+    ProviderCircuitBreaker,
-+    ProviderCircuitOpenError,
-+    ProviderTimeoutError,
-+)
++        engine._complete_auto_barge(sid)
++        self.assertEqual(session.state, LISTENING)
 +
 +
-+class TTSProviderBase(ProviderAdapterBase):
-+    """Base class for TTS providers with retry and breaker behaviour."""
-+
-+    def __init__(
-+        self,
-+        *,
-+        vendor: str,
-+        telemetry_bus=bus,
-+        retries: int = 1,
-+        timeout_s: float = 10.0,
-+        clock: ClockFn | None = None,
-+    ) -> None:
-+        super().__init__(
-+            vendor=vendor,
-+            provider_type="tts",
-+            telemetry_bus=telemetry_bus,
-+            retries=retries,
-+            timeout_s=timeout_s,
-+            clock=clock,
-+        )
-+
-+    async def synthesize(self, *args, **kwargs) -> object:
-+        """Execute synthesis with retry and breaker protections."""
-+
-+        return await self._invoke_with_breaker(self._synthesize_impl, *args, **kwargs)
-+
-+    @abc.abstractmethod
-+    async def _synthesize_impl(self, *args, **kwargs) -> object:
-+        """Concrete providers must implement this coroutine."""
-+
-+
-+__all__ = [
-+    "TTSProviderBase",
-+    "EVT_PROVIDER_CLOSE",
-+    "EVT_PROVIDER_OPEN",
-+    "EVT_PROVIDER_TRIP",
-+    "ProviderCircuitBreaker",
-+    "ProviderCircuitOpenError",
-+    "ProviderTimeoutError",
-+]
-diff --git a/docs/30_ADR.md b/docs/30_ADR.md
-index de5d20b8f6182950ae2b18ed25bed8f70c096fa1..9a6071a3ef3457db2d90468ba8d93749959d52c7 100644
---- a/docs/30_ADR.md
-+++ b/docs/30_ADR.md
-@@ -8,25 +8,31 @@
- - **ADR-0006 (2025-10-21)** — Templates root standardized to `app/templates/` only.
- - **ADR-0007 (2025-10-21)** — NLU/NLG contracts added; exactly one NLU & one NLG object per turn; persona-driven templates later.
- - **ADR-0008 (2025-10-21)** — Telemetry policy block controls runtime logging (enabled, level, categories, redaction, sampling).
- - **ADR-0009 (2025-10-21)** — Telemetry Envelope v1 & Redaction: events declare `schema_version: "1"` and follow a stable envelope (`type`, `ts_ms`, optional context fields, `meta`). Optional fields may be added without a new version; changes to required fields demand a new schema_version. The telemetry bus normalizes timestamps/levels and redacts PII/secrets within `meta` (emails, bearer tokens, URL secrets, opaque tokens, and overlong blobs) before dispatching to subscribers to ensure privacy-by-default across engine/exporter/admin consumers.
- 
- ---
- 
- - **ADR-0010 (2025-10-22)** — Exporter is a **telemetry-bus subscriber**  
-   Exporter subscribes to the normalized bus (wildcard `"*"` with `sid` filter) and writes **only redacted/normalized** events to disk. Engine must **not** write directly to the exporter. `manifest.json` is written at `begin()` with `open: true`, and atomically finalized at `end()` with `open: false` (tmp + rename). Counters (`events_written`, `by_type`) are updated incrementally for crash tolerance.
- 
- - **ADR-0011 (2025-10-22)** — **Admin Flow Trace API** (read-only, bearer-auth)  
-   Observability is served via HTTP, not WS:  
-   `GET /api/v1/admin/flow/{sid}/trace?type=EVT_X,EVT_Y&since_ms=<ts>&limit=<n>` streams **redacted** NDJSON;  
-   `GET /api/v1/admin/flow/{sid}/zip` downloads a packaged, **redacted** archive. Auth is required; endpoints are read-only.
- 
- - **ADR-0012 (2025-10-22)** — **Export packaging (deterministic, redacted, capped)**  
-   The packaged `flow.zip` contains exactly (in stable lexicographic order):  
-   `README.txt`, `events.redacted.ndjson`, `flow_timeline.ndjson`, `manifest.json`, `nlg.ndjson`, `nlu.ndjson`.  
-   A redaction pass is re-applied during packaging (idempotent) to produce `events.redacted.ndjson`. `manifest.json` includes `sha256` digests for packaged files. Default cap: **25 MB** total; truncation policy is recorded in `manifest.truncated` with dropped categories/line counts. Previously mentioned artifacts like `server.log`, `ws_in.ndjson`, `ws_out.ndjson` are **not** part of the packaged export (privacy & size).
- 
- - **ADR-0013 (2025-10-22)** — **WS backpressure + coalescing semantics**  
-   Outbound WS outbox is bounded (size **256**). On overflow, policy is **drop-newest** and emit `EVT_WS_OUTBOX_DROP` to the telemetry bus (telemetry-only; never sent to client). Under backpressure, ASR partials may be coalesced. Server→client **allow-list remains unchanged**.
- 
- - **ADR-0014 (2025-10-22)** — **Performance telemetry + SLOs**  
-   Per turn we record `t_first_partial_ms`, `t_final_ms`, `t_tts_start_ms`. Engine emits `EVT_PERF_SUMMARY` at `EVT_TURN_END` and the exporter persists a copy under `manifest.summary`. SLO targets/p95: first partial ≤ **450/750 ms**; final ≤ **2000/3000 ms**; TTS start ≤ **350/600 ms**.
-+
-+- **ADR-0015 (2025-10-22)** — **Provider adapters share breaker semantics**
-+  ASR, LLM, and TTS adapters inherit from shared base classes that enforce retries, timeouts, and a circuit breaker. Breakers trip
-+  after **3 consecutive errors** or **2 timeouts in 30 seconds**, move to half-open after **15 seconds**, and fully reset on a
-+  successful probe. Telemetry emits `EVT_PROVIDER_TRIP`, `EVT_PROVIDER_OPEN`, and `EVT_PROVIDER_CLOSE` with vendor metadata, and
-+  provider-specific opaque identifiers remain confined to `EVT_VENDOR_DEBUG`.
-diff --git a/tests/test_provider_breakers.py b/tests/test_provider_breakers.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..8791ca1fb8c2eec78e1027dcde1cfe5d56290aa4
---- /dev/null
-+++ b/tests/test_provider_breakers.py
-@@ -0,0 +1,101 @@
-+import asyncio
-+import pytest
-+
-+from app.voice_v2.asr_base import (
-+    ASRProviderBase,
-+    EVT_PROVIDER_CLOSE,
-+    EVT_PROVIDER_OPEN,
-+    EVT_PROVIDER_TRIP,
-+    ProviderCircuitOpenError,
-+    ProviderTimeoutError,
-+)
-+
-+
-+class ManualClock:
-+    def __init__(self) -> None:
-+        self._value = 0.0
-+
-+    def __call__(self) -> float:
-+        return self._value
-+
-+    def advance(self, seconds: float) -> None:
-+        self._value += seconds
-+
-+
-+class RecordingBus:
-+    def __init__(self) -> None:
-+        self.events: list[dict] = []
-+
-+    def publish(self, event: dict) -> None:
-+        self.events.append(event)
-+
-+
-+class ScriptedASRProvider(ASRProviderBase):
-+    def __init__(self, script: list[str], *, bus: RecordingBus, clock: ManualClock) -> None:
-+        super().__init__(
-+            vendor="dummy",
-+            telemetry_bus=bus,
-+            retries=0,
-+            timeout_s=0.01,
-+            clock=clock,
-+        )
-+        self._script = list(script)
-+
-+    async def _recognize_impl(self, *_args, **_kwargs) -> str:
-+        action = self._script.pop(0) if self._script else "success"
-+        if action == "error":
-+            raise RuntimeError("synthetic failure")
-+        if action == "timeout":
-+            await asyncio.sleep(self._timeout_s * 2)
-+            return "timeout"
-+        if action == "success":
-+            return "ok"
-+        raise AssertionError(f"unknown scripted action: {action}")
-+
-+
-+def _run(coro):
-+    return asyncio.run(coro)
-+
-+
-+def test_breaker_trips_after_three_errors_and_recovers() -> None:
-+    clock = ManualClock()
-+    bus = RecordingBus()
-+    provider = ScriptedASRProvider(["error", "error", "error", "success"], bus=bus, clock=clock)
-+
-+    for _ in range(3):
-+        with pytest.raises(RuntimeError):
-+            _run(provider.recognize(b"payload"))
-+
-+    assert provider.breaker_state == "open"
-+    assert any(event["type"] == EVT_PROVIDER_TRIP for event in bus.events)
-+
-+    with pytest.raises(ProviderCircuitOpenError):
-+        _run(provider.recognize(b"still_blocked"))
-+
-+    clock.advance(16.0)
-+    result = _run(provider.recognize(b"probe"))
-+    assert result == "ok"
-+    assert provider.breaker_state == "closed"
-+    assert [event["type"] for event in bus.events[-2:]] == [EVT_PROVIDER_OPEN, EVT_PROVIDER_CLOSE]
-+
-+
-+def test_breaker_trips_after_two_timeouts() -> None:
-+    clock = ManualClock()
-+    bus = RecordingBus()
-+    provider = ScriptedASRProvider(["timeout", "timeout", "success"], bus=bus, clock=clock)
-+
-+    with pytest.raises(ProviderTimeoutError):
-+        _run(provider.recognize(b"timeout-1"))
-+
-+    clock.advance(1.0)
-+    with pytest.raises(ProviderTimeoutError):
-+        _run(provider.recognize(b"timeout-2"))
-+
-+    assert provider.breaker_state == "open"
-+    assert bus.events[-1]["type"] == EVT_PROVIDER_TRIP
-+
-+    clock.advance(16.0)
-+    result = _run(provider.recognize(b"probe-success"))
-+    assert result == "ok"
-+    assert provider.breaker_state == "closed"
-+    assert [event["type"] for event in bus.events[-2:]] == [EVT_PROVIDER_OPEN, EVT_PROVIDER_CLOSE]
++if __name__ == "__main__":
++    unittest.main()
