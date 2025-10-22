@@ -105,6 +105,66 @@ class TokenBucket:
         return True
 
 
+class _PartialCoalescer:
+    """Rate limits outbound ASR partial frames for a connection."""
+
+    def __init__(self, min_interval_ms: int = 50) -> None:
+        self.min_interval_ms = max(0, int(min_interval_ms))
+        self._last_emit_ms = 0
+        self._pending: Optional[Dict[str, Any]] = None
+        self._timer: Optional[asyncio.TimerHandle] = None
+
+    def offer(
+        self,
+        payload: Dict[str, Any],
+        *,
+        now_ms: int,
+        loop: asyncio.AbstractEventLoop,
+        emit: Callable[[Dict[str, Any]], None],
+    ) -> None:
+        if self.min_interval_ms <= 0:
+            self._pending = None
+            self._cancel_timer()
+            self._last_emit_ms = now_ms
+            emit(payload)
+            return
+
+        if self._pending is None and now_ms - self._last_emit_ms >= self.min_interval_ms:
+            self._last_emit_ms = now_ms
+            emit(payload)
+            return
+
+        self._pending = dict(payload)
+        if self._timer is None:
+            delay_ms = max(0, self.min_interval_ms - (now_ms - self._last_emit_ms))
+            self._timer = loop.call_later(
+                delay_ms / 1000.0,
+                self._flush,
+                loop,
+                emit,
+            )
+
+    def cancel(self) -> None:
+        self._pending = None
+        self._cancel_timer()
+
+    def _flush(self, loop: asyncio.AbstractEventLoop, emit: Callable[[Dict[str, Any]], None]) -> None:
+        self._timer = None
+        pending = self._pending
+        if pending is None:
+            return
+        self._pending = None
+        now_ms = int(time.time() * 1000)
+        self._last_emit_ms = now_ms
+        emit(pending)
+
+    def _cancel_timer(self) -> None:
+        timer = self._timer
+        self._timer = None
+        if timer is not None:
+            timer.cancel()
+
+
 @runtime_checkable
 class EngineHooks(Protocol):
     """Engine surface used by the WebSocket adapter."""
@@ -152,6 +212,8 @@ class AdapterContext:
     resume_token: Optional[str] = None
     resume_expiry_ms: int = 0
     recent_markers: list[Dict[str, Any]] = field(default_factory=list)
+    partial_seq: int = 0
+    partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
 
 
 @dataclass
@@ -807,11 +869,12 @@ class ChatV2Adapter:
         loop = asyncio.get_running_loop()
         ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
 
-        def _enqueue(payload: Dict[str, Any]) -> None:
+        def _queue_payload(payload: Dict[str, Any], *, clone: bool = True) -> None:
             if ctx.outbox is None:
                 return
+            item = dict(payload) if clone else payload
             try:
-                ctx.outbox.put_nowait(dict(payload))
+                ctx.outbox.put_nowait(item)
             except asyncio.QueueFull:
                 now = ctx.outbox.qsize()
                 try:
@@ -824,6 +887,17 @@ class ChatV2Adapter:
                     )
                 except RuntimeError:
                     pass
+
+        def _enqueue(payload: Dict[str, Any]) -> None:
+            if payload.get("type") == "asr.partial":
+                self._offer_partial_frame(
+                    ctx,
+                    loop,
+                    payload,
+                    lambda frame: _queue_payload(frame, clone=False),
+                )
+                return
+            _queue_payload(payload)
 
         def _handle_event(event: dict) -> None:
             if event.get("sid") != ctx.sid or ctx.outbox is None:
@@ -842,6 +916,34 @@ class ChatV2Adapter:
 
         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
+
+    def _offer_partial_frame(
+        self,
+        ctx: AdapterContext,
+        loop: asyncio.AbstractEventLoop,
+        payload: Dict[str, Any],
+        enqueue: Callable[[Dict[str, Any]], None],
+    ) -> None:
+        def _emit(frame: Dict[str, Any]) -> None:
+            prepared = self._prepare_partial_frame(ctx, frame)
+            enqueue(prepared)
+
+        ctx.partial_coalescer.offer(
+            payload,
+            now_ms=self._now_ms(),
+            loop=loop,
+            emit=_emit,
+        )
+
+    def _prepare_partial_frame(self, ctx: AdapterContext, payload: Dict[str, Any]) -> Dict[str, Any]:
+        prepared = dict(payload)
+        seq_value = prepared.get("partial_seq")
+        if isinstance(seq_value, int) and seq_value > ctx.partial_seq:
+            ctx.partial_seq = seq_value
+        else:
+            ctx.partial_seq += 1
+            prepared["partial_seq"] = ctx.partial_seq
+        return prepared
 
     def _start_asr_ready_tracker(self, ctx: AdapterContext) -> None:
         if ctx.asr_subscription_token is not None:
@@ -963,6 +1065,8 @@ class ChatV2Adapter:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+        ctx.partial_coalescer.cancel()
 
         ctx.outbox = None
 
