@@ -6,6 +6,7 @@ import contextlib
 import inspect
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -32,6 +33,8 @@ _AUDIO_VIOLATION_LIMIT = 3
 
 QUEUE_ON_THRESHOLD = 12
 QUEUE_OFF_THRESHOLD = 6
+
+_DEFAULT_WS_PING_INTERVAL_MS = 25_000
 
 EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
 EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
@@ -123,6 +126,8 @@ class AdapterContext:
     outbox: asyncio.Queue[Dict[str, Any]] | None = None
     outbound_task: asyncio.Task[None] | None = None
     subscription_token: Optional[str] = None
+    server_keepalive_task: asyncio.Task[None] | None = None
+    last_policy_interaction: Optional[Dict[str, Any]] = None
 
 
 class ChatV2Adapter:
@@ -142,6 +147,10 @@ class ChatV2Adapter:
         self.binary_limit_bytes = binary_limit_bytes
         self._ip_buckets: Dict[str, TokenBucket] = {}
         self._contexts: Dict[str, AdapterContext] = {}
+        self._ping_interval_ms = max(
+            0,
+            int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+        )
 
     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
         if scope.get("type") != "websocket":
@@ -182,6 +191,7 @@ class ChatV2Adapter:
 
         self._contexts[ctx.sid] = ctx
         self._start_outbound_bridge(ctx, send)
+        self._start_server_keepalive(ctx, send)
 
         if self.exporter:
             self.exporter.begin(ctx.sid)
@@ -232,6 +242,7 @@ class ChatV2Adapter:
             await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
             raise
         finally:
+            await self._stop_server_keepalive(ctx)
             await self._cleanup_outbound(ctx)
             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
             if self.exporter:
@@ -488,6 +499,42 @@ class ChatV2Adapter:
         payload = {"type": "error", "code": code, "detail": detail}
         await self._send_json(send, sid, payload)
 
+    def _start_server_keepalive(
+        self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+    ) -> None:
+        if self._ping_interval_ms <= 0 or ctx.server_keepalive_task is not None:
+            return
+
+        async def _run() -> None:
+            interval = self._ping_interval_ms / 1000.0
+            if interval <= 0:
+                return
+            try:
+                while True:
+                    await asyncio.sleep(interval)
+                    payload = json.dumps(
+                        {"type": "keepalive", "ts": int(time.time() * 1000)},
+                        separators=(",", ":"),
+                    )
+                    await send({"type": "websocket.send", "text": payload})
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # pragma: no cover - defensive
+                _logger.exception("Failed to send keepalive for sid %s", ctx.sid)
+            finally:
+                ctx.server_keepalive_task = None
+
+        ctx.server_keepalive_task = asyncio.create_task(_run())
+
+    async def _stop_server_keepalive(self, ctx: AdapterContext) -> None:
+        task = ctx.server_keepalive_task
+        ctx.server_keepalive_task = None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
     def _start_outbound_bridge(
         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
     ) -> None:
@@ -515,7 +562,7 @@ class ChatV2Adapter:
         def _handle_event(event: dict) -> None:
             if event.get("sid") != ctx.sid or ctx.outbox is None:
                 return
-            payload = self._extract_outbound_payload(event)
+            payload = self._extract_outbound_payload(ctx, event)
             if payload is None:
                 return
 
@@ -530,7 +577,9 @@ class ChatV2Adapter:
         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
 
-    def _extract_outbound_payload(self, event: dict) -> Optional[Dict[str, Any]]:
+    def _extract_outbound_payload(
+        self, ctx: AdapterContext, event: dict
+    ) -> Optional[Dict[str, Any]]:
         payload = self._coerce_payload(event.get("payload"))
         if payload is None:
             meta = event.get("meta")
@@ -548,7 +597,15 @@ class ChatV2Adapter:
         frame_type = payload.get("type") if isinstance(payload, dict) else None
         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
             return None
-        return dict(payload)
+        normalized = dict(payload)
+        if frame_type == "policy.interaction":
+            last_policy = ctx.last_policy_interaction
+            if last_policy is not None and last_policy == normalized:
+                return None
+            ctx.last_policy_interaction = json.loads(
+                json.dumps(normalized, separators=(",", ":"))
+            )
+        return normalized
 
     @staticmethod
     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
