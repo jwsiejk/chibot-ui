@@ -27,6 +27,7 @@ from app.voice_v2 import (
     EVT_WS_OPEN,
 )
 from app.voice_v2.gate import GateController
+from app.voice_v2.conversation_buffer import ConversationBuffer
 from app.voice_v2.vad import VADAggregator
 
 
@@ -105,7 +106,18 @@ class EngineV2:
         self._sessions: Dict[str, _TurnSession] = {}
         self._barge_handles: Dict[str, object] = {}
         self._aggregators: Dict[str, VADAggregator] = {}
-        self._chat_subscription = self._bus.subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
+        self._conversation_buffer = ConversationBuffer()
+        subscribe = getattr(self._bus, "subscribe", None)
+        if callable(subscribe):
+            self._chat_subscription = subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
+            self._ws_send_subscription = subscribe(
+                EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
+            )
+        else:
+            self._chat_subscription = None
+            self._ws_send_subscription = bus.subscribe(
+                EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
+            )
 
     @property
     def policy_snapshot(self) -> Dict[str, Any] | None:
@@ -124,6 +136,7 @@ class EngineV2:
         self._last_sid = sid
         self._policy_snapshot = None
         self._ensure_session(sid)
+        self._publish_chat_history(sid)
         self._set_state(sid, READY, reason="ws_open")
         self.reapply_policy()
 
@@ -131,6 +144,7 @@ class EngineV2:
         """Capture a validated JSON frame from the adapter."""
         turn_id: Optional[Any] = None
         meta: Dict[str, Any] = {"dir": "in"}
+        frame_type: Optional[str] = None
         if isinstance(frame, Mapping):
             frame_type = frame.get("type")
             if isinstance(frame_type, str):
@@ -148,6 +162,8 @@ class EngineV2:
             payload["turn_id"] = turn_id
         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
         self._publish(event)
+        if frame_type == "client.resume":
+            self._publish_chat_history(sid)
 
     def _handle_chat_user_event(self, event: Dict[str, Any]) -> None:
         if event.get("type") != EVT_CHAT_USER:
@@ -357,6 +373,43 @@ class EngineV2:
     def _publish(self, event: Dict[str, Any]) -> None:
         self._bus.publish(dict(event))
         self._exporter.write(event["sid"], dict(event))
+
+    def _handle_outbound_chat_frame(self, event: Dict[str, Any]) -> None:
+        if event.get("type") != EVT_WS_JSON_SEND:
+            return
+        sid = event.get("sid")
+        if not isinstance(sid, str) or not sid:
+            return
+        frame: Mapping[str, Any] | None = None
+        raw_frame = event.get("frame")
+        if isinstance(raw_frame, Mapping):
+            frame = raw_frame
+        else:
+            payload = event.get("payload")
+            if isinstance(payload, Mapping):
+                candidate = payload.get("frame")
+                if isinstance(candidate, Mapping):
+                    frame = candidate
+        if frame is None:
+            return
+        if frame.get("type") != "chat.message":
+            return
+        self._conversation_buffer.append(sid, frame)
+
+    def _publish_chat_history(self, sid: str) -> None:
+        messages = self._conversation_buffer.messages(sid)
+        frame = {"type": "chat.history", "messages": messages, "next_cursor": None}
+        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+        meta = {
+            "ws": {
+                "dir": "out",
+                "size": len(serialized.encode("utf-8")),
+                "preview": serialized,
+            }
+        }
+        payload = {"meta": meta, "frame": frame}
+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+        self._publish(event)
 
     def _publish_gate_event(self, event: Dict[str, Any]) -> None:
         """Publish gate controller events through the standard telemetry path."""
