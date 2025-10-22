@@ -78,12 +78,17 @@ json
 Copy code
 {"type":"pong","t":1730000000000}
 Policy (client-visible subset)
-The server may push policy updates. The client‑stable subset is:
+The server may push policy updates. Client-visible frames follow the telemetry
+envelope (`type`, `ts_ms`, `level`, …) and the server **strips any policy keys
+outside the stable subset** before sending to browsers. The client‑stable subset
+is:
 
 json
 Copy code
 {
   "type": "policy.interaction",
+  "ts_ms": 1730000000000,
+  "level": "info",  
   "policy": {
     "mode": "idle",                  // "idle" | "assistant_speaking" | ...
     "allow_auto_vad": true,
