@@ -30,3 +30,9 @@
 
 - **ADR-0014 (2025-10-22)** — **Performance telemetry + SLOs**  
   Per turn we record `t_first_partial_ms`, `t_final_ms`, `t_tts_start_ms`. Engine emits `EVT_PERF_SUMMARY` at `EVT_TURN_END` and the exporter persists a copy under `manifest.summary`. SLO targets/p95: first partial ≤ **450/750 ms**; final ≤ **2000/3000 ms**; TTS start ≤ **350/600 ms**.
+
+- **ADR-0015 (2025-10-22)** — **Provider adapters share breaker semantics**
+  ASR, LLM, and TTS adapters inherit from shared base classes that enforce retries, timeouts, and a circuit breaker. Breakers trip
+  after **3 consecutive errors** or **2 timeouts in 30 seconds**, move to half-open after **15 seconds**, and fully reset on a
+  successful probe. Telemetry emits `EVT_PROVIDER_TRIP`, `EVT_PROVIDER_OPEN`, and `EVT_PROVIDER_CLOSE` with vendor metadata, and
+  provider-specific opaque identifiers remain confined to `EVT_VENDOR_DEBUG`.
