@@ -72,6 +72,7 @@ class _TurnSession:
     turn_id: Optional[str] = None
     turn_started_ms: Optional[int] = None
     tts_utt_id: Optional[str] = None
+    req_id: Optional[str] = None
 
 
 class _NullExporter:
@@ -411,9 +412,16 @@ class EngineV2:
 
         if new_state == LISTENING:
             session.turn_id = str(uuid.uuid4())
+            session.req_id = f"req-{uuid.uuid4().hex}"
             session.turn_started_ms = now_ms
             begin_payload = {
-                "meta": {"turn_id": session.turn_id, "state": LISTENING}
+                "turn_id": session.turn_id,
+                "req_id": session.req_id,
+                "meta": {
+                    "turn_id": session.turn_id,
+                    "req_id": session.req_id,
+                    "state": LISTENING,
+                },
             }
             begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
             self._publish(begin_event)
@@ -427,17 +435,23 @@ class EngineV2:
             duration_ms = now_ms - start_ms
             if duration_ms <= 0:
                 duration_ms = 1
+            turn_id = session.turn_id
+            req_id = session.req_id
             end_payload = {
+                "turn_id": turn_id,
+                "req_id": req_id,
                 "meta": {
-                    "turn_id": session.turn_id,
+                    "turn_id": turn_id,
+                    "req_id": req_id,
                     "duration_ms": duration_ms,
-                }
+                },
             }
             end_event = self._envelope(sid, EVT_TURN_END, end_payload)
             self._publish(end_event)
             session.turn_id = None
             session.turn_started_ms = None
             session.tts_utt_id = None
+            session.req_id = None
 
         session.state = new_state
 
@@ -451,6 +465,20 @@ class EngineV2:
         breadcrumb_payload = {"meta": breadcrumb_meta}
         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
         self._publish(breadcrumb_event)
+
+    def turn_context(self, sid: str) -> Optional[Dict[str, str]]:
+        """Return the active turn context for ``sid`` if a turn is in progress."""
+
+        session = self._sessions.get(sid)
+        if (
+            session is None
+            or session.turn_id is None
+            or session.req_id is None
+            or session.state == READY
+        ):
+            return None
+
+        return {"turn_id": session.turn_id, "req_id": session.req_id}
 
     def _publish_tts_mask(self, sid: str, phase: str) -> None:
         mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})
