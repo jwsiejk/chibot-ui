@@ -1,7 +1,8 @@
 # WebSocket Contract — `chat.v2`
 
 **Endpoint:** `/ws/v2/chat` (ASGI WS)  
-**Required subprotocol:** `chat.v2`
+**Required subprotocol:** `chat.v2`  
+**Deprecated:** `/ws/v1/chat` → HTTP 410 Gone (JSON `{"error":"gone"}`)
 
 ---
 
@@ -9,22 +10,16 @@
 - `{"type":"ping"}`
 - `{"type":"client.ready"}`
 - **Audio:** binary frames (Opus or PCM).  
-  If format changes, send a header JSON first:
+  Default: WebM/Opus, mono, 48 kHz.  
+  To override, send:
   ```json
   {"type":"audio.header","format":"opus","sample_rate":48000,"channels":1}
-
-  **Default:** If no `audio.header` is sent, the server assumes **WebM/Opus, mono, 48 kHz** for binary audio frames. Send `audio.header` only when deviating from this default.
-
-Optional admin toggle (if exposed):
-
-json
-Copy code
+Optional admin toggle:
 {"type":"admin.toggle","asr":"deepgram","barge_in_enabled":true}
-Optional reconnect/resume handshake (Build 07):
 
-json
-Copy code
+Optional resume handshake (Build 07):
 {"type":"client.resume","resume_token":"<string>"}
+
 Server → Client frames
 {"type":"pong","t":1730000000000}
 
@@ -40,7 +35,7 @@ Copy code
     "auto_commit_when_ready": true,
     "telemetry": {
       "enabled": true,
-      "level": "debug",               // trace|debug|info|warn|error
+      "level": "debug",
       "categories": {
         "ws": true,
         "audio": true,
@@ -59,108 +54,121 @@ Copy code
     }
   }
 }
+Core event schemas
 TTS / ASR / Error examples
 json
 Copy code
 {"type":"tts.start","utt_id":"u-123","post_hold_ms":200}
 {"type":"tts.end","utt_id":"u-123"}
-{"type":"asr.ready":true}
-{"type":"asr.partial","text":"...","confidence":0.73}
-{"type":"asr.final","text":"...","confidence":0.91}
+{"type":"asr.ready","vendor":"deepgram"}
+{"type":"asr.partial","req_id":"r-1","text":"...","confidence":0.73}
+{"type":"asr.final","req_id":"r-1","text":"...","confidence":0.91}
 {"type":"error","code":"bad_subprotocol","detail":"use chat.v2"}
 {"type":"error","code":"schema_invalid","detail":"audio.header requires integer channels"}
 {"type":"error","code":"unknown_type","detail":"admin.nuke"}
-
 Behavioral rules
 Connection & Version Negotiation
-The server only supports subprotocol "chat.v2".
-Clients proposing a different or missing subprotocol receive HTTP 426 with
-{"type":"error","code":"bad_subprotocol","detail":"use chat.v2"} before upgrade.
-
-Once upgraded, all subsequent error frames follow the same shape {type:"error","code","detail"}.
+Only subprotocol chat.v2 is accepted.
+Clients missing it receive HTTP 426 with {"code":"bad_subprotocol"}.
+/ws/v1/chat returns 410 Gone (JSON body).
 
 Authorization & Rate Limits
-A valid Authorization: Bearer <token> header is required unless disabled in configuration.
+Bearer token required unless disabled.
+Invalid → {"code":"unauthorized"}.
+Over-rate → {"code":"rate_limited"} then close 1008.
 
-Missing or invalid auth →
-{"type":"error","code":"unauthorized","detail":"missing or invalid auth"}.
-
-Excessive frame or byte rate →
-{"type":"error","code":"rate_limited","detail":"try later"} followed by WS close (1008).
-
-Frame Validation
-Text frames must contain valid JSON and minimal schema requirements.
-Invalid frames return:
-
-json
-Copy code
-{"type":"error","code":"schema_invalid","detail":"<validation hint>"}
-{"type":"error","code":"unknown_type","detail":"client.foo"}
-The connection remains open unless otherwise specified.
+Frame validation
+Invalid JSON → schema_invalid or unknown_type.
+Connection remains open unless otherwise specified.
 
 Backpressure
-When outbound queue depth exceeds threshold, the server publishes
-EVT_BACKPRESSURE_ON and EVT_BACKPRESSURE_OFF (diagnostic only).
+Server publishes EVT_BACKPRESSURE_ON / EVT_BACKPRESSURE_OFF (diagnostic).
 
 Mode & Barge rules
-While mode="assistant_speaking":
+While mode:"assistant_speaking":
 
-If barge_in_enabled=true, auto-VAD + ASR evidence may interrupt TTS.
+If barge_in_enabled:true → auto-VAD or ASR evidence may interrupt TTS.
 
-If barge_in_enabled=false, ignore speech until tts.end + post_hold_ms.
+If false → ignore speech until tts.end + post_hold_ms.
+In mode:"idle", allow_auto_vad MUST be true and ACWR effective.
 
-In mode="idle", allow_auto_vad MUST be true and ACWR effective (subject to admin kill).
-
-Telemetry event envelope v1 (both sides)
-All events use schema v1 and share this shape:
+Telemetry Envelope v1
+All events share this shape:
 
 json
 Copy code
 {
-  "schema_version": "1",
-  "type": "EVT_*",
-  "ts_ms": 1730000000000,
-  "sid": "session-uuid",
-  "turn_id": "turn-idx-or-uuid",
-  "who": "client|server|asr|tts|llm",
-  "source": "webapp|ws_server|deepgram|speechmatics|elevenlabs|openai|policy",
-  "level": "debug",
-  "meta": { ... }
+  "schema_version":"1",
+  "type":"EVT_*",
+  "ts_ms":1730000000000,
+  "sid":"session-uuid",
+  "turn_id":"turn-uuid",
+  "req_id":"req-uuid",
+  "who":"client|server|asr|tts|llm",
+  "source":"webapp|ws_server|deepgram|speechmatics|elevenlabs|openai|policy",
+  "level":"debug",
+  "meta":{...}
 }
-Server normalization
+Server normalization fills timestamps, levels, and redacts PII/secrets.
 
-Fills missing ts_ms and level.
+Extended event catalog (Builds 04-07)
+Engine & Gate events
+json
+Copy code
+{"type":"EVT_ENGINE_STATE","from":"Idle","to":"AssistantSpeaking","ts_ms":...}
+{"type":"EVT_MIC_GATE","effective":true,"reasons":["tts_active"],"ts_ms":...}
+{"type":"EVT_TTS_MASK","phase":"engaged","ts_ms":...}
+{"type":"EVT_BARGE_IN","source":"auto_vad","granted":false,"reason":"policy_disabled","ts_ms":...}
+reasons: tts_active | manual_gate | system_hold | error_hold
 
-Applies best-effort redaction to meta string fields
-(emails, authorization/bearer tokens, query secrets, opaque tokens, oversized blobs).
+States: Idle | AssistantSpeaking | ConfirmingBarge | Listening | UserTurnStreaming | Thinking
 
-Optional fields may be added without a schema bump; changing required fields requires a new schema_version.
+ASR events (multivendor)
+json
+Copy code
+{"type":"EVT_ASR_READY","vendor":"deepgram"}
+{"type":"EVT_ASR_PARTIAL","req_id":"r-1","text":"...","confidence":0.8}
+{"type":"EVT_ASR_FINAL","req_id":"r-1","text":"...","confidence":0.92}
+vendor: deepgram | speechmatics
+One FINAL per turn.
 
-Common meta fields by category
-Category	Example fields
-policy.diff	{ "allow_auto_vad":[old,new], "barge_in_enabled":[old,new], "auto_commit_when_ready":[old,new], "mode":[old,new], "telemetry.level":[old,new] }
-gate	`{ "state":"on
-barge	`{ "source":"auto_vad
-tts	{ "utt_id":"...", "post_hold_ms":200 }
-asr	`{ "req_id":"...", "partial":true
-ws taps	`{ "dir":"in
-backpressure	`{ "queue_depth":123, "state":"on
-nlu/nlg	full NLU or NLG object (see docs/15_NLU_NLG.md)
-error	{ "code":"...", "detail":"...", "stack":"(optional)" }
+Policy / NLU / NLG
+json
+Copy code
+{"type":"EVT_POLICY_DECISION","req_id":"r-1","action":"respond","barge_in_enabled":true,"auto_commit_when_ready":true,"ts_ms":...}
+{"type":"EVT_NLU","req_id":"r-1","intent":"troubleshoot_install","entities":{"product":"FlashArray"},"confidence":0.86,"ts_ms":...}
+{"type":"EVT_NLG","req_id":"r-1","text":"Let's run through a quick install check…","ts_ms":...}
+Exactly one NLU and one NLG per turn (req_id stable).
+
+Telemetry / Vendor debug
+json
+Copy code
+{"type":"EVT_TELEMETRY_POLICY","enabled":true,"level":"info","categories":["engine","asr"],"sampling":{"rate":1.0},"ts_ms":...}
+{"type":"EVT_VENDOR_DEBUG","channel":"asr","vendor":"deepgram","rid":"opaque","timings":{"first_partial_ms":141},"ts_ms":...}
+All fields subject to redaction rules (ADR-0009).
+
+Client playback telemetry (optional)
+json
+Copy code
+{"type":"EVT_PLAYBACK","phase":"start","media_id":"opt","ts_ms":...}
+phase: start | end — client informational only.
 
 Exporter Packaging (Build 06)
 Each session export under exports/<sid>/ includes:
 
-events.ndjson — one JSON line per event (Envelope v1).
+events.ndjson (one JSON line per event)
 
-manifest.json — counts by type, first/last timestamps, SHA-256 checksums.
+manifest.json (counts, first/last timestamps, SHA-256 hashes)
 
-README.txt — summary and truncation notice (if size capped).
+server.log, ws_in.ndjson, ws_out.ndjson, flow_timeline.ndjson,
+nlu.ndjson and nlg.ndjson (one record per user turn)
+
+README.txt (summary and truncation notice if size-capped)
 
 ZIPs include all files; redaction is re-applied before write.
 
-Client Reconnect/Resume (Build 07)
-Clients may attempt to resume a prior session via:
+Client Reconnect / Resume (Build 07)
+Clients may attempt to resume a prior session:
 
 json
 Copy code
@@ -168,3 +176,6 @@ Copy code
 Servers may echo the same token in policy.interaction or info frames for continuation.
 
 (End of Document)
+
+yaml
+Copy code

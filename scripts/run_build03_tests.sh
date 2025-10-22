@@ -13,28 +13,7 @@ else
   exit 1
 fi
 
-cleanup_tmp() {
-  if [[ -n "${TMP_TEST_DIR:-}" && -d "${TMP_TEST_DIR}" ]]; then
-    rm -rf "${TMP_TEST_DIR}"
-  fi
-}
-trap cleanup_tmp EXIT
-
 PYTHONPATH_ENTRIES=("$ROOT_DIR")
-
-if [[ ! -f "$ROOT_DIR/tests/test_ws_json_contract.py" ]]; then
-  TMP_TEST_DIR="$(mktemp -d)"
-  mkdir -p "$TMP_TEST_DIR/tests"
-  cat >"$TMP_TEST_DIR/tests/test_ws_json_contract.py" <<'PY'
-import unittest
-
-
-class MissingJsonContractTest(unittest.TestCase):
-    def test_missing_contract(self) -> None:
-        self.skipTest("tests.test_ws_json_contract not yet implemented")
-PY
-  PYTHONPATH_ENTRIES+=("$TMP_TEST_DIR")
-fi
 
 if [[ -n "${PYTHONPATH:-}" ]]; then
   PYTHONPATH_ENTRIES+=("$PYTHONPATH")

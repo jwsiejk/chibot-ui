@@ -6,7 +6,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
 
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
@@ -26,6 +26,12 @@ RATE_LIMIT_CAPACITY = 25
 RATE_LIMIT_WINDOW_SECONDS = 2.0
 RATE_LIMIT_CLOSE_CODE = 1013
 _AUDIO_VIOLATION_LIMIT = 3
+
+QUEUE_ON_THRESHOLD = 12
+QUEUE_OFF_THRESHOLD = 6
+
+EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
 
 EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
 EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
@@ -92,6 +98,8 @@ class AdapterContext:
     audio_profile: Optional[Dict[str, Any]] = None
     accepting_audio: bool = True
     audio_violation_count: int = 0
+    outbound_queue_depth: int = 0
+    backpressure_state: Literal["off", "on"] = "off"
 
 
 class ChatV2Adapter:
@@ -220,7 +228,13 @@ class ChatV2Adapter:
         return self._contexts.get(sid)
 
     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
-        body = json.dumps({"error": "unsupported_subprotocol", "expected": CHAT_V2_SUBPROTOCOL}).encode("utf-8")
+        body = json.dumps(
+            {
+                "type": "error",
+                "code": "bad_subprotocol",
+                "detail": "use chat.v2",
+            }
+        ).encode("utf-8")
         headers = [
             (b"content-type", b"application/json"),
             (b"content-length", str(len(body)).encode("ascii")),
@@ -449,8 +463,24 @@ class ChatV2Adapter:
         payload = {"type": "error", "code": code, "detail": detail}
         await self._send_json(send, sid, payload)
 
+    async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
+        """Record the estimated outbound queue depth and emit diagnostics if needed."""
+
+        ctx = self._contexts.get(sid)
+        if ctx is None:
+            return
+
+        if not isinstance(queued, int):
+            try:
+                queued = int(queued)
+            except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+                raise TypeError("queued must be an integer") from exc
+
+        await self._update_backpressure(ctx, max(0, queued))
+
     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
         event = {
+            "schema_version": "1",
             "type": event_type,
             "sid": sid,
             "who": "server",
@@ -495,5 +525,29 @@ class ChatV2Adapter:
             return f"{preview[: limit - 1]}…"
         return preview
 
+    async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
+        ctx.outbound_queue_depth = queued
+        if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
+            ctx.backpressure_state = "on"
+            await self._publish(
+                EVT_BACKPRESSURE_ON,
+                ctx.sid,
+                {"queue_depth": queued, "state": "on"},
+            )
+        elif ctx.backpressure_state == "on" and queued < QUEUE_OFF_THRESHOLD:
+            ctx.backpressure_state = "off"
+            await self._publish(
+                EVT_BACKPRESSURE_OFF,
+                ctx.sid,
+                {"queue_depth": queued, "state": "off"},
+            )
 
-__all__ = ["ChatV2Adapter", "CHAT_V2_SUBPROTOCOL"]
+
+__all__ = [
+    "ChatV2Adapter",
+    "CHAT_V2_SUBPROTOCOL",
+    "QUEUE_ON_THRESHOLD",
+    "QUEUE_OFF_THRESHOLD",
+    "EVT_BACKPRESSURE_ON",
+    "EVT_BACKPRESSURE_OFF",
+]

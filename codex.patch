@@ -1,15 +1,18 @@
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 20790f76f03ab03d3a6ffba7a49565fb78bcf10c..f4c7913f3b26ffb2b4165cc398b9bc5670f8a438 100644
+index f4c7913f3b26ffb2b4165cc398b9bc5670f8a438..a15ccf6d46880111c7a159f2061b75a915e4b824 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -3,50 +3,51 @@ from __future__ import annotations
+@@ -1,54 +1,60 @@
+ """chat.v2 WebSocket adapter for AskChip."""
+ from __future__ import annotations
  
  import inspect
  import json
  import time
  import uuid
  from dataclasses import dataclass
- from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, Protocol, runtime_checkable
+-from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, Protocol, runtime_checkable
++from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
  
  from app.telemetry import bus
  from app.telemetry.exporter import FileExporter
@@ -28,8 +31,14 @@ index 20790f76f03ab03d3a6ffba7a49565fb78bcf10c..f4c7913f3b26ffb2b4165cc398b9bc56
  RATE_LIMIT_CAPACITY = 25
  RATE_LIMIT_WINDOW_SECONDS = 2.0
  RATE_LIMIT_CLOSE_CODE = 1013
-+_AUDIO_VIOLATION_LIMIT = 3
+ _AUDIO_VIOLATION_LIMIT = 3
  
++QUEUE_ON_THRESHOLD = 12
++QUEUE_OFF_THRESHOLD = 6
++
++EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
++EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
++
  EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
  EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
  
@@ -54,10 +63,8 @@ index 20790f76f03ab03d3a6ffba7a49565fb78bcf10c..f4c7913f3b26ffb2b4165cc398b9bc56
              now = time.monotonic()
          elapsed = max(0.0, now - self.last_refill)
          if elapsed > 0:
-@@ -66,106 +67,112 @@ class EngineHooks(Protocol):
- 
-     def on_open(self, sid: str, headers: Dict[str, str]) -> Any:  # pragma: no cover - signature stub
-         """Called when a new WebSocket connection is established."""
+             refill = (self.capacity / self.refill_seconds) * elapsed
+@@ -70,50 +76,52 @@ class EngineHooks(Protocol):
  
      def on_json(self, sid: str, frame: Dict[str, Any]) -> Any:  # pragma: no cover - signature stub
          """Handle a validated JSON frame from the client."""
@@ -80,9 +87,11 @@ index 20790f76f03ab03d3a6ffba7a49565fb78bcf10c..f4c7913f3b26ffb2b4165cc398b9bc56
      ip: Optional[str] = None
      sid_bucket: Optional[TokenBucket] = None
      ip_bucket: Optional[TokenBucket] = None
-+    audio_profile: Optional[Dict[str, Any]] = None
-+    accepting_audio: bool = True
-+    audio_violation_count: int = 0
+     audio_profile: Optional[Dict[str, Any]] = None
+     accepting_audio: bool = True
+     audio_violation_count: int = 0
++    outbound_queue_depth: int = 0
++    backpressure_state: Literal["off", "on"] = "off"
  
  
  class ChatV2Adapter:
@@ -101,90 +110,14 @@ index 20790f76f03ab03d3a6ffba7a49565fb78bcf10c..f4c7913f3b26ffb2b4165cc398b9bc56
          self.text_limit_bytes = text_limit_bytes
          self.binary_limit_bytes = binary_limit_bytes
          self._ip_buckets: Dict[str, TokenBucket] = {}
-+        self._contexts: Dict[str, AdapterContext] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
  
      async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
          if scope.get("type") != "websocket":
              raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
  
          connect_event = await receive()
-         if connect_event.get("type") != "websocket.connect":
-             return
- 
-         subprotocols = scope.get("subprotocols") or []
-         if CHAT_V2_SUBPROTOCOL not in subprotocols:
-             await self._reject_subprotocol(send)
-             return
- 
-         sid = uuid.uuid4().hex
-         headers = self._decode_headers(scope.get("headers", ()))
-         allowed, reason = authorize(headers)
-         if not allowed:
-             await self._publish(
-                 EVT_AUTH_DENIED,
-                 sid,
-                 {"reason": reason or "missing or invalid auth"},
-             )
-             await self._deny_http(send, "missing or invalid auth")
-             return
- 
-         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
- 
-         ctx = AdapterContext(sid=sid, headers=headers)
-         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-         client = scope.get("client")
-         ctx.ip = client[0] if isinstance(client, tuple) and client else None
-         if ctx.ip:
-             ctx.ip_bucket = self._ip_buckets.setdefault(
-                 ctx.ip,
-                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-             )
- 
-+        self._contexts[ctx.sid] = ctx
-+
-         if self.exporter:
-             self.exporter.begin(ctx.sid)
-         await self._invoke_engine("on_open", ctx.sid, headers)
- 
-         close_code = 1000
-         close_reason: Optional[str] = None
- 
-         try:
-             while True:
-                 message = await receive()
-                 msg_type = message.get("type")
- 
-                 if msg_type == "websocket.receive":
-                     if message.get("text") is not None:
-                         result = await self._handle_text(message["text"], ctx, send)
-                         if not result.should_continue:
-                             close_code = result.close_code or 1000
-                             close_reason = result.close_reason
-                             await send(
-                                 {
-                                     "type": "websocket.close",
-                                     "code": close_code,
-                                     "reason": close_reason,
-                                 }
-                             )
-@@ -174,50 +181,65 @@ class ChatV2Adapter:
-                         result = await self._handle_binary(message["bytes"], ctx, send)
-                         if not result.should_continue:
-                             close_code = result.close_code or 1000
-                             close_reason = result.close_reason
-                             await send(
-                                 {
-                                     "type": "websocket.close",
-                                     "code": close_code,
-                                     "reason": close_reason,
-                                 }
-                             )
-                             break
-                 elif msg_type == "websocket.disconnect":
-                     close_code = message.get("code", 1000)
-                     close_reason = message.get("reason")
-                     break
-         except Exception:  # pragma: no cover - defensive guard
+@@ -198,51 +206,57 @@ class ChatV2Adapter:
              close_code = 1011
              close_reason = "internal_error"
              await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
@@ -193,24 +126,31 @@ index 20790f76f03ab03d3a6ffba7a49565fb78bcf10c..f4c7913f3b26ffb2b4165cc398b9bc56
              await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
              if self.exporter:
                  self.exporter.end(ctx.sid, {"close_code": close_code})
-+            self._contexts.pop(ctx.sid, None)
-+
-+    def set_accepting_audio(self, sid: str, accepting: bool) -> None:
-+        """Toggle whether the given connection should accept audio frames."""
-+
-+        ctx = self._contexts.get(sid)
-+        if ctx is not None:
-+            ctx.accepting_audio = accepting
-+            if accepting:
-+                ctx.audio_violation_count = 0
-+
-+    def get_context(self, sid: str) -> Optional[AdapterContext]:
-+        """Return the adapter context for testing hooks."""
-+
-+        return self._contexts.get(sid)
+             self._contexts.pop(ctx.sid, None)
+ 
+     def set_accepting_audio(self, sid: str, accepting: bool) -> None:
+         """Toggle whether the given connection should accept audio frames."""
+ 
+         ctx = self._contexts.get(sid)
+         if ctx is not None:
+             ctx.accepting_audio = accepting
+             if accepting:
+                 ctx.audio_violation_count = 0
+ 
+     def get_context(self, sid: str) -> Optional[AdapterContext]:
+         """Return the adapter context for testing hooks."""
+ 
+         return self._contexts.get(sid)
  
      async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
-         body = json.dumps({"error": "unsupported_subprotocol", "expected": CHAT_V2_SUBPROTOCOL}).encode("utf-8")
+-        body = json.dumps({"error": "unsupported_subprotocol", "expected": CHAT_V2_SUBPROTOCOL}).encode("utf-8")
++        body = json.dumps(
++            {
++                "type": "error",
++                "code": "bad_subprotocol",
++                "detail": "use chat.v2",
++            }
++        ).encode("utf-8")
          headers = [
              (b"content-type", b"application/json"),
              (b"content-length", str(len(body)).encode("ascii")),
@@ -233,227 +173,219 @@ index 20790f76f03ab03d3a6ffba7a49565fb78bcf10c..f4c7913f3b26ffb2b4165cc398b9bc56
  
          try:
              payload_bytes = data.encode("utf-8")
-@@ -284,74 +306,118 @@ class ChatV2Adapter:
-         if frame_type == "ping":
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             now_ms = int(time.time() * 1000)
-             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
-                 ctx.last_pong_sent_ms = now_ms
-                 reply_ts = frame.get("t")
-                 if not isinstance(reply_ts, int):
-                     reply_ts = now_ms
-                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
-             return self._HandleResult(True)
+             byte_count = len(payload_bytes)
+         except UnicodeEncodeError:
+             sanitized = data.encode("utf-8", "replace")
+@@ -427,73 +441,113 @@ class ChatV2Adapter:
  
-         if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
-             meta["error"] = "unknown_type"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "unknown_type", frame_type)
-             return self._HandleResult(True)
+     async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
+         text = json.dumps(payload, separators=(",", ":"))
+         await send({"type": "websocket.send", "text": text})
+         payload_bytes = text.encode("utf-8")
+         byte_count = len(payload_bytes)
+         meta: Dict[str, Any] = {
+             "byte_count": byte_count,
+             "frame_type": payload.get("type"),
+             "ws": {
+                 "dir": "out",
+                 "size": byte_count,
+             },
+         }
+         preview = self._make_preview_from_bytes(payload_bytes)
+         if preview is not None:
+             meta["ws"]["preview"] = preview
+         await self._publish(EVT_WS_JSON_SEND, sid, meta)
  
-         is_valid, hint = validate_frame(frame)
-         if not is_valid:
-             meta["error"] = "schema_invalid"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             detail = hint or "Frame failed validation"
-             await self._send_error(send, ctx.sid, "schema_invalid", detail)
-             return self._HandleResult(True)
+     async def _send_error(
+         self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
+     ) -> None:
+         payload = {"type": "error", "code": code, "detail": detail}
+         await self._send_json(send, sid, payload)
  
-+        if frame_type == "audio.header":
-+            profile = {
-+                "format": frame.get("format"),
-+                "sample_rate": frame.get("sample_rate"),
-+                "channels": frame.get("channels"),
-+            }
-+            if ctx.audio_profile is not None:
-+                meta["error"] = "schema_invalid"
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._send_error(
-+                    send,
-+                    ctx.sid,
-+                    "schema_invalid",
-+                    "duplicate or conflicting audio.header",
-+                )
-+                return self._HandleResult(True)
-+            ctx.audio_profile = profile
++    async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
++        """Record the estimated outbound queue depth and emit diagnostics if needed."""
 +
-         await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-         await self._invoke_engine("on_json", ctx.sid, frame)
-         return self._HandleResult(True)
- 
-     async def _handle_binary(
-         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> _HandleResult:
-         byte_count = len(data)
- 
-         limited = await self._check_rate_limit(ctx, send)
-         if limited is not None:
-             return limited
- 
-         if byte_count > self.binary_limit_bytes:
-             await self._publish(
-                 EVT_WS_AUDIO_RECV,
-                 ctx.sid,
--                {"byte_count": byte_count, "error": "frame_too_large", "dir": "in"},
-+                {
-+                    "byte_count": byte_count,
-+                    "error": "frame_too_large",
-+                    "ws": {"dir": "in", "size": byte_count},
-+                },
-             )
-             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
-             return self._HandleResult(False, 1009, "frame_too_large")
- 
-+        if not ctx.accepting_audio:
-+            ctx.audio_violation_count += 1
-+            violation_meta = {
-+                "byte_count": byte_count,
-+                "error": "audio_not_expected_close"
-+                if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT
-+                else "audio_not_expected",
-+                "ws": {"dir": "in", "size": byte_count},
-+                "violations": ctx.audio_violation_count,
-+            }
-+            await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, violation_meta)
-+            await self._send_error(send, ctx.sid, "audio_not_expected", "engine not accepting audio")
-+            if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT:
-+                return self._HandleResult(False, 1008, "audio_not_expected")
-+            return self._HandleResult(True)
++        ctx = self._contexts.get(sid)
++        if ctx is None:
++            return
 +
-+        ctx.audio_violation_count = 0
-         ctx.audio_seq += 1
--        meta = {"byte_count": byte_count, "seq": ctx.audio_seq, "dir": "in"}
-+        meta = {
-+            "byte_count": byte_count,
-+            "seq": ctx.audio_seq,
-+            "ws": {"dir": "in", "size": byte_count},
-+        }
-+        await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-         await self._invoke_engine("on_audio", ctx.sid, data, ctx.audio_seq)
-         return self._HandleResult(True)
++        if not isinstance(queued, int):
++            try:
++                queued = int(queued)
++            except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
++                raise TypeError("queued must be an integer") from exc
++
++        await self._update_backpressure(ctx, max(0, queued))
++
+     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
+         event = {
++            "schema_version": "1",
+             "type": event_type,
+             "sid": sid,
+             "who": "server",
+             "source": "ws_server",
+             "meta": dict(meta),
+         }
+         bus.publish(event)
  
-     async def _check_rate_limit(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> Optional[_HandleResult]:
-         if ctx.sid_bucket is None:
+     async def _deny_http(self, send: Callable[[dict], Awaitable[None]], detail: str) -> None:
+         body = json.dumps({"type": "error", "code": "unauthorized", "detail": detail}).encode("utf-8")
+         headers = [
+             (b"content-type", b"application/json"),
+             (b"content-length", str(len(body)).encode("ascii")),
+         ]
+         await send({"type": "websocket.http.response.start", "status": 401, "headers": headers})
+         await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
+ 
+     async def _invoke_engine(self, hook: str, *args: Any) -> None:
+         if not self.engine:
+             return
+         handler = getattr(self.engine, hook, None)
+         if handler is None:
+             return
+         result = handler(*args)
+         if inspect.isawaitable(result):
+             await result
+ 
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
+     @staticmethod
+     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
+         if not payload:
              return None
+         preview = payload.decode("utf-8", "replace")
+         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
+         if len(preview) > limit:
+             return f"{preview[: limit - 1]}…"
+         return preview
  
-         now = time.monotonic()
-         if not ctx.sid_bucket.consume(1, now):
-             return await self._handle_rate_limit(ctx, send, "sid")
++    async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
++        ctx.outbound_queue_depth = queued
++        if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
++            ctx.backpressure_state = "on"
++            await self._publish(
++                EVT_BACKPRESSURE_ON,
++                ctx.sid,
++                {"queue_depth": queued, "state": "on"},
++            )
++        elif ctx.backpressure_state == "on" and queued < QUEUE_OFF_THRESHOLD:
++            ctx.backpressure_state = "off"
++            await self._publish(
++                EVT_BACKPRESSURE_OFF,
++                ctx.sid,
++                {"queue_depth": queued, "state": "off"},
++            )
++
  
-         if ctx.ip_bucket is not None and not ctx.ip_bucket.consume(1, now):
-             return await self._handle_rate_limit(ctx, send, "ip")
- 
-         return None
- 
-     async def _handle_rate_limit(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]], scope: str
-     ) -> "ChatV2Adapter._HandleResult":
-         await self._publish(
-             EVT_RATE_LIMIT,
-             ctx.sid,
-             {"scope": scope, "ip": ctx.ip},
+-__all__ = ["ChatV2Adapter", "CHAT_V2_SUBPROTOCOL"]
++__all__ = [
++    "ChatV2Adapter",
++    "CHAT_V2_SUBPROTOCOL",
++    "QUEUE_ON_THRESHOLD",
++    "QUEUE_OFF_THRESHOLD",
++    "EVT_BACKPRESSURE_ON",
++    "EVT_BACKPRESSURE_OFF",
++]
 diff --git a/scripts/run_build03_tests.sh b/scripts/run_build03_tests.sh
-new file mode 100755
-index 0000000000000000000000000000000000000000..f40b2e7b49d4ca9ff6b1ad71ef821e518c27f281
---- /dev/null
+old mode 100644
+new mode 100755
+index f40b2e7b49d4ca9ff6b1ad71ef821e518c27f281..7efd044a365df45add2879e0d985f57f0b63edb1
+--- a/scripts/run_build03_tests.sh
 +++ b/scripts/run_build03_tests.sh
-@@ -0,0 +1,51 @@
-+#!/usr/bin/env bash
-+set -euo pipefail
-+
-+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-+
-+if command -v python3 >/dev/null 2>&1; then
-+  PY="$(command -v python3)"
-+elif command -v python >/dev/null 2>&1; then
-+  PY="$(command -v python)"
-+else
-+  echo "BUILD_03_TESTS: FAIL" >&2
-+  echo "python interpreter not found" >&2
-+  exit 1
-+fi
-+
-+cleanup_tmp() {
-+  if [[ -n "${TMP_TEST_DIR:-}" && -d "${TMP_TEST_DIR}" ]]; then
-+    rm -rf "${TMP_TEST_DIR}"
-+  fi
-+}
-+trap cleanup_tmp EXIT
-+
-+PYTHONPATH_ENTRIES=("$ROOT_DIR")
-+
-+if [[ ! -f "$ROOT_DIR/tests/test_ws_json_contract.py" ]]; then
-+  TMP_TEST_DIR="$(mktemp -d)"
-+  mkdir -p "$TMP_TEST_DIR/tests"
-+  cat >"$TMP_TEST_DIR/tests/test_ws_json_contract.py" <<'PY'
-+import unittest
-+
-+
-+class MissingJsonContractTest(unittest.TestCase):
-+    def test_missing_contract(self) -> None:
-+        self.skipTest("tests.test_ws_json_contract not yet implemented")
-+PY
-+  PYTHONPATH_ENTRIES+=("$TMP_TEST_DIR")
-+fi
-+
-+if [[ -n "${PYTHONPATH:-}" ]]; then
-+  PYTHONPATH_ENTRIES+=("$PYTHONPATH")
-+fi
-+
-+export PYTHONPATH="$(IFS=:; echo "${PYTHONPATH_ENTRIES[*]}")"
-+
-+if "$PY" -m unittest -v tests.test_ws_json_contract tests.test_ws_binary_guard; then
-+  echo "BUILD_03_TESTS: PASS"
-+else
-+  status=$?
-+  echo "BUILD_03_TESTS: FAIL"
-+  exit "$status"
-+fi
-diff --git a/tests/test_ws_binary_guard.py b/tests/test_ws_binary_guard.py
+@@ -1,51 +1,30 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ 
+ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ 
+ if command -v python3 >/dev/null 2>&1; then
+   PY="$(command -v python3)"
+ elif command -v python >/dev/null 2>&1; then
+   PY="$(command -v python)"
+ else
+   echo "BUILD_03_TESTS: FAIL" >&2
+   echo "python interpreter not found" >&2
+   exit 1
+ fi
+ 
+-cleanup_tmp() {
+-  if [[ -n "${TMP_TEST_DIR:-}" && -d "${TMP_TEST_DIR}" ]]; then
+-    rm -rf "${TMP_TEST_DIR}"
+-  fi
+-}
+-trap cleanup_tmp EXIT
+-
+ PYTHONPATH_ENTRIES=("$ROOT_DIR")
+ 
+-if [[ ! -f "$ROOT_DIR/tests/test_ws_json_contract.py" ]]; then
+-  TMP_TEST_DIR="$(mktemp -d)"
+-  mkdir -p "$TMP_TEST_DIR/tests"
+-  cat >"$TMP_TEST_DIR/tests/test_ws_json_contract.py" <<'PY'
+-import unittest
+-
+-
+-class MissingJsonContractTest(unittest.TestCase):
+-    def test_missing_contract(self) -> None:
+-        self.skipTest("tests.test_ws_json_contract not yet implemented")
+-PY
+-  PYTHONPATH_ENTRIES+=("$TMP_TEST_DIR")
+-fi
+-
+ if [[ -n "${PYTHONPATH:-}" ]]; then
+   PYTHONPATH_ENTRIES+=("$PYTHONPATH")
+ fi
+ 
+ export PYTHONPATH="$(IFS=:; echo "${PYTHONPATH_ENTRIES[*]}")"
+ 
+ if "$PY" -m unittest -v tests.test_ws_json_contract tests.test_ws_binary_guard; then
+   echo "BUILD_03_TESTS: PASS"
+ else
+   status=$?
+   echo "BUILD_03_TESTS: FAIL"
+   exit "$status"
+ fi
+diff --git a/tests/test_ws_json_contract.py b/tests/test_ws_json_contract.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..c9a54639fdb6c36a880628c5f8264f72c00cd75b
+index 0000000000000000000000000000000000000000..249fc3ebaa07f86d272998eb7921ac8158fa5ec0
 --- /dev/null
-+++ b/tests/test_ws_binary_guard.py
-@@ -0,0 +1,206 @@
-+"""Tests for binary audio routing guard in the chat.v2 adapter."""
++++ b/tests/test_ws_json_contract.py
+@@ -0,0 +1,177 @@
++"""Tests for chat.v2 JSON contract handshakes and diagnostics."""
 +from __future__ import annotations
 +
 +import asyncio
 +import json
-+from typing import Any, Dict, List
-+
 +import unittest
++from typing import Any, Callable, Dict, List
 +
 +from app.telemetry import bus
-+from app.voice_v2 import EVT_WS_AUDIO_RECV
-+from app.ws.adapter import ChatV2Adapter
++from app.ws.adapter import (
++    CHAT_V2_SUBPROTOCOL,
++    EVT_BACKPRESSURE_OFF,
++    EVT_BACKPRESSURE_ON,
++    QUEUE_OFF_THRESHOLD,
++    QUEUE_ON_THRESHOLD,
++    ChatV2Adapter,
++)
 +
 +
 +class RecordingEngine:
-+    """Recording stub for the engine hooks."""
++    """Minimal engine stub that records the opened session identifier."""
 +
-+    def __init__(self, adapter: ChatV2Adapter, accept_audio: bool = True) -> None:
-+        self.adapter = adapter
-+        self.accept_audio = accept_audio
++    def __init__(self) -> None:
 +        self.open_sid: str | None = None
-+        self.audio_calls: List[tuple[str, bytes, int]] = []
 +
-+    def on_open(self, sid: str, headers: Dict[str, str]) -> None:  # pragma: no cover - exercised via adapter
++    def on_open(self, sid: str, headers: Dict[str, str]) -> None:
 +        self.open_sid = sid
-+        if not self.accept_audio:
-+            self.adapter.set_accepting_audio(sid, False)
-+
-+    def on_json(self, sid: str, frame: Dict[str, Any]) -> None:  # pragma: no cover - signature stub
-+        return None
-+
-+    def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
-+        self.audio_calls.append((sid, chunk, seq))
 +
 +
-+class TestWebSocketBinaryGuard(unittest.TestCase):
-+    """Integration tests for the binary audio guard behavior."""
++class TestWebSocketJsonContract(unittest.TestCase):
++    """Integration tests covering JSON contract behavior."""
 +
 +    def setUp(self) -> None:
 +        bus.reset()
@@ -462,15 +394,21 @@ index 0000000000000000000000000000000000000000..c9a54639fdb6c36a880628c5f8264f72
 +        bus.reset()
 +
 +    @staticmethod
-+    def _make_scope() -> Dict[str, Any]:
++    def _make_scope(*, subprotocols: List[str] | None = None) -> Dict[str, Any]:
 +        return {
 +            "type": "websocket",
-+            "subprotocols": ["chat.v2"],
++            "subprotocols": subprotocols if subprotocols is not None else [CHAT_V2_SUBPROTOCOL],
 +            "headers": [(b"authorization", b"Bearer test-token")],
-+            "client": ("127.0.0.1", 12345),
++            "client": ("127.0.0.1", 1234),
 +        }
 +
-+    async def _run_adapter(self, adapter: ChatV2Adapter, events: List[dict]) -> List[dict]:
++    async def _run_adapter(
++        self,
++        adapter: ChatV2Adapter,
++        events: List[dict],
++        *,
++        scope: Dict[str, Any] | None = None,
++    ) -> List[dict]:
 +        queue: asyncio.Queue[dict] = asyncio.Queue()
 +        for event in events:
 +            queue.put_nowait(event)
@@ -483,143 +421,114 @@ index 0000000000000000000000000000000000000000..c9a54639fdb6c36a880628c5f8264f72
 +        async def send(message: dict) -> None:
 +            sent.append(message)
 +
-+        await adapter(self._make_scope(), receive, send)
++        await adapter(scope or self._make_scope(), receive, send)
 +        return sent
 +
-+    def _drive(self, adapter: ChatV2Adapter, events: List[dict]) -> List[dict]:
-+        return asyncio.run(self._run_adapter(adapter, events))
++    def _drive(
++        self,
++        adapter: ChatV2Adapter,
++        events: List[dict],
++        *,
++        scope: Dict[str, Any] | None = None,
++    ) -> List[dict]:
++        return asyncio.run(self._run_adapter(adapter, events, scope=scope))
 +
-+    def test_default_binary_flow_without_header(self) -> None:
++    def test_subprotocol_required_returns_426(self) -> None:
 +        adapter = ChatV2Adapter()
-+        engine = RecordingEngine(adapter)
-+        adapter.engine = engine
++        scope = self._make_scope(subprotocols=[])
++        events = [{"type": "websocket.connect"}]
 +
-+        received_events: List[dict] = []
-+        token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
-+        try:
-+            payload_one = b"\x01" * 4
-+            payload_two = b"\x02" * 8
-+            events = [
-+                {"type": "websocket.connect"},
-+                {"type": "websocket.receive", "bytes": payload_one},
-+                {"type": "websocket.receive", "bytes": payload_two},
-+                {"type": "websocket.disconnect", "code": 1000},
-+            ]
++        sent = self._drive(adapter, events, scope=scope)
 +
-+            sent = self._drive(adapter, events)
-+        finally:
-+            bus.unsubscribe(token)
++        self.assertEqual(len(sent), 2)
++        start, body = sent
++        self.assertEqual(start["type"], "websocket.http.response.start")
++        self.assertEqual(start["status"], 426)
++        self.assertEqual(body["type"], "websocket.http.response.body")
++        payload = json.loads(body["body"].decode("utf-8"))
++        self.assertEqual(
++            payload,
++            {"type": "error", "code": "bad_subprotocol", "detail": "use chat.v2"},
++        )
 +
-+        accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-+        self.assertEqual(len(accept_messages), 1)
-+
-+        self.assertEqual(len(engine.audio_calls), 2)
-+        self.assertEqual(engine.audio_calls[0][2], 1)
-+        self.assertEqual(engine.audio_calls[1][2], 2)
-+
-+        self.assertEqual(len(received_events), 2)
-+        self.assertEqual(received_events[0]["meta"]["seq"], 1)
-+        self.assertEqual(received_events[1]["meta"]["seq"], 2)
-+        self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload_one))
-+        self.assertEqual(received_events[1]["meta"]["ws"]["size"], len(payload_two))
-+
-+    def test_audio_header_sets_profile_and_allows_audio(self) -> None:
++    def test_unknown_type_error_uses_standard_shape(self) -> None:
 +        adapter = ChatV2Adapter()
-+        engine = RecordingEngine(adapter)
-+        adapter.engine = engine
-+
-+        received_events: List[dict] = []
-+        token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
-+        try:
-+            header = {"type": "audio.header", "format": "opus", "sample_rate": 48000, "channels": 1}
-+            payload = b"\x03" * 2
-+            events = [
-+                {"type": "websocket.connect"},
-+                {"type": "websocket.receive", "text": json.dumps(header)},
-+                {"type": "websocket.receive", "bytes": payload},
-+                {"type": "websocket.disconnect", "code": 1000},
-+            ]
-+
-+            sent = self._drive(adapter, events)
-+        finally:
-+            bus.unsubscribe(token)
-+
-+        self.assertEqual(len(engine.audio_calls), 1)
-+        self.assertEqual(engine.audio_calls[0][2], 1)
-+
-+        errors = [msg for msg in sent if msg.get("type") == "websocket.send" and msg.get("text")]
-+        self.assertFalse(errors)
-+
-+        self.assertEqual(len(received_events), 1)
-+        self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload))
-+
-+    def test_duplicate_audio_header_reports_error(self) -> None:
-+        adapter = ChatV2Adapter()
-+        engine = RecordingEngine(adapter)
-+        adapter.engine = engine
-+
-+        header_one = {"type": "audio.header", "format": "opus", "sample_rate": 48000, "channels": 1}
-+        header_two = {"type": "audio.header", "format": "pcm", "sample_rate": 16000, "channels": 1}
++        frame = {"type": "client.foo", "payload": "ignored"}
 +        events = [
 +            {"type": "websocket.connect"},
-+            {"type": "websocket.receive", "text": json.dumps(header_one)},
-+            {"type": "websocket.receive", "text": json.dumps(header_two)},
++            {"type": "websocket.receive", "text": json.dumps(frame)},
 +            {"type": "websocket.disconnect", "code": 1000},
 +        ]
 +
 +        sent = self._drive(adapter, events)
++        accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
++        self.assertEqual(len(accepts), 1)
 +
-+        error_messages = [msg for msg in sent if msg.get("type") == "websocket.send" and msg.get("text")]
-+        self.assertEqual(len(error_messages), 1)
-+        payload = json.loads(error_messages[0]["text"])
-+        self.assertEqual(payload, {
-+            "type": "error",
-+            "code": "schema_invalid",
-+            "detail": "duplicate or conflicting audio.header",
-+        })
++        errors = [msg for msg in sent if msg.get("type") == "websocket.send"]
++        self.assertEqual(len(errors), 1)
++        payload = json.loads(errors[0]["text"])
++        self.assertEqual(
++            payload,
++            {"type": "error", "code": "unknown_type", "detail": "client.foo"},
++        )
 +
-+        close_messages = [msg for msg in sent if msg.get("type") == "websocket.close"]
-+        self.assertFalse(close_messages)
-+
-+    def test_not_accepting_audio_triggers_policy_close(self) -> None:
++    def test_backpressure_events_toggle_on_thresholds(self) -> None:
 +        adapter = ChatV2Adapter()
-+        engine = RecordingEngine(adapter, accept_audio=False)
++        engine = RecordingEngine()
 +        adapter.engine = engine
 +
-+        received_events: List[dict] = []
-+        token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
++        received: List[dict] = []
++        token_on = bus.subscribe(EVT_BACKPRESSURE_ON, lambda event: received.append(event))
++        token_off = bus.subscribe(EVT_BACKPRESSURE_OFF, lambda event: received.append(event))
 +        try:
-+            chunk = b"\x05" * 4
-+            events = [
-+                {"type": "websocket.connect"},
-+                {"type": "websocket.receive", "bytes": chunk},
-+                {"type": "websocket.receive", "bytes": chunk},
-+                {"type": "websocket.receive", "bytes": chunk},
-+            ]
-+
-+            sent = self._drive(adapter, events)
++            asyncio.run(self._exercise_backpressure(adapter, engine))
 +        finally:
-+            bus.unsubscribe(token)
++            bus.unsubscribe(token_on)
++            bus.unsubscribe(token_off)
 +
-+        self.assertFalse(engine.audio_calls)
++        self.assertEqual([event["type"] for event in received], [EVT_BACKPRESSURE_ON, EVT_BACKPRESSURE_OFF])
++        self.assertEqual(received[0]["meta"]["queue_depth"], QUEUE_ON_THRESHOLD + 1)
++        self.assertEqual(received[0]["meta"]["state"], "on")
++        self.assertEqual(received[1]["meta"]["queue_depth"], QUEUE_OFF_THRESHOLD - 1)
++        self.assertEqual(received[1]["meta"]["state"], "off")
 +
-+        error_frames = [msg for msg in sent if msg.get("type") == "websocket.send" and msg.get("text")]
-+        self.assertEqual(len(error_frames), 3)
-+        parsed = [json.loads(msg["text"]) for msg in error_frames]
-+        for payload in parsed[:2]:
-+            self.assertEqual(payload["code"], "audio_not_expected")
-+            self.assertEqual(payload["detail"], "engine not accepting audio")
-+        self.assertEqual(parsed[2]["code"], "audio_not_expected")
-+        self.assertEqual(parsed[2]["detail"], "engine not accepting audio")
++    async def _exercise_backpressure(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
++        scope = self._make_scope()
++        queue: asyncio.Queue[dict] = asyncio.Queue()
++        sent: List[dict] = []
 +
-+        closes = [msg for msg in sent if msg.get("type") == "websocket.close"]
-+        self.assertEqual(len(closes), 1)
-+        self.assertEqual(closes[0]["code"], 1008)
++        async def receive() -> dict:
++            return await queue.get()
 +
-+        self.assertEqual(len(received_events), 3)
-+        self.assertEqual(received_events[-1]["meta"]["error"], "audio_not_expected_close")
-+        self.assertEqual(received_events[-1]["meta"]["ws"]["size"], len(chunk))
++        async def send(message: dict) -> None:
++            sent.append(message)
++
++        task = asyncio.create_task(adapter(scope, receive, send))
++        await queue.put({"type": "websocket.connect"})
++
++        await self._wait_for(lambda: engine.open_sid is not None)
++        sid = engine.open_sid
++        assert sid is not None
++
++        await adapter.set_outbound_queue_depth(sid, QUEUE_ON_THRESHOLD + 1)
++        await adapter.set_outbound_queue_depth(sid, QUEUE_OFF_THRESHOLD - 1)
++
++        await queue.put({"type": "websocket.disconnect", "code": 1000})
++        await task
++
++        accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
++        if not accepts:
++            raise AssertionError("connection was not accepted")
++
++    @staticmethod
++    async def _wait_for(predicate: Callable[[], bool], timeout: float = 1.0) -> None:
++        loop = asyncio.get_running_loop()
++        deadline = loop.time() + timeout
++        while not predicate():
++            if loop.time() >= deadline:
++                raise TimeoutError("timed out waiting for predicate")
++            await asyncio.sleep(0.01)
 +
 +
-+if __name__ == "__main__":  # pragma: no cover
++if __name__ == "__main__":  # pragma: no cover - convenience
 +    unittest.main()
