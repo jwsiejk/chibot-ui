@@ -1,4 +1,9 @@
-"""Minimal Deepgram streaming client with provider keepalive support."""
+"""Minimal Deepgram streaming client with provider keepalive support.
+
+This module was introduced in Build 04-G and is shared by higher-level
+adapters (for example :mod:`app.voice_v2.asr`) so that keepalive behaviour
+is implemented exactly once.
+"""
 from __future__ import annotations
 
 import asyncio
