@@ -1,143 +1,45 @@
-diff --git a/tests/test_ws_auth_browser.py b/tests/test_ws_auth_browser.py
+diff --git a/tests/test_ws_origin.py b/tests/test_ws_origin.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..95fc9740a8426322eceadbdf2c9a38f607a15cfb
+index 0000000000000000000000000000000000000000..0539c7a67e6e59437372144fb916b2bdae064828
 --- /dev/null
-+++ b/tests/test_ws_auth_browser.py
-@@ -0,0 +1,137 @@
-+"""Browser-compatible authentication tests for chat.v2 adapter."""
++++ b/tests/test_ws_origin.py
+@@ -0,0 +1,39 @@
++"""Origin allow-list enforcement for WebSocket handshakes."""
 +from __future__ import annotations
 +
-+import asyncio
-+import json
-+import unittest
-+from typing import Any, Dict, Iterable, List, Tuple
++import os
++from typing import Optional
 +from unittest.mock import patch
 +
-+from app.telemetry import bus
-+from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
++import pytest
++
++from app.asgi_gateway import _validate_ws_origin
 +
 +
-+class TestBrowserWsAuthentication(unittest.TestCase):
-+    """Verify query-string bearer handling for browser clients."""
-+
-+    def setUp(self) -> None:
-+        bus.reset()
-+
-+    def tearDown(self) -> None:
-+        bus.reset()
-+
-+    @staticmethod
-+    def _make_scope(
-+        *,
-+        query_string: bytes | str = b"",
-+        headers: Iterable[Tuple[bytes, bytes]] | None = None,
-+    ) -> Dict[str, Any]:
-+        return {
-+            "type": "websocket",
-+            "query_string": query_string,
-+            "subprotocols": [CHAT_V2_SUBPROTOCOL],
-+            "headers": list(headers or []),
-+            "client": ("127.0.0.1", 4312),
-+        }
-+
-+    async def _run_adapter(
-+        self,
-+        adapter: ChatV2Adapter,
-+        events: List[dict],
-+        *,
-+        scope: Dict[str, Any],
-+    ) -> List[dict]:
-+        queue: asyncio.Queue[dict] = asyncio.Queue()
-+        for event in events:
-+            queue.put_nowait(event)
-+
-+        sent: List[dict] = []
-+
-+        async def receive() -> dict:
-+            return await queue.get()
-+
-+        async def send(message: dict) -> None:
-+            sent.append(message)
-+
-+        await adapter(scope, receive, send)
-+        return sent
-+
-+    def _drive(
-+        self,
-+        adapter: ChatV2Adapter,
-+        events: List[dict],
-+        *,
-+        scope: Dict[str, Any],
-+    ) -> List[dict]:
-+        return asyncio.run(self._run_adapter(adapter, events, scope=scope))
-+
-+    def test_extracts_token_from_query_string(self) -> None:
-+        adapter = ChatV2Adapter()
-+        token, error = adapter._extract_browser_token(
-+            self._make_scope(query_string=b"access_token=my-token")
-+        )
-+
-+        self.assertEqual(token, "my-token")
-+        self.assertIsNone(error)
-+
-+    def test_query_token_sets_authorization_header(self) -> None:
-+        adapter = ChatV2Adapter()
-+        scope = self._make_scope(query_string=b"access_token=good-token")
-+        events = [
-+            {"type": "websocket.connect"},
-+            {"type": "websocket.disconnect", "code": 1000},
-+        ]
-+
-+        with patch("app.ws.adapter.authorize", return_value=(True, None)) as mock_authorize:
-+            sent = self._drive(adapter, events, scope=scope)
-+
-+        self.assertTrue(any(msg.get("type") == "websocket.accept" for msg in sent))
-+        mock_authorize.assert_called_once()
-+        headers_arg = mock_authorize.call_args.args[0]
-+        self.assertEqual(headers_arg.get("authorization"), "Bearer good-token")
-+
-+    def test_rejects_ambiguous_sources(self) -> None:
-+        adapter = ChatV2Adapter()
-+        scope = self._make_scope(
-+            query_string=b"access_token=q-token",
-+            headers=[(b"authorization", b"Bearer already")],
-+        )
-+        events = [{"type": "websocket.connect"}]
-+
-+        with patch("app.ws.adapter.authorize", return_value=(True, None)) as mock_authorize:
-+            sent = self._drive(adapter, events, scope=scope)
-+
-+        mock_authorize.assert_not_called()
-+        self.assertEqual(len(sent), 2)
-+        start, body = sent
-+        self.assertEqual(start["type"], "websocket.http.response.start")
-+        self.assertEqual(start["status"], 401)
-+        payload = json.loads(body["body"].decode("utf-8"))
-+        self.assertEqual(
-+            payload,
-+            {"type": "error", "code": "unauthorized", "detail": "ambiguous auth"},
-+        )
-+
-+    def test_invalid_token_is_rejected(self) -> None:
-+        adapter = ChatV2Adapter()
-+        scope = self._make_scope(query_string=b"access_token=bad-token")
-+        events = [{"type": "websocket.connect"}]
-+
-+        with patch(
-+            "app.ws.adapter.authorize", return_value=(False, "missing or invalid auth")
-+        ):
-+            sent = self._drive(adapter, events, scope=scope)
-+
-+        self.assertEqual(len(sent), 2)
-+        start, body = sent
-+        self.assertEqual(start["type"], "websocket.http.response.start")
-+        self.assertEqual(start["status"], 401)
-+        payload = json.loads(body["body"].decode("utf-8"))
-+        self.assertEqual(
-+            payload,
-+            {"type": "error", "code": "unauthorized", "detail": "missing or invalid auth"},
-+        )
++def _make_scope(origin: Optional[str]) -> dict:
++    headers = []
++    if origin is not None:
++        headers.append((b"origin", origin.encode("latin1")))
++    return {"type": "websocket", "path": "/ws/v2/chat", "headers": tuple(headers)}
 +
 +
-+if __name__ == "__main__":  # pragma: no cover - convenience
-+    unittest.main()
++@pytest.mark.parametrize(
++    "config, origin, expected",
++    [
++        ({"ASKCHIP_WS_ALLOWED_ORIGINS": "https://app.askchip.ai"}, "https://app.askchip.ai", True),
++        ({"ASKCHIP_WS_ALLOWED_ORIGINS": "https://app.askchip.ai"}, "https://evil.example", False),
++        ({"ASKCHIP_ENV": "development"}, "http://localhost:3000", True),
++        ({"ASKCHIP_ENV": "prod"}, "http://localhost:3000", False),
++    ],
++)
++def test_origin_policy(config: dict[str, str], origin: str, expected: bool) -> None:
++    with patch.dict(os.environ, config, clear=True):
++        allowed, _ = _validate_ws_origin(_make_scope(origin))
++        assert allowed is expected
++
++
++def test_missing_origin_is_accepted() -> None:
++    with patch.dict(os.environ, {}, clear=True):
++        allowed, origin = _validate_ws_origin(_make_scope(None))
++        assert origin is None
++        assert allowed is True

@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
+from urllib.parse import urlparse
 
 from app.admin.flow_api import handle_flow_trace, handle_flow_zip
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
@@ -61,6 +62,10 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
 
     if scope_type == "websocket":
         if path == WS_ROUTE:
+            allowed, blocked_origin = _validate_ws_origin(scope)
+            if not allowed:
+                await _reject_origin(scope, blocked_origin, receive, send)
+                return
             await _get_adapter()(scope, receive, send)
         else:
             await _reject_websocket(receive, send)
@@ -183,6 +188,108 @@ def _get_adapter() -> ChatV2Adapter:
     if _adapter is None:
         _adapter = ChatV2Adapter()
     return _adapter
+
+
+async def _reject_origin(
+    scope: dict,
+    origin: Optional[str],
+    receive: Callable[[], Awaitable[dict]],
+    send: Callable[[dict], Awaitable[None]],
+) -> None:
+    """Reject a WebSocket handshake because the Origin is not allowed."""
+
+    message = await receive()
+    if message.get("type") != "websocket.connect":
+        return
+
+    logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
+    payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
+    if origin:
+        payload["origin"] = origin
+    await _send_response(send, json_response(status=403, **payload))
+
+
+def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
+    for header, value in headers:
+        if header == name:
+            try:
+                return value.decode("latin1").strip()
+            except UnicodeDecodeError:  # pragma: no cover - defensive
+                return None
+    return None
+
+
+def _resolve_origin_policy() -> "_OriginPolicy":
+    raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
+    if raw is not None:
+        entries = tuple(filter(None, (_normalize_origin(item) for item in raw.split(","))))
+        return _OriginPolicy(mode="explicit", values=entries)
+
+    env = (os.getenv("ASKCHIP_ENV") or "development").strip().lower()
+    if env in {"production", "prod"}:
+        return _OriginPolicy(mode="explicit", values=())
+
+    return _OriginPolicy(mode="localhost", values=("localhost", "127.0.0.1"))
+
+
+def _is_origin_allowed(origin: str, policy: "_OriginPolicy") -> bool:
+    if policy.mode == "explicit":
+        normalized = _normalize_origin(origin)
+        if normalized is None or not policy.values:
+            return normalized in policy.values
+        return normalized in policy.values
+
+    if policy.mode == "localhost":
+        host = _extract_hostname(origin)
+        if host is None:
+            return False
+        return host in policy.values
+
+    return False
+
+
+def _normalize_origin(value: str) -> Optional[str]:
+    raw = value.strip()
+    if not raw:
+        return None
+
+    parsed = urlparse(raw)
+    if parsed.scheme and parsed.netloc:
+        scheme = parsed.scheme.lower()
+        netloc = parsed.netloc.lower()
+        return f"{scheme}://{netloc}"
+
+    lowered = raw.lower()
+    if lowered == "*":
+        return None
+    return lowered
+
+
+def _extract_hostname(value: str) -> Optional[str]:
+    parsed = urlparse(value)
+    if not parsed.hostname:
+        return None
+    return parsed.hostname.lower()
+
+
+@dataclass(frozen=True)
+class _OriginPolicy:
+    mode: str
+    values: tuple[str, ...]
+
+
+def _validate_ws_origin(scope: dict) -> tuple[bool, Optional[str]]:
+    """Validate the Origin header for incoming WebSocket handshakes."""
+
+    origin = _decode_header(scope.get("headers", ()), b"origin")
+    if origin is None:
+        return True, None
+
+    policy = _resolve_origin_policy()
+    if _is_origin_allowed(origin, policy):
+        return True, None
+
+    return False, origin
 
 
 _HTTP_ROUTES: Dict[str, HttpHandler] = {
