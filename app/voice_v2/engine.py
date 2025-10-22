@@ -21,6 +21,7 @@ from app.voice_v2 import (
     EVT_TTS_END,
     EVT_TTS_START,
     EVT_WS_AUDIO_RECV,
+    EVT_WS_AUDIO_SEND,
     EVT_WS_CLOSE,
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
@@ -41,6 +42,16 @@ LISTENING = "Listening"
 THINKING = "Thinking"
 RESPONDING = "Responding"
 CONFIRMING_BARGE = "ConfirmingBarge"
+
+_PCM_CODEC = "pcm_s16le"
+_PCM_RATE_HZ = 16000
+_PCM_CHANNELS = 1
+_PCM_DESCRIPTOR = {
+    "codec": _PCM_CODEC,
+    "rate_hz": _PCM_RATE_HZ,
+    "channels": _PCM_CHANNELS,
+}
+_PCM_SAMPLE_BYTES = 2 * _PCM_CHANNELS
 
 EVT_TURN_STATE = "EVT_TURN_STATE"
 EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
@@ -140,6 +151,7 @@ class EngineV2:
         self._last_sid = sid
         self._policy_snapshot = None
         self._ensure_session(sid)
+        self._emit_info_frame(sid)
         self._publish_chat_history(sid)
         self._set_state(sid, READY, reason="ws_open")
         self.reapply_policy()
@@ -271,6 +283,35 @@ class EngineV2:
 
         hold_ms = post_hold_ms or 0
         self._teardown_tts(sid, utt_id, post_hold_ms=hold_ms, transition_to_ready=True)
+
+    def emit_tts_audio_chunk(self, sid: str, chunk: bytes | bytearray | memoryview) -> None:
+        """Emit a PCM chunk for server-to-client playback."""
+
+        if not isinstance(sid, str) or not sid:
+            raise ValueError("sid must be a non-empty string")
+
+        self._ensure_session(sid)
+
+        if isinstance(chunk, (bytes, bytearray, memoryview)):
+            pcm_chunk = bytes(chunk)
+        else:  # pragma: no cover - defensive guard
+            raise TypeError("chunk must be bytes-like")
+
+        if not pcm_chunk:
+            return
+
+        byte_count = len(pcm_chunk)
+        if byte_count % _PCM_SAMPLE_BYTES != 0:
+            raise ValueError("PCM chunk must align to 16-bit mono frames")
+
+        meta = {
+            "byte_count": byte_count,
+            "audio": dict(_PCM_DESCRIPTOR),
+            "ws": {"dir": "out", "size": byte_count},
+        }
+        payload: Dict[str, Any] = {"meta": meta, "chunk": pcm_chunk}
+        event = self._envelope(sid, EVT_WS_AUDIO_SEND, payload)
+        self._publish(event)
 
     def on_asr_final(self, sid: str, text: str) -> None:
         """Observe the final ASR transcript for a turn."""
@@ -420,6 +461,20 @@ class EngineV2:
         if frame.get("type") != "chat.message":
             return
         self._conversation_buffer.append(sid, frame)
+
+    def _emit_info_frame(self, sid: str) -> None:
+        frame = {"type": "info", "audio": dict(_PCM_DESCRIPTOR)}
+        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+        meta = {
+            "ws": {
+                "dir": "out",
+                "size": len(serialized.encode("utf-8")),
+                "preview": serialized,
+            }
+        }
+        payload = {"meta": meta, "frame": frame}
+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+        self._publish(event)
 
     def _publish_chat_history(self, sid: str) -> None:
         messages = self._conversation_buffer.messages(sid)
