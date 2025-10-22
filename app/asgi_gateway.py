@@ -7,10 +7,12 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from app.admin.flow_api import handle_flow_trace, handle_flow_zip
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,9 @@ LIVE_ROUTE = "/api/v1/live"
 READY_ROUTE = "/api/v1/ready"
 INFO_ROUTE = "/api/v1/info"
 EXPORT_ROOT = Path("exports")
+_ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
+_TRACE_SEGMENT = "trace"
+_ZIP_SEGMENT = "zip"
 
 
 HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
@@ -63,6 +68,8 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
 
     if scope_type == "http":
         handler = _HTTP_ROUTES.get(path)
+        if handler is None:
+            handler = _resolve_admin_route(path)
         if handler is None:
             await _drain_request_body(receive)
             await _send_response(send, json_response(status=404, error="not_found"))
@@ -184,3 +191,26 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     READY_ROUTE: _handle_ready,
     INFO_ROUTE: _handle_info,
 }
+
+
+def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
+    if not path.startswith(_ADMIN_FLOW_PREFIX):
+        return None
+
+    suffix = path[len(_ADMIN_FLOW_PREFIX) :]
+    if not suffix:
+        return None
+
+    segments = suffix.split("/")
+    if len(segments) != 2:
+        return None
+
+    sid, action = segments
+    if not sid:
+        return None
+
+    if action == _TRACE_SEGMENT:
+        return partial(handle_flow_trace, sid=sid)
+    if action == _ZIP_SEGMENT:
+        return partial(handle_flow_zip, sid=sid)
+    return None

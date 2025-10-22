@@ -1,601 +1,512 @@
-diff --git a/app/admin/flow_zip.py b/app/admin/flow_zip.py
-index 13d1fd3a4a16eb9bbe0801d59f0c9b9f43c027e6..2cded5e60d0fa90be11e89a22e7e8e87e7e1a75d 100644
---- a/app/admin/flow_zip.py
-+++ b/app/admin/flow_zip.py
-@@ -1,113 +1,324 @@
- """Utilities for building deterministic flow export archives."""
- 
- from __future__ import annotations
- 
-+import io
- import json
- from datetime import datetime, timezone
- from pathlib import Path
--from typing import Dict, Iterable, Tuple
-+from typing import Dict, Iterable, List, Tuple
- from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
- 
-+from app.telemetry import bus as telemetry_bus
-+from app.telemetry.exporter import compute_sha256
-+
- 
- __all__ = ["build_flow_zip"]
- 
- 
- _ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
- _README_NAME = "README.txt"
- _MANIFEST_NAME = "manifest.json"
- _EVENTS_NAME = "events.ndjson"
-+_EVENTS_REDACTED_NAME = "events.redacted.ndjson"
-+_TIMELINE_NAME = "flow_timeline.ndjson"
-+_NLU_NAME = "nlu.ndjson"
-+_NLG_NAME = "nlg.ndjson"
-+
-+_TIMELINE_TYPES = {
-+    "EVT_TURN_BEGIN",
-+    "EVT_TURN_END",
-+    "EVT_TTS_START",
-+    "EVT_TTS_END",
-+    "EVT_TTS_MASK",
-+    "EVT_MIC_GATE",
-+    "EVT_POLICY_APPLIED",
-+    "EVT_BARGE_IN",
-+}
-+_WS_PREFIX = "EVT_WS_"
-+_VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SEND"}
-+_PARTIAL_TYPES = {"EVT_ASR_PARTIAL"}
-+
-+_DEFAULT_CAP_BYTES = 25 * 1024 * 1024
-+
-+
-+class _EventWrapper(dict):
-+    """Container storing a redacted event and its truncation category."""
-+
-+    __slots__ = ()
-+
-+    @property
-+    def event(self) -> Dict[str, object]:
-+        return self["event"]
- 
-+    @property
-+    def category(self) -> str:
-+        return self["category"]
- 
--def build_flow_zip(sid: str, root: Path = Path("exports")) -> Path:
-+
-+def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _DEFAULT_CAP_BYTES) -> Path:
-     """Package the flow artifacts for ``sid`` into a deterministic ZIP archive."""
- 
-     session_dir = Path(root) / sid
-     manifest_path = session_dir / _MANIFEST_NAME
-     events_path = session_dir / _EVENTS_NAME
- 
-     _assert_exists(manifest_path)
-     _assert_exists(events_path)
- 
--    manifest_bytes = manifest_path.read_bytes()
--    events_bytes = events_path.read_bytes()
--
--    manifest_data = _load_manifest(manifest_bytes)
-+    manifest_data = _load_manifest(manifest_path.read_bytes())
-     created_label = _determine_created_label(manifest_data)
-     readme_bytes = _build_readme(sid, created_label)
- 
--    archive_path = session_dir / "flow.zip"
--    entries: Iterable[Tuple[str, bytes]] = [
--        (_README_NAME, readme_bytes),
--        (_EVENTS_NAME, events_bytes),
--        (_MANIFEST_NAME, manifest_bytes),
--    ]
-+    raw_events = _load_events(events_path)
-+    wrapped_events = _wrap_events(raw_events)
- 
--    with ZipFile(archive_path, mode="w") as zf:
--        for name, payload in sorted(entries, key=lambda item: item[0]):
--            info = ZipInfo(filename=name)
--            info.date_time = _ARCHIVE_TIMESTAMP
--            info.compress_type = ZIP_DEFLATED
--            zf.writestr(info, payload)
-+    drop_counts = {"vendor_debug": 0, "partials": 0, "events_tail": 0}
-+    archive_bytes: bytes = b""
-+    payloads: Dict[str, bytes] = {}
-+    manifest_bytes: bytes = b""
- 
-+    while True:
-+        payloads, manifest_bytes = _render_payloads(
-+            wrapped_events,
-+            manifest_data,
-+            readme_bytes,
-+            drop_counts,
-+            cap_bytes,
-+        )
-+        entries = dict(payloads)
-+        entries[_MANIFEST_NAME] = manifest_bytes
-+        archive_bytes = _render_archive(entries)
-+
-+        if len(archive_bytes) <= cap_bytes:
-+            break
-+
-+        if not _drop_next_event(wrapped_events, drop_counts):
-+            break
-+
-+    archive_path = session_dir / "flow.zip"
-+    archive_path.write_bytes(archive_bytes)
-     return archive_path
- 
- 
- def _assert_exists(path: Path) -> None:
-     if not path.is_file():
-         raise FileNotFoundError(path)
- 
- 
- def _load_manifest(raw: bytes) -> Dict[str, object]:
-     try:
-         return json.loads(raw.decode("utf-8"))
-     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-         raise ValueError("manifest.json must contain valid UTF-8 encoded JSON") from exc
- 
- 
- def _determine_created_label(manifest: Dict[str, object]) -> str:
-     candidates = [
-         manifest.get("started_ms"),
-         manifest.get("created_ms"),
-         manifest.get("created_at_ms"),
-         manifest.get("created_at"),
-     ]
- 
-     for value in candidates:
-         if isinstance(value, int):
-             return _format_epoch_ms(value)
-         if isinstance(value, str) and value:
-             return value
- 
-     return "unknown"
- 
- 
- def _format_epoch_ms(value: int) -> str:
-     try:
-         dt = datetime.fromtimestamp(value / 1000, tz=timezone.utc)
-     except (OverflowError, OSError, ValueError):
-         return "unknown"
-     return dt.isoformat().replace("+00:00", "Z")
- 
- 
- def _build_readme(sid: str, created_label: str) -> bytes:
-     lines = [
-         "Flow Export",
-         "==========",
-         "",
-         f"Session ID: {sid}",
-         f"Created: {created_label}",
-         "",
--        "This archive contains the foundational flow artifacts for the session:",
--        f"- {_MANIFEST_NAME}: session metadata as recorded by the exporter.",
--        f"- {_EVENTS_NAME}: chronological event stream (unredacted).",
--        f"- {_README_NAME}: this overview and caveats.",
-+        "This archive contains privacy-safe flow artifacts:",
-+        f"- {_MANIFEST_NAME}: session metadata, integrity digests, and truncation notes.",
-+        f"- {_EVENTS_REDACTED_NAME}: chronological event stream with telemetry redaction re-applied.",
-+        f"- {_TIMELINE_NAME}: key timeline markers (turns, TTS, mic gate, policy, WS state).",
-+        f"- {_NLU_NAME}: captured NLU evaluations.",
-+        f"- {_NLG_NAME}: assistant planning and wording events.",
-         "",
--        "Privacy & Roadmap:",
--        "- Sensitive data may still be present. Handle with care.",
--        "- Additional redaction, SHA-256 mapping, and size caps will arrive in BUILD 06 Task C.",
--        "",
--        "For documentation, see /docs.",
-+        "Files are ordered lexicographically inside the archive. For documentation, see /docs.",
-     ]
- 
-     content = "\n".join(lines) + "\n"
-     return content.encode("utf-8")
-+
-+
-+def _wrap_events(events: List[Dict[str, object]]) -> List[_EventWrapper]:
-+    wrapped: List[_EventWrapper] = []
-+    for event in events:
-+        redacted = _redact_event(event)
-+        event_type = redacted.get("type")
-+        category = _categorize_event(event_type)
-+        wrapped.append(_EventWrapper(event=redacted, category=category))
-+    return wrapped
-+
-+
-+def _categorize_event(event_type: object) -> str:
-+    if isinstance(event_type, str):
-+        if event_type in _VENDOR_DEBUG_TYPES:
-+            return "vendor_debug"
-+        if event_type in _PARTIAL_TYPES:
-+            return "partials"
-+    return "main"
-+
-+
-+def _render_payloads(
-+    events: List[_EventWrapper],
-+    manifest_data: Dict[str, object],
-+    readme_bytes: bytes,
-+    drop_counts: Dict[str, int],
-+    cap_bytes: int,
-+) -> Tuple[Dict[str, bytes], bytes]:
-+    redacted_events = [wrapper.event for wrapper in events]
-+
-+    events_bytes = _dump_ndjson(redacted_events)
-+    timeline_events = [evt for evt in redacted_events if _is_timeline_event(evt)]
-+    timeline_bytes = _dump_ndjson(timeline_events)
-+    nlu_events = [evt for evt in redacted_events if evt.get("type") == "EVT_NLU"]
-+    nlg_events = [evt for evt in redacted_events if evt.get("type") == "EVT_NLG"]
-+
-+    payloads = {
-+        _README_NAME: readme_bytes,
-+        _EVENTS_REDACTED_NAME: events_bytes,
-+        _TIMELINE_NAME: timeline_bytes,
-+        _NLU_NAME: _dump_ndjson(nlu_events),
-+        _NLG_NAME: _dump_ndjson(nlg_events),
-+    }
-+
-+    manifest_bytes = _build_manifest_payload(
-+        manifest_data,
-+        payloads,
-+        drop_counts,
-+        cap_bytes,
-+    )
-+
-+    return payloads, manifest_bytes
-+
-+
-+def _is_timeline_event(event: Dict[str, object]) -> bool:
-+    event_type = event.get("type")
-+    if not isinstance(event_type, str):
-+        return False
-+    if event_type in _TIMELINE_TYPES:
-+        return True
-+    return event_type.startswith(_WS_PREFIX)
-+
-+
-+def _dump_ndjson(events: Iterable[Dict[str, object]]) -> bytes:
-+    lines = [json.dumps(event, separators=(",", ":"), ensure_ascii=False) for event in events]
-+    if not lines:
-+        return b""
-+    return ("\n".join(lines) + "\n").encode("utf-8")
-+
-+
-+def _build_manifest_payload(
-+    manifest_data: Dict[str, object],
-+    payloads: Dict[str, bytes],
-+    drop_counts: Dict[str, int],
-+    cap_bytes: int,
-+) -> bytes:
-+    manifest_copy = dict(manifest_data)
-+
-+    existing_sha = {}
-+    if isinstance(manifest_copy.get("sha256"), dict):
-+        existing_sha = dict(manifest_copy["sha256"])
-+
-+    sha_entries = {
-+        name: compute_sha256(content)
-+        for name, content in payloads.items()
-+    }
-+    existing_sha.update(sha_entries)
-+    manifest_copy["sha256"] = existing_sha
-+
-+    if any(drop_counts.values()):
-+        manifest_copy["truncated"] = True
-+        manifest_copy["cap_bytes"] = cap_bytes
-+        manifest_copy["dropped"] = {
-+            "vendor_debug": drop_counts.get("vendor_debug", 0),
-+            "partials": drop_counts.get("partials", 0),
-+            "events_tail": drop_counts.get("events_tail", 0),
-+        }
-+    else:
-+        manifest_copy.pop("truncated", None)
-+        manifest_copy.pop("cap_bytes", None)
-+        manifest_copy.pop("dropped", None)
-+
-+    return json.dumps(manifest_copy, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-+
-+
-+def _render_archive(entries: Dict[str, bytes]) -> bytes:
-+    buffer = io.BytesIO()
-+    with ZipFile(buffer, mode="w") as zf:
-+        for name in sorted(entries):
-+            info = ZipInfo(filename=name)
-+            info.date_time = _ARCHIVE_TIMESTAMP
-+            info.compress_type = ZIP_DEFLATED
-+            zf.writestr(info, entries[name])
-+    return buffer.getvalue()
-+
-+
-+def _drop_next_event(events: List[_EventWrapper], drop_counts: Dict[str, int]) -> bool:
-+    for category in ("vendor_debug", "partials"):
-+        idx = _find_last_index(events, category)
-+        if idx is not None:
-+            events.pop(idx)
-+            drop_counts[category] = drop_counts.get(category, 0) + 1
-+            return True
-+
-+    if events:
-+        events.pop()
-+        drop_counts["events_tail"] = drop_counts.get("events_tail", 0) + 1
-+        return True
-+
-+    return False
-+
-+
-+def _find_last_index(events: List[_EventWrapper], category: str) -> int | None:
-+    for index in range(len(events) - 1, -1, -1):
-+        if events[index].category == category:
-+            return index
-+    return None
-+
-+
-+def _redact_event(event: Dict[str, object]) -> Dict[str, object]:
-+    redacted = dict(event)
-+    if "meta" in redacted:
-+        try:
-+            redacted["meta"] = telemetry_bus._redact_meta(redacted["meta"])
-+        except Exception:  # pragma: no cover - redaction must not break packaging
-+            redacted["meta"] = redacted["meta"]
-+    return redacted
-+
-+
-+def _load_events(path: Path) -> List[Dict[str, object]]:
-+    events: List[Dict[str, object]] = []
-+    with path.open("r", encoding="utf-8") as handle:
-+        for idx, raw_line in enumerate(handle, start=1):
-+            line = raw_line.strip()
-+            if not line:
-+                continue
-+            try:
-+                parsed = json.loads(line)
-+            except json.JSONDecodeError as exc:
-+                raise ValueError(f"Invalid JSON on line {idx} of {path.name}") from exc
-+            if not isinstance(parsed, dict):
-+                raise ValueError(f"Event on line {idx} of {path.name} must be a JSON object")
-+            events.append(parsed)
-+    return events
-diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
-index 5792f12f1274a96d0d83430aa9965e13f801b62e..066e8e195ea3018576b2f977e30edec79c25c948 100644
---- a/app/telemetry/exporter.py
-+++ b/app/telemetry/exporter.py
-@@ -1,28 +1,29 @@
- """Minimal NDJSON file exporter for session telemetry."""
- from __future__ import annotations
- 
-+import hashlib
- import json
- import os
- import time
- from dataclasses import dataclass, field
- from pathlib import Path
- from typing import Any, Dict, Optional
- 
- from app.telemetry import bus as telemetry_bus
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
- 
-     return int(time.time() * 1000)
- 
- 
- @dataclass
- class _SessionStats:
-     """In-memory counters tracked for each active session."""
- 
-     directory: Path
-     events_path: Path
-     manifest_path: Path
-     events_written: int = 0
-     by_type: Dict[str, int] = field(default_factory=dict)
-@@ -127,26 +128,44 @@ class FileExporter:
-         if isinstance(ts_ms, int):
-             candidate = ts_ms
-             if stats.started_ms is not None and candidate < stats.started_ms:
-                 candidate = stats.started_ms
-             stats.ended_ms = candidate
- 
-         manifest = {
-             "sid": sid,
-             "schema_version": "1",
-             "started_ms": stats.started_ms,
-             "open": True,
-             "events_written": stats.events_written,
-             "by_type": dict(stats.by_type),
-         }
-         self._write_manifest(stats, manifest)
- 
-     def _write_manifest(self, stats: _SessionStats, manifest: Dict[str, Any]) -> None:
-         tmp_path = stats.manifest_path.with_name(stats.manifest_path.name + ".tmp")
-         tmp_path.write_text(
-             json.dumps(manifest, separators=(",", ":"), ensure_ascii=False),
-             encoding="utf-8",
-         )
-         os.replace(tmp_path, stats.manifest_path)
- 
- 
--__all__ = ["FileExporter"]
-+def compute_sha256(payload: bytes | bytearray | memoryview | str | Path) -> str:
-+    """Return the hexadecimal SHA-256 digest for the given payload or file."""
-+
-+    digest = hashlib.sha256()
-+
-+    if isinstance(payload, (bytes, bytearray, memoryview)):
-+        digest.update(bytes(payload))
-+        return digest.hexdigest()
-+
-+    path = Path(payload)
-+    with path.open("rb") as handle:
-+        for chunk in iter(lambda: handle.read(8192), b""):
-+            if not chunk:
-+                break
-+            digest.update(chunk)
-+    return digest.hexdigest()
-+
-+
-+__all__ = ["FileExporter", "compute_sha256"]
-diff --git a/tests/test_flow_zip_packaging.py b/tests/test_flow_zip_packaging.py
+diff --git a/app/admin/flow_api.py b/app/admin/flow_api.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..4655acafc5e26f0ec05f00666c6a8388f4f3473e
+index 0000000000000000000000000000000000000000..7fc76945c6acad98e40b0201f3d690dd091ff411
 --- /dev/null
-+++ b/tests/test_flow_zip_packaging.py
-@@ -0,0 +1,161 @@
++++ b/app/admin/flow_api.py
+@@ -0,0 +1,193 @@
++"""Admin HTTP endpoints exposing flow trace streams and ZIP archives."""
++
 +from __future__ import annotations
 +
-+import base64
 +import json
-+import os
-+import tempfile
-+import unittest
++from io import BytesIO
 +from pathlib import Path
-+from zipfile import ZipFile
++from typing import Awaitable, Callable, Dict, Iterable, Optional, Sequence
++from urllib.parse import parse_qs
 +
 +from app.admin.flow_zip import build_flow_zip
++from app.security.auth import authorize
 +
 +
-+_README = "README.txt"
-+_EVENTS_REDACTED = "events.redacted.ndjson"
-+_TIMELINE = "flow_timeline.ndjson"
-+_MANIFEST = "manifest.json"
-+_NLG = "nlg.ndjson"
-+_NLU = "nlu.ndjson"
++EXPORT_ROOT = Path("exports")
++_EVENTS_FILENAME = "events.ndjson"
++_ARCHIVE_FILENAME = "flow.zip"
++_CONTENT_TYPE_NDJSON = b"application/x-ndjson"
++_CONTENT_TYPE_ZIP = b"application/zip"
 +
-+class BuildFlowZipPackagingTest(unittest.TestCase):
-+    def test_redaction_and_sha_integrity(self) -> None:
-+        with tempfile.TemporaryDirectory() as tmp:
-+            root = Path(tmp) / "exports"
-+            sid = "sid-redaction"
-+            session_dir = self._prepare_session(root, sid)
 +
-+            events = [
++async def handle_flow_trace(
++    scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
++):
++    """Stream filtered redacted events for the given session identifier."""
++
++    from app.asgi_gateway import Response, json_response  # local import to avoid cycles
++
++    if _method(scope) != "GET":
++        await _drain_body(receive)
++        return json_response(status=405, error="method_not_allowed")
++
++    await _drain_body(receive)
++
++    headers = _decode_headers(scope.get("headers", ()))
++    authorized, reason = authorize(headers)
++    if not authorized:
++        return json_response(status=401, error="unauthorized", detail=reason)
++
++    try:
++        requested_types, since_ms, limit = _parse_trace_filters(scope.get("query_string", b""))
++    except ValueError as exc:
++        return json_response(status=400, error="invalid_query", detail=str(exc))
++
++    events_path = EXPORT_ROOT / sid / _EVENTS_FILENAME
++    if not events_path.is_file():
++        return json_response(status=404, error="not_found")
++
++    try:
++        body_bytes = _filter_events(events_path, requested_types, since_ms, limit)
++    except ValueError as exc:
++        return json_response(status=400, error="invalid_event", detail=str(exc))
++
++    headers = (
++        (b"content-type", _CONTENT_TYPE_NDJSON),
++        (b"content-length", str(len(body_bytes)).encode("ascii")),
++    )
++    return Response(status=200, body=body_bytes, headers=headers)
++
++
++async def handle_flow_zip(
++    scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
++):
++    """Return the packaged flow.zip archive for the requested session."""
++
++    from app.asgi_gateway import Response, json_response  # local import to avoid cycles
++
++    if _method(scope) != "GET":
++        await _drain_body(receive)
++        return json_response(status=405, error="method_not_allowed")
++
++    await _drain_body(receive)
++
++    headers = _decode_headers(scope.get("headers", ()))
++    authorized, reason = authorize(headers)
++    if not authorized:
++        return json_response(status=401, error="unauthorized", detail=reason)
++
++    session_dir = EXPORT_ROOT / sid
++    if not session_dir.exists():
++        return json_response(status=404, error="not_found")
++
++    archive_path = session_dir / _ARCHIVE_FILENAME
++    if not archive_path.is_file():
++        try:
++            archive_path = build_flow_zip(sid, root=EXPORT_ROOT)
++        except FileNotFoundError:
++            return json_response(status=404, error="not_found")
++
++    archive_bytes = archive_path.read_bytes()
++    headers = (
++        (b"content-type", _CONTENT_TYPE_ZIP),
++        (b"content-length", str(len(archive_bytes)).encode("ascii")),
++    )
++    return Response(status=200, body=archive_bytes, headers=headers)
++
++
++def _method(scope: dict) -> str:
++    return scope.get("method", "GET").upper()
++
++
++def _decode_headers(raw_headers: Iterable[Sequence[bytes]]) -> Dict[str, str]:
++    headers: Dict[str, str] = {}
++    for name, value in raw_headers:
++        headers[name.decode("latin1").lower()] = value.decode("latin1")
++    return headers
++
++
++async def _drain_body(receive: Callable[[], Awaitable[dict]]) -> None:
++    while True:
++        message = await receive()
++        if message.get("type") != "http.request":
++            break
++        if not message.get("more_body", False):
++            break
++
++
++def _parse_trace_filters(query: bytes) -> tuple[Optional[set[str]], Optional[int], Optional[int]]:
++    qs = query.decode("utf-8", errors="ignore")
++    parsed = parse_qs(qs, keep_blank_values=False)
++
++    requested_types: Optional[set[str]] = None
++    if "type" in parsed and parsed["type"]:
++        types_raw = parsed["type"][0].split(",")
++        requested_types = {value for value in (t.strip() for t in types_raw) if value}
++        if not requested_types:
++            requested_types = None
++
++    since_ms: Optional[int] = None
++    if "since_ms" in parsed and parsed["since_ms"]:
++        since_raw = parsed["since_ms"][0]
++        try:
++            since_ms = int(since_raw)
++        except ValueError as exc:  # pragma: no cover - defensive
++            raise ValueError("since_ms must be an integer") from exc
++        if since_ms < 0:
++            raise ValueError("since_ms must be non-negative")
++
++    limit: Optional[int] = None
++    if "limit" in parsed and parsed["limit"]:
++        limit_raw = parsed["limit"][0]
++        try:
++            limit = int(limit_raw)
++        except ValueError as exc:  # pragma: no cover - defensive
++            raise ValueError("limit must be an integer") from exc
++        if limit < 0:
++            raise ValueError("limit must be non-negative")
++
++    return requested_types, since_ms, limit
++
++
++def _filter_events(
++    events_path: Path,
++    requested_types: Optional[set[str]],
++    since_ms: Optional[int],
++    limit: Optional[int],
++) -> bytes:
++    matched = BytesIO()
++    remaining = limit if limit is not None else None
++
++    with events_path.open("r", encoding="utf-8") as handle:
++        for raw_line in handle:
++            if remaining is not None and remaining <= 0:
++                break
++
++            stripped = raw_line.strip()
++            if not stripped:
++                continue
++
++            try:
++                event = json.loads(stripped)
++            except json.JSONDecodeError as exc:  # pragma: no cover - defensive
++                raise ValueError("event payload must be valid JSON") from exc
++
++            if requested_types and event.get("type") not in requested_types:
++                continue
++
++            if since_ms is not None:
++                ts_value = event.get("ts_ms")
++                if not isinstance(ts_value, int):
++                    continue
++                if ts_value < since_ms:
++                    continue
++
++            matched.write(stripped.encode("utf-8"))
++            matched.write(b"\n")
++            if remaining is not None:
++                remaining -= 1
++
++    return matched.getvalue()
++
++
++__all__ = ["handle_flow_trace", "handle_flow_zip"]
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index 8bb762181578e1e4e94309abdc104ac5c0dab294..b0bd368a38cf7243510a35bbc368a6c0c4e45e50 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -1,90 +1,97 @@
+ """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
+ from __future__ import annotations
+ 
+ import json
+ import logging
+ import os
+ import time
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
++from functools import partial
+ from pathlib import Path
+ from tempfile import NamedTemporaryFile
+ from typing import Any, Awaitable, Callable, Dict, Optional
+ 
++from app.admin.flow_api import handle_flow_trace, handle_flow_zip
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ @dataclass(frozen=True)
+ class Response:
+     """Immutable container describing a serialized HTTP response."""
+ 
+     status: int
+     body: bytes
+     headers: tuple[tuple[bytes, bytes], ...]
+ 
+ 
+ def json_response(*, status: int = 200, **payload: Any) -> Response:
+     """Serialize a payload to JSON using a compact representation."""
+ 
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
+     )
+     return Response(status=status, body=body, headers=headers)
+ 
+ 
+ WS_ROUTE = "/ws/v2/chat"
+ HEALTH_ROUTE = "/api/v1/health"
+ LIVE_ROUTE = "/api/v1/live"
+ READY_ROUTE = "/api/v1/ready"
+ INFO_ROUTE = "/api/v1/info"
+ EXPORT_ROOT = Path("exports")
++_ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
++_TRACE_SEGMENT = "trace"
++_ZIP_SEGMENT = "zip"
+ 
+ 
+ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
+ 
+ _adapter: Optional[ChatV2Adapter] = None
+ 
+ 
+ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
+     scope_type = scope.get("type")
+     path = (scope.get("root_path") or "") + scope.get("path", "")
+ 
+     if scope_type == "websocket":
+         if path == WS_ROUTE:
+             await _get_adapter()(scope, receive, send)
+         else:
+             await _reject_websocket(receive, send)
+         return
+ 
+     if scope_type == "http":
+         handler = _HTTP_ROUTES.get(path)
++        if handler is None:
++            handler = _resolve_admin_route(path)
+         if handler is None:
+             await _drain_request_body(receive)
+             await _send_response(send, json_response(status=404, error="not_found"))
+         else:
+             response = await handler(scope, receive)
+             await _send_response(send, response)
+         return
+ 
+     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
+ 
+ 
+ async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Return a static JSON document for health checks."""
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+         return json_response(status=405, error="method_not_allowed")
+ 
+     await _drain_request_body(receive)
+     return json_response(ok=True, engine="v2", ws_subprotocol=CHAT_V2_SUBPROTOCOL)
+ 
+ 
+ async def _handle_live(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Expose a lightweight pulse indicating the event loop is responsive."""
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+@@ -162,25 +169,48 @@ async def _send_response(send: Callable[[dict], Awaitable[None]], response: Resp
+ 
+ 
+ def _method_is_get(scope: dict) -> bool:
+     """Return True when the incoming HTTP scope uses the GET method."""
+ 
+     return scope.get("method", "GET").upper() == "GET"
+ 
+ 
+ __all__ = ["app"]
+ 
+ 
+ def _get_adapter() -> ChatV2Adapter:
+     """Return a lazily instantiated ChatV2Adapter singleton."""
+     global _adapter
+     if _adapter is None:
+         _adapter = ChatV2Adapter()
+     return _adapter
+ 
+ 
+ _HTTP_ROUTES: Dict[str, HttpHandler] = {
+     HEALTH_ROUTE: _handle_health,
+     LIVE_ROUTE: _handle_live,
+     READY_ROUTE: _handle_ready,
+     INFO_ROUTE: _handle_info,
+ }
++
++
++def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
++    if not path.startswith(_ADMIN_FLOW_PREFIX):
++        return None
++
++    suffix = path[len(_ADMIN_FLOW_PREFIX) :]
++    if not suffix:
++        return None
++
++    segments = suffix.split("/")
++    if len(segments) != 2:
++        return None
++
++    sid, action = segments
++    if not sid:
++        return None
++
++    if action == _TRACE_SEGMENT:
++        return partial(handle_flow_trace, sid=sid)
++    if action == _ZIP_SEGMENT:
++        return partial(handle_flow_zip, sid=sid)
++    return None
+diff --git a/tests/test_admin_flow_api.py b/tests/test_admin_flow_api.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e91263a734bc06bf2ed4a3d7bf18aac936e6f122
+--- /dev/null
++++ b/tests/test_admin_flow_api.py
+@@ -0,0 +1,158 @@
++from __future__ import annotations
++
++import asyncio
++import hashlib
++import json
++import tempfile
++import unittest
++from io import BytesIO
++from pathlib import Path
++from typing import List, Sequence, Tuple
++from zipfile import ZipFile
++
++from app.admin import flow_api
++
++
++class AdminFlowApiTest(unittest.TestCase):
++    def setUp(self) -> None:
++        self._tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self._tmp.cleanup)
++
++        self._original_export_root = flow_api.EXPORT_ROOT
++        exports_root = Path(self._tmp.name) / "exports"
++        flow_api.EXPORT_ROOT = exports_root
++        self.addCleanup(self._restore_export_root)
++
++        self.exports_root = exports_root
++        self.sid = "sid-test"
++        self.session_dir = self.exports_root / self.sid
++        self.session_dir.mkdir(parents=True, exist_ok=True)
++
++        (self.session_dir / "manifest.json").write_text(
++            json.dumps(
 +                {
-+                    "type": "EVT_WS_JSON_RECV",
-+                    "sid": sid,
-+                    "ts_ms": 111,
-+                    "meta": {
-+                        "authorization": "Bearer supersecretvalue",
-+                        "email": "agent@example.com",
-+                    },
++                    "sid": self.sid,
++                    "schema_version": "1",
++                    "started_ms": 1_732_200_000_000,
++                    "open": False,
++                    "events_written": 0,
++                    "by_type": {},
 +                },
-+                {
-+                    "type": "EVT_NLU",
-+                    "sid": sid,
-+                    "ts_ms": 222,
-+                    "meta": {"intent": "help_install"},
-+                },
-+                {
-+                    "type": "EVT_NLG",
-+                    "sid": sid,
-+                    "ts_ms": 333,
-+                    "meta": {"utterance": "Masked"},
-+                },
-+            ]
-+            self._write_events(session_dir, events)
-+
-+            archive_path = build_flow_zip(sid, root=root)
-+            self.assertTrue(archive_path.exists())
-+
-+            with ZipFile(archive_path) as zf:
-+                names = zf.namelist()
-+                self.assertEqual(
-+                    names,
-+                    [_README, _EVENTS_REDACTED, _TIMELINE, _MANIFEST, _NLG, _NLU],
-+                )
-+
-+                events_data = zf.read(_EVENTS_REDACTED).decode("utf-8").strip().splitlines()
-+                self.assertEqual(len(events_data), 3)
-+                first_event = json.loads(events_data[0])
-+                self.assertNotIn("supersecretvalue", json.dumps(first_event))
-+                self.assertIn("***@example.com", json.dumps(first_event))
-+                auth_value = first_event["meta"]["authorization"]
-+                self.assertTrue(auth_value.startswith("Bearer "))
-+                self.assertIn("****", auth_value)
-+
-+                manifest = json.loads(zf.read(_MANIFEST).decode("utf-8"))
-+                sha_map = manifest.get("sha256", {})
-+                for name in [_README, _EVENTS_REDACTED, _TIMELINE, _NLG, _NLU]:
-+                    digest = self._sha256_bytes(zf.read(name))
-+                    self.assertEqual(sha_map[name], digest)
-+
-+                self.assertNotIn("events.ndjson", names)
-+                self.assertFalse(manifest.get("truncated"))
-+
-+    def test_truncation_applies_cap_and_records_drops(self) -> None:
-+        with tempfile.TemporaryDirectory() as tmp:
-+            root = Path(tmp) / "exports"
-+            sid = "sid-truncation"
-+            session_dir = self._prepare_session(root, sid)
-+
-+            cap_override = 200_000
-+            vendor_events = [self._make_event("EVT_VENDOR_DEBUG", sid, self._blob(50_000)) for _ in range(3)]
-+            partial_events = [self._make_event("EVT_ASR_PARTIAL", sid, self._blob(60_000)) for _ in range(3)]
-+            main_events = [self._make_event("EVT_WS_JSON_SEND", sid, self._blob(70_000)) for _ in range(6)]
-+            events = vendor_events + partial_events + main_events
-+            self._write_events(session_dir, events)
-+
-+            archive_path = build_flow_zip(sid, root=root, cap_bytes=cap_override)
-+            self.assertLessEqual(archive_path.stat().st_size, cap_override)
-+
-+            with ZipFile(archive_path) as zf:
-+                manifest = json.loads(zf.read(_MANIFEST).decode("utf-8"))
-+                self.assertTrue(manifest.get("truncated"))
-+                self.assertEqual(manifest.get("cap_bytes"), cap_override)
-+                dropped = manifest.get("dropped", {})
-+                self.assertGreaterEqual(dropped.get("vendor_debug", 0), 1)
-+                self.assertGreaterEqual(dropped.get("partials", 0), 1)
-+                self.assertGreater(dropped.get("events_tail", 0), 0)
-+
-+                redacted_lines = [json.loads(line) for line in zf.read(_EVENTS_REDACTED).decode("utf-8").strip().splitlines() if line]
-+                vendor_remaining = sum(1 for evt in redacted_lines if evt.get("type") == "EVT_VENDOR_DEBUG")
-+                partial_remaining = sum(1 for evt in redacted_lines if evt.get("type") == "EVT_ASR_PARTIAL")
-+                self.assertEqual(
-+                    vendor_remaining,
-+                    len(vendor_events) - dropped.get("vendor_debug", 0),
-+                )
-+                self.assertEqual(
-+                    partial_remaining,
-+                    len(partial_events) - dropped.get("partials", 0),
-+                )
-+
-+    def _prepare_session(self, root: Path, sid: str) -> Path:
-+        session_dir = root / sid
-+        session_dir.mkdir(parents=True, exist_ok=True)
-+        manifest = {
-+            "sid": sid,
-+            "schema_version": "1",
-+            "started_ms": 1_732_200_000_000,
-+            "open": False,
-+            "events_written": 0,
-+            "by_type": {},
-+        }
-+        (session_dir / "manifest.json").write_text(
-+            json.dumps(manifest, separators=(",", ":"), ensure_ascii=False),
++                separators=(",", ":"),
++            ),
 +            encoding="utf-8",
 +        )
-+        return session_dir
 +
-+    def _write_events(self, session_dir: Path, events: list[dict]) -> None:
-+        events_path = session_dir / "events.ndjson"
++    def _restore_export_root(self) -> None:
++        flow_api.EXPORT_ROOT = self._original_export_root
++
++    def test_trace_requires_authorization(self) -> None:
++        events = [
++            {"type": "EVT_TURN_BEGIN", "ts_ms": 75, "sid": self.sid, "meta": {}},
++        ]
++        self._write_events(events)
++
++        scope = self._make_scope(
++            path=f"/api/v1/admin/flow/{self.sid}/trace",
++            query_string=b"type=EVT_TURN_BEGIN",
++            headers=(),
++        )
++        response = asyncio.run(flow_api.handle_flow_trace(scope, self._receive(), sid=self.sid))
++
++        self.assertEqual(response.status, 401)
++        payload = json.loads(response.body.decode("utf-8"))
++        self.assertEqual(payload.get("error"), "unauthorized")
++
++    def test_trace_filters_by_type_and_limit(self) -> None:
++        events = [
++            {"type": "EVT_TURN_BEGIN", "ts_ms": 75, "sid": self.sid, "meta": {"idx": 1}},
++            {"type": "EVT_TURN_END", "ts_ms": 80, "sid": self.sid, "meta": {"idx": 2}},
++            {"type": "EVT_TURN_BEGIN", "ts_ms": 120, "sid": self.sid, "meta": {"idx": 3}},
++        ]
++        self._write_events(events)
++
++        query = b"type=EVT_TURN_BEGIN&since_ms=75&limit=1"
++        headers = ((b"authorization", b"Bearer admin-token"),)
++        scope = self._make_scope(
++            path=f"/api/v1/admin/flow/{self.sid}/trace",
++            query_string=query,
++            headers=headers,
++        )
++
++        response = asyncio.run(flow_api.handle_flow_trace(scope, self._receive(), sid=self.sid))
++
++        self.assertEqual(response.status, 200)
++        header_map = dict(response.headers)
++        self.assertEqual(header_map[b"content-type"], b"application/x-ndjson")
++
++        body_lines = [line for line in response.body.decode("utf-8").splitlines() if line]
++        self.assertEqual(len(body_lines), 1)
++        event = json.loads(body_lines[0])
++        self.assertEqual(event.get("type"), "EVT_TURN_BEGIN")
++        self.assertEqual(event.get("ts_ms"), 75)
++        self.assertEqual(event.get("meta", {}).get("idx"), 1)
++
++    def test_zip_returns_archive_with_valid_digests(self) -> None:
++        events = [
++            {"type": "EVT_TURN_BEGIN", "ts_ms": 100, "sid": self.sid, "meta": {"idx": 1}},
++            {"type": "EVT_TURN_END", "ts_ms": 140, "sid": self.sid, "meta": {"idx": 2}},
++        ]
++        self._write_events(events)
++
++        headers = ((b"authorization", b"Bearer admin-token"),)
++        scope = self._make_scope(
++            path=f"/api/v1/admin/flow/{self.sid}/zip",
++            query_string=b"",
++            headers=headers,
++        )
++
++        response = asyncio.run(flow_api.handle_flow_zip(scope, self._receive(), sid=self.sid))
++
++        self.assertEqual(response.status, 200)
++        header_map = dict(response.headers)
++        self.assertEqual(header_map[b"content-type"], b"application/zip")
++
++        with ZipFile(BytesIO(response.body)) as zf:
++            manifest_data = json.loads(zf.read("manifest.json").decode("utf-8"))
++            sha_map = manifest_data.get("sha256", {})
++            for name, digest in sha_map.items():
++                payload = zf.read(name)
++                self.assertEqual(hashlib.sha256(payload).hexdigest(), digest)
++
++    def _write_events(self, events: List[dict]) -> None:
++        events_path = self.session_dir / "events.ndjson"
 +        with events_path.open("w", encoding="utf-8") as handle:
 +            for event in events:
-+                json.dump(event, handle, separators=(",", ":"), ensure_ascii=False)
++                json.dump(event, handle, separators=(",", ":"))
 +                handle.write("\n")
 +
-+    def _sha256_bytes(self, payload: bytes) -> str:
-+        import hashlib
++    def _receive(self):
++        messages = [
++            {"type": "http.request", "body": b"", "more_body": False},
++        ]
 +
-+        return hashlib.sha256(payload).hexdigest()
++        async def _receive() -> dict:
++            if messages:
++                return messages.pop(0)
++            return {"type": "http.disconnect"}
 +
-+    def _blob(self, size: int) -> str:
-+        return base64.b64encode(os.urandom(size)).decode("ascii")
++        return _receive
 +
-+    def _make_event(self, event_type: str, sid: str, blob: str) -> dict:
++    def _make_scope(
++        self,
++        *,
++        path: str,
++        query_string: bytes,
++        headers: Sequence[Tuple[bytes, bytes]],
++    ) -> dict:
 +        return {
-+            "type": event_type,
-+            "sid": sid,
-+            "ts_ms": 1000,
-+            "meta": {"hint": "ok"},
-+            "payload": {"blob": blob},
++            "type": "http",
++            "method": "GET",
++            "path": path,
++            "query_string": query_string,
++            "headers": list(headers),
 +        }
 +
 +
