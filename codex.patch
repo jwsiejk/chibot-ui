@@ -1,428 +1,143 @@
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 4d7b8cfbb8cbe085105cd697020cf76959c63b03..6d1f93baa59e71ac3e3b5928771425585c7d3d0d 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -23,80 +23,84 @@ from app.voice_v2 import (
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- from app.voice_v2.gate import GateController
- from app.voice_v2.conversation_buffer import ConversationBuffer
- from app.voice_v2.vad import VADAggregator
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
- READY = "Ready"
- LISTENING = "Listening"
- THINKING = "Thinking"
- RESPONDING = "Responding"
- CONFIRMING_BARGE = "ConfirmingBarge"
- 
- EVT_TURN_STATE = "EVT_TURN_STATE"
- EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
- EVT_TURN_END = "EVT_TURN_END"
-+EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
- 
- 
- @dataclass
- class _Envelope:
-     """Normalized telemetry envelope returned by the engine hooks."""
- 
-     type: str
-     sid: str
-     payload: Dict[str, Any]
- 
-     def to_dict(self) -> Dict[str, Any]:
-         data = {"type": self.type, "sid": self.sid}
-         data.update(self.payload)
-         if "meta" in data and isinstance(data["meta"], Mapping):
-             data["meta"] = dict(data["meta"])
-         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
-             data["ts_ms"] = _now_ms()
-         data.setdefault("who", "server")
-         data.setdefault("source", "voice_engine")
-         data.setdefault("level", "debug")
-         return data
- 
- 
- @dataclass
- class _TurnSession:
-     state: str = READY
-     turn_id: Optional[str] = None
-     turn_started_ms: Optional[int] = None
-     tts_utt_id: Optional[str] = None
-     req_id: Optional[str] = None
-+    perf_first_partial_ms: Optional[int] = None
-+    perf_final_ms: Optional[int] = None
-+    perf_tts_start_ms: Optional[int] = None
- 
- 
- class _NullExporter:
-     """Exporter stub used when no exporter is provided."""
- 
-     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
-         return
- 
- 
- class EngineV2:
-     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
- 
-     def __init__(
-         self,
-         exporter: FileExporter | None = None,
-         *,
-         telemetry_bus=bus,
-         fake_exporter: FileExporter | None = None,
-     ) -> None:
-         if exporter is None:
-             exporter = fake_exporter
-         if exporter is None:
-             exporter = _NullExporter()
-         self._exporter = exporter
-         self._bus = telemetry_bus
-@@ -212,105 +216,127 @@ class EngineV2:
-         if session.state != LISTENING:
-             self._set_state(sid, LISTENING, reason="audio_rx")
-         byte_count = len(chunk)
-         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
-         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
-         self._publish(event)
- 
-     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
-         """Capture the WebSocket closing handshake."""
-         meta = {"code": code, "reason": reason}
-         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
-         self._publish(event)
-         if self._last_sid == sid:
-             self._last_sid = None
-             self._policy_snapshot = None
-         self._sessions.pop(sid, None)
-         self._aggregators.pop(sid, None)
- 
-     def on_tts_start(
-         self, sid: str, utt_id: str, post_hold_ms: int | None = None
-     ) -> None:
-         """Engage the TTS mask and emit a telemetry breadcrumb."""
- 
-         session = self._ensure_session(sid)
-         session.tts_utt_id = utt_id
-+        if session.turn_started_ms is not None and session.perf_tts_start_ms is None:
-+            elapsed = _now_ms() - session.turn_started_ms
-+            if elapsed < 0:
-+                elapsed = 0
-+            session.perf_tts_start_ms = elapsed
- 
-         hold_ms = post_hold_ms or 0
-         tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
-         self._gate.set_reason(
-             "tts_active",
-             True,
-             sid=sid,
-             meta=tts_meta,
-         )
- 
-         self._publish_tts_mask(sid, "engaged")
- 
-         payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
-         event = self._envelope(sid, EVT_TTS_START, payload)
-         self._publish(event)
-         self._set_state(sid, RESPONDING, reason="tts_start")
- 
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_tts_start()
- 
-     def on_tts_end(
-         self, sid: str, utt_id: str, post_hold_ms: int | None = None
-     ) -> None:
-         """Release the TTS mask and optionally engage a post-hold."""
- 
-         hold_ms = post_hold_ms or 0
-         self._teardown_tts(sid, utt_id, post_hold_ms=hold_ms, transition_to_ready=True)
- 
-     def on_asr_final(self, sid: str, text: str) -> None:
-         """Observe the final ASR transcript for a turn."""
- 
-         session = self._ensure_session(sid)
-+        if session.turn_started_ms is not None:
-+            elapsed = _now_ms() - session.turn_started_ms
-+            if elapsed < 0:
-+                elapsed = 0
-+            session.perf_final_ms = elapsed
-+
-         turn_id = session.turn_id or str(uuid.uuid4())
-         req_id = session.req_id or f"req-{uuid.uuid4().hex}"
-         session.turn_id = turn_id
-         session.req_id = req_id
- 
-         self._emit_user_chat_message(
-             sid,
-             text,
-             turn_id,
-             req_id,
-             origin="voice",
-         )
- 
-         self._set_state(sid, THINKING, reason="asr_final")
- 
-     def on_asr_partial(
-         self,
-         sid: str,
-         req_id: str,
-         confidence: float,
-         partial_text: Optional[str] = None,
-     ) -> None:
-+        session = self._ensure_session(sid)
-+        if (
-+            session.perf_first_partial_ms is None
-+            and session.turn_started_ms is not None
-+            and session.req_id == req_id
-+        ):
-+            elapsed = _now_ms() - session.turn_started_ms
-+            if elapsed < 0:
-+                elapsed = 0
-+            session.perf_first_partial_ms = elapsed
-+
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.feed_asr_evidence(req_id, confidence, partial_text)
- 
-     def on_auto_barge_attempt(
-         self, sid: str, source: str, *, reason: str | None = None
-     ) -> None:
-         """Handle an automatic barge-in attempt during assistant speech."""
- 
-         if source not in {"auto_vad", "asr_evidence"}:
-             return
- 
-         session = self._ensure_session(sid)
-         current_state = session.state
- 
-         policy = self.policy_snapshot or {}
-         policy_enabled = bool(policy.get("barge_in_enabled"))
- 
-         granted = bool(policy_enabled and current_state == RESPONDING)
- 
-         deny_reason = reason
-         if current_state != RESPONDING:
-             granted = False
-             deny_reason = deny_reason or "state_not_responding"
-         elif not policy_enabled:
-@@ -501,88 +527,103 @@ class EngineV2:
-             lambda source, info, *, _sid=sid: self._handle_vad_grant(_sid, source, info)
-         )
-         self._aggregators[sid] = aggregator
- 
-     def _handle_vad_grant(self, sid: str, source: str, info: Dict[str, Any]) -> None:
-         reason = "vad_grant"
-         mode = info.get("mode") if isinstance(info, Mapping) else None
-         if mode == "and":
-             reason = "vad_grant_dual"
-         self.on_auto_barge_attempt(sid, source, reason=reason)
- 
-     def _set_state(self, sid: str, new_state: str, *, reason: str | None = None) -> None:
-         """Transition the session state machine and emit telemetry breadcrumbs."""
- 
-         session = self._ensure_session(sid)
-         previous = session.state
-         if previous == new_state:
-             return
- 
-         now_ms = _now_ms()
- 
-         if new_state == LISTENING:
-             session.turn_id = str(uuid.uuid4())
-             session.req_id = f"req-{uuid.uuid4().hex}"
-             session.turn_started_ms = now_ms
-+            session.perf_first_partial_ms = None
-+            session.perf_final_ms = None
-+            session.perf_tts_start_ms = None
-             begin_payload = {
-                 "turn_id": session.turn_id,
-                 "req_id": session.req_id,
-                 "meta": {
-                     "turn_id": session.turn_id,
-                     "req_id": session.req_id,
-                     "state": LISTENING,
-                 },
-             }
-             begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
-             self._publish(begin_event)
- 
-         if (
-             new_state == READY
-             and previous in {LISTENING, THINKING, RESPONDING}
-             and session.turn_id
-         ):
-             start_ms = session.turn_started_ms or now_ms
-             duration_ms = now_ms - start_ms
-             if duration_ms <= 0:
-                 duration_ms = 1
-             turn_id = session.turn_id
-             req_id = session.req_id
-             end_payload = {
-                 "turn_id": turn_id,
-                 "req_id": req_id,
-                 "meta": {
-                     "turn_id": turn_id,
-                     "req_id": req_id,
-                     "duration_ms": duration_ms,
-                 },
-             }
-             end_event = self._envelope(sid, EVT_TURN_END, end_payload)
-             self._publish(end_event)
-+            summary_payload = {
-+                "turn_id": turn_id,
-+                "req_id": req_id,
-+                "t_first_partial_ms": session.perf_first_partial_ms,
-+                "t_final_ms": session.perf_final_ms,
-+                "t_tts_start_ms": session.perf_tts_start_ms,
-+            }
-+            perf_event = self._envelope(sid, EVT_PERF_SUMMARY, summary_payload)
-+            self._publish(perf_event)
-             session.turn_id = None
-             session.turn_started_ms = None
-             session.tts_utt_id = None
-             session.req_id = None
-+            session.perf_first_partial_ms = None
-+            session.perf_final_ms = None
-+            session.perf_tts_start_ms = None
- 
-         session.state = new_state
- 
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_engine_mode_change(new_state)
- 
-         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
-         if reason is not None:
-             breadcrumb_meta["reason"] = reason
-         breadcrumb_payload = {"meta": breadcrumb_meta}
-         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
-         self._publish(breadcrumb_event)
- 
-     def turn_context(self, sid: str) -> Optional[Dict[str, str]]:
-         """Return the active turn context for ``sid`` if a turn is in progress."""
- 
-         session = self._sessions.get(sid)
-         if (
-             session is None
-             or session.turn_id is None
-             or session.req_id is None
-             or session.state == READY
-         ):
-             return None
-@@ -704,31 +745,32 @@ class EngineV2:
- 
-     @staticmethod
-     def _summarize_policy_diff(
-         previous: Dict[str, Any] | None,
-         diff: Dict[str, Dict[str, Any]],
-     ) -> Dict[str, list[Any]]:
-         summary: Dict[str, list[Any]] = {}
-         before = dict(previous or {})
- 
-         for key, value in diff.get("added", {}).items():
-             summary[key] = [before.get(key), value]
- 
-         for key, value in diff.get("changed", {}).items():
-             summary[key] = [before.get(key), value]
- 
-         for key, value in diff.get("removed", {}).items():
-             summary[key] = [value, None]
- 
-         return summary
- 
- 
- __all__ = [
-     "EngineV2",
-     "EVT_TURN_BEGIN",
-     "EVT_TURN_END",
-+    "EVT_PERF_SUMMARY",
-     "EVT_TURN_STATE",
-     "READY",
-     "LISTENING",
-     "THINKING",
-     "RESPONDING",
- ]
-diff --git a/tests/test_perf_summary.py b/tests/test_perf_summary.py
+diff --git a/tests/test_ws_auth_browser.py b/tests/test_ws_auth_browser.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..bf34caa48c180eeb3797f89774c3741d2c17e828
+index 0000000000000000000000000000000000000000..95fc9740a8426322eceadbdf2c9a38f607a15cfb
 --- /dev/null
-+++ b/tests/test_perf_summary.py
-@@ -0,0 +1,68 @@
++++ b/tests/test_ws_auth_browser.py
+@@ -0,0 +1,137 @@
++"""Browser-compatible authentication tests for chat.v2 adapter."""
++from __future__ import annotations
++
++import asyncio
 +import json
 +import unittest
-+from pathlib import Path
-+from tempfile import TemporaryDirectory
++from typing import Any, Dict, Iterable, List, Tuple
++from unittest.mock import patch
 +
 +from app.telemetry import bus
-+from app.telemetry.exporter import FileExporter
-+from app.voice_v2.engine import EngineV2
++from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 +
 +
-+class PerformanceSummaryTests(unittest.TestCase):
-+    def test_summary_event_and_manifest_persistence(self) -> None:
-+        captured = []
-+        token = bus.subscribe("*", lambda event: captured.append(event))
-+        try:
-+            with TemporaryDirectory() as tmpdir:
-+                exporter = FileExporter(root=tmpdir, bus=bus)
-+                engine = EngineV2(exporter=exporter, telemetry_bus=bus)
-+                sid = "sid-perf"
++class TestBrowserWsAuthentication(unittest.TestCase):
++    """Verify query-string bearer handling for browser clients."""
 +
-+                exporter.begin(sid)
-+                engine.on_open(sid, headers={})
++    def setUp(self) -> None:
++        bus.reset()
 +
-+                engine.on_audio(sid, b"\x00\x00", 0)
-+                context = engine.turn_context(sid)
-+                self.assertIsNotNone(context)
-+                assert context is not None  # for type checkers
-+                req_id = context["req_id"]
++    def tearDown(self) -> None:
++        bus.reset()
 +
-+                engine.on_asr_partial(sid, req_id, 0.9, "he")
-+                engine.on_asr_final(sid, "hello there")
-+                engine.on_tts_start(sid, "utt-1")
-+                engine.on_tts_end(sid, "utt-1")
++    @staticmethod
++    def _make_scope(
++        *,
++        query_string: bytes | str = b"",
++        headers: Iterable[Tuple[bytes, bytes]] | None = None,
++    ) -> Dict[str, Any]:
++        return {
++            "type": "websocket",
++            "query_string": query_string,
++            "subprotocols": [CHAT_V2_SUBPROTOCOL],
++            "headers": list(headers or []),
++            "client": ("127.0.0.1", 4312),
++        }
 +
-+                summary_events = [
-+                    event
-+                    for event in captured
-+                    if event.get("type") == "EVT_PERF_SUMMARY" and event.get("sid") == sid
-+                ]
-+                self.assertEqual(1, len(summary_events))
-+                summary_event = summary_events[0]
++    async def _run_adapter(
++        self,
++        adapter: ChatV2Adapter,
++        events: List[dict],
++        *,
++        scope: Dict[str, Any],
++    ) -> List[dict]:
++        queue: asyncio.Queue[dict] = asyncio.Queue()
++        for event in events:
++            queue.put_nowait(event)
 +
-+                expected_fields = {
-+                    "turn_id",
-+                    "req_id",
-+                    "t_first_partial_ms",
-+                    "t_final_ms",
-+                    "t_tts_start_ms",
-+                }
-+                self.assertTrue(expected_fields.issubset(summary_event.keys()))
-+                for key in ["t_first_partial_ms", "t_final_ms", "t_tts_start_ms"]:
-+                    value = summary_event[key]
-+                    self.assertIsInstance(value, int)
-+                    self.assertGreaterEqual(value, 0)
++        sent: List[dict] = []
 +
-+                engine.on_close(sid, 1000, "done")
-+                exporter.end(sid, summary=summary_event)
++        async def receive() -> dict:
++            return await queue.get()
 +
-+                manifest_path = Path(tmpdir) / sid / "manifest.json"
-+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-+                self.assertIn("summary", manifest)
-+                self.assertEqual(summary_event, manifest["summary"])
-+        finally:
-+            bus.unsubscribe(token)
++        async def send(message: dict) -> None:
++            sent.append(message)
++
++        await adapter(scope, receive, send)
++        return sent
++
++    def _drive(
++        self,
++        adapter: ChatV2Adapter,
++        events: List[dict],
++        *,
++        scope: Dict[str, Any],
++    ) -> List[dict]:
++        return asyncio.run(self._run_adapter(adapter, events, scope=scope))
++
++    def test_extracts_token_from_query_string(self) -> None:
++        adapter = ChatV2Adapter()
++        token, error = adapter._extract_browser_token(
++            self._make_scope(query_string=b"access_token=my-token")
++        )
++
++        self.assertEqual(token, "my-token")
++        self.assertIsNone(error)
++
++    def test_query_token_sets_authorization_header(self) -> None:
++        adapter = ChatV2Adapter()
++        scope = self._make_scope(query_string=b"access_token=good-token")
++        events = [
++            {"type": "websocket.connect"},
++            {"type": "websocket.disconnect", "code": 1000},
++        ]
++
++        with patch("app.ws.adapter.authorize", return_value=(True, None)) as mock_authorize:
++            sent = self._drive(adapter, events, scope=scope)
++
++        self.assertTrue(any(msg.get("type") == "websocket.accept" for msg in sent))
++        mock_authorize.assert_called_once()
++        headers_arg = mock_authorize.call_args.args[0]
++        self.assertEqual(headers_arg.get("authorization"), "Bearer good-token")
++
++    def test_rejects_ambiguous_sources(self) -> None:
++        adapter = ChatV2Adapter()
++        scope = self._make_scope(
++            query_string=b"access_token=q-token",
++            headers=[(b"authorization", b"Bearer already")],
++        )
++        events = [{"type": "websocket.connect"}]
++
++        with patch("app.ws.adapter.authorize", return_value=(True, None)) as mock_authorize:
++            sent = self._drive(adapter, events, scope=scope)
++
++        mock_authorize.assert_not_called()
++        self.assertEqual(len(sent), 2)
++        start, body = sent
++        self.assertEqual(start["type"], "websocket.http.response.start")
++        self.assertEqual(start["status"], 401)
++        payload = json.loads(body["body"].decode("utf-8"))
++        self.assertEqual(
++            payload,
++            {"type": "error", "code": "unauthorized", "detail": "ambiguous auth"},
++        )
++
++    def test_invalid_token_is_rejected(self) -> None:
++        adapter = ChatV2Adapter()
++        scope = self._make_scope(query_string=b"access_token=bad-token")
++        events = [{"type": "websocket.connect"}]
++
++        with patch(
++            "app.ws.adapter.authorize", return_value=(False, "missing or invalid auth")
++        ):
++            sent = self._drive(adapter, events, scope=scope)
++
++        self.assertEqual(len(sent), 2)
++        start, body = sent
++        self.assertEqual(start["type"], "websocket.http.response.start")
++        self.assertEqual(start["status"], 401)
++        payload = json.loads(body["body"].decode("utf-8"))
++        self.assertEqual(
++            payload,
++            {"type": "error", "code": "unauthorized", "detail": "missing or invalid auth"},
++        )
 +
 +
-+if __name__ == "__main__":  # pragma: no cover
++if __name__ == "__main__":  # pragma: no cover - convenience
 +    unittest.main()

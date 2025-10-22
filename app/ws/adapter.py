@@ -4,13 +4,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
-import json
 import logging
 import os
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
+from urllib.parse import parse_qs
+
+import json
 
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
@@ -180,7 +182,17 @@ class ChatV2Adapter:
 
         sid = uuid.uuid4().hex
         headers = self._decode_headers(scope.get("headers", ()))
-        allowed, reason = authorize(headers)
+        auth_headers, detail = self._prepare_authorization_headers(scope, headers)
+        if detail:
+            await self._publish(
+                EVT_AUTH_DENIED,
+                sid,
+                {"reason": detail},
+            )
+            await self._deny_http(send, detail)
+            return
+
+        allowed, reason = authorize(auth_headers)
         if not allowed:
             await self._publish(
                 EVT_AUTH_DENIED,
@@ -192,7 +204,7 @@ class ChatV2Adapter:
 
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
 
-        ctx = AdapterContext(sid=sid, headers=headers)
+        ctx = AdapterContext(sid=sid, headers=auth_headers)
         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
         client = scope.get("client")
         ctx.ip = client[0] if isinstance(client, tuple) and client else None
@@ -209,7 +221,7 @@ class ChatV2Adapter:
 
         if self.exporter:
             self.exporter.begin(ctx.sid)
-        await self._invoke_engine("on_open", ctx.sid, headers)
+        await self._invoke_engine("on_open", ctx.sid, auth_headers)
 
         close_code = 1000
         close_reason: Optional[str] = None
@@ -937,6 +949,54 @@ class ChatV2Adapter:
         for key, value in headers:
             decoded[key.decode("latin1").lower()] = value.decode("latin1")
         return decoded
+
+    @staticmethod
+    def _extract_browser_token(scope: dict) -> tuple[Optional[str], Optional[str]]:
+        """Extract a browser-supplied access token from the query string."""
+
+        raw_query = scope.get("query_string", b"")
+        if not raw_query:
+            return None, None
+
+        if isinstance(raw_query, bytes):
+            try:
+                query = raw_query.decode("utf-8")
+            except UnicodeDecodeError:
+                return None, "missing or invalid auth"
+        else:
+            query = str(raw_query)
+
+        params = parse_qs(query, keep_blank_values=True)
+        tokens = params.get("access_token")
+        if not tokens:
+            return None, None
+        if len(tokens) != 1:
+            return None, "ambiguous auth"
+
+        token = tokens[0]
+        if not token:
+            return None, "missing or invalid auth"
+
+        return token, None
+
+    def _prepare_authorization_headers(
+        self, scope: dict, headers: Dict[str, str]
+    ) -> tuple[Dict[str, str], Optional[str]]:
+        """Overlay Authorization header based on browser token rules."""
+
+        token, error = self._extract_browser_token(scope)
+        if error:
+            return dict(headers), error
+
+        header_auth = headers.get("authorization")
+        if token:
+            if header_auth:
+                return dict(headers), "ambiguous auth"
+            updated = dict(headers)
+            updated["authorization"] = f"Bearer {token}"
+            return updated, None
+
+        return dict(headers), None
 
     @staticmethod
     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:

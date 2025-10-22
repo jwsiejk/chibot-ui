@@ -3,94 +3,189 @@
 **Endpoint:** `/ws/v2/chat` (ASGI WS)  
 **Required subprotocol:** `chat.v2`  
 
+---
+
+## Handshake & Authentication (browser-safe)
+
+- **Single path & protocol:** only `/ws/v2/chat` with `Sec-WebSocket-Protocol: chat.v2`.  
+- **Auth (browser-compatible):** client connects with a short‑lived bearer **query token**:
+
+wss://<host>/ws/v2/chat?access_token=<JWT>
+Sec-WebSocket-Protocol: chat.v2
+Origin: https://app.askchip.ai
+
+csharp
+Copy code
+
+- **Origin allow‑list:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
+- **Version negotiation:** if the subprotocol is missing/mismatched, the server replies **426** with a JSON body `{ "code": "bad_subprotocol" }`.
+
+On successful upgrade, the server emits an initial `info` frame with connection metadata (see “Initial `info` frame”).
 
 ---
 
 ## Client → Server frames
+
 - `{"type":"ping"}`
 - `{"type":"client.ready"}`
-- **Audio:** binary frames (Opus or PCM).  
-  Default: WebM/Opus, mono, 48 kHz.  
-  To override, send:
+
+- **Audio (binary frames):**  
+  The **server policy** selects the ASR provider and **required input audio**. Clients **MUST** follow the descriptor the server announces (see `asr.ready`). The client **MUST NOT** change codecs/containers; format is controlled by policy (Deepgram primary, Speechmatics secondary).  
+
+  - **Primary (Deepgram):** **WebM containerized Opus**, mono, **48 kHz**.  
+    The browser typically produces this via `MediaRecorder('audio/webm;codecs=opus')`.  
+  - **Secondary (Speechmatics):** **RAW PCM s16le**, mono, **16 kHz**.
+
+  The server signals readiness and the required input descriptor via:
+
   ```json
-  {"type":"audio.header","format":"opus","sample_rate":48000,"channels":1}
-Optional admin toggle:
-{"type":"admin.toggle","asr":"deepgram","barge_in_enabled":true}
+  {
+    "type": "asr.ready",
+    "vendor": "deepgram",
+    "input": { "container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1 }
+  }
+or
 
-Optional resume handshake (Build 07):
+json
+Copy code
+{
+  "type": "asr.ready",
+  "vendor": "speechmatics",
+  "input": { "container": "raw", "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }
+}
+Binary message rule: each WS binary message carries an arbitrary contiguous chunk of the current input stream (WebM segment/cluster bytes for Opus, or a raw PCM chunk). The server assigns/validates sequencing (see “Binary audio sequencing & jitter buffer”).
+
+audio.header (optional, not for selecting codecs):
+Clients may not override format. audio.header can supply stream hints like a starting sequence index:
+
+json
+Copy code
+{"type":"audio.header","seq_start":0}
+Optional admin toggle (dev only):
+
+json
+Copy code
+{"type":"admin.toggle","barge_in_enabled":true}
+Provider selection is policy‑controlled; do not flip providers via WS.
+
+Optional resume handshake (see “Reconnect / Resume”):
+
+json
+Copy code
 {"type":"client.resume","resume_token":"<string>"}
-
 Server → Client frames
+json
+Copy code
 {"type":"pong","t":1730000000000}
+Policy (client-visible subset)
+The server may push policy updates. The client‑stable subset is:
 
-Policy (always complete)
 json
 Copy code
 {
   "type": "policy.interaction",
   "policy": {
-    "mode": "idle",
+    "mode": "idle",                  // "idle" | "assistant_speaking" | ...
     "allow_auto_vad": true,
-    "barge_in_enabled": true,
-    "auto_commit_when_ready": true,
-    "telemetry": {
-      "enabled": true,
-      "level": "debug",
-      "categories": {
-        "ws": true,
-        "audio": true,
-        "policy": true,
-        "tts": true,
-        "gate": true,
-        "barge": true,
-        "asr": true,
-        "nlu": true,
-        "nlg": true,
-        "client_ui": true,
-        "provider_debug": true
-      },
-      "redaction": { "pii": true, "secrets": true, "text": false },
-      "sampling": { "percent": 100 }
-    }
+    "barge_in_enabled": true
   }
 }
+Other internal policy keys (e.g., telemetry, sampling) may be present in server telemetry/export, but MUST NOT be sent over WS to browsers as part of policy.interaction. (See ADR notes.)
+
+Initial info frame (emitted after handshake)
+The server emits a single info frame containing connection/session hints:
+
+json
+Copy code
+{
+  "type": "info",
+  "meta": {
+    "sid": "a1b2c3",
+    "version": "2",
+    "features": ["tts","asr","barge_in"],
+    "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000,
+    "tts_audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },
+    "slo": {
+      "first_partial_ms": { "target": 450, "p95": 750 },
+      "final_ms":         { "target": 2000, "p95": 3000 },
+      "tts_start_ms":     { "target": 350,  "p95": 600 }
+    },
+    "voice_id": "alloy-en-US-001",
+    "locale": "en-US"
+  }
+}
+tts_audio describes server→client playback format (binary WS messages, see “TTS audio framing”).
+
+slo provides advisory UI thresholds.
+
+voice_id/locale let the client label playback.
+
 Core event schemas
 TTS / ASR / Error examples
 json
 Copy code
-{"type":"tts.start","utt_id":"u-123","post_hold_ms":200}
+{"type":"tts.start","utt_id":"u-123","voice_id":"alloy-en-US-001","locale":"en-US","post_hold_ms":200}
 {"type":"tts.end","utt_id":"u-123"}
-{"type":"asr.ready","vendor":"deepgram"}
+
+{"type":"asr.ready","vendor":"deepgram","input":{"container":"webm","codec":"opus","rate_hz":48000,"channels":1}}
 {"type":"asr.partial","req_id":"r-1","text":"...","confidence":0.73}
 {"type":"asr.final","req_id":"r-1","text":"...","confidence":0.91}
-{"type":"error","code":"bad_subprotocol","detail":"use chat.v2"}
-{"type":"error","code":"schema_invalid","detail":"audio.header requires integer channels"}
-{"type":"error","code":"unknown_type","detail":"admin.nuke"}
+
+{"type":"error","code":"bad_subprotocol","message":"use chat.v2","retryable":false}
+{"type":"error","code":"schema_invalid","message":"audio.header requires integer channels","retryable":false}
+{"type":"error","code":"invalid_message","message":"unknown type admin.nuke","retryable":false}
+Error taxonomy (normative shape):
+
+json
+Copy code
+{
+  "type":"error",
+  "meta": {
+    "code":"rate_limited",          // enum
+    "message":"Too many connections",
+    "retryable": true,
+    "retry_in_ms": 3000             // optional when retryable==true
+  }
+}
+Standard code values:
+
+code	retryable	When
+auth_failed	false	Missing/invalid access_token
+origin_blocked	false	Origin not in allow‑list
+bad_subprotocol	false	Subprotocol not chat.v2
+version_mismatch	false	Version negotiation failed
+rate_limited	true	Session/IP throttled
+provider_down	true	Vendor outage (ASR/TTS/LLM)
+resume_invalid	false	Resume token expired/used
+invalid_message	false	Bad or unsupported client frame
+schema_invalid	false	JSON schema/type mismatch
+
 Behavioral rules
 Connection & Version Negotiation
-Only subprotocol chat.v2 is accepted.
-Clients missing it receive HTTP 426 with {"code":"bad_subprotocol"}.
+Only subprotocol chat.v2 is accepted. Clients missing it receive HTTP 426 with { "code": "bad_subprotocol" }.
 
+Authorization, Origin, Rate Limits
+Authorization: query token ?access_token=<JWT> is required unless explicitly disabled for dev. Invalid/missing → error{code:"auth_failed"} then close 1008.
 
-Authorization & Rate Limits
-Bearer token required unless disabled.
-Invalid → {"code":"unauthorized"}.
-Over-rate → {"code":"rate_limited"} then close 1008.
+Origin allow‑list: reject disallowed origins with 403 or close 1008 + error{code:"origin_blocked"}.
+
+Rate limits: over‑rate → error{code:"rate_limited", retry_in_ms:<ms>} then close 1008.
 
 Frame validation
-Invalid JSON → schema_invalid or unknown_type.
-Connection remains open unless otherwise specified.
+Invalid JSON → schema_invalid or invalid_message. Connection typically remains open unless otherwise specified.
 
-Backpressure
-Server publishes EVT_BACKPRESSURE_ON / EVT_BACKPRESSURE_OFF (diagnostic).
+Backpressure & partial coalescing
+Outbound WS outbox is bounded; on overflow the server emits telemetry EVT_WS_OUTBOX_DROP and may coalesce asr.partial frames (client should expect fewer partials; asr.final is authoritative).
+
+asr.partial MAY include partial_seq (monotonic). Under backlog, intermediate partials MAY be dropped; the most recent text is delivered at most once per throttle interval.
 
 Mode & Barge rules
-While mode:"assistant_speaking":
+While mode: "assistant_speaking":
 
-If barge_in_enabled:true → auto-VAD or ASR evidence may interrupt TTS.
+If barge_in_enabled: true → auto‑VAD or ASR evidence may interrupt TTS.
 
 If false → ignore speech until tts.end + post_hold_ms.
-In mode:"idle", allow_auto_vad MUST be true and ACWR effective.
+In mode: "idle", allow_auto_vad MUST be true and ACWR effective.
 
 Telemetry Envelope v1
 All events share this shape:
@@ -111,7 +206,7 @@ Copy code
 }
 Server normalization fills timestamps, levels, and redacts PII/secrets.
 
-Extended event catalog (Builds 04-07)
+Extended event catalog (Builds 04–07)
 Engine & Gate events
 json
 Copy code
@@ -121,7 +216,7 @@ Copy code
 {"type":"EVT_BARGE_IN","source":"auto_vad","granted":false,"reason":"policy_disabled","ts_ms":...}
 reasons: tts_active | manual_gate | system_hold | error_hold
 
-States: Idle | AssistantSpeaking | ConfirmingBarge | Listening | UserTurnStreaming | Thinking
+states: Idle | AssistantSpeaking | ConfirmingBarge | Listening | UserTurnStreaming | Thinking
 
 ASR events (multivendor)
 json
@@ -130,6 +225,7 @@ Copy code
 {"type":"EVT_ASR_PARTIAL","req_id":"r-1","text":"...","confidence":0.8}
 {"type":"EVT_ASR_FINAL","req_id":"r-1","text":"...","confidence":0.92}
 vendor: deepgram | speechmatics
+
 One FINAL per turn.
 
 Policy / NLU / NLG
@@ -145,7 +241,7 @@ json
 Copy code
 {"type":"EVT_TELEMETRY_POLICY","enabled":true,"level":"info","categories":["engine","asr"],"sampling":{"rate":1.0},"ts_ms":...}
 {"type":"EVT_VENDOR_DEBUG","channel":"asr","vendor":"deepgram","rid":"opaque","timings":{"first_partial_ms":141},"ts_ms":...}
-All fields subject to redaction rules (ADR-0009).
+All fields subject to redaction rules.
 
 Client playback telemetry (optional)
 json
@@ -153,93 +249,94 @@ Copy code
 {"type":"EVT_PLAYBACK","phase":"start","media_id":"opt","ts_ms":...}
 phase: start | end — client informational only.
 
+TTS audio framing (server → client)
+The server sends binary WS messages for TTS audio.
+
+Framing: one binary message == one contiguous PCM s16le chunk (rate_hz: 16000, channels: 1).
+
+The info.meta.tts_audio descriptor declares { "codec":"pcm_s16le","rate_hz":16000,"channels":1 } so the client can initialize WebAudio.
+
 Exporter Packaging (Build 06)
-Each session export under exports/<sid>/ includes:
+Each session export under exports/<sid>/ includes (packaged deterministically; redaction is re‑applied before write):
 
-events.ndjson (one JSON line per event)
+manifest.json (counts, first/last timestamps, SHA‑256 map, truncation info)
 
-manifest.json (counts, first/last timestamps, SHA-256 hashes)
+events.redacted.ndjson (one JSON line per event; post‑redaction)
 
-server.log, ws_in.ndjson, ws_out.ndjson, flow_timeline.ndjson,
-nlu.ndjson and nlg.ndjson (one record per user turn)
+flow_timeline.ndjson (turn/flow markers)
 
-README.txt (summary and truncation notice if size-capped)
+nlu.ndjson and nlg.ndjson (one record per user turn; may be empty)
 
-ZIPs include all files; redaction is re-applied before write.
+README.txt (summary and truncation notice if size‑capped)
+
+Note: Previously listed artifacts like server.log, ws_in.ndjson, ws_out.ndjson are not part of the packaged ZIP for privacy/size reasons. (Redaction is applied during packaging; file set is fixed and ordered.)
 
 Client Reconnect / Resume (Build 07)
-Clients may attempt to resume a prior session:
+The initial info frame includes a resume_token and resume_ttl_ms.
+
+To resume within TTL:
+
+bash
+Copy code
+wss://<host>/ws/v2/chat?access_token=<JWT>&resume=<resume_token>
+Sec-WebSocket-Protocol: chat.v2
+Origin: https://app.askchip.ai
+On success, the server re‑attaches to the same sid and replays recent markers (tts.start/end, asr.final) as JSON (audio is not replayed).
+
+Expired/invalid → error{code:"resume_invalid", retryable:false} then close 1008.
+
+ASR readiness gate
+Binary audio frames are accepted only after the server has emitted the appropriate {"type":"asr.ready","vendor":"<name>","input":{...}}.
+Before ASR is ready, inbound audio is rejected with:
+{"type":"error","code":"audio_not_expected","message":"ASR not ready","retryable":false} followed by a WebSocket close 1003.
+
+Binary audio sequencing & jitter buffer (Build 5)
+To handle network reordering and loss, the server maintains a per‑session sequence for inbound audio frames:
+
+The client may (optionally) signal a starting index with audio.header via {"seq_start": <int>}.
+
+Each subsequent binary frame is assigned a monotonically increasing seq by the adapter (when the client does not provide an explicit index).
+
+The server keeps a reordering window W (default 8 frames). Frames within the window may be reordered; frames older than the window are dropped.
+
+When the server detects one or more missing frames, it emits a diagnostic telemetry event:
+{"type":"EVT_AUDIO_GAP","from_seq": <int>,"to_seq": <int>}
+
+Oversized frames trigger {"type":"error","code":"frame_too_large"} then WS close 1009.
+
+Malformed or contradictory headers (e.g., PCM 16k declared but 48k sent) trigger {"type":"error","code":"schema_invalid"} then WS close 1003.
+
+Chat frames (Build 5 server support)
+Client → Server (typed user input)
+The client may send a typed message at any time (including while the assistant is speaking):
 
 json
 Copy code
-{"type":"client.resume","resume_token":"<string>"}
-Servers may echo the same token in policy.interaction or info frames for continuation.
-
-(End of Document)
-
-yaml
-Copy code
-
----
-
-### ASR readiness gate
-
-Binary audio frames are **accepted only after** the server has emitted `{"type":"asr.ready","vendor":"<name>"}`.  
-Before ASR is ready, inbound audio is rejected with:  
-`{"type":"error","code":"audio_not_expected"}` followed by a WebSocket close **1003**.
-
-### Binary audio sequencing & jitter buffer (Build 5)
-
-To handle network reordering and loss, the server maintains a **per-session** sequence for inbound audio frames:
-
-- The client may (optionally) signal a starting index with `audio.header` via `{"seq_start": <int>}`.
-- Each subsequent **binary** frame is assigned a monotonically increasing **`seq`** by the adapter (when the client does not provide an explicit index).
-- The server keeps a reordering window **W** (default **8 frames**). Frames within the window may be reordered; frames **older than the window** are **dropped**.
-- When the server detects one or more missing frames, it emits a diagnostic telemetry event:  
-  `{"type":"EVT_AUDIO_GAP","from_seq": <int>,"to_seq": <int>}`
-- Oversized frames trigger `{"type":"error","code":"frame_too_large"}` then WS close **1009**.
-- Malformed or contradictory headers (e.g., PCM 16k declared but 48k sent) trigger `{"type":"error","code":"schema_invalid"}` then WS close **1003**.
-
-**`audio.header` example (extended):**
-```json
-{"type":"audio.header","format":"opus","sample_rate":48000,"channels":1,"seq_start":0}
-```
-
----
-
-## Chat frames (Build 5 server support)
-
-### Client → Server (typed user input)
-
-The client may send a typed message at any time (including while the assistant is speaking):
-```json
 {"type":"chat.user","text":"<utf8 text>","client_msg_id":"<optional client UUID>"}
-```
-- Max size: **64 KiB** (same as JSON text frame limit).
-- Bad UTF‑8 ⇒ close **1007**. Other schema issues ⇒ `{"type":"error","code":"schema_invalid"}` then close **1003**.
-- If `barge_in_enabled:true` and the assistant is speaking, `chat.user` is treated as **barge‑in** with `source:"text"`.
+Max size: 64 KiB (same as JSON text frame limit).
 
-### Server → Client (messages & history)
+Bad UTF‑8 ⇒ close 1007. Other schema issues ⇒ {"type":"error","code":"schema_invalid"} then close 1003.
 
-**Single message:**
-```json
+If barge_in_enabled:true and the assistant is speaking, chat.user is treated as barge‑in with source:"text".
+
+Server → Client (messages & history)
+Single message:
+
+json
+Copy code
 {"type":"chat.message","id":"<uuid>","role":"user|assistant","text":"<utf8>","origin":"voice|text","turn_id":"<uuid>","req_id":"<uuid>","ts_ms":1730000000000}
-```
+History snapshot (sent on connect/resume):
 
-**History snapshot (sent on connect/resume):**
-```json
+json
+Copy code
 {"type":"chat.history","messages":[ /* array of chat.message */ ], "next_cursor": null}
-```
+Dual‑VAD policy & diagnostics (Build 5)
+The server fuses auto‑VAD (energy/activity) and ASR evidence into a single barge decision during policy.mode:"assistant_speaking". Clients do not need to change behavior; this section documents server‑side policy and diagnostic telemetry.
 
----
+Policy (server‑side) — policy.interaction.vad block:
 
-## Dual‑VAD policy & diagnostics (Build 5)
-
-The server fuses **auto‑VAD** (energy/activity) and **ASR evidence** into a single barge decision during `policy.mode:"assistant_speaking"`.
-Clients do not need to change behavior; this section documents server‑side policy and diagnostic telemetry.
-
-**Policy (server‑side) — `policy.interaction.vad` block:**
-```json
+json
+Copy code
 "vad": {
   "mode": "or",                 // "or" | "and" | "priority"
   "priority": "asr",            // "asr" | "auto" (used when mode=="priority")
@@ -249,16 +346,16 @@ Clients do not need to change behavior; this section documents server‑side pol
   "echo_suppression_ms": 350,   // ignore mic after tts.start
   "barge_cooldown_ms": 250      // avoid re‑barge storms
 }
-```
+Diagnostic telemetry (server‑emitted; not WS contract frames):
 
-**Diagnostic telemetry (server‑emitted; not WS contract frames):**
-```json
+json
+Copy code
 {"type":"EVT_VAD","source":"auto_vad","phase":"start","metric":{"dbfs":-28.0,"active_ms":220},"ts_ms":1730000000000}
 {"type":"EVT_VAD","source":"asr_evidence","phase":"start","metric":{"confidence":0.82},"ts_ms":1730000000500}
 {"type":"EVT_VAD_DECISION","mode":"or","granted":true,"reasons":["asr_conf>=0.75","auto_active>=200ms"],"ts_ms":1730000000550}
-```
+Text barge‑in: If a {"type":"chat.user"} arrives while policy.mode:"assistant_speaking" and barge_in_enabled:true, the server treats it as barge‑in with source:"text" and follows the standard mask/gate/tts‑cancel path.
 
-**Text barge‑in:** If a `{"type":"chat.user"}` arrives while `policy.mode:"assistant_speaking"` and `barge_in_enabled:true`, the server treats it as barge‑in with `source:"text"` and follows the standard mask/gate/tts‑cancel path.
+Document last updated: 2025-10-22T17:10:00Z
 
-
-*Document last updated:* 2025-10-22T08:40:45.378425Z
+markdown
+Copy code
