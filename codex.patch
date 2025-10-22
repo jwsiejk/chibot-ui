@@ -1,424 +1,60 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 4f78c4a2a11a0b12925ae8df3a5e821ce59fe841..55c21a3375a29bb3e430f2c601e764caef5fa128 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -43,50 +43,54 @@ QUEUE_OFF_THRESHOLD = 6
- _DEFAULT_WS_PING_INTERVAL_MS = 25_000
- 
- EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
- 
- EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
- 
- EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
- 
- _OUTBOUND_ALLOWED_TYPES = {
-     "policy.interaction",
-     "info",
-     "tts.start",
-     "tts.end",
-     "asr.ready",
-     "asr.partial",
-     "asr.final",
-     "error",
-     "chat.message",
-     "chat.history",
- }
- 
- _OUTBOX_MAXSIZE = 256
- 
-+_RESUME_TTL_MS = 10_000
-+_RESUME_MARKER_TYPES = {"tts.start", "tts.end", "asr.final"}
-+_RESUME_MARKER_LIMIT = 10
+diff --git a/app/ws/errors.py b/app/ws/errors.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c41c1c928dd1b5e0672a214a8a74f991076c6c46
+--- /dev/null
++++ b/app/ws/errors.py
+@@ -0,0 +1,54 @@
++"""Error frame helpers for WebSocket responses."""
++from __future__ import annotations
 +
- _logger = logging.getLogger(__name__)
- 
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
-     "chat.user",
- }
- 
- 
- class TokenBucket:
-     """Simple in-memory token bucket."""
- 
-     def __init__(self, capacity: int, refill_seconds: float) -> None:
-         self.capacity = capacity
-         self.tokens = float(capacity)
-         self.refill_seconds = refill_seconds
-         self.last_refill = time.monotonic()
- 
-     def consume(self, count: int, now: Optional[float] = None) -> bool:
-         if now is None:
-             now = time.monotonic()
-         elapsed = max(0.0, now - self.last_refill)
-         if elapsed > 0:
-             refill = (self.capacity / self.refill_seconds) * elapsed
-@@ -121,130 +125,175 @@ class AdapterContext:
-     """Per-connection state."""
- 
-     sid: str
-     headers: Dict[str, str]
-     audio_seq: int = 0
-     audio_expected_seq: int = 0
-     audio_highest_seq: int = -1
-     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
-     audio_window: int = AUDIO_SEQ_WINDOW
-     last_pong_sent_ms: int = 0
-     ip: Optional[str] = None
-     sid_bucket: Optional[TokenBucket] = None
-     ip_bucket: Optional[TokenBucket] = None
-     audio_profile: Optional[Dict[str, Any]] = None
-     accepting_audio: bool = True
-     audio_violation_count: int = 0
-     outbound_queue_depth: int = 0
-     backpressure_state: Literal["off", "on"] = "off"
-     outbox: asyncio.Queue[Dict[str, Any]] | None = None
-     outbound_task: asyncio.Task[None] | None = None
-     subscription_token: Optional[str] = None
-     asr_ready: bool = False
-     asr_subscription_token: Optional[str] = None
-     server_keepalive_task: asyncio.Task[None] | None = None
-     last_policy_interaction: Optional[Dict[str, Any]] = None
-+    resume_token: Optional[str] = None
-+    resume_expiry_ms: int = 0
-+    recent_markers: list[Dict[str, Any]] = field(default_factory=list)
++from enum import Enum
++from typing import Any, Dict, Optional, Union
 +
 +
-+@dataclass
-+class _ResumeState:
-+    sid: str
-+    expiry_ms: int
-+    markers: list[Dict[str, Any]]
- 
- 
- class ChatV2Adapter:
-     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
- 
-     def __init__(
-         self,
-         engine: EngineHooks | None = None,
-         exporter: FileExporter | None = None,
-         *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
-     ) -> None:
-         self.engine = engine
-         self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
-         self._ip_buckets: Dict[str, TokenBucket] = {}
-         self._contexts: Dict[str, AdapterContext] = {}
-+        self._resume_tokens: Dict[str, _ResumeState] = {}
-         self._ping_interval_ms = max(
-             0,
-             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
-         )
- 
-     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-         if scope.get("type") != "websocket":
-             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
- 
-         connect_event = await receive()
-         if connect_event.get("type") != "websocket.connect":
-             return
- 
-         subprotocols = scope.get("subprotocols") or []
-         if CHAT_V2_SUBPROTOCOL not in subprotocols:
-             await self._reject_subprotocol(send)
-             return
- 
-+        self._purge_expired_resume_tokens()
++class ErrorCode(str, Enum):
++    """Stable error code values for WebSocket error frames."""
 +
-+        resume_token_param, resume_error = self._extract_resume_token(scope)
-+        resume_state: Optional[_ResumeState] = None
-+        resume_replay: list[Dict[str, Any]] = []
++    AUTH_FAILED = "auth_failed"
++    ORIGIN_BLOCKED = "origin_blocked"
++    VERSION_MISMATCH = "version_mismatch"
++    RATE_LIMITED = "rate_limited"
++    PROVIDER_DOWN = "provider_down"
++    RESUME_INVALID = "resume_invalid"
++    INVALID_MESSAGE = "invalid_message"
 +
-         sid = uuid.uuid4().hex
-+        if resume_error is None and resume_token_param:
-+            resume_state = self._consume_resume_token(resume_token_param)
-+            if resume_state is None:
-+                resume_error = "resume_invalid"
-+            else:
-+                sid = resume_state.sid
-+                resume_replay = [self._clone_frame(marker) for marker in resume_state.markers]
 +
-         headers = self._decode_headers(scope.get("headers", ()))
-         auth_headers, detail = self._prepare_authorization_headers(scope, headers)
-         if detail:
-             await self._publish(
-                 EVT_AUTH_DENIED,
-                 sid,
-                 {"reason": detail},
-             )
-             await self._deny_http(send, detail)
-             return
- 
-         allowed, reason = authorize(auth_headers)
-         if not allowed:
-             await self._publish(
-                 EVT_AUTH_DENIED,
-                 sid,
-                 {"reason": reason or "missing or invalid auth"},
-             )
-             await self._deny_http(send, "missing or invalid auth")
-             return
- 
-         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
- 
-+        if resume_error is not None:
-+            await self._send_json(
-+                send,
-+                sid,
-+                {
-+                    "type": "error",
-+                    "code": "resume_invalid",
-+                    "detail": "Resume token expired or invalid",
-+                    "retryable": False,
-+                },
-+            )
-+            await send({"type": "websocket.close", "code": 1008, "reason": "resume_invalid"})
-+            return
++ErrorCodeLike = Union[ErrorCode, str]
 +
-         ctx = AdapterContext(sid=sid, headers=auth_headers)
-         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-         client = scope.get("client")
-         ctx.ip = client[0] if isinstance(client, tuple) and client else None
-         if ctx.ip:
-             ctx.ip_bucket = self._ip_buckets.setdefault(
-                 ctx.ip,
-                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-             )
- 
-         self._contexts[ctx.sid] = ctx
-         self._start_asr_ready_tracker(ctx)
-         self._start_outbound_bridge(ctx, send)
-         self._start_server_keepalive(ctx, send)
- 
-+        if resume_replay:
-+            ctx.recent_markers = [self._clone_frame(marker) for marker in resume_replay]
 +
-         if self.exporter:
-             self.exporter.begin(ctx.sid)
-         await self._invoke_engine("on_open", ctx.sid, auth_headers)
- 
-+        for marker in resume_replay:
-+            await self._send_json(send, ctx.sid, marker)
++def _normalize_code(code: ErrorCodeLike) -> ErrorCode:
++    if isinstance(code, ErrorCode):
++        return code
++    try:
++        return ErrorCode(code)
++    except ValueError as exc:  # pragma: no cover - defensive branch
++        raise ValueError(f"Unknown error code: {code!r}") from exc
 +
-         close_code = 1000
-         close_reason: Optional[str] = None
- 
-         try:
-             while True:
-                 message = await receive()
-                 msg_type = message.get("type")
- 
-                 if msg_type == "websocket.receive":
-                     if message.get("text") is not None:
-                         result = await self._handle_text(message["text"], ctx, send)
-                         if not result.should_continue:
-                             close_code = result.close_code or 1000
-                             close_reason = result.close_reason
-                             await send(
-                                 {
-                                     "type": "websocket.close",
-                                     "code": close_code,
-                                     "reason": close_reason,
-                                 }
-                             )
-                             break
-                     elif message.get("bytes") is not None:
-                         result = await self._handle_binary(message["bytes"], ctx, send)
-                         if not result.should_continue:
-@@ -811,50 +860,57 @@ class ChatV2Adapter:
-         payload = self._coerce_payload(event.get("payload"))
-         if payload is None:
-             meta = event.get("meta")
-             if isinstance(meta, dict):
-                 ws_meta = meta.get("ws")
-                 if isinstance(ws_meta, dict):
-                     frame = ws_meta.get("frame")
-                     if frame is None:
-                         frame = ws_meta.get("preview")
-                     payload = self._coerce_payload(frame)
- 
-         if payload is None:
-             return None
- 
-         frame_type = payload.get("type") if isinstance(payload, dict) else None
-         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
-             return None
-         normalized = dict(payload)
-         if frame_type == "policy.interaction":
-             last_policy = ctx.last_policy_interaction
-             if last_policy is not None and last_policy == normalized:
-                 return None
-             ctx.last_policy_interaction = json.loads(
-                 json.dumps(normalized, separators=(",", ":"))
-             )
-+        if frame_type == "info":
-+            self._ensure_resume_token(ctx)
-+            if ctx.resume_token:
-+                normalized["resume_token"] = ctx.resume_token
-+                normalized["resume_ttl_ms"] = _RESUME_TTL_MS
-+        if frame_type in _RESUME_MARKER_TYPES:
-+            self._record_resume_marker(ctx, normalized)
-         return normalized
- 
-     @staticmethod
-     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
-         if isinstance(raw, dict):
-             return raw
-         if isinstance(raw, str):
-             try:
-                 decoded = json.loads(raw)
-             except json.JSONDecodeError:
-                 return None
-             if isinstance(decoded, dict):
-                 return decoded
-         return None
- 
-     async def _run_outbound_sender(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> None:
-         queue = ctx.outbox
-         if queue is None:
-             return
-         try:
-             while True:
-                 payload = await queue.get()
-                 try:
-@@ -928,50 +984,130 @@ class ChatV2Adapter:
-         body = json.dumps({"type": "error", "code": "unauthorized", "detail": detail}).encode("utf-8")
-         headers = [
-             (b"content-type", b"application/json"),
-             (b"content-length", str(len(body)).encode("ascii")),
-         ]
-         await send({"type": "websocket.http.response.start", "status": 401, "headers": headers})
-         await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
- 
-     async def _invoke_engine(self, hook: str, *args: Any) -> None:
-         if not self.engine:
-             return
-         handler = getattr(self.engine, hook, None)
-         if handler is None:
-             return
-         result = handler(*args)
-         if inspect.isawaitable(result):
-             await result
- 
-     @staticmethod
-     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
-         decoded: Dict[str, str] = {}
-         for key, value in headers:
-             decoded[key.decode("latin1").lower()] = value.decode("latin1")
-         return decoded
- 
-+    def _purge_expired_resume_tokens(self) -> None:
-+        now = self._now_ms()
-+        for token, state in list(self._resume_tokens.items()):
-+            if state.expiry_ms < now:
-+                self._resume_tokens.pop(token, None)
 +
-+    def _extract_resume_token(self, scope: dict) -> tuple[Optional[str], Optional[str]]:
-+        raw_query = scope.get("query_string", b"")
-+        if not raw_query:
-+            return None, None
++def make_error(
++    code: ErrorCodeLike,
++    message: str,
++    retryable: bool,
++    retry_in_ms: Optional[int] = None,
++) -> Dict[str, Any]:
++    """Construct a client-visible error frame."""
 +
-+        if isinstance(raw_query, bytes):
-+            try:
-+                query = raw_query.decode("utf-8")
-+            except UnicodeDecodeError:
-+                return None, "resume_invalid"
-+        else:
-+            query = str(raw_query)
++    normalized_code = _normalize_code(code)
++    frame: Dict[str, Any] = {
++        "type": "error",
++        "code": normalized_code.value,
++        "message": message,
++        "retryable": bool(retryable),
++    }
 +
-+        params = parse_qs(query, keep_blank_values=True)
-+        values = params.get("resume")
-+        if not values:
-+            return None, None
-+        if len(values) != 1:
-+            return None, "resume_invalid"
++    if retry_in_ms is not None:
++        frame["retry_in_ms"] = int(retry_in_ms)
 +
-+        token = values[0]
-+        if not token:
-+            return None, "resume_invalid"
++    return frame
 +
-+        return token, None
 +
-+    def _consume_resume_token(self, token: str) -> Optional[_ResumeState]:
-+        state = self._resume_tokens.get(token)
-+        if state is None:
-+            return None
-+        now = self._now_ms()
-+        if state.expiry_ms < now:
-+            self._resume_tokens.pop(token, None)
-+            return None
-+        return self._resume_tokens.pop(token)
-+
-+    def _ensure_resume_token(self, ctx: AdapterContext) -> None:
-+        self._purge_expired_resume_tokens()
-+        token = ctx.resume_token
-+        if token is not None and token in self._resume_tokens:
-+            state = self._resume_tokens[token]
-+            state.markers = [self._clone_frame(marker) for marker in ctx.recent_markers]
-+            return
-+
-+        token = uuid.uuid4().hex
-+        expiry = self._now_ms() + _RESUME_TTL_MS
-+        ctx.resume_token = token
-+        ctx.resume_expiry_ms = expiry
-+        self._resume_tokens[token] = _ResumeState(
-+            sid=ctx.sid,
-+            expiry_ms=expiry,
-+            markers=[self._clone_frame(marker) for marker in ctx.recent_markers],
-+        )
-+
-+    def _record_resume_marker(self, ctx: AdapterContext, payload: Dict[str, Any]) -> None:
-+        clone = self._clone_frame(payload)
-+        ctx.recent_markers.append(clone)
-+        if len(ctx.recent_markers) > _RESUME_MARKER_LIMIT:
-+            ctx.recent_markers = ctx.recent_markers[-_RESUME_MARKER_LIMIT :]
-+
-+        token = ctx.resume_token
-+        if token:
-+            state = self._resume_tokens.get(token)
-+            if state:
-+                state.markers = [self._clone_frame(marker) for marker in ctx.recent_markers]
-+
-+    @staticmethod
-+    def _clone_frame(payload: Dict[str, Any]) -> Dict[str, Any]:
-+        return json.loads(json.dumps(payload, separators=(",", ":")))
-+
-+    @staticmethod
-+    def _now_ms() -> int:
-+        return int(time.time() * 1000)
-+
-     @staticmethod
-     def _extract_browser_token(scope: dict) -> tuple[Optional[str], Optional[str]]:
-         """Extract a browser-supplied access token from the query string."""
- 
-         raw_query = scope.get("query_string", b"")
-         if not raw_query:
-             return None, None
- 
-         if isinstance(raw_query, bytes):
-             try:
-                 query = raw_query.decode("utf-8")
-             except UnicodeDecodeError:
-                 return None, "missing or invalid auth"
-         else:
-             query = str(raw_query)
- 
-         params = parse_qs(query, keep_blank_values=True)
-         tokens = params.get("access_token")
-         if not tokens:
-             return None, None
-         if len(tokens) != 1:
-             return None, "ambiguous auth"
- 
-         token = tokens[0]
-         if not token:
++__all__ = ["ErrorCode", "make_error"]

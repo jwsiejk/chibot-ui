@@ -1,0 +1,54 @@
+"""Error frame helpers for WebSocket responses."""
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Dict, Optional, Union
+
+
+class ErrorCode(str, Enum):
+    """Stable error code values for WebSocket error frames."""
+
+    AUTH_FAILED = "auth_failed"
+    ORIGIN_BLOCKED = "origin_blocked"
+    VERSION_MISMATCH = "version_mismatch"
+    RATE_LIMITED = "rate_limited"
+    PROVIDER_DOWN = "provider_down"
+    RESUME_INVALID = "resume_invalid"
+    INVALID_MESSAGE = "invalid_message"
+
+
+ErrorCodeLike = Union[ErrorCode, str]
+
+
+def _normalize_code(code: ErrorCodeLike) -> ErrorCode:
+    if isinstance(code, ErrorCode):
+        return code
+    try:
+        return ErrorCode(code)
+    except ValueError as exc:  # pragma: no cover - defensive branch
+        raise ValueError(f"Unknown error code: {code!r}") from exc
+
+
+def make_error(
+    code: ErrorCodeLike,
+    message: str,
+    retryable: bool,
+    retry_in_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Construct a client-visible error frame."""
+
+    normalized_code = _normalize_code(code)
+    frame: Dict[str, Any] = {
+        "type": "error",
+        "code": normalized_code.value,
+        "message": message,
+        "retryable": bool(retryable),
+    }
+
+    if retry_in_ms is not None:
+        frame["retry_in_ms"] = int(retry_in_ms)
+
+    return frame
+
+
+__all__ = ["ErrorCode", "make_error"]
