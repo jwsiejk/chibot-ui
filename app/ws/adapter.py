@@ -69,6 +69,8 @@ _RESUME_TTL_MS = 10_000
 _RESUME_MARKER_TYPES = {"tts.start", "tts.end", "asr.final"}
 _RESUME_MARKER_LIMIT = 10
 
+_POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
+
 _logger = logging.getLogger(__name__)
 
 _ALLOWED_TEXT_FRAME_TYPES = {
@@ -876,6 +878,7 @@ class ChatV2Adapter:
             return None
         normalized = dict(payload)
         if frame_type == "policy.interaction":
+            normalized = self._sanitize_policy_interaction(normalized)
             last_policy = ctx.last_policy_interaction
             if last_policy is not None and last_policy == normalized:
                 return None
@@ -890,6 +893,22 @@ class ChatV2Adapter:
         if frame_type in _RESUME_MARKER_TYPES:
             self._record_resume_marker(ctx, normalized)
         return normalized
+
+    @staticmethod
+    def _sanitize_policy_interaction(frame: Dict[str, Any]) -> Dict[str, Any]:
+        sanitized = {key: value for key, value in frame.items() if key != "policy"}
+        if "policy" in frame:
+            policy = frame.get("policy")
+            if isinstance(policy, dict):
+                sanitized_policy = {
+                    key: policy[key]
+                    for key in _POLICY_STABLE_KEYS
+                    if key in policy
+                }
+            else:
+                sanitized_policy = {}
+            sanitized["policy"] = sanitized_policy
+        return sanitized
 
     @staticmethod
     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:

@@ -1,60 +1,140 @@
-diff --git a/app/ws/errors.py b/app/ws/errors.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..c41c1c928dd1b5e0672a214a8a74f991076c6c46
---- /dev/null
-+++ b/app/ws/errors.py
-@@ -0,0 +1,54 @@
-+"""Error frame helpers for WebSocket responses."""
-+from __future__ import annotations
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 55c21a3375a29bb3e430f2c601e764caef5fa128..c68d2babf414bd4418954abe29926d3ba2a61511 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -47,50 +47,52 @@ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
+ 
+ EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
+ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
+ 
+ EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
+ 
+ _OUTBOUND_ALLOWED_TYPES = {
+     "policy.interaction",
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
+     "asr.partial",
+     "asr.final",
+     "error",
+     "chat.message",
+     "chat.history",
+ }
+ 
+ _OUTBOX_MAXSIZE = 256
+ 
+ _RESUME_TTL_MS = 10_000
+ _RESUME_MARKER_TYPES = {"tts.start", "tts.end", "asr.final"}
+ _RESUME_MARKER_LIMIT = 10
+ 
++_POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
 +
-+from enum import Enum
-+from typing import Any, Dict, Optional, Union
+ _logger = logging.getLogger(__name__)
+ 
+ _ALLOWED_TEXT_FRAME_TYPES = {
+     "client.ready",
+     "audio.header",
+     "admin.toggle",
+     "chat.user",
+ }
+ 
+ 
+ class TokenBucket:
+     """Simple in-memory token bucket."""
+ 
+     def __init__(self, capacity: int, refill_seconds: float) -> None:
+         self.capacity = capacity
+         self.tokens = float(capacity)
+         self.refill_seconds = refill_seconds
+         self.last_refill = time.monotonic()
+ 
+     def consume(self, count: int, now: Optional[float] = None) -> bool:
+         if now is None:
+             now = time.monotonic()
+         elapsed = max(0.0, now - self.last_refill)
+         if elapsed > 0:
+             refill = (self.capacity / self.refill_seconds) * elapsed
+@@ -854,65 +856,82 @@ class ChatV2Adapter:
+ 
+         ctx.asr_subscription_token = bus.subscribe(EVT_ASR_READY, _handle)
+ 
+     def _extract_outbound_payload(
+         self, ctx: AdapterContext, event: dict
+     ) -> Optional[Dict[str, Any]]:
+         payload = self._coerce_payload(event.get("payload"))
+         if payload is None:
+             meta = event.get("meta")
+             if isinstance(meta, dict):
+                 ws_meta = meta.get("ws")
+                 if isinstance(ws_meta, dict):
+                     frame = ws_meta.get("frame")
+                     if frame is None:
+                         frame = ws_meta.get("preview")
+                     payload = self._coerce_payload(frame)
+ 
+         if payload is None:
+             return None
+ 
+         frame_type = payload.get("type") if isinstance(payload, dict) else None
+         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
+             return None
+         normalized = dict(payload)
+         if frame_type == "policy.interaction":
++            normalized = self._sanitize_policy_interaction(normalized)
+             last_policy = ctx.last_policy_interaction
+             if last_policy is not None and last_policy == normalized:
+                 return None
+             ctx.last_policy_interaction = json.loads(
+                 json.dumps(normalized, separators=(",", ":"))
+             )
+         if frame_type == "info":
+             self._ensure_resume_token(ctx)
+             if ctx.resume_token:
+                 normalized["resume_token"] = ctx.resume_token
+                 normalized["resume_ttl_ms"] = _RESUME_TTL_MS
+         if frame_type in _RESUME_MARKER_TYPES:
+             self._record_resume_marker(ctx, normalized)
+         return normalized
+ 
++    @staticmethod
++    def _sanitize_policy_interaction(frame: Dict[str, Any]) -> Dict[str, Any]:
++        sanitized = {key: value for key, value in frame.items() if key != "policy"}
++        if "policy" in frame:
++            policy = frame.get("policy")
++            if isinstance(policy, dict):
++                sanitized_policy = {
++                    key: policy[key]
++                    for key in _POLICY_STABLE_KEYS
++                    if key in policy
++                }
++            else:
++                sanitized_policy = {}
++            sanitized["policy"] = sanitized_policy
++        return sanitized
 +
-+
-+class ErrorCode(str, Enum):
-+    """Stable error code values for WebSocket error frames."""
-+
-+    AUTH_FAILED = "auth_failed"
-+    ORIGIN_BLOCKED = "origin_blocked"
-+    VERSION_MISMATCH = "version_mismatch"
-+    RATE_LIMITED = "rate_limited"
-+    PROVIDER_DOWN = "provider_down"
-+    RESUME_INVALID = "resume_invalid"
-+    INVALID_MESSAGE = "invalid_message"
-+
-+
-+ErrorCodeLike = Union[ErrorCode, str]
-+
-+
-+def _normalize_code(code: ErrorCodeLike) -> ErrorCode:
-+    if isinstance(code, ErrorCode):
-+        return code
-+    try:
-+        return ErrorCode(code)
-+    except ValueError as exc:  # pragma: no cover - defensive branch
-+        raise ValueError(f"Unknown error code: {code!r}") from exc
-+
-+
-+def make_error(
-+    code: ErrorCodeLike,
-+    message: str,
-+    retryable: bool,
-+    retry_in_ms: Optional[int] = None,
-+) -> Dict[str, Any]:
-+    """Construct a client-visible error frame."""
-+
-+    normalized_code = _normalize_code(code)
-+    frame: Dict[str, Any] = {
-+        "type": "error",
-+        "code": normalized_code.value,
-+        "message": message,
-+        "retryable": bool(retryable),
-+    }
-+
-+    if retry_in_ms is not None:
-+        frame["retry_in_ms"] = int(retry_in_ms)
-+
-+    return frame
-+
-+
-+__all__ = ["ErrorCode", "make_error"]
+     @staticmethod
+     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
+         if isinstance(raw, dict):
+             return raw
+         if isinstance(raw, str):
+             try:
+                 decoded = json.loads(raw)
+             except json.JSONDecodeError:
+                 return None
+             if isinstance(decoded, dict):
+                 return decoded
+         return None
+ 
+     async def _run_outbound_sender(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> None:
+         queue = ctx.outbox
+         if queue is None:
+             return
+         try:
+             while True:
+                 payload = await queue.get()
+                 try:
+                     await self._send_outbound_frame(send, payload)
+                 except asyncio.CancelledError:
