@@ -140,25 +140,25 @@ json
 Copy code
 {
   "type":"error",
-  "meta": {
-    "code":"rate_limited",          // enum
-    "message":"Too many connections",
-    "retryable": true,
-    "retry_in_ms": 3000             // optional when retryable==true
-  }
+  "code":"rate_limited",          // enum
+  "message":"Too many connections",
+  "retryable": true,
+  "retry_in_ms": 3000             // optional when retryable==true
 }
-Standard code values:
 
-code	retryable	When
-auth_failed	false	Missing/invalid access_token
-origin_blocked	false	Origin not in allow‑list
-bad_subprotocol	false	Subprotocol not chat.v2
-version_mismatch	false	Version negotiation failed
-rate_limited	true	Session/IP throttled
-provider_down	true	Vendor outage (ASR/TTS/LLM)
-resume_invalid	false	Resume token expired/used
-invalid_message	false	Bad or unsupported client frame
-schema_invalid	false	JSON schema/type mismatch
+### Error taxonomy
+
+| Code               | Retryable | When it is emitted                                             | Retry guidance                                          |
+| ------------------ | --------- | --------------------------------------------------------------- | ------------------------------------------------------- |
+| `auth_failed`      | No        | Missing or invalid `access_token` query token.                 | Fix authentication and reconnect immediately.           |
+| `origin_blocked`   | No        | Origin header not in allow-list.                               | Update the allow-list before attempting again.          |
+| `version_mismatch` | No        | WebSocket subprotocol negotiation failed.                      | Connect with `chat.v2` and retry immediately.           |
+| `rate_limited`     | Yes       | Connection/session exceeds token bucket limits.                | Wait `retry_in_ms` when provided; otherwise back off.   |
+| `provider_down`    | Yes       | Downstream ASR/TTS/LLM vendor outage.                          | Retry with exponential backoff until the service recovers. |
+| `resume_invalid`   | No        | Provided resume token is expired or already used.              | Start a new session and obtain a fresh resume token.    |
+| `invalid_message`  | No        | JSON frame is malformed or unsupported for the current policy. | Correct the payload before retrying.                    |
+
+`retry_in_ms` is only present when the server can provide a concrete wait time for retryable errors.
 
 Behavioral rules
 Connection & Version Negotiation
