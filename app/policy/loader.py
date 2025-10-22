@@ -4,11 +4,13 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict
 
+InteractionPolicySnapshot = Dict[str, Any]
+
 # NOTE: These defaults represent the deterministic policy snapshot returned by
 # ``load_interaction_policy`` when no overrides are provided. The structure is
 # intentionally shallow so that overrides replace entire child objects rather
 # than performing recursive merges.
-_DEFAULT_INTERACTION_POLICY: Dict[str, Any] = {
+_DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
     "mode": "idle",
     "allow_auto_vad": True,
     "barge_in_enabled": True,
@@ -35,7 +37,9 @@ _DEFAULT_INTERACTION_POLICY: Dict[str, Any] = {
 }
 
 
-def load_interaction_policy(overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
+def load_interaction_policy(
+    overrides: Dict[str, Any] | None = None,
+) -> InteractionPolicySnapshot:
     """Return a deterministic interaction policy snapshot.
 
     The returned snapshot matches the defaults defined by the system of record
@@ -54,7 +58,7 @@ def load_interaction_policy(overrides: Dict[str, Any] | None = None) -> Dict[str
         stored defaults.
     """
 
-    policy = deepcopy(_DEFAULT_INTERACTION_POLICY)
+    policy: InteractionPolicySnapshot = deepcopy(_DEFAULT_INTERACTION_POLICY)
 
     if overrides:
         for key, value in overrides.items():
@@ -63,4 +67,4 @@ def load_interaction_policy(overrides: Dict[str, Any] | None = None) -> Dict[str
     return policy
 
 
-__all__ = ["load_interaction_policy"]
+__all__ = ["load_interaction_policy", "InteractionPolicySnapshot"]
