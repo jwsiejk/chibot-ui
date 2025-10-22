@@ -18,6 +18,23 @@ csharp
 Copy code
 
 - **Origin allow‑list:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
+
+### Origin allow‑list configuration
+
+- `ASKCHIP_WS_ALLOWED_ORIGINS` — comma‑separated list of exact origins (`https://app.askchip.ai`, `https://console.askchip.ai`).
+  - Origins are matched case‑insensitively after normalizing scheme + host + optional port.
+  - Do **not** include wildcard (`*`) entries; they are ignored.
+- If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, the server looks at `ASKCHIP_ENV`:
+  - `ASKCHIP_ENV=production` (or `prod`) → reject every browser Origin by default.
+  - Any other value (or unset) → allow only localhost loopback origins (host `localhost`/`127.0.0.1`).
+- Missing `Origin` headers (non‑browser clients) are accepted.
+
+Deployment guidance:
+
+- Production deployments **must** set `ASKCHIP_WS_ALLOWED_ORIGINS` to the exact list of UI origins.
+- Development builds can omit the variable to allow local tooling (`http://localhost:3000`, `https://127.0.0.1:5173`, etc.).
+- When a connection is rejected the HTTP response is `403` with `{ "code": "origin_blocked" }`; browsers should surface this clearly to the user.
+
 - **Version negotiation:** if the subprotocol is missing/mismatched, the server replies **426** with a JSON body `{ "code": "bad_subprotocol" }`.
 
 On successful upgrade, the server emits an initial `info` frame with connection metadata (see “Initial `info` frame”).
