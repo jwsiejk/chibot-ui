@@ -1,6 +1,7 @@
 """Minimal NDJSON file exporter for session telemetry."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -149,4 +150,22 @@ class FileExporter:
         os.replace(tmp_path, stats.manifest_path)
 
 
-__all__ = ["FileExporter"]
+def compute_sha256(payload: bytes | bytearray | memoryview | str | Path) -> str:
+    """Return the hexadecimal SHA-256 digest for the given payload or file."""
+
+    digest = hashlib.sha256()
+
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        digest.update(bytes(payload))
+        return digest.hexdigest()
+
+    path = Path(payload)
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8192), b""):
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+__all__ = ["FileExporter", "compute_sha256"]
