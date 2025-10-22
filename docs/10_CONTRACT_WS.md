@@ -7,16 +7,6 @@
 ---
 
 ## Client → Server frames
-### Chat (typed user input)
-
-The client may send a typed message at any time (including while the assistant is speaking):
-```json
-{"type":"chat.user","text":"<utf8 text>","client_msg_id":"<optional client UUID>"}
-```
-- Max size: **64 KiB** (same as JSON text frame limit).
-- Bad UTF‑8 ⇒ close **1007**. Other schema issues ⇒ `{"type":"error","code":"schema_invalid"}` then close **1003**.
-- If `barge_in_enabled:true` and the assistant is speaking, `chat.user` is treated as **barge‑in** with `source:"text"`.
-
 - `{"type":"ping"}`
 - `{"type":"client.ready"}`
 - **Audio:** binary frames (Opus or PCM).  
@@ -215,27 +205,54 @@ To handle network reordering and loss, the server maintains a **per-session** se
 {"type":"audio.header","format":"opus","sample_rate":48000,"channels":1,"seq_start":0}
 ```
 
-### Chat (server messages & history)
+---
 
-**Single message:**
-```json
-{"type":"chat.message","id":"<uuid>","role":"user|assistant","text":"<utf8>","origin":"voice|text","turn_id":"<uuid>","req_id":"<uuid>","ts_ms":1730000000000}
-```
+## Build 6 updates (Exporter, Admin Flow, Backpressure clarifications)
 
-**History snapshot (sent on connect/resume):**
-```json
-{"type":"chat.history","messages":[ /* array of chat.message */ ], "next_cursor": null}
-```
+### Server → Client frames (allow‑list unchanged)
+Build 6 **does not expand** the set of server→client messages. Only these JSON frames are ever sent from server to client over the `chat.v2` socket:
 
-**Keepalive (implementation detail):**
-Servers MAY send a lightweight keepalive frame:
-```json
-{"type":"keepalive","ts":1730000000000}
-```
-(Clients should ignore if unrecognized.)
+- `"policy.interaction"`
+- `"info"`
+- `"tts.start"`, `"tts.end"`
+- `"asr.ready"`, `"asr.partial"`, `"asr.final"`
+- `"error"`
 
-**Text barge‑in:** If a `{"type":"chat.user"}` arrives while `policy.mode:"assistant_speaking"` and `barge_in_enabled:true`, the server will:
-- emit `EVT_BARGE_IN {source:"text", granted:true}`,
-- cancel current TTS (emitting `EVT_TTS_END {reason:"canceled"}`),
-- clear the TTS mask (`EVT_TTS_MASK {phase:"cleared"}`) and update `EVT_MIC_GATE` (drop `tts_active`),
-- begin a new user turn from the provided text.
+All other events are **server‑side telemetry only** (available via the Admin Flow endpoints below) and **will never be sent over WS**.
+
+### Outbound WS bridge & backpressure semantics
+The adapter maintains a bounded outbox queue (default **256**). On overflow the newest message is dropped and a telemetry event
+`EVT_WS_OUTBOX_DROP` is recorded (not emitted to the client). Implementations **may coalesce** `asr.partial` messages under sustained load;
+clients **must not** assume every partial is delivered.
+
+### Telemetry privacy & redaction
+Telemetry is normalized and redacted **before** it is written to disk or streamed via admin APIs. Sensitive fields (auth tokens, emails,
+opaque provider IDs) are masked. WS frames never include these fields.
+
+### Admin Flow (HTTP, not WS)
+Build 6 introduces read‑only Admin Flow endpoints for observability. These are **not** part of the WS contract, but are included here for clarity:
+
+- `GET /api/v1/admin/flow/{sid}/trace?type=EVT_X,EVT_Y&since_ms=<ts>&limit=<n>`  
+  Responds with **application/x-ndjson**; lines are redacted telemetry for the session. Requires `Authorization: Bearer ...`.
+- `GET /api/v1/admin/flow/{sid}/zip`  
+  Responds with **application/zip** containing a deterministic package of redacted artifacts.
+
+### Export artifacts (for reference)
+The packaged zip contains exactly:
+- `manifest.json` (stable key order; includes `sha256` of packaged files and a `summary` block)
+- `events.redacted.ndjson` (full redacted stream)
+- `flow_timeline.ndjson` (turn/flow markers only)
+- `nlu.ndjson`, `nlg.ndjson` (may be empty)
+- `README.txt`
+
+Total package size is capped (default **25 MB**). If truncation occurs, `manifest.json` includes a `truncated` section describing what was dropped.
+
+### Performance telemetry (server‑side)
+For each turn the engine records:
+- `t_first_partial_ms` — time from turn begin to first ASR partial
+- `t_final_ms` — time to ASR final
+- `t_tts_start_ms` — time to first TTS audio
+
+These appear in telemetry as `EVT_PERF_SUMMARY` and in `manifest.json.summary` in the exported zip. They are **not** sent over WS.
+
+*Document last updated:* 2025-10-22T07:21:07Z
