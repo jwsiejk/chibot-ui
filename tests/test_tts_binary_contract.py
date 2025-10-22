@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+import unittest
+
+from app.voice_v2 import EVT_WS_AUDIO_SEND, EVT_WS_JSON_SEND
+from app.voice_v2.engine import EngineV2
+
+
+class _FakeBus:
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    def publish(self, event: dict) -> None:  # pragma: no cover - helper used in tests
+        self.events.append(dict(event))
+
+
+class TestTTSBinaryContract(unittest.TestCase):
+    def setUp(self) -> None:
+        self.bus = _FakeBus()
+        self.engine = EngineV2(telemetry_bus=self.bus)
+        self.sid = "sid-tts-binary"
+
+    def _events_of_type(self, event_type: str) -> list[dict]:
+        return [evt for evt in self.bus.events if evt.get("type") == event_type]
+
+    def test_info_frame_announces_audio_descriptor(self) -> None:
+        self.engine.on_open(self.sid, {})
+
+        info_events = self._events_of_type(EVT_WS_JSON_SEND)
+        descriptors: list[dict] = []
+        for event in info_events:
+            frame = event.get("frame")
+            if isinstance(frame, dict) and frame.get("type") == "info":
+                audio = frame.get("audio")
+                if isinstance(audio, dict):
+                    descriptors.append(audio)
+
+        self.assertIn(
+            {"codec": "pcm_s16le", "rate_hz": 16000, "channels": 1},
+            descriptors,
+        )
+
+    def test_emit_tts_audio_chunk_alignment_and_payload(self) -> None:
+        pcm = b"\x00\x01" * 80  # 160 bytes -> 80 samples at 16-bit mono
+
+        self.engine.emit_tts_audio_chunk(self.sid, pcm)
+
+        audio_events = self._events_of_type(EVT_WS_AUDIO_SEND)
+        self.assertEqual(len(audio_events), 1)
+        event = audio_events[0]
+
+        self.assertIn("chunk", event)
+        self.assertEqual(event["chunk"], pcm)
+
+        meta = event.get("meta") or {}
+        self.assertEqual(meta.get("byte_count"), len(pcm))
+
+        audio_meta = meta.get("audio") or {}
+        self.assertEqual(audio_meta.get("codec"), "pcm_s16le")
+        channels = audio_meta.get("channels")
+        self.assertEqual(channels, 1)
+        self.assertEqual(len(pcm) % (2 * channels), 0)
+
+        with self.assertRaises(ValueError):
+            self.engine.emit_tts_audio_chunk(self.sid, b"\x00")
+
+
+if __name__ == "__main__":  # pragma: no cover - convenience
+    unittest.main()
