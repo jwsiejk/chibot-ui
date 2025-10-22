@@ -45,6 +45,7 @@ CONFIRMING_BARGE = "ConfirmingBarge"
 EVT_TURN_STATE = "EVT_TURN_STATE"
 EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
 EVT_TURN_END = "EVT_TURN_END"
+EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
 
 
 @dataclass
@@ -75,6 +76,9 @@ class _TurnSession:
     turn_started_ms: Optional[int] = None
     tts_utt_id: Optional[str] = None
     req_id: Optional[str] = None
+    perf_first_partial_ms: Optional[int] = None
+    perf_final_ms: Optional[int] = None
+    perf_tts_start_ms: Optional[int] = None
 
 
 class _NullExporter:
@@ -234,6 +238,11 @@ class EngineV2:
 
         session = self._ensure_session(sid)
         session.tts_utt_id = utt_id
+        if session.turn_started_ms is not None and session.perf_tts_start_ms is None:
+            elapsed = _now_ms() - session.turn_started_ms
+            if elapsed < 0:
+                elapsed = 0
+            session.perf_tts_start_ms = elapsed
 
         hold_ms = post_hold_ms or 0
         tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
@@ -267,6 +276,12 @@ class EngineV2:
         """Observe the final ASR transcript for a turn."""
 
         session = self._ensure_session(sid)
+        if session.turn_started_ms is not None:
+            elapsed = _now_ms() - session.turn_started_ms
+            if elapsed < 0:
+                elapsed = 0
+            session.perf_final_ms = elapsed
+
         turn_id = session.turn_id or str(uuid.uuid4())
         req_id = session.req_id or f"req-{uuid.uuid4().hex}"
         session.turn_id = turn_id
@@ -289,6 +304,17 @@ class EngineV2:
         confidence: float,
         partial_text: Optional[str] = None,
     ) -> None:
+        session = self._ensure_session(sid)
+        if (
+            session.perf_first_partial_ms is None
+            and session.turn_started_ms is not None
+            and session.req_id == req_id
+        ):
+            elapsed = _now_ms() - session.turn_started_ms
+            if elapsed < 0:
+                elapsed = 0
+            session.perf_first_partial_ms = elapsed
+
         aggregator = self._aggregators.get(sid)
         if aggregator is not None:
             aggregator.feed_asr_evidence(req_id, confidence, partial_text)
@@ -523,6 +549,9 @@ class EngineV2:
             session.turn_id = str(uuid.uuid4())
             session.req_id = f"req-{uuid.uuid4().hex}"
             session.turn_started_ms = now_ms
+            session.perf_first_partial_ms = None
+            session.perf_final_ms = None
+            session.perf_tts_start_ms = None
             begin_payload = {
                 "turn_id": session.turn_id,
                 "req_id": session.req_id,
@@ -557,10 +586,22 @@ class EngineV2:
             }
             end_event = self._envelope(sid, EVT_TURN_END, end_payload)
             self._publish(end_event)
+            summary_payload = {
+                "turn_id": turn_id,
+                "req_id": req_id,
+                "t_first_partial_ms": session.perf_first_partial_ms,
+                "t_final_ms": session.perf_final_ms,
+                "t_tts_start_ms": session.perf_tts_start_ms,
+            }
+            perf_event = self._envelope(sid, EVT_PERF_SUMMARY, summary_payload)
+            self._publish(perf_event)
             session.turn_id = None
             session.turn_started_ms = None
             session.tts_utt_id = None
             session.req_id = None
+            session.perf_first_partial_ms = None
+            session.perf_final_ms = None
+            session.perf_tts_start_ms = None
 
         session.state = new_state
 
@@ -726,6 +767,7 @@ __all__ = [
     "EngineV2",
     "EVT_TURN_BEGIN",
     "EVT_TURN_END",
+    "EVT_PERF_SUMMARY",
     "EVT_TURN_STATE",
     "READY",
     "LISTENING",
