@@ -18,6 +18,23 @@ csharp
 Copy code
 
 - **Origin allow‑list:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
+
+### Origin allow‑list configuration
+
+- `ASKCHIP_WS_ALLOWED_ORIGINS` — comma‑separated list of exact origins (`https://app.askchip.ai`, `https://console.askchip.ai`).
+  - Origins are matched case‑insensitively after normalizing scheme + host + optional port.
+  - Do **not** include wildcard (`*`) entries; they are ignored.
+- If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, the server looks at `ASKCHIP_ENV`:
+  - `ASKCHIP_ENV=production` (or `prod`) → reject every browser Origin by default.
+  - Any other value (or unset) → allow only localhost loopback origins (host `localhost`/`127.0.0.1`).
+- Missing `Origin` headers (non‑browser clients) are accepted.
+
+Deployment guidance:
+
+- Production deployments **must** set `ASKCHIP_WS_ALLOWED_ORIGINS` to the exact list of UI origins.
+- Development builds can omit the variable to allow local tooling (`http://localhost:3000`, `https://127.0.0.1:5173`, etc.).
+- When a connection is rejected the HTTP response is `403` with `{ "code": "origin_blocked" }`; browsers should surface this clearly to the user.
+
 - **Version negotiation:** if the subprotocol is missing/mismatched, the server replies **426** with a JSON body `{ "code": "bad_subprotocol" }`.
 
 On successful upgrade, the server emits an initial `info` frame with connection metadata (see “Initial `info` frame”).
@@ -104,12 +121,12 @@ json
 Copy code
 {
   "type": "info",
+  "audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },  
   "meta": {
     "sid": "a1b2c3",
     "version": "2",
     "features": ["tts","asr","barge_in"],
     "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000,
-    "tts_audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },
     "slo": {
       "first_partial_ms": { "target": 450, "p95": 750 },
       "final_ms":         { "target": 2000, "p95": 3000 },
@@ -119,11 +136,41 @@ Copy code
     "locale": "en-US"
   }
 }
-tts_audio describes server→client playback format (binary WS messages, see “TTS audio framing”).
+info.audio describes server→client playback format (binary WS messages, see “Binary audio framing”).
 
 slo provides advisory UI thresholds.
 
 voice_id/locale let the client label playback.
+
+### Binary audio framing (server → client TTS)
+
+- Codec: **PCM s16le**, mono, **16 kHz** (`info.audio` announces the descriptor).
+- The server emits one PCM buffer per **binary WebSocket message**. No frame headers or chunk counters are prepended.
+- Each chunk length MUST be a multiple of `channels * 2` bytes (16‑bit samples).
+- The existing binary routing guard still rejects non-audio payloads.
+
+Client decoding example (WebAudio):
+
+```js
+const sampleRate = 16000;
+const audioCtx = new AudioContext({ sampleRate });
+
+function playPcmChunk(arrayBuffer) {
+  const int16 = new Int16Array(arrayBuffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i += 1) {
+    float32[i] = Math.max(-1, Math.min(1, int16[i] / 32768));
+  }
+
+  const buffer = audioCtx.createBuffer(1, float32.length, sampleRate);
+  buffer.copyToChannel(float32, 0);
+
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioCtx.destination);
+  source.start();
+}
+```
 
 Core event schemas
 TTS / ASR / Error examples
@@ -135,6 +182,11 @@ Copy code
 {"type":"asr.ready","vendor":"deepgram","input":{"container":"webm","codec":"opus","rate_hz":48000,"channels":1}}
 {"type":"asr.partial","req_id":"r-1","text":"...","confidence":0.73}
 {"type":"asr.final","req_id":"r-1","text":"...","confidence":0.91}
+
+`asr.partial` frames are **opportunistic hints**. Under backpressure the server coalesces partials,
+emitting at most one every ~50 ms and keeping the latest text. The server maintains a monotonic
+`partial_seq` counter; clients MUST treat gaps as normal and continue waiting for the
+authoritative `asr.final` frame.
 
 {"type":"error","code":"bad_subprotocol","message":"use chat.v2","retryable":false}
 {"type":"error","code":"schema_invalid","message":"audio.header requires integer channels","retryable":false}
