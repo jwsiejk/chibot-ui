@@ -1,176 +1,340 @@
-diff --git a/app/voice_v2/gate.py b/app/voice_v2/gate.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..909839d99f5ed9caec9ed90bad9f2fa27c823c18
---- /dev/null
-+++ b/app/voice_v2/gate.py
-@@ -0,0 +1,97 @@
-+"""Mic gate controller for reasoning mask state."""
-+from __future__ import annotations
-+
-+from typing import Callable, Dict
-+
-+
-+class GateController:
-+    """Tracks reasoned mic mask state."""
-+
-+    _SUPPORTED_REASONS = ("tts_active", "manual_gate", "system_hold")
-+
-+    def __init__(self, publish: Callable[[dict], None]) -> None:
-+        """Create a gate controller with a telemetry publisher."""
-+        self._publish = publish
-+        self._reasons: Dict[str, bool] = {name: False for name in self._SUPPORTED_REASONS}
-+
-+    def set_reason(
-+        self,
-+        reason: str,
-+        on: bool,
-+        *,
-+        sid: str | None = None,
-+        meta: dict | None = None,
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index 187c516346883239e0371cb100712732130f1eb1..73d558e64126d41eb816004f73a0f6faa7127c19 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -1,162 +1,228 @@
+ """Minimal Engine v2 shell with telemetry hooks and session exporting."""
+ from __future__ import annotations
+ 
++import asyncio
+ from dataclasses import dataclass
+ import json
+ import time
+ from typing import Any, Dict, Mapping, Optional
+ 
+ from app.policy.loader import load_interaction_policy
+ from app.policy.watch import compute_diff, should_reapply
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ACWR_RECOMPUTE,
+     EVT_POLICY_APPLIED,
++    EVT_TTS_END,
++    EVT_TTS_START,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_CLOSE,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+     EVT_WS_OPEN,
+ )
++from app.voice_v2.gate import GateController
+ 
+ 
+ def _now_ms() -> int:
+     """Return the current epoch timestamp in milliseconds."""
+     return int(time.time() * 1000)
+ 
+ 
+ @dataclass
+ class _Envelope:
+     """Normalized telemetry envelope returned by the engine hooks."""
+ 
+     type: str
+     sid: str
+     payload: Dict[str, Any]
+ 
+     def to_dict(self) -> Dict[str, Any]:
+         data = {"type": self.type, "sid": self.sid}
+         data.update(self.payload)
+         if "meta" in data and isinstance(data["meta"], Mapping):
+             data["meta"] = dict(data["meta"])
+         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
+             data["ts_ms"] = _now_ms()
+         data.setdefault("who", "server")
+         data.setdefault("source", "voice_engine")
+         data.setdefault("level", "debug")
+         return data
+ 
+ 
+ class EngineV2:
+     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
+ 
+     def __init__(self, exporter: FileExporter, *, telemetry_bus=bus) -> None:
+         if exporter is None:
+             raise ValueError("exporter is required")
+         self._exporter = exporter
+         self._bus = telemetry_bus
+         self._policy_snapshot: Dict[str, Any] | None = None
+         self._last_sid: Optional[str] = None
++        self._gate = GateController(publish=self._publish_gate_event)
+ 
+     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
+         """Capture a successful WebSocket upgrade."""
+         meta = {"headers": dict(headers), "dir": "in"}
+         event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
+         self._publish(event)
+ 
+         self._last_sid = sid
+         self._policy_snapshot = None
+         self.reapply_policy()
+ 
+     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
+         """Capture a validated JSON frame from the adapter."""
+         turn_id: Optional[Any] = None
+         meta: Dict[str, Any] = {"dir": "in"}
+         if isinstance(frame, Mapping):
+             frame_type = frame.get("type")
+             if isinstance(frame_type, str):
+                 meta["frame_type"] = frame_type
+             turn_id = frame.get("turn_id")
+         else:
+             frame = {}
+         try:
+             serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         except (TypeError, ValueError):
+             serialized = "{}"
+         meta["byte_count"] = len(serialized.encode("utf-8"))
+         payload: Dict[str, Any] = {"meta": meta}
+         if turn_id is not None:
+             payload["turn_id"] = turn_id
+         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
+         self._publish(event)
+ 
+     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
+         """Capture an incoming audio chunk."""
+         byte_count = len(chunk)
+         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
+         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
+         self._publish(event)
+ 
+     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
+         """Capture the WebSocket closing handshake."""
+         meta = {"code": code, "reason": reason}
+         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
+         self._publish(event)
+         if self._last_sid == sid:
+             self._last_sid = None
+             self._policy_snapshot = None
+ 
++    def on_tts_start(
++        self, sid: str, utt_id: str, post_hold_ms: int | None = None
 +    ) -> None:
-+        """Set a reason mask value and publish on change."""
-+        if reason not in self._reasons:
-+            return
++        """Engage the TTS mask and emit a telemetry breadcrumb."""
 +
-+        current = self._reasons[reason]
-+        if current == on:
-+            return
++        hold_ms = post_hold_ms or 0
++        tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
++        self._gate.set_reason(
++            "tts_active",
++            True,
++            sid=sid,
++            meta=tts_meta,
++        )
 +
-+        self._reasons[reason] = on
-+        self._publish_event(changed_reason=reason, sid=sid, extra_meta=meta)
++        payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
++        event = self._envelope(sid, EVT_TTS_START, payload)
++        self._publish(event)
 +
-+    def clear_all(self, *, sid: str | None = None) -> None:
-+        """Clear all reasons and publish if the gate opens."""
-+        if not any(self._reasons.values()):
-+            return
-+
-+        changed = False
-+        for reason in self._reasons:
-+            if self._reasons[reason]:
-+                self._reasons[reason] = False
-+                changed = True
-+
-+        if changed:
-+            self._publish_event(changed_reason="clear_all", sid=sid)
-+
-+    def snapshot(self) -> dict:
-+        """Return a snapshot of reasons and effective state."""
-+        reasons = {name: self._reasons[name] for name in self._SUPPORTED_REASONS}
-+        return {"reasons": reasons, "effective": any(reasons.values())}
-+
-+    # Internal helpers -------------------------------------------------
-+
-+    def _publish_event(
-+        self,
-+        *,
-+        changed_reason: str,
-+        sid: str | None,
-+        extra_meta: dict | None = None,
++    def on_tts_end(
++        self, sid: str, utt_id: str, post_hold_ms: int | None = None
 +    ) -> None:
-+        reasons = {name: self._reasons[name] for name in self._SUPPORTED_REASONS}
-+        effective = any(reasons.values())
-+        mask = effective
-+        state = "on" if mask else "off"
-+        reason_label = self._resolve_reason(reasons, default=changed_reason)
++        """Release the TTS mask and optionally engage a post-hold."""
 +
-+        gate_meta = {
-+            "state": state,
-+            "mask": mask,
-+            "reason": reason_label,
-+            "reasons": reasons,
-+        }
++        self._gate.set_reason(
++            "tts_active",
++            False,
++            sid=sid,
++            meta={"tts": {"utt_id": utt_id}},
++        )
 +
-+        if extra_meta:
-+            gate_meta.update(extra_meta)
++        hold_ms = post_hold_ms or 0
++        if hold_ms > 0:
++            self._gate.set_reason(
++                "system_hold",
++                True,
++                sid=sid,
++                meta={"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}},
++            )
++            asyncio.create_task(self._release_system_hold_after(sid, hold_ms))
 +
-+        envelope = {
-+            "type": "EVT_MIC_GATE",
-+            "level": "debug",
-+            "meta": {"gate": gate_meta},
-+        }
-+        if sid is not None:
-+            envelope["sid"] = sid
++        event = self._envelope(sid, EVT_TTS_END, {"meta": {"tts": {"utt_id": utt_id}}})
++        self._publish(event)
 +
+     def reapply_policy(self, overrides: Dict[str, Any] | None = None) -> bool:
+         """Reload and re-emit the interaction policy when it changes."""
+ 
+         if not self._last_sid:
+             return False
+ 
+         sid = self._last_sid
+         snapshot = load_interaction_policy(overrides)
+         previous = self._policy_snapshot
+ 
+         if not should_reapply(previous, snapshot):
+             return False
+ 
+         diff = compute_diff(previous, snapshot)
+         self._policy_snapshot = dict(snapshot)
+ 
+         self._emit_policy_frame(sid, snapshot)
+         self._emit_policy_applied(sid, previous, diff)
+         self._emit_acwr_breadcrumb(sid, snapshot)
+         return True
+ 
+     def _envelope(self, sid: str, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+         envelope = _Envelope(event_type, sid, dict(payload))
+         return envelope.to_dict()
+ 
+     def _publish(self, event: Dict[str, Any]) -> None:
+         self._bus.publish(dict(event))
+         self._exporter.write(event["sid"], dict(event))
+ 
++    def _publish_gate_event(self, event: Dict[str, Any]) -> None:
++        """Publish gate controller events through the standard telemetry path."""
++
++        envelope = dict(event)
++        sid = envelope.get("sid") or self._last_sid
++        if not isinstance(sid, str) or not sid:
++            return
++        envelope.setdefault("sid", sid)
++        envelope.setdefault("who", "server")
++        envelope.setdefault("source", "voice_engine")
 +        self._publish(envelope)
 +
-+    def _resolve_reason(self, reasons: Dict[str, bool], default: str) -> str:
-+        active = [name for name, value in reasons.items() if value]
-+        if not active:
-+            return default if default != "clear_all" else "none"
-+        if len(active) > 1:
-+            return "multi"
-+        return active[0]
++    async def _release_system_hold_after(self, sid: str, post_hold_ms: int) -> None:
++        """Release the system_hold reason after the requested delay."""
 +
++        await asyncio.sleep(post_hold_ms / 1000)
++        self._gate.set_reason("system_hold", False, sid=sid)
++
+     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
+         frame = {"type": "policy.interaction", "policy": snapshot}
+         preview = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {"ws": {"dir": "out", "size": len(preview.encode("utf-8")), "preview": preview}}
+         payload = {"meta": meta, "frame": frame}
+         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+         self._publish(event)
+ 
+     def _emit_policy_applied(
+         self,
+         sid: str,
+         previous: Dict[str, Any] | None,
+         diff: Dict[str, Dict[str, Any]],
+     ) -> None:
+         meta = {"policy": {"diff": self._summarize_policy_diff(previous, diff)}}
+         event = self._envelope(sid, EVT_POLICY_APPLIED, {"meta": meta})
+         self._publish(event)
+ 
+     def _emit_acwr_breadcrumb(self, sid: str, snapshot: Dict[str, Any]) -> None:
+         """Publish a breadcrumb describing the Auto-Commit-When-Ready state."""
+ 
+         policy_acwr = (
+             snapshot["auto_commit_when_ready"]
+             if "auto_commit_when_ready" in snapshot
+             else None
 diff --git a/scripts/run_build04_tests.sh b/scripts/run_build04_tests.sh
-new file mode 100755
-index 0000000000000000000000000000000000000000..d5cc712372825965ad13018cab616ee067446f9a
---- /dev/null
+index d5cc712372825965ad13018cab616ee067446f9a..5f72b21d2c14059e339494a3f1a9b68e83d681ff 100644
+--- a/scripts/run_build04_tests.sh
 +++ b/scripts/run_build04_tests.sh
-@@ -0,0 +1,6 @@
-+#!/usr/bin/env bash
-+set -euo pipefail
-+export PYTHONPATH="${PYTHONPATH:-.}:."
-+PY="${PYTHON:=python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python
-+"$PY" -m unittest -v tests.test_gate_controller
-+echo "BUILD_04_TESTS: PASS"
-diff --git a/tests/test_gate_controller.py b/tests/test_gate_controller.py
+@@ -1,6 +1,8 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ export PYTHONPATH="${PYTHONPATH:-.}:."
+ PY="${PYTHON:=python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python
+-"$PY" -m unittest -v tests.test_gate_controller
++"$PY" -m unittest -v \
++  tests.test_gate_controller \
++  tests.test_tts_mask_lifecycle
+ echo "BUILD_04_TESTS: PASS"
+diff --git a/tests/test_tts_mask_lifecycle.py b/tests/test_tts_mask_lifecycle.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..db479543762920dfa114b09ca9a7e2b0841a0bb4
+index 0000000000000000000000000000000000000000..279d1f3b7ad170558e25daf6cb4b91a30d9980aa
 --- /dev/null
-+++ b/tests/test_gate_controller.py
-@@ -0,0 +1,55 @@
++++ b/tests/test_tts_mask_lifecycle.py
+@@ -0,0 +1,87 @@
++import asyncio
 +import unittest
 +
-+from app.voice_v2.gate import GateController
++from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END, EVT_TTS_START
++from app.voice_v2.engine import EngineV2
 +
 +
-+class GateControllerTests(unittest.TestCase):
-+    def test_set_clear_reasons_and_effective(self) -> None:
-+        published: list[dict] = []
++class _FakeExporter:
++    def __init__(self) -> None:
++        self.events: list[tuple[str, dict]] = []
 +
-+        controller = GateController(publish=published.append)
++    def write(self, sid: str, event: dict) -> None:  # pragma: no cover - exercised in tests
++        self.events.append((sid, dict(event)))
 +
-+        controller.set_reason("tts_active", True)
-+        self.assertEqual(len(published), 1)
-+        event_on = published[-1]
-+        gate_meta = event_on["meta"]["gate"]
-+        self.assertEqual(gate_meta["state"], "on")
-+        self.assertTrue(gate_meta["mask"])
 +
-+        controller.set_reason("tts_active", False)
-+        self.assertEqual(len(published), 2)
-+        event_off = published[-1]
-+        gate_meta_off = event_off["meta"]["gate"]
-+        self.assertEqual(gate_meta_off["state"], "off")
-+        self.assertFalse(gate_meta_off["mask"])
++class _FakeBus:
++    def __init__(self) -> None:
++        self.events: list[dict] = []
 +
-+        snapshot = controller.snapshot()
-+        self.assertFalse(snapshot["effective"])
-+        self.assertFalse(snapshot["reasons"]["tts_active"])
++    def publish(self, event: dict) -> None:  # pragma: no cover - exercised in tests
++        self.events.append(dict(event))
 +
-+    def test_idempotent_no_duplicate_publish(self) -> None:
-+        published: list[dict] = []
-+        controller = GateController(publish=published.append)
 +
-+        controller.set_reason("manual_gate", True)
-+        controller.set_reason("manual_gate", True)
++class TtsMaskLifecycleTests(unittest.IsolatedAsyncioTestCase):
++    async def test_tts_start_end_with_post_hold(self) -> None:
++        bus = _FakeBus()
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter, telemetry_bus=bus)
 +
-+        self.assertEqual(len(published), 1)
++        sid = "sid-123"
++        utt_id = "utt-1"
 +
-+    def test_multi_reason_marks_multi(self) -> None:
-+        published: list[dict] = []
-+        controller = GateController(publish=published.append)
++        engine.on_tts_start(sid, utt_id, post_hold_ms=200)
++        engine.on_tts_end(sid, utt_id, post_hold_ms=200)
 +
-+        controller.set_reason("manual_gate", True)
-+        controller.set_reason("system_hold", True)
++        await asyncio.sleep(0.25)
 +
-+        self.assertEqual(len(published), 2)
-+        event = published[-1]
-+        gate_meta = event["meta"]["gate"]
-+        self.assertEqual(gate_meta["reason"], "multi")
-+        self.assertTrue(gate_meta["mask"])
++        gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
++        tts_start_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_START]
++        tts_end_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_END]
++
++        self.assertGreaterEqual(len(gate_events), 3)
++
++        first_gate = gate_events[0]["meta"]["gate"]
++        self.assertEqual(first_gate["state"], "on")
++        self.assertEqual(first_gate["reason"], "tts_active")
++
++        self.assertTrue(
++            any(evt["meta"]["gate"]["reason"] == "system_hold" for evt in gate_events)
++        )
++        self.assertEqual(gate_events[-1]["meta"]["gate"]["state"], "off")
++
++        self.assertEqual(len(tts_start_events), 1)
++        start_meta = tts_start_events[0]["meta"]["tts"]
++        self.assertEqual(start_meta["utt_id"], utt_id)
++        self.assertEqual(start_meta["post_hold_ms"], 200)
++
++        self.assertEqual(len(tts_end_events), 1)
++        end_meta = tts_end_events[0]["meta"]["tts"]
++        self.assertEqual(end_meta["utt_id"], utt_id)
++
++    async def test_tts_end_no_post_hold(self) -> None:
++        bus = _FakeBus()
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter, telemetry_bus=bus)
++
++        sid = "sid-456"
++        utt_id = "utt-2"
++
++        engine.on_tts_start(sid, utt_id, post_hold_ms=0)
++        engine.on_tts_end(sid, utt_id, post_hold_ms=0)
++
++        await asyncio.sleep(0)
++
++        gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
++        reasons = [evt["meta"]["gate"]["reason"] for evt in gate_events]
++
++        self.assertFalse(any(reason == "system_hold" for reason in reasons))
++        self.assertEqual(gate_events[-1]["meta"]["gate"]["state"], "off")
++
++        tts_end_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_END]
++        self.assertEqual(len(tts_end_events), 1)
++        self.assertEqual(tts_end_events[0]["meta"]["tts"]["utt_id"], utt_id)
 +
 +
 +if __name__ == "__main__":
 +    unittest.main()
-+

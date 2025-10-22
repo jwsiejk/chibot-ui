@@ -1,6 +1,7 @@
 """Minimal Engine v2 shell with telemetry hooks and session exporting."""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import json
 import time
@@ -13,12 +14,15 @@ from app.telemetry.exporter import FileExporter
 from app.voice_v2 import (
     EVT_ACWR_RECOMPUTE,
     EVT_POLICY_APPLIED,
+    EVT_TTS_END,
+    EVT_TTS_START,
     EVT_WS_AUDIO_RECV,
     EVT_WS_CLOSE,
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
     EVT_WS_OPEN,
 )
+from app.voice_v2.gate import GateController
 
 
 def _now_ms() -> int:
@@ -57,6 +61,7 @@ class EngineV2:
         self._bus = telemetry_bus
         self._policy_snapshot: Dict[str, Any] | None = None
         self._last_sid: Optional[str] = None
+        self._gate = GateController(publish=self._publish_gate_event)
 
     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
         """Capture a successful WebSocket upgrade."""
@@ -106,6 +111,49 @@ class EngineV2:
             self._last_sid = None
             self._policy_snapshot = None
 
+    def on_tts_start(
+        self, sid: str, utt_id: str, post_hold_ms: int | None = None
+    ) -> None:
+        """Engage the TTS mask and emit a telemetry breadcrumb."""
+
+        hold_ms = post_hold_ms or 0
+        tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
+        self._gate.set_reason(
+            "tts_active",
+            True,
+            sid=sid,
+            meta=tts_meta,
+        )
+
+        payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
+        event = self._envelope(sid, EVT_TTS_START, payload)
+        self._publish(event)
+
+    def on_tts_end(
+        self, sid: str, utt_id: str, post_hold_ms: int | None = None
+    ) -> None:
+        """Release the TTS mask and optionally engage a post-hold."""
+
+        self._gate.set_reason(
+            "tts_active",
+            False,
+            sid=sid,
+            meta={"tts": {"utt_id": utt_id}},
+        )
+
+        hold_ms = post_hold_ms or 0
+        if hold_ms > 0:
+            self._gate.set_reason(
+                "system_hold",
+                True,
+                sid=sid,
+                meta={"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}},
+            )
+            asyncio.create_task(self._release_system_hold_after(sid, hold_ms))
+
+        event = self._envelope(sid, EVT_TTS_END, {"meta": {"tts": {"utt_id": utt_id}}})
+        self._publish(event)
+
     def reapply_policy(self, overrides: Dict[str, Any] | None = None) -> bool:
         """Reload and re-emit the interaction policy when it changes."""
 
@@ -134,6 +182,24 @@ class EngineV2:
     def _publish(self, event: Dict[str, Any]) -> None:
         self._bus.publish(dict(event))
         self._exporter.write(event["sid"], dict(event))
+
+    def _publish_gate_event(self, event: Dict[str, Any]) -> None:
+        """Publish gate controller events through the standard telemetry path."""
+
+        envelope = dict(event)
+        sid = envelope.get("sid") or self._last_sid
+        if not isinstance(sid, str) or not sid:
+            return
+        envelope.setdefault("sid", sid)
+        envelope.setdefault("who", "server")
+        envelope.setdefault("source", "voice_engine")
+        self._publish(envelope)
+
+    async def _release_system_hold_after(self, sid: str, post_hold_ms: int) -> None:
+        """Release the system_hold reason after the requested delay."""
+
+        await asyncio.sleep(post_hold_ms / 1000)
+        self._gate.set_reason("system_hold", False, sid=sid)
 
     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
         frame = {"type": "policy.interaction", "policy": snapshot}
