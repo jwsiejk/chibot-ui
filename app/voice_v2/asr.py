@@ -41,6 +41,7 @@ class ASRAdapter:
         self._partials_before_final = partials_before_final
         self._partial_count = 0
         self._buffer: list[str] = []
+        self._last_seq: int | None = None
 
     async def start(self, websocket: Any) -> None:
         """Attach to the provider websocket and publish readiness."""
@@ -79,6 +80,11 @@ class ASRAdapter:
             raise TypeError("chunk must be bytes-like")
         if not isinstance(seq, int):
             raise TypeError("seq must be an int")
+
+        if self._last_seq is not None and seq <= self._last_seq:
+            return
+
+        self._last_seq = seq
 
         text_fragment = self._normalize_chunk(chunk, seq)
         self._buffer.append(text_fragment)
@@ -150,6 +156,7 @@ class ASRAdapter:
         self._current_req_id = None
         self._partial_count = 0
         self._buffer.clear()
+        self._last_seq = None
 
     @staticmethod
     def _normalize_chunk(chunk: bytes | bytearray, seq: int) -> str:

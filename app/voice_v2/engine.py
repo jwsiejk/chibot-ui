@@ -70,6 +70,7 @@ class _TurnSession:
     state: str = READY
     turn_id: Optional[str] = None
     turn_started_ms: Optional[int] = None
+    tts_utt_id: Optional[str] = None
 
 
 class _NullExporter:
@@ -168,6 +169,9 @@ class EngineV2:
     ) -> None:
         """Engage the TTS mask and emit a telemetry breadcrumb."""
 
+        session = self._ensure_session(sid)
+        session.tts_utt_id = utt_id
+
         hold_ms = post_hold_ms or 0
         tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
         self._gate.set_reason(
@@ -177,8 +181,7 @@ class EngineV2:
             meta=tts_meta,
         )
 
-        mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": "engaged"})
-        self._publish(mask_event)
+        self._publish_tts_mask(sid, "engaged")
 
         payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
         event = self._envelope(sid, EVT_TTS_START, payload)
@@ -190,30 +193,8 @@ class EngineV2:
     ) -> None:
         """Release the TTS mask and optionally engage a post-hold."""
 
-        self._gate.set_reason(
-            "tts_active",
-            False,
-            sid=sid,
-            meta={"tts": {"utt_id": utt_id}},
-        )
-
-        mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": "cleared"})
-        self._publish(mask_event)
-
         hold_ms = post_hold_ms or 0
-        if hold_ms > 0:
-            self._gate.set_reason(
-                "system_hold",
-                True,
-                sid=sid,
-                meta={"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}},
-            )
-            asyncio.create_task(self._release_system_hold_after(sid, hold_ms))
-        else:
-            self._set_state(sid, READY, reason="tts_end")
-
-        event = self._envelope(sid, EVT_TTS_END, {"meta": {"tts": {"utt_id": utt_id}}})
-        self._publish(event)
+        self._teardown_tts(sid, utt_id, post_hold_ms=hold_ms, transition_to_ready=True)
 
     def on_asr_final(self, sid: str, text: str) -> None:
         """Observe the final ASR transcript for a turn."""
@@ -247,12 +228,30 @@ class EngineV2:
         self._publish_barge(sid, source, granted, reason if granted else deny_reason)
 
         if granted:
+            self.cancel_current_tts(sid, reason="canceled")
             self._set_state(sid, CONFIRMING_BARGE, reason="auto_barge")
             self._schedule_barge_confirmation(sid)
         else:
             logging.getLogger(__name__).info(
                 "Auto barge denied", extra={"sid": sid, "source": source, "reason": deny_reason}
             )
+
+    def cancel_current_tts(self, sid: str, *, reason: str = "canceled") -> bool:
+        """Cancel the active TTS stream for the session if present."""
+
+        session = self._ensure_session(sid)
+        utt_id = session.tts_utt_id
+        if not utt_id:
+            return False
+
+        self._teardown_tts(
+            sid,
+            utt_id,
+            reason=reason,
+            post_hold_ms=0,
+            transition_to_ready=False,
+        )
+        return True
 
     def reapply_policy(self, overrides: Dict[str, Any] | None = None) -> bool:
         """Reload and re-emit the interaction policy when it changes."""
@@ -398,6 +397,7 @@ class EngineV2:
             self._publish(end_event)
             session.turn_id = None
             session.turn_started_ms = None
+            session.tts_utt_id = None
 
         session.state = new_state
 
@@ -407,6 +407,45 @@ class EngineV2:
         breadcrumb_payload = {"meta": breadcrumb_meta}
         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
         self._publish(breadcrumb_event)
+
+    def _publish_tts_mask(self, sid: str, phase: str) -> None:
+        mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})
+        self._publish(mask_event)
+
+    def _teardown_tts(
+        self,
+        sid: str,
+        utt_id: str,
+        *,
+        reason: str | None = None,
+        post_hold_ms: int = 0,
+        transition_to_ready: bool,
+    ) -> None:
+        session = self._ensure_session(sid)
+        if session.tts_utt_id == utt_id:
+            session.tts_utt_id = None
+
+        payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
+        if reason:
+            payload["reason"] = reason
+
+        event = self._envelope(sid, EVT_TTS_END, payload)
+        self._publish(event)
+
+        self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
+        self._publish_tts_mask(sid, "cleared")
+
+        if transition_to_ready:
+            if post_hold_ms > 0:
+                self._gate.set_reason(
+                    "system_hold",
+                    True,
+                    sid=sid,
+                    meta={"tts": {"utt_id": utt_id, "post_hold_ms": post_hold_ms}},
+                )
+                asyncio.create_task(self._release_system_hold_after(sid, post_hold_ms))
+            else:
+                self._set_state(sid, READY, reason="tts_end")
 
     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
         frame = {"type": "policy.interaction", "policy": snapshot}

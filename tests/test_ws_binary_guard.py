@@ -95,12 +95,12 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         self.assertEqual(len(accept_messages), 1)
 
         self.assertEqual(len(engine.audio_calls), 2)
-        self.assertEqual(engine.audio_calls[0][2], 1)
-        self.assertEqual(engine.audio_calls[1][2], 2)
+        self.assertEqual(engine.audio_calls[0][2], 0)
+        self.assertEqual(engine.audio_calls[1][2], 1)
 
         self.assertEqual(len(received_events), 2)
-        self.assertEqual(received_events[0]["meta"]["seq"], 1)
-        self.assertEqual(received_events[1]["meta"]["seq"], 2)
+        self.assertEqual(received_events[0]["meta"]["seq"], 0)
+        self.assertEqual(received_events[1]["meta"]["seq"], 1)
         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload_one))
         self.assertEqual(received_events[1]["meta"]["ws"]["size"], len(payload_two))
 
@@ -126,7 +126,7 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
             bus.unsubscribe(token)
 
         self.assertEqual(len(engine.audio_calls), 1)
-        self.assertEqual(engine.audio_calls[0][2], 1)
+        self.assertEqual(engine.audio_calls[0][2], 0)
 
         errors = [msg for msg in sent if msg.get("type") == "websocket.send" and msg.get("text")]
         self.assertFalse(errors)
@@ -195,7 +195,7 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
 
         closes = [msg for msg in sent if msg.get("type") == "websocket.close"]
         self.assertEqual(len(closes), 1)
-        self.assertEqual(closes[0]["code"], 1008)
+        self.assertEqual(closes[0]["code"], 1003)
 
         self.assertEqual(len(received_events), 3)
         self.assertEqual(received_events[-1]["meta"]["error"], "audio_not_expected_close")

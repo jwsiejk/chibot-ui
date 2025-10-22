@@ -9,7 +9,7 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
 
 from app.telemetry import bus
@@ -30,6 +30,8 @@ RATE_LIMIT_CAPACITY = 25
 RATE_LIMIT_WINDOW_SECONDS = 2.0
 RATE_LIMIT_CLOSE_CODE = 1013
 _AUDIO_VIOLATION_LIMIT = 3
+
+AUDIO_SEQ_WINDOW = 8
 
 QUEUE_ON_THRESHOLD = 12
 QUEUE_OFF_THRESHOLD = 6
@@ -116,6 +118,10 @@ class AdapterContext:
     sid: str
     headers: Dict[str, str]
     audio_seq: int = 0
+    audio_expected_seq: int = 0
+    audio_highest_seq: int = -1
+    audio_buffer: Dict[int, bytes] = field(default_factory=dict)
+    audio_window: int = AUDIO_SEQ_WINDOW
     last_pong_sent_ms: int = 0
     ip: Optional[str] = None
     sid_bucket: Optional[TokenBucket] = None
@@ -386,6 +392,29 @@ class ChatV2Adapter:
                 "sample_rate": frame.get("sample_rate"),
                 "channels": frame.get("channels"),
             }
+            seq_start = frame.get("seq_start")
+            if seq_start is not None:
+                if not isinstance(seq_start, int):
+                    meta["error"] = "schema_invalid"
+                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                    await self._send_error(
+                        send,
+                        ctx.sid,
+                        "schema_invalid",
+                        "audio.header seq_start must be an integer",
+                    )
+                    return self._HandleResult(False, 1003, "schema_invalid")
+                if seq_start < 0:
+                    meta["error"] = "schema_invalid"
+                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                    await self._send_error(
+                        send,
+                        ctx.sid,
+                        "schema_invalid",
+                        "audio.header seq_start must be >= 0",
+                    )
+                    return self._HandleResult(False, 1003, "schema_invalid")
+                profile["seq_start"] = seq_start
             if ctx.audio_profile is not None:
                 meta["error"] = "schema_invalid"
                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
@@ -397,6 +426,11 @@ class ChatV2Adapter:
                 )
                 return self._HandleResult(True)
             ctx.audio_profile = profile
+            if seq_start is not None:
+                ctx.audio_seq = max(0, seq_start)
+                ctx.audio_expected_seq = ctx.audio_seq
+                ctx.audio_highest_seq = ctx.audio_seq - 1
+                ctx.audio_buffer.clear()
 
         await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
         await self._invoke_engine("on_json", ctx.sid, frame)
@@ -437,18 +471,15 @@ class ChatV2Adapter:
             await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, violation_meta)
             await self._send_error(send, ctx.sid, "audio_not_expected", "engine not accepting audio")
             if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT:
-                return self._HandleResult(False, 1008, "audio_not_expected")
+                return self._HandleResult(False, 1003, "audio_not_expected")
             return self._HandleResult(True)
 
         ctx.audio_violation_count = 0
+        if ctx.audio_highest_seq < 0:
+            ctx.audio_expected_seq = ctx.audio_seq
+        seq = ctx.audio_seq
         ctx.audio_seq += 1
-        meta = {
-            "byte_count": byte_count,
-            "seq": ctx.audio_seq,
-            "ws": {"dir": "in", "size": byte_count},
-        }
-        await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-        await self._invoke_engine("on_audio", ctx.sid, data, ctx.audio_seq)
+        await self._ingest_audio_chunk(ctx, bytes(data), seq)
         return self._HandleResult(True)
 
     async def _check_rate_limit(
@@ -476,6 +507,92 @@ class ChatV2Adapter:
         )
         await self._send_error(send, ctx.sid, "rate_limited", "try later")
         return self._HandleResult(False, RATE_LIMIT_CLOSE_CODE, "rate_limited")
+
+    async def _ingest_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+        if seq < 0:
+            return
+
+        window = max(1, ctx.audio_window)
+        expected = ctx.audio_expected_seq
+
+        if seq < expected - window:
+            return
+        if seq < expected:
+            return
+        if seq in ctx.audio_buffer:
+            return
+
+        ctx.audio_buffer[seq] = bytes(chunk)
+        if seq > ctx.audio_highest_seq:
+            ctx.audio_highest_seq = seq
+
+        gap = self._compute_audio_gap(ctx)
+        if gap is not None:
+            gap_from, gap_to = gap
+            await self._publish(
+                "EVT_AUDIO_GAP",
+                ctx.sid,
+                {"from_seq": gap_from, "to_seq": gap_to},
+            )
+
+        await self._flush_audio_buffer(ctx)
+
+    def _compute_audio_gap(self, ctx: AdapterContext) -> Optional[tuple[int, int]]:
+        expected = ctx.audio_expected_seq
+        if expected in ctx.audio_buffer:
+            return None
+        if not ctx.audio_buffer:
+            return None
+        if ctx.audio_highest_seq - expected < ctx.audio_window:
+            return None
+
+        next_candidates = [seq for seq in ctx.audio_buffer if seq >= expected]
+        if not next_candidates:
+            return None
+
+        next_available = min(next_candidates)
+        if next_available <= expected:
+            return None
+
+        gap_from = expected
+        self._drop_buffer_before(ctx, next_available)
+        ctx.audio_expected_seq = next_available
+        return gap_from, next_available
+
+    async def _flush_audio_buffer(self, ctx: AdapterContext) -> None:
+        while True:
+            seq = ctx.audio_expected_seq
+            chunk = ctx.audio_buffer.pop(seq, None)
+            if chunk is None:
+                break
+            await self._emit_audio_chunk(ctx, chunk, seq)
+            ctx.audio_expected_seq += 1
+        if ctx.audio_buffer:
+            ctx.audio_highest_seq = max(ctx.audio_buffer)
+        else:
+            ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+
+    async def _emit_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+        byte_count = len(chunk)
+        meta = {
+            "byte_count": byte_count,
+            "seq": seq,
+            "ws": {"dir": "in", "size": byte_count},
+        }
+        await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+        await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
+
+    def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
+        removed = False
+        for key in list(ctx.audio_buffer):
+            if key < threshold:
+                ctx.audio_buffer.pop(key, None)
+                removed = True
+        if removed:
+            if ctx.audio_buffer:
+                ctx.audio_highest_seq = max(ctx.audio_buffer)
+            else:
+                ctx.audio_highest_seq = ctx.audio_expected_seq - 1
 
     async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
         text = json.dumps(payload, separators=(",", ":"))
