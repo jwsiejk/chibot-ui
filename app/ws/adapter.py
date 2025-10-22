@@ -1,8 +1,11 @@
 """chat.v2 WebSocket adapter for AskChip."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import inspect
 import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -35,6 +38,23 @@ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
 
 EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
 EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
+
+EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
+
+_OUTBOUND_ALLOWED_TYPES = {
+    "policy.interaction",
+    "info",
+    "tts.start",
+    "tts.end",
+    "asr.ready",
+    "asr.partial",
+    "asr.final",
+    "error",
+}
+
+_OUTBOX_MAXSIZE = 256
+
+_logger = logging.getLogger(__name__)
 
 _ALLOWED_TEXT_FRAME_TYPES = {
     "client.ready",
@@ -100,6 +120,9 @@ class AdapterContext:
     audio_violation_count: int = 0
     outbound_queue_depth: int = 0
     backpressure_state: Literal["off", "on"] = "off"
+    outbox: asyncio.Queue[Dict[str, Any]] | None = None
+    outbound_task: asyncio.Task[None] | None = None
+    subscription_token: Optional[str] = None
 
 
 class ChatV2Adapter:
@@ -158,6 +181,7 @@ class ChatV2Adapter:
             )
 
         self._contexts[ctx.sid] = ctx
+        self._start_outbound_bridge(ctx, send)
 
         if self.exporter:
             self.exporter.begin(ctx.sid)
@@ -208,6 +232,7 @@ class ChatV2Adapter:
             await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
             raise
         finally:
+            await self._cleanup_outbound(ctx)
             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
             if self.exporter:
                 self.exporter.end(ctx.sid, {"close_code": close_code})
@@ -463,6 +488,124 @@ class ChatV2Adapter:
         payload = {"type": "error", "code": code, "detail": detail}
         await self._send_json(send, sid, payload)
 
+    def _start_outbound_bridge(
+        self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
+
+        def _enqueue(payload: Dict[str, Any]) -> None:
+            if ctx.outbox is None:
+                return
+            try:
+                ctx.outbox.put_nowait(dict(payload))
+            except asyncio.QueueFull:
+                now = ctx.outbox.qsize()
+                try:
+                    asyncio.create_task(
+                        self._publish(
+                            EVT_WS_OUTBOX_DROP,
+                            ctx.sid,
+                            {"sid": ctx.sid, "dropped": 1, "now": now},
+                        )
+                    )
+                except RuntimeError:
+                    pass
+
+        def _handle_event(event: dict) -> None:
+            if event.get("sid") != ctx.sid or ctx.outbox is None:
+                return
+            payload = self._extract_outbound_payload(event)
+            if payload is None:
+                return
+
+            def _on_loop() -> None:
+                _enqueue(payload)
+
+            try:
+                loop.call_soon_threadsafe(_on_loop)
+            except RuntimeError:
+                pass
+
+        ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
+        ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
+
+    def _extract_outbound_payload(self, event: dict) -> Optional[Dict[str, Any]]:
+        payload = self._coerce_payload(event.get("payload"))
+        if payload is None:
+            meta = event.get("meta")
+            if isinstance(meta, dict):
+                ws_meta = meta.get("ws")
+                if isinstance(ws_meta, dict):
+                    frame = ws_meta.get("frame")
+                    if frame is None:
+                        frame = ws_meta.get("preview")
+                    payload = self._coerce_payload(frame)
+
+        if payload is None:
+            return None
+
+        frame_type = payload.get("type") if isinstance(payload, dict) else None
+        if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
+            return None
+        return dict(payload)
+
+    @staticmethod
+    def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            try:
+                decoded = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+            if isinstance(decoded, dict):
+                return decoded
+        return None
+
+    async def _run_outbound_sender(
+        self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+    ) -> None:
+        queue = ctx.outbox
+        if queue is None:
+            return
+        try:
+            while True:
+                payload = await queue.get()
+                try:
+                    await self._send_outbound_frame(send, payload)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # pragma: no cover - defensive
+                    _logger.exception("Failed to deliver outbound frame for sid %s", ctx.sid)
+                finally:
+                    queue.task_done()
+        except asyncio.CancelledError:
+            raise
+        finally:
+            ctx.outbox = None
+
+    async def _send_outbound_frame(
+        self, send: Callable[[dict], Awaitable[None]], payload: Dict[str, Any]
+    ) -> None:
+        text = json.dumps(payload, separators=(",", ":"))
+        await send({"type": "websocket.send", "text": text})
+
+    async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
+        token = ctx.subscription_token
+        ctx.subscription_token = None
+        if token:
+            bus.unsubscribe(token)
+
+        task = ctx.outbound_task
+        ctx.outbound_task = None
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        ctx.outbox = None
+
     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
         """Record the estimated outbound queue depth and emit diagnostics if needed."""
 
@@ -550,4 +693,5 @@ __all__ = [
     "QUEUE_OFF_THRESHOLD",
     "EVT_BACKPRESSURE_ON",
     "EVT_BACKPRESSURE_OFF",
+    "EVT_WS_OUTBOX_DROP",
 ]
