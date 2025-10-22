@@ -250,6 +250,20 @@ class EngineV2:
     def on_asr_final(self, sid: str, text: str) -> None:
         """Observe the final ASR transcript for a turn."""
 
+        session = self._ensure_session(sid)
+        turn_id = session.turn_id or str(uuid.uuid4())
+        req_id = session.req_id or f"req-{uuid.uuid4().hex}"
+        session.turn_id = turn_id
+        session.req_id = req_id
+
+        self._emit_user_chat_message(
+            sid,
+            text,
+            turn_id,
+            req_id,
+            origin="voice",
+        )
+
         self._set_state(sid, THINKING, reason="asr_final")
 
     def on_asr_partial(
@@ -581,13 +595,15 @@ class EngineV2:
         turn_id: str,
         req_id: str,
         client_msg_id: Optional[str] = None,
+        *,
+        origin: str = "text",
     ) -> None:
         frame: Dict[str, Any] = {
             "type": "chat.message",
             "id": str(uuid.uuid4()),
             "role": "user",
             "text": text,
-            "origin": "text",
+            "origin": origin,
             "turn_id": turn_id,
             "req_id": req_id,
             "ts_ms": _now_ms(),

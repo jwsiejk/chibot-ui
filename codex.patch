@@ -1,299 +1,73 @@
-diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
-index c13f6e07c631f7863f101c908d02290fd8b6ba73..6866bee8a3840c58377ac8ac5cee248203beb6c3 100644
---- a/app/voice_v2/__init__.py
-+++ b/app/voice_v2/__init__.py
-@@ -1,43 +1,45 @@
- """Event constants for AskChip voice v2 telemetry."""
- 
- EVT_WS_OPEN = "EVT_WS_OPEN"
- EVT_WS_CLOSE = "EVT_WS_CLOSE"
- EVT_WS_JSON_RECV = "EVT_WS_JSON_RECV"
- EVT_WS_JSON_SEND = "EVT_WS_JSON_SEND"
- EVT_WS_AUDIO_RECV = "EVT_WS_AUDIO_RECV"
- EVT_WS_AUDIO_SEND = "EVT_WS_AUDIO_SEND"
-+EVT_CHAT_USER = "EVT_CHAT_USER"
- 
- EVT_TTS_START = "EVT_TTS_START"
- EVT_TTS_END = "EVT_TTS_END"
- 
- EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
- EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
- 
- EVT_MIC_GATE = "EVT_MIC_GATE"
- EVT_BARGE_IN = "EVT_BARGE_IN"
- 
- EVT_ASR_READY = "EVT_ASR_READY"
- EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
- EVT_ASR_FINAL = "EVT_ASR_FINAL"
- EVT_NLU = "EVT_NLU"
- EVT_NLG = "EVT_NLG"
- 
- __all__ = [
-     "EVT_WS_OPEN",
-     "EVT_WS_CLOSE",
-     "EVT_WS_JSON_RECV",
-     "EVT_WS_JSON_SEND",
-     "EVT_WS_AUDIO_RECV",
-     "EVT_WS_AUDIO_SEND",
-+    "EVT_CHAT_USER",
-     "EVT_TTS_START",
-     "EVT_TTS_END",
-     "EVT_POLICY_APPLIED",
-     "EVT_ACWR_RECOMPUTE",
-     "EVT_MIC_GATE",
-     "EVT_BARGE_IN",
-     "EVT_ASR_READY",
-     "EVT_ASR_PARTIAL",
-     "EVT_ASR_FINAL",
-     "EVT_NLU",
-     "EVT_NLG",
- ]
 diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 9d1b61731b3e39bccf33841bf6dbf70a7f9668e5..a4df039b08aabe4903152bee7a88aeb8059aaeb9 100644
+index a4df039b08aabe4903152bee7a88aeb8059aaeb9..3a32e438ee10f7ae0828640a90861157e42123b4 100644
 --- a/app/voice_v2/engine.py
 +++ b/app/voice_v2/engine.py
-@@ -1,43 +1,44 @@
- """Minimal Engine v2 shell with telemetry hooks and session exporting."""
- from __future__ import annotations
+@@ -228,50 +228,64 @@ class EngineV2:
+             meta=tts_meta,
+         )
  
- import asyncio
- from dataclasses import dataclass
- import json
- import logging
- import threading
- import time
- import uuid
- from typing import Any, Dict, Mapping, Optional
+         self._publish_tts_mask(sid, "engaged")
  
- from app.policy.loader import load_interaction_policy
- from app.policy.watch import compute_diff, should_reapply
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ACWR_RECOMPUTE,
-+    EVT_CHAT_USER,
-     EVT_POLICY_APPLIED,
-     EVT_TTS_END,
-     EVT_TTS_START,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- from app.voice_v2.gate import GateController
- from app.voice_v2.vad import VADAggregator
+         payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
+         event = self._envelope(sid, EVT_TTS_START, payload)
+         self._publish(event)
+         self._set_state(sid, RESPONDING, reason="tts_start")
  
+         aggregator = self._aggregators.get(sid)
+         if aggregator is not None:
+             aggregator.on_tts_start()
  
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
- READY = "Ready"
- LISTENING = "Listening"
- THINKING = "Thinking"
- RESPONDING = "Responding"
- CONFIRMING_BARGE = "ConfirmingBarge"
- 
- EVT_TURN_STATE = "EVT_TURN_STATE"
-@@ -82,93 +83,135 @@ class _NullExporter:
-         return
- 
- 
- class EngineV2:
-     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
- 
-     def __init__(
-         self,
-         exporter: FileExporter | None = None,
-         *,
-         telemetry_bus=bus,
-         fake_exporter: FileExporter | None = None,
+     def on_tts_end(
+         self, sid: str, utt_id: str, post_hold_ms: int | None = None
      ) -> None:
-         if exporter is None:
-             exporter = fake_exporter
-         if exporter is None:
-             exporter = _NullExporter()
-         self._exporter = exporter
-         self._bus = telemetry_bus
-         self._policy_snapshot: Dict[str, Any] | None = None
-         self._last_sid: Optional[str] = None
-         self._gate = GateController(publish=self._publish_gate_event)
-         self._sessions: Dict[str, _TurnSession] = {}
-         self._barge_handles: Dict[str, object] = {}
-         self._aggregators: Dict[str, VADAggregator] = {}
-+        self._chat_subscription = self._bus.subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
+         """Release the TTS mask and optionally engage a post-hold."""
  
-     @property
-     def policy_snapshot(self) -> Dict[str, Any] | None:
-         return self._policy_snapshot
+         hold_ms = post_hold_ms or 0
+         self._teardown_tts(sid, utt_id, post_hold_ms=hold_ms, transition_to_ready=True)
  
-     @policy_snapshot.setter
-     def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
-         self._policy_snapshot = dict(snapshot) if snapshot is not None else None
+     def on_asr_final(self, sid: str, text: str) -> None:
+         """Observe the final ASR transcript for a turn."""
  
-     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
-         """Capture a successful WebSocket upgrade."""
-         meta = {"headers": dict(headers), "dir": "in"}
-         event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
-         self._publish(event)
- 
-         self._last_sid = sid
-         self._policy_snapshot = None
-         self._ensure_session(sid)
-         self._set_state(sid, READY, reason="ws_open")
-         self.reapply_policy()
- 
-     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
-         """Capture a validated JSON frame from the adapter."""
-         turn_id: Optional[Any] = None
-         meta: Dict[str, Any] = {"dir": "in"}
-         if isinstance(frame, Mapping):
-             frame_type = frame.get("type")
-             if isinstance(frame_type, str):
-                 meta["frame_type"] = frame_type
-             turn_id = frame.get("turn_id")
-         else:
-             frame = {}
-         try:
-             serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         except (TypeError, ValueError):
-             serialized = "{}"
-         meta["byte_count"] = len(serialized.encode("utf-8"))
-         payload: Dict[str, Any] = {"meta": meta}
-         if turn_id is not None:
-             payload["turn_id"] = turn_id
-         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
-         self._publish(event)
- 
-+    def _handle_chat_user_event(self, event: Dict[str, Any]) -> None:
-+        if event.get("type") != EVT_CHAT_USER:
-+            return
-+        sid = event.get("sid")
-+        if not isinstance(sid, str) or not sid:
-+            return
-+        text = event.get("text")
-+        if not isinstance(text, str):
-+            return
-+        client_msg_id = event.get("client_msg_id")
-+        if client_msg_id is not None and not isinstance(client_msg_id, str):
-+            client_msg_id = None
-+
-+        session = self._ensure_session(sid)
-+        previous_state = session.state
-+        policy = self.policy_snapshot or {}
-+        barge_enabled = bool(policy.get("barge_in_enabled"))
-+
-+        if previous_state == RESPONDING:
-+            granted = barge_enabled
-+            reason = None if granted else "policy_disabled"
-+            self._publish_barge(sid, "text", granted, reason)
-+            if granted:
-+                self.cancel_current_tts(sid, reason="canceled")
-+
-+        if previous_state != READY:
-+            reset_reason = "text_barge_reset" if (previous_state == RESPONDING and barge_enabled) else "text_input_reset"
-+            self._set_state(sid, READY, reason=reset_reason)
-+
-+        listen_reason = "text_barge" if (previous_state == RESPONDING and barge_enabled) else "text_input"
-+        self._set_state(sid, LISTENING, reason=listen_reason)
-+
 +        session = self._ensure_session(sid)
 +        turn_id = session.turn_id or str(uuid.uuid4())
 +        req_id = session.req_id or f"req-{uuid.uuid4().hex}"
 +        session.turn_id = turn_id
 +        session.req_id = req_id
 +
-+        self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
-+        self._set_state(sid, THINKING, reason="text_input")
++        self._emit_user_chat_message(
++            sid,
++            text,
++            turn_id,
++            req_id,
++            origin="voice",
++        )
 +
-     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
-         """Capture an incoming audio chunk."""
+         self._set_state(sid, THINKING, reason="asr_final")
+ 
+     def on_asr_partial(
+         self,
+         sid: str,
+         req_id: str,
+         confidence: float,
+         partial_text: Optional[str] = None,
+     ) -> None:
+         aggregator = self._aggregators.get(sid)
+         if aggregator is not None:
+             aggregator.feed_asr_evidence(req_id, confidence, partial_text)
+ 
+     def on_auto_barge_attempt(
+         self, sid: str, source: str, *, reason: str | None = None
+     ) -> None:
+         """Handle an automatic barge-in attempt during assistant speech."""
+ 
+         if source not in {"auto_vad", "asr_evidence"}:
+             return
+ 
          session = self._ensure_session(sid)
-         if session.state != LISTENING:
-             self._set_state(sid, LISTENING, reason="audio_rx")
-         byte_count = len(chunk)
-         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
-         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
-         self._publish(event)
+         current_state = session.state
  
-     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
-         """Capture the WebSocket closing handshake."""
-         meta = {"code": code, "reason": reason}
-         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
-         self._publish(event)
-         if self._last_sid == sid:
-             self._last_sid = None
-             self._policy_snapshot = None
-         self._sessions.pop(sid, None)
-         self._aggregators.pop(sid, None)
- 
-     def on_tts_start(
-         self, sid: str, utt_id: str, post_hold_ms: int | None = None
-     ) -> None:
-         """Engage the TTS mask and emit a telemetry breadcrumb."""
-@@ -296,51 +339,51 @@ class EngineV2:
-     def _envelope(self, sid: str, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-         envelope = _Envelope(event_type, sid, dict(payload))
-         return envelope.to_dict()
- 
-     def _publish(self, event: Dict[str, Any]) -> None:
-         self._bus.publish(dict(event))
-         self._exporter.write(event["sid"], dict(event))
- 
-     def _publish_gate_event(self, event: Dict[str, Any]) -> None:
-         """Publish gate controller events through the standard telemetry path."""
- 
-         envelope = dict(event)
-         sid = envelope.get("sid") or self._last_sid
-         if not isinstance(sid, str) or not sid:
-             return
-         envelope.setdefault("sid", sid)
-         envelope.setdefault("who", "server")
-         envelope.setdefault("source", "voice_engine")
-         self._publish(envelope)
- 
-     def _publish_barge(
-         self, sid: str, source: str, granted: bool, reason: str | None = None
-     ) -> None:
-         """Publish EVT_BARGE_IN envelope with meta.barge.{source,granted,reason}."""
- 
--        if source not in {"auto_vad", "asr_evidence"}:
-+        if source not in {"auto_vad", "asr_evidence", "text"}:
-             return
- 
-         meta: Dict[str, Any] = {"barge": {"source": source, "granted": granted}}
-         if reason is not None:
-             meta["barge"]["reason"] = reason
-         event = self._envelope(sid, "EVT_BARGE_IN", {"meta": meta})
-         self._publish(event)
- 
-     def _schedule_barge_confirmation(self, sid: str) -> None:
-         """Transition from confirming to listening after a short delay."""
- 
-         async def _confirm() -> None:
-             await asyncio.sleep(0.5)
-             self._complete_auto_barge(sid)
- 
-         self._cancel_barge_confirmation(sid)
- 
-         try:
-             loop = asyncio.get_running_loop()
-         except RuntimeError:
-             loop = None
- 
-         if loop is not None:
-             task = loop.create_task(_confirm())
-             self._barge_handles[sid] = task
-@@ -509,50 +552,83 @@ class EngineV2:
-         self._publish(event)
- 
-         self._publish_tts_mask(sid, "cleared")
-         self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
- 
-         if transition_to_ready:
-             if post_hold_ms > 0:
+         policy = self.policy_snapshot or {}
+@@ -559,57 +573,59 @@ class EngineV2:
                  self._gate.set_reason(
                      "system_hold",
                      True,
@@ -312,301 +86,228 @@ index 9d1b61731b3e39bccf33841bf6dbf70a7f9668e5..a4df039b08aabe4903152bee7a88aeb8
          event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
          self._publish(event)
  
-+    def _emit_user_chat_message(
-+        self,
-+        sid: str,
-+        text: str,
-+        turn_id: str,
-+        req_id: str,
-+        client_msg_id: Optional[str] = None,
-+    ) -> None:
-+        frame: Dict[str, Any] = {
-+            "type": "chat.message",
-+            "id": str(uuid.uuid4()),
-+            "role": "user",
-+            "text": text,
-+            "origin": "text",
-+            "turn_id": turn_id,
-+            "req_id": req_id,
-+            "ts_ms": _now_ms(),
-+        }
-+        if client_msg_id is not None:
-+            frame["client_msg_id"] = client_msg_id
-+
-+        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-+        meta = {
-+            "ws": {
-+                "dir": "out",
-+                "size": len(serialized.encode("utf-8")),
-+                "preview": serialized,
-+            }
-+        }
-+        payload = {"meta": meta, "frame": frame}
-+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-+        self._publish(event)
-+
+     def _emit_user_chat_message(
+         self,
+         sid: str,
+         text: str,
+         turn_id: str,
+         req_id: str,
+         client_msg_id: Optional[str] = None,
++        *,
++        origin: str = "text",
+     ) -> None:
+         frame: Dict[str, Any] = {
+             "type": "chat.message",
+             "id": str(uuid.uuid4()),
+             "role": "user",
+             "text": text,
+-            "origin": "text",
++            "origin": origin,
+             "turn_id": turn_id,
+             "req_id": req_id,
+             "ts_ms": _now_ms(),
+         }
+         if client_msg_id is not None:
+             frame["client_msg_id"] = client_msg_id
+ 
+         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {
+             "ws": {
+                 "dir": "out",
+                 "size": len(serialized.encode("utf-8")),
+                 "preview": serialized,
+             }
+         }
+         payload = {"meta": meta, "frame": frame}
+         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+         self._publish(event)
+ 
      def _emit_policy_applied(
          self,
          sid: str,
          previous: Dict[str, Any] | None,
          diff: Dict[str, Dict[str, Any]],
      ) -> None:
-         meta = {"policy": {"diff": self._summarize_policy_diff(previous, diff)}}
-         event = self._envelope(sid, EVT_POLICY_APPLIED, {"meta": meta})
-         self._publish(event)
- 
-     def _emit_acwr_breadcrumb(self, sid: str, snapshot: Dict[str, Any]) -> None:
-         """Publish a breadcrumb describing the Auto-Commit-When-Ready state."""
- 
-         policy_acwr = (
-             snapshot["auto_commit_when_ready"]
-             if "auto_commit_when_ready" in snapshot
-             else None
-         )
-         effective = bool(snapshot.get("auto_commit_when_ready", True))
-         meta = {
-             "policy_acwr": policy_acwr,
-             "admin_enabled": None,
-             "effective": effective,
-         }
-         event = self._envelope(sid, EVT_ACWR_RECOMPUTE, {"meta": meta})
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 0ea3616db29d0ebf73a90dbabd24fa7f2db7546e..4e1c93d7cb3797bf12ae88c55c0f5bb1afc79d49 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1,44 +1,45 @@
- """chat.v2 WebSocket adapter for AskChip."""
+diff --git a/app/voice_v2/llm.py b/app/voice_v2/llm.py
+index 02946691991d27de85e29ccf1e0a3c2ca79cecfe..88d1af60f800a919ea1c91c01514cc648096b332 100644
+--- a/app/voice_v2/llm.py
++++ b/app/voice_v2/llm.py
+@@ -1,43 +1,107 @@
+ """Stubbed LLM adapter that emits EVT_NLG telemetry."""
  from __future__ import annotations
  
- import asyncio
- import contextlib
- import inspect
- import json
- import logging
- import os
++import json
  import time
- import uuid
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
+-from typing import Any, Dict
++import uuid
++from typing import Any, Dict, Tuple
  
  from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.security.auth import authorize
- from app.voice_v2 import (
-     EVT_ASR_READY,
-+    EVT_CHAT_USER,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_frame
- 
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
- RATE_LIMIT_WINDOW_SECONDS = 2.0
- RATE_LIMIT_CLOSE_CODE = 1013
- _AUDIO_VIOLATION_LIMIT = 3
- 
- AUDIO_SEQ_WINDOW = 8
- 
- QUEUE_ON_THRESHOLD = 12
- QUEUE_OFF_THRESHOLD = 6
- 
- _DEFAULT_WS_PING_INTERVAL_MS = 25_000
- 
- EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
- 
-@@ -46,50 +47,51 @@ EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
- 
- EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
- 
- _OUTBOUND_ALLOWED_TYPES = {
-     "policy.interaction",
-     "info",
-     "tts.start",
-     "tts.end",
-     "asr.ready",
-     "asr.partial",
-     "asr.final",
-     "error",
-     "chat.message",
-     "chat.history",
- }
- 
- _OUTBOX_MAXSIZE = 256
- 
- _logger = logging.getLogger(__name__)
- 
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
-+    "chat.user",
- }
+-from app.voice_v2 import EVT_NLG
++from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
++from app.voice_v2.engine import EVT_TURN_BEGIN, EVT_TURN_END
  
  
- class TokenBucket:
-     """Simple in-memory token bucket."""
+ class LLMAdapter:
+     """Return canned responses while publishing telemetry events."""
  
-     def __init__(self, capacity: int, refill_seconds: float) -> None:
-         self.capacity = capacity
-         self.tokens = float(capacity)
-         self.refill_seconds = refill_seconds
-         self.last_refill = time.monotonic()
+     def __init__(self, *, telemetry_bus=bus, canned_text: str | None = None) -> None:
+         self._bus = telemetry_bus
+         self._canned_text = canned_text or (
+             "Thanks for chatting with AskChip! How else can I help?"
+         )
++        self._turn_lookup: dict[str, Tuple[str, str]] = {}
++        self._subscriptions = [
++            self._bus.subscribe(EVT_TURN_BEGIN, self._handle_turn_event),
++            self._bus.subscribe(EVT_TURN_END, self._handle_turn_event),
++        ]
  
-     def consume(self, count: int, now: Optional[float] = None) -> bool:
-         if now is None:
-             now = time.monotonic()
-         elapsed = max(0.0, now - self.last_refill)
-         if elapsed > 0:
-             refill = (self.capacity / self.refill_seconds) * elapsed
-             if refill > 0:
-                 self.tokens = min(self.capacity, self.tokens + refill)
-                 self.last_refill = now
-         if self.tokens < count:
-             return False
-         self.tokens -= count
-         return True
-@@ -355,63 +357,125 @@ class ChatV2Adapter:
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
-             return self._HandleResult(True)
+     def generate(self, req_id: str, text: str, **_: Any) -> Dict[str, Any]:
+         """Return a canned response and emit an EVT_NLG event."""
  
-         raw_type = frame.get("type")
-         if not isinstance(raw_type, str):
-             meta["error"] = "schema_invalid"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
-             return self._HandleResult(True)
+         if not isinstance(req_id, str) or not req_id:
+             raise ValueError("req_id must be a non-empty string")
  
-         frame_type = raw_type
-         meta["frame_type"] = frame_type
+         start = time.perf_counter()
+         response_text = self._canned_text
+         self._publish_nlg(req_id, response_text)
++        self._publish_chat_message(req_id, response_text)
+         elapsed_ms = int((time.perf_counter() - start) * 1000)
+         timing = {"total_ms": max(elapsed_ms, 0)}
+         return {"text": response_text, "timing": timing}
  
-         if frame_type == "ping":
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             now_ms = int(time.time() * 1000)
-             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
-                 ctx.last_pong_sent_ms = now_ms
-                 reply_ts = frame.get("t")
-                 if not isinstance(reply_ts, int):
-                     reply_ts = now_ms
-                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
-             return self._HandleResult(True)
+     def _publish_nlg(self, req_id: str, text: str) -> None:
+         event = {
+             "type": EVT_NLG,
+             "req_id": req_id,
+             "text": text,
+             "source": "llm_adapter",
+         }
+         self._bus.publish(event)
  
--        if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
--            meta["error"] = "unknown_type"
--            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
--            await self._send_error(send, ctx.sid, "unknown_type", frame_type)
--            return self._HandleResult(True)
-+        if frame_type == "chat.user":
-+            text = frame.get("text")
-+            if not isinstance(text, str):
-+                meta["error"] = "schema_invalid"
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._send_error(
-+                    send,
-+                    ctx.sid,
-+                    "schema_invalid",
-+                    "chat.user requires a string text field",
-+                )
-+                return self._HandleResult(False, 1003, "schema_invalid")
- 
--        is_valid, hint = validate_frame(frame)
--        if not is_valid:
--            meta["error"] = "schema_invalid"
--            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
--            detail = hint or "Frame failed validation"
--            await self._send_error(send, ctx.sid, "schema_invalid", detail)
--            return self._HandleResult(True)
-+            try:
-+                text_bytes = text.encode("utf-8")
-+            except UnicodeEncodeError:
-+                meta["error"] = "bad_utf8"
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._send_error(
-+                    send,
-+                    ctx.sid,
-+                    "bad_utf8",
-+                    "chat.user text must be valid UTF-8",
-+                )
-+                return self._HandleResult(False, 1007, "bad_utf8")
++    def _publish_chat_message(self, req_id: str, text: str) -> None:
++        mapping = self._turn_lookup.get(req_id)
++        if not mapping:
++            return
 +
-+            client_msg_id = frame.get("client_msg_id")
-+            if client_msg_id is not None and not isinstance(client_msg_id, str):
-+                meta["error"] = "schema_invalid"
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._send_error(
-+                    send,
-+                    ctx.sid,
-+                    "schema_invalid",
-+                    "chat.user client_msg_id must be a string if provided",
-+                )
-+                return self._HandleResult(False, 1003, "schema_invalid")
++        sid, turn_id = mapping
++        if not sid or not turn_id:
++            return
 +
-+            ws_meta = meta.get("ws")
-+            event_meta: Dict[str, Any] = {}
-+            if isinstance(ws_meta, dict):
-+                event_meta["ws"] = dict(ws_meta)
-+            event_meta["text_length"] = len(text_bytes)
-+            preview = self._make_preview_from_bytes(text_bytes)
-+            if preview is not None:
-+                event_meta["preview"] = preview
-+            if client_msg_id is not None:
-+                event_meta["client_msg_id"] = client_msg_id
++        frame = {
++            "type": "chat.message",
++            "id": str(uuid.uuid4()),
++            "role": "assistant",
++            "text": text,
++            "origin": "voice",
++            "turn_id": turn_id,
++            "req_id": req_id,
++            "ts_ms": int(time.time() * 1000),
++        }
 +
-+            event = {
-+                "schema_version": "1",
-+                "type": EVT_CHAT_USER,
-+                "sid": ctx.sid,
-+                "who": "server",
-+                "source": "ws_server",
-+                "meta": event_meta,
-+                "text": text,
-+            }
-+            if client_msg_id is not None:
-+                event["client_msg_id"] = client_msg_id
-+            bus.publish(event)
-+        else:
-+            if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
-+                meta["error"] = "unknown_type"
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._send_error(send, ctx.sid, "unknown_type", frame_type)
-+                return self._HandleResult(True)
++        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
++        payload = {
++            "meta": {
++                "ws": {
++                    "dir": "out",
++                    "size": len(serialized.encode("utf-8")),
++                    "preview": serialized,
++                }
++            },
++            "frame": frame,
++        }
 +
-+            is_valid, hint = validate_frame(frame)
-+            if not is_valid:
-+                meta["error"] = "schema_invalid"
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                detail = hint or "Frame failed validation"
-+                await self._send_error(send, ctx.sid, "schema_invalid", detail)
-+                return self._HandleResult(True)
++        event = {"type": EVT_WS_JSON_SEND, "sid": sid, "payload": payload}
++        self._bus.publish(event)
++
++    def _handle_turn_event(self, event: Dict[str, Any]) -> None:
++        event_type = event.get("type")
++        if event_type == EVT_TURN_BEGIN:
++            sid = event.get("sid")
++            req_id = event.get("req_id")
++            turn_id = event.get("turn_id")
++            if (
++                isinstance(sid, str)
++                and sid
++                and isinstance(req_id, str)
++                and req_id
++                and isinstance(turn_id, str)
++                and turn_id
++            ):
++                self._turn_lookup[req_id] = (sid, turn_id)
++        elif event_type == EVT_TURN_END:
++            req_id = event.get("req_id")
++            if isinstance(req_id, str) and req_id:
++                self._turn_lookup.pop(req_id, None)
++
  
-         if frame_type == "audio.header":
-             profile = {
-                 "format": frame.get("format"),
-                 "sample_rate": frame.get("sample_rate"),
-                 "channels": frame.get("channels"),
-             }
-             seq_start = frame.get("seq_start")
-             if seq_start is not None:
-                 if not isinstance(seq_start, int):
-                     meta["error"] = "schema_invalid"
-                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-                     await self._send_error(
-                         send,
-                         ctx.sid,
-                         "schema_invalid",
-                         "audio.header seq_start must be an integer",
-                     )
-                     return self._HandleResult(False, 1003, "schema_invalid")
-                 if seq_start < 0:
-                     meta["error"] = "schema_invalid"
-                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-                     await self._send_error(
-                         send,
-                         ctx.sid,
+ __all__ = ["LLMAdapter"]
+diff --git a/tests/test_llm_stub.py b/tests/test_llm_stub.py
+index fceeb1ed850e1775626c97d480751ef84a92680f..5187ea1fdb7df470ae143c10c716a933b88ba775 100644
+--- a/tests/test_llm_stub.py
++++ b/tests/test_llm_stub.py
+@@ -1,37 +1,61 @@
+ import unittest
+ 
+ from app.telemetry import bus
+-from app.voice_v2 import EVT_NLG
++from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
++from app.voice_v2.engine import EVT_TURN_BEGIN
+ from app.voice_v2.llm import LLMAdapter
+ 
+ 
+ class TestLLMStub(unittest.TestCase):
+     def setUp(self) -> None:
+         bus.reset()
+ 
+     def tearDown(self) -> None:
+         bus.reset()
+ 
+     def test_generate_emits_single_event(self) -> None:
+         adapter = LLMAdapter(canned_text="Stub reply")
+         events: list[dict] = []
+         token = bus.subscribe("*", events.append)
+         try:
++            bus.publish(
++                {
++                    "type": EVT_TURN_BEGIN,
++                    "sid": "sid-123",
++                    "req_id": "req-123",
++                    "turn_id": "turn-123",
++                }
++            )
+             result = adapter.generate(req_id="req-123", text="Hello?")
+         finally:
+             bus.unsubscribe(token)
+ 
+         self.assertEqual(result["text"], "Stub reply")
+         self.assertIn("timing", result)
+         self.assertIsInstance(result["timing"], dict)
+         self.assertIn("total_ms", result["timing"])
+         self.assertGreaterEqual(result["timing"]["total_ms"], 0)
+ 
+         nlg_events = [evt for evt in events if evt["type"] == EVT_NLG]
+         self.assertEqual(len(nlg_events), 1)
+         nlg_event = nlg_events[0]
+         self.assertEqual(nlg_event["req_id"], "req-123")
+         self.assertEqual(nlg_event["text"], "Stub reply")
+ 
+-        other_types = [evt["type"] for evt in events if evt["type"] != EVT_NLG]
+-        self.assertEqual(other_types, [])
++        chat_events = [evt for evt in events if evt["type"] == EVT_WS_JSON_SEND]
++        self.assertEqual(len(chat_events), 1)
++        chat_event = chat_events[0]
++        self.assertEqual(chat_event["sid"], "sid-123")
++        payload = chat_event["payload"]
++        self.assertIsInstance(payload, dict)
++        frame = payload.get("frame")
++        self.assertIsInstance(frame, dict)
++        self.assertEqual(frame["type"], "chat.message")
++        self.assertEqual(frame["role"], "assistant")
++        self.assertEqual(frame["origin"], "voice")
++        self.assertEqual(frame["turn_id"], "turn-123")
++        self.assertEqual(frame["req_id"], "req-123")
++        self.assertEqual(frame["text"], "Stub reply")
++
++        event_types = {evt["type"] for evt in events}
++        self.assertEqual(event_types, {EVT_TURN_BEGIN, EVT_NLG, EVT_WS_JSON_SEND})
