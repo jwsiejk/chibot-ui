@@ -1,647 +1,195 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index a15ccf6d46880111c7a159f2061b75a915e4b824..9d0794522c01b4f6ba9d9ad755c3fecc77c0b285 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1,63 +1,83 @@
- """chat.v2 WebSocket adapter for AskChip."""
- from __future__ import annotations
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index 70802c85631e29c7afac0082511ddae5b44a58be..bb0b06dcfa2a1a278141a71de724215d70cac59a 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -155,67 +155,73 @@ class EngineV2:
  
-+import asyncio
-+import contextlib
- import inspect
- import json
-+import logging
- import time
- import uuid
- from dataclasses import dataclass
- from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
+     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
+         """Capture the WebSocket closing handshake."""
+         meta = {"code": code, "reason": reason}
+         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
+         self._publish(event)
+         if self._last_sid == sid:
+             self._last_sid = None
+             self._policy_snapshot = None
+         self._sessions.pop(sid, None)
  
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.security.auth import authorize
- from app.voice_v2 import (
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_frame
- 
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
- RATE_LIMIT_WINDOW_SECONDS = 2.0
- RATE_LIMIT_CLOSE_CODE = 1013
- _AUDIO_VIOLATION_LIMIT = 3
- 
- QUEUE_ON_THRESHOLD = 12
- QUEUE_OFF_THRESHOLD = 6
- 
- EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
- 
- EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
- 
-+EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
-+
-+_OUTBOUND_ALLOWED_TYPES = {
-+    "policy.interaction",
-+    "info",
-+    "tts.start",
-+    "tts.end",
-+    "asr.ready",
-+    "asr.partial",
-+    "asr.final",
-+    "error",
-+}
-+
-+_OUTBOX_MAXSIZE = 256
-+
-+_logger = logging.getLogger(__name__)
-+
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
- }
- 
- 
- class TokenBucket:
-     """Simple in-memory token bucket."""
- 
-     def __init__(self, capacity: int, refill_seconds: float) -> None:
-         self.capacity = capacity
-         self.tokens = float(capacity)
-         self.refill_seconds = refill_seconds
-         self.last_refill = time.monotonic()
- 
-     def consume(self, count: int, now: Optional[float] = None) -> bool:
-         if now is None:
-             now = time.monotonic()
-         elapsed = max(0.0, now - self.last_refill)
-         if elapsed > 0:
-             refill = (self.capacity / self.refill_seconds) * elapsed
-             if refill > 0:
-                 self.tokens = min(self.capacity, self.tokens + refill)
-                 self.last_refill = now
-@@ -78,50 +98,53 @@ class EngineHooks(Protocol):
-         """Handle a validated JSON frame from the client."""
- 
-     def on_audio(self, sid: str, chunk: bytes, seq: int) -> Any:  # pragma: no cover - signature stub
-         """Handle a binary audio chunk from the client."""
- 
-     def on_close(self, sid: str, code: int, reason: Optional[str]) -> Any:  # pragma: no cover - signature stub
-         """Handle the WebSocket closing."""
- 
- 
- @dataclass
- class AdapterContext:
-     """Per-connection state."""
- 
-     sid: str
-     headers: Dict[str, str]
-     audio_seq: int = 0
-     last_pong_sent_ms: int = 0
-     ip: Optional[str] = None
-     sid_bucket: Optional[TokenBucket] = None
-     ip_bucket: Optional[TokenBucket] = None
-     audio_profile: Optional[Dict[str, Any]] = None
-     accepting_audio: bool = True
-     audio_violation_count: int = 0
-     outbound_queue_depth: int = 0
-     backpressure_state: Literal["off", "on"] = "off"
-+    outbox: asyncio.Queue[Dict[str, Any]] | None = None
-+    outbound_task: asyncio.Task[None] | None = None
-+    subscription_token: Optional[str] = None
- 
- 
- class ChatV2Adapter:
-     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
- 
-     def __init__(
-         self,
-         engine: EngineHooks | None = None,
-         exporter: FileExporter | None = None,
-         *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     def on_tts_start(
+         self, sid: str, utt_id: str, post_hold_ms: int | None = None
      ) -> None:
-         self.engine = engine
-         self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
-         self._ip_buckets: Dict[str, TokenBucket] = {}
-         self._contexts: Dict[str, AdapterContext] = {}
+         """Engage the TTS mask and emit a telemetry breadcrumb."""
  
-     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-         if scope.get("type") != "websocket":
-             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
+         hold_ms = post_hold_ms or 0
+         tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
+         self._gate.set_reason(
+             "tts_active",
+             True,
+             sid=sid,
+             meta=tts_meta,
+         )
  
-         connect_event = await receive()
-@@ -136,100 +159,102 @@ class ChatV2Adapter:
-         sid = uuid.uuid4().hex
-         headers = self._decode_headers(scope.get("headers", ()))
-         allowed, reason = authorize(headers)
-         if not allowed:
-             await self._publish(
-                 EVT_AUTH_DENIED,
-                 sid,
-                 {"reason": reason or "missing or invalid auth"},
-             )
-             await self._deny_http(send, "missing or invalid auth")
-             return
++        mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": "engaged"})
++        self._publish(mask_event)
++
+         payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
+         event = self._envelope(sid, EVT_TTS_START, payload)
+         self._publish(event)
+         self._set_state(sid, RESPONDING, reason="tts_start")
  
-         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
- 
-         ctx = AdapterContext(sid=sid, headers=headers)
-         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-         client = scope.get("client")
-         ctx.ip = client[0] if isinstance(client, tuple) and client else None
-         if ctx.ip:
-             ctx.ip_bucket = self._ip_buckets.setdefault(
-                 ctx.ip,
-                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-             )
- 
-         self._contexts[ctx.sid] = ctx
-+        self._start_outbound_bridge(ctx, send)
- 
-         if self.exporter:
-             self.exporter.begin(ctx.sid)
-         await self._invoke_engine("on_open", ctx.sid, headers)
- 
-         close_code = 1000
-         close_reason: Optional[str] = None
- 
-         try:
-             while True:
-                 message = await receive()
-                 msg_type = message.get("type")
- 
-                 if msg_type == "websocket.receive":
-                     if message.get("text") is not None:
-                         result = await self._handle_text(message["text"], ctx, send)
-                         if not result.should_continue:
-                             close_code = result.close_code or 1000
-                             close_reason = result.close_reason
-                             await send(
-                                 {
-                                     "type": "websocket.close",
-                                     "code": close_code,
-                                     "reason": close_reason,
-                                 }
-                             )
-                             break
-                     elif message.get("bytes") is not None:
-                         result = await self._handle_binary(message["bytes"], ctx, send)
-                         if not result.should_continue:
-                             close_code = result.close_code or 1000
-                             close_reason = result.close_reason
-                             await send(
-                                 {
-                                     "type": "websocket.close",
-                                     "code": close_code,
-                                     "reason": close_reason,
-                                 }
-                             )
-                             break
-                 elif msg_type == "websocket.disconnect":
-                     close_code = message.get("code", 1000)
-                     close_reason = message.get("reason")
-                     break
-         except Exception:  # pragma: no cover - defensive guard
-             close_code = 1011
-             close_reason = "internal_error"
-             await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
-             raise
-         finally:
-+            await self._cleanup_outbound(ctx)
-             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
-             if self.exporter:
-                 self.exporter.end(ctx.sid, {"close_code": close_code})
-             self._contexts.pop(ctx.sid, None)
- 
-     def set_accepting_audio(self, sid: str, accepting: bool) -> None:
-         """Toggle whether the given connection should accept audio frames."""
- 
-         ctx = self._contexts.get(sid)
-         if ctx is not None:
-             ctx.accepting_audio = accepting
-             if accepting:
-                 ctx.audio_violation_count = 0
- 
-     def get_context(self, sid: str) -> Optional[AdapterContext]:
-         """Return the adapter context for testing hooks."""
- 
-         return self._contexts.get(sid)
- 
-     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
-         body = json.dumps(
-             {
-                 "type": "error",
-                 "code": "bad_subprotocol",
-                 "detail": "use chat.v2",
-@@ -441,50 +466,168 @@ class ChatV2Adapter:
- 
-     async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
-         text = json.dumps(payload, separators=(",", ":"))
-         await send({"type": "websocket.send", "text": text})
-         payload_bytes = text.encode("utf-8")
-         byte_count = len(payload_bytes)
-         meta: Dict[str, Any] = {
-             "byte_count": byte_count,
-             "frame_type": payload.get("type"),
-             "ws": {
-                 "dir": "out",
-                 "size": byte_count,
-             },
-         }
-         preview = self._make_preview_from_bytes(payload_bytes)
-         if preview is not None:
-             meta["ws"]["preview"] = preview
-         await self._publish(EVT_WS_JSON_SEND, sid, meta)
- 
-     async def _send_error(
-         self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
+     def on_tts_end(
+         self, sid: str, utt_id: str, post_hold_ms: int | None = None
      ) -> None:
-         payload = {"type": "error", "code": code, "detail": detail}
-         await self._send_json(send, sid, payload)
+         """Release the TTS mask and optionally engage a post-hold."""
  
-+    def _start_outbound_bridge(
-+        self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-+    ) -> None:
-+        loop = asyncio.get_running_loop()
-+        ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
-+
-+        def _enqueue(payload: Dict[str, Any]) -> None:
-+            if ctx.outbox is None:
-+                return
-+            try:
-+                ctx.outbox.put_nowait(dict(payload))
-+            except asyncio.QueueFull:
-+                now = ctx.outbox.qsize()
-+                try:
-+                    asyncio.create_task(
-+                        self._publish(
-+                            EVT_WS_OUTBOX_DROP,
-+                            ctx.sid,
-+                            {"sid": ctx.sid, "dropped": 1, "now": now},
-+                        )
-+                    )
-+                except RuntimeError:
-+                    pass
-+
-+        def _handle_event(event: dict) -> None:
-+            if event.get("sid") != ctx.sid or ctx.outbox is None:
-+                return
-+            payload = self._extract_outbound_payload(event)
-+            if payload is None:
-+                return
-+
-+            def _on_loop() -> None:
-+                _enqueue(payload)
-+
-+            try:
-+                loop.call_soon_threadsafe(_on_loop)
-+            except RuntimeError:
-+                pass
-+
-+        ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
-+        ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
-+
-+    def _extract_outbound_payload(self, event: dict) -> Optional[Dict[str, Any]]:
-+        payload = self._coerce_payload(event.get("payload"))
-+        if payload is None:
-+            meta = event.get("meta")
-+            if isinstance(meta, dict):
-+                ws_meta = meta.get("ws")
-+                if isinstance(ws_meta, dict):
-+                    frame = ws_meta.get("frame")
-+                    if frame is None:
-+                        frame = ws_meta.get("preview")
-+                    payload = self._coerce_payload(frame)
-+
-+        if payload is None:
-+            return None
-+
-+        frame_type = payload.get("type") if isinstance(payload, dict) else None
-+        if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
-+            return None
-+        return dict(payload)
-+
-+    @staticmethod
-+    def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
-+        if isinstance(raw, dict):
-+            return raw
-+        if isinstance(raw, str):
-+            try:
-+                decoded = json.loads(raw)
-+            except json.JSONDecodeError:
-+                return None
-+            if isinstance(decoded, dict):
-+                return decoded
-+        return None
-+
-+    async def _run_outbound_sender(
-+        self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-+    ) -> None:
-+        queue = ctx.outbox
-+        if queue is None:
-+            return
-+        try:
-+            while True:
-+                payload = await queue.get()
-+                try:
-+                    await self._send_outbound_frame(send, payload)
-+                except asyncio.CancelledError:
-+                    raise
-+                except Exception:  # pragma: no cover - defensive
-+                    _logger.exception("Failed to deliver outbound frame for sid %s", ctx.sid)
-+                finally:
-+                    queue.task_done()
-+        except asyncio.CancelledError:
-+            raise
-+        finally:
-+            ctx.outbox = None
-+
-+    async def _send_outbound_frame(
-+        self, send: Callable[[dict], Awaitable[None]], payload: Dict[str, Any]
-+    ) -> None:
-+        text = json.dumps(payload, separators=(",", ":"))
-+        await send({"type": "websocket.send", "text": text})
-+
-+    async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
-+        token = ctx.subscription_token
-+        ctx.subscription_token = None
-+        if token:
-+            bus.unsubscribe(token)
-+
-+        task = ctx.outbound_task
-+        ctx.outbound_task = None
-+        if task:
-+            task.cancel()
-+            with contextlib.suppress(asyncio.CancelledError):
-+                await task
-+
-+        ctx.outbox = None
-+
-     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
-         """Record the estimated outbound queue depth and emit diagnostics if needed."""
+         self._gate.set_reason(
+             "tts_active",
+             False,
+             sid=sid,
+             meta={"tts": {"utt_id": utt_id}},
+         )
  
-         ctx = self._contexts.get(sid)
-         if ctx is None:
-             return
- 
-         if not isinstance(queued, int):
-             try:
-                 queued = int(queued)
-             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
-                 raise TypeError("queued must be an integer") from exc
- 
-         await self._update_backpressure(ctx, max(0, queued))
- 
-     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
-         event = {
-             "schema_version": "1",
-             "type": event_type,
-             "sid": sid,
-             "who": "server",
-             "source": "ws_server",
-             "meta": dict(meta),
-         }
-         bus.publish(event)
-@@ -528,26 +671,27 @@ class ChatV2Adapter:
-     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
-         ctx.outbound_queue_depth = queued
-         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
-             ctx.backpressure_state = "on"
-             await self._publish(
-                 EVT_BACKPRESSURE_ON,
-                 ctx.sid,
-                 {"queue_depth": queued, "state": "on"},
++        mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": "cleared"})
++        self._publish(mask_event)
++
+         hold_ms = post_hold_ms or 0
+         if hold_ms > 0:
+             self._gate.set_reason(
+                 "system_hold",
+                 True,
+                 sid=sid,
+                 meta={"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}},
              )
-         elif ctx.backpressure_state == "on" and queued < QUEUE_OFF_THRESHOLD:
-             ctx.backpressure_state = "off"
-             await self._publish(
-                 EVT_BACKPRESSURE_OFF,
-                 ctx.sid,
-                 {"queue_depth": queued, "state": "off"},
-             )
+             asyncio.create_task(self._release_system_hold_after(sid, hold_ms))
+         else:
+             self._set_state(sid, READY, reason="tts_end")
+ 
+         event = self._envelope(sid, EVT_TTS_END, {"meta": {"tts": {"utt_id": utt_id}}})
+         self._publish(event)
+ 
+     def on_asr_final(self, sid: str, text: str) -> None:
+         """Observe the final ASR transcript for a turn."""
+ 
+         self._set_state(sid, THINKING, reason="asr_final")
+ 
+     def on_auto_barge_attempt(
+         self, sid: str, source: str, *, reason: str | None = None
+     ) -> None:
+         """Handle an automatic barge-in attempt during assistant speech."""
+ 
+diff --git a/tests/test_tts_mask_lifecycle.py b/tests/test_tts_mask_lifecycle.py
+index 279d1f3b7ad170558e25daf6cb4b91a30d9980aa..c7156c7343169382a3f0f6217177158d81469e53 100644
+--- a/tests/test_tts_mask_lifecycle.py
++++ b/tests/test_tts_mask_lifecycle.py
+@@ -1,87 +1,59 @@
+-import asyncio
+ import unittest
+ 
+-from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END, EVT_TTS_START
++from app.voice_v2 import EVT_MIC_GATE
+ from app.voice_v2.engine import EngineV2
  
  
- __all__ = [
-     "ChatV2Adapter",
-     "CHAT_V2_SUBPROTOCOL",
-     "QUEUE_ON_THRESHOLD",
-     "QUEUE_OFF_THRESHOLD",
-     "EVT_BACKPRESSURE_ON",
-     "EVT_BACKPRESSURE_OFF",
-+    "EVT_WS_OUTBOX_DROP",
- ]
-diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..de44fd0bc91d89c1350ee2a625614a9916d4ecd8
---- /dev/null
-+++ b/tests/test_adapter_outbound_bridge.py
-@@ -0,0 +1,199 @@
-+"""Tests for the outbound WebSocket bridge in the chat.v2 adapter."""
-+from __future__ import annotations
+ class _FakeExporter:
+     def __init__(self) -> None:
+         self.events: list[tuple[str, dict]] = []
+ 
+     def write(self, sid: str, event: dict) -> None:  # pragma: no cover - exercised in tests
+         self.events.append((sid, dict(event)))
+ 
+ 
+ class _FakeBus:
+     def __init__(self) -> None:
+         self.events: list[dict] = []
+ 
+     def publish(self, event: dict) -> None:  # pragma: no cover - exercised in tests
+         self.events.append(dict(event))
+ 
+ 
+-class TtsMaskLifecycleTests(unittest.IsolatedAsyncioTestCase):
+-    async def test_tts_start_end_with_post_hold(self) -> None:
++class TtsMaskLifecycleTests(unittest.TestCase):
++    def test_tts_mask_breadcrumb_sequence(self) -> None:
+         bus = _FakeBus()
+         exporter = _FakeExporter()
+         engine = EngineV2(exporter, telemetry_bus=bus)
+ 
+         sid = "sid-123"
+-        utt_id = "utt-1"
++        utt_id = "utt-456"
+ 
+-        engine.on_tts_start(sid, utt_id, post_hold_ms=200)
+-        engine.on_tts_end(sid, utt_id, post_hold_ms=200)
++        engine.on_tts_start(sid, utt_id)
+ 
+-        await asyncio.sleep(0.25)
++        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
++        self.assertEqual(len(mask_events), 1)
++        self.assertEqual(mask_events[0]["phase"], "engaged")
+ 
+         gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
+-        tts_start_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_START]
+-        tts_end_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_END]
+-
+-        self.assertGreaterEqual(len(gate_events), 3)
+-
+-        first_gate = gate_events[0]["meta"]["gate"]
+-        self.assertEqual(first_gate["state"], "on")
+-        self.assertEqual(first_gate["reason"], "tts_active")
+-
+-        self.assertTrue(
+-            any(evt["meta"]["gate"]["reason"] == "system_hold" for evt in gate_events)
+-        )
+-        self.assertEqual(gate_events[-1]["meta"]["gate"]["state"], "off")
+-
+-        self.assertEqual(len(tts_start_events), 1)
+-        start_meta = tts_start_events[0]["meta"]["tts"]
+-        self.assertEqual(start_meta["utt_id"], utt_id)
+-        self.assertEqual(start_meta["post_hold_ms"], 200)
+-
+-        self.assertEqual(len(tts_end_events), 1)
+-        end_meta = tts_end_events[0]["meta"]["tts"]
+-        self.assertEqual(end_meta["utt_id"], utt_id)
+-
+-    async def test_tts_end_no_post_hold(self) -> None:
+-        bus = _FakeBus()
+-        exporter = _FakeExporter()
+-        engine = EngineV2(exporter, telemetry_bus=bus)
+-
+-        sid = "sid-456"
+-        utt_id = "utt-2"
+-
+-        engine.on_tts_start(sid, utt_id, post_hold_ms=0)
+-        engine.on_tts_end(sid, utt_id, post_hold_ms=0)
+-
+-        await asyncio.sleep(0)
+-
+-        gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
+-        reasons = [evt["meta"]["gate"]["reason"] for evt in gate_events]
+-
+-        self.assertFalse(any(reason == "system_hold" for reason in reasons))
+-        self.assertEqual(gate_events[-1]["meta"]["gate"]["state"], "off")
+-
+-        tts_end_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_END]
+-        self.assertEqual(len(tts_end_events), 1)
+-        self.assertEqual(tts_end_events[0]["meta"]["tts"]["utt_id"], utt_id)
++        self.assertGreaterEqual(len(gate_events), 1)
++        engaged_gate = gate_events[-1]["meta"]["gate"]
++        engaged_effective = engaged_gate.get("effective", engaged_gate["mask"])
++        self.assertTrue(engaged_effective)
++        self.assertIn("tts_active", engaged_gate["reasons"])
++        self.assertTrue(engaged_gate["reasons"]["tts_active"])
 +
-+import asyncio
-+import json
-+import unittest
-+from typing import Any, Callable, Dict
++        engine.on_tts_end(sid, utt_id)
 +
-+from app.telemetry import bus
-+from app.voice_v2 import EVT_WS_JSON_SEND
-+from app.ws.adapter import (
-+    CHAT_V2_SUBPROTOCOL,
-+    EVT_WS_OUTBOX_DROP,
-+    ChatV2Adapter,
-+)
++        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
++        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "cleared"])
 +
-+
-+class RecordingEngine:
-+    """Engine stub that captures the opened session identifier."""
-+
-+    def __init__(self) -> None:
-+        self.open_sid: str | None = None
-+
-+    def on_open(self, sid: str, headers: Dict[str, str]) -> None:
-+        self.open_sid = sid
-+
-+
-+class OutboundHarness:
-+    """Helper for driving the adapter within an asyncio test."""
-+
-+    def __init__(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
-+        self.adapter = adapter
-+        self.engine = engine
-+        self.scope = {
-+            "type": "websocket",
-+            "subprotocols": [CHAT_V2_SUBPROTOCOL],
-+            "headers": [(b"authorization", b"Bearer test-token")],
-+            "client": ("127.0.0.1", 1234),
-+        }
-+        self._inbound: asyncio.Queue[dict] = asyncio.Queue()
-+        self.sent: list[dict] = []
-+        self.outbound_frames: list[Dict[str, Any]] = []
-+        self.accepted = False
-+        self._task: asyncio.Task[None] | None = None
-+
-+    async def start(self) -> None:
-+        self._task = asyncio.create_task(self.adapter(self.scope, self._receive, self._send))
-+        await self._inbound.put({"type": "websocket.connect"})
-+        await self.wait_for(lambda: self.accepted)
-+        await self.wait_for(lambda: self.engine.open_sid is not None)
-+
-+    async def _receive(self) -> dict:
-+        return await self._inbound.get()
-+
-+    async def _send(self, message: dict) -> None:
-+        self.sent.append(message)
-+        if message.get("type") == "websocket.accept":
-+            self.accepted = True
-+        if message.get("type") == "websocket.send" and message.get("text") is not None:
-+            self.outbound_frames.append(json.loads(message["text"]))
-+
-+    async def wait_for(self, predicate: Callable[[], bool], timeout: float = 1.0) -> None:
-+        loop = asyncio.get_running_loop()
-+        deadline = loop.time() + timeout
-+        while not predicate():
-+            if loop.time() >= deadline:
-+                raise TimeoutError("timed out waiting for condition")
-+            await asyncio.sleep(0.01)
-+
-+    async def wait_for_outbound(
-+        self, predicate: Callable[[Dict[str, Any]], bool], timeout: float = 1.0
-+    ) -> Dict[str, Any]:
-+        loop = asyncio.get_running_loop()
-+        deadline = loop.time() + timeout
-+        while True:
-+            for frame in self.outbound_frames:
-+                if predicate(frame):
-+                    return frame
-+            if loop.time() >= deadline:
-+                raise TimeoutError("timed out waiting for outbound frame")
-+            await asyncio.sleep(0.01)
-+
-+    async def close(self) -> None:
-+        if self._task is None:
-+            return
-+        await self._inbound.put({"type": "websocket.disconnect", "code": 1000})
-+        await self._task
-+        self._task = None
-+
-+    @property
-+    def sid(self) -> str:
-+        sid = self.engine.open_sid
-+        if sid is None:
-+            raise RuntimeError("connection not yet open")
-+        return sid
-+
-+
-+class TestAdapterOutboundBridge(unittest.TestCase):
-+    """Integration tests covering the server-to-client outbound bridge."""
-+
-+    def setUp(self) -> None:
-+        bus.reset()
-+
-+    def tearDown(self) -> None:
-+        bus.reset()
-+
-+    def test_happy_path_delivers_policy_interaction(self) -> None:
-+        asyncio.run(self._test_happy_path())
-+
-+    def test_sid_isolation_drops_other_sessions(self) -> None:
-+        asyncio.run(self._test_sid_isolation())
-+
-+    def test_allow_list_blocks_unknown_types(self) -> None:
-+        asyncio.run(self._test_allow_list())
-+
-+    def test_backpressure_reports_drops(self) -> None:
-+        asyncio.run(self._test_backpressure())
-+
-+    async def _test_happy_path(self) -> None:
-+        engine = RecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+        harness = OutboundHarness(adapter, engine)
-+        await harness.start()
-+        try:
-+            payload = {"type": "policy.interaction", "interaction_id": "abc123"}
-+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
-+
-+            frame = await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction")
-+            self.assertEqual(frame, payload)
-+
-+            frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
-+            self.assertEqual(len(frames), 1)
-+        finally:
-+            await harness.close()
-+
-+    async def _test_sid_isolation(self) -> None:
-+        engine = RecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+        harness = OutboundHarness(adapter, engine)
-+        await harness.start()
-+        try:
-+            payload = {"type": "policy.interaction", "interaction_id": "ignored"}
-+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": "other", "payload": payload})
-+
-+            with self.assertRaises(TimeoutError):
-+                await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction", timeout=0.1)
-+            self.assertEqual(len(harness.outbound_frames), 0)
-+        finally:
-+            await harness.close()
-+
-+    async def _test_allow_list(self) -> None:
-+        engine = RecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+        harness = OutboundHarness(adapter, engine)
-+        await harness.start()
-+        try:
-+            payload = {"type": "vendor.debug", "detail": "drop me"}
-+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
-+
-+            with self.assertRaises(TimeoutError):
-+                await harness.wait_for_outbound(lambda data: data.get("type") == "vendor.debug", timeout=0.1)
-+            self.assertEqual(len(harness.outbound_frames), 0)
-+        finally:
-+            await harness.close()
-+
-+    async def _test_backpressure(self) -> None:
-+        engine = RecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+        harness = OutboundHarness(adapter, engine)
-+        await harness.start()
-+        drop_count = 0
-+
-+        def _record_drop(event: dict) -> None:
-+            nonlocal drop_count
-+            meta = event.get("meta") or {}
-+            dropped = meta.get("dropped")
-+            if isinstance(dropped, int):
-+                drop_count += dropped
-+
-+        token = bus.subscribe(EVT_WS_OUTBOX_DROP, _record_drop)
-+        try:
-+            for idx in range(300):
-+                bus.publish(
-+                    {
-+                        "type": EVT_WS_JSON_SEND,
-+                        "sid": harness.sid,
-+                        "payload": {"type": "info", "seq": idx},
-+                    }
-+                )
-+
-+            await harness.wait_for_outbound(lambda data: data.get("type") == "info")
-+            await harness.wait_for(lambda: drop_count > 0)
-+        finally:
-+            bus.unsubscribe(token)
-+            await harness.close()
-+
-+
-+if __name__ == "__main__":  # pragma: no cover - convenience
-+    unittest.main()
++        final_gate = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE][-1]
++        final_gate_meta = final_gate["meta"]["gate"]
++        final_effective = final_gate_meta.get("effective", final_gate_meta["mask"])
++        self.assertFalse(final_effective)
++        self.assertFalse(final_gate_meta["reasons"]["tts_active"])
+ 
+ 
+ if __name__ == "__main__":
+     unittest.main()

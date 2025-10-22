@@ -177,6 +177,9 @@ class EngineV2:
             meta=tts_meta,
         )
 
+        mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": "engaged"})
+        self._publish(mask_event)
+
         payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
         event = self._envelope(sid, EVT_TTS_START, payload)
         self._publish(event)
@@ -193,6 +196,9 @@ class EngineV2:
             sid=sid,
             meta={"tts": {"utt_id": utt_id}},
         )
+
+        mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": "cleared"})
+        self._publish(mask_event)
 
         hold_ms = post_hold_ms or 0
         if hold_ms > 0:

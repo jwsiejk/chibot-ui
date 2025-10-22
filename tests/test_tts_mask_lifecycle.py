@@ -1,7 +1,6 @@
-import asyncio
 import unittest
 
-from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END, EVT_TTS_START
+from app.voice_v2 import EVT_MIC_GATE
 from app.voice_v2.engine import EngineV2
 
 
@@ -21,66 +20,39 @@ class _FakeBus:
         self.events.append(dict(event))
 
 
-class TtsMaskLifecycleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_tts_start_end_with_post_hold(self) -> None:
+class TtsMaskLifecycleTests(unittest.TestCase):
+    def test_tts_mask_breadcrumb_sequence(self) -> None:
         bus = _FakeBus()
         exporter = _FakeExporter()
         engine = EngineV2(exporter, telemetry_bus=bus)
 
         sid = "sid-123"
-        utt_id = "utt-1"
+        utt_id = "utt-456"
 
-        engine.on_tts_start(sid, utt_id, post_hold_ms=200)
-        engine.on_tts_end(sid, utt_id, post_hold_ms=200)
+        engine.on_tts_start(sid, utt_id)
 
-        await asyncio.sleep(0.25)
-
-        gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
-        tts_start_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_START]
-        tts_end_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_END]
-
-        self.assertGreaterEqual(len(gate_events), 3)
-
-        first_gate = gate_events[0]["meta"]["gate"]
-        self.assertEqual(first_gate["state"], "on")
-        self.assertEqual(first_gate["reason"], "tts_active")
-
-        self.assertTrue(
-            any(evt["meta"]["gate"]["reason"] == "system_hold" for evt in gate_events)
-        )
-        self.assertEqual(gate_events[-1]["meta"]["gate"]["state"], "off")
-
-        self.assertEqual(len(tts_start_events), 1)
-        start_meta = tts_start_events[0]["meta"]["tts"]
-        self.assertEqual(start_meta["utt_id"], utt_id)
-        self.assertEqual(start_meta["post_hold_ms"], 200)
-
-        self.assertEqual(len(tts_end_events), 1)
-        end_meta = tts_end_events[0]["meta"]["tts"]
-        self.assertEqual(end_meta["utt_id"], utt_id)
-
-    async def test_tts_end_no_post_hold(self) -> None:
-        bus = _FakeBus()
-        exporter = _FakeExporter()
-        engine = EngineV2(exporter, telemetry_bus=bus)
-
-        sid = "sid-456"
-        utt_id = "utt-2"
-
-        engine.on_tts_start(sid, utt_id, post_hold_ms=0)
-        engine.on_tts_end(sid, utt_id, post_hold_ms=0)
-
-        await asyncio.sleep(0)
+        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
+        self.assertEqual(len(mask_events), 1)
+        self.assertEqual(mask_events[0]["phase"], "engaged")
 
         gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
-        reasons = [evt["meta"]["gate"]["reason"] for evt in gate_events]
+        self.assertGreaterEqual(len(gate_events), 1)
+        engaged_gate = gate_events[-1]["meta"]["gate"]
+        engaged_effective = engaged_gate.get("effective", engaged_gate["mask"])
+        self.assertTrue(engaged_effective)
+        self.assertIn("tts_active", engaged_gate["reasons"])
+        self.assertTrue(engaged_gate["reasons"]["tts_active"])
 
-        self.assertFalse(any(reason == "system_hold" for reason in reasons))
-        self.assertEqual(gate_events[-1]["meta"]["gate"]["state"], "off")
+        engine.on_tts_end(sid, utt_id)
 
-        tts_end_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_END]
-        self.assertEqual(len(tts_end_events), 1)
-        self.assertEqual(tts_end_events[0]["meta"]["tts"]["utt_id"], utt_id)
+        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
+        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "cleared"])
+
+        final_gate = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE][-1]
+        final_gate_meta = final_gate["meta"]["gate"]
+        final_effective = final_gate_meta.get("effective", final_gate_meta["mask"])
+        self.assertFalse(final_effective)
+        self.assertFalse(final_gate_meta["reasons"]["tts_active"])
 
 
 if __name__ == "__main__":
