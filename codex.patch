@@ -1,276 +1,624 @@
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index d3c5e035dca73d4e805914da47fe2b09cacf35ed..9d1b61731b3e39bccf33841bf6dbf70a7f9668e5 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -50,50 +50,51 @@ class _Envelope:
-     """Normalized telemetry envelope returned by the engine hooks."""
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index a384ad30fdb23bfc70d5e0db716c86b046e2cb18..0ea3616db29d0ebf73a90dbabd24fa7f2db7546e 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -1,43 +1,44 @@
+ """chat.v2 WebSocket adapter for AskChip."""
+ from __future__ import annotations
  
-     type: str
-     sid: str
-     payload: Dict[str, Any]
+ import asyncio
+ import contextlib
+ import inspect
+ import json
+ import logging
+ import os
+ import time
+ import uuid
+ from dataclasses import dataclass, field
+ from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
  
-     def to_dict(self) -> Dict[str, Any]:
-         data = {"type": self.type, "sid": self.sid}
-         data.update(self.payload)
-         if "meta" in data and isinstance(data["meta"], Mapping):
-             data["meta"] = dict(data["meta"])
-         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
-             data["ts_ms"] = _now_ms()
-         data.setdefault("who", "server")
-         data.setdefault("source", "voice_engine")
-         data.setdefault("level", "debug")
-         return data
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.security.auth import authorize
+ from app.voice_v2 import (
++    EVT_ASR_READY,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.ws.validator import validate_frame
+ 
+ CHAT_V2_SUBPROTOCOL = "chat.v2"
+ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
+ BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ PING_MIN_INTERVAL_MS = 500
+ RATE_LIMIT_CAPACITY = 25
+ RATE_LIMIT_WINDOW_SECONDS = 2.0
+ RATE_LIMIT_CLOSE_CODE = 1013
+ _AUDIO_VIOLATION_LIMIT = 3
+ 
+ AUDIO_SEQ_WINDOW = 8
+ 
+ QUEUE_ON_THRESHOLD = 12
+ QUEUE_OFF_THRESHOLD = 6
+ 
+ _DEFAULT_WS_PING_INTERVAL_MS = 25_000
+ 
+ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
+ 
+@@ -112,50 +113,52 @@ class EngineHooks(Protocol):
  
  
  @dataclass
- class _TurnSession:
-     state: str = READY
-     turn_id: Optional[str] = None
-     turn_started_ms: Optional[int] = None
-     tts_utt_id: Optional[str] = None
-+    req_id: Optional[str] = None
+ class AdapterContext:
+     """Per-connection state."""
+ 
+     sid: str
+     headers: Dict[str, str]
+     audio_seq: int = 0
+     audio_expected_seq: int = 0
+     audio_highest_seq: int = -1
+     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
+     audio_window: int = AUDIO_SEQ_WINDOW
+     last_pong_sent_ms: int = 0
+     ip: Optional[str] = None
+     sid_bucket: Optional[TokenBucket] = None
+     ip_bucket: Optional[TokenBucket] = None
+     audio_profile: Optional[Dict[str, Any]] = None
+     accepting_audio: bool = True
+     audio_violation_count: int = 0
+     outbound_queue_depth: int = 0
+     backpressure_state: Literal["off", "on"] = "off"
+     outbox: asyncio.Queue[Dict[str, Any]] | None = None
+     outbound_task: asyncio.Task[None] | None = None
+     subscription_token: Optional[str] = None
++    asr_ready: bool = False
++    asr_subscription_token: Optional[str] = None
+     server_keepalive_task: asyncio.Task[None] | None = None
+     last_policy_interaction: Optional[Dict[str, Any]] = None
  
  
- class _NullExporter:
-     """Exporter stub used when no exporter is provided."""
- 
-     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
-         return
- 
- 
- class EngineV2:
-     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
  
      def __init__(
          self,
+         engine: EngineHooks | None = None,
          exporter: FileExporter | None = None,
          *,
-         telemetry_bus=bus,
-         fake_exporter: FileExporter | None = None,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
      ) -> None:
-         if exporter is None:
-             exporter = fake_exporter
-         if exporter is None:
-             exporter = _NullExporter()
-         self._exporter = exporter
-         self._bus = telemetry_bus
-@@ -389,91 +390,118 @@ class EngineV2:
-         aggregator = VADAggregator(sid, self._bus, _policy_supplier)
-         aggregator.set_grant_handler(
-             lambda source, info, *, _sid=sid: self._handle_vad_grant(_sid, source, info)
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
          )
-         self._aggregators[sid] = aggregator
- 
-     def _handle_vad_grant(self, sid: str, source: str, info: Dict[str, Any]) -> None:
-         reason = "vad_grant"
-         mode = info.get("mode") if isinstance(info, Mapping) else None
-         if mode == "and":
-             reason = "vad_grant_dual"
-         self.on_auto_barge_attempt(sid, source, reason=reason)
- 
-     def _set_state(self, sid: str, new_state: str, *, reason: str | None = None) -> None:
-         """Transition the session state machine and emit telemetry breadcrumbs."""
- 
-         session = self._ensure_session(sid)
-         previous = session.state
-         if previous == new_state:
+@@ -176,50 +179,51 @@ class ChatV2Adapter:
+         sid = uuid.uuid4().hex
+         headers = self._decode_headers(scope.get("headers", ()))
+         allowed, reason = authorize(headers)
+         if not allowed:
+             await self._publish(
+                 EVT_AUTH_DENIED,
+                 sid,
+                 {"reason": reason or "missing or invalid auth"},
+             )
+             await self._deny_http(send, "missing or invalid auth")
              return
  
-         now_ms = _now_ms()
+         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
  
-         if new_state == LISTENING:
-             session.turn_id = str(uuid.uuid4())
-+            session.req_id = f"req-{uuid.uuid4().hex}"
-             session.turn_started_ms = now_ms
-             begin_payload = {
--                "meta": {"turn_id": session.turn_id, "state": LISTENING}
-+                "turn_id": session.turn_id,
-+                "req_id": session.req_id,
-+                "meta": {
-+                    "turn_id": session.turn_id,
-+                    "req_id": session.req_id,
-+                    "state": LISTENING,
-+                },
+         ctx = AdapterContext(sid=sid, headers=headers)
+         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+         client = scope.get("client")
+         ctx.ip = client[0] if isinstance(client, tuple) and client else None
+         if ctx.ip:
+             ctx.ip_bucket = self._ip_buckets.setdefault(
+                 ctx.ip,
+                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+             )
+ 
+         self._contexts[ctx.sid] = ctx
++        self._start_asr_ready_tracker(ctx)
+         self._start_outbound_bridge(ctx, send)
+         self._start_server_keepalive(ctx, send)
+ 
+         if self.exporter:
+             self.exporter.begin(ctx.sid)
+         await self._invoke_engine("on_open", ctx.sid, headers)
+ 
+         close_code = 1000
+         close_reason: Optional[str] = None
+ 
+         try:
+             while True:
+                 message = await receive()
+                 msg_type = message.get("type")
+ 
+                 if msg_type == "websocket.receive":
+                     if message.get("text") is not None:
+                         result = await self._handle_text(message["text"], ctx, send)
+                         if not result.should_continue:
+                             close_code = result.close_code or 1000
+                             close_reason = result.close_reason
+                             await send(
+                                 {
+                                     "type": "websocket.close",
+                                     "code": close_code,
+@@ -230,50 +234,51 @@ class ChatV2Adapter:
+                     elif message.get("bytes") is not None:
+                         result = await self._handle_binary(message["bytes"], ctx, send)
+                         if not result.should_continue:
+                             close_code = result.close_code or 1000
+                             close_reason = result.close_reason
+                             await send(
+                                 {
+                                     "type": "websocket.close",
+                                     "code": close_code,
+                                     "reason": close_reason,
+                                 }
+                             )
+                             break
+                 elif msg_type == "websocket.disconnect":
+                     close_code = message.get("code", 1000)
+                     close_reason = message.get("reason")
+                     break
+         except Exception:  # pragma: no cover - defensive guard
+             close_code = 1011
+             close_reason = "internal_error"
+             await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
+             raise
+         finally:
+             await self._stop_server_keepalive(ctx)
+             await self._cleanup_outbound(ctx)
++            self._stop_asr_ready_tracker(ctx)
+             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
+             if self.exporter:
+                 self.exporter.end(ctx.sid, {"close_code": close_code})
+             self._contexts.pop(ctx.sid, None)
+ 
+     def set_accepting_audio(self, sid: str, accepting: bool) -> None:
+         """Toggle whether the given connection should accept audio frames."""
+ 
+         ctx = self._contexts.get(sid)
+         if ctx is not None:
+             ctx.accepting_audio = accepting
+             if accepting:
+                 ctx.audio_violation_count = 0
+ 
+     def get_context(self, sid: str) -> Optional[AdapterContext]:
+         """Return the adapter context for testing hooks."""
+ 
+         return self._contexts.get(sid)
+ 
+     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
+         body = json.dumps(
+             {
+                 "type": "error",
+                 "code": "bad_subprotocol",
+                 "detail": "use chat.v2",
+@@ -436,50 +441,65 @@ class ChatV2Adapter:
+         await self._invoke_engine("on_json", ctx.sid, frame)
+         return self._HandleResult(True)
+ 
+     async def _handle_binary(
+         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> _HandleResult:
+         byte_count = len(data)
+ 
+         limited = await self._check_rate_limit(ctx, send)
+         if limited is not None:
+             return limited
+ 
+         if byte_count > self.binary_limit_bytes:
+             await self._publish(
+                 EVT_WS_AUDIO_RECV,
+                 ctx.sid,
+                 {
+                     "byte_count": byte_count,
+                     "error": "frame_too_large",
+                     "ws": {"dir": "in", "size": byte_count},
+                 },
+             )
+             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
+             return self._HandleResult(False, 1009, "frame_too_large")
+ 
++        if not ctx.asr_ready:
++            meta = {
++                "byte_count": byte_count,
++                "error": "audio_not_expected",
++                "ws": {"dir": "in", "size": byte_count},
++            }
++            await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
++            await self._send_error(
++                send,
++                ctx.sid,
++                "audio_not_expected",
++                "asr not ready",
++            )
++            return self._HandleResult(False, 1003, "audio_not_expected")
++
+         if not ctx.accepting_audio:
+             ctx.audio_violation_count += 1
+             violation_meta = {
+                 "byte_count": byte_count,
+                 "error": "audio_not_expected_close"
+                 if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT
+                 else "audio_not_expected",
+                 "ws": {"dir": "in", "size": byte_count},
+                 "violations": ctx.audio_violation_count,
              }
-             begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
-             self._publish(begin_event)
+             await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, violation_meta)
+             await self._send_error(send, ctx.sid, "audio_not_expected", "engine not accepting audio")
+             if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT:
+                 return self._HandleResult(False, 1003, "audio_not_expected")
+             return self._HandleResult(True)
  
-         if (
-             new_state == READY
-             and previous in {LISTENING, THINKING, RESPONDING}
-             and session.turn_id
-         ):
-             start_ms = session.turn_started_ms or now_ms
-             duration_ms = now_ms - start_ms
-             if duration_ms <= 0:
-                 duration_ms = 1
-+            turn_id = session.turn_id
-+            req_id = session.req_id
-             end_payload = {
-+                "turn_id": turn_id,
-+                "req_id": req_id,
-                 "meta": {
--                    "turn_id": session.turn_id,
-+                    "turn_id": turn_id,
-+                    "req_id": req_id,
-                     "duration_ms": duration_ms,
--                }
-+                },
-             }
-             end_event = self._envelope(sid, EVT_TURN_END, end_payload)
-             self._publish(end_event)
-             session.turn_id = None
-             session.turn_started_ms = None
-             session.tts_utt_id = None
-+            session.req_id = None
+         ctx.audio_violation_count = 0
+         if ctx.audio_highest_seq < 0:
+             ctx.audio_expected_seq = ctx.audio_seq
+         seq = ctx.audio_seq
+         ctx.audio_seq += 1
+         await self._ingest_audio_chunk(ctx, bytes(data), seq)
+         return self._HandleResult(True)
  
-         session.state = new_state
+     async def _check_rate_limit(
+@@ -674,50 +694,63 @@ class ChatV2Adapter:
+                             ctx.sid,
+                             {"sid": ctx.sid, "dropped": 1, "now": now},
+                         )
+                     )
+                 except RuntimeError:
+                     pass
  
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_engine_mode_change(new_state)
+         def _handle_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+             payload = self._extract_outbound_payload(ctx, event)
+             if payload is None:
+                 return
  
-         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
-         if reason is not None:
-             breadcrumb_meta["reason"] = reason
-         breadcrumb_payload = {"meta": breadcrumb_meta}
-         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
-         self._publish(breadcrumb_event)
+             def _on_loop() -> None:
+                 _enqueue(payload)
  
-+    def turn_context(self, sid: str) -> Optional[Dict[str, str]]:
-+        """Return the active turn context for ``sid`` if a turn is in progress."""
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
+         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
+ 
++    def _start_asr_ready_tracker(self, ctx: AdapterContext) -> None:
++        if ctx.asr_subscription_token is not None:
++            return
 +
-+        session = self._sessions.get(sid)
-+        if (
-+            session is None
-+            or session.turn_id is None
-+            or session.req_id is None
-+            or session.state == READY
-+        ):
-+            return None
++        def _handle(event: dict) -> None:
++            if event.get("type") != EVT_ASR_READY:
++                return
++            if event.get("sid") != ctx.sid:
++                return
++            ctx.asr_ready = True
 +
-+        return {"turn_id": session.turn_id, "req_id": session.req_id}
++        ctx.asr_subscription_token = bus.subscribe(EVT_ASR_READY, _handle)
 +
-     def _publish_tts_mask(self, sid: str, phase: str) -> None:
-         mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})
-         self._publish(mask_event)
+     def _extract_outbound_payload(
+         self, ctx: AdapterContext, event: dict
+     ) -> Optional[Dict[str, Any]]:
+         payload = self._coerce_payload(event.get("payload"))
+         if payload is None:
+             meta = event.get("meta")
+             if isinstance(meta, dict):
+                 ws_meta = meta.get("ws")
+                 if isinstance(ws_meta, dict):
+                     frame = ws_meta.get("frame")
+                     if frame is None:
+                         frame = ws_meta.get("preview")
+                     payload = self._coerce_payload(frame)
  
-     def _teardown_tts(
-         self,
-         sid: str,
-         utt_id: str,
-         *,
-         reason: str | None = None,
-         post_hold_ms: int = 0,
-         transition_to_ready: bool,
+         if payload is None:
+             return None
+ 
+         frame_type = payload.get("type") if isinstance(payload, dict) else None
+         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
+             return None
+         normalized = dict(payload)
+         if frame_type == "policy.interaction":
+             last_policy = ctx.last_policy_interaction
+             if last_policy is not None and last_policy == normalized:
+                 return None
+@@ -760,50 +793,57 @@ class ChatV2Adapter:
+             raise
+         finally:
+             ctx.outbox = None
+ 
+     async def _send_outbound_frame(
+         self, send: Callable[[dict], Awaitable[None]], payload: Dict[str, Any]
      ) -> None:
-         session = self._ensure_session(sid)
-         if session.tts_utt_id == utt_id:
-             session.tts_utt_id = None
+         text = json.dumps(payload, separators=(",", ":"))
+         await send({"type": "websocket.send", "text": text})
  
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_tts_end()
+     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
+         token = ctx.subscription_token
+         ctx.subscription_token = None
+         if token:
+             bus.unsubscribe(token)
  
-         payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
-         if reason:
-             payload["reason"] = reason
+         task = ctx.outbound_task
+         ctx.outbound_task = None
+         if task:
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task
  
-diff --git a/tests/test_turn_correlation.py b/tests/test_turn_correlation.py
+         ctx.outbox = None
+ 
++    def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
++        token = ctx.asr_subscription_token
++        ctx.asr_subscription_token = None
++        if token:
++            bus.unsubscribe(token)
++        ctx.asr_ready = False
++
+     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
+         """Record the estimated outbound queue depth and emit diagnostics if needed."""
+ 
+         ctx = self._contexts.get(sid)
+         if ctx is None:
+             return
+ 
+         if not isinstance(queued, int):
+             try:
+                 queued = int(queued)
+             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+                 raise TypeError("queued must be an integer") from exc
+ 
+         await self._update_backpressure(ctx, max(0, queued))
+ 
+     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
+         event = {
+             "schema_version": "1",
+             "type": event_type,
+             "sid": sid,
+             "who": "server",
+             "source": "ws_server",
+             "meta": dict(meta),
+         }
+         bus.publish(event)
+diff --git a/scripts/run_build05_tests.sh b/scripts/run_build05_tests.sh
+index 810193f22acbaf342384abb9320d92ed30a55396..c9be3c3f8ed41676b7bc3ff273dc45466ec9beec 100644
+--- a/scripts/run_build05_tests.sh
++++ b/scripts/run_build05_tests.sh
+@@ -1,10 +1,11 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ export PYTHONPATH="${PYTHONPATH:-.}:."
+ PY="${PYTHON:=python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python
+ "$PY" -m unittest -v \
++  tests.test_asr_readiness_gate \
+   tests.test_asr_adapter_basic \
+   tests.test_llm_stub \
+   tests.test_dual_vad_arbiter \
+   tests.test_tts_stub
+ echo "BUILD_05_TESTS: PASS"
+diff --git a/tests/test_asr_readiness_gate.py b/tests/test_asr_readiness_gate.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..66372a215a5b96ed84453e5171fc64d1f996c744
+index 0000000000000000000000000000000000000000..66e4a10d238d8e70d769c3a65c6e9c030e1b6f79
 --- /dev/null
-+++ b/tests/test_turn_correlation.py
-@@ -0,0 +1,92 @@
++++ b/tests/test_asr_readiness_gate.py
+@@ -0,0 +1,151 @@
++import asyncio
++import json
 +import unittest
++from typing import Any, Dict, List
 +
-+from app.voice_v2.engine import (
-+    EngineV2,
-+    EVT_TURN_BEGIN,
-+    EVT_TURN_END,
-+)
++from app.telemetry import bus
++from app.voice_v2 import EVT_ASR_READY, EVT_WS_AUDIO_RECV
++from app.ws.adapter import ChatV2Adapter
 +
 +
-+class _FakeBus:
++class RecordingEngine:
++    """Recording stub to observe ASR readiness behavior."""
++
 +    def __init__(self) -> None:
-+        self.events: list[dict] = []
++        self.open_sid: str | None = None
++        self.audio_calls: List[tuple[str, bytes, int]] = []
 +
-+    def publish(self, event: dict) -> None:  # pragma: no cover - exercised in tests
-+        self.events.append(dict(event))
++    def on_open(self, sid: str, headers: Dict[str, str]) -> None:  # pragma: no cover - exercised via adapter
++        self.open_sid = sid
++
++    def on_json(self, sid: str, frame: Dict[str, Any]) -> None:  # pragma: no cover - signature stub
++        return None
++
++    def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
++        self.audio_calls.append((sid, bytes(chunk), seq))
 +
 +
-+class _NullExporter:
-+    def write(self, sid: str, event: dict) -> None:  # pragma: no cover - stub
-+        return
++class TestASRReadinessGate(unittest.TestCase):
++    """Integration tests covering the ASR readiness gate."""
 +
-+
-+class TurnCorrelationTests(unittest.TestCase):
 +    def setUp(self) -> None:
-+        self.bus = _FakeBus()
-+        self.engine = EngineV2(fake_exporter=_NullExporter(), telemetry_bus=self.bus)
-+        self.sid = "sid-correlation"
++        bus.reset()
 +
-+    def _events(self, event_type: str) -> list[dict]:
-+        return [evt for evt in self.bus.events if evt["type"] == event_type]
++    def tearDown(self) -> None:
++        bus.reset()
 +
-+    def test_turn_context_tracks_req_and_turn(self) -> None:
-+        self.engine.on_open(self.sid, {})
-+        self.engine.on_audio(self.sid, b"abc", seq=1)
++    @staticmethod
++    def _make_scope() -> Dict[str, Any]:
++        return {
++            "type": "websocket",
++            "subprotocols": ["chat.v2"],
++            "headers": [(b"authorization", b"Bearer test-token")],
++            "client": ("127.0.0.1", 12345),
++        }
 +
-+        begin_events = self._events(EVT_TURN_BEGIN)
-+        self.assertEqual(1, len(begin_events))
-+        begin_event = begin_events[0]
++    async def _exercise(self, publish_ready: bool) -> tuple[List[dict], RecordingEngine, List[dict]]:
++        adapter = ChatV2Adapter()
++        engine = RecordingEngine()
++        adapter.engine = engine
 +
-+        turn_id = begin_event["turn_id"]
-+        req_id = begin_event["req_id"]
-+        self.assertIsInstance(turn_id, str)
-+        self.assertTrue(turn_id)
-+        self.assertIsInstance(req_id, str)
-+        self.assertTrue(req_id)
++        scope = self._make_scope()
++        queue: asyncio.Queue[dict] = asyncio.Queue()
++        sent: List[dict] = []
++        audio_events: List[dict] = []
++        token = bus.subscribe(EVT_WS_AUDIO_RECV, audio_events.append)
 +
-+        context = self.engine.turn_context(self.sid)
-+        self.assertEqual({"turn_id": turn_id, "req_id": req_id}, context)
++        async def receive() -> dict:
++            return await queue.get()
 +
-+        self.engine.on_asr_final(self.sid, "hi")
-+        self.assertEqual(context, self.engine.turn_context(self.sid))
++        async def send(message: dict) -> None:
++            sent.append(message)
 +
-+        self.engine.on_tts_start(self.sid, "utt-1")
-+        self.assertEqual(context, self.engine.turn_context(self.sid))
++        try:
++            task = asyncio.create_task(adapter(scope, receive, send))
++            await queue.put({"type": "websocket.connect"})
 +
-+        self.engine.on_tts_end(self.sid, "utt-1")
++            async def wait_for(predicate, timeout: float = 0.5) -> None:
++                loop = asyncio.get_running_loop()
++                deadline = loop.time() + timeout
++                while not predicate():
++                    if loop.time() >= deadline:
++                        raise TimeoutError("timed out waiting for condition")
++                    await asyncio.sleep(0.01)
 +
-+        end_events = self._events(EVT_TURN_END)
-+        self.assertEqual(1, len(end_events))
-+        end_event = end_events[0]
-+        self.assertEqual(turn_id, end_event["turn_id"])
-+        self.assertEqual(req_id, end_event["req_id"])
++            await wait_for(lambda: engine.open_sid is not None)
 +
-+        self.assertIsNone(self.engine.turn_context(self.sid))
++            if publish_ready:
++                sid = engine.open_sid
++                if sid is None:  # pragma: no cover - defensive
++                    raise RuntimeError("sid not set")
++                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
 +
-+    def test_req_id_changes_between_turns(self) -> None:
-+        self.engine.on_open(self.sid, {})
++            chunk = b"\x00" * 4
++            await queue.put({"type": "websocket.receive", "bytes": chunk})
++            await asyncio.sleep(0.05)
 +
-+        # First turn
-+        self.engine.on_audio(self.sid, b"abc", seq=1)
-+        first_begin = self._events(EVT_TURN_BEGIN)[0]
-+        first_req_id = first_begin["req_id"]
-+        first_turn_id = first_begin["turn_id"]
-+        self.engine.on_asr_final(self.sid, "hi")
-+        self.engine.on_tts_start(self.sid, "utt-1")
-+        self.engine.on_tts_end(self.sid, "utt-1")
-+        first_end = self._events(EVT_TURN_END)[0]
-+        self.assertEqual(first_turn_id, first_end["turn_id"])
-+        self.assertEqual(first_req_id, first_end["req_id"])
++            if publish_ready:
++                await queue.put({"type": "websocket.disconnect", "code": 1000})
 +
-+        # Second turn
-+        self.engine.on_audio(self.sid, b"def", seq=1)
-+        second_begin = self._events(EVT_TURN_BEGIN)[-1]
-+        second_req_id = second_begin["req_id"]
-+        second_turn_id = second_begin["turn_id"]
++            try:
++                await asyncio.wait_for(task, timeout=0.5)
++            except asyncio.TimeoutError:  # pragma: no cover - defensive
++                task.cancel()
++                raise
++        finally:
++            bus.unsubscribe(token)
 +
-+        self.assertNotEqual(first_req_id, second_req_id)
-+        self.assertNotEqual(first_turn_id, second_turn_id)
++        return sent, engine, audio_events
++
++    def test_binary_pre_ready_rejected(self) -> None:
++        sent, engine, audio_events = asyncio.run(self._exercise(publish_ready=False))
++
++        accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
++        self.assertEqual(len(accept_messages), 1)
++
++        error_frames = [
++            json.loads(msg["text"])
++            for msg in sent
++            if msg.get("type") == "websocket.send" and msg.get("text")
++        ]
++        self.assertTrue(error_frames)
++        for payload in error_frames:
++            self.assertEqual(
++                payload,
++                {"type": "error", "code": "audio_not_expected", "detail": "asr not ready"},
++            )
++
++        close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]
++        self.assertEqual(len(close_frames), 1)
++        self.assertEqual(close_frames[0].get("code"), 1003)
++
++        self.assertFalse(engine.audio_calls)
++        self.assertEqual(len(audio_events), 1)
++        meta = audio_events[0]["meta"]
++        self.assertEqual(meta["error"], "audio_not_expected")
++        self.assertEqual(meta["ws"]["size"], 4)
++
++    def test_binary_post_ready_accepted(self) -> None:
++        sent, engine, audio_events = asyncio.run(self._exercise(publish_ready=True))
++
++        accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
++        self.assertEqual(len(accept_messages), 1)
++
++        error_frames = [msg for msg in sent if msg.get("type") == "websocket.send"]
++        self.assertFalse(error_frames)
++
++        close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]
++        self.assertFalse(close_frames)
++
++        self.assertEqual(len(engine.audio_calls), 1)
++        call = engine.audio_calls[0]
++        self.assertEqual(call[2], 0)
++        self.assertEqual(call[1], b"\x00" * 4)
++
++        self.assertEqual(len(audio_events), 1)
++        self.assertNotIn("error", audio_events[0]["meta"])
++        self.assertEqual(audio_events[0]["meta"]["seq"], 0)
 +
 +
-+if __name__ == "__main__":
++if __name__ == "__main__":  # pragma: no cover
 +    unittest.main()
+diff --git a/tests/test_ws_binary_guard.py b/tests/test_ws_binary_guard.py
+index 89edd367c4628f4d7958648b67a664dd1688aa3b..c929ffb96562402336b283c46d588962d15512a1 100644
+--- a/tests/test_ws_binary_guard.py
++++ b/tests/test_ws_binary_guard.py
+@@ -1,50 +1,51 @@
+ """Tests for binary audio routing guard in the chat.v2 adapter."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import json
+ from typing import Any, Dict, List
+ 
+ import unittest
+ 
+ from app.telemetry import bus
+-from app.voice_v2 import EVT_WS_AUDIO_RECV
++from app.voice_v2 import EVT_ASR_READY, EVT_WS_AUDIO_RECV
+ from app.ws.adapter import ChatV2Adapter
+ 
+ 
+ class RecordingEngine:
+     """Recording stub for the engine hooks."""
+ 
+     def __init__(self, adapter: ChatV2Adapter, accept_audio: bool = True) -> None:
+         self.adapter = adapter
+         self.accept_audio = accept_audio
+         self.open_sid: str | None = None
+         self.audio_calls: List[tuple[str, bytes, int]] = []
+ 
+     def on_open(self, sid: str, headers: Dict[str, str]) -> None:  # pragma: no cover - exercised via adapter
+         self.open_sid = sid
++        bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+         if not self.accept_audio:
+             self.adapter.set_accepting_audio(sid, False)
+ 
+     def on_json(self, sid: str, frame: Dict[str, Any]) -> None:  # pragma: no cover - signature stub
+         return None
+ 
+     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
+         self.audio_calls.append((sid, chunk, seq))
+ 
+ 
+ class TestWebSocketBinaryGuard(unittest.TestCase):
+     """Integration tests for the binary audio guard behavior."""
+ 
+     def setUp(self) -> None:
+         bus.reset()
+ 
+     def tearDown(self) -> None:
+         bus.reset()
+ 
+     @staticmethod
+     def _make_scope() -> Dict[str, Any]:
+         return {
+             "type": "websocket",
+             "subprotocols": ["chat.v2"],
+             "headers": [(b"authorization", b"Bearer test-token")],

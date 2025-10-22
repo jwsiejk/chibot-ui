@@ -16,6 +16,7 @@ from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
 from app.security.auth import authorize
 from app.voice_v2 import (
+    EVT_ASR_READY,
     EVT_WS_AUDIO_RECV,
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
@@ -134,6 +135,8 @@ class AdapterContext:
     outbox: asyncio.Queue[Dict[str, Any]] | None = None
     outbound_task: asyncio.Task[None] | None = None
     subscription_token: Optional[str] = None
+    asr_ready: bool = False
+    asr_subscription_token: Optional[str] = None
     server_keepalive_task: asyncio.Task[None] | None = None
     last_policy_interaction: Optional[Dict[str, Any]] = None
 
@@ -198,6 +201,7 @@ class ChatV2Adapter:
             )
 
         self._contexts[ctx.sid] = ctx
+        self._start_asr_ready_tracker(ctx)
         self._start_outbound_bridge(ctx, send)
         self._start_server_keepalive(ctx, send)
 
@@ -252,6 +256,7 @@ class ChatV2Adapter:
         finally:
             await self._stop_server_keepalive(ctx)
             await self._cleanup_outbound(ctx)
+            self._stop_asr_ready_tracker(ctx)
             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
             if self.exporter:
                 self.exporter.end(ctx.sid, {"close_code": close_code})
@@ -457,6 +462,21 @@ class ChatV2Adapter:
             )
             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
             return self._HandleResult(False, 1009, "frame_too_large")
+
+        if not ctx.asr_ready:
+            meta = {
+                "byte_count": byte_count,
+                "error": "audio_not_expected",
+                "ws": {"dir": "in", "size": byte_count},
+            }
+            await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+            await self._send_error(
+                send,
+                ctx.sid,
+                "audio_not_expected",
+                "asr not ready",
+            )
+            return self._HandleResult(False, 1003, "audio_not_expected")
 
         if not ctx.accepting_audio:
             ctx.audio_violation_count += 1
@@ -696,6 +716,19 @@ class ChatV2Adapter:
         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
 
+    def _start_asr_ready_tracker(self, ctx: AdapterContext) -> None:
+        if ctx.asr_subscription_token is not None:
+            return
+
+        def _handle(event: dict) -> None:
+            if event.get("type") != EVT_ASR_READY:
+                return
+            if event.get("sid") != ctx.sid:
+                return
+            ctx.asr_ready = True
+
+        ctx.asr_subscription_token = bus.subscribe(EVT_ASR_READY, _handle)
+
     def _extract_outbound_payload(
         self, ctx: AdapterContext, event: dict
     ) -> Optional[Dict[str, Any]]:
@@ -781,6 +814,13 @@ class ChatV2Adapter:
                 await task
 
         ctx.outbox = None
+
+    def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
+        token = ctx.asr_subscription_token
+        ctx.asr_subscription_token = None
+        if token:
+            bus.unsubscribe(token)
+        ctx.asr_ready = False
 
     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
         """Record the estimated outbound queue depth and emit diagnostics if needed."""

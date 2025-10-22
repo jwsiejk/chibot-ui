@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 import unittest
 
 from app.telemetry import bus
-from app.voice_v2 import EVT_WS_AUDIO_RECV
+from app.voice_v2 import EVT_ASR_READY, EVT_WS_AUDIO_RECV
 from app.ws.adapter import ChatV2Adapter
 
 
@@ -23,6 +23,7 @@ class RecordingEngine:
 
     def on_open(self, sid: str, headers: Dict[str, str]) -> None:  # pragma: no cover - exercised via adapter
         self.open_sid = sid
+        bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
         if not self.accept_audio:
             self.adapter.set_accepting_audio(sid, False)
 
