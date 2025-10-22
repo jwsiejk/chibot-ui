@@ -36,8 +36,8 @@
   - **Acceptance:** Reject inbound binary audio **before** `asr.ready` with `{"type":"error","code":"audio_not_expected"}` and close **1003**; accept after `asr.ready`.
 
 - **B5-A — ASR Adapter (expand acceptance)**
-  - Include **provider keepalive**: start `DG_KEEPALIVE_INTERVAL_S` (default **5.0s**) on connect; stop cleanly on close.
-  - Emit `EVT_ASR_READY {vendor}` on warm-up.
+  - **Delegate provider keepalive to Build 04‑G** (do not implement a new loop here).
+  - Emit `EVT_ASR_READY {vendor}` on warm‑up.
 
 - **B5-E — Audio Envelope & Jitter Buffer (expand acceptance)**
   - Per-session sequence with reordering window **W=8** (configurable).
@@ -58,18 +58,6 @@
   - Header mismatch (declared PCM 16k vs actual 48k) ⇒ `schema_invalid` + close 1003.
   - Partial latency budget exceed triggers circuit breaker and `EVT_PROVIDER_TRIP`.
   - Redaction: provider opaque IDs appear only in `EVT_VENDOR_DEBUG`, never in client-visible frames.
-
-- **B4-H:** **Outbound allow‑list extension (Chat frames)**  
-  **Files:** `app/ws/adapter.py` (update), `tests/test_adapter_outbound_bridge.py` (update)  
-  **Non‑goals:** No UI work; no changes to error taxonomy.  
-  **Change:** Extend the outbound bridge **allow‑list** to include chat frames so the client receives chat alongside policy/tts/asr:  
-  `chat.message`, `chat.history`  
-  **Acceptance:**  
-   • `chat.message` frames for the active `sid` are forwarded to the client; other sids are not.  
-   • `chat.history` is forwarded when published (e.g., on connect/resume).  
-   • Non‑allow‑listed types (e.g., `vendor.debug`) are still dropped.  
-   • Existing allow‑listed types (`policy.interaction`, `tts.*`, `asr.*`, `error`) continue to forward unchanged.  
-   • Tests updated to assert forwarding of `chat.message` and dropping of non‑allow‑listed frames.
 
 - **B5-I:** **Dual‑VAD Aggregator & Policy (production‑grade)**  
   **Files:** `app/voice_v2/vad.py` (new), `app/voice_v2/engine.py` (update), `tests/test_dual_vad_arbiter.py` (new)  

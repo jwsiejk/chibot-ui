@@ -372,7 +372,6 @@ class EngineV2:
 
     def _publish(self, event: Dict[str, Any]) -> None:
         self._bus.publish(dict(event))
-        self._exporter.write(event["sid"], dict(event))
 
     def _handle_outbound_chat_frame(self, event: Dict[str, Any]) -> None:
         if event.get("type") != EVT_WS_JSON_SEND:

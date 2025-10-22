@@ -1,216 +1,189 @@
-diff --git a/app/voice_v2/conversation_buffer.py b/app/voice_v2/conversation_buffer.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..b6e7a929f7b9a13bcb95fd17dea28be5c50a141b
---- /dev/null
-+++ b/app/voice_v2/conversation_buffer.py
-@@ -0,0 +1,40 @@
-+"""Utilities for tracking per-session chat history buffers."""
-+from __future__ import annotations
-+
-+import copy
-+from collections import deque
-+from typing import Any, Deque, Dict, List, Mapping
-+
-+
-+class ConversationBuffer:
-+    """Maintain a bounded, per-session history of chat messages."""
-+
-+    def __init__(self, max_messages: int = 100) -> None:
-+        if not isinstance(max_messages, int):
-+            raise TypeError("max_messages must be an integer")
-+        if max_messages <= 0:
-+            raise ValueError("max_messages must be positive")
-+        self._max_messages = max_messages
-+        self._buffers: Dict[str, Deque[Dict[str, Any]]] = {}
-+
-+    def append(self, sid: str, message: Mapping[str, Any]) -> None:
-+        """Record a chat.message for the provided session identifier."""
-+
-+        if not isinstance(sid, str) or not sid:
-+            return
-+        if not isinstance(message, Mapping):
-+            return
-+
-+        buffer = self._buffers.setdefault(sid, deque(maxlen=self._max_messages))
-+        buffer.append(copy.deepcopy(dict(message)))
-+
-+    def messages(self, sid: str) -> List[Dict[str, Any]]:
-+        """Return a copy of the buffered messages for the session."""
-+
-+        buffer = self._buffers.get(sid)
-+        if not buffer:
-+            return []
-+        return [copy.deepcopy(item) for item in buffer]
-+
-+
-+__all__ = ["ConversationBuffer"]
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 3a32e438ee10f7ae0828640a90861157e42123b4..5fac24f126b45d9bb5765edbd580289f63e7bbcf 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -5,50 +5,51 @@ import asyncio
- from dataclasses import dataclass
+diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
+index 04f782fe10a7e4d3ee30f96192f226e599e0c69e..5792f12f1274a96d0d83430aa9965e13f801b62e 100644
+--- a/app/telemetry/exporter.py
++++ b/app/telemetry/exporter.py
+@@ -1,85 +1,152 @@
+ """Minimal NDJSON file exporter for session telemetry."""
+ from __future__ import annotations
+ 
  import json
- import logging
- import threading
- import time
- import uuid
- from typing import Any, Dict, Mapping, Optional
++import os
++import time
+ from dataclasses import dataclass, field
+ from pathlib import Path
+ from typing import Any, Dict, Optional
  
- from app.policy.loader import load_interaction_policy
- from app.policy.watch import compute_diff, should_reapply
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ACWR_RECOMPUTE,
-     EVT_CHAT_USER,
-     EVT_POLICY_APPLIED,
-     EVT_TTS_END,
-     EVT_TTS_START,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- from app.voice_v2.gate import GateController
-+from app.voice_v2.conversation_buffer import ConversationBuffer
- from app.voice_v2.vad import VADAggregator
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
- READY = "Ready"
- LISTENING = "Listening"
- THINKING = "Thinking"
- RESPONDING = "Responding"
- CONFIRMING_BARGE = "ConfirmingBarge"
- 
- EVT_TURN_STATE = "EVT_TURN_STATE"
- EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
- EVT_TURN_END = "EVT_TURN_END"
- 
++from app.telemetry import bus as telemetry_bus
++
++
++def _now_ms() -> int:
++    """Return the current epoch timestamp in milliseconds."""
++
++    return int(time.time() * 1000)
++
  
  @dataclass
- class _Envelope:
-     """Normalized telemetry envelope returned by the engine hooks."""
+ class _SessionStats:
+     """In-memory counters tracked for each active session."""
  
-     type: str
-     sid: str
-@@ -83,93 +84,108 @@ class _NullExporter:
-         return
+     directory: Path
+     events_path: Path
+     manifest_path: Path
+     events_written: int = 0
+     by_type: Dict[str, int] = field(default_factory=dict)
+     started_ms: Optional[int] = None
+     ended_ms: Optional[int] = None
++    subscription_token: Optional[str] = None
  
  
- class EngineV2:
-     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
+ class FileExporter:
+     """Write session telemetry to disk in a restart-friendly manner."""
  
-     def __init__(
-         self,
-         exporter: FileExporter | None = None,
-         *,
-         telemetry_bus=bus,
-         fake_exporter: FileExporter | None = None,
-     ) -> None:
-         if exporter is None:
-             exporter = fake_exporter
-         if exporter is None:
-             exporter = _NullExporter()
-         self._exporter = exporter
-         self._bus = telemetry_bus
-         self._policy_snapshot: Dict[str, Any] | None = None
-         self._last_sid: Optional[str] = None
-         self._gate = GateController(publish=self._publish_gate_event)
-         self._sessions: Dict[str, _TurnSession] = {}
-         self._barge_handles: Dict[str, object] = {}
-         self._aggregators: Dict[str, VADAggregator] = {}
--        self._chat_subscription = self._bus.subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
-+        self._conversation_buffer = ConversationBuffer()
-+        subscribe = getattr(self._bus, "subscribe", None)
-+        if callable(subscribe):
-+            self._chat_subscription = subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
-+            self._ws_send_subscription = subscribe(
-+                EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
-+            )
-+        else:
-+            self._chat_subscription = None
-+            self._ws_send_subscription = bus.subscribe(
-+                EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
-+            )
+-    def __init__(self, root: Path | str = "exports") -> None:
++    def __init__(self, root: Path | str = "exports", *, bus=telemetry_bus) -> None:
+         self._root = Path(root)
++        self._bus = bus
+         self._sessions: Dict[str, _SessionStats] = {}
  
-     @property
-     def policy_snapshot(self) -> Dict[str, Any] | None:
-         return self._policy_snapshot
+     def begin(self, sid: str) -> None:
+-        """Prepare an export directory for the session."""
++        """Prepare an export directory and subscribe to telemetry for the session."""
++
++        if sid in self._sessions:
++            # Duplicate begin calls should not create additional subscriptions.
++            return
++
+         session_dir = self._root / sid
+         session_dir.mkdir(parents=True, exist_ok=True)
+         stats = _SessionStats(
+             directory=session_dir,
+             events_path=session_dir / "events.ndjson",
+             manifest_path=session_dir / "manifest.json",
++            started_ms=_now_ms(),
+         )
++
++        # Reset the NDJSON log for the session.
+         stats.events_path.write_text("", encoding="utf-8")
++
++        def _callback(event: Dict[str, Any]) -> None:
++            if event.get("sid") != sid:
++                return
++            self._handle_event(sid, event)
++
++        token = self._bus.subscribe("*", _callback)
++        stats.subscription_token = token
+         self._sessions[sid] = stats
  
-     @policy_snapshot.setter
-     def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
-         self._policy_snapshot = dict(snapshot) if snapshot is not None else None
- 
-     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
-         """Capture a successful WebSocket upgrade."""
-         meta = {"headers": dict(headers), "dir": "in"}
-         event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
-         self._publish(event)
- 
-         self._last_sid = sid
-         self._policy_snapshot = None
-         self._ensure_session(sid)
-+        self._publish_chat_history(sid)
-         self._set_state(sid, READY, reason="ws_open")
-         self.reapply_policy()
- 
-     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
-         """Capture a validated JSON frame from the adapter."""
-         turn_id: Optional[Any] = None
-         meta: Dict[str, Any] = {"dir": "in"}
-+        frame_type: Optional[str] = None
-         if isinstance(frame, Mapping):
-             frame_type = frame.get("type")
-             if isinstance(frame_type, str):
-                 meta["frame_type"] = frame_type
-             turn_id = frame.get("turn_id")
-         else:
-             frame = {}
-         try:
-             serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         except (TypeError, ValueError):
-             serialized = "{}"
-         meta["byte_count"] = len(serialized.encode("utf-8"))
-         payload: Dict[str, Any] = {"meta": meta}
-         if turn_id is not None:
-             payload["turn_id"] = turn_id
-         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
-         self._publish(event)
-+        if frame_type == "client.resume":
-+            self._publish_chat_history(sid)
- 
-     def _handle_chat_user_event(self, event: Dict[str, Any]) -> None:
-         if event.get("type") != EVT_CHAT_USER:
+-    def write(self, sid: str, event: Dict[str, Any]) -> None:
+-        """Append a single event line to the NDJSON log."""
+-        stats = self._sessions.get(sid)
++        manifest = {
++            "sid": sid,
++            "schema_version": "1",
++            "started_ms": stats.started_ms,
++            "open": True,
++            "events_written": 0,
++            "by_type": {},
++        }
++        self._write_manifest(stats, manifest)
++
++    def end(self, sid: str, summary: Optional[Dict[str, Any]] = None) -> None:
++        """Finalize a session by writing manifest metadata and unsubscribing."""
++
++        stats = self._sessions.pop(sid, None)
+         if not stats:
              return
-         sid = event.get("sid")
-         if not isinstance(sid, str) or not sid:
-             return
-         text = event.get("text")
-         if not isinstance(text, str):
-             return
-         client_msg_id = event.get("client_msg_id")
-         if client_msg_id is not None and not isinstance(client_msg_id, str):
-             client_msg_id = None
  
-         session = self._ensure_session(sid)
-         previous_state = session.state
-         policy = self.policy_snapshot or {}
-         barge_enabled = bool(policy.get("barge_in_enabled"))
+-        event_copy = dict(event)
+-        event_type = event_copy.get("type", "")
+-        ts_ms = event_copy.get("ts_ms")
+-        if isinstance(ts_ms, int):
+-            if stats.started_ms is None:
+-                stats.started_ms = ts_ms
+-            stats.ended_ms = ts_ms
++        token = stats.subscription_token
++        if token:
++            self._bus.unsubscribe(token)
++
++        ended_ms = stats.ended_ms
++        if ended_ms is None:
++            base = stats.started_ms if stats.started_ms is not None else _now_ms()
++            ended_ms = base
++
++        manifest = {
++            "sid": sid,
++            "schema_version": "1",
++            "started_ms": stats.started_ms,
++            "open": False,
++            "events_written": stats.events_written,
++            "by_type": dict(stats.by_type),
++            "ended_ms": ended_ms,
++        }
++
++        if summary is not None:
++            manifest["summary"] = dict(summary)
++
++        self._write_manifest(stats, manifest)
++
++    def _handle_event(self, sid: str, event: Dict[str, Any]) -> None:
++        stats = self._sessions.get(sid)
++        if not stats:
++            return
  
-         if previous_state == RESPONDING:
-             granted = barge_enabled
-             reason = None if granted else "policy_disabled"
-             self._publish_barge(sid, "text", granted, reason)
-             if granted:
-                 self.cancel_current_tts(sid, reason="canceled")
-@@ -336,50 +352,87 @@ class EngineV2:
+         with stats.events_path.open("a", encoding="utf-8") as handle:
+-            json.dump(event_copy, handle, separators=(",", ":"), ensure_ascii=False)
++            json.dump(event, handle, separators=(",", ":"), ensure_ascii=False)
+             handle.write("\n")
+ 
+         stats.events_written += 1
++
++        event_type = event.get("type")
+         if isinstance(event_type, str) and event_type:
+             stats.by_type[event_type] = stats.by_type.get(event_type, 0) + 1
+ 
+-    def end(self, sid: str, summary: Optional[Dict[str, Any]] = None) -> None:
+-        """Finalize a session by writing manifest metadata."""
+-        stats = self._sessions.pop(sid, None)
+-        if not stats:
+-            return
++        ts_ms = event.get("ts_ms")
++        if isinstance(ts_ms, int):
++            candidate = ts_ms
++            if stats.started_ms is not None and candidate < stats.started_ms:
++                candidate = stats.started_ms
++            stats.ended_ms = candidate
+ 
+         manifest = {
+             "sid": sid,
++            "schema_version": "1",
+             "started_ms": stats.started_ms,
+-            "ended_ms": stats.ended_ms,
++            "open": True,
+             "events_written": stats.events_written,
+             "by_type": dict(stats.by_type),
+-            "extra": dict(summary or {}),
+         }
++        self._write_manifest(stats, manifest)
+ 
+-        stats.manifest_path.write_text(
+-            json.dumps(manifest, separators=(",", ":"), ensure_ascii=False, indent=None),
++    def _write_manifest(self, stats: _SessionStats, manifest: Dict[str, Any]) -> None:
++        tmp_path = stats.manifest_path.with_name(stats.manifest_path.name + ".tmp")
++        tmp_path.write_text(
++            json.dumps(manifest, separators=(",", ":"), ensure_ascii=False),
+             encoding="utf-8",
+         )
++        os.replace(tmp_path, stats.manifest_path)
+ 
+ 
+ __all__ = ["FileExporter"]
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index 5fac24f126b45d9bb5765edbd580289f63e7bbcf..4d7b8cfbb8cbe085105cd697020cf76959c63b03 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -350,51 +350,50 @@ class EngineV2:
+ 
+         if not self._last_sid:
              return False
  
          sid = self._last_sid
@@ -234,162 +207,108 @@ index 3a32e438ee10f7ae0828640a90861157e42123b4..5fac24f126b45d9bb5765edbd580289f
  
      def _publish(self, event: Dict[str, Any]) -> None:
          self._bus.publish(dict(event))
-         self._exporter.write(event["sid"], dict(event))
+-        self._exporter.write(event["sid"], dict(event))
  
-+    def _handle_outbound_chat_frame(self, event: Dict[str, Any]) -> None:
-+        if event.get("type") != EVT_WS_JSON_SEND:
-+            return
-+        sid = event.get("sid")
-+        if not isinstance(sid, str) or not sid:
-+            return
-+        frame: Mapping[str, Any] | None = None
-+        raw_frame = event.get("frame")
-+        if isinstance(raw_frame, Mapping):
-+            frame = raw_frame
-+        else:
-+            payload = event.get("payload")
-+            if isinstance(payload, Mapping):
-+                candidate = payload.get("frame")
-+                if isinstance(candidate, Mapping):
-+                    frame = candidate
-+        if frame is None:
-+            return
-+        if frame.get("type") != "chat.message":
-+            return
-+        self._conversation_buffer.append(sid, frame)
-+
-+    def _publish_chat_history(self, sid: str) -> None:
-+        messages = self._conversation_buffer.messages(sid)
-+        frame = {"type": "chat.history", "messages": messages, "next_cursor": None}
-+        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-+        meta = {
-+            "ws": {
-+                "dir": "out",
-+                "size": len(serialized.encode("utf-8")),
-+                "preview": serialized,
-+            }
-+        }
-+        payload = {"meta": meta, "frame": frame}
-+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-+        self._publish(event)
-+
-     def _publish_gate_event(self, event: Dict[str, Any]) -> None:
-         """Publish gate controller events through the standard telemetry path."""
- 
-         envelope = dict(event)
-         sid = envelope.get("sid") or self._last_sid
+     def _handle_outbound_chat_frame(self, event: Dict[str, Any]) -> None:
+         if event.get("type") != EVT_WS_JSON_SEND:
+             return
+         sid = event.get("sid")
          if not isinstance(sid, str) or not sid:
              return
-         envelope.setdefault("sid", sid)
-         envelope.setdefault("who", "server")
-         envelope.setdefault("source", "voice_engine")
-         self._publish(envelope)
- 
-     def _publish_barge(
-         self, sid: str, source: str, granted: bool, reason: str | None = None
-     ) -> None:
-         """Publish EVT_BARGE_IN envelope with meta.barge.{source,granted,reason}."""
- 
-         if source not in {"auto_vad", "asr_evidence", "text"}:
+         frame: Mapping[str, Any] | None = None
+         raw_frame = event.get("frame")
+         if isinstance(raw_frame, Mapping):
+             frame = raw_frame
+         else:
+             payload = event.get("payload")
+             if isinstance(payload, Mapping):
+                 candidate = payload.get("frame")
+                 if isinstance(candidate, Mapping):
+                     frame = candidate
+         if frame is None:
              return
+         if frame.get("type") != "chat.message":
+             return
+         self._conversation_buffer.append(sid, frame)
  
-         meta: Dict[str, Any] = {"barge": {"source": source, "granted": granted}}
-         if reason is not None:
-             meta["barge"]["reason"] = reason
-         event = self._envelope(sid, "EVT_BARGE_IN", {"meta": meta})
-         self._publish(event)
-diff --git a/tests/test_chat_history_resume.py b/tests/test_chat_history_resume.py
+     def _publish_chat_history(self, sid: str) -> None:
+         messages = self._conversation_buffer.messages(sid)
+diff --git a/tests/test_exporter_bus_subscription.py b/tests/test_exporter_bus_subscription.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..83fd89df63423344bce8ab3431e13eb76680d64a
+index 0000000000000000000000000000000000000000..916ac256500a4290e50b2cdd22e407ae62776829
 --- /dev/null
-+++ b/tests/test_chat_history_resume.py
-@@ -0,0 +1,89 @@
-+"""Tests covering chat.history emission on connect and resume."""
-+from __future__ import annotations
-+
-+import copy
++++ b/tests/test_exporter_bus_subscription.py
+@@ -0,0 +1,73 @@
++import json
 +import unittest
++from pathlib import Path
++from tempfile import TemporaryDirectory
 +
 +from app.telemetry import bus
-+from app.voice_v2 import EVT_CHAT_USER, EVT_WS_JSON_SEND
-+from app.voice_v2.engine import EngineV2
++from app.telemetry.exporter import FileExporter
 +
 +
-+class ChatHistoryResumeTests(unittest.TestCase):
-+    """Validate conversation buffering and history emission semantics."""
++class ExporterBusSubscriptionTests(unittest.TestCase):
++    def test_exporter_subscribes_and_tracks_manifest(self) -> None:
++        with TemporaryDirectory() as tmpdir:
++            exporter = FileExporter(root=tmpdir, bus=bus)
++            sid = "sid1"
 +
-+    def setUp(self) -> None:
-+        bus.reset()
-+        self.history_frames: list[dict] = []
-+        self.messages: list[dict] = []
++            exporter.begin(sid)
 +
-+        def _capture(event: dict) -> None:
-+            frame = event.get("frame")
-+            if not isinstance(frame, dict):
-+                payload = event.get("payload")
-+                if isinstance(payload, dict):
-+                    frame = payload.get("frame")
-+            if not isinstance(frame, dict):
-+                return
++            session_dir = Path(tmpdir) / sid
++            events_path = session_dir / "events.ndjson"
++            manifest_path = session_dir / "manifest.json"
 +
-+            frame_type = frame.get("type")
-+            if frame_type == "chat.history":
-+                self.history_frames.append(copy.deepcopy(frame))
-+            elif frame_type == "chat.message":
-+                self.messages.append(copy.deepcopy(frame))
++            self.assertTrue(events_path.exists())
++            self.assertTrue(manifest_path.exists())
 +
-+        self._token = bus.subscribe(EVT_WS_JSON_SEND, _capture)
++            manifest_open = json.loads(manifest_path.read_text(encoding="utf-8"))
++            self.assertTrue(manifest_open["open"])
++            self.assertEqual(0, manifest_open["events_written"])
 +
-+    def tearDown(self) -> None:
-+        bus.reset()
-+
-+    def test_history_buffer_on_connect_and_resume(self) -> None:
-+        engine = EngineV2()
-+        sid = "sid-history"
-+
-+        engine.on_open(sid, {})
-+        self.assertEqual(len(self.history_frames), 1)
-+        self.assertEqual(self.history_frames[-1]["messages"], [])
-+
-+        self.history_frames.clear()
-+
-+        total_turns = 105
-+        for idx in range(total_turns):
-+            if idx % 2 == 0:
-+                bus.publish({"type": EVT_CHAT_USER, "sid": sid, "text": f"typed-{idx}"})
-+            else:
-+                engine.on_asr_final(sid, f"voice-{idx}")
-+
-+            last_user = self.messages[-1]
-+            assistant_frame = {
-+                "type": "chat.message",
-+                "id": f"a-{idx}",
-+                "role": "assistant",
-+                "text": f"assistant-{idx}",
-+                "origin": "voice",
-+                "turn_id": last_user.get("turn_id"),
-+                "req_id": last_user.get("req_id"),
-+                "ts_ms": last_user.get("ts_ms", 0) + 1,
++            secret_event = {
++                "type": "voice.secret",
++                "sid": sid,
++                "meta": {
++                    "authorization": "Bearer SECRET-TOKEN-123456",
++                    "contact": "person@example.com",
++                },
 +            }
-+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": {"frame": assistant_frame}})
++            info_event = {
++                "type": "voice.info",
++                "sid": sid,
++                "meta": {"note": "ok"},
++            }
 +
-+        expected_messages = copy.deepcopy(self.messages)
++            bus.publish(secret_event)
++            bus.publish(info_event)
 +
-+        engine.on_close(sid, 1000, "disconnect")
-+        self.history_frames.clear()
++            lines = [
++                json.loads(line)
++                for line in events_path.read_text(encoding="utf-8").splitlines()
++                if line.strip()
++            ]
++            self.assertEqual(2, len(lines))
 +
-+        engine.on_open(sid, {})
-+        self.assertEqual(len(self.history_frames), 1)
-+        resume_history = self.history_frames[-1]
-+        history_messages = resume_history["messages"]
-+        self.assertEqual(len(history_messages), 100)
-+        self.assertEqual(history_messages, expected_messages[-100:])
++            first_meta = lines[0].get("meta", {})
++            self.assertEqual("Bearer ****3456", first_meta.get("authorization"))
++            self.assertEqual("***@example.com", first_meta.get("contact"))
 +
-+        self.history_frames.clear()
-+        engine.on_json(sid, {"type": "client.resume", "resume_token": "token-1"})
-+        self.assertEqual(len(self.history_frames), 1)
-+        self.assertEqual(self.history_frames[-1]["messages"], expected_messages[-100:])
++            manifest_mid = json.loads(manifest_path.read_text(encoding="utf-8"))
++            self.assertTrue(manifest_mid["open"])
++            self.assertEqual(2, manifest_mid["events_written"])
++            self.assertEqual({"voice.secret": 1, "voice.info": 1}, manifest_mid["by_type"])
++
++            exporter.end(sid)
++
++            manifest_final = json.loads(manifest_path.read_text(encoding="utf-8"))
++            self.assertFalse(manifest_final["open"])
++            self.assertEqual(2, manifest_final["events_written"])
++            self.assertEqual({"voice.secret": 1, "voice.info": 1}, manifest_final["by_type"])
++            self.assertIn("ended_ms", manifest_final)
++            self.assertGreaterEqual(manifest_final["ended_ms"], manifest_final["started_ms"])
 +
 +
-+if __name__ == "__main__":  # pragma: no cover - convenience
++if __name__ == "__main__":  # pragma: no cover
 +    unittest.main()
