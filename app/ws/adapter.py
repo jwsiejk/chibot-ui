@@ -16,6 +16,7 @@ from app.voice_v2 import (
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
 )
+from app.ws.validator import validate_frame
 
 CHAT_V2_SUBPROTOCOL = "chat.v2"
 TEXT_FRAME_LIMIT_BYTES = 64 * 1024
@@ -268,6 +269,14 @@ class ChatV2Adapter:
             meta["error"] = "unknown_type"
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
             await self._send_error(send, ctx.sid, "unknown_type", f"Unsupported frame type '{frame_type}'")
+            return self._HandleResult(True)
+
+        is_valid, hint = validate_frame(frame)
+        if not is_valid:
+            meta["error"] = "schema_invalid"
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+            detail = hint or "Frame failed validation"
+            await self._send_error(send, ctx.sid, "schema_invalid", detail)
             return self._HandleResult(True)
 
         await self._invoke_engine("on_json", ctx.sid, frame)
