@@ -1,322 +1,108 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 9db6bdeea3811ffc3abdd0f5ce04fb1ed1ffb0d0..e0ff583ae39a2b9b47127dde297e37ae70ecd9cb 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -1,26 +1,31 @@
--"""Minimal Deepgram streaming client with provider keepalive support."""
-+"""Minimal Deepgram streaming client with provider keepalive support.
-+
-+This module was introduced in Build 04-G and is shared by higher-level
-+adapters (for example :mod:`app.voice_v2.asr`) so that keepalive behaviour
-+is implemented exactly once.
-+"""
- from __future__ import annotations
- 
- import asyncio
- import contextlib
- import json
- import logging
- import os
- from typing import Any, Callable
- 
- _logger = logging.getLogger(__name__)
- 
- 
- class DeepgramClient:
-     """Client wrapper responsible for maintaining the Deepgram websocket."""
- 
-     def __init__(self) -> None:
-         self._ws: Any | None = None
-         self._send_lock = asyncio.Lock()
-         self._keepalive_interval = max(
-             0.0, float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
-         )
-         self._keepalive_task: asyncio.Task[None] | None = None
- 
-     async def connect(self, websocket: Any) -> None:
-         """Attach to an already negotiated websocket transport."""
-diff --git a/app/voice_v2/asr.py b/app/voice_v2/asr.py
+diff --git a/app/voice_v2/llm.py b/app/voice_v2/llm.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..1ca0d299196d80d78df7a5a7d7c7a915ecb21ee2
+index 0000000000000000000000000000000000000000..02946691991d27de85e29ccf1e0a3c2ca79cecfe
 --- /dev/null
-+++ b/app/voice_v2/asr.py
-@@ -0,0 +1,165 @@
-+"""Minimal ASR adapter that publishes telemetry for Deepgram.
-+
-+This adapter intentionally composes the :class:`~app.services.streaming_asr.deepgram_client.DeepgramClient`
-+from Build 04-G so that the websocket lifecycle and keepalive responsibilities stay
-+centralized in a single client implementation. The adapter only orchestrates
-+telemetry emission for Build 05.
-+"""
++++ b/app/voice_v2/llm.py
+@@ -0,0 +1,43 @@
++"""Stubbed LLM adapter that emits EVT_NLG telemetry."""
 +from __future__ import annotations
 +
-+from typing import Any, Callable
++import time
++from typing import Any, Dict
 +
-+from app.services.streaming_asr.deepgram_client import DeepgramClient
 +from app.telemetry import bus
-+from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL, EVT_ASR_READY
++from app.voice_v2 import EVT_NLG
 +
 +
-+class ASRAdapter:
-+    """Stubbed streaming ASR adapter wired into the telemetry bus."""
++class LLMAdapter:
++    """Return canned responses while publishing telemetry events."""
 +
-+    def __init__(
-+        self,
-+        *,
-+        telemetry_bus=bus,
-+        client_factory: Callable[[], DeepgramClient] | None = None,
-+        vendor: str = "deepgram",
-+        partial_confidence: float = 0.55,
-+        final_confidence: float = 0.9,
-+        partials_before_final: int = 2,
-+    ) -> None:
-+        if partials_before_final < 1:
-+            raise ValueError("partials_before_final must be >= 1")
++    def __init__(self, *, telemetry_bus=bus, canned_text: str | None = None) -> None:
 +        self._bus = telemetry_bus
-+        self._client_factory = client_factory or DeepgramClient
-+        self._vendor = vendor
-+        self._client: DeepgramClient | None = None
-+        self._started = False
-+        self._req_seq = 0
-+        self._current_req_id: str | None = None
-+        self._partial_confidence = float(partial_confidence)
-+        self._final_confidence = float(final_confidence)
-+        self._partials_before_final = partials_before_final
-+        self._partial_count = 0
-+        self._buffer: list[str] = []
++        self._canned_text = canned_text or (
++            "Thanks for chatting with AskChip! How else can I help?"
++        )
 +
-+    async def start(self, websocket: Any) -> None:
-+        """Attach to the provider websocket and publish readiness."""
++    def generate(self, req_id: str, text: str, **_: Any) -> Dict[str, Any]:
++        """Return a canned response and emit an EVT_NLG event."""
 +
-+        if websocket is None:
-+            raise ValueError("websocket must not be None")
-+        if self._started:
-+            return
++        if not isinstance(req_id, str) or not req_id:
++            raise ValueError("req_id must be a non-empty string")
 +
-+        client = self._client_factory()
-+        await client.connect(websocket)
-+        self._client = client
-+        self._started = True
-+        self._publish_ready()
++        start = time.perf_counter()
++        response_text = self._canned_text
++        self._publish_nlg(req_id, response_text)
++        elapsed_ms = int((time.perf_counter() - start) * 1000)
++        timing = {"total_ms": max(elapsed_ms, 0)}
++        return {"text": response_text, "timing": timing}
 +
-+    async def stop(self) -> None:
-+        """Tear down the provider client and reset turn state."""
-+
-+        if not self._started:
-+            return
-+
-+        self._started = False
-+        self._reset_turn()
-+
-+        client = self._client
-+        self._client = None
-+        if client is not None:
-+            await client.close()
-+
-+    def feed(self, chunk: bytes, seq: int) -> None:
-+        """Consume an audio chunk and emit simulated ASR events."""
-+
-+        if not self._started:
-+            raise RuntimeError("ASRAdapter.start() must be awaited before feed()")
-+        if not isinstance(chunk, (bytes, bytearray)):
-+            raise TypeError("chunk must be bytes-like")
-+        if not isinstance(seq, int):
-+            raise TypeError("seq must be an int")
-+
-+        text_fragment = self._normalize_chunk(chunk, seq)
-+        self._buffer.append(text_fragment)
-+        full_text = " ".join(self._buffer).strip()
-+        if not full_text:
-+            full_text = f"[seq:{seq}]"
-+
-+        req_id = self._ensure_req_id()
-+        partial_index = self._partial_count
-+        self._publish_partial(req_id, full_text, seq, partial_index)
-+        self._partial_count += 1
-+
-+        if self._partial_count >= self._partials_before_final:
-+            self._publish_final(req_id, full_text, seq)
-+            self._reset_turn()
-+
-+    # ------------------------------------------------------------------
-+    # Internal helpers
-+    # ------------------------------------------------------------------
-+    def _publish_ready(self) -> None:
++    def _publish_nlg(self, req_id: str, text: str) -> None:
 +        event = {
-+            "type": EVT_ASR_READY,
-+            "vendor": self._vendor,
-+            "source": "asr_adapter",
-+        }
-+        self._publish(event)
-+
-+    def _publish_partial(self, req_id: str, text: str, seq: int, partial_index: int) -> None:
-+        event = {
-+            "type": EVT_ASR_PARTIAL,
++            "type": EVT_NLG,
 +            "req_id": req_id,
 +            "text": text,
-+            "confidence": self._partial_confidence,
-+            "vendor": self._vendor,
-+            "meta": {
-+                "seq": seq,
-+                "partial_index": partial_index,
-+            },
-+            "source": "asr_adapter",
++            "source": "llm_adapter",
 +        }
-+        self._publish(event)
-+
-+    def _publish_final(self, req_id: str, text: str, seq: int) -> None:
-+        event = {
-+            "type": EVT_ASR_FINAL,
-+            "req_id": req_id,
-+            "text": text,
-+            "confidence": self._final_confidence,
-+            "vendor": self._vendor,
-+            "meta": {
-+                "seq": seq,
-+            },
-+            "source": "asr_adapter",
-+        }
-+        self._publish(event)
-+
-+    def _publish(self, event: dict) -> None:
 +        self._bus.publish(event)
 +
-+    def _ensure_req_id(self) -> str:
-+        req_id = self._current_req_id
-+        if req_id is None:
-+            self._req_seq += 1
-+            req_id = f"dg-{self._req_seq:05d}"
-+            self._current_req_id = req_id
-+        return req_id
 +
-+    def _reset_turn(self) -> None:
-+        self._current_req_id = None
-+        self._partial_count = 0
-+        self._buffer.clear()
-+
-+    @staticmethod
-+    def _normalize_chunk(chunk: bytes | bytearray, seq: int) -> str:
-+        try:
-+            decoded = bytes(chunk).decode("utf-8", errors="ignore").strip()
-+        except Exception:  # pragma: no cover - defensive
-+            decoded = ""
-+        if decoded:
-+            return decoded
-+        return f"[seq:{seq}]"
-+
-+
-+__all__ = ["ASRAdapter"]
++__all__ = ["LLMAdapter"]
 diff --git a/scripts/run_build05_tests.sh b/scripts/run_build05_tests.sh
-new file mode 100755
-index 0000000000000000000000000000000000000000..b292018833cc09d38d93858939a67011e1942272
---- /dev/null
+old mode 100644
+new mode 100755
+index b292018833cc09d38d93858939a67011e1942272..45cfef93af8c51244dcdfa6c17a1674e4a92e686
+--- a/scripts/run_build05_tests.sh
 +++ b/scripts/run_build05_tests.sh
-@@ -0,0 +1,7 @@
-+#!/usr/bin/env bash
-+set -euo pipefail
-+export PYTHONPATH="${PYTHONPATH:-.}:."
-+PY="${PYTHON:=python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python
-+"$PY" -m unittest -v \
-+  tests.test_asr_adapter_basic
-+echo "BUILD_05_TESTS: PASS"
-diff --git a/tests/test_asr_adapter_basic.py b/tests/test_asr_adapter_basic.py
+@@ -1,7 +1,8 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ export PYTHONPATH="${PYTHONPATH:-.}:."
+ PY="${PYTHON:=python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python
+ "$PY" -m unittest -v \
+-  tests.test_asr_adapter_basic
++  tests.test_asr_adapter_basic \
++  tests.test_llm_stub
+ echo "BUILD_05_TESTS: PASS"
+diff --git a/tests/test_llm_stub.py b/tests/test_llm_stub.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..a5b60bbb884a30f1018d3cc887632ef1de743c07
+index 0000000000000000000000000000000000000000..fceeb1ed850e1775626c97d480751ef84a92680f
 --- /dev/null
-+++ b/tests/test_asr_adapter_basic.py
-@@ -0,0 +1,95 @@
-+import asyncio
-+import os
++++ b/tests/test_llm_stub.py
+@@ -0,0 +1,37 @@
 +import unittest
-+from unittest.mock import patch
 +
 +from app.telemetry import bus
-+from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL, EVT_ASR_READY
-+from app.voice_v2.asr import ASRAdapter
++from app.voice_v2 import EVT_NLG
++from app.voice_v2.llm import LLMAdapter
 +
 +
-+class FakeWebSocket:
-+    """Minimal websocket stub to capture keepalive frames."""
-+
-+    def __init__(self) -> None:
-+        self.sent: list[str] = []
-+        self.closed = False
-+        self.close_code: int | None = None
-+
-+    async def send(self, message: str) -> None:
-+        self.sent.append(message)
-+
-+    async def close(self) -> None:
-+        self.closed = True
-+        self.close_code = 1000
-+
-+
-+class TestASRAdapterBasic(unittest.TestCase):
++class TestLLMStub(unittest.TestCase):
 +    def setUp(self) -> None:
 +        bus.reset()
 +
 +    def tearDown(self) -> None:
 +        bus.reset()
 +
-+    def test_ready_emitted_once(self) -> None:
-+        asyncio.run(self._test_ready_emitted_once())
-+
-+    def test_partials_then_final(self) -> None:
-+        asyncio.run(self._test_partials_then_final())
-+
-+    def test_stop_cancels_keepalive(self) -> None:
-+        asyncio.run(self._test_stop_cancels_keepalive())
-+
-+    async def _test_ready_emitted_once(self) -> None:
-+        ws = FakeWebSocket()
-+        adapter = ASRAdapter()
++    def test_generate_emits_single_event(self) -> None:
++        adapter = LLMAdapter(canned_text="Stub reply")
 +        events: list[dict] = []
 +        token = bus.subscribe("*", events.append)
 +        try:
-+            await adapter.start(ws)
-+            ready_events = [evt for evt in events if evt["type"] == EVT_ASR_READY]
-+            self.assertEqual(len(ready_events), 1)
-+            await adapter.stop()
++            result = adapter.generate(req_id="req-123", text="Hello?")
 +        finally:
 +            bus.unsubscribe(token)
 +
-+    async def _test_partials_then_final(self) -> None:
-+        ws = FakeWebSocket()
-+        adapter = ASRAdapter()
-+        events: list[dict] = []
-+        token = bus.subscribe("*", events.append)
-+        try:
-+            await adapter.start(ws)
-+            adapter.feed(b"hello", seq=0)
-+            adapter.feed(b"world", seq=1)
++        self.assertEqual(result["text"], "Stub reply")
++        self.assertIn("timing", result)
++        self.assertIsInstance(result["timing"], dict)
++        self.assertIn("total_ms", result["timing"])
++        self.assertGreaterEqual(result["timing"]["total_ms"], 0)
 +
-+            partials = [evt for evt in events if evt["type"] == EVT_ASR_PARTIAL]
-+            finals = [evt for evt in events if evt["type"] == EVT_ASR_FINAL]
-+            self.assertGreaterEqual(len(partials), 2)
-+            self.assertEqual(len(finals), 1)
++        nlg_events = [evt for evt in events if evt["type"] == EVT_NLG]
++        self.assertEqual(len(nlg_events), 1)
++        nlg_event = nlg_events[0]
++        self.assertEqual(nlg_event["req_id"], "req-123")
++        self.assertEqual(nlg_event["text"], "Stub reply")
 +
-+            req_ids = {evt["req_id"] for evt in partials}
-+            req_ids.add(finals[0]["req_id"])
-+            self.assertEqual(len(req_ids), 1)
-+
-+            # New audio should start a fresh turn.
-+            adapter.feed(b"again", seq=2)
-+            adapter.feed(b"done", seq=3)
-+            finals = [evt for evt in events if evt["type"] == EVT_ASR_FINAL]
-+            self.assertEqual(len(finals), 2)
-+            await adapter.stop()
-+        finally:
-+            bus.unsubscribe(token)
-+
-+    async def _test_stop_cancels_keepalive(self) -> None:
-+        ws = FakeWebSocket()
-+        adapter = ASRAdapter()
-+        with patch.dict(os.environ, {"DG_KEEPALIVE_INTERVAL_S": "0.05"}, clear=False):
-+            await adapter.start(ws)
-+            await asyncio.sleep(0.12)
-+            count_before_close = len(ws.sent)
-+            self.assertGreaterEqual(count_before_close, 1)
-+            await adapter.stop()
-+            await asyncio.sleep(0.06)
-+            self.assertEqual(count_before_close, len(ws.sent))
-+            self.assertTrue(ws.closed)
++        other_types = [evt["type"] for evt in events if evt["type"] != EVT_NLG]
++        self.assertEqual(other_types, [])
