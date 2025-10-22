@@ -1,449 +1,274 @@
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 242f1d0d47736ee380a1c85db67638ff94277e1b..eb99c99ca8fcd8a912e961798f795606d0c14e52 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -30,50 +30,53 @@ from app.voice_v2 import (
- from app.voice_v2.gate import GateController
- from app.voice_v2.conversation_buffer import ConversationBuffer
- from app.voice_v2.vad import VADAggregator
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
- READY = "Ready"
- LISTENING = "Listening"
- THINKING = "Thinking"
- RESPONDING = "Responding"
- CONFIRMING_BARGE = "ConfirmingBarge"
- 
- _PCM_CODEC = "pcm_s16le"
- _PCM_RATE_HZ = 16000
- _PCM_CHANNELS = 1
- _PCM_DESCRIPTOR = {
-     "codec": _PCM_CODEC,
-     "rate_hz": _PCM_RATE_HZ,
-     "channels": _PCM_CHANNELS,
- }
- 
-+_DEFAULT_VOICE_ID = "alloy-en-US-001"
-+_DEFAULT_LOCALE = "en-US"
-+
- _INFO_SLO = {
-     "first_partial_ms": {"target": 450, "p95": 750},
-     "final_ms": {"target": 2000, "p95": 3000},
-     "tts_start_ms": {"target": 350, "p95": 600},
- }
- _PCM_SAMPLE_BYTES = 2 * _PCM_CHANNELS
- 
- EVT_TURN_STATE = "EVT_TURN_STATE"
- EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
- EVT_TURN_END = "EVT_TURN_END"
- EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
- 
- 
- @dataclass
- class _Envelope:
-     """Normalized telemetry envelope returned by the engine hooks."""
- 
-     type: str
-     sid: str
-     payload: Dict[str, Any]
- 
-     def to_dict(self) -> Dict[str, Any]:
-         data = {"type": self.type, "sid": self.sid}
-         data.update(self.payload)
-         if "meta" in data and isinstance(data["meta"], Mapping):
-@@ -241,61 +244,66 @@ class EngineV2:
-     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
-         """Capture the WebSocket closing handshake."""
-         meta = {"code": code, "reason": reason}
-         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
-         self._publish(event)
-         if self._last_sid == sid:
-             self._last_sid = None
-             self._policy_snapshot = None
-         self._sessions.pop(sid, None)
-         self._aggregators.pop(sid, None)
- 
-     def on_tts_start(
-         self, sid: str, utt_id: str, post_hold_ms: int | None = None
-     ) -> None:
-         """Engage the TTS mask and emit a telemetry breadcrumb."""
- 
-         session = self._ensure_session(sid)
-         session.tts_utt_id = utt_id
-         if session.turn_started_ms is not None and session.perf_tts_start_ms is None:
-             elapsed = _now_ms() - session.turn_started_ms
-             if elapsed < 0:
-                 elapsed = 0
-             session.perf_tts_start_ms = elapsed
- 
-         hold_ms = post_hold_ms or 0
--        tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
-+        voice_id, locale = self._voice_profile()
-+        tts_meta = {
-+            "tts": {"utt_id": utt_id, "post_hold_ms": hold_ms},
-+            "voice_id": voice_id,
-+            "locale": locale,
-+        }
-         self._gate.set_reason(
-             "tts_active",
-             True,
-             sid=sid,
-             meta=tts_meta,
-         )
- 
-         self._publish_tts_mask(sid, "engaged")
- 
--        payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
-+        payload = {"meta": tts_meta}
-         event = self._envelope(sid, EVT_TTS_START, payload)
-         self._publish(event)
-         self._set_state(sid, RESPONDING, reason="tts_start")
- 
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_tts_start()
- 
-     def on_tts_end(
-         self, sid: str, utt_id: str, post_hold_ms: int | None = None
-     ) -> None:
-         """Release the TTS mask and optionally engage a post-hold."""
- 
-         hold_ms = post_hold_ms or 0
-         self._teardown_tts(sid, utt_id, post_hold_ms=hold_ms, transition_to_ready=True)
- 
-     def emit_tts_audio_chunk(self, sid: str, chunk: bytes | bytearray | memoryview) -> None:
-         """Emit a PCM chunk for server-to-client playback."""
- 
-         if not isinstance(sid, str) or not sid:
-             raise ValueError("sid must be a non-empty string")
- 
-         self._ensure_session(sid)
- 
-         if isinstance(chunk, (bytes, bytearray, memoryview)):
-@@ -447,54 +455,57 @@ class EngineV2:
-         self._bus.publish(dict(event))
- 
-     def _handle_outbound_chat_frame(self, event: Dict[str, Any]) -> None:
-         if event.get("type") != EVT_WS_JSON_SEND:
-             return
-         sid = event.get("sid")
-         if not isinstance(sid, str) or not sid:
-             return
-         frame: Mapping[str, Any] | None = None
-         raw_frame = event.get("frame")
-         if isinstance(raw_frame, Mapping):
-             frame = raw_frame
-         else:
-             payload = event.get("payload")
-             if isinstance(payload, Mapping):
-                 candidate = payload.get("frame")
-                 if isinstance(candidate, Mapping):
-                     frame = candidate
-         if frame is None:
-             return
-         if frame.get("type") != "chat.message":
-             return
-         self._conversation_buffer.append(sid, frame)
- 
-     def _emit_info_frame(self, sid: str) -> None:
-+        voice_id, locale = self._voice_profile()
-         frame = {
-             "type": "info",
-             "audio": dict(_PCM_DESCRIPTOR),
-             "slo": json.loads(json.dumps(_INFO_SLO)),
-+            "voice_id": voice_id,
-+            "locale": locale,
-         }
-         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         meta = {
-             "ws": {
-                 "dir": "out",
-                 "size": len(serialized.encode("utf-8")),
-                 "preview": serialized,
-             }
-         }
-         payload = {"meta": meta, "frame": frame}
-         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-         self._publish(event)
- 
-     def _publish_chat_history(self, sid: str) -> None:
-         messages = self._conversation_buffer.messages(sid)
-         frame = {"type": "chat.history", "messages": messages, "next_cursor": None}
-         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         meta = {
-             "ws": {
-                 "dir": "out",
-                 "size": len(serialized.encode("utf-8")),
-                 "preview": serialized,
-             }
-         }
-         payload = {"meta": meta, "frame": frame}
-@@ -673,50 +684,88 @@ class EngineV2:
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_engine_mode_change(new_state)
- 
-         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
-         if reason is not None:
-             breadcrumb_meta["reason"] = reason
-         breadcrumb_payload = {"meta": breadcrumb_meta}
-         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
-         self._publish(breadcrumb_event)
- 
-     def turn_context(self, sid: str) -> Optional[Dict[str, str]]:
-         """Return the active turn context for ``sid`` if a turn is in progress."""
- 
-         session = self._sessions.get(sid)
-         if (
-             session is None
-             or session.turn_id is None
-             or session.req_id is None
-             or session.state == READY
-         ):
-             return None
- 
-         return {"turn_id": session.turn_id, "req_id": session.req_id}
- 
-+    def _voice_profile(self) -> tuple[str, str]:
-+        """Return the active voice identifier and locale.
-+
-+        Preference order:
-+
-+        1. Current policy snapshot voice block (``policy["voice"]``).
-+        2. Top-level ``voice_id``/``locale`` keys in the snapshot.
-+        3. Static server defaults when the policy omits the fields.
-+        """
-+
-+        snapshot = self.policy_snapshot or {}
-+        voice_id: Optional[str] = None
-+        locale: Optional[str] = None
-+
-+        voice_block = snapshot.get("voice")
-+        if isinstance(voice_block, Mapping):
-+            voice_candidate = voice_block.get("voice_id")
-+            if isinstance(voice_candidate, str) and voice_candidate:
-+                voice_id = voice_candidate
-+            locale_candidate = voice_block.get("locale")
-+            if isinstance(locale_candidate, str) and locale_candidate:
-+                locale = locale_candidate
-+
-+        top_level_voice = snapshot.get("voice_id")
-+        if isinstance(top_level_voice, str) and top_level_voice:
-+            voice_id = voice_id or top_level_voice
-+
-+        top_level_locale = snapshot.get("locale")
-+        if isinstance(top_level_locale, str) and top_level_locale:
-+            locale = locale or top_level_locale
-+
-+        if not voice_id:
-+            voice_id = _DEFAULT_VOICE_ID
-+        if not locale:
-+            locale = _DEFAULT_LOCALE
-+
-+        return voice_id, locale
-+
-     def _publish_tts_mask(self, sid: str, phase: str) -> None:
-         mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})
-         self._publish(mask_event)
- 
-     def _teardown_tts(
-         self,
-         sid: str,
-         utt_id: str,
-         *,
-         reason: str | None = None,
-         post_hold_ms: int = 0,
-         transition_to_ready: bool,
-     ) -> None:
-         session = self._ensure_session(sid)
-         if session.tts_utt_id == utt_id:
-             session.tts_utt_id = None
- 
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_tts_end()
- 
-         payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
-         if reason:
-             payload["reason"] = reason
- 
-diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
-index eb6edd52135d1bdde428d4a4ef4db07105a5448c..23656ebf117f0babf56f946cfe7ecf8c3dcee714 100644
---- a/docs/10_CONTRACT_WS.md
-+++ b/docs/10_CONTRACT_WS.md
-@@ -106,66 +106,78 @@ Copy code
- {
-   "type": "policy.interaction",
-   "ts_ms": 1730000000000,
-   "level": "info",  
-   "policy": {
-     "mode": "idle",                  // "idle" | "assistant_speaking" | ...
-     "allow_auto_vad": true,
-     "barge_in_enabled": true
-   }
- }
- Other internal policy keys (e.g., telemetry, sampling) may be present in server telemetry/export, but MUST NOT be sent over WS to browsers as part of policy.interaction. (See ADR notes.)
- 
- Initial info frame (emitted after handshake)
- The server emits a single info frame containing connection/session hints:
- 
- json
- Copy code
- {
-   "type": "info",
-   "audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },
-   "slo": {
-     "first_partial_ms": { "target": 450, "p95": 750 },
-     "final_ms":         { "target": 2000, "p95": 3000 },
-     "tts_start_ms":     { "target": 350,  "p95": 600 }
-   },
-+  "voice_id": "alloy-en-US-001",
-+  "locale": "en-US",
-   "meta": {
-     "sid": "a1b2c3",
-     "version": "2",
-     "features": ["tts","asr","barge_in"],
--    "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000,
--    "voice_id": "alloy-en-US-001",
--    "locale": "en-US"
-+    "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000
-   }
- }
- info.audio describes server→client playback format (binary WS messages, see “Binary audio framing”).
- 
- slo provides advisory UI thresholds. The block is optional; clients MUST handle
- connections where it is absent.
- 
- voice_id/locale let the client label playback.
- 
-+- `voice_id` is a stable string slug that identifies the TTS configuration. It
-+  follows the `<provider>-<locale>-<variant>` pattern (for example
-+  `alloy-en-US-001`).
-+- `locale` is a BCP 47 language tag constrained to `ll-CC` casing (`en-US`,
-+  `fr-FR`, `es-ES`, …). This is the locale the server will narrate in and
-+  should inform captioning or playback labels.
-+
-+The server **always** populates `info.voice_id` and `info.locale`. Every
-+`tts.start` telemetry envelope mirrors the same identifiers in
-+`meta.voice_id`/`meta.locale` so the client can update UI state when playback
-+begins.
-+
- ### Binary audio framing (server → client TTS)
- 
- - Codec: **PCM s16le**, mono, **16 kHz** (`info.audio` announces the descriptor).
- - The server emits one PCM buffer per **binary WebSocket message**. No frame headers or chunk counters are prepended.
- - Each chunk length MUST be a multiple of `channels * 2` bytes (16‑bit samples).
- - The existing binary routing guard still rejects non-audio payloads.
- 
- Client decoding example (WebAudio):
- 
- ```js
- const sampleRate = 16000;
- const audioCtx = new AudioContext({ sampleRate });
- 
- function playPcmChunk(arrayBuffer) {
-   const int16 = new Int16Array(arrayBuffer);
-   const float32 = new Float32Array(int16.length);
-   for (let i = 0; i < int16.length; i += 1) {
-     float32[i] = Math.max(-1, Math.min(1, int16[i] / 32768));
-   }
- 
-   const buffer = audioCtx.createBuffer(1, float32.length, sampleRate);
-   buffer.copyToChannel(float32, 0);
- 
-   const source = audioCtx.createBufferSource();
-   source.buffer = buffer;
-diff --git a/tests/test_voice_locale.py b/tests/test_voice_locale.py
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..02d2870c20ec95770d0cbe17336187075fc14ce2
+index 0000000000000000000000000000000000000000..0572f9a1ec6a57a78d3b545e0829bdb89b11766f
 --- /dev/null
-+++ b/tests/test_voice_locale.py
-@@ -0,0 +1,83 @@
-+import unittest
++++ b/app/static/js/ws_client.js
+@@ -0,0 +1,268 @@
++(() => {
++  const HEARTBEAT_INTERVAL_MS = 15000;
++  const DEFAULT_CLOSE_REASON = "client_shutdown";
++  const SUBPROTOCOL = "chat.v2";
 +
-+from app.voice_v2 import EVT_TTS_START, EVT_WS_JSON_SEND
-+from app.voice_v2.engine import EngineV2
++  const AppState = window.AppState;
++  if (!AppState) {
++    throw new Error("AppState store is required before loading WSClient");
++  }
 +
++  let socket = null;
++  let heartbeatTimerId = null;
++  let expectInfoFrame = true;
++  let lastPingAt = null;
++  let transportFactory = (url, protocol) => new WebSocket(url, protocol);
 +
-+class _RecordingBus:
-+    def __init__(self) -> None:
-+        self.events: list[dict] = []
++  function updateState(patch) {
++    AppState.setState(patch);
++  }
 +
-+    def publish(self, event: dict) -> None:  # pragma: no cover - helper used in tests
-+        self.events.append(dict(event))
++  function computeUrl(accessToken, resumeToken) {
++    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
++    const base = `${protocol}//${window.location.host}/ws/v2/chat`;
++    const params = new URLSearchParams({ access_token: accessToken });
++    if (resumeToken) params.set("resume", resumeToken);
++    return `${base}?${params.toString()}`;
++  }
 +
++  function clearHeartbeat() {
++    if (heartbeatTimerId) {
++      clearInterval(heartbeatTimerId);
++      heartbeatTimerId = null;
++    }
++    updateState({ heartbeatTimerId: null, lastPingAt: null });
++  }
 +
-+class TestVoiceLocale(unittest.TestCase):
-+    def setUp(self) -> None:
-+        self.bus = _RecordingBus()
-+        self.engine = EngineV2(telemetry_bus=self.bus)
-+        self.sid = "voice-locale"
++  function sendRaw(payload) {
++    if (!socket || socket.readyState !== WebSocket.OPEN) return;
++    socket.send(payload);
++  }
 +
-+    def _info_frames(self) -> list[dict]:
-+        frames: list[dict] = []
-+        for event in self.bus.events:
-+            if event.get("type") != EVT_WS_JSON_SEND:
-+                continue
-+            frame = event.get("frame")
-+            if isinstance(frame, dict) and frame.get("type") == "info":
-+                frames.append(frame)
-+        return frames
++  function sendJson(frame) {
++    try {
++      sendRaw(JSON.stringify(frame));
++    } catch (err) {
++      console.error("WSClient sendJson error", err);
++    }
++  }
 +
-+    def _tts_start_events(self) -> list[dict]:
-+        return [evt for evt in self.bus.events if evt.get("type") == EVT_TTS_START]
++  function sendPing() {
++    if (!socket || socket.readyState !== WebSocket.OPEN) return;
++    lastPingAt = Date.now();
++    updateState({ lastPingAt });
++    sendJson({ type: "ping" });
++  }
 +
-+    def test_info_frame_includes_voice_and_locale(self) -> None:
-+        self.engine.on_open(self.sid, {})
++  function startHeartbeat() {
++    clearHeartbeat();
++    sendPing();
++    heartbeatTimerId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
++    updateState({ heartbeatTimerId });
++  }
 +
-+        info_frames = self._info_frames()
-+        self.assertTrue(info_frames, "expected at least one info frame")
++  function dispatchFrame(frame) {
++    if (!frame || typeof frame.type !== "string") return;
++    const type = frame.type;
++    try {
++      window.dispatchEvent(new CustomEvent(type, { detail: frame }));
++      if (type.includes(".")) {
++        const baseType = type.split(".")[0];
++        window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
++      }
++    } catch (err) {
++      console.warn("WSClient dispatch error", err);
++    }
++  }
 +
-+        frame = info_frames[-1]
-+        self.assertEqual(frame.get("voice_id"), "alloy-en-US-001")
-+        self.assertEqual(frame.get("locale"), "en-US")
++  function handleInfoFrame(frame) {
++    const meta = frame && frame.meta;
++    if (!meta || typeof meta.sid !== "string") {
++      console.error("Invalid info frame", frame);
++      close("bad_info_frame");
++      return;
++    }
++    expectInfoFrame = false;
++    const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
++    const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
++    const expiresAt = resumeToken && resumeTtlMs ? Date.now() + resumeTtlMs : null;
++    updateState({
++      connectionState: "connected",
++      sid: meta.sid,
++      resumeToken,
++      resumeTtlMs,
++      resumeExpiresAt: expiresAt,
++      infoFrame: frame
++    });
++    startHeartbeat();
++  }
 +
-+    def test_tts_start_meta_matches_info(self) -> None:
-+        self.engine.on_open(self.sid, {})
-+        self.engine.on_tts_start(self.sid, "utt-1")
++  function handlePongFrame() {
++    if (typeof lastPingAt === "number") {
++      const latency = Math.max(0, Date.now() - lastPingAt);
++      updateState({ latencyMs: latency });
++    }
++  }
 +
-+        info_frames = self._info_frames()
-+        self.assertTrue(info_frames, "expected an info frame before tts.start")
-+        info_voice = info_frames[-1].get("voice_id")
-+        info_locale = info_frames[-1].get("locale")
++  function handleMessageFrame(frame) {
++    if (expectInfoFrame) {
++      if (frame.type !== "info") {
++        console.error("Expected info frame first, received", frame.type);
++        close("bad_info_sequence");
++        return;
++      }
++      handleInfoFrame(frame);
++    } else if (frame.type === "info") {
++      handleInfoFrame(frame);
++    } else if (frame.type === "pong") {
++      handlePongFrame();
++    } else if (frame.type === "ping") {
++      sendJson({ type: "pong", t: Date.now() });
++    } else if (frame.type === "error") {
++      console.error("WS error frame", frame);
++    }
++    dispatchFrame(frame);
++  }
 +
-+        tts_events = self._tts_start_events()
-+        self.assertTrue(tts_events, "expected a tts.start event")
-+        meta = tts_events[-1].get("meta") or {}
++  function parseFrame(event) {
++    const { data } = event;
++    if (typeof data === "string") {
++      try {
++        const frame = JSON.parse(data);
++        handleMessageFrame(frame);
++      } catch (err) {
++        console.error("Failed to parse WS frame", err, data);
++      }
++      return;
++    }
++    if (data instanceof Blob) {
++      window.dispatchEvent(new CustomEvent("binary", { detail: data }));
++      return;
++    }
++    console.warn("Unknown WS frame type", data);
++  }
 +
-+        self.assertEqual(meta.get("voice_id"), info_voice)
-+        self.assertEqual(meta.get("locale"), info_locale)
-+
-+        tts_meta = meta.get("tts")
-+        self.assertIsInstance(tts_meta, dict)
-+        self.assertEqual(tts_meta.get("utt_id"), "utt-1")
-+
-+    def test_policy_snapshot_overrides_defaults(self) -> None:
-+        self.engine.on_open(self.sid, {})
-+
-+        self.engine.policy_snapshot = {
-+            "voice": {"voice_id": "nova-en-GB-002", "locale": "en-GB"}
++  function attachSocket(ws) {
++    const handlers = {
++      open: () => {
++        updateState({ websocket: ws });
++      },
++      message: parseFrame,
++      error: (event) => {
++        console.error("WebSocket error", event);
++        window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
++      },
++      close: (event) => {
++        if (socket === ws) {
++          socket = null;
++          expectInfoFrame = true;
 +        }
-+        self.engine._emit_info_frame(self.sid)
-+        self.engine.on_tts_start(self.sid, "utt-policy")
++        clearHeartbeat();
++        updateState({ connectionState: "disconnected", websocket: null });
++        window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
++      }
++    };
++    ws.addEventListener("open", handlers.open);
++    ws.addEventListener("message", handlers.message);
++    ws.addEventListener("error", handlers.error);
++    ws.addEventListener("close", handlers.close);
++    ws.__handlers = handlers;
++  }
 +
-+        info_frame = self._info_frames()[-1]
-+        tts_meta = self._tts_start_events()[-1].get("meta") or {}
++  function detachSocket(ws) {
++    const handlers = ws && ws.__handlers;
++    if (!handlers) return;
++    ws.removeEventListener("open", handlers.open);
++    ws.removeEventListener("message", handlers.message);
++    ws.removeEventListener("error", handlers.error);
++    ws.removeEventListener("close", handlers.close);
++    delete ws.__handlers;
++  }
 +
-+        self.assertEqual(info_frame.get("voice_id"), "nova-en-GB-002")
-+        self.assertEqual(info_frame.get("locale"), "en-GB")
-+        self.assertEqual(tts_meta.get("voice_id"), "nova-en-GB-002")
-+        self.assertEqual(tts_meta.get("locale"), "en-GB")
++  function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
++    if (!ws) return;
++    detachSocket(ws);
++    try {
++      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
++        ws.close(1000, reason);
++      }
++    } catch (err) {
++      console.warn("WSClient cleanup close error", err);
++    }
++    if (socket === ws) {
++      socket = null;
++      expectInfoFrame = true;
++    }
++  }
 +
++  function open(accessToken, { resumeToken = null } = {}) {
++    if (!accessToken) {
++      throw new Error("accessToken is required to open the chat socket");
++    }
++    if (socket) {
++      cleanupSocket(socket, "superseded");
++    }
++    expectInfoFrame = true;
++    const url = computeUrl(accessToken, resumeToken);
++    const ws = transportFactory(url, SUBPROTOCOL);
++    socket = ws;
++    updateState({
++      connectionState: resumeToken ? "resuming" : "connecting",
++      accessToken,
++      websocket: ws,
++      latencyMs: null,
++      lastPingAt: null
++    });
++    attachSocket(ws);
++    return ws;
++  }
 +
-+if __name__ == "__main__":  # pragma: no cover - convenience
-+    unittest.main()
++  function close(reason = DEFAULT_CLOSE_REASON) {
++    if (!socket) {
++      updateState({ connectionState: "disconnected" });
++      return;
++    }
++    const ws = socket;
++    cleanupSocket(ws, reason);
++    clearHeartbeat();
++    updateState({ connectionState: "disconnected", websocket: null });
++  }
++
++  function send(frame) {
++    if (!socket || socket.readyState !== WebSocket.OPEN) {
++      console.warn("WSClient.send called without an open socket");
++      return;
++    }
++    const payload = typeof frame === "string" ? frame : JSON.stringify(frame);
++    sendRaw(payload);
++  }
++
++  const debug = {
++    simulateIncomingFrame(frame) {
++      handleMessageFrame(frame);
++    },
++    recordPing(ts) {
++      lastPingAt = ts;
++      updateState({ lastPingAt: ts });
++    },
++    setTransportFactory(factory) {
++      transportFactory = typeof factory === "function" ? factory : transportFactory;
++    },
++    resetTransportFactory() {
++      transportFactory = (url, protocol) => new WebSocket(url, protocol);
++    }
++  };
++
++  window.WSClient = {
++    open,
++    close,
++    send,
++    get socket() {
++      return socket;
++    },
++    isConnected() {
++      return !!socket && socket.readyState === WebSocket.OPEN && AppState.getState().connectionState === "connected";
++    },
++    __debug: debug
++  };
++})();
