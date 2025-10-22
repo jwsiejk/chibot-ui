@@ -97,11 +97,16 @@
         </button>
       </div>
       <div class="toolbar-right">
+        <form id="textChatForm" class="text-chat" autocomplete="off" style="display:flex; gap:8px; align-items:center;">
+          <input type="text" id="textChatInput" name="textChatInput" placeholder="Type to interrupt…" aria-label="Send a message" style="flex:1; min-width:160px; padding:8px 12px; border-radius:12px; border:1px solid var(--border); background:rgba(0,0,0,0.35); color:var(--text);" />
+          <button type="submit" class="pill secondary" id="textChatSendBtn">Send</button>
+        </form>        
         <span class="latency" id="latencyHint">~0 ms</span>
       </div>
     </footer>
   </div>
 
+  <script src="./transcript_view.js"></script>  
   <script src="./app.js"></script>
 </body>
 </html>
