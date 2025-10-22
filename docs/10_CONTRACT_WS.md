@@ -183,6 +183,11 @@ Copy code
 {"type":"asr.partial","req_id":"r-1","text":"...","confidence":0.73}
 {"type":"asr.final","req_id":"r-1","text":"...","confidence":0.91}
 
+`asr.partial` frames are **opportunistic hints**. Under backpressure the server coalesces partials,
+emitting at most one every ~50 ms and keeping the latest text. The server maintains a monotonic
+`partial_seq` counter; clients MUST treat gaps as normal and continue waiting for the
+authoritative `asr.final` frame.
+
 {"type":"error","code":"bad_subprotocol","message":"use chat.v2","retryable":false}
 {"type":"error","code":"schema_invalid","message":"audio.header requires integer channels","retryable":false}
 {"type":"error","code":"invalid_message","message":"unknown type admin.nuke","retryable":false}
