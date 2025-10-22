@@ -53,6 +53,8 @@ _OUTBOUND_ALLOWED_TYPES = {
     "asr.partial",
     "asr.final",
     "error",
+    "chat.message",
+    "chat.history",
 }
 
 _OUTBOX_MAXSIZE = 256

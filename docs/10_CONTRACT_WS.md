@@ -7,6 +7,16 @@
 ---
 
 ## Client → Server frames
+### Chat (typed user input)
+
+The client may send a typed message at any time (including while the assistant is speaking):
+```json
+{"type":"chat.user","text":"<utf8 text>","client_msg_id":"<optional client UUID>"}
+```
+- Max size: **64 KiB** (same as JSON text frame limit).
+- Bad UTF‑8 ⇒ close **1007**. Other schema issues ⇒ `{"type":"error","code":"schema_invalid"}` then close **1003**.
+- If `barge_in_enabled:true` and the assistant is speaking, `chat.user` is treated as **barge‑in** with `source:"text"`.
+
 - `{"type":"ping"}`
 - `{"type":"client.ready"}`
 - **Audio:** binary frames (Opus or PCM).  
@@ -204,3 +214,28 @@ To handle network reordering and loss, the server maintains a **per-session** se
 ```json
 {"type":"audio.header","format":"opus","sample_rate":48000,"channels":1,"seq_start":0}
 ```
+
+### Chat (server messages & history)
+
+**Single message:**
+```json
+{"type":"chat.message","id":"<uuid>","role":"user|assistant","text":"<utf8>","origin":"voice|text","turn_id":"<uuid>","req_id":"<uuid>","ts_ms":1730000000000}
+```
+
+**History snapshot (sent on connect/resume):**
+```json
+{"type":"chat.history","messages":[ /* array of chat.message */ ], "next_cursor": null}
+```
+
+**Keepalive (implementation detail):**
+Servers MAY send a lightweight keepalive frame:
+```json
+{"type":"keepalive","ts":1730000000000}
+```
+(Clients should ignore if unrecognized.)
+
+**Text barge‑in:** If a `{"type":"chat.user"}` arrives while `policy.mode:"assistant_speaking"` and `barge_in_enabled:true`, the server will:
+- emit `EVT_BARGE_IN {source:"text", granted:true}`,
+- cancel current TTS (emitting `EVT_TTS_END {reason:"canceled"}`),
+- clear the TTS mask (`EVT_TTS_MASK {phase:"cleared"}`) and update `EVT_MIC_GATE` (drop `tts_active`),
+- begin a new user turn from the provided text.

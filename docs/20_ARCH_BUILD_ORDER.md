@@ -58,3 +58,16 @@
   - Header mismatch (declared PCM 16k vs actual 48k) ⇒ `schema_invalid` + close 1003.
   - Partial latency budget exceed triggers circuit breaker and `EVT_PROVIDER_TRIP`.
   - Redaction: provider opaque IDs appear only in `EVT_VENDOR_DEBUG`, never in client-visible frames.
+
+- **B4-H:** **Outbound allow‑list extension (Chat frames)**  
+  **Files:** `app/ws/adapter.py` (update), `tests/test_adapter_outbound_bridge.py` (update)  
+  **Non‑goals:** No UI work; no changes to error taxonomy.  
+  **Change:** Extend the outbound bridge **allow‑list** to include chat frames so the client receives chat alongside policy/tts/asr:  
+  `chat.message`, `chat.history`  
+  **Acceptance:**  
+   • `chat.message` frames for the active `sid` are forwarded to the client; other sids are not.  
+   • `chat.history` is forwarded when published (e.g., on connect/resume).  
+   • Non‑allow‑listed types (e.g., `vendor.debug`) are still dropped.  
+   • Existing allow‑listed types (`policy.interaction`, `tts.*`, `asr.*`, `error`) continue to forward unchanged.  
+   • Tests updated to assert forwarding of `chat.message` and dropping of non‑allow‑listed frames.
+

@@ -107,8 +107,28 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     def test_happy_path_delivers_policy_interaction(self) -> None:
         asyncio.run(self._test_happy_path())
 
+    def test_chat_message_forwarded_with_matching_sid(self) -> None:
+        asyncio.run(
+            self._test_payload_forwarded({"type": "chat.message", "message_id": "m-1"})
+        )
+
+    def test_chat_history_forwarded_with_matching_sid(self) -> None:
+        asyncio.run(
+            self._test_payload_forwarded(
+                {
+                    "type": "chat.history",
+                    "messages": [{"id": "m-1", "role": "user", "text": "hi"}],
+                }
+            )
+        )
+
     def test_sid_isolation_drops_other_sessions(self) -> None:
         asyncio.run(self._test_sid_isolation())
+
+    def test_chat_message_dropped_for_other_sessions(self) -> None:
+        asyncio.run(
+            self._test_payload_other_sid_drop({"type": "chat.message", "message_id": "ignored"})
+        )
 
     def test_allow_list_blocks_unknown_types(self) -> None:
         asyncio.run(self._test_allow_list())
@@ -133,6 +153,19 @@ class TestAdapterOutboundBridge(unittest.TestCase):
         finally:
             await harness.close()
 
+    async def _test_payload_forwarded(self, payload: Dict[str, Any]) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+        try:
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+
+            frame = await harness.wait_for_outbound(lambda data: data == payload)
+            self.assertEqual(frame, payload)
+        finally:
+            await harness.close()
+
     async def _test_sid_isolation(self) -> None:
         engine = RecordingEngine()
         adapter = ChatV2Adapter(engine=engine)
@@ -144,6 +177,22 @@ class TestAdapterOutboundBridge(unittest.TestCase):
 
             with self.assertRaises(TimeoutError):
                 await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction", timeout=0.1)
+            self.assertEqual(len(harness.outbound_frames), 0)
+        finally:
+            await harness.close()
+
+    async def _test_payload_other_sid_drop(self, payload: Dict[str, Any]) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+        try:
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": "other", "payload": payload})
+
+            with self.assertRaises(TimeoutError):
+                await harness.wait_for_outbound(
+                    lambda data: data.get("type") == payload.get("type"), timeout=0.1
+                )
             self.assertEqual(len(harness.outbound_frames), 0)
         finally:
             await harness.close()
