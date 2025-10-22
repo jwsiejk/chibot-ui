@@ -316,8 +316,83 @@ def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
     if not sid:
         return None
 
+    handler: Optional[HttpHandler]
     if action == _TRACE_SEGMENT:
-        return partial(handle_flow_trace, sid=sid)
-    if action == _ZIP_SEGMENT:
-        return partial(handle_flow_zip, sid=sid)
+        handler = partial(handle_flow_trace, sid=sid)
+    elif action == _ZIP_SEGMENT:
+        handler = partial(handle_flow_zip, sid=sid)
+    else:
+        handler = None
+
+    if handler is None:
+        return None
+
+    if _admin_cors_enabled():
+        return partial(_apply_admin_cors, handler)
+
+    return handler
+
+
+async def _apply_admin_cors(
+    handler: HttpHandler,
+    scope: dict,
+    receive: Callable[[], Awaitable[dict]],
+) -> Response:
+    response = await handler(scope, receive)
+    allow_origin = _resolve_admin_cors_origin(scope)
+    if allow_origin is None:
+        return response
+
+    encoded_origin = _encode_header_value(allow_origin)
+    if encoded_origin is None:
+        return response
+
+    headers = tuple(response.headers) + (
+        (b"access-control-allow-origin", encoded_origin),
+        (b"access-control-allow-methods", b"GET"),
+    )
+    return Response(status=response.status, body=response.body, headers=headers)
+
+
+def _admin_cors_enabled() -> bool:
+    env = (os.getenv("ASKCHIP_ENV") or "").strip().lower()
+    return env in {"dev", "staging"}
+
+
+def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
+    allowed = _parse_admin_cors_origins()
+    if not allowed:
+        return None
+
+    if "*" in allowed:
+        return "*"
+
+    origin = _decode_header(scope.get("headers", ()), b"origin")
+    if origin is None:
+        return None
+
+    normalized = origin.strip()
+    for entry in allowed:
+        if normalized == entry:
+            return normalized
     return None
+
+
+def _parse_admin_cors_origins() -> tuple[str, ...]:
+    raw = os.getenv("ASKCHIP_ADMIN_CORS_ORIGINS")
+    if not raw:
+        return ()
+
+    entries = []
+    for item in raw.split(","):
+        value = item.strip()
+        if value:
+            entries.append(value)
+    return tuple(entries)
+
+
+def _encode_header_value(value: str) -> Optional[bytes]:
+    try:
+        return value.encode("latin1")
+    except UnicodeEncodeError:  # pragma: no cover - defensive
+        return None
