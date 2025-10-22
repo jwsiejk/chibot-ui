@@ -1,314 +1,220 @@
-diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
-index 04f782fe10a7e4d3ee30f96192f226e599e0c69e..5792f12f1274a96d0d83430aa9965e13f801b62e 100644
---- a/app/telemetry/exporter.py
-+++ b/app/telemetry/exporter.py
-@@ -1,85 +1,152 @@
- """Minimal NDJSON file exporter for session telemetry."""
- from __future__ import annotations
- 
- import json
-+import os
-+import time
- from dataclasses import dataclass, field
- from pathlib import Path
- from typing import Any, Dict, Optional
- 
-+from app.telemetry import bus as telemetry_bus
-+
-+
-+def _now_ms() -> int:
-+    """Return the current epoch timestamp in milliseconds."""
-+
-+    return int(time.time() * 1000)
-+
- 
- @dataclass
- class _SessionStats:
-     """In-memory counters tracked for each active session."""
- 
-     directory: Path
-     events_path: Path
-     manifest_path: Path
-     events_written: int = 0
-     by_type: Dict[str, int] = field(default_factory=dict)
-     started_ms: Optional[int] = None
-     ended_ms: Optional[int] = None
-+    subscription_token: Optional[str] = None
- 
- 
- class FileExporter:
-     """Write session telemetry to disk in a restart-friendly manner."""
- 
--    def __init__(self, root: Path | str = "exports") -> None:
-+    def __init__(self, root: Path | str = "exports", *, bus=telemetry_bus) -> None:
-         self._root = Path(root)
-+        self._bus = bus
-         self._sessions: Dict[str, _SessionStats] = {}
- 
-     def begin(self, sid: str) -> None:
--        """Prepare an export directory for the session."""
-+        """Prepare an export directory and subscribe to telemetry for the session."""
-+
-+        if sid in self._sessions:
-+            # Duplicate begin calls should not create additional subscriptions.
-+            return
-+
-         session_dir = self._root / sid
-         session_dir.mkdir(parents=True, exist_ok=True)
-         stats = _SessionStats(
-             directory=session_dir,
-             events_path=session_dir / "events.ndjson",
-             manifest_path=session_dir / "manifest.json",
-+            started_ms=_now_ms(),
-         )
-+
-+        # Reset the NDJSON log for the session.
-         stats.events_path.write_text("", encoding="utf-8")
-+
-+        def _callback(event: Dict[str, Any]) -> None:
-+            if event.get("sid") != sid:
-+                return
-+            self._handle_event(sid, event)
-+
-+        token = self._bus.subscribe("*", _callback)
-+        stats.subscription_token = token
-         self._sessions[sid] = stats
- 
--    def write(self, sid: str, event: Dict[str, Any]) -> None:
--        """Append a single event line to the NDJSON log."""
--        stats = self._sessions.get(sid)
-+        manifest = {
-+            "sid": sid,
-+            "schema_version": "1",
-+            "started_ms": stats.started_ms,
-+            "open": True,
-+            "events_written": 0,
-+            "by_type": {},
-+        }
-+        self._write_manifest(stats, manifest)
-+
-+    def end(self, sid: str, summary: Optional[Dict[str, Any]] = None) -> None:
-+        """Finalize a session by writing manifest metadata and unsubscribing."""
-+
-+        stats = self._sessions.pop(sid, None)
-         if not stats:
-             return
- 
--        event_copy = dict(event)
--        event_type = event_copy.get("type", "")
--        ts_ms = event_copy.get("ts_ms")
--        if isinstance(ts_ms, int):
--            if stats.started_ms is None:
--                stats.started_ms = ts_ms
--            stats.ended_ms = ts_ms
-+        token = stats.subscription_token
-+        if token:
-+            self._bus.unsubscribe(token)
-+
-+        ended_ms = stats.ended_ms
-+        if ended_ms is None:
-+            base = stats.started_ms if stats.started_ms is not None else _now_ms()
-+            ended_ms = base
-+
-+        manifest = {
-+            "sid": sid,
-+            "schema_version": "1",
-+            "started_ms": stats.started_ms,
-+            "open": False,
-+            "events_written": stats.events_written,
-+            "by_type": dict(stats.by_type),
-+            "ended_ms": ended_ms,
-+        }
-+
-+        if summary is not None:
-+            manifest["summary"] = dict(summary)
-+
-+        self._write_manifest(stats, manifest)
-+
-+    def _handle_event(self, sid: str, event: Dict[str, Any]) -> None:
-+        stats = self._sessions.get(sid)
-+        if not stats:
-+            return
- 
-         with stats.events_path.open("a", encoding="utf-8") as handle:
--            json.dump(event_copy, handle, separators=(",", ":"), ensure_ascii=False)
-+            json.dump(event, handle, separators=(",", ":"), ensure_ascii=False)
-             handle.write("\n")
- 
-         stats.events_written += 1
-+
-+        event_type = event.get("type")
-         if isinstance(event_type, str) and event_type:
-             stats.by_type[event_type] = stats.by_type.get(event_type, 0) + 1
- 
--    def end(self, sid: str, summary: Optional[Dict[str, Any]] = None) -> None:
--        """Finalize a session by writing manifest metadata."""
--        stats = self._sessions.pop(sid, None)
--        if not stats:
--            return
-+        ts_ms = event.get("ts_ms")
-+        if isinstance(ts_ms, int):
-+            candidate = ts_ms
-+            if stats.started_ms is not None and candidate < stats.started_ms:
-+                candidate = stats.started_ms
-+            stats.ended_ms = candidate
- 
-         manifest = {
-             "sid": sid,
-+            "schema_version": "1",
-             "started_ms": stats.started_ms,
--            "ended_ms": stats.ended_ms,
-+            "open": True,
-             "events_written": stats.events_written,
-             "by_type": dict(stats.by_type),
--            "extra": dict(summary or {}),
-         }
-+        self._write_manifest(stats, manifest)
- 
--        stats.manifest_path.write_text(
--            json.dumps(manifest, separators=(",", ":"), ensure_ascii=False, indent=None),
-+    def _write_manifest(self, stats: _SessionStats, manifest: Dict[str, Any]) -> None:
-+        tmp_path = stats.manifest_path.with_name(stats.manifest_path.name + ".tmp")
-+        tmp_path.write_text(
-+            json.dumps(manifest, separators=(",", ":"), ensure_ascii=False),
-             encoding="utf-8",
-         )
-+        os.replace(tmp_path, stats.manifest_path)
- 
- 
- __all__ = ["FileExporter"]
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 5fac24f126b45d9bb5765edbd580289f63e7bbcf..4d7b8cfbb8cbe085105cd697020cf76959c63b03 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -350,51 +350,50 @@ class EngineV2:
- 
-         if not self._last_sid:
-             return False
- 
-         sid = self._last_sid
-         snapshot = load_interaction_policy(overrides)
-         previous = self._policy_snapshot
- 
-         if not should_reapply(previous, snapshot):
-             return False
- 
-         diff = compute_diff(previous, snapshot)
-         self._policy_snapshot = dict(snapshot)
- 
-         self._emit_policy_frame(sid, snapshot)
-         self._emit_policy_applied(sid, previous, diff)
-         self._emit_acwr_breadcrumb(sid, snapshot)
-         return True
- 
-     def _envelope(self, sid: str, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-         envelope = _Envelope(event_type, sid, dict(payload))
-         return envelope.to_dict()
- 
-     def _publish(self, event: Dict[str, Any]) -> None:
-         self._bus.publish(dict(event))
--        self._exporter.write(event["sid"], dict(event))
- 
-     def _handle_outbound_chat_frame(self, event: Dict[str, Any]) -> None:
-         if event.get("type") != EVT_WS_JSON_SEND:
-             return
-         sid = event.get("sid")
-         if not isinstance(sid, str) or not sid:
-             return
-         frame: Mapping[str, Any] | None = None
-         raw_frame = event.get("frame")
-         if isinstance(raw_frame, Mapping):
-             frame = raw_frame
-         else:
-             payload = event.get("payload")
-             if isinstance(payload, Mapping):
-                 candidate = payload.get("frame")
-                 if isinstance(candidate, Mapping):
-                     frame = candidate
-         if frame is None:
-             return
-         if frame.get("type") != "chat.message":
-             return
-         self._conversation_buffer.append(sid, frame)
- 
-     def _publish_chat_history(self, sid: str) -> None:
-         messages = self._conversation_buffer.messages(sid)
-diff --git a/tests/test_exporter_bus_subscription.py b/tests/test_exporter_bus_subscription.py
+diff --git a/app/admin/flow_zip.py b/app/admin/flow_zip.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..916ac256500a4290e50b2cdd22e407ae62776829
+index 0000000000000000000000000000000000000000..13d1fd3a4a16eb9bbe0801d59f0c9b9f43c027e6
 --- /dev/null
-+++ b/tests/test_exporter_bus_subscription.py
-@@ -0,0 +1,73 @@
++++ b/app/admin/flow_zip.py
+@@ -0,0 +1,113 @@
++"""Utilities for building deterministic flow export archives."""
++
++from __future__ import annotations
++
 +import json
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Dict, Iterable, Tuple
++from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
++
++
++__all__ = ["build_flow_zip"]
++
++
++_ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
++_README_NAME = "README.txt"
++_MANIFEST_NAME = "manifest.json"
++_EVENTS_NAME = "events.ndjson"
++
++
++def build_flow_zip(sid: str, root: Path = Path("exports")) -> Path:
++    """Package the flow artifacts for ``sid`` into a deterministic ZIP archive."""
++
++    session_dir = Path(root) / sid
++    manifest_path = session_dir / _MANIFEST_NAME
++    events_path = session_dir / _EVENTS_NAME
++
++    _assert_exists(manifest_path)
++    _assert_exists(events_path)
++
++    manifest_bytes = manifest_path.read_bytes()
++    events_bytes = events_path.read_bytes()
++
++    manifest_data = _load_manifest(manifest_bytes)
++    created_label = _determine_created_label(manifest_data)
++    readme_bytes = _build_readme(sid, created_label)
++
++    archive_path = session_dir / "flow.zip"
++    entries: Iterable[Tuple[str, bytes]] = [
++        (_README_NAME, readme_bytes),
++        (_EVENTS_NAME, events_bytes),
++        (_MANIFEST_NAME, manifest_bytes),
++    ]
++
++    with ZipFile(archive_path, mode="w") as zf:
++        for name, payload in sorted(entries, key=lambda item: item[0]):
++            info = ZipInfo(filename=name)
++            info.date_time = _ARCHIVE_TIMESTAMP
++            info.compress_type = ZIP_DEFLATED
++            zf.writestr(info, payload)
++
++    return archive_path
++
++
++def _assert_exists(path: Path) -> None:
++    if not path.is_file():
++        raise FileNotFoundError(path)
++
++
++def _load_manifest(raw: bytes) -> Dict[str, object]:
++    try:
++        return json.loads(raw.decode("utf-8"))
++    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
++        raise ValueError("manifest.json must contain valid UTF-8 encoded JSON") from exc
++
++
++def _determine_created_label(manifest: Dict[str, object]) -> str:
++    candidates = [
++        manifest.get("started_ms"),
++        manifest.get("created_ms"),
++        manifest.get("created_at_ms"),
++        manifest.get("created_at"),
++    ]
++
++    for value in candidates:
++        if isinstance(value, int):
++            return _format_epoch_ms(value)
++        if isinstance(value, str) and value:
++            return value
++
++    return "unknown"
++
++
++def _format_epoch_ms(value: int) -> str:
++    try:
++        dt = datetime.fromtimestamp(value / 1000, tz=timezone.utc)
++    except (OverflowError, OSError, ValueError):
++        return "unknown"
++    return dt.isoformat().replace("+00:00", "Z")
++
++
++def _build_readme(sid: str, created_label: str) -> bytes:
++    lines = [
++        "Flow Export",
++        "==========",
++        "",
++        f"Session ID: {sid}",
++        f"Created: {created_label}",
++        "",
++        "This archive contains the foundational flow artifacts for the session:",
++        f"- {_MANIFEST_NAME}: session metadata as recorded by the exporter.",
++        f"- {_EVENTS_NAME}: chronological event stream (unredacted).",
++        f"- {_README_NAME}: this overview and caveats.",
++        "",
++        "Privacy & Roadmap:",
++        "- Sensitive data may still be present. Handle with care.",
++        "- Additional redaction, SHA-256 mapping, and size caps will arrive in BUILD 06 Task C.",
++        "",
++        "For documentation, see /docs.",
++    ]
++
++    content = "\n".join(lines) + "\n"
++    return content.encode("utf-8")
+diff --git a/scripts/run_build06_tests.sh b/scripts/run_build06_tests.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..0f85238c1b77529f9c496d0c25094528612f6dcd
+--- /dev/null
++++ b/scripts/run_build06_tests.sh
+@@ -0,0 +1,8 @@
++#!/usr/bin/env bash
++set -euo pipefail
++export PYTHONPATH="${PYTHONPATH:-.}:."
++PY="${PYTHON:=python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python
++"$PY" -m unittest -v \
++  tests.test_flow_zip_foundation
++
++echo "BUILD_06_TESTS: PASS"
+diff --git a/tests/test_flow_zip_foundation.py b/tests/test_flow_zip_foundation.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ef102f51c79469e6105147e03b62f8d252eb2b99
+--- /dev/null
++++ b/tests/test_flow_zip_foundation.py
+@@ -0,0 +1,81 @@
++from __future__ import annotations
++
++import hashlib
++import json
++import tempfile
 +import unittest
 +from pathlib import Path
-+from tempfile import TemporaryDirectory
++from zipfile import ZipFile
 +
-+from app.telemetry import bus
-+from app.telemetry.exporter import FileExporter
-+
-+
-+class ExporterBusSubscriptionTests(unittest.TestCase):
-+    def test_exporter_subscribes_and_tracks_manifest(self) -> None:
-+        with TemporaryDirectory() as tmpdir:
-+            exporter = FileExporter(root=tmpdir, bus=bus)
-+            sid = "sid1"
-+
-+            exporter.begin(sid)
-+
-+            session_dir = Path(tmpdir) / sid
-+            events_path = session_dir / "events.ndjson"
-+            manifest_path = session_dir / "manifest.json"
-+
-+            self.assertTrue(events_path.exists())
-+            self.assertTrue(manifest_path.exists())
-+
-+            manifest_open = json.loads(manifest_path.read_text(encoding="utf-8"))
-+            self.assertTrue(manifest_open["open"])
-+            self.assertEqual(0, manifest_open["events_written"])
-+
-+            secret_event = {
-+                "type": "voice.secret",
-+                "sid": sid,
-+                "meta": {
-+                    "authorization": "Bearer SECRET-TOKEN-123456",
-+                    "contact": "person@example.com",
-+                },
-+            }
-+            info_event = {
-+                "type": "voice.info",
-+                "sid": sid,
-+                "meta": {"note": "ok"},
-+            }
-+
-+            bus.publish(secret_event)
-+            bus.publish(info_event)
-+
-+            lines = [
-+                json.loads(line)
-+                for line in events_path.read_text(encoding="utf-8").splitlines()
-+                if line.strip()
-+            ]
-+            self.assertEqual(2, len(lines))
-+
-+            first_meta = lines[0].get("meta", {})
-+            self.assertEqual("Bearer ****3456", first_meta.get("authorization"))
-+            self.assertEqual("***@example.com", first_meta.get("contact"))
-+
-+            manifest_mid = json.loads(manifest_path.read_text(encoding="utf-8"))
-+            self.assertTrue(manifest_mid["open"])
-+            self.assertEqual(2, manifest_mid["events_written"])
-+            self.assertEqual({"voice.secret": 1, "voice.info": 1}, manifest_mid["by_type"])
-+
-+            exporter.end(sid)
-+
-+            manifest_final = json.loads(manifest_path.read_text(encoding="utf-8"))
-+            self.assertFalse(manifest_final["open"])
-+            self.assertEqual(2, manifest_final["events_written"])
-+            self.assertEqual({"voice.secret": 1, "voice.info": 1}, manifest_final["by_type"])
-+            self.assertIn("ended_ms", manifest_final)
-+            self.assertGreaterEqual(manifest_final["ended_ms"], manifest_final["started_ms"])
++from app.admin.flow_zip import build_flow_zip
 +
 +
-+if __name__ == "__main__":  # pragma: no cover
++class BuildFlowZipFoundationTest(unittest.TestCase):
++    def _prepare_session(self, root: Path, sid: str) -> Path:
++        session_dir = root / sid
++        session_dir.mkdir(parents=True, exist_ok=True)
++
++        manifest = {
++            "sid": sid,
++            "schema_version": "1",
++            "started_ms": 1_732_200_000_000,
++            "open": False,
++            "events_written": 2,
++            "by_type": {"test": 2},
++        }
++        (session_dir / "manifest.json").write_text(
++            json.dumps(manifest, separators=(",", ":")), encoding="utf-8"
++        )
++        (session_dir / "events.ndjson").write_text("{}\n{}\n", encoding="utf-8")
++
++        return session_dir
++
++    def test_build_flow_zip_foundation(self) -> None:
++        with tempfile.TemporaryDirectory() as tmp:
++            tmp_path = Path(tmp)
++            root = tmp_path / "exports"
++            sid = "sid-test"
++            session_dir = self._prepare_session(root, sid)
++
++            archive_path = build_flow_zip(sid, root=root)
++            self.assertEqual(archive_path, session_dir / "flow.zip")
++            self.assertTrue(archive_path.exists())
++
++            with ZipFile(archive_path) as zf:
++                names = zf.namelist()
++                self.assertEqual(names, ["README.txt", "events.ndjson", "manifest.json"])
++                readme = zf.read("README.txt").decode("utf-8")
++
++            self.assertIn(sid, readme)
++            self.assertIn("BUILD 06 Task C", readme)
++            self.assertNotIn("1732200000000", readme)  # ensure human friendly timestamp
++
++            digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
++            archive_path_second = build_flow_zip(sid, root=root)
++            self.assertEqual(archive_path_second.read_bytes(), archive_path.read_bytes())
++            self.assertEqual(
++                hashlib.sha256(archive_path_second.read_bytes()).hexdigest(), digest
++            )
++
++    def test_build_flow_zip_requires_artifacts(self) -> None:
++        with tempfile.TemporaryDirectory() as tmp:
++            tmp_path = Path(tmp)
++            root = tmp_path / "exports"
++            sid = "missing"
++            session_dir = root / sid
++            session_dir.mkdir(parents=True, exist_ok=True)
++
++            # Only manifest present
++            (session_dir / "manifest.json").write_text("{}", encoding="utf-8")
++            with self.assertRaises(FileNotFoundError):
++                build_flow_zip(sid, root=root)
++
++            # Remove manifest, only events present
++            (session_dir / "manifest.json").unlink()
++            (session_dir / "events.ndjson").write_text("{}\n", encoding="utf-8")
++            with self.assertRaises(FileNotFoundError):
++                build_flow_zip(sid, root=root)
++
++
++if __name__ == "__main__":
 +    unittest.main()
