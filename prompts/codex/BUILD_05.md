@@ -47,3 +47,35 @@
 - Switch `ASR_VENDOR` to `speechmatics` and observe identical event shapes with `vendor:"speechmatics"`.
 
 > "Return only diffs for the files listed above. Do not modify or create any other files."
+
+---
+
+### B5-G — Turn & Request Correlation
+**Files:** `app/voice_v2/engine.py` (upd)  
+**Acceptance:** Emit `EVT_TURN_BEGIN {turn_id, req_id}` at turn start; carry the same `req_id` across `EVT_ASR_* → EVT_NLU → EVT_POLICY_DECISION → EVT_NLG`; emit exactly one `EVT_TURN_END {turn_id}` per turn.
+
+---
+
+### B5-H — ASR Readiness Gate
+**Files:** `app/ws/adapter.py` (upd)  
+**Acceptance:** Reject inbound binary audio **before** `asr.ready` with `{"type":"error","code":"audio_not_expected"}` and close **1003**; accept after `asr.ready`.
+
+---
+
+### Test Matrix (edge cases)
+- Duplicate `final` notices from ASR are suppressed: exactly one `EVT_ASR_FINAL` per turn.
+- Vendor swap mid-session is not supported; verify it's rejected or deferred.
+- Header mismatch (declared PCM 16k vs actual 48k) ⇒ `schema_invalid` + close 1003.
+- Partial latency budget exceeded triggers circuit breaker path and `EVT_PROVIDER_TRIP`.
+- Redaction: provider opaque IDs appear only in `EVT_VENDOR_DEBUG`, never in client-visible frames.
+
+---
+
+### Contract updates (10_CONTRACT_WS.md)
+- Add `audio.header` `seq_start` example and note ASR readiness gate.
+- Document binary sequence window (W), gap telemetry (`EVT_AUDIO_GAP`), and oversize/malformed close codes.
+
+> **Note for B5-A:** Start a provider keepalive task with `DG_KEEPALIVE_INTERVAL_S` (default 5.0s) on connect; stop it cleanly on close; emit `EVT_ASR_READY {vendor}` on warm-up.
+
+
+> **Note for B5-D:** After barge-in cancel, assert `EVT_TTS_MASK {phase:"cleared"}` and latest `EVT_MIC_GATE` removes `tts_active`.

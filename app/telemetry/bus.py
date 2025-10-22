@@ -168,6 +168,9 @@ def publish(event: dict) -> None:
     if not isinstance(event_type, str) or not event_type:
         raise ValueError("event['type'] must be a non-empty string")
 
+    if "schema_version" not in normalized:
+        normalized["schema_version"] = "1"
+
     if "ts_ms" not in normalized or not isinstance(normalized["ts_ms"], int):
         normalized["ts_ms"] = _now_ms()
     if "level" not in normalized or not isinstance(normalized["level"], str):

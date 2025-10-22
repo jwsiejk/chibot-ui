@@ -1,195 +1,105 @@
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 70802c85631e29c7afac0082511ddae5b44a58be..bb0b06dcfa2a1a278141a71de724215d70cac59a 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -155,67 +155,73 @@ class EngineV2:
+diff --git a/app/telemetry/bus.py b/app/telemetry/bus.py
+index 931488c7b877369cfa1ab7df212889411bea8a0c..e47ec694a9a4037af5cd53c9375656b2d3c88e12 100644
+--- a/app/telemetry/bus.py
++++ b/app/telemetry/bus.py
+@@ -146,50 +146,53 @@ def subscribe(event_type: str, handler: Callable[[dict], None]) -> str:
+ def unsubscribe(token: str) -> bool:
+     """Remove a previously registered subscription."""
+     subscription = _subscriptions.pop(token, None)
+     if not subscription:
+         return False
  
-     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
-         """Capture the WebSocket closing handshake."""
-         meta = {"code": code, "reason": reason}
-         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
-         self._publish(event)
-         if self._last_sid == sid:
-             self._last_sid = None
-             self._policy_snapshot = None
-         self._sessions.pop(sid, None)
+     event_type, _ = subscription
+     tokens = _event_index.get(event_type)
+     if tokens is not None:
+         tokens.discard(token)
+         if not tokens:
+             _event_index.pop(event_type, None)
+     return True
  
-     def on_tts_start(
-         self, sid: str, utt_id: str, post_hold_ms: int | None = None
-     ) -> None:
-         """Engage the TTS mask and emit a telemetry breadcrumb."""
  
-         hold_ms = post_hold_ms or 0
-         tts_meta = {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}
-         self._gate.set_reason(
-             "tts_active",
-             True,
-             sid=sid,
-             meta=tts_meta,
-         )
+ def publish(event: dict) -> None:
+     """Normalize and dispatch an event to registered handlers."""
+     if not isinstance(event, dict):
+         raise ValueError("event must be a dict")
  
-+        mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": "engaged"})
-+        self._publish(mask_event)
+     normalized = dict(event)
+     event_type = normalized.get("type")
+     if not isinstance(event_type, str) or not event_type:
+         raise ValueError("event['type'] must be a non-empty string")
+ 
++    if "schema_version" not in normalized:
++        normalized["schema_version"] = "1"
 +
-         payload = {"meta": {"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}}}
-         event = self._envelope(sid, EVT_TTS_START, payload)
-         self._publish(event)
-         self._set_state(sid, RESPONDING, reason="tts_start")
+     if "ts_ms" not in normalized or not isinstance(normalized["ts_ms"], int):
+         normalized["ts_ms"] = _now_ms()
+     if "level" not in normalized or not isinstance(normalized["level"], str):
+         normalized["level"] = "debug"
  
-     def on_tts_end(
-         self, sid: str, utt_id: str, post_hold_ms: int | None = None
-     ) -> None:
-         """Release the TTS mask and optionally engage a post-hold."""
+     if "meta" in normalized:
+         original_meta = normalized["meta"]
+         try:
+             normalized["meta"] = _redact_meta(original_meta)
+         except Exception as exc:  # pylint: disable=broad-except
+             print(f"WARN telemetry redaction failed: {exc}")
+             normalized["meta"] = original_meta
  
-         self._gate.set_reason(
-             "tts_active",
-             False,
-             sid=sid,
-             meta={"tts": {"utt_id": utt_id}},
-         )
+     tokens = set()
+     tokens.update(_event_index.get(event_type, set()))
+     tokens.update(_event_index.get("*", set()))
  
-+        mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": "cleared"})
-+        self._publish(mask_event)
+     for token in list(tokens):
+         subscription = _subscriptions.get(token)
+         if not subscription:
+             continue
+         _, handler = subscription
+         try:
+             handler(dict(normalized))
+         except Exception as exc:  # pylint: disable=broad-except
+diff --git a/tests/test_bus_publish_basics.py b/tests/test_bus_publish_basics.py
+index 6fc432d71822077bba6726016f9be76f2da441d6..f62fa37004b2127348932e897eff8e0750ce386e 100644
+--- a/tests/test_bus_publish_basics.py
++++ b/tests/test_bus_publish_basics.py
+@@ -28,28 +28,42 @@ class TestBusPublishBasics(unittest.TestCase):
+         self.assertGreater(event["ts_ms"], 0)
+ 
+     def test_non_mutation_of_caller(self) -> None:
+         event = {"type": "EVT_WS_JSON_RECV", "meta": {"a": "b"}}
+ 
+         publish(event)
+ 
+         self.assertEqual(event, {"type": "EVT_WS_JSON_RECV", "meta": {"a": "b"}})
+ 
+     def test_handler_isolation(self) -> None:
+         delivered = []
+ 
+         def boom_handler(_: dict) -> None:
+             raise RuntimeError("boom")
+ 
+         token1 = subscribe("EVT_WS_OPEN", boom_handler)
+         token2 = subscribe("EVT_WS_OPEN", lambda event: delivered.append(event))
+         try:
+             publish({"type": "EVT_WS_OPEN"})
+         finally:
+             unsubscribe(token1)
+             unsubscribe(token2)
+ 
+         self.assertEqual(len(delivered), 1)
+ 
++    def test_schema_version_defaults(self) -> None:
++        delivered = []
 +
-         hold_ms = post_hold_ms or 0
-         if hold_ms > 0:
-             self._gate.set_reason(
-                 "system_hold",
-                 True,
-                 sid=sid,
-                 meta={"tts": {"utt_id": utt_id, "post_hold_ms": hold_ms}},
-             )
-             asyncio.create_task(self._release_system_hold_after(sid, hold_ms))
-         else:
-             self._set_state(sid, READY, reason="tts_end")
- 
-         event = self._envelope(sid, EVT_TTS_END, {"meta": {"tts": {"utt_id": utt_id}}})
-         self._publish(event)
- 
-     def on_asr_final(self, sid: str, text: str) -> None:
-         """Observe the final ASR transcript for a turn."""
- 
-         self._set_state(sid, THINKING, reason="asr_final")
- 
-     def on_auto_barge_attempt(
-         self, sid: str, source: str, *, reason: str | None = None
-     ) -> None:
-         """Handle an automatic barge-in attempt during assistant speech."""
- 
-diff --git a/tests/test_tts_mask_lifecycle.py b/tests/test_tts_mask_lifecycle.py
-index 279d1f3b7ad170558e25daf6cb4b91a30d9980aa..c7156c7343169382a3f0f6217177158d81469e53 100644
---- a/tests/test_tts_mask_lifecycle.py
-+++ b/tests/test_tts_mask_lifecycle.py
-@@ -1,87 +1,59 @@
--import asyncio
- import unittest
- 
--from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END, EVT_TTS_START
-+from app.voice_v2 import EVT_MIC_GATE
- from app.voice_v2.engine import EngineV2
- 
- 
- class _FakeExporter:
-     def __init__(self) -> None:
-         self.events: list[tuple[str, dict]] = []
- 
-     def write(self, sid: str, event: dict) -> None:  # pragma: no cover - exercised in tests
-         self.events.append((sid, dict(event)))
- 
- 
- class _FakeBus:
-     def __init__(self) -> None:
-         self.events: list[dict] = []
- 
-     def publish(self, event: dict) -> None:  # pragma: no cover - exercised in tests
-         self.events.append(dict(event))
- 
- 
--class TtsMaskLifecycleTests(unittest.IsolatedAsyncioTestCase):
--    async def test_tts_start_end_with_post_hold(self) -> None:
-+class TtsMaskLifecycleTests(unittest.TestCase):
-+    def test_tts_mask_breadcrumb_sequence(self) -> None:
-         bus = _FakeBus()
-         exporter = _FakeExporter()
-         engine = EngineV2(exporter, telemetry_bus=bus)
- 
-         sid = "sid-123"
--        utt_id = "utt-1"
-+        utt_id = "utt-456"
- 
--        engine.on_tts_start(sid, utt_id, post_hold_ms=200)
--        engine.on_tts_end(sid, utt_id, post_hold_ms=200)
-+        engine.on_tts_start(sid, utt_id)
- 
--        await asyncio.sleep(0.25)
-+        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-+        self.assertEqual(len(mask_events), 1)
-+        self.assertEqual(mask_events[0]["phase"], "engaged")
- 
-         gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
--        tts_start_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_START]
--        tts_end_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_END]
--
--        self.assertGreaterEqual(len(gate_events), 3)
--
--        first_gate = gate_events[0]["meta"]["gate"]
--        self.assertEqual(first_gate["state"], "on")
--        self.assertEqual(first_gate["reason"], "tts_active")
--
--        self.assertTrue(
--            any(evt["meta"]["gate"]["reason"] == "system_hold" for evt in gate_events)
--        )
--        self.assertEqual(gate_events[-1]["meta"]["gate"]["state"], "off")
--
--        self.assertEqual(len(tts_start_events), 1)
--        start_meta = tts_start_events[0]["meta"]["tts"]
--        self.assertEqual(start_meta["utt_id"], utt_id)
--        self.assertEqual(start_meta["post_hold_ms"], 200)
--
--        self.assertEqual(len(tts_end_events), 1)
--        end_meta = tts_end_events[0]["meta"]["tts"]
--        self.assertEqual(end_meta["utt_id"], utt_id)
--
--    async def test_tts_end_no_post_hold(self) -> None:
--        bus = _FakeBus()
--        exporter = _FakeExporter()
--        engine = EngineV2(exporter, telemetry_bus=bus)
--
--        sid = "sid-456"
--        utt_id = "utt-2"
--
--        engine.on_tts_start(sid, utt_id, post_hold_ms=0)
--        engine.on_tts_end(sid, utt_id, post_hold_ms=0)
--
--        await asyncio.sleep(0)
--
--        gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
--        reasons = [evt["meta"]["gate"]["reason"] for evt in gate_events]
--
--        self.assertFalse(any(reason == "system_hold" for reason in reasons))
--        self.assertEqual(gate_events[-1]["meta"]["gate"]["state"], "off")
--
--        tts_end_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_END]
--        self.assertEqual(len(tts_end_events), 1)
--        self.assertEqual(tts_end_events[0]["meta"]["tts"]["utt_id"], utt_id)
-+        self.assertGreaterEqual(len(gate_events), 1)
-+        engaged_gate = gate_events[-1]["meta"]["gate"]
-+        engaged_effective = engaged_gate.get("effective", engaged_gate["mask"])
-+        self.assertTrue(engaged_effective)
-+        self.assertIn("tts_active", engaged_gate["reasons"])
-+        self.assertTrue(engaged_gate["reasons"]["tts_active"])
++        token = subscribe("*", lambda event: delivered.append(event))
++        try:
++            publish({"type": "EVT_ENGINE_EVENT"})
++            publish({"type": "EVT_ADAPTER_EVENT", "schema_version": "2"})
++        finally:
++            unsubscribe(token)
 +
-+        engine.on_tts_end(sid, utt_id)
++        self.assertEqual(len(delivered), 2)
++        self.assertEqual(delivered[0]["schema_version"], "1")
++        self.assertEqual(delivered[1]["schema_version"], "2")
 +
-+        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-+        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "cleared"])
-+
-+        final_gate = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE][-1]
-+        final_gate_meta = final_gate["meta"]["gate"]
-+        final_effective = final_gate_meta.get("effective", final_gate_meta["mask"])
-+        self.assertFalse(final_effective)
-+        self.assertFalse(final_gate_meta["reasons"]["tts_active"])
  
- 
- if __name__ == "__main__":
+ if __name__ == "__main__":  # pragma: no cover
      unittest.main()

@@ -50,6 +50,20 @@ class TestBusPublishBasics(unittest.TestCase):
 
         self.assertEqual(len(delivered), 1)
 
+    def test_schema_version_defaults(self) -> None:
+        delivered = []
+
+        token = subscribe("*", lambda event: delivered.append(event))
+        try:
+            publish({"type": "EVT_ENGINE_EVENT"})
+            publish({"type": "EVT_ADAPTER_EVENT", "schema_version": "2"})
+        finally:
+            unsubscribe(token)
+
+        self.assertEqual(len(delivered), 2)
+        self.assertEqual(delivered[0]["schema_version"], "1")
+        self.assertEqual(delivered[1]["schema_version"], "2")
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
