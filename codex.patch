@@ -1,108 +1,244 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 473ece3d4eab3dadd8fbf8def1b6c288e7c24530..bdc203096911126b3194e2923f0759406ded92e9 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1,43 +1,44 @@
- """chat.v2 WebSocket adapter for AskChip."""
- from __future__ import annotations
+diff --git a/scripts/run_build02_tests.sh b/scripts/run_build02_tests.sh
+old mode 100644
+new mode 100755
+index 7469cfb0a3165eb995546abcb86e02a4b34fa6e0..c8806d82cd6826ab0ab89864d4e87200e3d64eeb
+--- a/scripts/run_build02_tests.sh
++++ b/scripts/run_build02_tests.sh
+@@ -1,28 +1,30 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
  
- import inspect
- import json
- import time
- import uuid
- from dataclasses import dataclass
- from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, Protocol, runtime_checkable
- 
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.security.auth import authorize
- from app.voice_v2 import (
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
-+from app.ws.validator import validate_frame
- 
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
- RATE_LIMIT_WINDOW_SECONDS = 2.0
- RATE_LIMIT_CLOSE_CODE = 1013
- 
- EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
- 
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
- }
- 
- 
- class TokenBucket:
-     """Simple in-memory token bucket."""
- 
-     def __init__(self, capacity: int, refill_seconds: float) -> None:
-         self.capacity = capacity
-         self.tokens = float(capacity)
-@@ -248,50 +249,58 @@ class ChatV2Adapter:
-             meta["error"] = "unknown_type"
-             meta["frame_type"] = None
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "unknown_type", "Frame missing type field")
-             return self._HandleResult(True)
- 
-         meta["frame_type"] = frame_type
- 
-         if frame_type == "ping":
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             now_ms = int(time.time() * 1000)
-             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
-                 ctx.last_pong_sent_ms = now_ms
-                 reply_ts = frame.get("t")
-                 if not isinstance(reply_ts, int):
-                     reply_ts = now_ms
-                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
-             return self._HandleResult(True)
- 
-         if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
-             meta["error"] = "unknown_type"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "unknown_type", f"Unsupported frame type '{frame_type}'")
-             return self._HandleResult(True)
- 
-+        is_valid, hint = validate_frame(frame)
-+        if not is_valid:
-+            meta["error"] = "schema_invalid"
-+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+            detail = hint or "Frame failed validation"
-+            await self._send_error(send, ctx.sid, "schema_invalid", detail)
-+            return self._HandleResult(True)
++export PYTHONPATH=".:${PYTHONPATH:-}"
 +
-         await self._invoke_engine("on_json", ctx.sid, frame)
-         return self._HandleResult(True)
+ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
  
-     async def _handle_binary(
-         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> _HandleResult:
-         byte_count = len(data)
+ if command -v python3 >/dev/null 2>&1; then
+   PY="$(command -v python3)"
+ elif command -v python >/dev/null 2>&1; then
+   PY="$(command -v python)"
+ else
+   echo "BUILD_02_TESTS: FAIL" >&2
+   echo "python interpreter not found" >&2
+   exit 1
+ fi
  
-         limited = await self._check_rate_limit(ctx, send)
-         if limited is not None:
-             return limited
+ MODULES=(
+   tests.test_policy_loader
+   tests.test_policy_apply_and_diff
+   tests.test_acwr_breadcrumb
+ )
  
-         if byte_count > self.binary_limit_bytes:
-             await self._publish(
-                 EVT_WS_AUDIO_RECV,
-                 ctx.sid,
-                 {"byte_count": byte_count, "error": "frame_too_large", "dir": "in"},
-             )
-             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
-             return self._HandleResult(False, 1009, "frame_too_large")
- 
-         ctx.audio_seq += 1
-         meta = {"byte_count": byte_count, "seq": ctx.audio_seq, "dir": "in"}
-         await self._invoke_engine("on_audio", ctx.sid, data, ctx.audio_seq)
-         return self._HandleResult(True)
+ missing_files=()
+ for module in "${MODULES[@]}"; do
+   module_path="${module//.//}.py"
+   if [[ ! -f "$ROOT_DIR/$module_path" ]]; then
+     missing_files+=("$module_path")
+   fi
+ done
+diff --git a/tests/test_policy_apply_and_diff.py b/tests/test_policy_apply_and_diff.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..1fecdde1ed2fac0999ecb0cfa68b484e7bbc1461
+--- /dev/null
++++ b/tests/test_policy_apply_and_diff.py
+@@ -0,0 +1,117 @@
++"""Tests for policy apply/reapply flow in the engine."""
++from __future__ import annotations
++
++from typing import Any, Dict, List
++import unittest
++
++from app.policy.loader import load_interaction_policy
++from app.telemetry.bus import reset, subscribe
++from app.voice_v2 import EVT_POLICY_APPLIED, EVT_WS_JSON_SEND
++from app.voice_v2.engine import EngineV2
++
++
++class _FakeExporter:
++    """Minimal exporter stub satisfying the EngineV2 contract."""
++
++    def __init__(self) -> None:
++        self.events: List[Dict[str, Any]] = []
++
++    def begin(self, sid: str) -> None:  # pragma: no cover - not used in these tests
++        self.events.append({"action": "begin", "sid": sid})
++
++    def write(self, sid: str, event: Dict[str, Any]) -> None:
++        self.events.append({"action": "write", "sid": sid, "event": dict(event)})
++
++    def end(self, sid: str, summary: Dict[str, Any] | None = None) -> None:  # pragma: no cover
++        self.events.append({"action": "end", "sid": sid, "summary": dict(summary or {})})
++
++
++class PolicyApplyAndDiffTests(unittest.TestCase):
++    """Validate policy frames and diff summaries emitted by the engine."""
++
++    def setUp(self) -> None:
++        reset()
++        self._events: List[Dict[str, Any]] = []
++        subscribe("*", lambda event: self._events.append(event))
++
++    def tearDown(self) -> None:
++        reset()
++
++    def _policy_frames(self) -> List[Dict[str, Any]]:
++        frames: List[Dict[str, Any]] = []
++        for event in self._events:
++            if event.get("type") != EVT_WS_JSON_SEND:
++                continue
++            frame = event.get("frame")
++            if isinstance(frame, dict) and frame.get("type") == "policy.interaction":
++                frames.append(event)
++        return frames
++
++    def _events_of_type(self, event_type: str) -> List[Dict[str, Any]]:
++        return [event for event in self._events if event.get("type") == event_type]
++
++    def test_on_open_emits_policy_frame_and_diff(self) -> None:
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter)
++
++        engine.on_open("sid-1", headers={})
++
++        frames = self._policy_frames()
++        self.assertEqual(len(frames), 1)
++
++        applied_events = self._events_of_type(EVT_POLICY_APPLIED)
++        self.assertEqual(len(applied_events), 1)
++
++        diff_meta = applied_events[0].get("meta", {}).get("policy", {}).get("diff")
++        self.assertIsInstance(diff_meta, dict)
++
++        expected_keys = {
++            "mode",
++            "allow_auto_vad",
++            "barge_in_enabled",
++            "auto_commit_when_ready",
++            "telemetry",
++        }
++        self.assertEqual(set(diff_meta.keys()), expected_keys)
++
++        defaults = load_interaction_policy()
++        for key in expected_keys:
++            before_after = diff_meta[key]
++            self.assertEqual(before_after[0], None)
++            self.assertEqual(before_after[1], defaults[key])
++
++    def test_reapply_without_changes_is_noop(self) -> None:
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter)
++        engine.on_open("sid-1", headers={})
++
++        baseline_frames = len(self._policy_frames())
++        baseline_applied = len(self._events_of_type(EVT_POLICY_APPLIED))
++
++        result = engine.reapply_policy({})
++        self.assertIs(result, False)
++
++        self.assertEqual(len(self._policy_frames()), baseline_frames)
++        self.assertEqual(len(self._events_of_type(EVT_POLICY_APPLIED)), baseline_applied)
++
++    def test_reapply_with_changes_emits_diff(self) -> None:
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter)
++        engine.on_open("sid-1", headers={})
++
++        baseline_frames = len(self._policy_frames())
++        baseline_applied = len(self._events_of_type(EVT_POLICY_APPLIED))
++
++        result = engine.reapply_policy({"barge_in_enabled": False})
++        self.assertIs(result, True)
++
++        self.assertEqual(len(self._policy_frames()), baseline_frames + 1)
++        self.assertEqual(len(self._events_of_type(EVT_POLICY_APPLIED)), baseline_applied + 1)
++
++        diff_meta = self._events_of_type(EVT_POLICY_APPLIED)[-1]["meta"]["policy"]["diff"]
++        self.assertEqual(set(diff_meta.keys()), {"barge_in_enabled"})
++        self.assertEqual(diff_meta["barge_in_enabled"], [True, False])
++
++
++if __name__ == "__main__":  # pragma: no cover
++    unittest.main()
+diff --git a/tests/test_policy_loader.py b/tests/test_policy_loader.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c87abe0157279abe89557a9529be396924889a70
+--- /dev/null
++++ b/tests/test_policy_loader.py
+@@ -0,0 +1,78 @@
++"""Tests for the interaction policy loader utilities."""
++from __future__ import annotations
++
++import unittest
++
++from app.policy.loader import load_interaction_policy
++
++
++class InteractionPolicyLoaderTests(unittest.TestCase):
++    """Validate the deterministic snapshot returned by ``load_interaction_policy``."""
++
++    def test_defaults_shape_and_types(self) -> None:
++        snapshot = load_interaction_policy()
++
++        expected_keys = {
++            "mode",
++            "allow_auto_vad",
++            "barge_in_enabled",
++            "auto_commit_when_ready",
++            "telemetry",
++        }
++        self.assertEqual(set(snapshot.keys()), expected_keys)
++
++        self.assertEqual(snapshot["mode"], "idle")
++        self.assertIs(snapshot["allow_auto_vad"], True)
++        self.assertIs(snapshot["barge_in_enabled"], True)
++        self.assertIs(snapshot["auto_commit_when_ready"], True)
++
++        telemetry = snapshot["telemetry"]
++        self.assertIsInstance(telemetry, dict)
++        self.assertIs(telemetry["enabled"], True)
++        self.assertEqual(telemetry["level"], "debug")
++
++        categories = telemetry["categories"]
++        self.assertIsInstance(categories, dict)
++        expected_categories = {
++            "ws",
++            "audio",
++            "policy",
++            "tts",
++            "gate",
++            "barge",
++            "asr",
++            "nlu",
++            "nlg",
++            "client_ui",
++            "provider_debug",
++        }
++        self.assertEqual(set(categories.keys()), expected_categories)
++        for key in expected_categories:
++            self.assertIs(categories[key], True)
++
++        redaction = telemetry["redaction"]
++        self.assertEqual(redaction, {"pii": True, "secrets": True, "text": False})
++
++        sampling = telemetry["sampling"]
++        self.assertEqual(sampling, {"percent": 100})
++
++    def test_overrides_shallow(self) -> None:
++        overrides = {"telemetry": {"level": "info"}}
++        snapshot = load_interaction_policy(overrides)
++
++        self.assertEqual(snapshot["mode"], "idle")
++        self.assertIs(snapshot["allow_auto_vad"], True)
++        self.assertIs(snapshot["barge_in_enabled"], True)
++        self.assertIs(snapshot["auto_commit_when_ready"], True)
++
++        telemetry = snapshot["telemetry"]
++        self.assertEqual(telemetry, {"level": "info"})
++        self.assertNotIn("categories", telemetry)
++
++        # Loading defaults again should not be impacted by the overrides call.
++        fresh_defaults = load_interaction_policy()
++        self.assertIn("categories", fresh_defaults["telemetry"])
++
++
++if __name__ == "__main__":  # pragma: no cover
++    unittest.main()
