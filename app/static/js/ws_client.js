@@ -39,6 +39,23 @@
     socket.send(payload);
   }
 
+  function sendBinary(payload, { dropIfBusy = false } = {}) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      console.warn("WSClient.sendBinary called without an open socket");
+      return false;
+    }
+    if (dropIfBusy && socket.bufferedAmount > 512 * 1024) {
+      return false;
+    }
+    try {
+      socket.send(payload);
+      return true;
+    } catch (err) {
+      console.error("WSClient sendBinary error", err);
+      return false;
+    }
+  }
+
   function sendJson(frame) {
     try {
       sendRaw(JSON.stringify(frame));
@@ -237,6 +254,11 @@
     sendRaw(payload);
   }
 
+  function getBufferedAmount() {
+    if (!socket) return 0;
+    return socket.bufferedAmount || 0;
+  }
+
   const debug = {
     simulateIncomingFrame(frame) {
       handleMessageFrame(frame);
@@ -257,6 +279,8 @@
     open,
     close,
     send,
+    sendBinary,
+    getBufferedAmount,
     get socket() {
       return socket;
     },

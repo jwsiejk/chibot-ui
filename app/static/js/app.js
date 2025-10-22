@@ -31,6 +31,9 @@
     if (!window.WSClient) {
       await loadScript("./ws_client.js");
     }
+    if (!window.AudioRecorder) {
+      await loadScript("./audio_recorder.js");
+    }
   }
 
   async function init() {
@@ -113,6 +116,13 @@
 
     endBtn.addEventListener('click', () => {
       WSClient.close('user_requested');
+      if (window.AudioRecorder) {
+        try {
+          window.AudioRecorder.stop();
+        } catch (err) {
+          console.warn('Failed to stop audio recorder', err);
+        }
+      }
     });
 
     // --- Waveform visual inside the Chip window ---
@@ -247,8 +257,20 @@
       }
       if (previousConnectionState !== 'connected' && state.connectionState === 'connected') {
         Waveform.start();
+        if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+          window.AudioRecorder.start().catch((err) => {
+            console.error('AudioRecorder start error', err);
+          });
+        }
       } else if (previousConnectionState !== 'disconnected' && state.connectionState === 'disconnected') {
         Waveform.stop();
+        if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+          try {
+            window.AudioRecorder.stop();
+          } catch (err) {
+            console.warn('AudioRecorder stop error', err);
+          }
+        }
       }
       previousConnectionState = state.connectionState;
     });
