@@ -17,6 +17,7 @@ from app.telemetry.exporter import FileExporter
 from app.security.auth import authorize
 from app.voice_v2 import (
     EVT_ASR_READY,
+    EVT_CHAT_USER,
     EVT_WS_AUDIO_RECV,
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
@@ -68,6 +69,7 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "client.ready",
     "audio.header",
     "admin.toggle",
+    "chat.user",
 }
 
 
@@ -377,19 +379,81 @@ class ChatV2Adapter:
                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
             return self._HandleResult(True)
 
-        if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
-            meta["error"] = "unknown_type"
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-            await self._send_error(send, ctx.sid, "unknown_type", frame_type)
-            return self._HandleResult(True)
+        if frame_type == "chat.user":
+            text = frame.get("text")
+            if not isinstance(text, str):
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "chat.user requires a string text field",
+                )
+                return self._HandleResult(False, 1003, "schema_invalid")
 
-        is_valid, hint = validate_frame(frame)
-        if not is_valid:
-            meta["error"] = "schema_invalid"
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-            detail = hint or "Frame failed validation"
-            await self._send_error(send, ctx.sid, "schema_invalid", detail)
-            return self._HandleResult(True)
+            try:
+                text_bytes = text.encode("utf-8")
+            except UnicodeEncodeError:
+                meta["error"] = "bad_utf8"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "bad_utf8",
+                    "chat.user text must be valid UTF-8",
+                )
+                return self._HandleResult(False, 1007, "bad_utf8")
+
+            client_msg_id = frame.get("client_msg_id")
+            if client_msg_id is not None and not isinstance(client_msg_id, str):
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "chat.user client_msg_id must be a string if provided",
+                )
+                return self._HandleResult(False, 1003, "schema_invalid")
+
+            ws_meta = meta.get("ws")
+            event_meta: Dict[str, Any] = {}
+            if isinstance(ws_meta, dict):
+                event_meta["ws"] = dict(ws_meta)
+            event_meta["text_length"] = len(text_bytes)
+            preview = self._make_preview_from_bytes(text_bytes)
+            if preview is not None:
+                event_meta["preview"] = preview
+            if client_msg_id is not None:
+                event_meta["client_msg_id"] = client_msg_id
+
+            event = {
+                "schema_version": "1",
+                "type": EVT_CHAT_USER,
+                "sid": ctx.sid,
+                "who": "server",
+                "source": "ws_server",
+                "meta": event_meta,
+                "text": text,
+            }
+            if client_msg_id is not None:
+                event["client_msg_id"] = client_msg_id
+            bus.publish(event)
+        else:
+            if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
+                meta["error"] = "unknown_type"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(send, ctx.sid, "unknown_type", frame_type)
+                return self._HandleResult(True)
+
+            is_valid, hint = validate_frame(frame)
+            if not is_valid:
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                detail = hint or "Frame failed validation"
+                await self._send_error(send, ctx.sid, "schema_invalid", detail)
+                return self._HandleResult(True)
 
         if frame_type == "audio.header":
             profile = {

@@ -16,6 +16,7 @@ from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
 from app.voice_v2 import (
     EVT_ACWR_RECOMPUTE,
+    EVT_CHAT_USER,
     EVT_POLICY_APPLIED,
     EVT_TTS_END,
     EVT_TTS_START,
@@ -104,6 +105,7 @@ class EngineV2:
         self._sessions: Dict[str, _TurnSession] = {}
         self._barge_handles: Dict[str, object] = {}
         self._aggregators: Dict[str, VADAggregator] = {}
+        self._chat_subscription = self._bus.subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
 
     @property
     def policy_snapshot(self) -> Dict[str, Any] | None:
@@ -146,6 +148,47 @@ class EngineV2:
             payload["turn_id"] = turn_id
         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
         self._publish(event)
+
+    def _handle_chat_user_event(self, event: Dict[str, Any]) -> None:
+        if event.get("type") != EVT_CHAT_USER:
+            return
+        sid = event.get("sid")
+        if not isinstance(sid, str) or not sid:
+            return
+        text = event.get("text")
+        if not isinstance(text, str):
+            return
+        client_msg_id = event.get("client_msg_id")
+        if client_msg_id is not None and not isinstance(client_msg_id, str):
+            client_msg_id = None
+
+        session = self._ensure_session(sid)
+        previous_state = session.state
+        policy = self.policy_snapshot or {}
+        barge_enabled = bool(policy.get("barge_in_enabled"))
+
+        if previous_state == RESPONDING:
+            granted = barge_enabled
+            reason = None if granted else "policy_disabled"
+            self._publish_barge(sid, "text", granted, reason)
+            if granted:
+                self.cancel_current_tts(sid, reason="canceled")
+
+        if previous_state != READY:
+            reset_reason = "text_barge_reset" if (previous_state == RESPONDING and barge_enabled) else "text_input_reset"
+            self._set_state(sid, READY, reason=reset_reason)
+
+        listen_reason = "text_barge" if (previous_state == RESPONDING and barge_enabled) else "text_input"
+        self._set_state(sid, LISTENING, reason=listen_reason)
+
+        session = self._ensure_session(sid)
+        turn_id = session.turn_id or str(uuid.uuid4())
+        req_id = session.req_id or f"req-{uuid.uuid4().hex}"
+        session.turn_id = turn_id
+        session.req_id = req_id
+
+        self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
+        self._set_state(sid, THINKING, reason="text_input")
 
     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
         """Capture an incoming audio chunk."""
@@ -318,7 +361,7 @@ class EngineV2:
     ) -> None:
         """Publish EVT_BARGE_IN envelope with meta.barge.{source,granted,reason}."""
 
-        if source not in {"auto_vad", "asr_evidence"}:
+        if source not in {"auto_vad", "asr_evidence", "text"}:
             return
 
         meta: Dict[str, Any] = {"barge": {"source": source, "granted": granted}}
@@ -527,6 +570,39 @@ class EngineV2:
         frame = {"type": "policy.interaction", "policy": snapshot}
         preview = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
         meta = {"ws": {"dir": "out", "size": len(preview.encode("utf-8")), "preview": preview}}
+        payload = {"meta": meta, "frame": frame}
+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+        self._publish(event)
+
+    def _emit_user_chat_message(
+        self,
+        sid: str,
+        text: str,
+        turn_id: str,
+        req_id: str,
+        client_msg_id: Optional[str] = None,
+    ) -> None:
+        frame: Dict[str, Any] = {
+            "type": "chat.message",
+            "id": str(uuid.uuid4()),
+            "role": "user",
+            "text": text,
+            "origin": "text",
+            "turn_id": turn_id,
+            "req_id": req_id,
+            "ts_ms": _now_ms(),
+        }
+        if client_msg_id is not None:
+            frame["client_msg_id"] = client_msg_id
+
+        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+        meta = {
+            "ws": {
+                "dir": "out",
+                "size": len(serialized.encode("utf-8")),
+                "preview": serialized,
+            }
+        }
         payload = {"meta": meta, "frame": frame}
         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
         self._publish(event)
