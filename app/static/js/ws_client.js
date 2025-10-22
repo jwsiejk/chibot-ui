@@ -153,6 +153,24 @@
       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
         audioPlayer.handleTtsEnd(frame);
       }
+    } else if (frame.type === "asr.partial") {
+      const view = window.TranscriptView;
+      if (view && typeof view.handlePartial === "function") {
+        try {
+          view.handlePartial(frame);
+        } catch (err) {
+          console.warn("TranscriptView partial handler error", err);
+        }
+      }
+    } else if (frame.type === "asr.final") {
+      const view = window.TranscriptView;
+      if (view && typeof view.handleFinal === "function") {
+        try {
+          view.handleFinal(frame);
+        } catch (err) {
+          console.warn("TranscriptView final handler error", err);
+        }
+      }
     }
     dispatchFrame(frame);
   }
