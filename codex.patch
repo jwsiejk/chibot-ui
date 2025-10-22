@@ -1,244 +1,345 @@
-diff --git a/scripts/run_build02_tests.sh b/scripts/run_build02_tests.sh
-old mode 100644
-new mode 100755
-index 7469cfb0a3165eb995546abcb86e02a4b34fa6e0..c8806d82cd6826ab0ab89864d4e87200e3d64eeb
---- a/scripts/run_build02_tests.sh
-+++ b/scripts/run_build02_tests.sh
-@@ -1,28 +1,30 @@
- #!/usr/bin/env bash
- set -euo pipefail
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index bdc203096911126b3194e2923f0759406ded92e9..20790f76f03ab03d3a6ffba7a49565fb78bcf10c 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -193,114 +193,142 @@ class ChatV2Adapter:
+             await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
+             raise
+         finally:
+             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
+             if self.exporter:
+                 self.exporter.end(ctx.sid, {"close_code": close_code})
  
-+export PYTHONPATH=".:${PYTHONPATH:-}"
-+
- ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
+         body = json.dumps({"error": "unsupported_subprotocol", "expected": CHAT_V2_SUBPROTOCOL}).encode("utf-8")
+         headers = [
+             (b"content-type", b"application/json"),
+             (b"content-length", str(len(body)).encode("ascii")),
+         ]
+         await send({"type": "websocket.http.response.start", "status": 426, "headers": headers})
+         await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
  
- if command -v python3 >/dev/null 2>&1; then
-   PY="$(command -v python3)"
- elif command -v python >/dev/null 2>&1; then
-   PY="$(command -v python)"
- else
-   echo "BUILD_02_TESTS: FAIL" >&2
-   echo "python interpreter not found" >&2
-   exit 1
- fi
+     @dataclass
+     class _HandleResult:
+         should_continue: bool
+         close_code: Optional[int] = None
+         close_reason: Optional[str] = None
  
- MODULES=(
-   tests.test_policy_loader
-   tests.test_policy_apply_and_diff
-   tests.test_acwr_breadcrumb
- )
+     async def _handle_text(
+         self, data: str, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> _HandleResult:
+-        payload_bytes = data.encode("utf-8")
+-        byte_count = len(payload_bytes)
+-        frame_type: Optional[str] = None
+-        meta: Dict[str, Any] = {"byte_count": byte_count, "dir": "in"}
+-
+         limited = await self._check_rate_limit(ctx, send)
+         if limited is not None:
+             return limited
  
- missing_files=()
- for module in "${MODULES[@]}"; do
-   module_path="${module//.//}.py"
-   if [[ ! -f "$ROOT_DIR/$module_path" ]]; then
-     missing_files+=("$module_path")
-   fi
- done
-diff --git a/tests/test_policy_apply_and_diff.py b/tests/test_policy_apply_and_diff.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..1fecdde1ed2fac0999ecb0cfa68b484e7bbc1461
---- /dev/null
-+++ b/tests/test_policy_apply_and_diff.py
-@@ -0,0 +1,117 @@
-+"""Tests for policy apply/reapply flow in the engine."""
-+from __future__ import annotations
++        try:
++            payload_bytes = data.encode("utf-8")
++            byte_count = len(payload_bytes)
++        except UnicodeEncodeError:
++            sanitized = data.encode("utf-8", "replace")
++            meta = {
++                "byte_count": len(sanitized),
++                "error": "bad_utf8",
++                "frame_type": None,
++                "ws": {
++                    "dir": "in",
++                    "size": len(sanitized),
++                    "preview": self._make_preview_from_bytes(sanitized),
++                },
++            }
++            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
++            await self._send_error(send, ctx.sid, "bad_utf8", "Text frame must be UTF-8 encoded JSON")
++            return self._HandleResult(True)
 +
-+from typing import Any, Dict, List
-+import unittest
-+
-+from app.policy.loader import load_interaction_policy
-+from app.telemetry.bus import reset, subscribe
-+from app.voice_v2 import EVT_POLICY_APPLIED, EVT_WS_JSON_SEND
-+from app.voice_v2.engine import EngineV2
-+
-+
-+class _FakeExporter:
-+    """Minimal exporter stub satisfying the EngineV2 contract."""
-+
-+    def __init__(self) -> None:
-+        self.events: List[Dict[str, Any]] = []
-+
-+    def begin(self, sid: str) -> None:  # pragma: no cover - not used in these tests
-+        self.events.append({"action": "begin", "sid": sid})
-+
-+    def write(self, sid: str, event: Dict[str, Any]) -> None:
-+        self.events.append({"action": "write", "sid": sid, "event": dict(event)})
-+
-+    def end(self, sid: str, summary: Dict[str, Any] | None = None) -> None:  # pragma: no cover
-+        self.events.append({"action": "end", "sid": sid, "summary": dict(summary or {})})
-+
-+
-+class PolicyApplyAndDiffTests(unittest.TestCase):
-+    """Validate policy frames and diff summaries emitted by the engine."""
-+
-+    def setUp(self) -> None:
-+        reset()
-+        self._events: List[Dict[str, Any]] = []
-+        subscribe("*", lambda event: self._events.append(event))
-+
-+    def tearDown(self) -> None:
-+        reset()
-+
-+    def _policy_frames(self) -> List[Dict[str, Any]]:
-+        frames: List[Dict[str, Any]] = []
-+        for event in self._events:
-+            if event.get("type") != EVT_WS_JSON_SEND:
-+                continue
-+            frame = event.get("frame")
-+            if isinstance(frame, dict) and frame.get("type") == "policy.interaction":
-+                frames.append(event)
-+        return frames
-+
-+    def _events_of_type(self, event_type: str) -> List[Dict[str, Any]]:
-+        return [event for event in self._events if event.get("type") == event_type]
-+
-+    def test_on_open_emits_policy_frame_and_diff(self) -> None:
-+        exporter = _FakeExporter()
-+        engine = EngineV2(exporter)
-+
-+        engine.on_open("sid-1", headers={})
-+
-+        frames = self._policy_frames()
-+        self.assertEqual(len(frames), 1)
-+
-+        applied_events = self._events_of_type(EVT_POLICY_APPLIED)
-+        self.assertEqual(len(applied_events), 1)
-+
-+        diff_meta = applied_events[0].get("meta", {}).get("policy", {}).get("diff")
-+        self.assertIsInstance(diff_meta, dict)
-+
-+        expected_keys = {
-+            "mode",
-+            "allow_auto_vad",
-+            "barge_in_enabled",
-+            "auto_commit_when_ready",
-+            "telemetry",
++        meta: Dict[str, Any] = {
++            "byte_count": byte_count,
++            "frame_type": None,
++            "ws": {
++                "dir": "in",
++                "size": byte_count,
++            },
 +        }
-+        self.assertEqual(set(diff_meta.keys()), expected_keys)
 +
-+        defaults = load_interaction_policy()
-+        for key in expected_keys:
-+            before_after = diff_meta[key]
-+            self.assertEqual(before_after[0], None)
-+            self.assertEqual(before_after[1], defaults[key])
++        preview = self._make_preview_from_bytes(payload_bytes)
++        if preview is not None:
++            meta["ws"]["preview"] = preview
 +
-+    def test_reapply_without_changes_is_noop(self) -> None:
-+        exporter = _FakeExporter()
-+        engine = EngineV2(exporter)
-+        engine.on_open("sid-1", headers={})
+         if byte_count > self.text_limit_bytes:
+             meta["error"] = "frame_too_large"
+-            meta["frame_type"] = None
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             await self._send_error(send, ctx.sid, "frame_too_large", "Text frame exceeds limit")
+             return self._HandleResult(False, 1009, "frame_too_large")
+ 
+         try:
+-            frame = json.loads(data)
+-            if isinstance(frame, dict):
+-                raw_type = frame.get("type")
+-                frame_type = raw_type if isinstance(raw_type, str) else None
+-            else:
+-                frame = {}
++            frame = json.loads(payload_bytes.decode("utf-8"))
+         except json.JSONDecodeError as exc:
+             meta["error"] = "bad_json"
+-            meta["frame_type"] = None
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
+             return self._HandleResult(True)
+ 
+-        if frame_type is None:
+-            meta["error"] = "unknown_type"
+-            meta["frame_type"] = None
++        if not isinstance(frame, dict):
++            meta["error"] = "schema_invalid"
++            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
++            await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
++            return self._HandleResult(True)
 +
-+        baseline_frames = len(self._policy_frames())
-+        baseline_applied = len(self._events_of_type(EVT_POLICY_APPLIED))
++        raw_type = frame.get("type")
++        if not isinstance(raw_type, str):
++            meta["error"] = "schema_invalid"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+-            await self._send_error(send, ctx.sid, "unknown_type", "Frame missing type field")
++            await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
+             return self._HandleResult(True)
+ 
++        frame_type = raw_type
+         meta["frame_type"] = frame_type
+ 
+         if frame_type == "ping":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             now_ms = int(time.time() * 1000)
+             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
+                 ctx.last_pong_sent_ms = now_ms
+                 reply_ts = frame.get("t")
+                 if not isinstance(reply_ts, int):
+                     reply_ts = now_ms
+                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
+             return self._HandleResult(True)
+ 
+         if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
+             meta["error"] = "unknown_type"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+-            await self._send_error(send, ctx.sid, "unknown_type", f"Unsupported frame type '{frame_type}'")
++            await self._send_error(send, ctx.sid, "unknown_type", frame_type)
+             return self._HandleResult(True)
+ 
+         is_valid, hint = validate_frame(frame)
+         if not is_valid:
+             meta["error"] = "schema_invalid"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             detail = hint or "Frame failed validation"
+             await self._send_error(send, ctx.sid, "schema_invalid", detail)
+             return self._HandleResult(True)
+ 
++        await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+         await self._invoke_engine("on_json", ctx.sid, frame)
+         return self._HandleResult(True)
+ 
+     async def _handle_binary(
+         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> _HandleResult:
+         byte_count = len(data)
+ 
+         limited = await self._check_rate_limit(ctx, send)
+         if limited is not None:
+             return limited
+ 
+         if byte_count > self.binary_limit_bytes:
+             await self._publish(
+                 EVT_WS_AUDIO_RECV,
+                 ctx.sid,
+                 {"byte_count": byte_count, "error": "frame_too_large", "dir": "in"},
+             )
+             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
+             return self._HandleResult(False, 1009, "frame_too_large")
+ 
+         ctx.audio_seq += 1
+         meta = {"byte_count": byte_count, "seq": ctx.audio_seq, "dir": "in"}
+         await self._invoke_engine("on_audio", ctx.sid, data, ctx.audio_seq)
+         return self._HandleResult(True)
+@@ -312,76 +340,94 @@ class ChatV2Adapter:
+             return None
+ 
+         now = time.monotonic()
+         if not ctx.sid_bucket.consume(1, now):
+             return await self._handle_rate_limit(ctx, send, "sid")
+ 
+         if ctx.ip_bucket is not None and not ctx.ip_bucket.consume(1, now):
+             return await self._handle_rate_limit(ctx, send, "ip")
+ 
+         return None
+ 
+     async def _handle_rate_limit(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]], scope: str
+     ) -> "ChatV2Adapter._HandleResult":
+         await self._publish(
+             EVT_RATE_LIMIT,
+             ctx.sid,
+             {"scope": scope, "ip": ctx.ip},
+         )
+         await self._send_error(send, ctx.sid, "rate_limited", "try later")
+         return self._HandleResult(False, RATE_LIMIT_CLOSE_CODE, "rate_limited")
+ 
+     async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
+         text = json.dumps(payload, separators=(",", ":"))
+         await send({"type": "websocket.send", "text": text})
+-        meta = {
+-            "byte_count": len(text.encode("utf-8")),
++        payload_bytes = text.encode("utf-8")
++        byte_count = len(payload_bytes)
++        meta: Dict[str, Any] = {
++            "byte_count": byte_count,
+             "frame_type": payload.get("type"),
+-            "dir": "out",
++            "ws": {
++                "dir": "out",
++                "size": byte_count,
++            },
+         }
++        preview = self._make_preview_from_bytes(payload_bytes)
++        if preview is not None:
++            meta["ws"]["preview"] = preview
+         await self._publish(EVT_WS_JSON_SEND, sid, meta)
+ 
+     async def _send_error(
+         self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
+     ) -> None:
+         payload = {"type": "error", "code": code, "detail": detail}
+         await self._send_json(send, sid, payload)
+ 
+     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
+         event = {
+             "type": event_type,
+             "sid": sid,
+             "who": "server",
+             "source": "ws_server",
+             "meta": dict(meta),
+         }
+         bus.publish(event)
+ 
+     async def _deny_http(self, send: Callable[[dict], Awaitable[None]], detail: str) -> None:
+         body = json.dumps({"type": "error", "code": "unauthorized", "detail": detail}).encode("utf-8")
+         headers = [
+             (b"content-type", b"application/json"),
+             (b"content-length", str(len(body)).encode("ascii")),
+         ]
+         await send({"type": "websocket.http.response.start", "status": 401, "headers": headers})
+         await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
+ 
+     async def _invoke_engine(self, hook: str, *args: Any) -> None:
+         if not self.engine:
+             return
+         handler = getattr(self.engine, hook, None)
+         if handler is None:
+             return
+         result = handler(*args)
+         if inspect.isawaitable(result):
+             await result
+ 
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
++    @staticmethod
++    def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
++        if not payload:
++            return None
++        preview = payload.decode("utf-8", "replace")
++        preview = preview.replace("\r", "\\r").replace("\n", "\\n")
++        if len(preview) > limit:
++            return f"{preview[: limit - 1]}…"
++        return preview
 +
-+        result = engine.reapply_policy({})
-+        self.assertIs(result, False)
-+
-+        self.assertEqual(len(self._policy_frames()), baseline_frames)
-+        self.assertEqual(len(self._events_of_type(EVT_POLICY_APPLIED)), baseline_applied)
-+
-+    def test_reapply_with_changes_emits_diff(self) -> None:
-+        exporter = _FakeExporter()
-+        engine = EngineV2(exporter)
-+        engine.on_open("sid-1", headers={})
-+
-+        baseline_frames = len(self._policy_frames())
-+        baseline_applied = len(self._events_of_type(EVT_POLICY_APPLIED))
-+
-+        result = engine.reapply_policy({"barge_in_enabled": False})
-+        self.assertIs(result, True)
-+
-+        self.assertEqual(len(self._policy_frames()), baseline_frames + 1)
-+        self.assertEqual(len(self._events_of_type(EVT_POLICY_APPLIED)), baseline_applied + 1)
-+
-+        diff_meta = self._events_of_type(EVT_POLICY_APPLIED)[-1]["meta"]["policy"]["diff"]
-+        self.assertEqual(set(diff_meta.keys()), {"barge_in_enabled"})
-+        self.assertEqual(diff_meta["barge_in_enabled"], [True, False])
-+
-+
-+if __name__ == "__main__":  # pragma: no cover
-+    unittest.main()
-diff --git a/tests/test_policy_loader.py b/tests/test_policy_loader.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..c87abe0157279abe89557a9529be396924889a70
---- /dev/null
-+++ b/tests/test_policy_loader.py
-@@ -0,0 +1,78 @@
-+"""Tests for the interaction policy loader utilities."""
-+from __future__ import annotations
-+
-+import unittest
-+
-+from app.policy.loader import load_interaction_policy
-+
-+
-+class InteractionPolicyLoaderTests(unittest.TestCase):
-+    """Validate the deterministic snapshot returned by ``load_interaction_policy``."""
-+
-+    def test_defaults_shape_and_types(self) -> None:
-+        snapshot = load_interaction_policy()
-+
-+        expected_keys = {
-+            "mode",
-+            "allow_auto_vad",
-+            "barge_in_enabled",
-+            "auto_commit_when_ready",
-+            "telemetry",
-+        }
-+        self.assertEqual(set(snapshot.keys()), expected_keys)
-+
-+        self.assertEqual(snapshot["mode"], "idle")
-+        self.assertIs(snapshot["allow_auto_vad"], True)
-+        self.assertIs(snapshot["barge_in_enabled"], True)
-+        self.assertIs(snapshot["auto_commit_when_ready"], True)
-+
-+        telemetry = snapshot["telemetry"]
-+        self.assertIsInstance(telemetry, dict)
-+        self.assertIs(telemetry["enabled"], True)
-+        self.assertEqual(telemetry["level"], "debug")
-+
-+        categories = telemetry["categories"]
-+        self.assertIsInstance(categories, dict)
-+        expected_categories = {
-+            "ws",
-+            "audio",
-+            "policy",
-+            "tts",
-+            "gate",
-+            "barge",
-+            "asr",
-+            "nlu",
-+            "nlg",
-+            "client_ui",
-+            "provider_debug",
-+        }
-+        self.assertEqual(set(categories.keys()), expected_categories)
-+        for key in expected_categories:
-+            self.assertIs(categories[key], True)
-+
-+        redaction = telemetry["redaction"]
-+        self.assertEqual(redaction, {"pii": True, "secrets": True, "text": False})
-+
-+        sampling = telemetry["sampling"]
-+        self.assertEqual(sampling, {"percent": 100})
-+
-+    def test_overrides_shallow(self) -> None:
-+        overrides = {"telemetry": {"level": "info"}}
-+        snapshot = load_interaction_policy(overrides)
-+
-+        self.assertEqual(snapshot["mode"], "idle")
-+        self.assertIs(snapshot["allow_auto_vad"], True)
-+        self.assertIs(snapshot["barge_in_enabled"], True)
-+        self.assertIs(snapshot["auto_commit_when_ready"], True)
-+
-+        telemetry = snapshot["telemetry"]
-+        self.assertEqual(telemetry, {"level": "info"})
-+        self.assertNotIn("categories", telemetry)
-+
-+        # Loading defaults again should not be impacted by the overrides call.
-+        fresh_defaults = load_interaction_policy()
-+        self.assertIn("categories", fresh_defaults["telemetry"])
-+
-+
-+if __name__ == "__main__":  # pragma: no cover
-+    unittest.main()
+ 
+ __all__ = ["ChatV2Adapter", "CHAT_V2_SUBPROTOCOL"]
+diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
+index 1784bd62ad3acd45a2294fb0644cecbffa504809..0ec3927b582b119b7d935bb8ba7264342bb44196 100644
+--- a/docs/10_CONTRACT_WS.md
++++ b/docs/10_CONTRACT_WS.md
+@@ -44,75 +44,77 @@ Copy code
+         "policy": true,
+         "tts": true,
+         "gate": true,
+         "barge": true,
+         "asr": true,
+         "nlu": true,
+         "nlg": true,
+         "client_ui": true,
+         "provider_debug": true
+       },
+       "redaction": { "pii": true, "secrets": true, "text": false },
+       "sampling": { "percent": 100 }
+     }
+   }
+ }
+ TTS / ASR / Error examples
+ json
+ Copy code
+ {"type":"tts.start","utt_id":"u-123","post_hold_ms":200}
+ {"type":"tts.end","utt_id":"u-123"}
+ {"type":"asr.ready":true}
+ {"type":"asr.partial","text":"...","confidence":0.73}
+ {"type":"asr.final","text":"...","confidence":0.91}
+ {"type":"error","code":"bad_subprotocol","detail":"use chat.v2"}
+ {"type":"error","code":"schema_invalid","detail":"audio.header requires integer channels"}
++{"type":"error","code":"unknown_type","detail":"admin.nuke"}
+ 
+ Behavioral rules
+ Connection & Version Negotiation
+ The server only supports subprotocol "chat.v2".
+ Clients proposing a different or missing subprotocol receive HTTP 426 with
+ {"type":"error","code":"bad_subprotocol","detail":"use chat.v2"} before upgrade.
+ 
+ Once upgraded, all subsequent error frames follow the same shape {type:"error","code","detail"}.
+ 
+ Authorization & Rate Limits
+ A valid Authorization: Bearer <token> header is required unless disabled in configuration.
+ 
+ Missing or invalid auth →
+ {"type":"error","code":"unauthorized","detail":"missing or invalid auth"}.
+ 
+ Excessive frame or byte rate →
+ {"type":"error","code":"rate_limited","detail":"try later"} followed by WS close (1008).
+ 
+ Frame Validation
+ Text frames must contain valid JSON and minimal schema requirements.
+ Invalid frames return:
+ 
+ json
+ Copy code
+ {"type":"error","code":"schema_invalid","detail":"<validation hint>"}
++{"type":"error","code":"unknown_type","detail":"client.foo"}
+ The connection remains open unless otherwise specified.
+ 
+ Backpressure
+ When outbound queue depth exceeds threshold, the server publishes
+ EVT_BACKPRESSURE_ON and EVT_BACKPRESSURE_OFF (diagnostic only).
+ 
+ Mode & Barge rules
+ While mode="assistant_speaking":
+ 
+ If barge_in_enabled=true, auto-VAD + ASR evidence may interrupt TTS.
+ 
+ If barge_in_enabled=false, ignore speech until tts.end + post_hold_ms.
+ 
+ In mode="idle", allow_auto_vad MUST be true and ACWR effective (subject to admin kill).
+ 
+ Telemetry event envelope v1 (both sides)
+ All events use schema v1 and share this shape:
+ 
+ json
+ Copy code
+ {
+   "schema_version": "1",
+   "type": "EVT_*",
+   "ts_ms": 1730000000000,
+   "sid": "session-uuid",

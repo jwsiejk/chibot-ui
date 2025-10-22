@@ -66,6 +66,7 @@ Copy code
 {"type":"asr.final","text":"...","confidence":0.91}
 {"type":"error","code":"bad_subprotocol","detail":"use chat.v2"}
 {"type":"error","code":"schema_invalid","detail":"audio.header requires integer channels"}
+{"type":"error","code":"unknown_type","detail":"admin.nuke"}
 
 Behavioral rules
 Connection & Version Negotiation
@@ -91,6 +92,7 @@ Invalid frames return:
 json
 Copy code
 {"type":"error","code":"schema_invalid","detail":"<validation hint>"}
+{"type":"error","code":"unknown_type","detail":"client.foo"}
 The connection remains open unless otherwise specified.
 
 Backpressure

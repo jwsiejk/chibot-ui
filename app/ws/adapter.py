@@ -215,43 +215,70 @@ class ChatV2Adapter:
     async def _handle_text(
         self, data: str, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
     ) -> _HandleResult:
-        payload_bytes = data.encode("utf-8")
-        byte_count = len(payload_bytes)
-        frame_type: Optional[str] = None
-        meta: Dict[str, Any] = {"byte_count": byte_count, "dir": "in"}
-
         limited = await self._check_rate_limit(ctx, send)
         if limited is not None:
             return limited
 
+        try:
+            payload_bytes = data.encode("utf-8")
+            byte_count = len(payload_bytes)
+        except UnicodeEncodeError:
+            sanitized = data.encode("utf-8", "replace")
+            meta = {
+                "byte_count": len(sanitized),
+                "error": "bad_utf8",
+                "frame_type": None,
+                "ws": {
+                    "dir": "in",
+                    "size": len(sanitized),
+                    "preview": self._make_preview_from_bytes(sanitized),
+                },
+            }
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+            await self._send_error(send, ctx.sid, "bad_utf8", "Text frame must be UTF-8 encoded JSON")
+            return self._HandleResult(True)
+
+        meta: Dict[str, Any] = {
+            "byte_count": byte_count,
+            "frame_type": None,
+            "ws": {
+                "dir": "in",
+                "size": byte_count,
+            },
+        }
+
+        preview = self._make_preview_from_bytes(payload_bytes)
+        if preview is not None:
+            meta["ws"]["preview"] = preview
+
         if byte_count > self.text_limit_bytes:
             meta["error"] = "frame_too_large"
-            meta["frame_type"] = None
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
             await self._send_error(send, ctx.sid, "frame_too_large", "Text frame exceeds limit")
             return self._HandleResult(False, 1009, "frame_too_large")
 
         try:
-            frame = json.loads(data)
-            if isinstance(frame, dict):
-                raw_type = frame.get("type")
-                frame_type = raw_type if isinstance(raw_type, str) else None
-            else:
-                frame = {}
+            frame = json.loads(payload_bytes.decode("utf-8"))
         except json.JSONDecodeError as exc:
             meta["error"] = "bad_json"
-            meta["frame_type"] = None
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
             await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
             return self._HandleResult(True)
 
-        if frame_type is None:
-            meta["error"] = "unknown_type"
-            meta["frame_type"] = None
+        if not isinstance(frame, dict):
+            meta["error"] = "schema_invalid"
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-            await self._send_error(send, ctx.sid, "unknown_type", "Frame missing type field")
+            await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
             return self._HandleResult(True)
 
+        raw_type = frame.get("type")
+        if not isinstance(raw_type, str):
+            meta["error"] = "schema_invalid"
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+            await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
+            return self._HandleResult(True)
+
+        frame_type = raw_type
         meta["frame_type"] = frame_type
 
         if frame_type == "ping":
@@ -268,7 +295,7 @@ class ChatV2Adapter:
         if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
             meta["error"] = "unknown_type"
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-            await self._send_error(send, ctx.sid, "unknown_type", f"Unsupported frame type '{frame_type}'")
+            await self._send_error(send, ctx.sid, "unknown_type", frame_type)
             return self._HandleResult(True)
 
         is_valid, hint = validate_frame(frame)
@@ -279,6 +306,7 @@ class ChatV2Adapter:
             await self._send_error(send, ctx.sid, "schema_invalid", detail)
             return self._HandleResult(True)
 
+        await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
         await self._invoke_engine("on_json", ctx.sid, frame)
         return self._HandleResult(True)
 
@@ -334,11 +362,19 @@ class ChatV2Adapter:
     async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
         text = json.dumps(payload, separators=(",", ":"))
         await send({"type": "websocket.send", "text": text})
-        meta = {
-            "byte_count": len(text.encode("utf-8")),
+        payload_bytes = text.encode("utf-8")
+        byte_count = len(payload_bytes)
+        meta: Dict[str, Any] = {
+            "byte_count": byte_count,
             "frame_type": payload.get("type"),
-            "dir": "out",
+            "ws": {
+                "dir": "out",
+                "size": byte_count,
+            },
         }
+        preview = self._make_preview_from_bytes(payload_bytes)
+        if preview is not None:
+            meta["ws"]["preview"] = preview
         await self._publish(EVT_WS_JSON_SEND, sid, meta)
 
     async def _send_error(
@@ -382,6 +418,16 @@ class ChatV2Adapter:
         for key, value in headers:
             decoded[key.decode("latin1").lower()] = value.decode("latin1")
         return decoded
+
+    @staticmethod
+    def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
+        if not payload:
+            return None
+        preview = payload.decode("utf-8", "replace")
+        preview = preview.replace("\r", "\\r").replace("\n", "\\n")
+        if len(preview) > limit:
+            return f"{preview[: limit - 1]}…"
+        return preview
 
 
 __all__ = ["ChatV2Adapter", "CHAT_V2_SUBPROTOCOL"]
