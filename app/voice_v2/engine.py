@@ -124,7 +124,7 @@ class EngineV2:
 
         self._emit_policy_frame(sid, snapshot)
         self._emit_policy_applied(sid, previous, diff)
-        self._emit_acwr_recompute(sid, snapshot)
+        self._emit_acwr_breadcrumb(sid, snapshot)
         return True
 
     def _envelope(self, sid: str, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -153,8 +153,14 @@ class EngineV2:
         event = self._envelope(sid, EVT_POLICY_APPLIED, {"meta": meta})
         self._publish(event)
 
-    def _emit_acwr_recompute(self, sid: str, snapshot: Dict[str, Any]) -> None:
-        policy_acwr = snapshot.get("auto_commit_when_ready")
+    def _emit_acwr_breadcrumb(self, sid: str, snapshot: Dict[str, Any]) -> None:
+        """Publish a breadcrumb describing the Auto-Commit-When-Ready state."""
+
+        policy_acwr = (
+            snapshot["auto_commit_when_ready"]
+            if "auto_commit_when_ready" in snapshot
+            else None
+        )
         effective = bool(snapshot.get("auto_commit_when_ready", True))
         meta = {
             "policy_acwr": policy_acwr,

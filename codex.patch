@@ -1,48 +1,8 @@
 diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index ebb5741af14c413e84e5073aa2a9d74f8129f3c4..dd9d942ae96500ce2620c6f39e040554f4e1c136 100644
+index dd9d942ae96500ce2620c6f39e040554f4e1c136..187c516346883239e0371cb100712732130f1eb1 100644
 --- a/app/voice_v2/engine.py
 +++ b/app/voice_v2/engine.py
-@@ -1,38 +1,39 @@
- """Minimal Engine v2 shell with telemetry hooks and session exporting."""
- from __future__ import annotations
- 
- from dataclasses import dataclass
- import json
- import time
- from typing import Any, Dict, Mapping, Optional
- 
- from app.policy.loader import load_interaction_policy
- from app.policy.watch import compute_diff, should_reapply
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-+    EVT_ACWR_RECOMPUTE,
-     EVT_POLICY_APPLIED,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
- @dataclass
- class _Envelope:
-     """Normalized telemetry envelope returned by the engine hooks."""
- 
-     type: str
-     sid: str
-     payload: Dict[str, Any]
- 
-     def to_dict(self) -> Dict[str, Any]:
-         data = {"type": self.type, "sid": self.sid}
-         data.update(self.payload)
-@@ -101,74 +102,86 @@ class EngineV2:
+@@ -102,81 +102,87 @@ class EngineV2:
          meta = {"code": code, "reason": reason}
          event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
          self._publish(event)
@@ -68,7 +28,8 @@ index ebb5741af14c413e84e5073aa2a9d74f8129f3c4..dd9d942ae96500ce2620c6f39e040554
  
          self._emit_policy_frame(sid, snapshot)
          self._emit_policy_applied(sid, previous, diff)
-+        self._emit_acwr_recompute(sid, snapshot)
+-        self._emit_acwr_recompute(sid, snapshot)
++        self._emit_acwr_breadcrumb(sid, snapshot)
          return True
  
      def _envelope(self, sid: str, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,17 +58,25 @@ index ebb5741af14c413e84e5073aa2a9d74f8129f3c4..dd9d942ae96500ce2620c6f39e040554
          event = self._envelope(sid, EVT_POLICY_APPLIED, {"meta": meta})
          self._publish(event)
  
-+    def _emit_acwr_recompute(self, sid: str, snapshot: Dict[str, Any]) -> None:
-+        policy_acwr = snapshot.get("auto_commit_when_ready")
-+        effective = bool(snapshot.get("auto_commit_when_ready", True))
-+        meta = {
-+            "policy_acwr": policy_acwr,
-+            "admin_enabled": None,
-+            "effective": effective,
-+        }
-+        event = self._envelope(sid, EVT_ACWR_RECOMPUTE, {"meta": meta})
-+        self._publish(event)
+-    def _emit_acwr_recompute(self, sid: str, snapshot: Dict[str, Any]) -> None:
+-        policy_acwr = snapshot.get("auto_commit_when_ready")
++    def _emit_acwr_breadcrumb(self, sid: str, snapshot: Dict[str, Any]) -> None:
++        """Publish a breadcrumb describing the Auto-Commit-When-Ready state."""
 +
++        policy_acwr = (
++            snapshot["auto_commit_when_ready"]
++            if "auto_commit_when_ready" in snapshot
++            else None
++        )
+         effective = bool(snapshot.get("auto_commit_when_ready", True))
+         meta = {
+             "policy_acwr": policy_acwr,
+             "admin_enabled": None,
+             "effective": effective,
+         }
+         event = self._envelope(sid, EVT_ACWR_RECOMPUTE, {"meta": meta})
+         self._publish(event)
+ 
      @staticmethod
      def _summarize_policy_diff(
          previous: Dict[str, Any] | None,
@@ -124,8 +93,145 @@ index ebb5741af14c413e84e5073aa2a9d74f8129f3c4..dd9d942ae96500ce2620c6f39e040554
  
          for key, value in diff.get("removed", {}).items():
              summary[key] = [value, None]
- 
-         return summary
- 
- 
- __all__ = ["EngineV2"]
+diff --git a/scripts/run_build02_tests.sh b/scripts/run_build02_tests.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..7469cfb0a3165eb995546abcb86e02a4b34fa6e0
+--- /dev/null
++++ b/scripts/run_build02_tests.sh
+@@ -0,0 +1,42 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++
++if command -v python3 >/dev/null 2>&1; then
++  PY="$(command -v python3)"
++elif command -v python >/dev/null 2>&1; then
++  PY="$(command -v python)"
++else
++  echo "BUILD_02_TESTS: FAIL" >&2
++  echo "python interpreter not found" >&2
++  exit 1
++fi
++
++MODULES=(
++  tests.test_policy_loader
++  tests.test_policy_apply_and_diff
++  tests.test_acwr_breadcrumb
++)
++
++missing_files=()
++for module in "${MODULES[@]}"; do
++  module_path="${module//.//}.py"
++  if [[ ! -f "$ROOT_DIR/$module_path" ]]; then
++    missing_files+=("$module_path")
++  fi
++done
++
++if [[ ${#missing_files[@]} -gt 0 ]]; then
++  echo "BUILD_02_TESTS: FAIL" >&2
++  echo "required test files are missing: ${missing_files[*]}" >&2
++  exit 1
++fi
++
++if "$PY" -m unittest -v "${MODULES[@]}"; then
++  echo "BUILD_02_TESTS: PASS"
++else
++  status=$?
++  echo "BUILD_02_TESTS: FAIL"
++  exit "$status"
++fi
+diff --git a/tests/test_acwr_breadcrumb.py b/tests/test_acwr_breadcrumb.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..bc45b76c4cff261be2d9924d2666c39ad073186f
+--- /dev/null
++++ b/tests/test_acwr_breadcrumb.py
+@@ -0,0 +1,88 @@
++"""Tests for ACWR recompute breadcrumbs emitted by the engine."""
++from __future__ import annotations
++
++from typing import Any, Dict, List
++import unittest
++
++from app.telemetry.bus import reset, subscribe
++from app.voice_v2 import EVT_ACWR_RECOMPUTE
++from app.voice_v2.engine import EngineV2
++
++
++class _FakeExporter:
++    """Minimal exporter stub satisfying the EngineV2 contract."""
++
++    def __init__(self) -> None:
++        self.events: List[Dict[str, Any]] = []
++
++    def begin(self, sid: str) -> None:  # pragma: no cover - not used in these tests
++        self.events.append({"action": "begin", "sid": sid})
++
++    def write(self, sid: str, event: Dict[str, Any]) -> None:
++        self.events.append({"action": "write", "sid": sid, "event": dict(event)})
++
++    def end(self, sid: str, summary: Dict[str, Any] | None = None) -> None:  # pragma: no cover
++        self.events.append({"action": "end", "sid": sid, "summary": dict(summary or {})})
++
++
++class ACWRBreadcrumbTests(unittest.TestCase):
++    """Validate Auto-Commit-When-Ready recompute breadcrumbs."""
++
++    def setUp(self) -> None:
++        reset()
++        self._events: List[Dict[str, Any]] = []
++        subscribe("*", lambda event: self._events.append(event))
++
++    def tearDown(self) -> None:
++        reset()
++
++    def _acwr_events(self) -> List[Dict[str, Any]]:
++        return [event for event in self._events if event.get("type") == EVT_ACWR_RECOMPUTE]
++
++    def test_acwr_emitted_on_open(self) -> None:
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter)
++
++        engine.on_open("sid-1", headers={})
++
++        acwr_events = self._acwr_events()
++        self.assertEqual(len(acwr_events), 1)
++
++        event = acwr_events[0]
++        meta = event.get("meta") or {}
++        self.assertIs(meta.get("policy_acwr"), True)
++        self.assertIs(meta.get("effective"), True)
++        self.assertIsNone(meta.get("admin_enabled"))
++
++    def test_acwr_emitted_on_reapply_change(self) -> None:
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter)
++        engine.on_open("sid-1", headers={})
++
++        baseline_count = len(self._acwr_events())
++
++        engine.reapply_policy({"auto_commit_when_ready": False})
++
++        acwr_events = self._acwr_events()
++        self.assertEqual(len(acwr_events), baseline_count + 1)
++
++        event = acwr_events[-1]
++        meta = event.get("meta") or {}
++        self.assertIs(meta.get("policy_acwr"), False)
++        self.assertIs(meta.get("effective"), False)
++
++    def test_acwr_no_emit_on_reapply_same_snapshot(self) -> None:
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter)
++        engine.on_open("sid-1", headers={})
++
++        baseline_count = len(self._acwr_events())
++
++        engine.reapply_policy({})
++
++        acwr_events = self._acwr_events()
++        self.assertEqual(len(acwr_events), baseline_count)
++
++
++if __name__ == "__main__":  # pragma: no cover
++    unittest.main()
