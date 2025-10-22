@@ -11,11 +11,11 @@ class TestBusRedaction(unittest.TestCase):
         reset()
 
     def _capture_event(self, meta: dict | None = None, **extra: object) -> dict:
-        delivered: list[dict] = []
+        delivered = []
 
         token = subscribe("EVT_WS_JSON_RECV", lambda event: delivered.append(event))
         try:
-            payload: dict = {"type": "EVT_WS_JSON_RECV"}
+            payload = {"type": "EVT_WS_JSON_RECV"}
             if meta is not None:
                 payload["meta"] = meta
             if extra:
@@ -35,23 +35,23 @@ class TestBusRedaction(unittest.TestCase):
         event = self._capture_event({"auth": "Bearer abc123def456"})
         self.assertEqual(event["meta"], {"auth": "Bearer ****f456"})
 
-    def test_secret_opaque_masking(self) -> None:
+    def test_secretish_token_shortening(self) -> None:
         secret_value = "abc" + ("d" * 42) + "xyz"
         event = self._capture_event({"secret": secret_value})
         self.assertEqual(event["meta"], {"secret": "abc…xyz"})
 
-    def test_url_query_param_masking(self) -> None:
+    def test_url_param_masking(self) -> None:
         event = self._capture_event({"callback": "https://x.y/cb?token=abcdef&ok=1"})
         self.assertEqual(
             event["meta"],
             {"callback": "https://x.y/cb?token=%2A%2A%2A%2A&ok=1"},
         )
 
-    def test_generic_long_string_collapse(self) -> None:
+    def test_long_blob_collapse(self) -> None:
         event = self._capture_event({"blob": "A" * 140})
         self.assertEqual(event["meta"], {"blob": "AAAAAAAA…AAAAAAAA"})
 
-    def test_nested_container_redaction(self) -> None:
+    def test_nested_containers_redaction(self) -> None:
         event = self._capture_event(
             {
                 "outer": [
