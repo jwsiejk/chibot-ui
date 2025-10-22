@@ -7,6 +7,7 @@
   if (!AppState) {
     throw new Error("AppState store is required before loading WSClient");
   }
+  const getAudioPlayer = () => window.AudioPlayer;
 
   let socket = null;
   let heartbeatTimerId = null;
@@ -103,6 +104,11 @@
     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
     const expiresAt = resumeToken && resumeTtlMs ? Date.now() + resumeTtlMs : null;
+    const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
+    const audioPlayer = getAudioPlayer();
+    if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+      audioPlayer.setDescriptor(descriptor);
+    }
     updateState({
       connectionState: "connected",
       sid: meta.sid,
@@ -137,6 +143,16 @@
       sendJson({ type: "pong", t: Date.now() });
     } else if (frame.type === "error") {
       console.error("WS error frame", frame);
+    } else if (frame.type === "tts.start") {
+      const audioPlayer = getAudioPlayer();
+      if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+        audioPlayer.handleTtsStart(frame);
+      }
+    } else if (frame.type === "tts.end") {
+      const audioPlayer = getAudioPlayer();
+      if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+        audioPlayer.handleTtsEnd(frame);
+      }
     }
     dispatchFrame(frame);
   }
@@ -153,6 +169,10 @@
       return;
     }
     if (data instanceof Blob) {
+      const audioPlayer = getAudioPlayer();
+      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+        audioPlayer.enqueueChunk(data);
+      }
       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
       return;
     }

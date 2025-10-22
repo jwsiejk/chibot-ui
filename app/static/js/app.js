@@ -28,6 +28,9 @@
     if (!window.AppState) {
       await loadScript("./state.js");
     }
+    if (!window.AudioPlayer) {
+      await loadScript("./audio_player.js");
+    }
     if (!window.WSClient) {
       await loadScript("./ws_client.js");
     }
@@ -122,6 +125,9 @@
         } catch (err) {
           console.warn('Failed to stop audio recorder', err);
         }
+      }
+      if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+        window.AudioPlayer.interrupt();
       }
     });
 
@@ -270,6 +276,9 @@
           } catch (err) {
             console.warn('AudioRecorder stop error', err);
           }
+        }
+        if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+          window.AudioPlayer.interrupt();
         }
       }
       previousConnectionState = state.connectionState;

@@ -1,8 +1,11 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 766fc5828e3b814a93466fac7f6c9ef25482b4e3..5fdb6b32321f4c93c4a224f51ea8c87fd179a1c3 100644
+index 5fdb6b32321f4c93c4a224f51ea8c87fd179a1c3..debb3c5baa6db590f1d6a56a7ea5e457b0c131e8 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -9,50 +9,53 @@
+@@ -6,50 +6,53 @@
+         if (existing.dataset.loaded === "true") {
+           resolve();
+         } else {
            existing.addEventListener("load", resolve, { once: true });
            existing.addEventListener("error", reject, { once: true });
          }
@@ -25,12 +28,15 @@ index 766fc5828e3b814a93466fac7f6c9ef25482b4e3..5fdb6b32321f4c93c4a224f51ea8c87f
      if (!window.AppState) {
        await loadScript("./state.js");
      }
++    if (!window.AudioPlayer) {
++      await loadScript("./audio_player.js");
++    }
      if (!window.WSClient) {
        await loadScript("./ws_client.js");
      }
-+    if (!window.AudioRecorder) {
-+      await loadScript("./audio_recorder.js");
-+    }
+     if (!window.AudioRecorder) {
+       await loadScript("./audio_recorder.js");
+     }
    }
  
    async function init() {
@@ -50,20 +56,7 @@ index 766fc5828e3b814a93466fac7f6c9ef25482b4e3..5fdb6b32321f4c93c4a224f51ea8c87f
      const brandMenu = document.getElementById('brandMenu');
      const adminItem = document.getElementById('adminItem');
      if (!isAdmin) {
-       adminItem.setAttribute('aria-disabled', 'true');
-       adminItem.title = "Admins only";
-     }
-     function closeMenu(){ brandMenu.classList.remove('open'); brandBtn.setAttribute('aria-expanded','false'); }
-     brandBtn.addEventListener('click', (e) => {
-       const open = brandMenu.classList.toggle('open');
-@@ -91,50 +94,57 @@
-     const latencyHint = document.getElementById('latencyHint');
- 
-     const accessTokenParam = urlParams.get('access_token') || urlParams.get('token');
-     const defaultToken = (window.DEMO_ACCESS_TOKEN || accessTokenParam || '').trim();
- 
-     function resolveAccessToken() {
-       return defaultToken || 'demo-token';
+@@ -101,50 +104,53 @@
      }
  
      startBtn.addEventListener('click', async () => {
@@ -82,12 +75,15 @@ index 766fc5828e3b814a93466fac7f6c9ef25482b4e3..5fdb6b32321f4c93c4a224f51ea8c87f
  
      endBtn.addEventListener('click', () => {
        WSClient.close('user_requested');
-+      if (window.AudioRecorder) {
-+        try {
-+          window.AudioRecorder.stop();
-+        } catch (err) {
-+          console.warn('Failed to stop audio recorder', err);
-+        }
+       if (window.AudioRecorder) {
+         try {
+           window.AudioRecorder.stop();
+         } catch (err) {
+           console.warn('Failed to stop audio recorder', err);
+         }
+       }
++      if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
++        window.AudioPlayer.interrupt();
 +      }
      });
  
@@ -114,21 +110,7 @@ index 766fc5828e3b814a93466fac7f6c9ef25482b4e3..5fdb6b32321f4c93c4a224f51ea8c87f
          ctx.fillStyle = g; ctx.fillRect(0,0,w,h);
          ctx.strokeStyle = 'rgba(255,255,255,0.04)';
          ctx.lineWidth = 1;
-@@ -225,52 +235,64 @@
-         if (audioCtx){ try{ audioCtx.close(); }catch{} audioCtx = null; }
-       }
-       drawBackground(); drawSynth();
-       return { start, stop };
-     })();
- 
-     let previousConnectionState = AppState.getState().connectionState;
-     AppState.subscribe((state) => {
-       sidText.textContent = state.sid || '—';
-       let label = 'Disconnected';
-       if (state.connectionState === 'connected') label = 'Connected';
-       else if (state.connectionState === 'connecting') label = 'Connecting…';
-       else if (state.connectionState === 'resuming') label = 'Resuming…';
-       connLabel.textContent = label;
+@@ -249,50 +255,53 @@
        const active = state.connectionState !== 'disconnected';
        statusDot.classList.toggle('on', active);
        startBtn.disabled = active;
@@ -140,19 +122,22 @@ index 766fc5828e3b814a93466fac7f6c9ef25482b4e3..5fdb6b32321f4c93c4a224f51ea8c87f
        }
        if (previousConnectionState !== 'connected' && state.connectionState === 'connected') {
          Waveform.start();
-+        if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-+          window.AudioRecorder.start().catch((err) => {
-+            console.error('AudioRecorder start error', err);
-+          });
-+        }
+         if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+           window.AudioRecorder.start().catch((err) => {
+             console.error('AudioRecorder start error', err);
+           });
+         }
        } else if (previousConnectionState !== 'disconnected' && state.connectionState === 'disconnected') {
          Waveform.stop();
-+        if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
-+          try {
-+            window.AudioRecorder.stop();
-+          } catch (err) {
-+            console.warn('AudioRecorder stop error', err);
-+          }
+         if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+           try {
+             window.AudioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
+           }
+         }
++        if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
++          window.AudioPlayer.interrupt();
 +        }
        }
        previousConnectionState = state.connectionState;
@@ -179,446 +164,300 @@ index 766fc5828e3b814a93466fac7f6c9ef25482b4e3..5fdb6b32321f4c93c4a224f51ea8c87f
            this.readyState = WebSocket.CLOSED;
            const ev = new Event('close');
            ev.code = code;
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+diff --git a/app/static/js/audio_player.js b/app/static/js/audio_player.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..96cd1e9df5619fc171309ec9ce12ffe351e3e540
+index 0000000000000000000000000000000000000000..e35c5a5b64fcd6680d7ff72ea31ee28b7812392a
 --- /dev/null
-+++ b/app/static/js/audio_recorder.js
-@@ -0,0 +1,429 @@
++++ b/app/static/js/audio_player.js
+@@ -0,0 +1,266 @@
 +(() => {
 +  const AppState = window.AppState;
 +  if (!AppState) {
-+    throw new Error("AppState store is required before loading AudioRecorder");
++    throw new Error("AppState store is required before loading AudioPlayer");
 +  }
 +
-+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-+  const BACKPRESSURE_LIMIT_BYTES = 512 * 1024;
-+  const WEBM_TIMESLICE_MS = 250;
++  const INT16_DIVISOR = 32768;
++  const ACTIVE_SOURCES = new Set();
 +
-+  class PcmDownsampler {
-+    constructor(sourceRate, targetRate) {
-+      this.sourceRate = sourceRate;
-+      this.targetRate = targetRate;
-+      this._ratio = sourceRate / targetRate;
-+      this._buffer = [];
-+      this._position = 0;
-+    }
++  let descriptor = null;
++  let audioContext = null;
++  let gainNode = null;
++  let nextStartTime = 0;
++  let decodeChain = Promise.resolve();
++  let flushToken = 0;
++  let currentUtteranceId = null;
++  let pendingDrainUttId = null;
++  let audioStartReported = false;
 +
-+    reset() {
-+      this._buffer.length = 0;
-+      this._position = 0;
-+    }
-+
-+    push(samples) {
-+      if (!samples || samples.length === 0) return;
-+      for (let i = 0; i < samples.length; i += 1) {
-+        this._buffer.push(samples[i]);
-+      }
-+    }
-+
-+    pullInt16() {
-+      const buffer = this._buffer;
-+      if (!buffer.length) return null;
-+      const ratio = this._ratio;
-+      const output = [];
-+      let pos = this._position;
-+      const total = buffer.length;
-+      while (pos + 1 < total) {
-+        const base = Math.floor(pos);
-+        const frac = pos - base;
-+        const next = base + 1;
-+        if (next >= total) break;
-+        const sample = buffer[base] + (buffer[next] - buffer[base]) * frac;
-+        output.push(sample);
-+        pos += ratio;
-+      }
-+      let consumed = Math.floor(pos);
-+      const maxConsumable = Math.max(0, buffer.length - 2);
-+      if (consumed > maxConsumable) consumed = maxConsumable;
-+      if (consumed > 0) {
-+        buffer.splice(0, consumed);
-+        pos -= consumed;
-+      }
-+      this._position = pos;
-+      if (!output.length) return null;
-+      const out = new Int16Array(output.length);
-+      for (let i = 0; i < output.length; i += 1) {
-+        const value = Math.max(-1, Math.min(1, output[i]));
-+        out[i] = value < 0 ? Math.round(value * 32768) : Math.round(value * 32767);
-+      }
-+      return out;
-+    }
++  function normalizeDescriptor(meta) {
++    if (!meta || typeof meta !== "object") return null;
++    const rateCandidate = Number(meta.rate_hz ?? meta.sampleRate ?? meta.sample_rate ?? meta.rate);
++    const channelsCandidate = Number(meta.channels ?? meta.channel_count ?? meta.num_channels);
++    if (!Number.isFinite(rateCandidate) || rateCandidate <= 0) return null;
++    const channels = Number.isFinite(channelsCandidate) && channelsCandidate > 0 ? channelsCandidate : 1;
++    return { sampleRate: rateCandidate, channels };
 +  }
 +
-+  function downmixToMono(channels) {
-+    if (!channels || !channels.length) {
-+      return new Float32Array(0);
++  function closeContext() {
++    if (!audioContext) return;
++    try {
++      audioContext.close();
++    } catch (err) {
++      console.warn("AudioPlayer failed to close AudioContext", err);
 +    }
-+    if (channels.length === 1) {
-+      return new Float32Array(channels[0]);
-+    }
-+    const length = channels[0].length;
-+    const mono = new Float32Array(length);
-+    for (let i = 0; i < length; i += 1) {
-+      let sum = 0;
-+      for (let c = 0; c < channels.length; c += 1) {
-+        sum += channels[c][i] || 0;
-+      }
-+      mono[i] = sum / channels.length;
-+    }
-+    return mono;
++    audioContext = null;
++    gainNode = null;
++    nextStartTime = 0;
 +  }
 +
-+  function computePayloadSize(payload) {
-+    if (payload instanceof Blob) return payload.size;
-+    if (payload && typeof payload.byteLength === "number") return payload.byteLength;
-+    if (payload && typeof payload.length === "number") return payload.length;
-+    return 0;
-+  }
-+
-+  const recorder = {
-+    _stream: null,
-+    _startPromise: null,
-+    _mediaRecorder: null,
-+    _audioCtx: null,
-+    _sourceNode: null,
-+    _processorNode: null,
-+    _muteNode: null,
-+    _downsampler: null,
-+    _descriptor: null,
-+    _pendingDescriptor: null,
-+    _vendor: null,
-+    _asrReady: false,
-+    _mask: { active: false, holdMs: 0, timerId: null },
-+    _bargeInEnabled: true,
-+
-+    async start() {
-+      if (this._stream) return this._stream;
-+      if (this._startPromise) return this._startPromise;
-+      try {
-+        this._startPromise = navigator.mediaDevices.getUserMedia({
-+          audio: {
-+            channelCount: 1,
-+            echoCancellation: true,
-+            noiseSuppression: true,
-+            autoGainControl: false
-+          }
-+        });
-+        const stream = await this._startPromise;
-+        this._startPromise = null;
-+        this._stream = stream;
-+        if (this._pendingDescriptor) {
-+          this._activateDescriptor(this._pendingDescriptor);
-+          this._pendingDescriptor = null;
-+        }
-+        return stream;
-+      } catch (err) {
-+        this._startPromise = null;
-+        console.error("AudioRecorder start failed", err);
-+        throw err;
-+      }
-+    },
-+
-+    stop() {
-+      this._teardownEncoder();
-+      if (this._stream) {
-+        const tracks = this._stream.getTracks();
-+        tracks.forEach((track) => {
-+          try {
-+            track.stop();
-+          } catch (err) {
-+            console.warn("Failed to stop track", err);
-+          }
-+        });
-+        this._stream = null;
-+      }
-+      this._descriptor = null;
-+      this._pendingDescriptor = null;
-+      this._vendor = null;
-+      this._asrReady = false;
-+      this._setMask(false);
-+    },
-+
-+    _teardownEncoder() {
-+      this._asrReady = false;
-+      if (this._mediaRecorder) {
-+        try {
-+          if (this._mediaRecorder.state !== "inactive") {
-+            this._mediaRecorder.stop();
-+          }
-+        } catch (err) {
-+          console.warn("MediaRecorder stop error", err);
-+        }
-+        this._mediaRecorder.removeEventListener("dataavailable", this._handleWebmData);
-+        this._mediaRecorder.removeEventListener("error", this._handleRecorderError);
-+        this._mediaRecorder = null;
-+        this._handleWebmData = null;
-+        this._handleRecorderError = null;
-+      }
-+      if (this._processorNode) {
-+        try {
-+          this._processorNode.disconnect();
-+        } catch (err) {
-+          console.warn("Processor disconnect error", err);
-+        }
-+        this._processorNode.onaudioprocess = null;
-+        this._processorNode = null;
-+      }
-+      if (this._muteNode) {
-+        try {
-+          this._muteNode.disconnect();
-+        } catch (err) {
-+          console.warn("Mute node disconnect error", err);
-+        }
-+        this._muteNode = null;
-+      }
-+      if (this._sourceNode) {
-+        try {
-+          this._sourceNode.disconnect();
-+        } catch (err) {
-+          console.warn("Source disconnect error", err);
-+        }
-+        this._sourceNode = null;
-+      }
-+      if (this._audioCtx) {
-+        try {
-+          this._audioCtx.close();
-+        } catch (err) {
-+          console.warn("AudioContext close error", err);
-+        }
-+        this._audioCtx = null;
-+      }
-+      if (this._downsampler) {
-+        this._downsampler.reset();
-+        this._downsampler = null;
-+      }
-+    },
-+
-+    _setMask(active) {
-+      if (this._mask.active === active) return;
-+      if (!active && this._mask.timerId) {
-+        clearTimeout(this._mask.timerId);
-+        this._mask.timerId = null;
-+      }
-+      this._mask.active = active;
-+      if (active && this._downsampler) {
-+        this._downsampler.reset();
-+      }
-+    },
-+
-+    _scheduleMaskRelease(delayMs) {
-+      if (this._mask.timerId) {
-+        clearTimeout(this._mask.timerId);
-+        this._mask.timerId = null;
-+      }
-+      if (delayMs > 0) {
-+        this._mask.timerId = setTimeout(() => {
-+          this._mask.timerId = null;
-+          this._setMask(false);
-+        }, delayMs);
-+      } else {
-+        this._setMask(false);
-+      }
-+    },
-+
-+    handleAsrReady(frame) {
-+      const descriptor = frame && frame.input;
-+      const vendor = frame && frame.vendor;
-+      if (!descriptor || !vendor) {
-+        console.warn("Invalid asr.ready frame", frame);
-+        return;
-+      }
-+      const normalized = {
-+        container: String(descriptor.container || "").toLowerCase(),
-+        codec: String(descriptor.codec || "").toLowerCase(),
-+        rate_hz: Number(descriptor.rate_hz) || 0,
-+        channels: Number(descriptor.channels) || 1
-+      };
-+      this._pendingDescriptor = { vendor, descriptor: normalized };
-+      if (this._stream) {
-+        this._activateDescriptor(this._pendingDescriptor);
-+        this._pendingDescriptor = null;
-+      }
-+    },
-+
-+    _activateDescriptor(spec) {
-+      if (!spec || !this._stream) return;
-+      const { vendor, descriptor } = spec;
-+      this._teardownEncoder();
-+      this._vendor = vendor;
-+      this._descriptor = descriptor;
-+      if (descriptor.container === "webm" && descriptor.codec === "opus" && descriptor.rate_hz === 48000 && descriptor.channels === 1) {
-+        this._setupWebmRecorder();
-+      } else if (descriptor.container === "raw" && descriptor.codec === "pcm_s16le" && descriptor.rate_hz === 16000 && descriptor.channels === 1) {
-+        this._setupPcmRecorder();
-+      } else {
-+        console.error("Unsupported ASR descriptor", descriptor);
-+      }
-+    },
-+
-+    _setupWebmRecorder() {
-+      if (typeof MediaRecorder === "undefined") {
-+        console.error("MediaRecorder not supported in this browser");
-+        return;
-+      }
-+      const mimeType = "audio/webm;codecs=opus";
-+      if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(mimeType)) {
-+        console.error("MediaRecorder does not support", mimeType);
-+        return;
++  function ensureContext() {
++    if (!descriptor) return null;
++    const desiredRate = descriptor.sampleRate;
++    if (audioContext && Math.abs(audioContext.sampleRate - desiredRate) > 1) {
++      closeContext();
++    }
++    if (!audioContext) {
++      const Ctor = window.AudioContext || window.webkitAudioContext;
++      if (!Ctor) {
++        console.error("Web Audio API is not supported in this browser");
++        return null;
 +      }
 +      try {
-+        const recorder = new MediaRecorder(this._stream, { mimeType });
-+        this._handleWebmData = (event) => {
-+          const chunk = event.data;
-+          if (!chunk || !chunk.size) return;
-+          if (!this._canSend()) return;
-+          this._sendChunk(chunk);
-+        };
-+        this._handleRecorderError = (event) => {
-+          console.error("MediaRecorder error", event);
-+        };
-+        recorder.addEventListener("dataavailable", this._handleWebmData);
-+        recorder.addEventListener("error", this._handleRecorderError);
-+        recorder.start(WEBM_TIMESLICE_MS);
-+        this._mediaRecorder = recorder;
-+        this._asrReady = true;
++        audioContext = new Ctor({ sampleRate: desiredRate });
 +      } catch (err) {
-+        console.error("Failed to start MediaRecorder", err);
++        console.error("AudioPlayer failed to create AudioContext", err);
++        audioContext = null;
++        return null;
 +      }
-+    },
++      gainNode = audioContext.createGain();
++      gainNode.connect(audioContext.destination);
++      nextStartTime = audioContext.currentTime;
++    }
++    return audioContext;
++  }
 +
-+    _setupPcmRecorder() {
-+      if (!AudioContextCtor) {
-+        console.error("Web Audio API is not supported");
-+        return;
++  function extractUttId(payload) {
++    if (!payload || typeof payload !== "object") return null;
++    if (typeof payload.utt_id === "string" && payload.utt_id) {
++      return payload.utt_id;
++    }
++    const meta = payload.meta;
++    if (meta && typeof meta === "object") {
++      const ttsMeta = meta.tts;
++      if (ttsMeta && typeof ttsMeta === "object" && typeof ttsMeta.utt_id === "string" && ttsMeta.utt_id) {
++        return ttsMeta.utt_id;
++      }
++    }
++    return null;
++  }
++
++  function extractReason(payload) {
++    if (!payload || typeof payload !== "object") return null;
++    if (typeof payload.reason === "string" && payload.reason) {
++      return payload.reason;
++    }
++    const meta = payload.meta;
++    if (meta && typeof meta === "object") {
++      if (typeof meta.reason === "string" && meta.reason) {
++        return meta.reason;
++      }
++      const ttsMeta = meta.tts;
++      if (ttsMeta && typeof ttsMeta === "object" && typeof ttsMeta.reason === "string" && ttsMeta.reason) {
++        return ttsMeta.reason;
++      }
++    }
++    return null;
++  }
++
++  function finalizeUtterance() {
++    pendingDrainUttId = null;
++    currentUtteranceId = null;
++    audioStartReported = false;
++    AppState.setState({ tAudioStartMs: null, ttsUttId: null });
++  }
++
++  function interrupt({ preserveState = false } = {}) {
++    flushToken += 1;
++    decodeChain = Promise.resolve();
++    const ctx = audioContext;
++    ACTIVE_SOURCES.forEach((source) => {
++      try {
++        source.stop();
++      } catch (err) {
++        // no-op
 +      }
 +      try {
-+        const ctx = new AudioContextCtor();
-+        const source = ctx.createMediaStreamSource(this._stream);
-+        const channels = Math.max(1, source.channelCount || 1);
-+        const processor = ctx.createScriptProcessor(4096, channels, 1);
-+        const gain = ctx.createGain();
-+        gain.gain.value = 0;
-+        processor.connect(gain);
-+        gain.connect(ctx.destination);
-+        source.connect(processor);
-+        this._downsampler = new PcmDownsampler(ctx.sampleRate, this._descriptor.rate_hz);
-+        processor.onaudioprocess = (event) => {
-+          if (!this._canSend()) {
-+            if (this._downsampler) this._downsampler.reset();
-+            return;
-+          }
-+          const input = event.inputBuffer;
-+          const channelData = [];
-+          for (let i = 0; i < input.numberOfChannels; i += 1) {
-+            channelData.push(input.getChannelData(i));
-+          }
-+          const mono = downmixToMono(channelData);
-+          this._downsampler.push(mono);
-+          const int16 = this._downsampler.pullInt16();
-+          if (int16 && int16.byteLength) {
-+            this._sendChunk(int16.buffer, int16.byteLength);
-+          }
-+        };
-+        if (typeof ctx.resume === "function") {
-+          ctx.resume().catch(() => {});
-+        }
-+        this._audioCtx = ctx;
-+        this._sourceNode = source;
-+        this._processorNode = processor;
-+        this._muteNode = gain;
-+        this._asrReady = true;
++        source.disconnect();
 +      } catch (err) {
-+        console.error("Failed to set up PCM recorder", err);
++        // no-op
 +      }
-+    },
-+
-+    _canSend() {
-+      if (!this._asrReady || !this._stream) return false;
-+      if (this._mask.active) return false;
-+      const WSClient = window.WSClient;
-+      if (!WSClient || typeof WSClient.isConnected !== "function" || typeof WSClient.sendBinary !== "function") {
-+        return false;
-+      }
-+      return WSClient.isConnected();
-+    },
-+
-+    _sendChunk(payload, sizeOverride) {
-+      const WSClient = window.WSClient;
-+      if (!WSClient || typeof WSClient.sendBinary !== "function") return false;
-+      const bufferedAmount = typeof WSClient.getBufferedAmount === "function" ? WSClient.getBufferedAmount() : 0;
-+      if (bufferedAmount > BACKPRESSURE_LIMIT_BYTES) {
-+        console.warn("Dropping audio chunk due to backpressure", bufferedAmount);
-+        return false;
-+      }
-+      const sent = WSClient.sendBinary(payload, { dropIfBusy: true });
-+      if (sent) {
-+        const size = typeof sizeOverride === "number" ? sizeOverride : computePayloadSize(payload);
-+        console.debug("[AudioRecorder] uplink chunk bytes", size);
-+      } else {
-+        console.warn("Failed to send audio chunk");
-+      }
-+      return sent;
-+    },
-+
-+    handlePolicy(frame) {
-+      const policy = frame && frame.policy;
-+      if (policy && typeof policy.barge_in_enabled === "boolean") {
-+        this._bargeInEnabled = policy.barge_in_enabled;
-+        if (this._bargeInEnabled && this._mask.active) {
-+          this._mask.holdMs = 0;
-+          this._setMask(false);
-+        }
-+      }
-+    },
-+
-+    handleTtsStart(frame) {
-+      if (this._bargeInEnabled) return;
-+      const hold = Number(frame && frame.post_hold_ms);
-+      this._mask.holdMs = Number.isFinite(hold) && hold > 0 ? hold : 0;
-+      this._setMask(true);
-+    },
-+
-+    handleTtsEnd() {
-+      if (!this._mask.active) return;
-+      const hold = this._mask.holdMs || 0;
-+      this._mask.holdMs = 0;
-+      this._scheduleMaskRelease(hold);
-+    },
-+
-+    handleWsClose() {
-+      this._teardownEncoder();
-+      this._asrReady = false;
-+      this._descriptor = null;
-+      this._pendingDescriptor = null;
-+      this._vendor = null;
-+      this._setMask(false);
++    });
++    ACTIVE_SOURCES.clear();
++    if (ctx) {
++      nextStartTime = ctx.currentTime;
++    } else {
++      nextStartTime = 0;
 +    }
++    pendingDrainUttId = null;
++    audioStartReported = false;
++    if (!preserveState) {
++      finalizeUtterance();
++    }
++  }
++
++  function scheduleBuffer(float32, token) {
++    if (!descriptor || flushToken !== token) return;
++    const ctx = ensureContext();
++    if (!ctx || flushToken !== token) return;
++    if (float32.length === 0) return;
++    const channels = descriptor.channels || 1;
++    const buffer = ctx.createBuffer(channels, float32.length, ctx.sampleRate);
++    for (let ch = 0; ch < channels; ch += 1) {
++      buffer.copyToChannel(float32, ch);
++    }
++    const source = ctx.createBufferSource();
++    source.buffer = buffer;
++    source.connect(gainNode);
++    const safeLeadTime = 0.005;
++    const startAt = Math.max(nextStartTime, ctx.currentTime + safeLeadTime);
++    try {
++      source.start(startAt);
++    } catch (err) {
++      console.error("AudioPlayer failed to start buffer source", err);
++      return;
++    }
++    nextStartTime = startAt + buffer.duration;
++    ACTIVE_SOURCES.add(source);
++    source.onended = () => {
++      ACTIVE_SOURCES.delete(source);
++      if (ACTIVE_SOURCES.size === 0) {
++        if (audioContext) {
++          nextStartTime = audioContext.currentTime;
++        }
++        if (!pendingDrainUttId || (currentUtteranceId && pendingDrainUttId !== currentUtteranceId)) {
++          return;
++        }
++        finalizeUtterance();
++      }
++    };
++    if (!audioStartReported && currentUtteranceId) {
++      audioStartReported = true;
++      const ctxNow = ctx.currentTime;
++      const delayMs = Math.max(0, startAt - ctxNow) * 1000;
++      const startMs = Date.now() + delayMs;
++      AppState.setState({ tAudioStartMs: startMs, ttsUttId: currentUtteranceId });
++    }
++  }
++
++  function enqueueChunk(chunk) {
++    if (!descriptor) {
++      console.warn("AudioPlayer received chunk without descriptor; dropping");
++      return;
++    }
++    const token = flushToken;
++    decodeChain = decodeChain
++      .then(async () => {
++        const ctx = ensureContext();
++        if (!ctx || flushToken !== token) return;
++        let arrayBuffer;
++        if (chunk instanceof ArrayBuffer) {
++          arrayBuffer = chunk;
++        } else if (chunk instanceof Blob) {
++          arrayBuffer = await chunk.arrayBuffer();
++        } else {
++          console.warn("AudioPlayer received unsupported chunk", chunk);
++          return;
++        }
++        if (!arrayBuffer || flushToken !== token) return;
++        const int16 = new Int16Array(arrayBuffer);
++        if (!int16.length) return;
++        const float32 = new Float32Array(int16.length);
++        for (let i = 0; i < int16.length; i += 1) {
++          float32[i] = Math.max(-1, Math.min(1, int16[i] / INT16_DIVISOR));
++        }
++        if (flushToken !== token) return;
++        try {
++          await ctx.resume();
++        } catch (err) {
++          // Some browsers throw if resume is called redundantly; ignore.
++        }
++        scheduleBuffer(float32, token);
++      })
++      .catch((err) => {
++        console.error("AudioPlayer chunk enqueue failed", err);
++      });
++  }
++
++  function setDescriptor(meta) {
++    const normalized = normalizeDescriptor(meta);
++    if (!normalized) {
++      console.warn("AudioPlayer received invalid descriptor", meta);
++      return;
++    }
++    descriptor = normalized;
++    ensureContext();
++  }
++
++  function handleTtsStart(frame) {
++    interrupt({ preserveState: true });
++    currentUtteranceId = extractUttId(frame);
++    pendingDrainUttId = null;
++    audioStartReported = false;
++    if (currentUtteranceId) {
++      AppState.setState({ ttsUttId: currentUtteranceId, tAudioStartMs: null });
++    } else {
++      AppState.setState({ tAudioStartMs: null });
++    }
++  }
++
++  function handleTtsEnd(frame) {
++    const reasonRaw = extractReason(frame);
++    const reason = typeof reasonRaw === "string" ? reasonRaw.toLowerCase() : null;
++    if (reason && !["completed", "finished", "complete", "done"].includes(reason)) {
++      interrupt();
++      return;
++    }
++    const uttId = extractUttId(frame);
++    pendingDrainUttId = uttId || currentUtteranceId;
++    if (ACTIVE_SOURCES.size === 0) {
++      finalizeUtterance();
++    }
++  }
++
++  window.AudioPlayer = {
++    setDescriptor,
++    enqueueChunk,
++    handleTtsStart,
++    handleTtsEnd,
++    interrupt,
 +  };
 +
-+  window.addEventListener("asr.ready", (event) => {
-+    recorder.handleAsrReady(event && event.detail);
-+  });
-+  window.addEventListener("policy.interaction", (event) => {
-+    recorder.handlePolicy(event && event.detail);
-+  });
-+  window.addEventListener("tts.start", (event) => {
-+    recorder.handleTtsStart(event && event.detail);
-+  });
-+  window.addEventListener("tts.end", () => {
-+    recorder.handleTtsEnd();
-+  });
 +  window.addEventListener("ws.close", () => {
-+    recorder.handleWsClose();
++    interrupt();
 +  });
-+
-+  window.AudioRecorder = recorder;
 +})();
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 0572f9a1ec6a57a78d3b545e0829bdb89b11766f..e812a569001ad2fbed8df6f689b7b1819dce3233 100644
+index e812a569001ad2fbed8df6f689b7b1819dce3233..05d5429808e9ff24112f2ee62c9bb2ab0119f2ce 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -17,50 +17,67 @@
+@@ -1,34 +1,35 @@
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 15000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+ 
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading WSClient");
+   }
++  const getAudioPlayer = () => window.AudioPlayer;
+ 
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
+   let lastPingAt = null;
+   let transportFactory = (url, protocol) => new WebSocket(url, protocol);
+ 
    function updateState(patch) {
      AppState.setState(patch);
    }
@@ -637,114 +476,123 @@ index 0572f9a1ec6a57a78d3b545e0829bdb89b11766f..e812a569001ad2fbed8df6f689b7b181
        heartbeatTimerId = null;
      }
      updateState({ heartbeatTimerId: null, lastPingAt: null });
-   }
- 
-   function sendRaw(payload) {
-     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-     socket.send(payload);
-   }
- 
-+  function sendBinary(payload, { dropIfBusy = false } = {}) {
-+    if (!socket || socket.readyState !== WebSocket.OPEN) {
-+      console.warn("WSClient.sendBinary called without an open socket");
-+      return false;
-+    }
-+    if (dropIfBusy && socket.bufferedAmount > 512 * 1024) {
-+      return false;
-+    }
-+    try {
-+      socket.send(payload);
-+      return true;
-+    } catch (err) {
-+      console.error("WSClient sendBinary error", err);
-+      return false;
-+    }
-+  }
-+
-   function sendJson(frame) {
-     try {
-       sendRaw(JSON.stringify(frame));
-     } catch (err) {
-       console.error("WSClient sendJson error", err);
-     }
-   }
- 
-   function sendPing() {
-     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-     lastPingAt = Date.now();
-     updateState({ lastPingAt });
-     sendJson({ type: "ping" });
-   }
- 
-   function startHeartbeat() {
-     clearHeartbeat();
-     sendPing();
-     heartbeatTimerId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
-     updateState({ heartbeatTimerId });
-   }
- 
+@@ -81,100 +82,119 @@
    function dispatchFrame(frame) {
      if (!frame || typeof frame.type !== "string") return;
      const type = frame.type;
-@@ -215,54 +232,61 @@
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail: frame }));
+       if (type.includes(".")) {
+         const baseType = type.split(".")[0];
+         window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
+       }
+     } catch (err) {
+       console.warn("WSClient dispatch error", err);
+     }
+   }
+ 
+   function handleInfoFrame(frame) {
+     const meta = frame && frame.meta;
+     if (!meta || typeof meta.sid !== "string") {
+       console.error("Invalid info frame", frame);
+       close("bad_info_frame");
+       return;
+     }
+     expectInfoFrame = false;
+     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
+     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
+     const expiresAt = resumeToken && resumeTtlMs ? Date.now() + resumeTtlMs : null;
++    const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
++    const audioPlayer = getAudioPlayer();
++    if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
++      audioPlayer.setDescriptor(descriptor);
++    }
+     updateState({
+       connectionState: "connected",
+       sid: meta.sid,
+       resumeToken,
+       resumeTtlMs,
+       resumeExpiresAt: expiresAt,
+       infoFrame: frame
      });
-     attachSocket(ws);
-     return ws;
+     startHeartbeat();
    }
  
-   function close(reason = DEFAULT_CLOSE_REASON) {
-     if (!socket) {
-       updateState({ connectionState: "disconnected" });
+   function handlePongFrame() {
+     if (typeof lastPingAt === "number") {
+       const latency = Math.max(0, Date.now() - lastPingAt);
+       updateState({ latencyMs: latency });
+     }
+   }
+ 
+   function handleMessageFrame(frame) {
+     if (expectInfoFrame) {
+       if (frame.type !== "info") {
+         console.error("Expected info frame first, received", frame.type);
+         close("bad_info_sequence");
+         return;
+       }
+       handleInfoFrame(frame);
+     } else if (frame.type === "info") {
+       handleInfoFrame(frame);
+     } else if (frame.type === "pong") {
+       handlePongFrame();
+     } else if (frame.type === "ping") {
+       sendJson({ type: "pong", t: Date.now() });
+     } else if (frame.type === "error") {
+       console.error("WS error frame", frame);
++    } else if (frame.type === "tts.start") {
++      const audioPlayer = getAudioPlayer();
++      if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
++        audioPlayer.handleTtsStart(frame);
++      }
++    } else if (frame.type === "tts.end") {
++      const audioPlayer = getAudioPlayer();
++      if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
++        audioPlayer.handleTtsEnd(frame);
++      }
+     }
+     dispatchFrame(frame);
+   }
+ 
+   function parseFrame(event) {
+     const { data } = event;
+     if (typeof data === "string") {
+       try {
+         const frame = JSON.parse(data);
+         handleMessageFrame(frame);
+       } catch (err) {
+         console.error("Failed to parse WS frame", err, data);
+       }
        return;
      }
-     const ws = socket;
-     cleanupSocket(ws, reason);
-     clearHeartbeat();
-     updateState({ connectionState: "disconnected", websocket: null });
-   }
- 
-   function send(frame) {
-     if (!socket || socket.readyState !== WebSocket.OPEN) {
-       console.warn("WSClient.send called without an open socket");
+     if (data instanceof Blob) {
++      const audioPlayer = getAudioPlayer();
++      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
++        audioPlayer.enqueueChunk(data);
++      }
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
        return;
      }
-     const payload = typeof frame === "string" ? frame : JSON.stringify(frame);
-     sendRaw(payload);
+     console.warn("Unknown WS frame type", data);
    }
  
-+  function getBufferedAmount() {
-+    if (!socket) return 0;
-+    return socket.bufferedAmount || 0;
-+  }
-+
-   const debug = {
-     simulateIncomingFrame(frame) {
-       handleMessageFrame(frame);
-     },
-     recordPing(ts) {
-       lastPingAt = ts;
-       updateState({ lastPingAt: ts });
-     },
-     setTransportFactory(factory) {
-       transportFactory = typeof factory === "function" ? factory : transportFactory;
-     },
-     resetTransportFactory() {
-       transportFactory = (url, protocol) => new WebSocket(url, protocol);
-     }
-   };
- 
-   window.WSClient = {
-     open,
-     close,
-     send,
-+    sendBinary,
-+    getBufferedAmount,
-     get socket() {
-       return socket;
-     },
-     isConnected() {
-       return !!socket && socket.readyState === WebSocket.OPEN && AppState.getState().connectionState === "connected";
-     },
-     __debug: debug
-   };
- })();
+   function attachSocket(ws) {
+     const handlers = {
+       open: () => {
+         updateState({ websocket: ws });
+       },
+       message: parseFrame,
+       error: (event) => {
+         console.error("WebSocket error", event);
+         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
+       },
+       close: (event) => {
+         if (socket === ws) {
+           socket = null;
+           expectInfoFrame = true;
+         }
+         clearHeartbeat();
+         updateState({ connectionState: "disconnected", websocket: null });
+         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
+       }
