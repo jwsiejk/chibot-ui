@@ -12,6 +12,9 @@
   If format changes, send a header JSON first:
   ```json
   {"type":"audio.header","format":"opus","sample_rate":48000,"channels":1}
+
+  **Default:** If no `audio.header` is sent, the server assumes **WebM/Opus, mono, 48 kHz** for binary audio frames. Send `audio.header` only when deviating from this default.
+
 Optional admin toggle (if exposed):
 
 json

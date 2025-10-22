@@ -25,6 +25,7 @@ PING_MIN_INTERVAL_MS = 500
 RATE_LIMIT_CAPACITY = 25
 RATE_LIMIT_WINDOW_SECONDS = 2.0
 RATE_LIMIT_CLOSE_CODE = 1013
+_AUDIO_VIOLATION_LIMIT = 3
 
 EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
 EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
@@ -88,6 +89,9 @@ class AdapterContext:
     ip: Optional[str] = None
     sid_bucket: Optional[TokenBucket] = None
     ip_bucket: Optional[TokenBucket] = None
+    audio_profile: Optional[Dict[str, Any]] = None
+    accepting_audio: bool = True
+    audio_violation_count: int = 0
 
 
 class ChatV2Adapter:
@@ -106,6 +110,7 @@ class ChatV2Adapter:
         self.text_limit_bytes = text_limit_bytes
         self.binary_limit_bytes = binary_limit_bytes
         self._ip_buckets: Dict[str, TokenBucket] = {}
+        self._contexts: Dict[str, AdapterContext] = {}
 
     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
         if scope.get("type") != "websocket":
@@ -143,6 +148,8 @@ class ChatV2Adapter:
                 ctx.ip,
                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
             )
+
+        self._contexts[ctx.sid] = ctx
 
         if self.exporter:
             self.exporter.begin(ctx.sid)
@@ -196,6 +203,21 @@ class ChatV2Adapter:
             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
             if self.exporter:
                 self.exporter.end(ctx.sid, {"close_code": close_code})
+            self._contexts.pop(ctx.sid, None)
+
+    def set_accepting_audio(self, sid: str, accepting: bool) -> None:
+        """Toggle whether the given connection should accept audio frames."""
+
+        ctx = self._contexts.get(sid)
+        if ctx is not None:
+            ctx.accepting_audio = accepting
+            if accepting:
+                ctx.audio_violation_count = 0
+
+    def get_context(self, sid: str) -> Optional[AdapterContext]:
+        """Return the adapter context for testing hooks."""
+
+        return self._contexts.get(sid)
 
     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
         body = json.dumps({"error": "unsupported_subprotocol", "expected": CHAT_V2_SUBPROTOCOL}).encode("utf-8")
@@ -306,6 +328,24 @@ class ChatV2Adapter:
             await self._send_error(send, ctx.sid, "schema_invalid", detail)
             return self._HandleResult(True)
 
+        if frame_type == "audio.header":
+            profile = {
+                "format": frame.get("format"),
+                "sample_rate": frame.get("sample_rate"),
+                "channels": frame.get("channels"),
+            }
+            if ctx.audio_profile is not None:
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "duplicate or conflicting audio.header",
+                )
+                return self._HandleResult(True)
+            ctx.audio_profile = profile
+
         await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
         await self._invoke_engine("on_json", ctx.sid, frame)
         return self._HandleResult(True)
@@ -323,13 +363,39 @@ class ChatV2Adapter:
             await self._publish(
                 EVT_WS_AUDIO_RECV,
                 ctx.sid,
-                {"byte_count": byte_count, "error": "frame_too_large", "dir": "in"},
+                {
+                    "byte_count": byte_count,
+                    "error": "frame_too_large",
+                    "ws": {"dir": "in", "size": byte_count},
+                },
             )
             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
             return self._HandleResult(False, 1009, "frame_too_large")
 
+        if not ctx.accepting_audio:
+            ctx.audio_violation_count += 1
+            violation_meta = {
+                "byte_count": byte_count,
+                "error": "audio_not_expected_close"
+                if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT
+                else "audio_not_expected",
+                "ws": {"dir": "in", "size": byte_count},
+                "violations": ctx.audio_violation_count,
+            }
+            await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, violation_meta)
+            await self._send_error(send, ctx.sid, "audio_not_expected", "engine not accepting audio")
+            if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT:
+                return self._HandleResult(False, 1008, "audio_not_expected")
+            return self._HandleResult(True)
+
+        ctx.audio_violation_count = 0
         ctx.audio_seq += 1
-        meta = {"byte_count": byte_count, "seq": ctx.audio_seq, "dir": "in"}
+        meta = {
+            "byte_count": byte_count,
+            "seq": ctx.audio_seq,
+            "ws": {"dir": "in", "size": byte_count},
+        }
+        await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
         await self._invoke_engine("on_audio", ctx.sid, data, ctx.audio_seq)
         return self._HandleResult(True)
 
