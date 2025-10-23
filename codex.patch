@@ -1,182 +1,80 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 36e016e0e5d549535d4459ba56c0dfa2414c241d..4ebb5f9aef4de8edcde44bc3bce7ddf9d0b87dec 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -277,81 +277,101 @@ def _resolve_static_path(raw_path: str) -> Optional[Path]:
- async def _drain_request_body(receive: Callable[[], Awaitable[dict]]) -> None:
-     """Consume and discard the HTTP request body if present."""
-     while True:
-         message = await receive()
-         if message.get("type") != "http.request":
-             break
-         if not message.get("more_body"):
-             break
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 1279639befadccb93740deee513322011467eb22..5b1c1641a104354c06f524bc11bde7bddf5b3f84 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -249,63 +249,73 @@
+     } else {
+       clearResumeState();
+     }
+     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
+     const audioPlayer = getAudioPlayer();
+     if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+       audioPlayer.setDescriptor(descriptor);
+     }
+     updateState({
+       connectionState: "connected",
+       sid: meta.sid,
+       infoFrame: frame,
+       resumeError: null
+     });
+     startHeartbeat();
+   }
  
+   function handlePongFrame() {
+     if (typeof lastPingAt === "number") {
+       const latency = Math.max(0, Date.now() - lastPingAt);
+       updateState({ latencyMs: latency });
+     }
+   }
  
- async def _reject_websocket(receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-     """Politely refuse WebSocket connections on unsupported routes."""
-     message = await receive()
-     if message.get("type") == "websocket.connect":
-         await send({"type": "websocket.close", "code": 1000})
- 
- 
- async def _send_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
-     """Emit a prepared HTTP response through the ASGI channel."""
- 
-     headers = list(response.headers)
-     await send({"type": "http.response.start", "status": response.status, "headers": headers})
-     await send({"type": "http.response.body", "body": response.body, "more_body": False})
- 
- 
-+async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
-+    """Emit an HTTP response while still in the WebSocket handshake."""
+   function handleMessageFrame(frame) {
++    if (frame.type === "keepalive") {
++      // Some transports may emit a keepalive frame before the info frame has
++      // been sent. Treat it as a no-op and continue waiting for the info
++      // frame so we do not close the connection prematurely.
++      return;
++    }
 +
-+    headers = list(response.headers)
-+    await send(
-+        {
-+            "type": "websocket.http.response.start",
-+            "status": response.status,
-+            "headers": headers,
-+        }
-+    )
-+    await send(
-+        {
-+            "type": "websocket.http.response.body",
-+            "body": response.body,
-+            "more_body": False,
-+        }
-+    )
++    if (frame.type === "ping") {
++      sendJson({ type: "pong", t: Date.now() });
++      return;
++    }
 +
-+
- def _method_is_get(scope: dict) -> bool:
-     """Return True when the incoming HTTP scope uses the GET method."""
- 
-     return scope.get("method", "GET").upper() == "GET"
- 
- 
- def _get_adapter() -> ChatV2Adapter:
-     """Return a lazily instantiated ChatV2Adapter singleton."""
-     global _adapter
-     if _adapter is None:
-         _adapter = ChatV2Adapter()
-     return _adapter
- 
- 
- async def _reject_origin(
-     scope: dict,
-     origin: Optional[str],
-     receive: Callable[[], Awaitable[dict]],
-     send: Callable[[dict], Awaitable[None]],
- ) -> None:
-     """Reject a WebSocket handshake because the Origin is not allowed."""
- 
-     message = await receive()
-     if message.get("type") != "websocket.connect":
-         return
- 
-     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
-     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
-     if origin:
-         payload["origin"] = origin
--    await _send_response(send, json_response(status=403, **payload))
-+    await _send_ws_response(send, json_response(status=403, **payload))
- 
- 
- def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
-     for header, value in headers:
-         if header == name:
-             try:
-                 return value.decode("latin1").strip()
-             except UnicodeDecodeError:  # pragma: no cover - defensive
-                 return None
-     return None
- 
- 
- def _resolve_origin_policy() -> "_OriginPolicy":
-     raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
-     if raw is not None:
-         entries = tuple(filter(None, (_normalize_origin(item) for item in raw.split(","))))
-         return _OriginPolicy(mode="explicit", values=entries)
- 
-     env = (os.getenv("ASKCHIP_ENV") or "development").strip().lower()
-     if env in {"production", "prod"}:
-         return _OriginPolicy(mode="explicit", values=())
- 
-     return _OriginPolicy(mode="localhost", values=("localhost", "127.0.0.1"))
- 
- 
-diff --git a/tests/test_ws_origin.py b/tests/test_ws_origin.py
-index 0539c7a67e6e59437372144fb916b2bdae064828..db79d6a321d344a3287151281d81d8acd8339b7e 100644
---- a/tests/test_ws_origin.py
-+++ b/tests/test_ws_origin.py
-@@ -1,39 +1,69 @@
- """Origin allow-list enforcement for WebSocket handshakes."""
- from __future__ import annotations
- 
-+import asyncio
-+import json
- import os
- from typing import Optional
- from unittest.mock import patch
- 
- import pytest
- 
--from app.asgi_gateway import _validate_ws_origin
-+from app.asgi_gateway import _reject_origin, _validate_ws_origin
- 
- 
- def _make_scope(origin: Optional[str]) -> dict:
-     headers = []
-     if origin is not None:
-         headers.append((b"origin", origin.encode("latin1")))
-     return {"type": "websocket", "path": "/ws/v2/chat", "headers": tuple(headers)}
- 
- 
- @pytest.mark.parametrize(
-     "config, origin, expected",
-     [
-         ({"ASKCHIP_WS_ALLOWED_ORIGINS": "https://app.askchip.ai"}, "https://app.askchip.ai", True),
-         ({"ASKCHIP_WS_ALLOWED_ORIGINS": "https://app.askchip.ai"}, "https://evil.example", False),
-         ({"ASKCHIP_ENV": "development"}, "http://localhost:3000", True),
-         ({"ASKCHIP_ENV": "prod"}, "http://localhost:3000", False),
-     ],
- )
- def test_origin_policy(config: dict[str, str], origin: str, expected: bool) -> None:
-     with patch.dict(os.environ, config, clear=True):
-         allowed, _ = _validate_ws_origin(_make_scope(origin))
-         assert allowed is expected
- 
- 
- def test_missing_origin_is_accepted() -> None:
-     with patch.dict(os.environ, {}, clear=True):
-         allowed, origin = _validate_ws_origin(_make_scope(None))
-         assert origin is None
-         assert allowed is True
-+
-+
-+def test_reject_origin_responds_during_handshake() -> None:
-+    async def _exercise() -> list[dict]:
-+        queue: asyncio.Queue[dict] = asyncio.Queue()
-+        await queue.put({"type": "websocket.connect"})
-+
-+        sent: list[dict] = []
-+
-+        async def receive() -> dict:
-+            return await queue.get()
-+
-+        async def send(message: dict) -> None:
-+            sent.append(message)
-+
-+        scope = {"type": "websocket", "path": "/ws/v2/chat"}
-+        await _reject_origin(scope, "https://evil.example", receive, send)
-+        return sent
-+
-+    messages = asyncio.run(_exercise())
-+    assert [message["type"] for message in messages] == [
-+        "websocket.http.response.start",
-+        "websocket.http.response.body",
-+    ]
-+    start, body = messages
-+    assert start["status"] == 403
-+    payload = json.loads(body["body"].decode("utf-8"))
-+    assert payload["code"] == "origin_blocked"
+     if (expectInfoFrame) {
+       if (frame.type !== "info") {
+         console.error("Expected info frame first, received", frame.type);
+         close("bad_info_sequence");
+         return;
+       }
+       handleInfoFrame(frame);
+     } else if (frame.type === "info") {
+       handleInfoFrame(frame);
+     } else if (frame.type === "pong") {
+       handlePongFrame();
+-    } else if (frame.type === "ping") {
+-      sendJson({ type: "pong", t: Date.now() });
+     } else if (frame.type === "error") {
+       console.error("WS error frame", frame);
+       const isResumeInvalid = frame && frame.code === "resume_invalid";
+       if (isResumeInvalid) {
+         clearResumeState();
+         updateState({ resumeError: "invalid" });
+       }
+       if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+         try {
+           window.WSErrorUI.handleFrame(frame, {
+             scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
+           });
+         } catch (err) {
+           console.warn("Error handler threw", err);
+         }
+       }
+       if (isResumeInvalid) {
+         close("resume_invalid");
+       }
+     } else if (frame.type === "tts.start") {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+         audioPlayer.handleTtsStart(frame);
+       }
+     } else if (frame.type === "tts.end") {

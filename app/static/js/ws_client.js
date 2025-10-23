@@ -271,6 +271,18 @@
   }
 
   function handleMessageFrame(frame) {
+    if (frame.type === "keepalive") {
+      // Some transports may emit a keepalive frame before the info frame has
+      // been sent. Treat it as a no-op and continue waiting for the info
+      // frame so we do not close the connection prematurely.
+      return;
+    }
+
+    if (frame.type === "ping") {
+      sendJson({ type: "pong", t: Date.now() });
+      return;
+    }
+
     if (expectInfoFrame) {
       if (frame.type !== "info") {
         console.error("Expected info frame first, received", frame.type);
@@ -282,8 +294,6 @@
       handleInfoFrame(frame);
     } else if (frame.type === "pong") {
       handlePongFrame();
-    } else if (frame.type === "ping") {
-      sendJson({ type: "pong", t: Date.now() });
     } else if (frame.type === "error") {
       console.error("WS error frame", frame);
       const isResumeInvalid = frame && frame.code === "resume_invalid";
