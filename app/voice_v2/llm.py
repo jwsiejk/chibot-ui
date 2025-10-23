@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Any, Mapping
+from typing import Any, Dict, Mapping
 
 from app.telemetry import bus
 from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
 from app.voice_v2 import generator
-from app.voice_v2.persona import load_persona
+from app.voice_v2.persona import load_persona, maybe_pick_quote_for_sid
 
 EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
 EVT_TURN_END = "EVT_TURN_END"
@@ -38,6 +38,7 @@ class LLMAdapter:
             "Thanks for chatting with AskChip! How else can I help?"
         )
         self._turn_lookup: dict[str, tuple[str, str]] = {}
+        self._turn_counter_by_sid: Dict[str, int] = {}
         subscribe = getattr(self._bus, "subscribe", None)
         if callable(subscribe):
             self._subscriptions = [
@@ -92,10 +93,37 @@ class LLMAdapter:
         reply = generator.render_reply(messages)
         if not isinstance(reply, str):
             reply = str(reply)
-        self.publish_nlg(req_id, reply)
+        metadata: Dict[str, Any] | None = None
+        sid_key: str | None = sid if isinstance(sid, str) and sid else None
+        if sid_key:
+            turn_no = self._turn_counter_by_sid.get(sid_key, 0) + 1
+            self._turn_counter_by_sid[sid_key] = turn_no
+            mode = ""
+            if isinstance(plan, Mapping):
+                candidate_mode = plan.get("mode")
+                if isinstance(candidate_mode, str):
+                    mode = candidate_mode
+            quote = maybe_pick_quote_for_sid(persona, sid_key, mode, turn_no)
+            if quote:
+                quote_text = quote.get("text")
+                quote_id = quote.get("id")
+                if isinstance(quote_text, str) and quote_text:
+                    reply = f"{reply.rstrip()} (As my granddad would say: \"{quote_text}\")"
+                    if isinstance(quote_id, str) and quote_id:
+                        identifier = quote_id
+                    else:
+                        identifier = f"quote_turn_{turn_no}"
+                    metadata = {"quote_id": identifier}
+        self.publish_nlg(req_id, reply, metadata=metadata)
         return reply
 
-    def publish_nlg(self, req_id: str, text: str) -> None:
+    def publish_nlg(
+        self,
+        req_id: str,
+        text: str,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
         """Publish EVT_NLG and chat bridge messages when enabled."""
 
         if not self._auto_publish:
@@ -103,7 +131,7 @@ class LLMAdapter:
             # this helper is invoked directly (the engine handles it).
             return
 
-        self._publish_nlg(req_id, text)
+        self._publish_nlg(req_id, text, metadata=metadata)
         self._publish_chat_message(req_id, text)
 
     def publish_chat_message(self, req_id: str, text: str) -> None:
@@ -111,8 +139,18 @@ class LLMAdapter:
 
         self._publish_chat_message(req_id, text)
 
-    def _publish_nlg(self, req_id: str, text: str) -> None:
+    def _publish_nlg(
+        self,
+        req_id: str,
+        text: str,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
         event = {"type": EVT_NLG, "req_id": req_id, "text": text, "source": "llm_adapter"}
+        if isinstance(metadata, Mapping):
+            payload = {key: metadata[key] for key in metadata}
+            if payload:
+                event["metadata"] = payload
         self._bus.publish(event)
 
     def _publish_chat_message(self, req_id: str, text: str) -> None:
