@@ -13,6 +13,10 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
+from starlette.applications import Starlette
+from starlette.responses import FileResponse, HTMLResponse, Response as StarletteResponse
+from starlette.staticfiles import StaticFiles
+
 from app.admin.flow_api import handle_flow_trace, handle_flow_zip
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 
@@ -396,3 +400,34 @@ def _encode_header_value(value: str) -> Optional[bytes]:
         return value.encode("latin1")
     except UnicodeEncodeError:  # pragma: no cover - defensive
         return None
+
+
+asgi = Starlette()
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(os.path.dirname(BASE_DIR), "static")
+
+if os.path.isdir(STATIC_DIR):
+    asgi.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@asgi.route("/", methods=["GET"])
+async def index(request):
+    idx = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(idx):
+        return FileResponse(idx, media_type="text/html")
+    return HTMLResponse("<!doctype html><title>AskChip</title><div id='app'></div>")
+
+
+@asgi.route("/favicon.ico", methods=["GET"])
+async def favicon(request):
+    ico = os.path.join(STATIC_DIR, "favicon.ico")
+    if os.path.exists(ico):
+        return FileResponse(ico)
+    return StarletteResponse(status_code=204)
+
+
+asgi.mount("/", app)
+
+
+__all__.append("asgi")
