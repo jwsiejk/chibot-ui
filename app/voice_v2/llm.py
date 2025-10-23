@@ -1,51 +1,95 @@
-"""Stubbed LLM adapter that emits EVT_NLG telemetry."""
+"""Stubbed LLM adapter used by the voice engine."""
 from __future__ import annotations
 
 import json
 import time
 import uuid
-from typing import Any, Dict, Tuple
+from typing import Any, Mapping
 
 from app.telemetry import bus
 from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
-from app.voice_v2.engine import EVT_TURN_BEGIN, EVT_TURN_END
+
+EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
+EVT_TURN_END = "EVT_TURN_END"
 
 
 class LLMAdapter:
-    """Return canned responses while publishing telemetry events."""
+    """Return canned responses while optionally publishing telemetry events."""
 
-    def __init__(self, *, telemetry_bus=bus, canned_text: str | None = None) -> None:
+    _INTENT_REPLIES = {
+        "greeting": "Hi there! How can I help you today?",
+        "goodbye": "Thanks for stopping by. Talk soon!",
+        "status.check": "Let me pull up the latest status for you.",
+        "support.request": "I'm here to help. Could you share a few more details?",
+    }
+
+    def __init__(
+        self,
+        *,
+        telemetry_bus=bus,
+        canned_text: str | None = None,
+        auto_publish: bool = True,
+    ) -> None:
         self._bus = telemetry_bus
+        self._auto_publish = bool(auto_publish)
         self._canned_text = canned_text or (
             "Thanks for chatting with AskChip! How else can I help?"
         )
-        self._turn_lookup: dict[str, Tuple[str, str]] = {}
-        self._subscriptions = [
-            self._bus.subscribe(EVT_TURN_BEGIN, self._handle_turn_event),
-            self._bus.subscribe(EVT_TURN_END, self._handle_turn_event),
-        ]
+        self._turn_lookup: dict[str, tuple[str, str]] = {}
+        subscribe = getattr(self._bus, "subscribe", None)
+        if callable(subscribe):
+            self._subscriptions = [
+                subscribe(EVT_TURN_BEGIN, self._handle_turn_event),
+                subscribe(EVT_TURN_END, self._handle_turn_event),
+            ]
+        else:
+            self._subscriptions = []
 
-    def generate(self, req_id: str, text: str, **_: Any) -> Dict[str, Any]:
-        """Return a canned response and emit an EVT_NLG event."""
+    def generate(
+        self,
+        req_id: str,
+        intent: str | None = None,
+        entities: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        """Return a canned response for the provided ``intent``.
+
+        ``entities`` are currently unused but accepted so future call sites can
+        pass structured data without needing a signature change. The adapter can
+        still be called with ``text="..."`` to preserve compatibility with
+        legacy callers and tests.
+        """
 
         if not isinstance(req_id, str) or not req_id:
             raise ValueError("req_id must be a non-empty string")
 
+        _ = kwargs.get("text")  # legacy callers provide the user utterance via ``text``
+        response_text = self._INTENT_REPLIES.get(intent or "", self._canned_text)
+
         start = time.perf_counter()
-        response_text = self._canned_text
-        self._publish_nlg(req_id, response_text)
-        self._publish_chat_message(req_id, response_text)
-        elapsed_ms = int((time.perf_counter() - start) * 1000)
-        timing = {"total_ms": max(elapsed_ms, 0)}
+        timing = {"total_ms": max(int((time.perf_counter() - start) * 1000), 0)}
+        if self._auto_publish:
+            self.publish_nlg(req_id, response_text)
         return {"text": response_text, "timing": timing}
 
+    def publish_nlg(self, req_id: str, text: str) -> None:
+        """Publish EVT_NLG and chat bridge messages when enabled."""
+
+        if not self._auto_publish:
+            # When auto publish is disabled we only emit the bus events when
+            # this helper is invoked directly (the engine handles it).
+            return
+
+        self._publish_nlg(req_id, text)
+        self._publish_chat_message(req_id, text)
+
+    def publish_chat_message(self, req_id: str, text: str) -> None:
+        """Manually mirror the assistant message into the chat stream."""
+
+        self._publish_chat_message(req_id, text)
+
     def _publish_nlg(self, req_id: str, text: str) -> None:
-        event = {
-            "type": EVT_NLG,
-            "req_id": req_id,
-            "text": text,
-            "source": "llm_adapter",
-        }
+        event = {"type": EVT_NLG, "req_id": req_id, "text": text, "source": "llm_adapter"}
         self._bus.publish(event)
 
     def _publish_chat_message(self, req_id: str, text: str) -> None:
@@ -83,7 +127,7 @@ class LLMAdapter:
         event = {"type": EVT_WS_JSON_SEND, "sid": sid, "payload": payload}
         self._bus.publish(event)
 
-    def _handle_turn_event(self, event: Dict[str, Any]) -> None:
+    def _handle_turn_event(self, event: Mapping[str, Any]) -> None:
         event_type = event.get("type")
         if event_type == EVT_TURN_BEGIN:
             sid = event.get("sid")

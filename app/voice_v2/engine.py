@@ -18,6 +18,7 @@ from app.voice_v2 import (
     EVT_ACWR_RECOMPUTE,
     EVT_CHAT_USER,
     EVT_ASR_FINAL,
+    EVT_NLG,
     EVT_NLU,
     EVT_POLICY_APPLIED,
     EVT_TTS_END,
@@ -30,6 +31,8 @@ from app.voice_v2 import (
     EVT_WS_OPEN,
 )
 from app.voice_v2.nlu import NLUAdapter
+from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
+from app.voice_v2.llm import LLMAdapter
 from app.voice_v2.gate import GateController
 from app.voice_v2.conversation_buffer import ConversationBuffer
 from app.voice_v2.vad import VADAggregator
@@ -104,6 +107,8 @@ class _TurnSession:
     perf_tts_start_ms: Optional[int] = None
     asr_final_emitted: bool = False
     nlu_emitted: bool = False
+    policy_emitted: bool = False
+    nlg_emitted: bool = False
 
 
 class _NullExporter:
@@ -137,6 +142,8 @@ class EngineV2:
         self._aggregators: Dict[str, VADAggregator] = {}
         self._conversation_buffer = ConversationBuffer()
         self._nlu = NLUAdapter()
+        self._policy_decider = PolicyDecider()
+        self._llm = LLMAdapter(telemetry_bus=self._bus, auto_publish=False)
         subscribe = getattr(self._bus, "subscribe", None)
         if callable(subscribe):
             self._chat_subscription = subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
@@ -366,6 +373,7 @@ class EngineV2:
                 nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
                 self._publish(nlu_event)
                 session.nlu_emitted = True
+                self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
 
             self._emit_user_chat_message(
                 sid,
@@ -655,6 +663,8 @@ class EngineV2:
             session.perf_tts_start_ms = None
             session.asr_final_emitted = False
             session.nlu_emitted = False
+            session.policy_emitted = False
+            session.nlg_emitted = False
             begin_payload = {
                 "turn_id": session.turn_id,
                 "req_id": session.req_id,
@@ -707,6 +717,8 @@ class EngineV2:
             session.perf_tts_start_ms = None
             session.asr_final_emitted = False
             session.nlu_emitted = False
+            session.policy_emitted = False
+            session.nlg_emitted = False
 
         session.state = new_state
 
@@ -823,6 +835,55 @@ class EngineV2:
         payload = {"meta": meta, "frame": frame}
         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
         self._publish(event)
+
+    def _maybe_emit_policy_and_nlg(
+        self,
+        sid: str,
+        session: _TurnSession,
+        nlu_payload: Mapping[str, Any],
+    ) -> None:
+        if session.policy_emitted:
+            return
+
+        req_id = session.req_id or nlu_payload.get("req_id")
+        if not isinstance(req_id, str) or not req_id:
+            return
+
+        snapshot = self.policy_snapshot or {}
+        decision = self._policy_decider.decide(req_id, nlu_payload, snapshot)
+        policy_payload = {"req_id": req_id, **decision}
+        policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
+        self._publish(policy_event)
+        session.policy_emitted = True
+
+        if decision.get("action") != "respond" or session.nlg_emitted:
+            return
+
+        intent = nlu_payload.get("intent")
+        if not isinstance(intent, str) or not intent:
+            intent = "chitchat.fallback"
+
+        entities = nlu_payload.get("entities")
+        if isinstance(entities, Mapping):
+            entity_payload = dict(entities)
+        else:
+            entity_payload = {}
+
+        llm_result = self._llm.generate(req_id, intent=intent, entities=entity_payload)
+        if isinstance(llm_result, Mapping):
+            response_text = llm_result.get("text")
+        else:
+            response_text = llm_result
+
+        if not isinstance(response_text, str):
+            response_text = str(response_text)
+
+        nlg_payload = {"req_id": req_id, "text": response_text}
+        nlg_event = self._envelope(sid, EVT_NLG, nlg_payload)
+        self._publish(nlg_event)
+        session.nlg_emitted = True
+
+        self._llm.publish_chat_message(req_id, response_text)
 
     def _emit_user_chat_message(
         self,

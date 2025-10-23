@@ -1,8 +1,8 @@
 diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9ab3631900 100644
+index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812b319b954 100644
 --- a/app/voice_v2/engine.py
 +++ b/app/voice_v2/engine.py
-@@ -1,54 +1,57 @@
+@@ -1,57 +1,60 @@
  """Minimal Engine v2 shell with telemetry hooks and session exporting."""
  from __future__ import annotations
  
@@ -22,8 +22,9 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
  from app.voice_v2 import (
      EVT_ACWR_RECOMPUTE,
      EVT_CHAT_USER,
-+    EVT_ASR_FINAL,
-+    EVT_NLU,
+     EVT_ASR_FINAL,
++    EVT_NLG,
+     EVT_NLU,
      EVT_POLICY_APPLIED,
      EVT_TTS_END,
      EVT_TTS_START,
@@ -34,7 +35,9 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
      EVT_WS_JSON_SEND,
      EVT_WS_OPEN,
  )
-+from app.voice_v2.nlu import NLUAdapter
+ from app.voice_v2.nlu import NLUAdapter
++from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
++from app.voice_v2.llm import LLMAdapter
  from app.voice_v2.gate import GateController
  from app.voice_v2.conversation_buffer import ConversationBuffer
  from app.voice_v2.vad import VADAggregator
@@ -60,9 +63,7 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
      "channels": _PCM_CHANNELS,
  }
  
-@@ -77,82 +80,85 @@ class _Envelope:
-     payload: Dict[str, Any]
- 
+@@ -82,83 +85,87 @@ class _Envelope:
      def to_dict(self) -> Dict[str, Any]:
          data = {"type": self.type, "sid": self.sid}
          data.update(self.payload)
@@ -86,8 +87,10 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
      perf_first_partial_ms: Optional[int] = None
      perf_final_ms: Optional[int] = None
      perf_tts_start_ms: Optional[int] = None
-+    asr_final_emitted: bool = False
-+    nlu_emitted: bool = False
+     asr_final_emitted: bool = False
+     nlu_emitted: bool = False
++    policy_emitted: bool = False
++    nlg_emitted: bool = False
  
  
  class _NullExporter:
@@ -120,7 +123,9 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
          self._barge_handles: Dict[str, object] = {}
          self._aggregators: Dict[str, VADAggregator] = {}
          self._conversation_buffer = ConversationBuffer()
-+        self._nlu = NLUAdapter()
+         self._nlu = NLUAdapter()
++        self._policy_decider = PolicyDecider()
++        self._llm = LLMAdapter(telemetry_bus=self._bus, auto_publish=False)
          subscribe = getattr(self._bus, "subscribe", None)
          if callable(subscribe):
              self._chat_subscription = subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
@@ -146,25 +151,7 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
          meta = {"headers": dict(headers), "dir": "in"}
          event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
          self._publish(event)
-@@ -320,57 +326,76 @@ class EngineV2:
- 
-         meta = {
-             "byte_count": byte_count,
-             "audio": dict(_PCM_DESCRIPTOR),
-             "ws": {"dir": "out", "size": byte_count},
-         }
-         payload: Dict[str, Any] = {"meta": meta, "chunk": pcm_chunk}
-         event = self._envelope(sid, EVT_WS_AUDIO_SEND, payload)
-         self._publish(event)
- 
-     def on_asr_final(self, sid: str, text: str) -> None:
-         """Observe the final ASR transcript for a turn."""
- 
-         session = self._ensure_session(sid)
-         if session.turn_started_ms is not None:
-             elapsed = _now_ms() - session.turn_started_ms
-             if elapsed < 0:
-                 elapsed = 0
+@@ -344,50 +351,51 @@ class EngineV2:
              session.perf_final_ms = elapsed
  
          turn_id = session.turn_id or str(uuid.uuid4())
@@ -172,39 +159,33 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
          session.turn_id = turn_id
          session.req_id = req_id
  
--        self._emit_user_chat_message(
--            sid,
--            text,
--            turn_id,
--            req_id,
--            origin="voice",
--        )
-+        if not session.asr_final_emitted:
-+            session.asr_final_emitted = True
-+
-+            final_payload: Dict[str, Any] = {
-+                "req_id": req_id,
-+                "turn_id": turn_id,
-+                "text": text,
-+                "confidence": 0.9,
-+            }
-+            final_event = self._envelope(sid, EVT_ASR_FINAL, final_payload)
-+            self._publish(final_event)
-+
-+            if not session.nlu_emitted:
-+                nlu_result = self._nlu.extract(req_id, text)
-+                nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
-+                nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
-+                self._publish(nlu_event)
-+                session.nlu_emitted = True
-+
-+            self._emit_user_chat_message(
-+                sid,
-+                text,
-+                turn_id,
-+                req_id,
-+                origin="voice",
-+            )
+         if not session.asr_final_emitted:
+             session.asr_final_emitted = True
+ 
+             final_payload: Dict[str, Any] = {
+                 "req_id": req_id,
+                 "turn_id": turn_id,
+                 "text": text,
+                 "confidence": 0.9,
+             }
+             final_event = self._envelope(sid, EVT_ASR_FINAL, final_payload)
+             self._publish(final_event)
+ 
+             if not session.nlu_emitted:
+                 nlu_result = self._nlu.extract(req_id, text)
+                 nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
+                 nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
+                 self._publish(nlu_event)
+                 session.nlu_emitted = True
++                self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
+ 
+             self._emit_user_chat_message(
+                 sid,
+                 text,
+                 turn_id,
+                 req_id,
+                 origin="voice",
+             )
  
          self._set_state(sid, THINKING, reason="asr_final")
  
@@ -222,17 +203,7 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
              and session.req_id == req_id
          ):
              elapsed = _now_ms() - session.turn_started_ms
-             if elapsed < 0:
-                 elapsed = 0
-             session.perf_first_partial_ms = elapsed
- 
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.feed_asr_evidence(req_id, confidence, partial_text)
- 
-@@ -606,100 +631,104 @@ class EngineV2:
- 
-     def _handle_vad_grant(self, sid: str, source: str, info: Dict[str, Any]) -> None:
+@@ -633,50 +641,52 @@ class EngineV2:
          reason = "vad_grant"
          mode = info.get("mode") if isinstance(info, Mapping) else None
          if mode == "and":
@@ -256,8 +227,10 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
              session.perf_first_partial_ms = None
              session.perf_final_ms = None
              session.perf_tts_start_ms = None
-+            session.asr_final_emitted = False
-+            session.nlu_emitted = False
+             session.asr_final_emitted = False
+             session.nlu_emitted = False
++            session.policy_emitted = False
++            session.nlg_emitted = False
              begin_payload = {
                  "turn_id": session.turn_id,
                  "req_id": session.req_id,
@@ -283,8 +256,7 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
              req_id = session.req_id
              end_payload = {
                  "turn_id": turn_id,
-                 "req_id": req_id,
-                 "meta": {
+@@ -685,50 +695,52 @@ class EngineV2:
                      "turn_id": turn_id,
                      "req_id": req_id,
                      "duration_ms": duration_ms,
@@ -308,8 +280,10 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
              session.perf_first_partial_ms = None
              session.perf_final_ms = None
              session.perf_tts_start_ms = None
-+            session.asr_final_emitted = False
-+            session.nlu_emitted = False
+             session.asr_final_emitted = False
+             session.nlu_emitted = False
++            session.policy_emitted = False
++            session.nlg_emitted = False
  
          session.state = new_state
  
@@ -335,77 +309,341 @@ index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9a
              or session.state == READY
          ):
              return None
-diff --git a/app/voice_v2/nlu.py b/app/voice_v2/nlu.py
+@@ -802,50 +814,99 @@ class EngineV2:
+         self._publish(event)
+ 
+         self._publish_tts_mask(sid, "cleared")
+         self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
+ 
+         if transition_to_ready:
+             if post_hold_ms > 0:
+                 self._gate.set_reason(
+                     "system_hold",
+                     True,
+                     sid=sid,
+                     meta={"tts": {"utt_id": utt_id, "post_hold_ms": post_hold_ms}},
+                 )
+                 asyncio.create_task(self._release_system_hold_after(sid, post_hold_ms))
+             else:
+                 self._set_state(sid, READY, reason="tts_end")
+ 
+     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
+         frame = {"type": "policy.interaction", "policy": snapshot}
+         preview = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {"ws": {"dir": "out", "size": len(preview.encode("utf-8")), "preview": preview}}
+         payload = {"meta": meta, "frame": frame}
+         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+         self._publish(event)
+ 
++    def _maybe_emit_policy_and_nlg(
++        self,
++        sid: str,
++        session: _TurnSession,
++        nlu_payload: Mapping[str, Any],
++    ) -> None:
++        if session.policy_emitted:
++            return
++
++        req_id = session.req_id or nlu_payload.get("req_id")
++        if not isinstance(req_id, str) or not req_id:
++            return
++
++        snapshot = self.policy_snapshot or {}
++        decision = self._policy_decider.decide(req_id, nlu_payload, snapshot)
++        policy_payload = {"req_id": req_id, **decision}
++        policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
++        self._publish(policy_event)
++        session.policy_emitted = True
++
++        if decision.get("action") != "respond" or session.nlg_emitted:
++            return
++
++        intent = nlu_payload.get("intent")
++        if not isinstance(intent, str) or not intent:
++            intent = "chitchat.fallback"
++
++        entities = nlu_payload.get("entities")
++        if isinstance(entities, Mapping):
++            entity_payload = dict(entities)
++        else:
++            entity_payload = {}
++
++        llm_result = self._llm.generate(req_id, intent=intent, entities=entity_payload)
++        if isinstance(llm_result, Mapping):
++            response_text = llm_result.get("text")
++        else:
++            response_text = llm_result
++
++        if not isinstance(response_text, str):
++            response_text = str(response_text)
++
++        nlg_payload = {"req_id": req_id, "text": response_text}
++        nlg_event = self._envelope(sid, EVT_NLG, nlg_payload)
++        self._publish(nlg_event)
++        session.nlg_emitted = True
++
++        self._llm.publish_chat_message(req_id, response_text)
++
+     def _emit_user_chat_message(
+         self,
+         sid: str,
+         text: str,
+         turn_id: str,
+         req_id: str,
+         client_msg_id: Optional[str] = None,
+         *,
+         origin: str = "text",
+     ) -> None:
+         frame: Dict[str, Any] = {
+             "type": "chat.message",
+             "id": str(uuid.uuid4()),
+             "role": "user",
+             "text": text,
+             "origin": origin,
+             "turn_id": turn_id,
+             "req_id": req_id,
+             "ts_ms": _now_ms(),
+         }
+         if client_msg_id is not None:
+             frame["client_msg_id"] = client_msg_id
+ 
+         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {
+diff --git a/app/voice_v2/llm.py b/app/voice_v2/llm.py
+index 88d1af60f800a919ea1c91c01514cc648096b332..855d073d72189b34459534de4c27b33568e4aa76 100644
+--- a/app/voice_v2/llm.py
++++ b/app/voice_v2/llm.py
+@@ -1,107 +1,151 @@
+-"""Stubbed LLM adapter that emits EVT_NLG telemetry."""
++"""Stubbed LLM adapter used by the voice engine."""
+ from __future__ import annotations
+ 
+ import json
+ import time
+ import uuid
+-from typing import Any, Dict, Tuple
++from typing import Any, Mapping
+ 
+ from app.telemetry import bus
+ from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
+-from app.voice_v2.engine import EVT_TURN_BEGIN, EVT_TURN_END
+ 
++EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
++EVT_TURN_END = "EVT_TURN_END"
+ 
+-class LLMAdapter:
+-    """Return canned responses while publishing telemetry events."""
+ 
+-    def __init__(self, *, telemetry_bus=bus, canned_text: str | None = None) -> None:
++class LLMAdapter:
++    """Return canned responses while optionally publishing telemetry events."""
++
++    _INTENT_REPLIES = {
++        "greeting": "Hi there! How can I help you today?",
++        "goodbye": "Thanks for stopping by. Talk soon!",
++        "status.check": "Let me pull up the latest status for you.",
++        "support.request": "I'm here to help. Could you share a few more details?",
++    }
++
++    def __init__(
++        self,
++        *,
++        telemetry_bus=bus,
++        canned_text: str | None = None,
++        auto_publish: bool = True,
++    ) -> None:
+         self._bus = telemetry_bus
++        self._auto_publish = bool(auto_publish)
+         self._canned_text = canned_text or (
+             "Thanks for chatting with AskChip! How else can I help?"
+         )
+-        self._turn_lookup: dict[str, Tuple[str, str]] = {}
+-        self._subscriptions = [
+-            self._bus.subscribe(EVT_TURN_BEGIN, self._handle_turn_event),
+-            self._bus.subscribe(EVT_TURN_END, self._handle_turn_event),
+-        ]
+-
+-    def generate(self, req_id: str, text: str, **_: Any) -> Dict[str, Any]:
+-        """Return a canned response and emit an EVT_NLG event."""
++        self._turn_lookup: dict[str, tuple[str, str]] = {}
++        subscribe = getattr(self._bus, "subscribe", None)
++        if callable(subscribe):
++            self._subscriptions = [
++                subscribe(EVT_TURN_BEGIN, self._handle_turn_event),
++                subscribe(EVT_TURN_END, self._handle_turn_event),
++            ]
++        else:
++            self._subscriptions = []
++
++    def generate(
++        self,
++        req_id: str,
++        intent: str | None = None,
++        entities: Mapping[str, Any] | None = None,
++        **kwargs: Any,
++    ) -> Mapping[str, Any]:
++        """Return a canned response for the provided ``intent``.
++
++        ``entities`` are currently unused but accepted so future call sites can
++        pass structured data without needing a signature change. The adapter can
++        still be called with ``text="..."`` to preserve compatibility with
++        legacy callers and tests.
++        """
+ 
+         if not isinstance(req_id, str) or not req_id:
+             raise ValueError("req_id must be a non-empty string")
+ 
++        _ = kwargs.get("text")  # legacy callers provide the user utterance via ``text``
++        response_text = self._INTENT_REPLIES.get(intent or "", self._canned_text)
++
+         start = time.perf_counter()
+-        response_text = self._canned_text
+-        self._publish_nlg(req_id, response_text)
+-        self._publish_chat_message(req_id, response_text)
+-        elapsed_ms = int((time.perf_counter() - start) * 1000)
+-        timing = {"total_ms": max(elapsed_ms, 0)}
++        timing = {"total_ms": max(int((time.perf_counter() - start) * 1000), 0)}
++        if self._auto_publish:
++            self.publish_nlg(req_id, response_text)
+         return {"text": response_text, "timing": timing}
+ 
++    def publish_nlg(self, req_id: str, text: str) -> None:
++        """Publish EVT_NLG and chat bridge messages when enabled."""
++
++        if not self._auto_publish:
++            # When auto publish is disabled we only emit the bus events when
++            # this helper is invoked directly (the engine handles it).
++            return
++
++        self._publish_nlg(req_id, text)
++        self._publish_chat_message(req_id, text)
++
++    def publish_chat_message(self, req_id: str, text: str) -> None:
++        """Manually mirror the assistant message into the chat stream."""
++
++        self._publish_chat_message(req_id, text)
++
+     def _publish_nlg(self, req_id: str, text: str) -> None:
+-        event = {
+-            "type": EVT_NLG,
+-            "req_id": req_id,
+-            "text": text,
+-            "source": "llm_adapter",
+-        }
++        event = {"type": EVT_NLG, "req_id": req_id, "text": text, "source": "llm_adapter"}
+         self._bus.publish(event)
+ 
+     def _publish_chat_message(self, req_id: str, text: str) -> None:
+         mapping = self._turn_lookup.get(req_id)
+         if not mapping:
+             return
+ 
+         sid, turn_id = mapping
+         if not sid or not turn_id:
+             return
+ 
+         frame = {
+             "type": "chat.message",
+             "id": str(uuid.uuid4()),
+             "role": "assistant",
+             "text": text,
+             "origin": "voice",
+             "turn_id": turn_id,
+             "req_id": req_id,
+             "ts_ms": int(time.time() * 1000),
+         }
+ 
+         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         payload = {
+             "meta": {
+                 "ws": {
+                     "dir": "out",
+                     "size": len(serialized.encode("utf-8")),
+                     "preview": serialized,
+                 }
+             },
+             "frame": frame,
+         }
+ 
+         event = {"type": EVT_WS_JSON_SEND, "sid": sid, "payload": payload}
+         self._bus.publish(event)
+ 
+-    def _handle_turn_event(self, event: Dict[str, Any]) -> None:
++    def _handle_turn_event(self, event: Mapping[str, Any]) -> None:
+         event_type = event.get("type")
+         if event_type == EVT_TURN_BEGIN:
+             sid = event.get("sid")
+             req_id = event.get("req_id")
+             turn_id = event.get("turn_id")
+             if (
+                 isinstance(sid, str)
+                 and sid
+                 and isinstance(req_id, str)
+                 and req_id
+                 and isinstance(turn_id, str)
+                 and turn_id
+             ):
+                 self._turn_lookup[req_id] = (sid, turn_id)
+         elif event_type == EVT_TURN_END:
+             req_id = event.get("req_id")
+             if isinstance(req_id, str) and req_id:
+                 self._turn_lookup.pop(req_id, None)
+ 
+ 
+ __all__ = ["LLMAdapter"]
+diff --git a/app/voice_v2/policy_decider.py b/app/voice_v2/policy_decider.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7d2ced5ab36df305695215e2c8058656fcb8e1b6
+index 0000000000000000000000000000000000000000..ccf9d2d8f3681b75dc52f77fc7f4aa9a509fc469
 --- /dev/null
-+++ b/app/voice_v2/nlu.py
-@@ -0,0 +1,60 @@
-+"""Rule-based NLU adapter used by the voice engine."""
++++ b/app/voice_v2/policy_decider.py
+@@ -0,0 +1,42 @@
++"""Deterministic policy decider used by the voice engine."""
 +from __future__ import annotations
 +
-+import re
-+from typing import Dict
++from typing import Mapping, MutableMapping
 +
 +
-+class NLUAdapter:
-+    """Deterministic, lightweight intent and entity extractor."""
++EVT_POLICY_DECISION = "EVT_POLICY_DECISION"
 +
-+    _INTENT_KEYWORDS = {
-+        "greeting": {"hello", "hi", "hey"},
-+        "goodbye": {"bye", "goodbye", "see you"},
-+        "status.check": {"status", "progress", "update"},
-+        "support.request": {"help", "support", "assist", "issue"},
-+        "order.lookup": {"order", "shipment", "tracking"},
-+    }
-+    _ORDER_RE = re.compile(r"\border(?:\s+number)?\s*(?P<order>[A-Za-z0-9-]{3,})", re.IGNORECASE)
-+    _PRODUCT_RE = re.compile(r"\bproduct\s+(?P<product>[A-Za-z0-9-]+)", re.IGNORECASE)
-+    _TICKET_RE = re.compile(r"\b(ticket|case)\s*(?P<ticket>[A-Za-z0-9-]{3,})", re.IGNORECASE)
 +
-+    def extract(self, req_id: str, text: str) -> Dict[str, object]:
-+        """Return a stable NLU interpretation for ``text``.
++class PolicyDecider:
++    """Return simple policy decisions based on the current snapshot."""
 +
-+        The adapter intentionally keeps the implementation minimal so it can
-+        run synchronously inside the engine hot path. Keyword matching is used
-+        to infer intents and a few regexes capture simple entity candidates.
-+        ``req_id`` is unused by the extractor today but is accepted so callers
-+        can pass through contextual identifiers without branching.
++    def decide(
++        self,
++        req_id: str,
++        nlu: Mapping[str, object] | None,
++        policy_snapshot: Mapping[str, object] | None,
++    ) -> MutableMapping[str, object]:
++        """Compute the dialog action for the current turn.
++
++        The implementation is intentionally lightweight. It inspects the
++        provided ``policy_snapshot`` (if any) to mirror the boolean flags that
++        downstream components expect while always returning an action of
++        ``"respond"`` so the stubbed LLM path can be exercised in tests.
 +        """
 +
-+        source = text or ""
-+        normalized = source.strip().lower()
-+        intent = "chitchat.fallback"
-+        confidence = 0.35
++        if not isinstance(req_id, str) or not req_id:
++            raise ValueError("req_id must be a non-empty string")
 +
-+        for candidate, keywords in self._INTENT_KEYWORDS.items():
-+            if any(keyword in normalized for keyword in keywords):
-+                intent = candidate
-+                confidence = 0.82
-+                break
++        snapshot = dict(policy_snapshot or {})
++        action = "respond"
++        barge_in_enabled = bool(snapshot.get("barge_in_enabled", False))
++        auto_commit = bool(snapshot.get("auto_commit_when_ready", False))
 +
-+        entities: Dict[str, str] = {}
-+        if normalized:
-+            order_match = self._ORDER_RE.search(source)
-+            if order_match:
-+                entities["order"] = order_match.group("order")
-+
-+            product_match = self._PRODUCT_RE.search(source)
-+            if product_match:
-+                entities["product"] = product_match.group("product")
-+
-+            ticket_match = self._TICKET_RE.search(source)
-+            if ticket_match:
-+                entities["ticket"] = ticket_match.group("ticket")
-+
-+        return {"intent": intent, "entities": entities, "confidence": confidence}
++        return {
++            "action": action,
++            "barge_in_enabled": barge_in_enabled,
++            "auto_commit_when_ready": auto_commit,
++        }
 +
 +
-+__all__ = ["NLUAdapter"]
++__all__ = ["PolicyDecider", "EVT_POLICY_DECISION"]
 diff --git a/scripts/run_build05_tests.sh b/scripts/run_build05_tests.sh
-index c9be3c3f8ed41676b7bc3ff273dc45466ec9beec..fa5c478a42330fcdecb604106483fe529206d334 100644
+index fa5c478a42330fcdecb604106483fe529206d334..0d3ac3be60bdd97bcfeeae63d98e29a3266993b4 100644
 --- a/scripts/run_build05_tests.sh
 +++ b/scripts/run_build05_tests.sh
-@@ -1,11 +1,12 @@
+@@ -1,12 +1,13 @@
  #!/usr/bin/env bash
  set -euo pipefail
  export PYTHONPATH="${PYTHONPATH:-.}:."
@@ -416,28 +654,30 @@ index c9be3c3f8ed41676b7bc3ff273dc45466ec9beec..fa5c478a42330fcdecb604106483fe52
    tests.test_llm_stub \
    tests.test_dual_vad_arbiter \
    tests.test_tts_stub
-+"$PY" -m unittest -v tests.test_nlu_once_per_turn
+ "$PY" -m unittest -v tests.test_nlu_once_per_turn
++"$PY" -m unittest -v tests.test_policy_nlg_once_per_turn
  echo "BUILD_05_TESTS: PASS"
-diff --git a/tests/test_nlu_once_per_turn.py b/tests/test_nlu_once_per_turn.py
+diff --git a/tests/test_policy_nlg_once_per_turn.py b/tests/test_policy_nlg_once_per_turn.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..5e0e55df3dbb463d630b777082b760446b6b31fb
+index 0000000000000000000000000000000000000000..2772daeb593d6ca91e1d74abdb370f2ecc66ddf1
 --- /dev/null
-+++ b/tests/test_nlu_once_per_turn.py
-@@ -0,0 +1,73 @@
++++ b/tests/test_policy_nlg_once_per_turn.py
+@@ -0,0 +1,127 @@
 +import unittest
 +
 +from app.telemetry import bus
-+from app.voice_v2 import EVT_ASR_FINAL, EVT_NLU
++from app.voice_v2 import EVT_ASR_FINAL, EVT_NLU, EVT_NLG
 +from app.voice_v2.engine import EngineV2
++from app.voice_v2.policy_decider import EVT_POLICY_DECISION
 +
 +
-+class TestNLUOncePerTurn(unittest.TestCase):
++class TestPolicyAndNLGOncePerTurn(unittest.TestCase):
 +    def setUp(self) -> None:
 +        bus.reset()
 +        self.events: list[dict] = []
 +        self.token = bus.subscribe("*", self.events.append)
 +        self.engine = EngineV2(telemetry_bus=bus)
-+        self.sid = "sid-nlu"
++        self.sid = "sid-policy"
 +        self.engine.on_open(self.sid, {})
 +        self.engine.on_audio(self.sid, b"abc", seq=0)
 +
@@ -445,54 +685,107 @@ index 0000000000000000000000000000000000000000..5e0e55df3dbb463d630b777082b76044
 +        bus.unsubscribe(self.token)
 +        bus.reset()
 +
-+    def _events(self, event_type: str) -> list[dict]:
-+        return [evt for evt in self.events if evt["type"] == event_type]
++    def _events(self, event_type: str, *, sid: str | None = None) -> list[dict]:
++        events = [evt for evt in self.events if evt["type"] == event_type]
++        if sid is None:
++            return events
++        return [evt for evt in events if evt.get("sid") == sid]
 +
-+    def test_single_final_emits_nlu_once(self) -> None:
-+        self.engine.on_asr_final(self.sid, "hello there order 12345")
++    def test_happy_path_emits_policy_and_nlg_once(self) -> None:
++        self.engine.policy_snapshot = {
++            "barge_in_enabled": True,
++            "auto_commit_when_ready": True,
++        }
 +
-+        finals = self._events(EVT_ASR_FINAL)
-+        nlus = self._events(EVT_NLU)
++        self.engine.on_asr_final(self.sid, "hello there")
++
++        finals = self._events(EVT_ASR_FINAL, sid=self.sid)
++        nlus = self._events(EVT_NLU, sid=self.sid)
++        policies = self._events(EVT_POLICY_DECISION, sid=self.sid)
++        nlgs = self._events(EVT_NLG, sid=self.sid)
++
 +        self.assertEqual(1, len(finals))
 +        self.assertEqual(1, len(nlus))
++        self.assertEqual(1, len(policies))
++        self.assertEqual(1, len(nlgs))
 +
 +        final_event = finals[0]
 +        nlu_event = nlus[0]
-+        self.assertEqual(final_event["req_id"], nlu_event["req_id"])
-+        self.assertEqual("1", nlu_event["schema_version"])
-+        self.assertIn("intent", nlu_event)
-+        self.assertIn("entities", nlu_event)
-+        self.assertIn("confidence", nlu_event)
++        policy_event = policies[0]
++        nlg_event = nlgs[0]
++
++        req_id = final_event["req_id"]
++        self.assertEqual(req_id, nlu_event["req_id"])
++        self.assertEqual(req_id, policy_event["req_id"])
++        self.assertEqual(req_id, nlg_event["req_id"])
++
++        self.assertEqual("respond", policy_event["action"])
++        self.assertTrue(policy_event["barge_in_enabled"])
++        self.assertTrue(policy_event["auto_commit_when_ready"])
++        self.assertEqual("Hi there! How can I help you today?", nlg_event["text"])
++
++        self.assertEqual("1", policy_event["schema_version"])
++        self.assertEqual("1", nlg_event["schema_version"])
 +
 +        final_index = self.events.index(final_event)
 +        nlu_index = self.events.index(nlu_event)
++        policy_index = self.events.index(policy_event)
++        nlg_index = self.events.index(nlg_event)
++
 +        self.assertLess(final_index, nlu_index)
++        self.assertLess(nlu_index, policy_index)
++        self.assertLess(policy_index, nlg_index)
 +
 +    def test_duplicate_finals_deduped(self) -> None:
++        self.engine.policy_snapshot = {
++            "barge_in_enabled": False,
++            "auto_commit_when_ready": False,
++        }
++
 +        self.engine.on_asr_final(self.sid, "status update please")
 +        self.engine.on_asr_final(self.sid, "status update please")
 +
-+        finals = self._events(EVT_ASR_FINAL)
-+        nlus = self._events(EVT_NLU)
-+        self.assertEqual(1, len(finals))
-+        self.assertEqual(1, len(nlus))
++        policies = self._events(EVT_POLICY_DECISION, sid=self.sid)
++        nlgs = self._events(EVT_NLG, sid=self.sid)
++
++        self.assertEqual(1, len(policies))
++        self.assertEqual(1, len(nlgs))
 +
 +    def test_sessions_do_not_cross(self) -> None:
-+        sid_two = "sid-nlu-2"
++        sid_two = "sid-policy-2"
 +        self.engine.on_open(sid_two, {})
-+        self.engine.on_audio(sid_two, b"def", seq=0)
++        self.engine.on_audio(sid_two, b"xyz", seq=0)
 +
-+        self.engine.on_asr_final(self.sid, "hello order 456")
-+        self.engine.on_asr_final(sid_two, "need help with product zenith")
++        self.engine.policy_snapshot = {
++            "barge_in_enabled": True,
++            "auto_commit_when_ready": False,
++        }
 +
-+        nlus = self._events(EVT_NLU)
-+        self.assertEqual(2, len(nlus))
++        self.engine.on_asr_final(self.sid, "need help with order 123")
++        self.engine.on_asr_final(sid_two, "hello agent")
 +
-+        sid_map = {evt["sid"]: evt for evt in nlus}
-+        self.assertIn(self.sid, sid_map)
-+        self.assertIn(sid_two, sid_map)
-+        self.assertEqual(self.sid, sid_map[self.sid]["sid"])
-+        self.assertEqual(sid_two, sid_map[sid_two]["sid"])
++        policies = self._events(EVT_POLICY_DECISION)
++        nlgs = self._events(EVT_NLG)
++
++        self.assertEqual(2, len(policies))
++        self.assertEqual(2, len(nlgs))
++
++        sid_to_policy = {evt["sid"]: evt for evt in policies}
++        sid_to_nlg = {evt["sid"]: evt for evt in nlgs}
++
++        self.assertIn(self.sid, sid_to_policy)
++        self.assertIn(sid_two, sid_to_policy)
++        self.assertIn(self.sid, sid_to_nlg)
++        self.assertIn(sid_two, sid_to_nlg)
++
++        for sid, evt in sid_to_policy.items():
++            self.assertEqual(sid, evt["sid"])
++            self.assertEqual("respond", evt["action"])
++            self.assertEqual("1", evt["schema_version"])
++
++        for sid, evt in sid_to_nlg.items():
++            self.assertEqual(sid, evt["sid"])
++            self.assertEqual("1", evt["schema_version"])
 +
 +
 +if __name__ == "__main__":
