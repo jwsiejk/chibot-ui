@@ -14,14 +14,6 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
-try:  # pragma: no cover - optional Starlette integration
-    from starlette.applications import Starlette
-    from starlette.responses import FileResponse, HTMLResponse, Response as StarletteResponse
-    from starlette.staticfiles import StaticFiles
-except ImportError:  # pragma: no cover - Starlette not installed in all environments
-    Starlette = None  # type: ignore[assignment]
-    FileResponse = HTMLResponse = StarletteResponse = StaticFiles = None  # type: ignore[assignment]
-
 from app.admin.flow_api import handle_flow_trace, handle_flow_zip
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 
@@ -57,8 +49,10 @@ ROOT_ROUTE = "/"
 FAVICON_ROUTE = "/favicon.ico"
 STATIC_ROUTE_PREFIX = "/static/"
 EXPORT_ROOT = Path("exports")
-STATIC_ROOT = Path(__file__).resolve().parent / "static"
-INDEX_PATH = STATIC_ROOT / "index.html"
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_ROOT = BASE_DIR / "static"
+TEMPLATES_ROOT = BASE_DIR / "templates"
+INDEX_PATH = TEMPLATES_ROOT / "index.html"
 FAVICON_PATH = STATIC_ROOT / "favicon.ico"
 _ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
 _TRACE_SEGMENT = "trace"
@@ -311,9 +305,6 @@ def _method_is_get(scope: dict) -> bool:
     return scope.get("method", "GET").upper() == "GET"
 
 
-__all__ = ["app"]
-
-
 def _get_adapter() -> ChatV2Adapter:
     """Return a lazily instantiated ChatV2Adapter singleton."""
     global _adapter
@@ -531,30 +522,6 @@ def _encode_header_value(value: str) -> Optional[bytes]:
     except UnicodeEncodeError:  # pragma: no cover - defensive
         return None
 
+asgi = app
 
-if Starlette is not None:
-    asgi = Starlette()
-
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    STATIC_DIR = os.path.join(BASE_DIR, "static")
-
-    if os.path.isdir(STATIC_DIR):
-        app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-    @app.route("/", methods=["GET"])
-    async def index(request):
-        idx = os.path.join(STATIC_DIR, "index.html")
-        if os.path.exists(idx):
-            return FileResponse(idx, media_type="text/html")
-        return HTMLResponse("<!doctype html><title>AskChip</title><div id='app'></div>")
-
-    @app.route("/favicon.ico", methods=["GET"])
-    async def favicon(request):
-        ico = os.path.join(STATIC_DIR, "favicon.ico")
-        if os.path.exists(ico):
-            return FileResponse(ico)
-        return StarletteResponse(status_code=204)
-
-    asgi = app
-
-    __all__ = ["asgi"]
+__all__ = ["app", "asgi"]
