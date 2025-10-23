@@ -1,354 +1,347 @@
-diff --git a/app/voice_v2/llm.py b/app/voice_v2/llm.py
-index f614ce517443e3c18ab98adfb5782b7cd8b44b17..eae3c5448efe182ca3b1a701c1e891165d7ca3af 100644
---- a/app/voice_v2/llm.py
-+++ b/app/voice_v2/llm.py
-@@ -1,65 +1,66 @@
- """Stubbed LLM adapter used by the voice engine."""
- from __future__ import annotations
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index 1bc6a8c6b1904d9c76a68b271d51abcbb25ae625..876e157476b4c894374f335727f208b8094f1685 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -16,50 +16,51 @@ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ACWR_RECOMPUTE,
+     EVT_CHAT_USER,
+     EVT_ASR_FINAL,
+     EVT_NLG,
+     EVT_NLU,
+     EVT_DIALOG_PLAN,
+     EVT_POLICY_APPLIED,
+     EVT_TTS_END,
+     EVT_TTS_START,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_CLOSE,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+     EVT_WS_OPEN,
+ )
+ from app.voice_v2.nlu import NLUAdapter
+ from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
+ from app.voice_v2.llm import LLMAdapter
+ from app.voice_v2.gate import GateController
+ from app.voice_v2.conversation_buffer import ConversationBuffer
+ from app.voice_v2.vad import VADAggregator
+ from app.voice_v2.planner import plan_turn
++from app.voice_v2.persona import default_chips_for_mode, load_persona
  
- import json
- import time
- import uuid
--from typing import Any, Mapping
-+from typing import Any, Dict, Mapping
  
- from app.telemetry import bus
- from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
- from app.voice_v2 import generator
--from app.voice_v2.persona import load_persona
-+from app.voice_v2.persona import load_persona, maybe_pick_quote_for_sid
- 
- EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
- EVT_TURN_END = "EVT_TURN_END"
+ def _now_ms() -> int:
+     """Return the current epoch timestamp in milliseconds."""
+     return int(time.time() * 1000)
  
  
- class LLMAdapter:
-     """Return canned responses while optionally publishing telemetry events."""
+ READY = "Ready"
+ LISTENING = "Listening"
+ THINKING = "Thinking"
+ RESPONDING = "Responding"
+ CONFIRMING_BARGE = "ConfirmingBarge"
  
-     _INTENT_REPLIES = {
-         "greeting": "Hi there! How can I help you today?",
-         "goodbye": "Thanks for stopping by. Talk soon!",
-         "status.check": "Let me pull up the latest status for you.",
-         "support.request": "I'm here to help. Could you share a few more details?",
-     }
+ _PCM_CODEC = "pcm_s16le"
+ _PCM_RATE_HZ = 16000
+ _PCM_CHANNELS = 1
+ _PCM_DESCRIPTOR = {
+     "codec": _PCM_CODEC,
+     "rate_hz": _PCM_RATE_HZ,
+     "channels": _PCM_CHANNELS,
+ }
+ 
+ _DEFAULT_VOICE_ID = "alloy-en-US-001"
+ _DEFAULT_LOCALE = "en-US"
+ 
+@@ -91,50 +92,51 @@ class _Envelope:
+             data["meta"] = dict(data["meta"])
+         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
+             data["ts_ms"] = _now_ms()
+         data.setdefault("who", "server")
+         data.setdefault("source", "voice_engine")
+         data.setdefault("level", "debug")
+         return data
+ 
+ 
+ @dataclass
+ class _TurnSession:
+     state: str = READY
+     turn_id: Optional[str] = None
+     turn_started_ms: Optional[int] = None
+     tts_utt_id: Optional[str] = None
+     req_id: Optional[str] = None
+     perf_first_partial_ms: Optional[int] = None
+     perf_final_ms: Optional[int] = None
+     perf_tts_start_ms: Optional[int] = None
+     asr_final_emitted: bool = False
+     nlu_emitted: bool = False
+     policy_emitted: bool = False
+     nlg_emitted: bool = False
+     plan_emitted: bool = False
+     plan: Optional[Dict[str, Any]] = None
++    suggestions_emitted: bool = False
+ 
+ 
+ class _NullExporter:
+     """Exporter stub used when no exporter is provided."""
+ 
+     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
+         return
+ 
+ 
+ class EngineV2:
+     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
  
      def __init__(
          self,
+         exporter: FileExporter | None = None,
          *,
          telemetry_bus=bus,
-         canned_text: str | None = None,
-         auto_publish: bool = True,
+         fake_exporter: FileExporter | None = None,
      ) -> None:
+         if exporter is None:
+             exporter = fake_exporter
+         if exporter is None:
+             exporter = _NullExporter()
+         self._exporter = exporter
          self._bus = telemetry_bus
-         self._auto_publish = bool(auto_publish)
-         self._canned_text = canned_text or (
-             "Thanks for chatting with AskChip! How else can I help?"
-         )
-         self._turn_lookup: dict[str, tuple[str, str]] = {}
-+        self._turn_counter_by_sid: Dict[str, int] = {}
-         subscribe = getattr(self._bus, "subscribe", None)
-         if callable(subscribe):
-             self._subscriptions = [
-                 subscribe(EVT_TURN_BEGIN, self._handle_turn_event),
-                 subscribe(EVT_TURN_END, self._handle_turn_event),
-             ]
-         else:
-             self._subscriptions = []
+@@ -649,50 +651,51 @@ class EngineV2:
+             reason = "vad_grant_dual"
+         self.on_auto_barge_attempt(sid, source, reason=reason)
  
-     def generate(
-         self,
-         req_id: str,
-         intent: str | None = None,
-         entities: Mapping[str, Any] | None = None,
-         **kwargs: Any,
-     ) -> Mapping[str, Any]:
-         """Return a canned response for the provided ``intent``.
+     def _set_state(self, sid: str, new_state: str, *, reason: str | None = None) -> None:
+         """Transition the session state machine and emit telemetry breadcrumbs."""
  
-         ``entities`` are currently unused but accepted so future call sites can
-         pass structured data without needing a signature change. The adapter can
-         still be called with ``text="..."`` to preserve compatibility with
-         legacy callers and tests.
-         """
- 
-         if not isinstance(req_id, str) or not req_id:
-@@ -70,71 +71,108 @@ class LLMAdapter:
- 
-         start = time.perf_counter()
-         timing = {"total_ms": max(int((time.perf_counter() - start) * 1000), 0)}
-         if self._auto_publish:
-             self.publish_nlg(req_id, response_text)
-         return {"text": response_text, "timing": timing}
- 
-     def generate_persona(
-         self,
-         sid: str,
-         turn_id: str,
-         req_id: str,
-         user_text: str,
-         plan: Mapping[str, Any] | object,
-     ) -> str:
-         """Return a persona-aligned reply using the rule-based generator."""
- 
-         if not isinstance(req_id, str) or not req_id:
-             raise ValueError("req_id must be a non-empty string")
- 
-         persona = load_persona()
-         messages = generator.build_messages(persona, plan, user_text)
-         reply = generator.render_reply(messages)
-         if not isinstance(reply, str):
-             reply = str(reply)
--        self.publish_nlg(req_id, reply)
-+        metadata: Dict[str, Any] | None = None
-+        sid_key: str | None = sid if isinstance(sid, str) and sid else None
-+        if sid_key:
-+            turn_no = self._turn_counter_by_sid.get(sid_key, 0) + 1
-+            self._turn_counter_by_sid[sid_key] = turn_no
-+            mode = ""
-+            if isinstance(plan, Mapping):
-+                candidate_mode = plan.get("mode")
-+                if isinstance(candidate_mode, str):
-+                    mode = candidate_mode
-+            quote = maybe_pick_quote_for_sid(persona, sid_key, mode, turn_no)
-+            if quote:
-+                quote_text = quote.get("text")
-+                quote_id = quote.get("id")
-+                if isinstance(quote_text, str) and quote_text:
-+                    reply = f"{reply.rstrip()} (As my granddad would say: \"{quote_text}\")"
-+                    if isinstance(quote_id, str) and quote_id:
-+                        identifier = quote_id
-+                    else:
-+                        identifier = f"quote_turn_{turn_no}"
-+                    metadata = {"quote_id": identifier}
-+        self.publish_nlg(req_id, reply, metadata=metadata)
-         return reply
- 
--    def publish_nlg(self, req_id: str, text: str) -> None:
-+    def publish_nlg(
-+        self,
-+        req_id: str,
-+        text: str,
-+        *,
-+        metadata: Mapping[str, Any] | None = None,
-+    ) -> None:
-         """Publish EVT_NLG and chat bridge messages when enabled."""
- 
-         if not self._auto_publish:
-             # When auto publish is disabled we only emit the bus events when
-             # this helper is invoked directly (the engine handles it).
+         session = self._ensure_session(sid)
+         previous = session.state
+         if previous == new_state:
              return
  
--        self._publish_nlg(req_id, text)
-+        self._publish_nlg(req_id, text, metadata=metadata)
-         self._publish_chat_message(req_id, text)
+         now_ms = _now_ms()
  
-     def publish_chat_message(self, req_id: str, text: str) -> None:
-         """Manually mirror the assistant message into the chat stream."""
+         if new_state == LISTENING:
+             session.turn_id = str(uuid.uuid4())
+             session.req_id = f"req-{uuid.uuid4().hex}"
+             session.turn_started_ms = now_ms
+             session.perf_first_partial_ms = None
+             session.perf_final_ms = None
+             session.perf_tts_start_ms = None
+             session.asr_final_emitted = False
+             session.nlu_emitted = False
+             session.policy_emitted = False
+             session.nlg_emitted = False
+             session.plan_emitted = False
++            session.suggestions_emitted = False
+             session.plan = None
+             begin_payload = {
+                 "turn_id": session.turn_id,
+                 "req_id": session.req_id,
+                 "meta": {
+                     "turn_id": session.turn_id,
+                     "req_id": session.req_id,
+                     "state": LISTENING,
+                 },
+             }
+             begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
+             self._publish(begin_event)
  
-         self._publish_chat_message(req_id, text)
+         if (
+             new_state == READY
+             and previous in {LISTENING, THINKING, RESPONDING}
+             and session.turn_id
+         ):
+             start_ms = session.turn_started_ms or now_ms
+             duration_ms = now_ms - start_ms
+             if duration_ms <= 0:
+                 duration_ms = 1
+             turn_id = session.turn_id
+             req_id = session.req_id
+             end_payload = {
+@@ -705,50 +708,51 @@ class EngineV2:
+                 },
+             }
+             end_event = self._envelope(sid, EVT_TURN_END, end_payload)
+             self._publish(end_event)
+             summary_payload = {
+                 "turn_id": turn_id,
+                 "req_id": req_id,
+                 "t_first_partial_ms": session.perf_first_partial_ms,
+                 "t_final_ms": session.perf_final_ms,
+                 "t_tts_start_ms": session.perf_tts_start_ms,
+             }
+             perf_event = self._envelope(sid, EVT_PERF_SUMMARY, summary_payload)
+             self._publish(perf_event)
+             session.turn_id = None
+             session.turn_started_ms = None
+             session.tts_utt_id = None
+             session.req_id = None
+             session.perf_first_partial_ms = None
+             session.perf_final_ms = None
+             session.perf_tts_start_ms = None
+             session.asr_final_emitted = False
+             session.nlu_emitted = False
+             session.policy_emitted = False
+             session.nlg_emitted = False
+             session.plan_emitted = False
++            session.suggestions_emitted = False
+             session.plan = None
  
--    def _publish_nlg(self, req_id: str, text: str) -> None:
-+    def _publish_nlg(
-+        self,
-+        req_id: str,
-+        text: str,
-+        *,
-+        metadata: Mapping[str, Any] | None = None,
-+    ) -> None:
-         event = {"type": EVT_NLG, "req_id": req_id, "text": text, "source": "llm_adapter"}
-+        if isinstance(metadata, Mapping):
-+            payload = {key: metadata[key] for key in metadata}
-+            if payload:
-+                event["metadata"] = payload
-         self._bus.publish(event)
+         session.state = new_state
  
-     def _publish_chat_message(self, req_id: str, text: str) -> None:
-         mapping = self._turn_lookup.get(req_id)
-         if not mapping:
-             return
+         aggregator = self._aggregators.get(sid)
+         if aggregator is not None:
+             aggregator.on_engine_mode_change(new_state)
  
-         sid, turn_id = mapping
-         if not sid or not turn_id:
-             return
+         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
+         if reason is not None:
+             breadcrumb_meta["reason"] = reason
+         breadcrumb_payload = {"meta": breadcrumb_meta}
+         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
+         self._publish(breadcrumb_event)
+ 
+     def turn_context(self, sid: str) -> Optional[Dict[str, str]]:
+         """Return the active turn context for ``sid`` if a turn is in progress."""
+ 
+         session = self._sessions.get(sid)
+         if (
+             session is None
+             or session.turn_id is None
+             or session.req_id is None
+             or session.state == READY
+         ):
+@@ -872,50 +876,96 @@ class EngineV2:
+                 "reason": plan.reason,
+             },
+         }
+         plan_event = self._envelope(sid, EVT_DIALOG_PLAN, plan_payload)
+         self._publish(plan_event)
  
          frame = {
-             "type": "chat.message",
-             "id": str(uuid.uuid4()),
-             "role": "assistant",
-             "text": text,
-             "origin": "voice",
-             "turn_id": turn_id,
+             "type": "dialog.plan",
+             "ts_ms": _now_ms(),
+             "mode": plan.mode,
+             "missing_info": list(plan.missing_info),
+             "chips": list(plan.chips),
+             "reason": plan.reason,
+         }
+         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {
+             "ws": {
+                 "dir": "out",
+                 "size": len(serialized.encode("utf-8")),
+                 "preview": serialized,
+             }
+         }
+         payload = {"meta": meta, "frame": frame}
+         frame_event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+         self._publish(frame_event)
++
++        if not session.suggestions_emitted:
++            chips: list[str] = []
++            for chip in list(plan.chips):
++                if isinstance(chip, str):
++                    label = chip.strip()
++                    if label:
++                        chips.append(label)
++                if len(chips) >= 3:
++                    break
++
++            if not chips:
++                try:
++                    persona_candidate = load_persona()
++                except Exception:
++                    persona_candidate = None
++                persona = persona_candidate if isinstance(persona_candidate, dict) else {}
++                fallback = default_chips_for_mode(persona, plan.mode)
++                chips = [
++                    str(item).strip()
++                    for item in fallback
++                    if isinstance(item, str) and str(item).strip()
++                ][:3]
++
++            if chips:
++                suggestions_frame = {
++                    "type": "assistant.suggestions",
++                    "ts_ms": _now_ms(),
++                    "items": [{"label": label, "kind": "action"} for label in chips],
++                    "mode": plan.mode,
++                }
++                suggestions_serialized = json.dumps(
++                    suggestions_frame, ensure_ascii=False, separators=(",", ":")
++                )
++                suggestions_meta = {
++                    "ws": {
++                        "dir": "out",
++                        "size": len(suggestions_serialized.encode("utf-8")),
++                        "preview": suggestions_serialized,
++                    }
++                }
++                suggestions_payload = {"meta": suggestions_meta, "frame": suggestions_frame}
++                suggestions_event = self._envelope(sid, EVT_WS_JSON_SEND, suggestions_payload)
++                self._publish(suggestions_event)
++                session.suggestions_emitted = True
++
+         session.plan_emitted = True
+         session.plan = {
              "req_id": req_id,
-             "ts_ms": int(time.time() * 1000),
+             "turn_id": turn_id,
+             "mode": plan.mode,
+             "missing_info": list(plan.missing_info),
+             "chips": list(plan.chips),
+             "reason": plan.reason,
+             "user_text": (user_text or "").strip(),
          }
  
-         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         payload = {
-             "meta": {
+     def _maybe_emit_policy_and_nlg(
+         self,
+         sid: str,
+         session: _TurnSession,
+         nlu_payload: Mapping[str, Any],
+     ) -> None:
+         if session.policy_emitted:
+             return
+ 
+         req_id = session.req_id or nlu_payload.get("req_id")
+         if not isinstance(req_id, str) or not req_id:
+             return
+ 
+         snapshot = self.policy_snapshot or {}
 diff --git a/app/voice_v2/persona.py b/app/voice_v2/persona.py
-index 33a61d85d1a7075f1af898b117baabf68c46b9e2..aa4a409bc492a4f239bee382393739bc228b4e6f 100644
+index aa4a409bc492a4f239bee382393739bc228b4e6f..c78a8f03ff405f8a346eff1cf2d9ec15b6bf95ca 100644
 --- a/app/voice_v2/persona.py
 +++ b/app/voice_v2/persona.py
-@@ -1,56 +1,171 @@
- """Persona loader and system preamble helpers for Chip."""
- from __future__ import annotations
- 
- import json
- import os
-+import random
- from pathlib import Path
--from typing import Any, Dict, Mapping
-+from typing import Any, Dict, Mapping, MutableMapping, Sequence
- 
- _PERSONA_ENV_VAR = "ASKCHIP_PERSONA_PATH"
- _DEFAULT_PERSONA_PATH = Path(__file__).resolve().parents[2] / "config" / "personas" / "chip.json"
- 
- _persona_cache: Dict[str, Any] | None = None
- 
-+# Session-scoped bookkeeping for rare persona quote injections.
-+_quote_last_turn_by_sid: Dict[str, int] = {}
-+
- 
- def _resolve_persona_path() -> Path:
-     override = os.environ.get(_PERSONA_ENV_VAR)
-     if override:
-         return Path(override).expanduser()
-     return _DEFAULT_PERSONA_PATH
+@@ -137,35 +137,42 @@ def select_quote(
  
  
- def load_persona() -> Dict[str, Any]:
-     """Load Chip's persona JSON with an mtime-aware cache."""
+ def maybe_pick_quote_for_sid(
+     persona: Mapping[str, Any] | MutableMapping[str, Any] | None,
+     sid: str,
+     mode: str,
+     turn_no: int,
+ ) -> Dict[str, str] | None:
+     """Return a persona quote for the given session when policy allows."""
  
-     global _persona_cache
+     if not isinstance(sid, str) or not sid:
+         return None
  
-     persona_path = _resolve_persona_path()
-     stat = persona_path.stat()
-     mtime = stat.st_mtime
+     last_turn = _quote_last_turn_by_sid.get(sid)
+     if last_turn is not None and turn_no >= last_turn:
+         delta = turn_no - last_turn
+     else:
+         delta = None
  
-     if (
-         _persona_cache is not None
-         and _persona_cache.get("path") == persona_path
-         and _persona_cache.get("mtime") == mtime
-     ):
-         cached = _persona_cache.get("persona")
-         if isinstance(cached, dict):
-             return cached
- 
-     with persona_path.open("r", encoding="utf-8") as handle:
-         persona = json.load(handle)
- 
-     _persona_cache = {"path": persona_path, "mtime": mtime, "persona": persona}
-     return persona
+     quote = select_quote(persona, mode, delta, rng_seed=turn_no)
+     if quote:
+         _quote_last_turn_by_sid[sid] = turn_no
+     return quote
  
  
-+def _coerce_mode(mode: object) -> str:
-+    return mode if isinstance(mode, str) else ""
-+
-+
-+def _sanitize_quotes(quotes: object) -> Sequence[str]:
-+    if isinstance(quotes, Sequence) and not isinstance(quotes, (str, bytes)):
-+        cleaned = [str(item).strip() for item in quotes if isinstance(item, str) and item.strip()]
-+        return cleaned
-+    return ()
-+
-+
-+def _coerce_policy_int(value: object, minimum: int = 0) -> int | None:
-+    if isinstance(value, bool):  # bool is int subclass, handle explicitly
-+        return int(value)
-+    if isinstance(value, (int, float)):
-+        coerced = int(value)
-+        return coerced if coerced >= minimum else minimum
-+    if isinstance(value, str) and value.strip().lstrip("-+").isdigit():
-+        coerced = int(value)
-+        return coerced if coerced >= minimum else minimum
-+    return None
-+
-+
-+def _coerce_rate_percent(value: object) -> float:
-+    if isinstance(value, (int, float)):
-+        return max(0.0, min(float(value), 100.0))
-+    if isinstance(value, str):
-+        try:
-+            parsed = float(value)
-+        except ValueError:
-+            return 0.0
-+        return max(0.0, min(parsed, 100.0))
-+    return 0.0
-+
-+
-+def select_quote(
-+    persona: Mapping[str, Any] | MutableMapping[str, Any] | None,
-+    mode: str,
-+    last_used_turns_ago: int | None,
-+    *,
-+    rng_seed: int,
-+) -> Dict[str, str] | None:
-+    """Deterministically pick a persona quote if policy allows it."""
-+
-+    if not isinstance(persona, Mapping):
-+        return None
-+
-+    quotes = _sanitize_quotes(persona.get("quotes"))
-+    if not quotes:
-+        return None
-+
-+    policy_obj = persona.get("quote_policy")
-+    policy = policy_obj if isinstance(policy_obj, Mapping) else {}
-+
-+    normalized_mode = _coerce_mode(mode).lower()
-+    forbid_on_clarify = bool(policy.get("forbid_on_clarify", False))
-+    if forbid_on_clarify and normalized_mode == "clarify":
-+        return None
-+
-+    allowed_modes = policy.get("modes_allowed")
-+    if isinstance(allowed_modes, Sequence) and not isinstance(allowed_modes, (str, bytes)):
-+        normalized_allowed = {str(item).lower() for item in allowed_modes if isinstance(item, str) and item}
-+        if normalized_allowed and normalized_mode not in normalized_allowed:
-+            return None
-+
-+    cooldown_turns = _coerce_policy_int(policy.get("cooldown_turns"), minimum=0)
-+    if (
-+        cooldown_turns is not None
-+        and last_used_turns_ago is not None
-+        and last_used_turns_ago >= 0
-+        and last_used_turns_ago < cooldown_turns
-+    ):
-+        return None
-+
-+    rate_percent = _coerce_rate_percent(policy.get("rate_percent"))
-+    if rate_percent <= 0.0:
-+        return None
-+
-+    rng = random.Random(rng_seed)
-+    if rng.random() >= (rate_percent / 100.0):
-+        return None
-+
-+    quote_index = rng.randrange(len(quotes))
-+    quote_text = quotes[quote_index]
-+    quote_id = f"quote_{quote_index}"
-+    return {"id": quote_id, "text": quote_text}
-+
-+
-+def maybe_pick_quote_for_sid(
-+    persona: Mapping[str, Any] | MutableMapping[str, Any] | None,
-+    sid: str,
-+    mode: str,
-+    turn_no: int,
-+) -> Dict[str, str] | None:
-+    """Return a persona quote for the given session when policy allows."""
-+
-+    if not isinstance(sid, str) or not sid:
-+        return None
-+
-+    last_turn = _quote_last_turn_by_sid.get(sid)
-+    if last_turn is not None and turn_no >= last_turn:
-+        delta = turn_no - last_turn
-+    else:
-+        delta = None
-+
-+    quote = select_quote(persona, mode, delta, rng_seed=turn_no)
-+    if quote:
-+        _quote_last_turn_by_sid[sid] = turn_no
-+    return quote
++def default_chips_for_mode(p: dict, mode: str) -> list[str]:
++    try:
++        return list((p.get("modes") or {}).get(mode, {}).get("chips") or [])[:3]
++    except Exception:
++        return []
 +
 +
  def build_system_preamble(persona: Mapping[str, Any]) -> str:
@@ -361,98 +354,75 @@ index 33a61d85d1a7075f1af898b117baabf68c46b9e2..aa4a409bc492a4f239bee382393739bc
          f"You are {title}, the Virtual Partner Technical Manager for Pure Storage partners; "
          f"respond with a {tone} tone, stay focused on {domain}, and teach through conversation."
      )
-diff --git a/tests/test_persona_quotes.py b/tests/test_persona_quotes.py
+diff --git a/tests/test_suggestions_frame.py b/tests/test_suggestions_frame.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..cc32ad83c361428f896278d0832fef18c0e81b34
+index 0000000000000000000000000000000000000000..5f3c9464d0c53b077e919a079d4808919789f775
 --- /dev/null
-+++ b/tests/test_persona_quotes.py
-@@ -0,0 +1,89 @@
-+"""Deterministic checks for persona quote injections."""
-+
++++ b/tests/test_suggestions_frame.py
+@@ -0,0 +1,66 @@
 +from __future__ import annotations
 +
 +import unittest
 +
 +from app.telemetry import bus
-+from app.voice_v2 import EVT_NLG
-+from app.voice_v2.llm import LLMAdapter
-+from app.voice_v2 import persona
++from app.voice_v2 import EVT_WS_JSON_SEND
++from app.voice_v2.engine import EngineV2
 +
 +
-+class TestPersonaQuotes(unittest.TestCase):
++class TestAssistantSuggestionsFrame(unittest.TestCase):
 +    def setUp(self) -> None:
 +        bus.reset()
-+        persona._quote_last_turn_by_sid.clear()
++        self.events: list[dict] = []
++        self.token = bus.subscribe("*", self.events.append)
++        self.engine = EngineV2(telemetry_bus=bus)
++        self.sid = "sid-suggestions"
++        self.engine.on_open(self.sid, {})
++        self.engine.on_audio(self.sid, b"pcm", seq=0)
 +
 +    def tearDown(self) -> None:
++        bus.unsubscribe(self.token)
 +        bus.reset()
-+        persona._quote_last_turn_by_sid.clear()
 +
-+    def test_persona_quotes_follow_policy(self) -> None:
-+        data = persona.load_persona()
-+
-+        # Clarify should always be rejected when forbid_on_clarify policy is set.
-+        clarify_quote = persona.maybe_pick_quote_for_sid(data, "sid-clarify", "clarify", turn_no=1)
-+        self.assertIsNone(clarify_quote)
-+
-+        adapter = LLMAdapter()
-+        events: list[dict] = []
-+        token = bus.subscribe("*", events.append)
-+        try:
-+            sid = "sid-outline"
-+            modes = ["outline", "deep_dive"] * 15  # 30 turns total
-+            for index, mode in enumerate(modes, start=1):
-+                adapter.generate_persona(
-+                    sid,
-+                    f"turn-{index}",
-+                    f"req-{index}",
-+                    f"Walk me through topic {index}",
-+                    {"mode": mode},
-+                )
-+        finally:
-+            bus.unsubscribe(token)
-+
-+        nlg_events = [evt for evt in events if evt.get("type") == EVT_NLG]
-+        self.assertEqual(len(nlg_events), 30)
-+
-+        quote_events = [
++    def _ws_frames(self, frame_type: str) -> list[dict]:
++        return [
 +            evt
-+            for evt in nlg_events
-+            if isinstance(evt.get("metadata"), dict) and evt["metadata"].get("quote_id")
++            for evt in self.events
++            if evt["type"] == EVT_WS_JSON_SEND
++            and isinstance(evt.get("frame"), dict)
++            and evt["frame"].get("type") == frame_type
 +        ]
-+        quote_rate = len(quote_events) / len(nlg_events)
-+        self.assertGreaterEqual(quote_rate, 0.05)
-+        self.assertLessEqual(quote_rate, 0.2)
 +
-+        for event in quote_events:
-+            self.assertIn("(As my granddad would say:", event.get("text", ""))
-+            self.assertIsInstance(event["metadata"]["quote_id"], str)
-+            self.assertTrue(event["metadata"]["quote_id"])
++    def test_emits_single_suggestions_frame(self) -> None:
++        utterance = "can you walk me through the install steps"
++        self.engine.on_asr_final(self.sid, utterance)
 +
-+        # Ensure clarify mode never injects a quote even after other turns.
-+        events.clear()
-+        token = bus.subscribe("*", events.append)
-+        try:
-+            for index in range(1, 6):
-+                adapter.generate_persona(
-+                    "sid-clarify",
-+                    f"clarify-turn-{index}",
-+                    f"clarify-req-{index}",
-+                    "Need more detail?",
-+                    {"mode": "clarify"},
-+                )
-+        finally:
-+            bus.unsubscribe(token)
++        suggestion_frames = self._ws_frames("assistant.suggestions")
++        plan_frames = self._ws_frames("dialog.plan")
 +
-+        clarify_events = [evt for evt in events if evt.get("type") == EVT_NLG]
-+        self.assertEqual(len(clarify_events), 5)
-+        self.assertTrue(
-+            all(
-+                not (isinstance(evt.get("metadata"), dict) and evt["metadata"].get("quote_id"))
-+                for evt in clarify_events
-+            )
-+        )
++        self.assertEqual(1, len(plan_frames))
++        self.assertEqual(1, len(suggestion_frames))
++
++        plan_index = self.events.index(plan_frames[0])
++        suggestions_index = self.events.index(suggestion_frames[0])
++        self.assertLess(plan_index, suggestions_index)
++
++        items = suggestion_frames[0]["frame"].get("items")
++        self.assertIsInstance(items, list)
++        self.assertGreaterEqual(len(items), 1)
++        self.assertLessEqual(len(items), 3)
++        for item in items:
++            self.assertIsInstance(item, dict)
++            self.assertEqual("action", item.get("kind"))
++            label = item.get("label")
++            self.assertIsInstance(label, str)
++            self.assertTrue(label)
++
++        self.assertEqual("steps", suggestion_frames[0]["frame"].get("mode"))
++
++        # A duplicate final should not emit a second suggestions frame.
++        self.engine.on_asr_final(self.sid, utterance)
++        self.assertEqual(1, len(self._ws_frames("assistant.suggestions")))
 +
 +
-+if __name__ == "__main__":
++if __name__ == "__main__":  # pragma: no cover - convenience
 +    unittest.main()

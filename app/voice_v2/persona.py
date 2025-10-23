@@ -159,6 +159,13 @@ def maybe_pick_quote_for_sid(
     return quote
 
 
+def default_chips_for_mode(p: dict, mode: str) -> list[str]:
+    try:
+        return list((p.get("modes") or {}).get(mode, {}).get("chips") or [])[:3]
+    except Exception:
+        return []
+
+
 def build_system_preamble(persona: Mapping[str, Any]) -> str:
     """Compose the single-line system preamble for Chip."""
 

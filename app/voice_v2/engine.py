@@ -38,6 +38,7 @@ from app.voice_v2.gate import GateController
 from app.voice_v2.conversation_buffer import ConversationBuffer
 from app.voice_v2.vad import VADAggregator
 from app.voice_v2.planner import plan_turn
+from app.voice_v2.persona import default_chips_for_mode, load_persona
 
 
 def _now_ms() -> int:
@@ -113,6 +114,7 @@ class _TurnSession:
     nlg_emitted: bool = False
     plan_emitted: bool = False
     plan: Optional[Dict[str, Any]] = None
+    suggestions_emitted: bool = False
 
 
 class _NullExporter:
@@ -671,6 +673,7 @@ class EngineV2:
             session.policy_emitted = False
             session.nlg_emitted = False
             session.plan_emitted = False
+            session.suggestions_emitted = False
             session.plan = None
             begin_payload = {
                 "turn_id": session.turn_id,
@@ -727,6 +730,7 @@ class EngineV2:
             session.policy_emitted = False
             session.nlg_emitted = False
             session.plan_emitted = False
+            session.suggestions_emitted = False
             session.plan = None
 
         session.state = new_state
@@ -894,6 +898,52 @@ class EngineV2:
         payload = {"meta": meta, "frame": frame}
         frame_event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
         self._publish(frame_event)
+
+        if not session.suggestions_emitted:
+            chips: list[str] = []
+            for chip in list(plan.chips):
+                if isinstance(chip, str):
+                    label = chip.strip()
+                    if label:
+                        chips.append(label)
+                if len(chips) >= 3:
+                    break
+
+            if not chips:
+                try:
+                    persona_candidate = load_persona()
+                except Exception:
+                    persona_candidate = None
+                persona = persona_candidate if isinstance(persona_candidate, dict) else {}
+                fallback = default_chips_for_mode(persona, plan.mode)
+                chips = [
+                    str(item).strip()
+                    for item in fallback
+                    if isinstance(item, str) and str(item).strip()
+                ][:3]
+
+            if chips:
+                suggestions_frame = {
+                    "type": "assistant.suggestions",
+                    "ts_ms": _now_ms(),
+                    "items": [{"label": label, "kind": "action"} for label in chips],
+                    "mode": plan.mode,
+                }
+                suggestions_serialized = json.dumps(
+                    suggestions_frame, ensure_ascii=False, separators=(",", ":")
+                )
+                suggestions_meta = {
+                    "ws": {
+                        "dir": "out",
+                        "size": len(suggestions_serialized.encode("utf-8")),
+                        "preview": suggestions_serialized,
+                    }
+                }
+                suggestions_payload = {"meta": suggestions_meta, "frame": suggestions_frame}
+                suggestions_event = self._envelope(sid, EVT_WS_JSON_SEND, suggestions_payload)
+                self._publish(suggestions_event)
+                session.suggestions_emitted = True
+
         session.plan_emitted = True
         session.plan = {
             "req_id": req_id,
