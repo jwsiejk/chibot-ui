@@ -8,6 +8,8 @@ from typing import Any, Mapping
 
 from app.telemetry import bus
 from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
+from app.voice_v2 import generator
+from app.voice_v2.persona import load_persona
 
 EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
 EVT_TURN_END = "EVT_TURN_END"
@@ -71,6 +73,27 @@ class LLMAdapter:
         if self._auto_publish:
             self.publish_nlg(req_id, response_text)
         return {"text": response_text, "timing": timing}
+
+    def generate_persona(
+        self,
+        sid: str,
+        turn_id: str,
+        req_id: str,
+        user_text: str,
+        plan: Mapping[str, Any] | object,
+    ) -> str:
+        """Return a persona-aligned reply using the rule-based generator."""
+
+        if not isinstance(req_id, str) or not req_id:
+            raise ValueError("req_id must be a non-empty string")
+
+        persona = load_persona()
+        messages = generator.build_messages(persona, plan, user_text)
+        reply = generator.render_reply(messages)
+        if not isinstance(reply, str):
+            reply = str(reply)
+        self.publish_nlg(req_id, reply)
+        return reply
 
     def publish_nlg(self, req_id: str, text: str) -> None:
         """Publish EVT_NLG and chat bridge messages when enabled."""

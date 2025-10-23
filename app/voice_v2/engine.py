@@ -112,6 +112,7 @@ class _TurnSession:
     policy_emitted: bool = False
     nlg_emitted: bool = False
     plan_emitted: bool = False
+    plan: Optional[Dict[str, Any]] = None
 
 
 class _NullExporter:
@@ -670,6 +671,7 @@ class EngineV2:
             session.policy_emitted = False
             session.nlg_emitted = False
             session.plan_emitted = False
+            session.plan = None
             begin_payload = {
                 "turn_id": session.turn_id,
                 "req_id": session.req_id,
@@ -725,6 +727,7 @@ class EngineV2:
             session.policy_emitted = False
             session.nlg_emitted = False
             session.plan_emitted = False
+            session.plan = None
 
         session.state = new_state
 
@@ -892,6 +895,15 @@ class EngineV2:
         frame_event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
         self._publish(frame_event)
         session.plan_emitted = True
+        session.plan = {
+            "req_id": req_id,
+            "turn_id": turn_id,
+            "mode": plan.mode,
+            "missing_info": list(plan.missing_info),
+            "chips": list(plan.chips),
+            "reason": plan.reason,
+            "user_text": (user_text or "").strip(),
+        }
 
     def _maybe_emit_policy_and_nlg(
         self,
@@ -926,11 +938,41 @@ class EngineV2:
         else:
             entity_payload = {}
 
-        llm_result = self._llm.generate(req_id, intent=intent, entities=entity_payload)
-        if isinstance(llm_result, Mapping):
-            response_text = llm_result.get("text")
+        plan_context = session.plan if isinstance(session.plan, Mapping) else None
+        plan_mode = None
+        if plan_context is not None:
+            plan_req_id = plan_context.get("req_id")
+            if plan_req_id == req_id:
+                candidate_mode = plan_context.get("mode")
+                if isinstance(candidate_mode, str) and candidate_mode:
+                    plan_mode = candidate_mode
+
+        if plan_mode:
+            turn_id = session.turn_id or plan_context.get("turn_id") or nlu_payload.get("turn_id")
+            if not isinstance(turn_id, str) or not turn_id:
+                turn_id = f"turn-{uuid.uuid4().hex}"
+            user_text = plan_context.get("user_text") if isinstance(plan_context, Mapping) else ""
+            if not isinstance(user_text, str):
+                user_text = ""
+            plan_payload: Dict[str, Any] = {
+                "mode": plan_mode,
+                "missing_info": list(plan_context.get("missing_info") or []),
+                "chips": list(plan_context.get("chips") or []),
+                "reason": plan_context.get("reason"),
+            }
+            response_text = self._llm.generate_persona(
+                sid,
+                turn_id,
+                req_id,
+                user_text,
+                plan_payload,
+            )
         else:
-            response_text = llm_result
+            llm_result = self._llm.generate(req_id, intent=intent, entities=entity_payload)
+            if isinstance(llm_result, Mapping):
+                response_text = llm_result.get("text")
+            else:
+                response_text = llm_result
 
         if not isinstance(response_text, str):
             response_text = str(response_text)
