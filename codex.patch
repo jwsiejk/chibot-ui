@@ -1,160 +1,70 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 5b1c1641a104354c06f524bc11bde7bddf5b3f84..0c50527a5008cda9c3c237fd7ad7707643df2747 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -248,70 +248,89 @@
-       assignResume(resumeToken, resumeTtlMs);
-     } else {
-       clearResumeState();
-     }
-     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
-     const audioPlayer = getAudioPlayer();
-     if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
-       audioPlayer.setDescriptor(descriptor);
-     }
-     updateState({
-       connectionState: "connected",
-       sid: meta.sid,
-       infoFrame: frame,
-       resumeError: null
-     });
-     startHeartbeat();
-   }
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 91c834dd2358856d878e9674b18396142dd2feb0..21f34092d187a2e0235abc75547c392509a9a248 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -941,59 +941,61 @@ class ChatV2Adapter:
+         seq_value = prepared.get("partial_seq")
+         if isinstance(seq_value, int) and seq_value > ctx.partial_seq:
+             ctx.partial_seq = seq_value
+         else:
+             ctx.partial_seq += 1
+             prepared["partial_seq"] = ctx.partial_seq
+         return prepared
  
-   function handlePongFrame() {
-     if (typeof lastPingAt === "number") {
-       const latency = Math.max(0, Date.now() - lastPingAt);
-       updateState({ latencyMs: latency });
-     }
-   }
+     def _start_asr_ready_tracker(self, ctx: AdapterContext) -> None:
+         if ctx.asr_subscription_token is not None:
+             return
  
-+  function handleChatHistoryFrame(frame) {
-+    const view = window.TranscriptView;
-+    const messages = Array.isArray(frame.messages) ? frame.messages : [];
-+    if (view && typeof view.handleChatMessage === "function" && messages.length) {
-+      for (const message of messages) {
-+        try {
-+          view.handleChatMessage(message);
-+        } catch (err) {
-+          console.warn("TranscriptView chat history handler error", err);
-+          break;
-+        }
-+      }
-+    }
-+  }
+         def _handle(event: dict) -> None:
+             if event.get("type") != EVT_ASR_READY:
+                 return
+             if event.get("sid") != ctx.sid:
+                 return
+             ctx.asr_ready = True
+ 
+         ctx.asr_subscription_token = bus.subscribe(EVT_ASR_READY, _handle)
+ 
+     def _extract_outbound_payload(
+         self, ctx: AdapterContext, event: dict
+     ) -> Optional[Dict[str, Any]]:
+         payload = self._coerce_payload(event.get("payload"))
++        if payload is None:
++            payload = self._coerce_payload(event.get("frame"))
 +
-   function handleMessageFrame(frame) {
-     if (frame.type === "keepalive") {
-       // Some transports may emit a keepalive frame before the info frame has
-       // been sent. Treat it as a no-op and continue waiting for the info
-       // frame so we do not close the connection prematurely.
-       return;
-     }
+         if payload is None:
+             meta = event.get("meta")
+             if isinstance(meta, dict):
+                 ws_meta = meta.get("ws")
+                 if isinstance(ws_meta, dict):
+-                    frame = ws_meta.get("frame")
+-                    if frame is None:
+-                        frame = ws_meta.get("preview")
+-                    payload = self._coerce_payload(frame)
++                    payload = self._coerce_payload(ws_meta.get("frame"))
++                    if payload is None:
++                        payload = self._coerce_payload(ws_meta.get("preview"))
  
-     if (frame.type === "ping") {
-       sendJson({ type: "pong", t: Date.now() });
-       return;
-     }
+         if payload is None:
+             return None
  
-     if (expectInfoFrame) {
--      if (frame.type !== "info") {
-+      if (frame.type === "chat.history") {
-+        handleChatHistoryFrame(frame);
-+      } else if (frame.type !== "info") {
-         console.error("Expected info frame first, received", frame.type);
-         close("bad_info_sequence");
-         return;
-       }
--      handleInfoFrame(frame);
-+      if (frame.type === "info") {
-+        handleInfoFrame(frame);
-+      }
-     } else if (frame.type === "info") {
-       handleInfoFrame(frame);
-     } else if (frame.type === "pong") {
-       handlePongFrame();
-     } else if (frame.type === "error") {
-       console.error("WS error frame", frame);
-       const isResumeInvalid = frame && frame.code === "resume_invalid";
-       if (isResumeInvalid) {
-         clearResumeState();
-         updateState({ resumeError: "invalid" });
-       }
-       if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
-         try {
-           window.WSErrorUI.handleFrame(frame, {
-             scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
-           });
-         } catch (err) {
-           console.warn("Error handler threw", err);
-         }
-       }
-       if (isResumeInvalid) {
-         close("resume_invalid");
-       }
-     } else if (frame.type === "tts.start") {
-       const audioPlayer = getAudioPlayer();
-@@ -333,62 +352,51 @@
-         try {
-           view.handlePartial(frame);
-         } catch (err) {
-           console.warn("TranscriptView partial handler error", err);
-         }
-       }
-     } else if (frame.type === "asr.final") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleFinal === "function") {
-         try {
-           view.handleFinal(frame);
-         } catch (err) {
-           console.warn("TranscriptView final handler error", err);
-         }
-       }
-     } else if (frame.type === "chat.message") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleChatMessage === "function") {
-         try {
-           view.handleChatMessage(frame);
-         } catch (err) {
-           console.warn("TranscriptView chat handler error", err);
-         }
-       }
-     } else if (frame.type === "chat.history") {
--      const view = window.TranscriptView;
--      const messages = Array.isArray(frame.messages) ? frame.messages : [];
--      if (view && typeof view.handleChatMessage === "function" && messages.length) {
--        for (const message of messages) {
--          try {
--            view.handleChatMessage(message);
--          } catch (err) {
--            console.warn("TranscriptView chat history handler error", err);
--            break;
--          }
--        }
--      }
-+      handleChatHistoryFrame(frame);
-     }
-     dispatchFrame(frame);
-   }
- 
-   function parseFrame(event) {
-     const { data } = event;
-     if (typeof data === "string") {
-       try {
-         const frame = JSON.parse(data);
-         handleMessageFrame(frame);
-       } catch (err) {
-         console.error("Failed to parse WS frame", err, data);
-       }
-       return;
-     }
-     if (data instanceof Blob) {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(data);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-       return;
-     }
-     console.warn("Unknown WS frame type", data);
-   }
+         frame_type = payload.get("type") if isinstance(payload, dict) else None
+         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
+             return None
+         normalized = dict(payload)
+         if frame_type == "policy.interaction":
+             normalized = self._sanitize_policy_interaction(normalized)
+             last_policy = ctx.last_policy_interaction
+             if last_policy is not None and last_policy == normalized:
+                 return None
+             ctx.last_policy_interaction = json.loads(
+                 json.dumps(normalized, separators=(",", ":"))
+             )
+         if frame_type == "info":
+             self._ensure_resume_token(ctx)
+             meta = {}
+             source_meta = normalized.get("meta")
+             if isinstance(source_meta, dict):
+                 meta = dict(source_meta)
+             meta["sid"] = ctx.sid
+             if ctx.resume_token:
+                 normalized["resume_token"] = ctx.resume_token

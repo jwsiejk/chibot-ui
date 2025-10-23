@@ -964,14 +964,16 @@ class ChatV2Adapter:
     ) -> Optional[Dict[str, Any]]:
         payload = self._coerce_payload(event.get("payload"))
         if payload is None:
+            payload = self._coerce_payload(event.get("frame"))
+
+        if payload is None:
             meta = event.get("meta")
             if isinstance(meta, dict):
                 ws_meta = meta.get("ws")
                 if isinstance(ws_meta, dict):
-                    frame = ws_meta.get("frame")
-                    if frame is None:
-                        frame = ws_meta.get("preview")
-                    payload = self._coerce_payload(frame)
+                    payload = self._coerce_payload(ws_meta.get("frame"))
+                    if payload is None:
+                        payload = self._coerce_payload(ws_meta.get("preview"))
 
         if payload is None:
             return None
