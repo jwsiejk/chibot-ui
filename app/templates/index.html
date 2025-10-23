@@ -183,7 +183,7 @@ def _build_static_response(path: Path) -> Optional[Response]:
         ctype = "application/octet-stream"
     elif ctype.startswith("text/") and "charset=" not in ctype:
         ctype = f"{ctype}; charset=utf-8"
-    headers: list[tuple[bytes, bytes]] = [
+    headers = [
         (b"content-type", ctype.encode("latin1")),
         (b"content-length", str(len(data)).encode("ascii")),
     ]
@@ -202,14 +202,11 @@ def _resolve_static_path(raw_path: str) -> Optional[Path]:
         resolved = target.resolve(strict=False)
     except OSError:
         return None
-    # prevent traversal
     try:
-        resolved.relative_to(STATIC_ROOT)
+        resolved.relative_to(STATIC_ROOT)  # prevent traversal
     except ValueError:
         return None
-    if not resolved.is_file():
-        return None
-    return resolved
+    return resolved if resolved.is_file() else None
 
 async def _drain_request_body(receive: Callable[[], Awaitable[dict]]) -> None:
     while True:
