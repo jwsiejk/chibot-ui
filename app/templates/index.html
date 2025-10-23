@@ -1,403 +1,139 @@
-"""ASGI gateway mounting the chat.v2 adapter, HTTP probes, and UI assets (pure ASGI)."""
-from __future__ import annotations
+<!doctype html>
+<html lang="en" data-askchip-env="development">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="askchip-env" content="development" />
+    <title>AskChip UI</title>
+    <link rel="icon" href="/static/favicon.ico" />
+    <link rel="stylesheet" href="/static/css/styles.css" />
+  </head>
+  <body data-askchip-env="development">
+    <div id="app">
+      <header class="topbar" role="banner">
+        <div class="topbar-left">
+          <span class="env-badge" aria-label="Environment">Development</span>
+          <span class="sid" id="sid-text">SID: —</span>
+        </div>
+        <div class="topbar-right">
+          <div class="brand-menu">
+            <button
+              id="brandBtn"
+              class="brand-btn"
+              type="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+            >
+              <span class="brand-text">AskChip</span>
+              <span aria-hidden="true">▾</span>
+            </button>
+            <div id="brandMenu" class="menu" role="menu" aria-hidden="true">
+              <button id="profileItem" class="menu-item" type="button" role="menuitem">Profile</button>
+              <button id="adminItem" class="menu-item" type="button" role="menuitem">Admin UI</button>
+              <button id="logoutItem" class="menu-item" type="button" role="menuitem">Sign out</button>
+            </div>
+          </div>
+        </div>
+      </header>
 
-import json
-import logging
-import mimetypes
-import os
-import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from functools import partial
-from pathlib import Path
-from tempfile import NamedTemporaryFile
-from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
-from urllib.parse import urlparse
+      <main class="layout" role="main">
+        <section class="stage" aria-labelledby="connLabel">
+          <div class="chip-window">
+            <canvas
+              id="waveCanvas"
+              class="wave-canvas"
+              role="img"
+              aria-label="Live audio visualization"
+            ></canvas>
+            <div class="chip-overlay">
+              <div class="chip-status" role="status" aria-live="polite">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span id="connLabel">Disconnected</span>
+              </div>
+              <div
+                id="modeSuggestions"
+                class="mode-suggestions hidden"
+                role="region"
+                aria-live="polite"
+              >
+                <div id="modeSuggestionsLabel" class="mode-suggestions__label"></div>
+                <div id="modeSuggestionsChips" class="mode-suggestions__chips" role="list"></div>
+              </div>
+              <div class="voice-chip" aria-live="polite">
+                <span class="chip-label">Voice</span>
+                <span id="voiceLabel">—</span>
+                <span class="sep" aria-hidden="true">•</span>
+                <span class="chip-label">Locale</span>
+                <span id="localeLabel">en-US</span>
+              </div>
+            </div>
+          </div>
+        </section>
 
-from app.admin.flow_api import handle_flow_trace, handle_flow_zip
-from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+        <section class="chat" aria-label="Conversation transcript">
+          <header class="chat-header">
+            <h2>Session transcript</h2>
+          </header>
+          <div
+            id="messages"
+            class="messages"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
+          ></div>
+          <footer class="toolbar">
+            <div class="toolbar-left">
+              <button id="openChatBtn" class="pill secondary" type="button">Pop out</button>
+            </div>
+            <div class="toolbar-center">
+              <button id="startBtn" class="pill start" type="button">Start session</button>
+              <button id="endBtn" class="pill end" type="button" disabled>End session</button>
+            </div>
+            <div class="toolbar-right" id="latencyHint">Latency: —</div>
+          </footer>
+          <form id="textChatForm" class="text-chat-form" autocomplete="off">
+            <label for="textChatInput" class="visually-hidden">Send a chat message</label>
+            <input
+              id="textChatInput"
+              type="text"
+              name="message"
+              placeholder="Type a message to the assistant…"
+              aria-label="Send a chat message"
+            />
+          </form>
+        </section>
+      </main>
 
-logger = logging.getLogger(__name__)
+      <section class="dev-tools">
+        <button id="devInspectorToggle" class="pill secondary" type="button" hidden>
+          Flow inspector
+        </button>
+        <div id="devInspectorPanel" class="dev-inspector" hidden aria-hidden="true">
+          <header class="dev-inspector__header">
+            <h3>Flow inspector</h3>
+            <div class="dev-inspector__actions">
+              <button id="devInspectorRefresh" type="button">Refresh</button>
+              <button id="devInspectorClose" type="button">Close</button>
+            </div>
+          </header>
+          <p id="devInspectorSid">SID: —</p>
+          <p id="devInspectorStatus">Connect to capture flow events.</p>
+          <pre id="devInspectorOutput" aria-live="polite"></pre>
+          <a
+            id="devInspectorDownload"
+            href="#"
+            aria-disabled="true"
+            tabindex="-1"
+          >
+            Download flow.zip
+          </a>
+        </div>
+      </section>
+    </div>
 
-# ---------------------------- Basics / response type --------------------------
+    <div id="toast-root" class="toast-container" aria-live="polite"></div>
+    <div id="wserror-banner-root" aria-live="assertive"></div>
 
-@dataclass(frozen=True)
-class Response:
-    status: int
-    body: bytes
-    headers: tuple[tuple[bytes, bytes], ...]
-
-def json_response(*, status: int = 200, **payload: Any) -> Response:
-    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    headers = (
-        (b"content-type", b"application/json; charset=utf-8"),
-        (b"content-length", str(len(body)).encode("ascii")),
-    )
-    return Response(status=status, body=body, headers=headers)
-
-def _html_response(body: bytes) -> Response:
-    headers = (
-        (b"content-type", b"text/html; charset=utf-8"),
-        (b"content-length", str(len(body)).encode("ascii")),
-    )
-    return Response(status=200, body=body, headers=headers)
-
-# ---------------------------- Routes / paths ---------------------------------
-
-WS_ROUTE = "/ws/v2/chat"
-HEALTH_ROUTE = "/api/v1/health"
-LIVE_ROUTE = "/api/v1/live"
-READY_ROUTE = "/api/v1/ready"
-INFO_ROUTE = "/api/v1/info"
-ROOT_ROUTE = "/"
-FAVICON_ROUTE = "/favicon.ico"
-STATIC_PREFIX = "/static/"
-
-EXPORT_ROOT = Path("exports")
-BASE_DIR = Path(__file__).resolve().parent        # app/
-TEMPLATES_ROOT = BASE_DIR / "templates"           # app/templates
-STATIC_ROOT = BASE_DIR / "static"                 # app/static
-
-INDEX_PATH = TEMPLATES_ROOT / "index.html"
-FAVICON_PATH = STATIC_ROOT / "favicon.ico"
-
-_ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
-_TRACE_SEGMENT = "trace"
-_ZIP_SEGMENT = "zip"
-
-_DEFAULT_INDEX_HTML = b"<!doctype html><title>AskChip</title><div id='app'></div>"
-
-HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
-_adapter: Optional[ChatV2Adapter] = None
-
-# ---------------------------- ASGI entrypoint --------------------------------
-
-async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-    scope_type = scope.get("type")
-    path = (scope.get("root_path") or "") + scope.get("path", "")
-
-    if scope_type == "websocket":
-        if path == WS_ROUTE:
-            allowed, blocked = _validate_ws_origin(scope)
-            if not allowed:
-                await _reject_origin(scope, blocked, receive, send)
-                return
-            await _get_adapter()(scope, receive, send)
-        else:
-            await _reject_websocket(receive, send)
-        return
-
-    if scope_type == "http":
-        handler = _HTTP_ROUTES.get(path)
-        if handler is None and path.startswith(STATIC_PREFIX):
-            handler = partial(_handle_static, raw_path=path)
-        if handler is None:
-            handler = _resolve_admin_route(path)
-        if handler is None:
-            await _drain_request_body(receive)
-            await _send_response(send, json_response(status=404, error="not_found"))
-        else:
-            resp = await handler(scope, receive)
-            await _send_response(send, resp)
-        return
-
-    raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
-
-# ---------------------------- HTTP handlers ----------------------------------
-
-async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-    if not _method_is_get(scope):
-        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
-    await _drain_request_body(receive)
-    return json_response(ok=True, engine="v2", ws_subprotocol=CHAT_V2_SUBPROTOCOL)
-
-async def _handle_live(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-    if not _method_is_get(scope):
-        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
-    await _drain_request_body(receive)
-    return json_response(ok=True, ts_ms=int(time.time() * 1000))
-
-async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-    if not _method_is_get(scope):
-        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
-    await _drain_request_body(receive)
-    try:
-        EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
-        with NamedTemporaryFile(dir=EXPORT_ROOT, prefix=".ready-", delete=True) as tmp:
-            tmp.write(b"ok"); tmp.flush()
-        return json_response(ok=True, export_path=str(EXPORT_ROOT))
-    except OSError as exc:
-        logger.warning("Readiness probe failed: %s", exc)
-        return json_response(status=503, ok=False, reason="export_path_unwritable", export_path=str(EXPORT_ROOT))
-
-async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-    if not _method_is_get(scope):
-        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
-    await _drain_request_body(receive)
-    version = os.getenv("APP_VERSION") or "0.0.0+dev"
-    raw_sha = os.getenv("GIT_SHA") or ""
-    git_sha = raw_sha[:7] if raw_sha else "unknown"
-    built_at = os.getenv("BUILD_TIME") or datetime.now(timezone.utc).isoformat()
-    return json_response(version=version, git_sha=git_sha, built_at=built_at)
-
-async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-    if not _method_is_get(scope):
-        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
-    await _drain_request_body(receive)
-    try:
-        body = INDEX_PATH.read_bytes()
-    except OSError:
-        body = _DEFAULT_INDEX_HTML
-    return _html_response(body)
-
-async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-    if not _method_is_get(scope):
-        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
-    await _drain_request_body(receive)
-    resp = _build_static_response(FAVICON_PATH)
-    if resp is None:
-        return Response(status=204, body=b"", headers=((b"content-length", b"0"),))
-    return resp
-
-async def _handle_static(scope: dict, receive: Callable[[], Awaitable[dict]], *, raw_path: str) -> Response:
-    if not _method_is_get(scope):
-        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
-    await _drain_request_body(receive)
-    resolved = _resolve_static_path(raw_path)
-    if resolved is None:
-        return json_response(status=404, error="not_found")
-    resp = _build_static_response(resolved)
-    if resp is None:
-        return json_response(status=404, error="not_found")
-    return resp
-
-# ---------------------------- helpers ----------------------------------------
-
-def _build_static_response(path: Path) -> Optional[Response]:
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return None
-    ctype, enc = mimetypes.guess_type(path.name)
-    if ctype is None:
-        ctype = "application/octet-stream"
-    elif ctype.startswith("text/") and "charset=" not in ctype:
-        ctype = f"{ctype}; charset=utf-8"
-    headers = [
-        (b"content-type", ctype.encode("latin1")),
-        (b"content-length", str(len(data)).encode("ascii")),
-    ]
-    if enc:
-        headers.append((b"content-encoding", enc.encode("latin1")))
-    return Response(status=200, body=data, headers=tuple(headers))
-
-def _resolve_static_path(raw_path: str) -> Optional[Path]:
-    if not raw_path.startswith(STATIC_PREFIX):
-        return None
-    rel = raw_path[len(STATIC_PREFIX):]
-    if not rel:
-        return None
-    target = STATIC_ROOT / rel
-    try:
-        resolved = target.resolve(strict=False)
-    except OSError:
-        return None
-    try:
-        resolved.relative_to(STATIC_ROOT)  # prevent traversal
-    except ValueError:
-        return None
-    return resolved if resolved.is_file() else None
-
-async def _drain_request_body(receive: Callable[[], Awaitable[dict]]) -> None:
-    while True:
-        msg = await receive()
-        if msg.get("type") != "http.request":
-            break
-        if not msg.get("more_body"):
-            break
-
-async def _reject_websocket(receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-    msg = await receive()
-    if msg.get("type") == "websocket.connect":
-        await send({"type": "websocket.close", "code": 1000})
-
-async def _send_response(send: Callable[[dict], Awaitable[None]], resp: Response) -> None:
-    await send({"type": "http.response.start", "status": resp.status, "headers": list(resp.headers)})
-    await send({"type": "http.response.body", "body": resp.body, "more_body": False})
-
-def _method_is_get(scope: dict) -> bool:
-    return scope.get("method", "GET").upper() == "GET"
-
-def _get_adapter() -> ChatV2Adapter:
-    global _adapter
-    if _adapter is None:
-        _adapter = ChatV2Adapter()
-    return _adapter
-
-# ---------------------------- WS Origin policy -------------------------------
-
-async def _reject_origin(
-    scope: dict,
-    origin: Optional[str],
-    receive: Callable[[], Awaitable[dict]],
-    send: Callable[[dict], Awaitable[None]],
-) -> None:
-    msg = await receive()
-    if msg.get("type") != "websocket.connect":
-        return
-    logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
-    payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
-    if origin:
-        payload["origin"] = origin
-    await _send_response(send, json_response(status=403, **payload))
-
-def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
-    for h, v in headers:
-        if h == name:
-            try:
-                return v.decode("latin1").strip()
-            except UnicodeDecodeError:
-                return None
-    return None
-
-def _resolve_origin_policy() -> "_OriginPolicy":
-    raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
-    if raw is not None:
-        entries = tuple(filter(None, (_normalize_origin(x) for x in raw.split(","))))
-        return _OriginPolicy(mode="explicit", values=entries)
-    env = (os.getenv("ASKCHIP_ENV") or "development").strip().lower()
-    if env in {"production", "prod"}:
-        return _OriginPolicy(mode="explicit", values=())
-    return _OriginPolicy(mode="localhost", values=("localhost", "127.0.0.1"))
-
-def _is_origin_allowed(origin: str, policy: "_OriginPolicy") -> bool:
-    if policy.mode == "explicit":
-        normalized = _normalize_origin(origin)
-        if normalized is None or not policy.values:
-            return normalized in policy.values
-        return normalized in policy.values
-    if policy.mode == "localhost":
-        host = _extract_hostname(origin)
-        if host is None:
-            return False
-        return host in policy.values
-    return False
-
-def _normalize_origin(value: str) -> Optional[str]:
-    raw = value.strip()
-    if not raw:
-        return None
-    parsed = urlparse(raw)
-    if parsed.scheme and parsed.netloc:
-        return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
-    lowered = raw.lower()
-    if lowered == "*":
-        return None
-    return lowered
-
-def _extract_hostname(value: str) -> Optional[str]:
-    parsed = urlparse(value)
-    if not parsed.hostname:
-        return None
-    return parsed.hostname.lower()
-
-@dataclass(frozen=True)
-class _OriginPolicy:
-    mode: str
-    values: tuple[str, ...]
-
-
-def _validate_ws_origin(scope: dict) -> tuple[bool, Optional[str]]:
-    origin = _decode_header(scope.get("headers", ()), b"origin")
-    if origin is None:
-        return True, None
-    policy = _resolve_origin_policy()
-    if _is_origin_allowed(origin, policy):
-        return True, None
-    return False, origin
-
-# ---------------------------- HTTP route map ---------------------------------
-
-_HTTP_ROUTES: Dict[str, HttpHandler] = {
-    ROOT_ROUTE: _handle_index,
-    FAVICON_ROUTE: _handle_favicon,
-    HEALTH_ROUTE: _handle_health,
-    LIVE_ROUTE: _handle_live,
-    READY_ROUTE: _handle_ready,
-    INFO_ROUTE: _handle_info,
-}
-
-def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
-    if not path.startswith(_ADMIN_FLOW_PREFIX):
-        return None
-    suffix = path[len(_ADMIN_FLOW_PREFIX):]
-    if not suffix:
-        return None
-    parts = suffix.split("/")
-    if len(parts) != 2:
-        return None
-    sid, action = parts
-    if not sid:
-        return None
-    if action == _TRACE_SEGMENT:
-        base = partial(handle_flow_trace, sid=sid)
-    elif action == _ZIP_SEGMENT:
-        base = partial(handle_flow_zip, sid=sid)
-    else:
-        return None
-    return partial(_maybe_admin_cors, base)
-
-# ---------------------------- Admin CORS helpers -----------------------------
-
-async def _maybe_admin_cors(
-    handler: HttpHandler,
-    scope: dict,
-    receive: Callable[[], Awaitable[dict]],
-) -> Response:
-    resp = await handler(scope, receive)
-    allow = _resolve_admin_cors_origin(scope) if _admin_cors_enabled() else None
-    if not allow:
-        return resp
-    enc = _encode_header_value(allow)
-    if not enc:
-        return resp
-    headers = tuple(resp.headers) + (
-        (b"access-control-allow-origin", enc),
-        (b"access-control-allow-methods", b"GET"),
-    )
-    return Response(status=resp.status, body=resp.body, headers=headers)
-
-def _admin_cors_enabled() -> bool:
-    env = (os.getenv("ASKCHIP_ENV") or "").strip().lower()
-    return env in {"dev", "staging"}
-
-def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
-    allowed = _parse_admin_cors()
-    if not allowed:
-        return None
-    if "*" in allowed:
-        return "*"
-    origin = _decode_header(scope.get("headers", ()), b"origin")
-    if not origin:
-        return None
-    norm = origin.strip()
-    return norm if norm in allowed else None
-
-def _parse_admin_cors() -> tuple[str, ...]:
-    raw = os.getenv("ASKCHIP_ADMIN_CORS_ORIGINS")
-    if not raw:
-        return ()
-    return tuple(s.strip() for s in raw.split(",") if s.strip())
-
-def _encode_header_value(value: str) -> Optional[bytes]:
-    try:
-        return value.encode("latin1")
-    except UnicodeEncodeError:
-        return None
-
-# ---------------------------- Export for Gunicorn -----------------------------
-
-# Start command should be:
-# gunicorn -k uvicorn.workers.UvicornWorker -w 2 -t 120 -b 0.0.0.0:$PORT app.asgi_gateway:asgi
-asgi = app
-__all__ = ["asgi", "app"]
+    <script src="/static/js/app.js" defer></script>
+  </body>
+</html>
