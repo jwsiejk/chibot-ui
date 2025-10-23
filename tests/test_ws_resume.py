@@ -148,8 +148,18 @@ class TestWebSocketResume(unittest.TestCase):
 
             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "info")
             self.assertIn("resume_token", frame)
-            self.assertEqual(frame.get("resume_ttl_ms"), 10_000)
-            self.assertTrue(frame["resume_token"])
+            resume_token = frame["resume_token"]
+            self.assertTrue(resume_token)
+
+            ttl_ms = frame.get("resume_ttl_ms")
+            self.assertIsInstance(ttl_ms, int)
+            self.assertGreater(ttl_ms, 0)
+            self.assertLessEqual(ttl_ms, 10_000)
+
+            meta = frame.get("meta") or {}
+            self.assertEqual(meta.get("sid"), harness.sid)
+            self.assertEqual(meta.get("resume_token"), resume_token)
+            self.assertEqual(meta.get("resume_ttl_ms"), ttl_ms)
         finally:
             await harness.close()
 

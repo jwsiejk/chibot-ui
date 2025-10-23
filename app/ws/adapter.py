@@ -990,9 +990,18 @@ class ChatV2Adapter:
             )
         if frame_type == "info":
             self._ensure_resume_token(ctx)
+            meta = {}
+            source_meta = normalized.get("meta")
+            if isinstance(source_meta, dict):
+                meta = dict(source_meta)
+            meta["sid"] = ctx.sid
             if ctx.resume_token:
                 normalized["resume_token"] = ctx.resume_token
-                normalized["resume_ttl_ms"] = _RESUME_TTL_MS
+                ttl_ms = max(0, ctx.resume_expiry_ms - self._now_ms()) if ctx.resume_expiry_ms else _RESUME_TTL_MS
+                normalized["resume_ttl_ms"] = ttl_ms
+                meta["resume_token"] = ctx.resume_token
+                meta["resume_ttl_ms"] = ttl_ms
+            normalized["meta"] = meta
         if frame_type in _RESUME_MARKER_TYPES:
             self._record_resume_marker(ctx, normalized)
         return normalized

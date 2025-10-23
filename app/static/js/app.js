@@ -165,7 +165,11 @@
       }
     }
     syncAdminItem();
-    function closeMenu(){ brandMenu.classList.remove('open'); brandMenu.setAttribute('aria-hidden','true'); brandBtn.setAttribute('aria-expanded','false'); }
+    function closeMenu() {
+      brandMenu.classList.remove('open');
+      brandMenu.setAttribute('aria-hidden', 'true');
+      brandBtn.setAttribute('aria-expanded', 'false');
+    }
     brandBtn.addEventListener('click', (e) => {
       const open = brandMenu.classList.toggle('open');
       brandBtn.setAttribute('aria-expanded', String(open));

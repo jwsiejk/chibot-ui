@@ -518,12 +518,17 @@ class EngineV2:
 
     def _emit_info_frame(self, sid: str) -> None:
         voice_id, locale = self._voice_profile()
+        audio_descriptor = dict(_PCM_DESCRIPTOR)
         frame = {
             "type": "info",
-            "audio": dict(_PCM_DESCRIPTOR),
+            "audio": audio_descriptor,
             "slo": json.loads(json.dumps(_INFO_SLO)),
             "voice_id": voice_id,
             "locale": locale,
+            "meta": {
+                "sid": sid,
+                "audio": audio_descriptor,
+            },
         }
         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
         meta = {
