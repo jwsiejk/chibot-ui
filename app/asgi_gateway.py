@@ -15,6 +15,8 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
 from app.admin.flow_api import handle_flow_trace, handle_flow_zip
+from app.telemetry.exporter import FileExporter
+from app.voice_v2.engine import EngineV2
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 
 logger = logging.getLogger(__name__)
@@ -329,7 +331,9 @@ def _get_adapter() -> ChatV2Adapter:
     """Return a lazily instantiated ChatV2Adapter singleton."""
     global _adapter
     if _adapter is None:
-        _adapter = ChatV2Adapter()
+        exporter = FileExporter(EXPORT_ROOT)
+        engine = EngineV2(exporter=exporter)
+        _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
     return _adapter
 
 

@@ -1,265 +1,104 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 73e2bdbd4d3e715082aac7d3f9f6bd30d6e35751..2a66143af23b1d38d613c80e06db2e153b317f6a 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -143,51 +143,55 @@
-     // --- Config & mock current user for gating ---
-     window.ADMIN_EMAILS = (window.ADMIN_EMAILS || ["admin@askchip.ai"]).map(e => e.toLowerCase());
-     const urlParams = new URLSearchParams(window.location.search);
-     const currentUserEmail = (urlParams.get("email") || "user@example.com").toLowerCase();
-     const isAdmin = window.ADMIN_EMAILS.includes(currentUserEmail);
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index 4ebb5f9aef4de8edcde44bc3bce7ddf9d0b87dec..7f3b2909d7aa40781cff7870ebf8b78cbd023087 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -1,42 +1,44 @@
+ """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
+ from __future__ import annotations
  
-     // --- Top-right brand dropdown ---
-     const brandBtn = document.getElementById('brandBtn');
-     const brandMenu = document.getElementById('brandMenu');
-     const adminItem = document.getElementById('adminItem');
-     brandMenu.setAttribute('aria-hidden', 'true');
-     function syncAdminItem() {
-       if (isAdmin) {
-         adminItem.removeAttribute('aria-disabled');
-         adminItem.disabled = false;
-         adminItem.tabIndex = 0;
-         adminItem.title = "Open Admin UI";
-       } else {
-         adminItem.setAttribute('aria-disabled', 'true');
-         adminItem.disabled = true;
-         adminItem.tabIndex = -1;
-         adminItem.title = "Admins only";
-       }
-     }
-     syncAdminItem();
--    function closeMenu(){ brandMenu.classList.remove('open'); brandMenu.setAttribute('aria-hidden','true'); brandBtn.setAttribute('aria-expanded','false'); }
-+    function closeMenu() {
-+      brandMenu.classList.remove('open');
-+      brandMenu.setAttribute('aria-hidden', 'true');
-+      brandBtn.setAttribute('aria-expanded', 'false');
-+    }
-     brandBtn.addEventListener('click', (e) => {
-       const open = brandMenu.classList.toggle('open');
-       brandBtn.setAttribute('aria-expanded', String(open));
-       brandMenu.setAttribute('aria-hidden', String(!open));
-       if (!open) return;
-       const firstItem = brandMenu.querySelector('.menu-item:not([aria-disabled="true"])');
-       if (firstItem) firstItem.focus();
-     });
-     document.addEventListener('click', (e) => {
-       if (!brandMenu.contains(e.target) && !brandBtn.contains(e.target)) closeMenu();
-     });
-     brandMenu.addEventListener('keydown', (event) => {
-       if (event.key === 'Escape') {
-         event.stopPropagation();
-         closeMenu();
-         brandBtn.focus();
-       }
-     });
-     adminItem.addEventListener('click', (event) => {
-       if (!isAdmin) {
-         event.preventDefault();
-         return;
-       }
-       alert("Open Admin UI (placeholder).");
-       closeMenu();
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 876e157476b4c894374f335727f208b8094f1685..7d9026288e6b788279270682a02fb53a08944c03 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -496,56 +496,61 @@ class EngineV2:
+ import json
+ import logging
+ import mimetypes
+ import os
+ import time
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from functools import partial
+ from pathlib import Path
+ from tempfile import NamedTemporaryFile
+ from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
+ from urllib.parse import urlparse
  
-     def _handle_outbound_chat_frame(self, event: Dict[str, Any]) -> None:
-         if event.get("type") != EVT_WS_JSON_SEND:
-             return
-         sid = event.get("sid")
-         if not isinstance(sid, str) or not sid:
-             return
-         frame: Mapping[str, Any] | None = None
-         raw_frame = event.get("frame")
-         if isinstance(raw_frame, Mapping):
-             frame = raw_frame
-         else:
-             payload = event.get("payload")
-             if isinstance(payload, Mapping):
-                 candidate = payload.get("frame")
-                 if isinstance(candidate, Mapping):
-                     frame = candidate
-         if frame is None:
-             return
-         if frame.get("type") != "chat.message":
-             return
-         self._conversation_buffer.append(sid, frame)
+ from app.admin.flow_api import handle_flow_trace, handle_flow_zip
++from app.telemetry.exporter import FileExporter
++from app.voice_v2.engine import EngineV2
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
  
-     def _emit_info_frame(self, sid: str) -> None:
-         voice_id, locale = self._voice_profile()
-+        audio_descriptor = dict(_PCM_DESCRIPTOR)
-         frame = {
-             "type": "info",
--            "audio": dict(_PCM_DESCRIPTOR),
-+            "audio": audio_descriptor,
-             "slo": json.loads(json.dumps(_INFO_SLO)),
-             "voice_id": voice_id,
-             "locale": locale,
-+            "meta": {
-+                "sid": sid,
-+                "audio": audio_descriptor,
-+            },
+ logger = logging.getLogger(__name__)
+ 
+ 
+ @dataclass(frozen=True)
+ class Response:
+     """Immutable container describing a serialized HTTP response."""
+ 
+     status: int
+     body: bytes
+     headers: tuple[tuple[bytes, bytes], ...]
+ 
+ 
+ def json_response(*, status: int = 200, **payload: Any) -> Response:
+     """Serialize a payload to JSON using a compact representation."""
+ 
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
+     )
+     return Response(status=status, body=body, headers=headers)
+ 
+ 
+@@ -307,51 +309,53 @@ async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: R
+         {
+             "type": "websocket.http.response.start",
+             "status": response.status,
+             "headers": headers,
          }
-         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         meta = {
-             "ws": {
-                 "dir": "out",
-                 "size": len(serialized.encode("utf-8")),
-                 "preview": serialized,
-             }
+     )
+     await send(
+         {
+             "type": "websocket.http.response.body",
+             "body": response.body,
+             "more_body": False,
          }
-         payload = {"meta": meta, "frame": frame}
-         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-         self._publish(event)
+     )
  
-     def _publish_chat_history(self, sid: str) -> None:
-         messages = self._conversation_buffer.messages(sid)
-         frame = {"type": "chat.history", "messages": messages, "next_cursor": None}
-         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         meta = {
-             "ws": {
-                 "dir": "out",
-                 "size": len(serialized.encode("utf-8")),
-                 "preview": serialized,
-             }
-         }
-         payload = {"meta": meta, "frame": frame}
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 3e9a57967782e3c1a5e7305a3053b1e3ed0933ef..91c834dd2358856d878e9674b18396142dd2feb0 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -968,53 +968,62 @@ class ChatV2Adapter:
-             if isinstance(meta, dict):
-                 ws_meta = meta.get("ws")
-                 if isinstance(ws_meta, dict):
-                     frame = ws_meta.get("frame")
-                     if frame is None:
-                         frame = ws_meta.get("preview")
-                     payload = self._coerce_payload(frame)
  
-         if payload is None:
-             return None
+ def _method_is_get(scope: dict) -> bool:
+     """Return True when the incoming HTTP scope uses the GET method."""
  
-         frame_type = payload.get("type") if isinstance(payload, dict) else None
-         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
-             return None
-         normalized = dict(payload)
-         if frame_type == "policy.interaction":
-             normalized = self._sanitize_policy_interaction(normalized)
-             last_policy = ctx.last_policy_interaction
-             if last_policy is not None and last_policy == normalized:
-                 return None
-             ctx.last_policy_interaction = json.loads(
-                 json.dumps(normalized, separators=(",", ":"))
-             )
-         if frame_type == "info":
-             self._ensure_resume_token(ctx)
-+            meta = {}
-+            source_meta = normalized.get("meta")
-+            if isinstance(source_meta, dict):
-+                meta = dict(source_meta)
-+            meta["sid"] = ctx.sid
-             if ctx.resume_token:
-                 normalized["resume_token"] = ctx.resume_token
--                normalized["resume_ttl_ms"] = _RESUME_TTL_MS
-+                ttl_ms = max(0, ctx.resume_expiry_ms - self._now_ms()) if ctx.resume_expiry_ms else _RESUME_TTL_MS
-+                normalized["resume_ttl_ms"] = ttl_ms
-+                meta["resume_token"] = ctx.resume_token
-+                meta["resume_ttl_ms"] = ttl_ms
-+            normalized["meta"] = meta
-         if frame_type in _RESUME_MARKER_TYPES:
-             self._record_resume_marker(ctx, normalized)
-         return normalized
+     return scope.get("method", "GET").upper() == "GET"
  
-     @staticmethod
-     def _sanitize_policy_interaction(frame: Dict[str, Any]) -> Dict[str, Any]:
-         sanitized = {key: value for key, value in frame.items() if key != "policy"}
-         if "policy" in frame:
-             policy = frame.get("policy")
-             if isinstance(policy, dict):
-                 sanitized_policy = {
-                     key: policy[key]
-                     for key in _POLICY_STABLE_KEYS
-                     if key in policy
-                 }
-             else:
-                 sanitized_policy = {}
-             sanitized["policy"] = sanitized_policy
-         return sanitized
  
-     @staticmethod
-     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
-         if isinstance(raw, dict):
-             return raw
-         if isinstance(raw, str):
-diff --git a/tests/test_ws_resume.py b/tests/test_ws_resume.py
-index 962010689639748c566ca85d14499262e62872d9..1eba722ab8578ef70fcb7b97906f40daea1401d8 100644
---- a/tests/test_ws_resume.py
-+++ b/tests/test_ws_resume.py
-@@ -126,52 +126,62 @@ class TestWebSocketResume(unittest.TestCase):
-         bus.reset()
+ def _get_adapter() -> ChatV2Adapter:
+     """Return a lazily instantiated ChatV2Adapter singleton."""
+     global _adapter
+     if _adapter is None:
+-        _adapter = ChatV2Adapter()
++        exporter = FileExporter(EXPORT_ROOT)
++        engine = EngineV2(exporter=exporter)
++        _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
+     return _adapter
  
-     def tearDown(self) -> None:
-         bus.reset()
  
-     def test_info_frame_includes_resume_token(self) -> None:
-         asyncio.run(self._test_info_frame_includes_resume_token())
+ async def _reject_origin(
+     scope: dict,
+     origin: Optional[str],
+     receive: Callable[[], Awaitable[dict]],
+     send: Callable[[dict], Awaitable[None]],
+ ) -> None:
+     """Reject a WebSocket handshake because the Origin is not allowed."""
  
-     def test_resume_replays_markers_and_sid(self) -> None:
-         asyncio.run(self._test_resume_replays_markers_and_sid())
+     message = await receive()
+     if message.get("type") != "websocket.connect":
+         return
  
-     def test_expired_token_rejected(self) -> None:
-         asyncio.run(self._test_expired_token_rejected())
+     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
+     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
+     if origin:
+         payload["origin"] = origin
+     await _send_ws_response(send, json_response(status=403, **payload))
  
-     async def _test_info_frame_includes_resume_token(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = ResumeHarness(adapter, engine)
-         await harness.start()
-         try:
-             payload = {"type": "info", "session": "abc"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
  
-             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "info")
-             self.assertIn("resume_token", frame)
--            self.assertEqual(frame.get("resume_ttl_ms"), 10_000)
--            self.assertTrue(frame["resume_token"])
-+            resume_token = frame["resume_token"]
-+            self.assertTrue(resume_token)
-+
-+            ttl_ms = frame.get("resume_ttl_ms")
-+            self.assertIsInstance(ttl_ms, int)
-+            self.assertGreater(ttl_ms, 0)
-+            self.assertLessEqual(ttl_ms, 10_000)
-+
-+            meta = frame.get("meta") or {}
-+            self.assertEqual(meta.get("sid"), harness.sid)
-+            self.assertEqual(meta.get("resume_token"), resume_token)
-+            self.assertEqual(meta.get("resume_ttl_ms"), ttl_ms)
-         finally:
-             await harness.close()
- 
-     async def _test_resume_replays_markers_and_sid(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = ResumeHarness(adapter, engine)
-         await harness.start()
-         try:
-             info_frame = {"type": "info"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": info_frame})
-             info = await harness.wait_for_outbound(lambda data: data.get("type") == "info")
-             resume_token = info["resume_token"]
-             original_sid = harness.sid
- 
-             markers = [
-                 {"type": "tts.start", "utt_id": "utt-1"},
-                 {"type": "tts.end", "utt_id": "utt-1"},
-                 {"type": "asr.final", "req_id": "req-1", "text": "hello"},
-             ]
-             for marker in markers:
-                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": original_sid, "payload": marker})
-                 await harness.wait_for_outbound(lambda data, m=marker: data == m)
-         finally:
-             await harness.close()
+ def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
+     for header, value in headers:
+         if header == name:
