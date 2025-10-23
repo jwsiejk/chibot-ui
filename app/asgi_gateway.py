@@ -539,22 +539,22 @@ if Starlette is not None:
     STATIC_DIR = os.path.join(BASE_DIR, "static")
 
     if os.path.isdir(STATIC_DIR):
-        asgi.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+        app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-    @asgi.route("/", methods=["GET"])
+    @app.route("/", methods=["GET"])
     async def index(request):
         idx = os.path.join(STATIC_DIR, "index.html")
         if os.path.exists(idx):
             return FileResponse(idx, media_type="text/html")
         return HTMLResponse("<!doctype html><title>AskChip</title><div id='app'></div>")
 
-    @asgi.route("/favicon.ico", methods=["GET"])
+    @app.route("/favicon.ico", methods=["GET"])
     async def favicon(request):
         ico = os.path.join(STATIC_DIR, "favicon.ico")
         if os.path.exists(ico):
             return FileResponse(ico)
         return StarletteResponse(status_code=204)
 
-    asgi.mount("/", app)
+    asgi = app
 
-    __all__.append("asgi")
+    __all__ = ["asgi"]
