@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import os
 import time
 from dataclasses import dataclass
@@ -13,9 +14,13 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
-from starlette.applications import Starlette
-from starlette.responses import FileResponse, HTMLResponse, Response as StarletteResponse
-from starlette.staticfiles import StaticFiles
+try:  # pragma: no cover - optional Starlette integration
+    from starlette.applications import Starlette
+    from starlette.responses import FileResponse, HTMLResponse, Response as StarletteResponse
+    from starlette.staticfiles import StaticFiles
+except ImportError:  # pragma: no cover - Starlette not installed in all environments
+    Starlette = None  # type: ignore[assignment]
+    FileResponse = HTMLResponse = StarletteResponse = StaticFiles = None  # type: ignore[assignment]
 
 from app.admin.flow_api import handle_flow_trace, handle_flow_zip
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
@@ -48,10 +53,20 @@ HEALTH_ROUTE = "/api/v1/health"
 LIVE_ROUTE = "/api/v1/live"
 READY_ROUTE = "/api/v1/ready"
 INFO_ROUTE = "/api/v1/info"
+ROOT_ROUTE = "/"
+FAVICON_ROUTE = "/favicon.ico"
+STATIC_ROUTE_PREFIX = "/static/"
 EXPORT_ROOT = Path("exports")
+STATIC_ROOT = Path(__file__).resolve().parent / "static"
+INDEX_PATH = STATIC_ROOT / "index.html"
+FAVICON_PATH = STATIC_ROOT / "favicon.ico"
 _ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
 _TRACE_SEGMENT = "trace"
 _ZIP_SEGMENT = "zip"
+
+_DEFAULT_INDEX_HTML = (
+    "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
+)
 
 
 HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
@@ -77,6 +92,8 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
 
     if scope_type == "http":
         handler = _HTTP_ROUTES.get(path)
+        if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
+            handler = partial(_handle_static, raw_path=path)
         if handler is None:
             handler = _resolve_admin_route(path)
         if handler is None:
@@ -150,6 +167,117 @@ async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> R
 
     payload = {"version": version, "git_sha": git_sha, "built_at": built_at}
     return json_response(**payload)
+
+
+async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+    """Serve the primary HTML shell for the single-page application."""
+
+    if not _method_is_get(scope):
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+    body = _load_index_html()
+    return _html_response(body)
+
+
+async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+    """Serve the site favicon when available."""
+
+    if not _method_is_get(scope):
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+    response = _build_static_response(FAVICON_PATH)
+    if response is None:
+        headers = ((b"content-length", b"0"),)
+        return Response(status=204, body=b"", headers=headers)
+    return response
+
+
+async def _handle_static(
+    scope: dict,
+    receive: Callable[[], Awaitable[dict]],
+    *,
+    raw_path: str,
+) -> Response:
+    """Serve files from the bundled static asset directory."""
+
+    if not _method_is_get(scope):
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+    resolved = _resolve_static_path(raw_path)
+    if resolved is None:
+        return json_response(status=404, error="not_found")
+    response = _build_static_response(resolved)
+    if response is None:
+        return json_response(status=404, error="not_found")
+    return response
+
+
+def _load_index_html() -> bytes:
+    try:
+        return INDEX_PATH.read_bytes()
+    except OSError:
+        return _DEFAULT_INDEX_HTML
+
+
+def _html_response(body: bytes) -> Response:
+    headers = (
+        (b"content-type", b"text/html; charset=utf-8"),
+        (b"content-length", str(len(body)).encode("ascii")),
+    )
+    return Response(status=200, body=body, headers=headers)
+
+
+def _build_static_response(path: Path) -> Optional[Response]:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+
+    content_type, encoding = mimetypes.guess_type(path.name)
+    if content_type is None:
+        content_type = "application/octet-stream"
+    elif content_type.startswith("text/") and "charset=" not in content_type:
+        content_type = f"{content_type}; charset=utf-8"
+
+    headers: list[tuple[bytes, bytes]] = [
+        (b"content-type", content_type.encode("latin1")),
+        (b"content-length", str(len(data)).encode("ascii")),
+    ]
+    if encoding:
+        headers.append((b"content-encoding", encoding.encode("latin1")))
+
+    return Response(status=200, body=data, headers=tuple(headers))
+
+
+def _resolve_static_path(raw_path: str) -> Optional[Path]:
+    if not raw_path.startswith(STATIC_ROUTE_PREFIX):
+        return None
+
+    relative = raw_path[len(STATIC_ROUTE_PREFIX) :]
+    if not relative:
+        return None
+
+    target = STATIC_ROOT / relative
+    try:
+        resolved = target.resolve(strict=False)
+    except OSError:
+        return None
+
+    try:
+        resolved.relative_to(STATIC_ROOT)
+    except ValueError:
+        return None
+
+    if not resolved.is_file():
+        return None
+
+    return resolved
 
 
 async def _drain_request_body(receive: Callable[[], Awaitable[dict]]) -> None:
@@ -297,6 +425,8 @@ def _validate_ws_origin(scope: dict) -> tuple[bool, Optional[str]]:
 
 
 _HTTP_ROUTES: Dict[str, HttpHandler] = {
+    ROOT_ROUTE: _handle_index,
+    FAVICON_ROUTE: _handle_favicon,
     HEALTH_ROUTE: _handle_health,
     LIVE_ROUTE: _handle_live,
     READY_ROUTE: _handle_ready,
@@ -402,32 +532,29 @@ def _encode_header_value(value: str) -> Optional[bytes]:
         return None
 
 
-asgi = Starlette()
+if Starlette is not None:
+    asgi = Starlette()
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(os.path.dirname(BASE_DIR), "static")
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    STATIC_DIR = os.path.join(BASE_DIR, "static")
 
-if os.path.isdir(STATIC_DIR):
-    asgi.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    if os.path.isdir(STATIC_DIR):
+        asgi.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    @asgi.route("/", methods=["GET"])
+    async def index(request):
+        idx = os.path.join(STATIC_DIR, "index.html")
+        if os.path.exists(idx):
+            return FileResponse(idx, media_type="text/html")
+        return HTMLResponse("<!doctype html><title>AskChip</title><div id='app'></div>")
 
-@asgi.route("/", methods=["GET"])
-async def index(request):
-    idx = os.path.join(STATIC_DIR, "index.html")
-    if os.path.exists(idx):
-        return FileResponse(idx, media_type="text/html")
-    return HTMLResponse("<!doctype html><title>AskChip</title><div id='app'></div>")
+    @asgi.route("/favicon.ico", methods=["GET"])
+    async def favicon(request):
+        ico = os.path.join(STATIC_DIR, "favicon.ico")
+        if os.path.exists(ico):
+            return FileResponse(ico)
+        return StarletteResponse(status_code=204)
 
+    asgi.mount("/", app)
 
-@asgi.route("/favicon.ico", methods=["GET"])
-async def favicon(request):
-    ico = os.path.join(STATIC_DIR, "favicon.ico")
-    if os.path.exists(ico):
-        return FileResponse(ico)
-    return StarletteResponse(status_code=204)
-
-
-asgi.mount("/", app)
-
-
-__all__.append("asgi")
+    __all__.append("asgi")

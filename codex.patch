@@ -1,13 +1,14 @@
 diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 2cfb41f088a36dea0baf5c152c6117b9cbe9fe99..0d6f0a0cf5494894798ad3f8484d6a03279963e3 100644
+index 0d6f0a0cf5494894798ad3f8484d6a03279963e3..49ab35990d6070c4c3bfe88c7739e30ca2a4058c 100644
 --- a/app/asgi_gateway.py
 +++ b/app/asgi_gateway.py
-@@ -1,40 +1,44 @@
+@@ -1,104 +1,121 @@
  """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
  from __future__ import annotations
  
  import json
  import logging
++import mimetypes
  import os
  import time
  from dataclasses import dataclass
@@ -18,10 +19,17 @@ index 2cfb41f088a36dea0baf5c152c6117b9cbe9fe99..0d6f0a0cf5494894798ad3f8484d6a03
  from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
  from urllib.parse import urlparse
  
-+from starlette.applications import Starlette
-+from starlette.responses import FileResponse, HTMLResponse, Response as StarletteResponse
-+from starlette.staticfiles import StaticFiles
-+
+-from starlette.applications import Starlette
+-from starlette.responses import FileResponse, HTMLResponse, Response as StarletteResponse
+-from starlette.staticfiles import StaticFiles
++try:  # pragma: no cover - optional Starlette integration
++    from starlette.applications import Starlette
++    from starlette.responses import FileResponse, HTMLResponse, Response as StarletteResponse
++    from starlette.staticfiles import StaticFiles
++except ImportError:  # pragma: no cover - Starlette not installed in all environments
++    Starlette = None  # type: ignore[assignment]
++    FileResponse = HTMLResponse = StarletteResponse = StaticFiles = None  # type: ignore[assignment]
+ 
  from app.admin.flow_api import handle_flow_trace, handle_flow_zip
  from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
  
@@ -47,9 +55,294 @@ index 2cfb41f088a36dea0baf5c152c6117b9cbe9fe99..0d6f0a0cf5494894798ad3f8484d6a03
      )
      return Response(status=status, body=body, headers=headers)
  
-@@ -374,25 +378,56 @@ def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
-     normalized = origin.strip()
-     for entry in allowed:
+ 
+ WS_ROUTE = "/ws/v2/chat"
+ HEALTH_ROUTE = "/api/v1/health"
+ LIVE_ROUTE = "/api/v1/live"
+ READY_ROUTE = "/api/v1/ready"
+ INFO_ROUTE = "/api/v1/info"
++ROOT_ROUTE = "/"
++FAVICON_ROUTE = "/favicon.ico"
++STATIC_ROUTE_PREFIX = "/static/"
+ EXPORT_ROOT = Path("exports")
++STATIC_ROOT = Path(__file__).resolve().parent / "static"
++INDEX_PATH = STATIC_ROOT / "index.html"
++FAVICON_PATH = STATIC_ROOT / "favicon.ico"
+ _ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
+ _TRACE_SEGMENT = "trace"
+ _ZIP_SEGMENT = "zip"
+ 
++_DEFAULT_INDEX_HTML = (
++    "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
++)
++
+ 
+ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
+ 
+ _adapter: Optional[ChatV2Adapter] = None
+ 
+ 
+ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
+     scope_type = scope.get("type")
+     path = (scope.get("root_path") or "") + scope.get("path", "")
+ 
+     if scope_type == "websocket":
+         if path == WS_ROUTE:
+             allowed, blocked_origin = _validate_ws_origin(scope)
+             if not allowed:
+                 await _reject_origin(scope, blocked_origin, receive, send)
+                 return
+             await _get_adapter()(scope, receive, send)
+         else:
+             await _reject_websocket(receive, send)
+         return
+ 
+     if scope_type == "http":
+         handler = _HTTP_ROUTES.get(path)
++        if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
++            handler = partial(_handle_static, raw_path=path)
+         if handler is None:
+             handler = _resolve_admin_route(path)
+         if handler is None:
+             await _drain_request_body(receive)
+             await _send_response(send, json_response(status=404, error="not_found"))
+         else:
+             response = await handler(scope, receive)
+             await _send_response(send, response)
+         return
+ 
+     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
+ 
+ 
+ async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Return a static JSON document for health checks."""
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+         return json_response(status=405, error="method_not_allowed")
+ 
+     await _drain_request_body(receive)
+     return json_response(ok=True, engine="v2", ws_subprotocol=CHAT_V2_SUBPROTOCOL)
+ 
+ 
+ async def _handle_live(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Expose a lightweight pulse indicating the event loop is responsive."""
+@@ -130,50 +147,161 @@ async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) ->
+         return json_response(
+             status=503,
+             ok=False,
+             reason="export_path_unwritable",
+             export_path=str(EXPORT_ROOT),
+         )
+ 
+ 
+ async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Return build metadata derived from environment configuration."""
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+         return json_response(status=405, error="method_not_allowed")
+ 
+     await _drain_request_body(receive)
+ 
+     version = os.getenv("APP_VERSION") or "0.0.0+dev"
+     raw_sha = os.getenv("GIT_SHA") or ""
+     git_sha = raw_sha[:7] if raw_sha else "unknown"
+     built_at = os.getenv("BUILD_TIME") or datetime.now(timezone.utc).isoformat()
+ 
+     payload = {"version": version, "git_sha": git_sha, "built_at": built_at}
+     return json_response(**payload)
+ 
+ 
++async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
++    """Serve the primary HTML shell for the single-page application."""
++
++    if not _method_is_get(scope):
++        await _drain_request_body(receive)
++        return json_response(status=405, error="method_not_allowed")
++
++    await _drain_request_body(receive)
++    body = _load_index_html()
++    return _html_response(body)
++
++
++async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
++    """Serve the site favicon when available."""
++
++    if not _method_is_get(scope):
++        await _drain_request_body(receive)
++        return json_response(status=405, error="method_not_allowed")
++
++    await _drain_request_body(receive)
++    response = _build_static_response(FAVICON_PATH)
++    if response is None:
++        headers = ((b"content-length", b"0"),)
++        return Response(status=204, body=b"", headers=headers)
++    return response
++
++
++async def _handle_static(
++    scope: dict,
++    receive: Callable[[], Awaitable[dict]],
++    *,
++    raw_path: str,
++) -> Response:
++    """Serve files from the bundled static asset directory."""
++
++    if not _method_is_get(scope):
++        await _drain_request_body(receive)
++        return json_response(status=405, error="method_not_allowed")
++
++    await _drain_request_body(receive)
++    resolved = _resolve_static_path(raw_path)
++    if resolved is None:
++        return json_response(status=404, error="not_found")
++    response = _build_static_response(resolved)
++    if response is None:
++        return json_response(status=404, error="not_found")
++    return response
++
++
++def _load_index_html() -> bytes:
++    try:
++        return INDEX_PATH.read_bytes()
++    except OSError:
++        return _DEFAULT_INDEX_HTML
++
++
++def _html_response(body: bytes) -> Response:
++    headers = (
++        (b"content-type", b"text/html; charset=utf-8"),
++        (b"content-length", str(len(body)).encode("ascii")),
++    )
++    return Response(status=200, body=body, headers=headers)
++
++
++def _build_static_response(path: Path) -> Optional[Response]:
++    try:
++        data = path.read_bytes()
++    except OSError:
++        return None
++
++    content_type, encoding = mimetypes.guess_type(path.name)
++    if content_type is None:
++        content_type = "application/octet-stream"
++    elif content_type.startswith("text/") and "charset=" not in content_type:
++        content_type = f"{content_type}; charset=utf-8"
++
++    headers: list[tuple[bytes, bytes]] = [
++        (b"content-type", content_type.encode("latin1")),
++        (b"content-length", str(len(data)).encode("ascii")),
++    ]
++    if encoding:
++        headers.append((b"content-encoding", encoding.encode("latin1")))
++
++    return Response(status=200, body=data, headers=tuple(headers))
++
++
++def _resolve_static_path(raw_path: str) -> Optional[Path]:
++    if not raw_path.startswith(STATIC_ROUTE_PREFIX):
++        return None
++
++    relative = raw_path[len(STATIC_ROUTE_PREFIX) :]
++    if not relative:
++        return None
++
++    target = STATIC_ROOT / relative
++    try:
++        resolved = target.resolve(strict=False)
++    except OSError:
++        return None
++
++    try:
++        resolved.relative_to(STATIC_ROOT)
++    except ValueError:
++        return None
++
++    if not resolved.is_file():
++        return None
++
++    return resolved
++
++
+ async def _drain_request_body(receive: Callable[[], Awaitable[dict]]) -> None:
+     """Consume and discard the HTTP request body if present."""
+     while True:
+         message = await receive()
+         if message.get("type") != "http.request":
+             break
+         if not message.get("more_body"):
+             break
+ 
+ 
+ async def _reject_websocket(receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+     """Politely refuse WebSocket connections on unsupported routes."""
+     message = await receive()
+     if message.get("type") == "websocket.connect":
+         await send({"type": "websocket.close", "code": 1000})
+ 
+ 
+ async def _send_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
+     """Emit a prepared HTTP response through the ASGI channel."""
+ 
+     headers = list(response.headers)
+     await send({"type": "http.response.start", "status": response.status, "headers": headers})
+     await send({"type": "http.response.body", "body": response.body, "more_body": False})
+ 
+ 
+@@ -275,50 +403,52 @@ def _extract_hostname(value: str) -> Optional[str]:
+         return None
+     return parsed.hostname.lower()
+ 
+ 
+ @dataclass(frozen=True)
+ class _OriginPolicy:
+     mode: str
+     values: tuple[str, ...]
+ 
+ 
+ def _validate_ws_origin(scope: dict) -> tuple[bool, Optional[str]]:
+     """Validate the Origin header for incoming WebSocket handshakes."""
+ 
+     origin = _decode_header(scope.get("headers", ()), b"origin")
+     if origin is None:
+         return True, None
+ 
+     policy = _resolve_origin_policy()
+     if _is_origin_allowed(origin, policy):
+         return True, None
+ 
+     return False, origin
+ 
+ 
+ _HTTP_ROUTES: Dict[str, HttpHandler] = {
++    ROOT_ROUTE: _handle_index,
++    FAVICON_ROUTE: _handle_favicon,
+     HEALTH_ROUTE: _handle_health,
+     LIVE_ROUTE: _handle_live,
+     READY_ROUTE: _handle_ready,
+     INFO_ROUTE: _handle_info,
+ }
+ 
+ 
+ def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
+     if not path.startswith(_ADMIN_FLOW_PREFIX):
+         return None
+ 
+     suffix = path[len(_ADMIN_FLOW_PREFIX) :]
+     if not suffix:
+         return None
+ 
+     segments = suffix.split("/")
+     if len(segments) != 2:
+         return None
+ 
+     sid, action = segments
+     if not sid:
+         return None
+ 
+     handler: Optional[HttpHandler]
+     if action == _TRACE_SEGMENT:
+@@ -380,54 +510,51 @@ def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
          if normalized == entry:
              return normalized
      return None
@@ -73,50 +366,142 @@ index 2cfb41f088a36dea0baf5c152c6117b9cbe9fe99..0d6f0a0cf5494894798ad3f8484d6a03
          return value.encode("latin1")
      except UnicodeEncodeError:  # pragma: no cover - defensive
          return None
-+
-+
-+asgi = Starlette()
-+
-+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-+STATIC_DIR = os.path.join(os.path.dirname(BASE_DIR), "static")
-+
-+if os.path.isdir(STATIC_DIR):
-+    asgi.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-+
-+
-+@asgi.route("/", methods=["GET"])
-+async def index(request):
-+    idx = os.path.join(STATIC_DIR, "index.html")
-+    if os.path.exists(idx):
-+        return FileResponse(idx, media_type="text/html")
-+    return HTMLResponse("<!doctype html><title>AskChip</title><div id='app'></div>")
-+
-+
-+@asgi.route("/favicon.ico", methods=["GET"])
-+async def favicon(request):
-+    ico = os.path.join(STATIC_DIR, "favicon.ico")
-+    if os.path.exists(ico):
-+        return FileResponse(ico)
-+    return StarletteResponse(status_code=204)
-+
-+
-+asgi.mount("/", app)
-+
-+
-+__all__.append("asgi")
-diff --git a/app/static/index.html b/app/static/index.html
+ 
+ 
+-asgi = Starlette()
+-
+-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+-STATIC_DIR = os.path.join(os.path.dirname(BASE_DIR), "static")
+-
+-if os.path.isdir(STATIC_DIR):
+-    asgi.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+-
+-
+-@asgi.route("/", methods=["GET"])
+-async def index(request):
+-    idx = os.path.join(STATIC_DIR, "index.html")
+-    if os.path.exists(idx):
+-        return FileResponse(idx, media_type="text/html")
+-    return HTMLResponse("<!doctype html><title>AskChip</title><div id='app'></div>")
++if Starlette is not None:
++    asgi = Starlette()
+ 
++    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
++    STATIC_DIR = os.path.join(BASE_DIR, "static")
+ 
+-@asgi.route("/favicon.ico", methods=["GET"])
+-async def favicon(request):
+-    ico = os.path.join(STATIC_DIR, "favicon.ico")
+-    if os.path.exists(ico):
+-        return FileResponse(ico)
+-    return StarletteResponse(status_code=204)
++    if os.path.isdir(STATIC_DIR):
++        asgi.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+ 
++    @asgi.route("/", methods=["GET"])
++    async def index(request):
++        idx = os.path.join(STATIC_DIR, "index.html")
++        if os.path.exists(idx):
++            return FileResponse(idx, media_type="text/html")
++        return HTMLResponse("<!doctype html><title>AskChip</title><div id='app'></div>")
+ 
+-asgi.mount("/", app)
++    @asgi.route("/favicon.ico", methods=["GET"])
++    async def favicon(request):
++        ico = os.path.join(STATIC_DIR, "favicon.ico")
++        if os.path.exists(ico):
++            return FileResponse(ico)
++        return StarletteResponse(status_code=204)
+ 
++    asgi.mount("/", app)
+ 
+-__all__.append("asgi")
++    __all__.append("asgi")
+diff --git a/tests/test_static_routes.py b/tests/test_static_routes.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..105f3e40f55c256f53eeb9431649568aa80d2d0c
+index 0000000000000000000000000000000000000000..1afc35d27124c5e12168b739d69de362f3afb9c7
 --- /dev/null
-+++ b/app/static/index.html
-@@ -0,0 +1,10 @@
-+<!doctype html>
-+<html lang="en">
-+  <head>
-+    <meta charset="utf-8" />
-+    <title>AskChip UI</title>
-+  </head>
-+  <body>
-+    <div id="app"></div>
-+  </body>
-+</html>
++++ b/tests/test_static_routes.py
+@@ -0,0 +1,82 @@
++from __future__ import annotations
++
++import asyncio
++from typing import Any, Awaitable, Callable, Dict, List, Tuple
++
++from app import asgi_gateway
++
++
++Headers = List[Tuple[bytes, bytes]]
++
++
++def _make_scope(path: str, method: str = "GET") -> Dict[str, Any]:
++    return {
++        "type": "http",
++        "method": method,
++        "path": path,
++        "headers": [],
++        "query_string": b"",
++    }
++
++
++def _make_receive(body: bytes = b"") -> Callable[[], Awaitable[Dict[str, Any]]]:
++    messages = [{"type": "http.request", "body": body, "more_body": False}]
++
++    async def _receive() -> Dict[str, Any]:
++        return messages.pop(0) if messages else {"type": "http.disconnect"}
++
++    return _receive
++
++
++def _collect_headers(raw: Headers) -> Dict[bytes, bytes]:
++    return {name: value for name, value in raw}
++
++
++def _dispatch(path: str, method: str = "GET") -> List[Dict[str, Any]]:
++    scope = _make_scope(path, method)
++    messages: List[Dict[str, Any]] = []
++
++    async def _send(message: Dict[str, Any]) -> None:
++        messages.append(message)
++
++    asyncio.run(asgi_gateway.app(scope, _make_receive(), _send))
++    return messages
++
++
++def test_root_route_serves_index_html() -> None:
++    messages = _dispatch("/")
++
++    assert len(messages) == 2
++    start, body = messages
++    assert start["type"] == "http.response.start"
++    assert start["status"] == 200
++    headers = _collect_headers(start["headers"])
++    assert headers[b"content-type"] == b"text/html; charset=utf-8"
++    assert body["type"] == "http.response.body"
++    assert b"id=\"app\"" in body["body"]
++
++
++def test_static_asset_served_from_app() -> None:
++    messages = _dispatch("/static/js/app.js")
++
++    assert len(messages) == 2
++    start, body = messages
++    assert start["status"] == 200
++    headers = _collect_headers(start["headers"])
++    assert headers[b"content-type"].startswith(b"text/javascript")
++    length = int(headers[b"content-length"].decode("ascii"))
++    assert body["type"] == "http.response.body"
++    assert length == len(body["body"])
++    assert body["body"]
++
++
++def test_missing_static_asset_returns_not_found() -> None:
++    messages = _dispatch("/static/js/missing-file.js")
++
++    assert len(messages) == 2
++    start, body = messages
++    assert start["status"] == 404
++    headers = _collect_headers(start["headers"])
++    assert headers[b"content-type"] == b"application/json; charset=utf-8"
++    assert body["type"] == "http.response.body"
++    assert b"not_found" in body["body"]
