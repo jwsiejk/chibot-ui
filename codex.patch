@@ -1,159 +1,56 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 7fddbe52bbe116f5c267438c4784232531aa177c..7300ab4e746364fa4e064fa17dabc9d458ac2b52 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1,113 +1,145 @@
- (() => {
-+  const STATIC_JS_BASE = (() => {
-+    if (typeof document === "undefined") {
-+      return "/static/js/";
-+    }
-+
-+    const script = document.currentScript || document.querySelector('script[src$="/static/js/app.js"]');
-+    if (script && script.src) {
-+      try {
-+        const url = new URL(script.src, window.location.href);
-+        return url.pathname.replace(/[^/]+$/, "");
-+      } catch (err) {
-+        console.warn("Failed to parse static script URL", err);
-+      }
-+    }
-+
-+    return "/static/js/";
-+  })();
-+
-+  function resolveScriptSrc(src) {
-+    if (!src || typeof src !== "string") {
-+      return src;
-+    }
-+
-+    if (/^(?:[a-z]+:)?\/\//i.test(src) || src.startsWith("/")) {
-+      return src;
-+    }
-+
-+    const normalized = src.replace(/^\.\//, "");
-+    return `${STATIC_JS_BASE.replace(/\/?$/, '/')}${normalized}`;
-+  }
-+
-   function loadScript(src) {
-+    const resolvedSrc = resolveScriptSrc(src);
-     return new Promise((resolve, reject) => {
--      const existing = document.querySelector(`script[data-dynamic="${src}"]`);
-+      const existing = document.querySelector(`script[data-dynamic="${resolvedSrc}"]`);
-       if (existing) {
-         if (existing.dataset.loaded === "true") {
-           resolve();
-         } else {
-           existing.addEventListener("load", resolve, { once: true });
-           existing.addEventListener("error", reject, { once: true });
-         }
-         return;
-       }
-       const el = document.createElement("script");
--      el.src = src;
-+      el.src = resolvedSrc;
-       el.async = false;
--      el.dataset.dynamic = src;
-+      el.dataset.dynamic = resolvedSrc;
-       el.addEventListener("load", () => {
-         el.dataset.loaded = "true";
-         resolve();
-       }, { once: true });
-       el.addEventListener("error", reject, { once: true });
-       document.head.appendChild(el);
-     });
-   }
+diff --git a/app/templates/index.html b/app/templates/index.html
+index cb6d02611e8c44ada0a117d7fc26824b6214ba48..a0a59826ae32141353a35d390b1f925b5d2e31ec 100644
+--- a/app/templates/index.html
++++ b/app/templates/index.html
+@@ -2,50 +2,51 @@
+ <html lang="en" data-askchip-env="development">
+   <head>
+     <meta charset="utf-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1" />
+     <meta name="askchip-env" content="development" />
+     <title>AskChip UI</title>
+     <link rel="icon" href="/static/favicon.ico" />
+     <link rel="stylesheet" href="/static/css/styles.css" />
+   </head>
+   <body data-askchip-env="development">
+     <div id="app">
+       <header class="topbar" role="banner">
+         <div class="topbar-left">
+           <span class="env-badge" aria-label="Environment">Development</span>
+           <span class="sid" id="sid-text">SID: —</span>
+         </div>
+         <div class="topbar-right">
+           <div class="brand-menu">
+             <button
+               id="brandBtn"
+               class="brand-btn"
+               type="button"
+               aria-haspopup="true"
+               aria-expanded="false"
+             >
++              <img src="/static/chip/chip.png" alt="AskChip logo" class="brand-logo" />
+               <span class="brand-text">AskChip</span>
+               <span aria-hidden="true">▾</span>
+             </button>
+             <div id="brandMenu" class="menu" role="menu" aria-hidden="true">
+               <button id="profileItem" class="menu-item" type="button" role="menuitem">Profile</button>
+               <button id="adminItem" class="menu-item" type="button" role="menuitem">Admin UI</button>
+               <button id="logoutItem" class="menu-item" type="button" role="menuitem">Sign out</button>
+             </div>
+           </div>
+         </div>
+       </header>
  
-   function sanitizeEnvCandidate(value) {
-     if (!value || typeof value !== "string") return null;
-     const trimmed = value.trim();
-     if (!trimmed) return null;
-     if (trimmed.includes("{{") || trimmed.includes("}}")) return null;
-     if (trimmed.includes("{") || trimmed.includes("}")) return null;
-     return trimmed;
-   }
- 
-   function detectEnvironment() {
-     const html = typeof document !== "undefined" ? document.documentElement : null;
-     const body = typeof document !== "undefined" ? document.body : null;
-     const meta = typeof document !== "undefined" ? document.querySelector('meta[name="askchip-env"]') : null;
-     const candidates = [
-       sanitizeEnvCandidate(window.ASKCHIP_ENV),
-       html ? sanitizeEnvCandidate(html.getAttribute("data-askchip-env")) : null,
-       body ? sanitizeEnvCandidate(body.getAttribute("data-askchip-env")) : null,
-       meta ? sanitizeEnvCandidate(meta.getAttribute("content")) : null
-     ];
-     for (const candidate of candidates) {
-       if (candidate) {
-         return candidate.toLowerCase();
-       }
-     }
-     return "prod";
-   }
- 
-   function isProdEnv(value) {
-     if (!value || typeof value !== "string") return true;
-     const normalized = value.trim().toLowerCase();
-     return normalized === "prod" || normalized === "production";
-   }
- 
-   async function maybeInitInspector(env) {
-     if (isProdEnv(env)) {
-       return;
-     }
-     try {
--      await loadScript("./inspector.js");
-+      await loadScript("inspector.js");
-       if (window.DevInspector && typeof window.DevInspector.init === "function") {
-         window.DevInspector.init({ env, AppState: window.AppState });
-       }
-     } catch (err) {
-       console.warn("Dev inspector initialization failed", err);
-     }
-   }
- 
-   async function ensureRuntimeModules() {
-     if (!window.AppState) {
--      await loadScript("./state.js");
-+      await loadScript("state.js");
-     }
-     if (!window.AudioPlayer) {
--      await loadScript("./audio_player.js");
-+      await loadScript("audio_player.js");
-     }
-     if (!window.WSClient) {
--      await loadScript("./ws_client.js");
-+      await loadScript("ws_client.js");
-     }
-     if (!window.AudioRecorder) {
--      await loadScript("./audio_recorder.js");
-+      await loadScript("audio_recorder.js");
-     }
-     if (!window.PolicyBadges) {
--      await loadScript("./policy_badges.js");
-+      await loadScript("policy_badges.js");
-     }
-   }
- 
-   async function init() {
-     await ensureRuntimeModules();
- 
-     const runtimeEnv = detectEnvironment();
-     window.ASKCHIP_ENV = runtimeEnv;
-     if (document.body) {
-       document.body.dataset.askchipEnv = runtimeEnv;
-     }
- 
-     const AppState = window.AppState;
-     const WSClient = window.WSClient;
-     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
-       try {
-         window.PolicyBadges.init();
-       } catch (err) {
-         console.warn("Failed to initialize PolicyBadges", err);
-       }
-     }
- 
-     // --- Config & mock current user for gating ---
-     window.ADMIN_EMAILS = (window.ADMIN_EMAILS || ["admin@askchip.ai"]).map(e => e.toLowerCase());
-     const urlParams = new URLSearchParams(window.location.search);
+       <main class="layout" role="main">
+         <section class="stage" aria-labelledby="connLabel">
+           <div class="chip-window">
+             <canvas
+               id="waveCanvas"
+               class="wave-canvas"
+               role="img"
+               aria-label="Live audio visualization"
+             ></canvas>
+             <div class="chip-overlay">
+               <div class="chip-status" role="status" aria-live="polite">
+                 <span class="status-dot" aria-hidden="true"></span>
+                 <span id="connLabel">Disconnected</span>

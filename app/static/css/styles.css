@@ -51,6 +51,12 @@ body{
   padding:8px 12px; border-radius:10px;
   transition: background .2s ease;
 }
+.brand-logo{
+  height:1.6em; width:1.6em;
+  border-radius:50%;
+  box-shadow:0 4px 10px rgba(0,0,0,.3);
+  flex-shrink:0;
+}
 .brand-text{font-weight:800; color:var(--brand); letter-spacing:.2px}
 .brand-btn:hover{background:rgba(255,255,255,.06)}
 .brand-btn:focus-visible{
