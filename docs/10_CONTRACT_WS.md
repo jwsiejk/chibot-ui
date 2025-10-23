@@ -115,6 +115,13 @@ Copy code
 }
 Other internal policy keys (e.g., telemetry, sampling) may be present in server telemetry/export, but MUST NOT be sent over WS to browsers as part of policy.interaction. (See ADR notes.)
 
+### Persona modes & generation (informational)
+
+- The server’s Generator composes messages using a mode-aware persona (single source of truth).
+- Modes (enum): `clarify`, `outline`, `deep_dive`, `compare`, `steps`, `next_actions`.
+- Each mode has a short instruction that shapes the assistant’s response; these are server-side and not sent to the client.
+- The Planner selects one mode; the server may expose the selection via `dialog.plan` telemetry.
+
 Initial info frame (emitted after handshake)
 The server emits a single info frame containing connection/session hints:
 
@@ -150,11 +157,37 @@ voice_id/locale let the client label playback.
 - `locale` is a BCP 47 language tag constrained to `ll-CC` casing (`en-US`,
   `fr-FR`, `es-ES`, …). This is the locale the server will narrate in and
   should inform captioning or playback labels.
+- `persona_mode_hints`: informational array (for example,
+  `["clarify","outline","deep_dive","compare","steps","next_actions"]`) that the
+  server MAY include to describe available planner modes. Servers may omit this
+  field without changing client behavior.
 
 The server **always** populates `info.voice_id` and `info.locale`. Every
 `tts.start` telemetry envelope mirrors the same identifiers in
 `meta.voice_id`/`meta.locale` so the client can update UI state when playback
 begins.
+
+### Dialog planning (optional telemetry)
+
+The server may emit a lightweight telemetry frame to describe planner intent:
+
+```json
+{
+  "type": "dialog.plan",
+  "ts_ms": 1730000000000,
+  "mode": "clarify | outline | deep_dive | compare | steps | next_actions",
+  "missing_info": ["intent", "details"],
+  "chips": ["Share more context", "Show an example"],
+  "reason": "short note for observability only"
+}
+```
+
+Notes:
+
+- Emitted at most once per user turn, after ASR final and before assistant chunks.
+- Purely telemetry; clients don’t need it to function.
+- The mode constrains the response style used by the NLG Generator.
+- If absent, client behavior is unchanged.
 
 ### Binary audio framing (server → client TTS)
 
