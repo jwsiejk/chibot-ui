@@ -117,8 +117,19 @@
       startBtn.disabled = true;
       const accessToken = resolveAccessToken();
       const state = AppState.getState();
+      const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
+      let resumeToken = null;
+      if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
+        resumeToken = resumeState.token;
+      }
       try {
-        WSClient.open(accessToken, { resumeToken: state.resumeToken });
+        const options = resumeToken ? { resumeToken } : undefined;
+        AppState.setState({ resumeError: null });
+        if (options) {
+          WSClient.open(accessToken, options);
+        } else {
+          WSClient.open(accessToken);
+        }
       } catch (err) {
         console.error('Failed to open WS client', err);
         AppState.setState({ connectionState: 'disconnected' });
@@ -129,6 +140,9 @@
 
     endBtn.addEventListener('click', () => {
       WSClient.close('user_requested');
+      if (typeof AppState.clearResume === 'function') {
+        AppState.clearResume();
+      }
       if (window.AudioRecorder) {
         try {
           window.AudioRecorder.stop();
@@ -138,6 +152,134 @@
       }
       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
         window.AudioPlayer.interrupt();
+      }
+    });
+
+    // --- Resume banner ---
+    const resumeBanner = document.createElement('div');
+    resumeBanner.setAttribute('role', 'status');
+    resumeBanner.setAttribute('aria-live', 'polite');
+    resumeBanner.style.position = 'fixed';
+    resumeBanner.style.top = '16px';
+    resumeBanner.style.right = '16px';
+    resumeBanner.style.display = 'none';
+    resumeBanner.style.alignItems = 'center';
+    resumeBanner.style.gap = '12px';
+    resumeBanner.style.padding = '10px 14px';
+    resumeBanner.style.borderRadius = '10px';
+    resumeBanner.style.background = 'rgba(12, 19, 35, 0.92)';
+    resumeBanner.style.color = '#fff';
+    resumeBanner.style.fontSize = '13px';
+    resumeBanner.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.25)';
+    resumeBanner.style.zIndex = '1000';
+    resumeBanner.style.backdropFilter = 'blur(8px)';
+    resumeBanner.style.webkitBackdropFilter = 'blur(8px)';
+
+    const resumeText = document.createElement('span');
+    resumeText.textContent = '';
+
+    const resumeAction = document.createElement('button');
+    resumeAction.type = 'button';
+    resumeAction.textContent = 'Start new session';
+    resumeAction.style.background = '#2251ff';
+    resumeAction.style.color = '#fff';
+    resumeAction.style.border = 'none';
+    resumeAction.style.borderRadius = '6px';
+    resumeAction.style.padding = '6px 10px';
+    resumeAction.style.fontSize = '12px';
+    resumeAction.style.cursor = 'pointer';
+    resumeAction.style.fontWeight = '600';
+
+    resumeBanner.append(resumeText, resumeAction);
+    document.body.appendChild(resumeBanner);
+
+    let resumeBannerMode = 'hidden';
+    let resumeCountdownId = null;
+
+    function stopResumeCountdown() {
+      if (resumeCountdownId) {
+        clearInterval(resumeCountdownId);
+        resumeCountdownId = null;
+      }
+    }
+
+    function hideResumeBanner() {
+      if (resumeBannerMode === 'hidden') return;
+      stopResumeCountdown();
+      resumeBannerMode = 'hidden';
+      resumeBanner.style.display = 'none';
+    }
+
+    function renderResumeCountdown() {
+      const state = AppState.getState();
+      const resume = state && typeof state.resume === 'object' ? state.resume : null;
+      if (!resume || !Number.isFinite(resume.expiresAt)) {
+        return false;
+      }
+      const remainingMs = Math.max(0, resume.expiresAt - Date.now());
+      const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
+      resumeText.textContent = `Reconnecting… (${seconds}s)`;
+      return true;
+    }
+
+    function showResumeCountdown() {
+      if (!renderResumeCountdown()) {
+        hideResumeBanner();
+        return;
+      }
+      if (resumeBannerMode !== 'countdown') {
+        stopResumeCountdown();
+        resumeBannerMode = 'countdown';
+        resumeBanner.style.display = 'flex';
+        resumeAction.disabled = false;
+        resumeCountdownId = setInterval(() => {
+          if (!renderResumeCountdown()) {
+            hideResumeBanner();
+          }
+        }, 1000);
+      }
+    }
+
+    function showResumeError() {
+      stopResumeCountdown();
+      resumeBannerMode = 'error';
+      resumeBanner.style.display = 'flex';
+      resumeText.textContent = 'Session resume unavailable. Start a new session to continue.';
+      resumeAction.disabled = false;
+    }
+
+    function updateResumeBanner(state) {
+      const hasCountdown = state.connectionState === 'resuming' && state.resume && Number.isFinite(state.resume.expiresAt);
+      if (hasCountdown) {
+        showResumeCountdown();
+        return;
+      }
+      if (state.resumeError === 'invalid') {
+        showResumeError();
+        return;
+      }
+      hideResumeBanner();
+    }
+
+    resumeAction.addEventListener('click', () => {
+      resumeAction.disabled = true;
+      try {
+        WSClient.close('user_restart');
+      } catch (err) {
+        console.warn('Resume banner close failed', err);
+      }
+      if (typeof AppState.clearResume === 'function') {
+        AppState.clearResume();
+      }
+      AppState.setState({ resumeError: null });
+      const accessToken = resolveAccessToken();
+      try {
+        WSClient.open(accessToken);
+      } catch (err) {
+        console.error('Failed to start new session', err);
+        AppState.setState({ connectionState: 'disconnected' });
+      } finally {
+        resumeAction.disabled = false;
       }
     });
 
@@ -292,6 +434,7 @@
         }
       }
       previousConnectionState = state.connectionState;
+      updateResumeBanner(state);
     });
 
     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---

@@ -16,6 +16,32 @@
   let transportFactory = (url, protocol) => new WebSocket(url, protocol);
   let rateLimitRetryTimerId = null;
   let rateLimitRetryCount = 0;
+  let autoResumeAttemptToken = null;
+
+  function getResumeState() {
+    const state = AppState.getState();
+    const resume = state && typeof state.resume === "object" ? state.resume : null;
+    if (!resume) return null;
+    const token = typeof resume.token === "string" ? resume.token : null;
+    const ttlMs = Number.isFinite(resume.ttlMs) ? resume.ttlMs : null;
+    const expiresAt = Number.isFinite(resume.expiresAt) ? resume.expiresAt : null;
+    if (!token || !ttlMs || !expiresAt) return null;
+    return { token, ttlMs, expiresAt };
+  }
+
+  function assignResume(token, ttlMs) {
+    if (typeof AppState.setResume === "function") {
+      AppState.setResume(token, ttlMs);
+    }
+    autoResumeAttemptToken = null;
+  }
+
+  function clearResumeState() {
+    if (typeof AppState.clearResume === "function") {
+      AppState.clearResume();
+    }
+    autoResumeAttemptToken = null;
+  }
 
   function updateState(patch) {
     AppState.setState(patch);
@@ -76,8 +102,13 @@
         console.warn("Auto-retry skipped: missing access token");
         return;
       }
+      const resumeState = state && typeof state.resume === "object" ? state.resume : null;
+      let resumeToken = null;
+      if (resumeState && typeof resumeState.token === "string" && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
+        resumeToken = resumeState.token;
+      }
       try {
-        open(token, { resumeToken: state.resumeToken, skipRateLimitCancel: true });
+        open(token, { resumeToken, skipRateLimitCancel: true });
       } catch (err) {
         console.error("Auto-retry open failed", err);
       }
@@ -127,6 +158,38 @@
     sendPing();
     heartbeatTimerId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
     updateState({ heartbeatTimerId });
+  }
+
+  function attemptAutoResume() {
+    const resume = getResumeState();
+    if (!resume) {
+      return false;
+    }
+    if (Date.now() >= resume.expiresAt) {
+      clearResumeState();
+      updateState({ resumeError: "invalid" });
+      return false;
+    }
+    const state = AppState.getState();
+    const accessToken = state && state.accessToken;
+    if (!accessToken) {
+      console.warn("Auto-resume skipped: missing access token");
+      return false;
+    }
+    if (autoResumeAttemptToken === resume.token) {
+      return false;
+    }
+    autoResumeAttemptToken = resume.token;
+    updateState({ connectionState: "resuming", resumeError: null });
+    try {
+      open(accessToken, { resumeToken: resume.token, skipRateLimitCancel: true });
+      return true;
+    } catch (err) {
+      console.error("Auto-resume open failed", err);
+      autoResumeAttemptToken = null;
+      updateState({ connectionState: "disconnected" });
+      return false;
+    }
   }
 
   function dispatchFrame(frame) {
@@ -181,7 +244,11 @@
     resetRateLimitRecovery();
     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
-    const expiresAt = resumeToken && resumeTtlMs ? Date.now() + resumeTtlMs : null;
+    if (resumeToken && resumeTtlMs) {
+      assignResume(resumeToken, resumeTtlMs);
+    } else {
+      clearResumeState();
+    }
     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
     const audioPlayer = getAudioPlayer();
     if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
@@ -190,10 +257,8 @@
     updateState({
       connectionState: "connected",
       sid: meta.sid,
-      resumeToken,
-      resumeTtlMs,
-      resumeExpiresAt: expiresAt,
-      infoFrame: frame
+      infoFrame: frame,
+      resumeError: null
     });
     startHeartbeat();
   }
@@ -221,6 +286,11 @@
       sendJson({ type: "pong", t: Date.now() });
     } else if (frame.type === "error") {
       console.error("WS error frame", frame);
+      const isResumeInvalid = frame && frame.code === "resume_invalid";
+      if (isResumeInvalid) {
+        clearResumeState();
+        updateState({ resumeError: "invalid" });
+      }
       if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
         try {
           window.WSErrorUI.handleFrame(frame, {
@@ -229,6 +299,9 @@
         } catch (err) {
           console.warn("Error handler threw", err);
         }
+      }
+      if (isResumeInvalid) {
+        close("resume_invalid");
       }
     } else if (frame.type === "tts.start") {
       const audioPlayer = getAudioPlayer();
@@ -289,6 +362,7 @@
   }
 
   function attachSocket(ws) {
+    ws.__intentionalClose = false;
     const handlers = {
       open: () => {
         updateState({ websocket: ws });
@@ -299,12 +373,20 @@
         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
       },
       close: (event) => {
+        const expected = ws.__intentionalClose === true;
         if (socket === ws) {
           socket = null;
           expectInfoFrame = true;
         }
         clearHeartbeat();
-        updateState({ connectionState: "disconnected", websocket: null });
+        updateState({ websocket: null });
+        let resumed = false;
+        if (!expected) {
+          resumed = attemptAutoResume();
+        }
+        if (!resumed) {
+          updateState({ connectionState: "disconnected" });
+        }
         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
       }
     };
@@ -323,11 +405,13 @@
     ws.removeEventListener("error", handlers.error);
     ws.removeEventListener("close", handlers.close);
     delete ws.__handlers;
+    delete ws.__intentionalClose;
   }
 
   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
     if (!ws) return;
     detachSocket(ws);
+    ws.__intentionalClose = true;
     try {
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close(1000, reason);
@@ -346,6 +430,7 @@
       throw new Error("accessToken is required to open the chat socket");
     }
     const { resumeToken = null, skipRateLimitCancel = false } = options;
+    const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
     if (socket) {
       cleanupSocket(socket, "superseded");
     }
@@ -361,15 +446,16 @@
       clearRateLimitRetryTimer();
       rateLimitRetryCount = 0;
     }
-    const url = computeUrl(accessToken, resumeToken);
+    const url = computeUrl(accessToken, resumeTokenValue);
     const ws = transportFactory(url, SUBPROTOCOL);
     socket = ws;
     updateState({
-      connectionState: resumeToken ? "resuming" : "connecting",
+      connectionState: resumeTokenValue ? "resuming" : "connecting",
       accessToken,
       websocket: ws,
       latencyMs: null,
-      lastPingAt: null
+      lastPingAt: null,
+      resumeError: null
     });
     attachSocket(ws);
     return ws;
@@ -392,6 +478,7 @@
         console.warn("Failed to cancel countdown on close", err);
       }
     }
+    autoResumeAttemptToken = null;
     updateState({ connectionState: "disconnected", websocket: null });
   }
 

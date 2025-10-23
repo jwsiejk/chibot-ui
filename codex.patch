@@ -1,439 +1,373 @@
-diff --git a/app/static/js/errors.js b/app/static/js/errors.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..ca591bf9bcb72bba151f35c603ef9fed449caacb
---- /dev/null
-+++ b/app/static/js/errors.js
-@@ -0,0 +1,425 @@
-+(() => {
-+  const LEVELS = {
-+    info: {
-+      background: "rgba(36, 41, 58, 0.95)",
-+      color: "#f7fafc"
-+    },
-+    warning: {
-+      background: "rgba(217, 119, 6, 0.92)",
-+      color: "#0f0f0f"
-+    },
-+    danger: {
-+      background: "rgba(220, 38, 38, 0.92)",
-+      color: "#fff"
-+    }
-+  };
-+
-+  const ERROR_CATALOG = {
-+    rate_limited: {
-+      tone: "toast",
-+      level: "warning",
-+      title: "Rate limit reached",
-+      body: "Too many concurrent connections."
-+    },
-+    provider_down: {
-+      tone: "toast",
-+      level: "warning",
-+      title: "Service unavailable",
-+      body: "A provider outage is preventing new sessions."
-+    },
-+    invalid_message: {
-+      tone: "toast",
-+      level: "danger",
-+      title: "Unsupported request",
-+      body: "The server rejected a message from the client."
-+    },
-+    auth_failed: {
-+      tone: "banner",
-+      level: "danger",
-+      title: "Authentication failed",
-+      body: "The access token is missing or invalid. Update your credentials and reload."
-+    },
-+    origin_blocked: {
-+      tone: "banner",
-+      level: "danger",
-+      title: "Origin blocked",
-+      body: "This origin is not authorized for AskChip. Use an approved domain or update the allow-list."
-+    },
-+    version_mismatch: {
-+      tone: "banner",
-+      level: "danger",
-+      title: "Client version mismatch",
-+      body: "Refresh the page to negotiate the chat.v2 protocol."
-+    },
-+    resume_invalid: {
-+      tone: "banner",
-+      level: "danger",
-+      title: "Resume token invalid",
-+      body: "The saved session can no longer be resumed. Start a new session."
-+    },
-+    schema_invalid: {
-+      tone: "banner",
-+      level: "danger",
-+      title: "Request schema invalid",
-+      body: "The client sent an unsupported payload. Reload and try again."
-+    }
-+  };
-+
-+  let toastRoot = null;
-+  let bannerRoot = null;
-+  let styleTag = null;
-+  let rateLimitState = null;
-+
-+  function ensureStyleTag() {
-+    if (styleTag) return;
-+    styleTag = document.createElement("style");
-+    styleTag.id = "ws-error-styles";
-+    styleTag.textContent = `
-+#toast-root.toast-container {
-+  position: fixed;
-+  bottom: 24px;
-+  right: 24px;
-+  display: flex;
-+  flex-direction: column;
-+  gap: 12px;
-+  z-index: 4000;
-+  pointer-events: none;
-+}
-+
-+#toast-root .toast {
-+  pointer-events: auto;
-+  min-width: 260px;
-+  max-width: 360px;
-+  padding: 14px 18px;
-+  border-radius: 12px;
-+  box-shadow: 0 18px 40px rgba(12, 14, 24, 0.35);
-+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-+  backdrop-filter: blur(12px);
-+  display: flex;
-+  flex-direction: column;
-+  gap: 6px;
-+  transition: opacity 160ms ease;
-+}
-+
-+#toast-root .toast.toast-exit {
-+  opacity: 0;
-+  transform: translateY(12px);
-+}
-+
-+#toast-root .toast-title {
-+  font-weight: 600;
-+  font-size: 0.95rem;
-+}
-+
-+#toast-root .toast-body {
-+  font-size: 0.88rem;
-+  line-height: 1.4;
-+}
-+
-+#toast-root .toast-meta {
-+  font-size: 0.75rem;
-+  opacity: 0.85;
-+}
-+
-+#toast-root .toast a {
-+  color: inherit;
-+  text-decoration: underline;
-+}
-+
-+#wserror-banner-root {
-+  position: fixed;
-+  top: 0;
-+  left: 0;
-+  width: 100%;
-+  display: flex;
-+  flex-direction: column;
-+  gap: 12px;
-+  align-items: center;
-+  padding: 16px;
-+  z-index: 5000;
-+  pointer-events: none;
-+}
-+
-+#wserror-banner-root .banner {
-+  pointer-events: auto;
-+  width: min(720px, 92vw);
-+  border-radius: 14px;
-+  padding: 16px 22px;
-+  box-shadow: 0 20px 45px rgba(12, 14, 24, 0.32);
-+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-+  display: flex;
-+  flex-direction: column;
-+  gap: 8px;
-+  text-align: left;
-+  }
-+
-+#wserror-banner-root .banner.toast-exit {
-+  opacity: 0;
-+  transform: translateY(-12px);
-+}
-+
-+#wserror-banner-root .banner-title {
-+  font-weight: 700;
-+  font-size: 1.05rem;
-+}
-+
-+#wserror-banner-root .banner-body {
-+  font-size: 0.95rem;
-+  line-height: 1.45;
-+}
-+
-+#wserror-banner-root .banner-meta {
-+  font-size: 0.8rem;
-+  opacity: 0.9;
-+}
-+`;
-+    document.head.appendChild(styleTag);
-+  }
-+
-+  function ensureRoots() {
-+    if (!toastRoot) {
-+      toastRoot = document.getElementById("toast-root");
-+      if (!toastRoot) {
-+        toastRoot = document.createElement("div");
-+        toastRoot.id = "toast-root";
-+        toastRoot.className = "toast-container";
-+        document.body.appendChild(toastRoot);
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 3cc72e0cf9cab415b8ae07d82b3ee55bad81b7e4..0e4e57f1b9ac9dd527cfab02fcbdb5ce6c0b8b72 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -95,74 +95,216 @@
+     const chatPanel = document.querySelector('.chat');
+     openChatBtn.addEventListener('click', () => {
+       const hidden = chatPanel.classList.toggle('hidden');
+       openChatBtn.setAttribute('aria-pressed', String(!hidden));
+     });
+ 
+     // --- Start/End button wiring ---
+     const startBtn = document.getElementById('startBtn');
+     const endBtn = document.getElementById('endBtn');
+     const sidText = document.getElementById('sid-text');
+     const connLabel = document.getElementById('connLabel');
+     const statusDot = document.querySelector('.status-dot');
+     const latencyHint = document.getElementById('latencyHint');
+ 
+     const accessTokenParam = urlParams.get('access_token') || urlParams.get('token');
+     const defaultToken = (window.DEMO_ACCESS_TOKEN || accessTokenParam || '').trim();
+ 
+     function resolveAccessToken() {
+       return defaultToken || 'demo-token';
+     }
+ 
+     startBtn.addEventListener('click', async () => {
+       startBtn.disabled = true;
+       const accessToken = resolveAccessToken();
+       const state = AppState.getState();
++      const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
++      let resumeToken = null;
++      if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
++        resumeToken = resumeState.token;
 +      }
-+    }
-+    if (!bannerRoot) {
-+      bannerRoot = document.getElementById("wserror-banner-root");
-+      if (!bannerRoot) {
-+        bannerRoot = document.createElement("div");
-+        bannerRoot.id = "wserror-banner-root";
-+        document.body.appendChild(bannerRoot);
-+      }
-+    }
-+  }
-+
-+  function applyLevelStyles(element, level) {
-+    const palette = LEVELS[level] || LEVELS.info;
-+    element.style.background = palette.background;
-+    element.style.color = palette.color;
-+  }
-+
-+  function removeElement(el) {
-+    if (!el || !el.parentNode) return;
-+    el.classList.add("toast-exit");
-+    setTimeout(() => {
-+      if (el.parentNode) {
-+        el.parentNode.removeChild(el);
-+      }
-+    }, 220);
-+  }
-+
-+  function createToast({ title, body, meta, level = "info", persistent = false }) {
-+    ensureStyleTag();
-+    ensureRoots();
-+    const toast = document.createElement("div");
-+    toast.className = "toast";
-+    toast.setAttribute("role", "alert");
-+    applyLevelStyles(toast, level);
-+
-+    if (title) {
-+      const heading = document.createElement("div");
-+      heading.className = "toast-title";
-+      heading.textContent = title;
-+      toast.appendChild(heading);
-+    }
-+    if (body) {
-+      const bodyEl = document.createElement("div");
-+      bodyEl.className = "toast-body";
-+      bodyEl.textContent = body;
-+      toast.appendChild(bodyEl);
-+    }
-+    if (meta) {
-+      const metaEl = document.createElement("div");
-+      metaEl.className = "toast-meta";
-+      if (meta instanceof Node) {
-+        metaEl.appendChild(meta);
-+      } else {
-+        metaEl.textContent = meta;
-+      }
-+      toast.appendChild(metaEl);
-+    }
-+
-+    toastRoot.appendChild(toast);
-+
-+    if (!persistent) {
-+      setTimeout(() => removeElement(toast), 6500);
-+    }
-+
-+    return toast;
-+  }
-+
-+  function createBanner({ code, title, body, meta, level = "danger" }) {
-+    ensureStyleTag();
-+    ensureRoots();
-+    let banner = bannerRoot.querySelector(`[data-error-code="${code}"]`);
-+    if (!banner) {
-+      banner = document.createElement("div");
-+      banner.className = "banner";
-+      banner.dataset.errorCode = code;
-+      banner.setAttribute("role", "alert");
-+      bannerRoot.appendChild(banner);
-+    } else {
-+      banner.innerHTML = "";
-+    }
-+
-+    applyLevelStyles(banner, level);
-+
-+    const heading = document.createElement("div");
-+    heading.className = "banner-title";
-+    heading.textContent = title;
-+    banner.appendChild(heading);
-+
-+    if (body) {
-+      const bodyEl = document.createElement("div");
-+      bodyEl.className = "banner-body";
-+      bodyEl.textContent = body;
-+      banner.appendChild(bodyEl);
-+    }
-+
-+    const metaEl = document.createElement("div");
-+    metaEl.className = "banner-meta";
-+    metaEl.textContent = meta || `Error code: ${code}`;
-+    banner.appendChild(metaEl);
-+
-+    return banner;
-+  }
-+
-+  function clearRateLimitState(reason = "resolved") {
-+    if (!rateLimitState) return;
-+    if (rateLimitState.intervalId) {
-+      clearInterval(rateLimitState.intervalId);
-+    }
-+    if (rateLimitState.toast) {
-+      if (reason === "manual") {
-+        const body = rateLimitState.toast.querySelector(".toast-body");
-+        if (body) {
-+          body.textContent = "Retry cancelled.";
+       try {
+-        WSClient.open(accessToken, { resumeToken: state.resumeToken });
++        const options = resumeToken ? { resumeToken } : undefined;
++        AppState.setState({ resumeError: null });
++        if (options) {
++          WSClient.open(accessToken, options);
++        } else {
++          WSClient.open(accessToken);
 +        }
-+        setTimeout(() => removeElement(rateLimitState.toast), 1800);
-+      } else {
-+        removeElement(rateLimitState.toast);
+       } catch (err) {
+         console.error('Failed to open WS client', err);
+         AppState.setState({ connectionState: 'disconnected' });
+         startBtn.disabled = false;
+         endBtn.disabled = true;
+       }
+     });
+ 
+     endBtn.addEventListener('click', () => {
+       WSClient.close('user_requested');
++      if (typeof AppState.clearResume === 'function') {
++        AppState.clearResume();
++      }
+       if (window.AudioRecorder) {
+         try {
+           window.AudioRecorder.stop();
+         } catch (err) {
+           console.warn('Failed to stop audio recorder', err);
+         }
+       }
+       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+         window.AudioPlayer.interrupt();
+       }
+     });
+ 
++    // --- Resume banner ---
++    const resumeBanner = document.createElement('div');
++    resumeBanner.setAttribute('role', 'status');
++    resumeBanner.setAttribute('aria-live', 'polite');
++    resumeBanner.style.position = 'fixed';
++    resumeBanner.style.top = '16px';
++    resumeBanner.style.right = '16px';
++    resumeBanner.style.display = 'none';
++    resumeBanner.style.alignItems = 'center';
++    resumeBanner.style.gap = '12px';
++    resumeBanner.style.padding = '10px 14px';
++    resumeBanner.style.borderRadius = '10px';
++    resumeBanner.style.background = 'rgba(12, 19, 35, 0.92)';
++    resumeBanner.style.color = '#fff';
++    resumeBanner.style.fontSize = '13px';
++    resumeBanner.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.25)';
++    resumeBanner.style.zIndex = '1000';
++    resumeBanner.style.backdropFilter = 'blur(8px)';
++    resumeBanner.style.webkitBackdropFilter = 'blur(8px)';
++
++    const resumeText = document.createElement('span');
++    resumeText.textContent = '';
++
++    const resumeAction = document.createElement('button');
++    resumeAction.type = 'button';
++    resumeAction.textContent = 'Start new session';
++    resumeAction.style.background = '#2251ff';
++    resumeAction.style.color = '#fff';
++    resumeAction.style.border = 'none';
++    resumeAction.style.borderRadius = '6px';
++    resumeAction.style.padding = '6px 10px';
++    resumeAction.style.fontSize = '12px';
++    resumeAction.style.cursor = 'pointer';
++    resumeAction.style.fontWeight = '600';
++
++    resumeBanner.append(resumeText, resumeAction);
++    document.body.appendChild(resumeBanner);
++
++    let resumeBannerMode = 'hidden';
++    let resumeCountdownId = null;
++
++    function stopResumeCountdown() {
++      if (resumeCountdownId) {
++        clearInterval(resumeCountdownId);
++        resumeCountdownId = null;
 +      }
 +    }
-+    rateLimitState = null;
-+  }
 +
-+  function showRateLimitToast(frame, controls) {
-+    const retryIn = Number(frame.retry_in_ms);
-+    const descriptor = ERROR_CATALOG.rate_limited;
-+    const bodyText = descriptor.body;
-+    const toast = createToast({
-+      title: descriptor.title,
-+      body: bodyText,
-+      level: descriptor.level,
-+      persistent: true
-+    });
++    function hideResumeBanner() {
++      if (resumeBannerMode === 'hidden') return;
++      stopResumeCountdown();
++      resumeBannerMode = 'hidden';
++      resumeBanner.style.display = 'none';
++    }
 +
-+    const countdown = document.createElement("span");
-+    countdown.setAttribute("aria-live", "polite");
-+    const metaEl = document.createElement("div");
-+    metaEl.className = "toast-meta";
-+    metaEl.appendChild(countdown);
-+    toast.appendChild(metaEl);
-+
-+    let scheduled = false;
-+    const callbacks = {
-+      onRetryStart: () => {
-+        countdown.textContent = "Retrying now…";
-+        if (rateLimitState && rateLimitState.intervalId) {
-+          clearInterval(rateLimitState.intervalId);
-+          rateLimitState.intervalId = null;
-+        }
++    function renderResumeCountdown() {
++      const state = AppState.getState();
++      const resume = state && typeof state.resume === 'object' ? state.resume : null;
++      if (!resume || !Number.isFinite(resume.expiresAt)) {
++        return false;
 +      }
-+    };
++      const remainingMs = Math.max(0, resume.expiresAt - Date.now());
++      const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
++      resumeText.textContent = `Reconnecting… (${seconds}s)`;
++      return true;
++    }
 +
-+    if (controls && typeof controls.scheduleRetry === "function" && Number.isFinite(retryIn) && retryIn > 0) {
++    function showResumeCountdown() {
++      if (!renderResumeCountdown()) {
++        hideResumeBanner();
++        return;
++      }
++      if (resumeBannerMode !== 'countdown') {
++        stopResumeCountdown();
++        resumeBannerMode = 'countdown';
++        resumeBanner.style.display = 'flex';
++        resumeAction.disabled = false;
++        resumeCountdownId = setInterval(() => {
++          if (!renderResumeCountdown()) {
++            hideResumeBanner();
++          }
++        }, 1000);
++      }
++    }
++
++    function showResumeError() {
++      stopResumeCountdown();
++      resumeBannerMode = 'error';
++      resumeBanner.style.display = 'flex';
++      resumeText.textContent = 'Session resume unavailable. Start a new session to continue.';
++      resumeAction.disabled = false;
++    }
++
++    function updateResumeBanner(state) {
++      const hasCountdown = state.connectionState === 'resuming' && state.resume && Number.isFinite(state.resume.expiresAt);
++      if (hasCountdown) {
++        showResumeCountdown();
++        return;
++      }
++      if (state.resumeError === 'invalid') {
++        showResumeError();
++        return;
++      }
++      hideResumeBanner();
++    }
++
++    resumeAction.addEventListener('click', () => {
++      resumeAction.disabled = true;
 +      try {
-+        scheduled = controls.scheduleRetry(retryIn, callbacks);
++        WSClient.close('user_restart');
 +      } catch (err) {
-+        console.warn("Failed to schedule auto-retry", err);
-+        scheduled = false;
++        console.warn('Resume banner close failed', err);
 +      }
-+    }
-+
-+    if (!scheduled) {
-+      countdown.textContent = "Retry not scheduled. Try reconnecting manually.";
-+      rateLimitState = { toast, intervalId: null };
-+      return;
-+    }
-+
-+    const deadline = Date.now() + retryIn;
-+
-+    function updateCountdown() {
-+      const remaining = Math.max(0, deadline - Date.now());
-+      const seconds = Math.ceil(remaining / 1000);
-+      if (seconds > 0) {
-+        countdown.textContent = `Retrying in ${seconds}s…`;
-+      } else {
-+        countdown.textContent = "Retrying now…";
-+        if (rateLimitState && rateLimitState.intervalId) {
-+          clearInterval(rateLimitState.intervalId);
-+          rateLimitState.intervalId = null;
-+        }
++      if (typeof AppState.clearResume === 'function') {
++        AppState.clearResume();
 +      }
-+    }
-+
-+    updateCountdown();
-+    const intervalId = setInterval(updateCountdown, 1000);
-+    rateLimitState = { toast, intervalId };
-+  }
-+
-+  function handleErrorFrame(frame, controls = {}) {
-+    if (!frame || frame.type !== "error") return;
-+    ensureStyleTag();
-+    ensureRoots();
-+
-+    const code = typeof frame.code === "string" ? frame.code : "unknown";
-+    const descriptor = ERROR_CATALOG[code] || {
-+      tone: frame.retryable ? "toast" : "banner",
-+      level: frame.retryable ? "warning" : "danger",
-+      title: `Server error (${code})`,
-+      body: frame.message || "The server reported an unexpected error."
-+    };
-+
-+    const body = frame.message && frame.message !== descriptor.body
-+      ? `${descriptor.body} ${frame.message}`.trim()
-+      : descriptor.body;
-+
-+    if (descriptor.tone === "banner") {
-+      createBanner({
-+        code,
-+        title: descriptor.title,
-+        body,
-+        meta: frame.retryable ? "This error can be retried after addressing the issue." : undefined,
-+        level: descriptor.level
-+      });
-+      return;
-+    }
-+
-+    if (code === "rate_limited" && Number.isFinite(Number(frame.retry_in_ms))) {
-+      showRateLimitToast(frame, controls);
-+      return;
-+    }
-+
-+    createToast({
-+      title: descriptor.title,
-+      body,
-+      meta: `Error code: ${code}`,
-+      level: descriptor.level
++      AppState.setState({ resumeError: null });
++      const accessToken = resolveAccessToken();
++      try {
++        WSClient.open(accessToken);
++      } catch (err) {
++        console.error('Failed to start new session', err);
++        AppState.setState({ connectionState: 'disconnected' });
++      } finally {
++        resumeAction.disabled = false;
++      }
 +    });
++
+     // --- Waveform visual inside the Chip window ---
+     const Waveform = (() => {
+       const canvas = document.getElementById('waveCanvas');
+       const ctx = canvas.getContext('2d', {alpha:false});
+       let raf = 0, analyser = null, source = null, audioCtx = null, dataArray = null;
+       let synthMode = true, t = 0;
+ 
+       function resizeCanvas(){
+         const dpr = Math.max(1, window.devicePixelRatio || 1);
+         canvas.width = canvas.clientWidth * dpr;
+         canvas.height = canvas.clientHeight * dpr;
+         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+       }
+       window.addEventListener('resize', resizeCanvas, {passive:true});
+       resizeCanvas();
+ 
+       function drawBackground(){
+         const w = canvas.clientWidth, h = canvas.clientHeight;
+         const g = ctx.createLinearGradient(0,0,w,h);
+         g.addColorStop(0,'#0b1222'); g.addColorStop(1,'#0a0f1b');
+         ctx.fillStyle = g; ctx.fillRect(0,0,w,h);
+         ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+         ctx.lineWidth = 1;
+         const gap = 24;
+         ctx.beginPath();
+@@ -270,50 +412,51 @@
+         latencyHint.textContent = `${Math.round(state.latencyMs)} ms`;
+       } else {
+         latencyHint.textContent = '—';
+       }
+       if (previousConnectionState !== 'connected' && state.connectionState === 'connected') {
+         Waveform.start();
+         if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+           window.AudioRecorder.start().catch((err) => {
+             console.error('AudioRecorder start error', err);
+           });
+         }
+       } else if (previousConnectionState !== 'disconnected' && state.connectionState === 'disconnected') {
+         Waveform.stop();
+         if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+           try {
+             window.AudioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
+           }
+         }
+         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+           window.AudioPlayer.interrupt();
+         }
+       }
+       previousConnectionState = state.connectionState;
++      updateResumeBanner(state);
+     });
+ 
+     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
+     if (urlParams.get('wsSmoke') === '1') {
+       const transitions = [];
+       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
+ 
+       class MockSocket extends EventTarget {
+         constructor() {
+           super();
+           this.readyState = WebSocket.CONNECTING;
+           setTimeout(() => {
+             this.readyState = WebSocket.OPEN;
+             this.dispatchEvent(new Event('open'));
+           }, 0);
+         }
+         send(payload) {
+           this.lastSent = payload;
+         }
+         close(code = 1000, reason = '') {
+           this.readyState = WebSocket.CLOSED;
+           const ev = new Event('close');
+           ev.code = code;
+           ev.reason = reason;
+           ev.wasClean = true;
+diff --git a/app/static/js/state.js b/app/static/js/state.js
+index c4307b0d28f27f72585e291e0364ef4e907083e5..8e791fd833ce3dd85be681e88c7116f6f281c5de 100644
+--- a/app/static/js/state.js
++++ b/app/static/js/state.js
+@@ -1,65 +1,83 @@
+ (() => {
+   const initialState = {
+     connectionState: "disconnected",
+     accessToken: null,
+     sid: null,
+-    resumeToken: null,
+-    resumeTtlMs: null,
+-    resumeExpiresAt: null,
++    resume: null,
++    resumeError: null,
+     latencyMs: null,
+     lastPingAt: null,
+     heartbeatTimerId: null,
+     websocket: null,
+     infoFrame: null
+   };
+ 
+   let state = { ...initialState };
+   const listeners = new Set();
+ 
+   function snapshot() {
+     return { ...state };
+   }
+ 
+   function notify() {
+     const current = snapshot();
+     listeners.forEach((listener) => {
+       try {
+         listener(current);
+       } catch (err) {
+         console.error("AppState subscriber error", err);
+       }
+     });
+   }
+ 
+   function setState(patch) {
+     if (!patch || typeof patch !== "object") return;
+     state = { ...state, ...patch };
+     notify();
+   }
+ 
++  function setResume(token, ttlMs) {
++    const resumeToken = typeof token === "string" && token.trim() ? token.trim() : null;
++    const ttl = Number(ttlMs);
++    if (!resumeToken || !Number.isFinite(ttl) || ttl <= 0) {
++      clearResume();
++      return null;
++    }
++    const expiresAt = Date.now() + ttl;
++    const resume = { token: resumeToken, ttlMs: ttl, expiresAt };
++    setState({ resume, resumeError: null });
++    return resume;
 +  }
 +
-+  window.WSErrorUI = {
-+    handleFrame: handleErrorFrame,
-+    clearRateLimitToast(reason = "resolved") {
-+      clearRateLimitState(reason);
-+    },
-+    cancelRateLimitCountdown(reason = "manual") {
-+      clearRateLimitState(reason);
-+    }
-+  };
-+})();
++  function clearResume() {
++    setState({ resume: null, resumeError: null });
++  }
++
+   function reset() {
+     state = { ...initialState };
+     notify();
+   }
+ 
+   function subscribe(listener) {
+     if (typeof listener !== "function") {
+       throw new TypeError("listener must be a function");
+     }
+     listeners.add(listener);
+     listener(snapshot());
+     return () => {
+       listeners.delete(listener);
+     };
+   }
+ 
+   window.AppState = {
+     getState: snapshot,
+     setState,
+     reset,
+     subscribe,
++    setResume,
++    clearResume,
+     get initialState() {
+       return { ...initialState };
+     }
+   };
+ })();
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83af79df914 100644
+index e768324873e85aae43cc4ffdcca2c83af79df914..e92c4705ab2a6df523933c51f9e5f69ff99b1f3f 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -1,62 +1,112 @@
+@@ -1,43 +1,69 @@
  (() => {
    const HEARTBEAT_INTERVAL_MS = 15000;
    const DEFAULT_CLOSE_REASON = "client_shutdown";
@@ -450,8 +384,34 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
    let expectInfoFrame = true;
    let lastPingAt = null;
    let transportFactory = (url, protocol) => new WebSocket(url, protocol);
-+  let rateLimitRetryTimerId = null;
-+  let rateLimitRetryCount = 0;
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
++  let autoResumeAttemptToken = null;
++
++  function getResumeState() {
++    const state = AppState.getState();
++    const resume = state && typeof state.resume === "object" ? state.resume : null;
++    if (!resume) return null;
++    const token = typeof resume.token === "string" ? resume.token : null;
++    const ttlMs = Number.isFinite(resume.ttlMs) ? resume.ttlMs : null;
++    const expiresAt = Number.isFinite(resume.expiresAt) ? resume.expiresAt : null;
++    if (!token || !ttlMs || !expiresAt) return null;
++    return { token, ttlMs, expiresAt };
++  }
++
++  function assignResume(token, ttlMs) {
++    if (typeof AppState.setResume === "function") {
++      AppState.setResume(token, ttlMs);
++    }
++    autoResumeAttemptToken = null;
++  }
++
++  function clearResumeState() {
++    if (typeof AppState.clearResume === "function") {
++      AppState.clearResume();
++    }
++    autoResumeAttemptToken = null;
++  }
  
    function updateState(patch) {
      AppState.setState(patch);
@@ -473,54 +433,51 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
      updateState({ heartbeatTimerId: null, lastPingAt: null });
    }
  
-+  function clearRateLimitRetryTimer() {
-+    if (rateLimitRetryTimerId) {
-+      clearTimeout(rateLimitRetryTimerId);
-+      rateLimitRetryTimerId = null;
-+    }
-+  }
-+
-+  function resetRateLimitRecovery() {
-+    clearRateLimitRetryTimer();
-+    rateLimitRetryCount = 0;
-+    if (window.WSErrorUI && typeof window.WSErrorUI.clearRateLimitToast === "function") {
-+      try {
-+        window.WSErrorUI.clearRateLimitToast();
-+      } catch (err) {
-+        console.warn("Failed to clear rate limit toast", err);
+   function clearRateLimitRetryTimer() {
+     if (rateLimitRetryTimerId) {
+       clearTimeout(rateLimitRetryTimerId);
+       rateLimitRetryTimerId = null;
+@@ -54,52 +80,57 @@
+         console.warn("Failed to clear rate limit toast", err);
+       }
+     }
+   }
+ 
+   function scheduleRateLimitRetry(delayMs, callbacks = {}) {
+     const delay = Number(delayMs);
+     if (!Number.isFinite(delay) || delay <= 0) return false;
+     if (rateLimitRetryTimerId || rateLimitRetryCount >= 1) return false;
+     rateLimitRetryCount += 1;
+     rateLimitRetryTimerId = setTimeout(() => {
+       rateLimitRetryTimerId = null;
+       if (callbacks && typeof callbacks.onRetryStart === "function") {
+         try {
+           callbacks.onRetryStart();
+         } catch (err) {
+           console.warn("Auto-retry callback failed", err);
+         }
+       }
+       const state = AppState.getState();
+       const token = state.accessToken;
+       if (!token) {
+         console.warn("Auto-retry skipped: missing access token");
+         return;
+       }
++      const resumeState = state && typeof state.resume === "object" ? state.resume : null;
++      let resumeToken = null;
++      if (resumeState && typeof resumeState.token === "string" && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
++        resumeToken = resumeState.token;
 +      }
-+    }
-+  }
-+
-+  function scheduleRateLimitRetry(delayMs, callbacks = {}) {
-+    const delay = Number(delayMs);
-+    if (!Number.isFinite(delay) || delay <= 0) return false;
-+    if (rateLimitRetryTimerId || rateLimitRetryCount >= 1) return false;
-+    rateLimitRetryCount += 1;
-+    rateLimitRetryTimerId = setTimeout(() => {
-+      rateLimitRetryTimerId = null;
-+      if (callbacks && typeof callbacks.onRetryStart === "function") {
-+        try {
-+          callbacks.onRetryStart();
-+        } catch (err) {
-+          console.warn("Auto-retry callback failed", err);
-+        }
-+      }
-+      const state = AppState.getState();
-+      const token = state.accessToken;
-+      if (!token) {
-+        console.warn("Auto-retry skipped: missing access token");
-+        return;
-+      }
-+      try {
-+        open(token, { resumeToken: state.resumeToken, skipRateLimitCancel: true });
-+      } catch (err) {
-+        console.error("Auto-retry open failed", err);
-+      }
-+    }, delay);
-+    return true;
-+  }
-+
+       try {
+-        open(token, { resumeToken: state.resumeToken, skipRateLimitCancel: true });
++        open(token, { resumeToken, skipRateLimitCancel: true });
+       } catch (err) {
+         console.error("Auto-retry open failed", err);
+       }
+     }, delay);
+     return true;
+   }
+ 
    function sendRaw(payload) {
      if (!socket || socket.readyState !== WebSocket.OPEN) return;
      socket.send(payload);
@@ -539,17 +496,90 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
        return true;
      } catch (err) {
        console.error("WSClient sendBinary error", err);
-       return false;
+@@ -107,50 +138,82 @@
      }
    }
  
    function sendJson(frame) {
      try {
        sendRaw(JSON.stringify(frame));
-@@ -106,92 +156,102 @@
+     } catch (err) {
+       console.error("WSClient sendJson error", err);
+     }
+   }
+ 
+   function sendPing() {
+     if (!socket || socket.readyState !== WebSocket.OPEN) return;
+     lastPingAt = Date.now();
+     updateState({ lastPingAt });
+     sendJson({ type: "ping" });
+   }
+ 
+   function startHeartbeat() {
+     clearHeartbeat();
+     sendPing();
+     heartbeatTimerId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
+     updateState({ heartbeatTimerId });
+   }
+ 
++  function attemptAutoResume() {
++    const resume = getResumeState();
++    if (!resume) {
++      return false;
++    }
++    if (Date.now() >= resume.expiresAt) {
++      clearResumeState();
++      updateState({ resumeError: "invalid" });
++      return false;
++    }
++    const state = AppState.getState();
++    const accessToken = state && state.accessToken;
++    if (!accessToken) {
++      console.warn("Auto-resume skipped: missing access token");
++      return false;
++    }
++    if (autoResumeAttemptToken === resume.token) {
++      return false;
++    }
++    autoResumeAttemptToken = resume.token;
++    updateState({ connectionState: "resuming", resumeError: null });
++    try {
++      open(accessToken, { resumeToken: resume.token, skipRateLimitCancel: true });
++      return true;
++    } catch (err) {
++      console.error("Auto-resume open failed", err);
++      autoResumeAttemptToken = null;
++      updateState({ connectionState: "disconnected" });
++      return false;
++    }
++  }
++
+   function dispatchFrame(frame) {
+     if (!frame || typeof frame.type !== "string") return;
+     const type = frame.type;
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail: frame }));
+       if (type.includes(".")) {
+         const baseType = type.split(".")[0];
+         window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
+       }
+     } catch (err) {
+       console.warn("WSClient dispatch error", err);
+     }
+   }
+ 
+   function sanitizePolicyFrame(frame) {
+     const safe = { type: "policy.interaction" };
+     if (!frame || typeof frame !== "object") {
+       safe.policy = {};
+       return safe;
+     }
+     Object.keys(frame).forEach((key) => {
+       if (key === "policy") return;
+       safe[key] = frame[key];
+     });
      const policy = {};
-     const source = frame.policy;
-     if (source && typeof source === "object") {
+@@ -159,99 +222,109 @@
        if (typeof source.mode === "string") {
          policy.mode = source.mode;
        }
@@ -572,10 +602,15 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
        return;
      }
      expectInfoFrame = false;
-+    resetRateLimitRecovery();
+     resetRateLimitRecovery();
      const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
      const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
-     const expiresAt = resumeToken && resumeTtlMs ? Date.now() + resumeTtlMs : null;
+-    const expiresAt = resumeToken && resumeTtlMs ? Date.now() + resumeTtlMs : null;
++    if (resumeToken && resumeTtlMs) {
++      assignResume(resumeToken, resumeTtlMs);
++    } else {
++      clearResumeState();
++    }
      const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
      const audioPlayer = getAudioPlayer();
      if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
@@ -584,10 +619,12 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
      updateState({
        connectionState: "connected",
        sid: meta.sid,
-       resumeToken,
-       resumeTtlMs,
-       resumeExpiresAt: expiresAt,
-       infoFrame: frame
+-      resumeToken,
+-      resumeTtlMs,
+-      resumeExpiresAt: expiresAt,
+-      infoFrame: frame
++      infoFrame: frame,
++      resumeError: null
      });
      startHeartbeat();
    }
@@ -615,14 +652,22 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
        sendJson({ type: "pong", t: Date.now() });
      } else if (frame.type === "error") {
        console.error("WS error frame", frame);
-+      if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
-+        try {
-+          window.WSErrorUI.handleFrame(frame, {
-+            scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
-+          });
-+        } catch (err) {
-+          console.warn("Error handler threw", err);
-+        }
++      const isResumeInvalid = frame && frame.code === "resume_invalid";
++      if (isResumeInvalid) {
++        clearResumeState();
++        updateState({ resumeError: "invalid" });
++      }
+       if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+         try {
+           window.WSErrorUI.handleFrame(frame, {
+             scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
+           });
+         } catch (err) {
+           console.warn("Error handler threw", err);
+         }
+       }
++      if (isResumeInvalid) {
++        close("resume_invalid");
 +      }
      } else if (frame.type === "tts.start") {
        const audioPlayer = getAudioPlayer();
@@ -649,7 +694,69 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
        }
      } else if (frame.type === "asr.final") {
        const view = window.TranscriptView;
-@@ -259,80 +319,101 @@
+@@ -267,153 +340,167 @@
+   }
+ 
+   function parseFrame(event) {
+     const { data } = event;
+     if (typeof data === "string") {
+       try {
+         const frame = JSON.parse(data);
+         handleMessageFrame(frame);
+       } catch (err) {
+         console.error("Failed to parse WS frame", err, data);
+       }
+       return;
+     }
+     if (data instanceof Blob) {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(data);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+       return;
+     }
+     console.warn("Unknown WS frame type", data);
+   }
+ 
+   function attachSocket(ws) {
++    ws.__intentionalClose = false;
+     const handlers = {
+       open: () => {
+         updateState({ websocket: ws });
+       },
+       message: parseFrame,
+       error: (event) => {
+         console.error("WebSocket error", event);
+         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
+       },
+       close: (event) => {
++        const expected = ws.__intentionalClose === true;
+         if (socket === ws) {
+           socket = null;
+           expectInfoFrame = true;
+         }
+         clearHeartbeat();
+-        updateState({ connectionState: "disconnected", websocket: null });
++        updateState({ websocket: null });
++        let resumed = false;
++        if (!expected) {
++          resumed = attemptAutoResume();
++        }
++        if (!resumed) {
++          updateState({ connectionState: "disconnected" });
++        }
+         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
+       }
+     };
+     ws.addEventListener("open", handlers.open);
+     ws.addEventListener("message", handlers.message);
+     ws.addEventListener("error", handlers.error);
+     ws.addEventListener("close", handlers.close);
+     ws.__handlers = handlers;
+   }
+ 
+   function detachSocket(ws) {
      const handlers = ws && ws.__handlers;
      if (!handlers) return;
      ws.removeEventListener("open", handlers.open);
@@ -657,11 +764,13 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
      ws.removeEventListener("error", handlers.error);
      ws.removeEventListener("close", handlers.close);
      delete ws.__handlers;
++    delete ws.__intentionalClose;
    }
  
    function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
      if (!ws) return;
      detachSocket(ws);
++    ws.__intentionalClose = true;
      try {
        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
          ws.close(1000, reason);
@@ -675,36 +784,40 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
      }
    }
  
--  function open(accessToken, { resumeToken = null } = {}) {
-+  function open(accessToken, options = {}) {
+   function open(accessToken, options = {}) {
      if (!accessToken) {
        throw new Error("accessToken is required to open the chat socket");
      }
-+    const { resumeToken = null, skipRateLimitCancel = false } = options;
+     const { resumeToken = null, skipRateLimitCancel = false } = options;
++    const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
      if (socket) {
        cleanupSocket(socket, "superseded");
      }
      expectInfoFrame = true;
-+    if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
-+      try {
-+        window.WSErrorUI.cancelRateLimitCountdown("manual");
-+      } catch (err) {
-+        console.warn("Failed to cancel rate limit countdown", err);
-+      }
-+    }
-+    if (!skipRateLimitCancel) {
-+      clearRateLimitRetryTimer();
-+      rateLimitRetryCount = 0;
-+    }
-     const url = computeUrl(accessToken, resumeToken);
+     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+         window.WSErrorUI.cancelRateLimitCountdown("manual");
+       } catch (err) {
+         console.warn("Failed to cancel rate limit countdown", err);
+       }
+     }
+     if (!skipRateLimitCancel) {
+       clearRateLimitRetryTimer();
+       rateLimitRetryCount = 0;
+     }
+-    const url = computeUrl(accessToken, resumeToken);
++    const url = computeUrl(accessToken, resumeTokenValue);
      const ws = transportFactory(url, SUBPROTOCOL);
      socket = ws;
      updateState({
-       connectionState: resumeToken ? "resuming" : "connecting",
+-      connectionState: resumeToken ? "resuming" : "connecting",
++      connectionState: resumeTokenValue ? "resuming" : "connecting",
        accessToken,
        websocket: ws,
        latencyMs: null,
-       lastPingAt: null
+-      lastPingAt: null
++      lastPingAt: null,
++      resumeError: null
      });
      attachSocket(ws);
      return ws;
@@ -718,15 +831,16 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
      const ws = socket;
      cleanupSocket(ws, reason);
      clearHeartbeat();
-+    clearRateLimitRetryTimer();
-+    rateLimitRetryCount = 0;
-+    if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
-+      try {
-+        window.WSErrorUI.cancelRateLimitCountdown(reason);
-+      } catch (err) {
-+        console.warn("Failed to cancel countdown on close", err);
-+      }
-+    }
+     clearRateLimitRetryTimer();
+     rateLimitRetryCount = 0;
+     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+         window.WSErrorUI.cancelRateLimitCountdown(reason);
+       } catch (err) {
+         console.warn("Failed to cancel countdown on close", err);
+       }
+     }
++    autoResumeAttemptToken = null;
      updateState({ connectionState: "disconnected", websocket: null });
    }
  
@@ -752,79 +866,3 @@ index d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0..e768324873e85aae43cc4ffdcca2c83a
        lastPingAt = ts;
        updateState({ lastPingAt: ts });
      },
-diff --git a/app/templates/index.html b/app/templates/index.html
-index 88b50d0d3544187d74f066164be972db1536f594..c72fdd0ff1649e8e74b4a1188f3677a4238d0b4c 100644
---- a/app/templates/index.html
-+++ b/app/templates/index.html
-@@ -1,38 +1,39 @@
- <!DOCTYPE html>
- <html lang="en">
- <head>
-   <meta charset="utf-8" />
-   <meta name="viewport" content="width=device-width, initial-scale=1" />
-   <title>AskChip — Live</title>
-   <meta name="color-scheme" content="dark light">
-   <link rel="preconnect" href="https://fonts.googleapis.com">
-   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-   <link rel="stylesheet" href="./styles.css" />
- </head>
- <body>
-+  <div id="toast-root" class="toast-container" aria-live="assertive" aria-atomic="true"></div>
-   <div id="app" class="app">
-     <!-- Top Bar -->
-     <header class="topbar" role="banner">
-       <div class="topbar-left">
-         <span class="env-badge" title="Environment">LIVE</span>
-         <span class="sid" aria-live="polite" title="Session ID">SID: <span id="sid-text">—</span></span>
-       </div>
-       <div class="topbar-right">
-         <div class="brand-menu">
-           <button id="brandBtn" class="brand-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="brandMenu">
-             <span class="brand-text">AskChip</span>
-             <svg class="chev" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z" fill="currentColor"/></svg>
-           </button>
-           <div id="brandMenu" class="menu" role="menu" aria-labelledby="brandBtn">
-             <button class="menu-item" role="menuitem" id="adminItem">
-               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2l4 2 4 2-4 2-4 2-4-2-4-2 4-2 4-2zm0 6l4 2 4 2-4 2-4 2-4-2-4-2 4-2 4-2zm0 6l4 2 4 2-4 2-4 2-4-2-4-2 4-2 4-2z"/></svg>
-               <span>Admin</span>
-             </button>
-             <button class="menu-item" role="menuitem" id="profileItem">
-               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>
-               <span>Profile</span>
-             </button>
-             <button class="menu-item" role="menuitem" id="logoutItem">
-               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 13v-2H7V8l-5 4 5 4v-3zM20 3h-8v2h8v14h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
-               <span>Logout</span>
-@@ -84,29 +85,30 @@
-         <button class="pill secondary" id="openChatBtn" aria-pressed="false" title="Toggle Chat Panel">
-           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20 2H4a2 2 0 00-2 2v18l4-4h14a2 2 0 002-2V4a2 2 0 00-2-2z"/></svg>
-           Chat
-         </button>
-       </div>
-       <div class="toolbar-center">
-         <button class="pill start" id="startBtn" aria-label="Start session">
-           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
-           Start
-         </button>
-         <button class="pill end" id="endBtn" aria-label="End session" disabled>
-           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>
-           End
-         </button>
-       </div>
-       <div class="toolbar-right">
-         <form id="textChatForm" class="text-chat" autocomplete="off" style="display:flex; gap:8px; align-items:center;">
-           <input type="text" id="textChatInput" name="textChatInput" placeholder="Type to interrupt…" aria-label="Send a message" style="flex:1; min-width:160px; padding:8px 12px; border-radius:12px; border:1px solid var(--border); background:rgba(0,0,0,0.35); color:var(--text);" />
-           <button type="submit" class="pill secondary" id="textChatSendBtn">Send</button>
-         </form>        
-         <span class="latency" id="latencyHint">~0 ms</span>
-       </div>
-     </footer>
-   </div>
- 
--  <script src="./transcript_view.js"></script>  
-+  <script src="./transcript_view.js"></script>
-+  <script src="./errors.js"></script>
-   <script src="./app.js"></script>
- </body>
- </html>

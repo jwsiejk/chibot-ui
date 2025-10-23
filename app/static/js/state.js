@@ -3,9 +3,8 @@
     connectionState: "disconnected",
     accessToken: null,
     sid: null,
-    resumeToken: null,
-    resumeTtlMs: null,
-    resumeExpiresAt: null,
+    resume: null,
+    resumeError: null,
     latencyMs: null,
     lastPingAt: null,
     heartbeatTimerId: null,
@@ -37,6 +36,23 @@
     notify();
   }
 
+  function setResume(token, ttlMs) {
+    const resumeToken = typeof token === "string" && token.trim() ? token.trim() : null;
+    const ttl = Number(ttlMs);
+    if (!resumeToken || !Number.isFinite(ttl) || ttl <= 0) {
+      clearResume();
+      return null;
+    }
+    const expiresAt = Date.now() + ttl;
+    const resume = { token: resumeToken, ttlMs: ttl, expiresAt };
+    setState({ resume, resumeError: null });
+    return resume;
+  }
+
+  function clearResume() {
+    setState({ resume: null, resumeError: null });
+  }
+
   function reset() {
     state = { ...initialState };
     notify();
@@ -58,6 +74,8 @@
     setState,
     reset,
     subscribe,
+    setResume,
+    clearResume,
     get initialState() {
       return { ...initialState };
     }
