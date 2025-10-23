@@ -1,4 +1,4 @@
-"""ASGI gateway mounting the chat.v2 adapter, HTTP probes, and UI assets."""
+"""ASGI gateway mounting the chat.v2 adapter, HTTP probes, and UI assets (pure ASGI)."""
 from __future__ import annotations
 
 import json
@@ -14,28 +14,18 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
-# Optional Starlette types (not required for runtime)
-try:  # pragma: no cover
-    from starlette.applications import Starlette  # noqa: F401
-    from starlette.responses import FileResponse, HTMLResponse, Response as StarletteResponse  # noqa: F401
-    from starlette.staticfiles import StaticFiles  # noqa: F401
-except ImportError:  # pragma: no cover
-    Starlette = None  # type: ignore[assignment]
-    FileResponse = HTMLResponse = StarletteResponse = StaticFiles = None  # type: ignore[assignment]
-
 from app.admin.flow_api import handle_flow_trace, handle_flow_zip
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
+# ---------------------------- Basics / response type --------------------------
 
 @dataclass(frozen=True)
 class Response:
     status: int
     body: bytes
     headers: tuple[tuple[bytes, bytes], ...]
-
 
 def json_response(*, status: int = 200, **payload: Any) -> Response:
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -45,7 +35,14 @@ def json_response(*, status: int = 200, **payload: Any) -> Response:
     )
     return Response(status=status, body=body, headers=headers)
 
-# --- Route constants ---------------------------------------------------------
+def _html_response(body: bytes) -> Response:
+    headers = (
+        (b"content-type", b"text/html; charset=utf-8"),
+        (b"content-length", str(len(body)).encode("ascii")),
+    )
+    return Response(status=200, body=body, headers=headers)
+
+# ---------------------------- Routes / paths ---------------------------------
 
 WS_ROUTE = "/ws/v2/chat"
 HEALTH_ROUTE = "/api/v1/health"
@@ -54,14 +51,12 @@ READY_ROUTE = "/api/v1/ready"
 INFO_ROUTE = "/api/v1/info"
 ROOT_ROUTE = "/"
 FAVICON_ROUTE = "/favicon.ico"
-STATIC_ROUTE_PREFIX = "/static/"
+STATIC_PREFIX = "/static/"
 
 EXPORT_ROOT = Path("exports")
-
-# Paths for UI
-BASE_DIR = Path(__file__).resolve().parent                # app/
-TEMPLATES_ROOT = BASE_DIR / "templates"                   # app/templates
-STATIC_ROOT = BASE_DIR / "static"                         # app/static
+BASE_DIR = Path(__file__).resolve().parent        # app/
+TEMPLATES_ROOT = BASE_DIR / "templates"           # app/templates
+STATIC_ROOT = BASE_DIR / "static"                 # app/static
 
 INDEX_PATH = TEMPLATES_ROOT / "index.html"
 FAVICON_PATH = STATIC_ROOT / "favicon.ico"
@@ -75,7 +70,7 @@ _DEFAULT_INDEX_HTML = b"<!doctype html><title>AskChip</title><div id='app'></div
 HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
 _adapter: Optional[ChatV2Adapter] = None
 
-# --- ASGI entry --------------------------------------------------------------
+# ---------------------------- ASGI entrypoint --------------------------------
 
 async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
     scope_type = scope.get("type")
@@ -83,9 +78,9 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
 
     if scope_type == "websocket":
         if path == WS_ROUTE:
-            allowed, blocked_origin = _validate_ws_origin(scope)
+            allowed, blocked = _validate_ws_origin(scope)
             if not allowed:
-                await _reject_origin(scope, blocked_origin, receive, send)
+                await _reject_origin(scope, blocked, receive, send)
                 return
             await _get_adapter()(scope, receive, send)
         else:
@@ -94,7 +89,7 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
 
     if scope_type == "http":
         handler = _HTTP_ROUTES.get(path)
-        if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
+        if handler is None and path.startswith(STATIC_PREFIX):
             handler = partial(_handle_static, raw_path=path)
         if handler is None:
             handler = _resolve_admin_route(path)
@@ -102,32 +97,29 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
             await _drain_request_body(receive)
             await _send_response(send, json_response(status=404, error="not_found"))
         else:
-            response = await handler(scope, receive)
-            await _send_response(send, response)
+            resp = await handler(scope, receive)
+            await _send_response(send, resp)
         return
 
     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
 
-# --- HTTP handlers -----------------------------------------------------------
+# ---------------------------- HTTP handlers ----------------------------------
 
 async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
     if not _method_is_get(scope):
-        await _drain_request_body(receive)
-        return json_response(status=405, error="method_not_allowed")
+        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
     await _drain_request_body(receive)
     return json_response(ok=True, engine="v2", ws_subprotocol=CHAT_V2_SUBPROTOCOL)
 
 async def _handle_live(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
     if not _method_is_get(scope):
-        await _drain_request_body(receive)
-        return json_response(status=405, error="method_not_allowed")
+        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
     await _drain_request_body(receive)
     return json_response(ok=True, ts_ms=int(time.time() * 1000))
 
 async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
     if not _method_is_get(scope):
-        await _drain_request_body(receive)
-        return json_response(status=405, error="method_not_allowed")
+        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
     await _drain_request_body(receive)
     try:
         EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -140,8 +132,7 @@ async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) -> 
 
 async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
     if not _method_is_get(scope):
-        await _drain_request_body(receive)
-        return json_response(status=405, error="method_not_allowed")
+        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
     await _drain_request_body(receive)
     version = os.getenv("APP_VERSION") or "0.0.0+dev"
     raw_sha = os.getenv("GIT_SHA") or ""
@@ -151,8 +142,7 @@ async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> R
 
 async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
     if not _method_is_get(scope):
-        await _drain_request_body(receive)
-        return json_response(status=405, error="method_not_allowed")
+        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
     await _drain_request_body(receive)
     try:
         body = INDEX_PATH.read_bytes()
@@ -162,8 +152,7 @@ async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> 
 
 async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
     if not _method_is_get(scope):
-        await _drain_request_body(receive)
-        return json_response(status=405, error="method_not_allowed")
+        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
     await _drain_request_body(receive)
     resp = _build_static_response(FAVICON_PATH)
     if resp is None:
@@ -172,8 +161,7 @@ async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -
 
 async def _handle_static(scope: dict, receive: Callable[[], Awaitable[dict]], *, raw_path: str) -> Response:
     if not _method_is_get(scope):
-        await _drain_request_body(receive)
-        return json_response(status=405, error="method_not_allowed")
+        await _drain_request_body(receive); return json_response(status=405, error="method_not_allowed")
     await _drain_request_body(receive)
     resolved = _resolve_static_path(raw_path)
     if resolved is None:
@@ -183,40 +171,33 @@ async def _handle_static(scope: dict, receive: Callable[[], Awaitable[dict]], *,
         return json_response(status=404, error="not_found")
     return resp
 
-# --- Helpers -----------------------------------------------------------------
-
-def _html_response(body: bytes) -> Response:
-    headers = (
-        (b"content-type", b"text/html; charset=utf-8"),
-        (b"content-length", str(len(body)).encode("ascii")),
-    )
-    return Response(status=200, body=body, headers=headers)
+# ---------------------------- helpers ----------------------------------------
 
 def _build_static_response(path: Path) -> Optional[Response]:
     try:
         data = path.read_bytes()
     except OSError:
         return None
-    content_type, encoding = mimetypes.guess_type(path.name)
-    if content_type is None:
-        content_type = "application/octet-stream"
-    elif content_type.startswith("text/") and "charset=" not in content_type:
-        content_type = f"{content_type}; charset=utf-8"
+    ctype, enc = mimetypes.guess_type(path.name)
+    if ctype is None:
+        ctype = "application/octet-stream"
+    elif ctype.startswith("text/") and "charset=" not in ctype:
+        ctype = f"{ctype}; charset=utf-8"
     headers: list[tuple[bytes, bytes]] = [
-        (b"content-type", content_type.encode("latin1")),
+        (b"content-type", ctype.encode("latin1")),
         (b"content-length", str(len(data)).encode("ascii")),
     ]
-    if encoding:
-        headers.append((b"content-encoding", encoding.encode("latin1")))
+    if enc:
+        headers.append((b"content-encoding", enc.encode("latin1")))
     return Response(status=200, body=data, headers=tuple(headers))
 
 def _resolve_static_path(raw_path: str) -> Optional[Path]:
-    if not raw_path.startswith(STATIC_ROUTE_PREFIX):
+    if not raw_path.startswith(STATIC_PREFIX):
         return None
-    relative = raw_path[len(STATIC_ROUTE_PREFIX):]
-    if not relative:
+    rel = raw_path[len(STATIC_PREFIX):]
+    if not rel:
         return None
-    target = STATIC_ROOT / relative
+    target = STATIC_ROOT / rel
     try:
         resolved = target.resolve(strict=False)
     except OSError:
@@ -232,20 +213,20 @@ def _resolve_static_path(raw_path: str) -> Optional[Path]:
 
 async def _drain_request_body(receive: Callable[[], Awaitable[dict]]) -> None:
     while True:
-        message = await receive()
-        if message.get("type") != "http.request":
+        msg = await receive()
+        if msg.get("type") != "http.request":
             break
-        if not message.get("more_body"):
+        if not msg.get("more_body"):
             break
 
 async def _reject_websocket(receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-    message = await receive()
-    if message.get("type") == "websocket.connect":
+    msg = await receive()
+    if msg.get("type") == "websocket.connect":
         await send({"type": "websocket.close", "code": 1000})
 
-async def _send_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
-    await send({"type": "http.response.start", "status": response.status, "headers": list(response.headers)})
-    await send({"type": "http.response.body", "body": response.body, "more_body": False})
+async def _send_response(send: Callable[[dict], Awaitable[None]], resp: Response) -> None:
+    await send({"type": "http.response.start", "status": resp.status, "headers": list(resp.headers)})
+    await send({"type": "http.response.body", "body": resp.body, "more_body": False})
 
 def _method_is_get(scope: dict) -> bool:
     return scope.get("method", "GET").upper() == "GET"
@@ -256,7 +237,7 @@ def _get_adapter() -> ChatV2Adapter:
         _adapter = ChatV2Adapter()
     return _adapter
 
-# --- WS Origin policy --------------------------------------------------------
+# ---------------------------- WS Origin policy -------------------------------
 
 async def _reject_origin(
     scope: dict,
@@ -264,8 +245,8 @@ async def _reject_origin(
     receive: Callable[[], Awaitable[dict]],
     send: Callable[[dict], Awaitable[None]],
 ) -> None:
-    message = await receive()
-    if message.get("type") != "websocket.connect":
+    msg = await receive()
+    if msg.get("type") != "websocket.connect":
         return
     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
@@ -274,10 +255,10 @@ async def _reject_origin(
     await _send_response(send, json_response(status=403, **payload))
 
 def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
-    for header, value in headers:
-        if header == name:
+    for h, v in headers:
+        if h == name:
             try:
-                return value.decode("latin1").strip()
+                return v.decode("latin1").strip()
             except UnicodeDecodeError:
                 return None
     return None
@@ -285,7 +266,7 @@ def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optio
 def _resolve_origin_policy() -> "_OriginPolicy":
     raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
     if raw is not None:
-        entries = tuple(filter(None, (_normalize_origin(item) for item in raw.split(","))))
+        entries = tuple(filter(None, (_normalize_origin(x) for x in raw.split(","))))
         return _OriginPolicy(mode="explicit", values=entries)
     env = (os.getenv("ASKCHIP_ENV") or "development").strip().lower()
     if env in {"production", "prod"}:
@@ -338,7 +319,7 @@ def _validate_ws_origin(scope: dict) -> tuple[bool, Optional[str]]:
         return True, None
     return False, origin
 
-# --- HTTP route map ----------------------------------------------------------
+# ---------------------------- HTTP route map ---------------------------------
 
 _HTTP_ROUTES: Dict[str, HttpHandler] = {
     ROOT_ROUTE: _handle_index,
@@ -355,65 +336,61 @@ def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
     suffix = path[len(_ADMIN_FLOW_PREFIX):]
     if not suffix:
         return None
-    segments = suffix.split("/")
-    if len(segments) != 2:
+    parts = suffix.split("/")
+    if len(parts) != 2:
         return None
-    sid, action = segments
+    sid, action = parts
     if not sid:
         return None
     if action == _TRACE_SEGMENT:
-        handler = partial(handle_flow_trace, sid=sid)
+        base = partial(handle_flow_trace, sid=sid)
     elif action == _ZIP_SEGMENT:
-        handler = partial(handle_flow_zip, sid=sid)
+        base = partial(handle_flow_zip, sid=sid)
     else:
-        handler = None
-    if handler is None:
         return None
-    if _admin_cors_enabled():
-        return partial(_apply_admin_cors, handler)
-    return handler
+    return partial(_maybe_admin_cors, base)
 
-# --- Admin CORS helpers ------------------------------------------------------
+# ---------------------------- Admin CORS helpers -----------------------------
 
-async def _apply_admin_cors(handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-    response = await handler(scope, receive)
-    allow_origin = _resolve_admin_cors_origin(scope)
-    if allow_origin is None:
-        return response
-    encoded_origin = _encode_header_value(allow_origin)
-    if encoded_origin is None:
-        return response
-    headers = tuple(response.headers) + (
-        (b"access-control-allow-origin", encoded_origin),
+async def _maybe_admin_cors(
+    handler: HttpHandler,
+    scope: dict,
+    receive: Callable[[], Awaitable[dict]],
+) -> Response:
+    resp = await handler(scope, receive)
+    allow = _resolve_admin_cors_origin(scope) if _admin_cors_enabled() else None
+    if not allow:
+        return resp
+    enc = _encode_header_value(allow)
+    if not enc:
+        return resp
+    headers = tuple(resp.headers) + (
+        (b"access-control-allow-origin", enc),
         (b"access-control-allow-methods", b"GET"),
     )
-    return Response(status=response.status, body=response.body, headers=headers)
+    return Response(status=resp.status, body=resp.body, headers=headers)
 
 def _admin_cors_enabled() -> bool:
     env = (os.getenv("ASKCHIP_ENV") or "").strip().lower()
     return env in {"dev", "staging"}
 
 def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
-    allowed = _parse_admin_cors_origins()
+    allowed = _parse_admin_cors()
     if not allowed:
         return None
     if "*" in allowed:
         return "*"
     origin = _decode_header(scope.get("headers", ()), b"origin")
-    if origin is None:
+    if not origin:
         return None
-    normalized = origin.strip()
-    for entry in allowed:
-        if normalized == entry:
-            return normalized
-    return None
+    norm = origin.strip()
+    return norm if norm in allowed else None
 
-def _parse_admin_cors_origins() -> tuple[str, ...]:
+def _parse_admin_cors() -> tuple[str, ...]:
     raw = os.getenv("ASKCHIP_ADMIN_CORS_ORIGINS")
     if not raw:
         return ()
-    entries = [item.strip() for item in raw.split(",") if item.strip()]
-    return tuple(entries)
+    return tuple(s.strip() for s in raw.split(",") if s.strip())
 
 def _encode_header_value(value: str) -> Optional[bytes]:
     try:
@@ -421,8 +398,9 @@ def _encode_header_value(value: str) -> Optional[bytes]:
     except UnicodeEncodeError:
         return None
 
-# --- Export for Gunicorn -----------------------------------------------------
+# ---------------------------- Export for Gunicorn -----------------------------
 
-# Start command expects: app.asgi_gateway:asgi
+# Start command should be:
+# gunicorn -k uvicorn.workers.UvicornWorker -w 2 -t 120 -b 0.0.0.0:$PORT app.asgi_gateway:asgi
 asgi = app
 __all__ = ["asgi", "app"]
