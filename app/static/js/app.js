@@ -118,23 +118,47 @@
     const brandBtn = document.getElementById('brandBtn');
     const brandMenu = document.getElementById('brandMenu');
     const adminItem = document.getElementById('adminItem');
-    if (!isAdmin) {
-      adminItem.setAttribute('aria-disabled', 'true');
-      adminItem.title = "Admins only";
+    brandMenu.setAttribute('aria-hidden', 'true');
+    function syncAdminItem() {
+      if (isAdmin) {
+        adminItem.removeAttribute('aria-disabled');
+        adminItem.disabled = false;
+        adminItem.tabIndex = 0;
+        adminItem.title = "Open Admin UI";
+      } else {
+        adminItem.setAttribute('aria-disabled', 'true');
+        adminItem.disabled = true;
+        adminItem.tabIndex = -1;
+        adminItem.title = "Admins only";
+      }
     }
-    function closeMenu(){ brandMenu.classList.remove('open'); brandBtn.setAttribute('aria-expanded','false'); }
+    syncAdminItem();
+    function closeMenu(){ brandMenu.classList.remove('open'); brandMenu.setAttribute('aria-hidden','true'); brandBtn.setAttribute('aria-expanded','false'); }
     brandBtn.addEventListener('click', (e) => {
       const open = brandMenu.classList.toggle('open');
       brandBtn.setAttribute('aria-expanded', String(open));
+      brandMenu.setAttribute('aria-hidden', String(!open));
+      if (!open) return;
+      const firstItem = brandMenu.querySelector('.menu-item:not([aria-disabled="true"])');
+      if (firstItem) firstItem.focus();
     });
     document.addEventListener('click', (e) => {
       if (!brandMenu.contains(e.target) && !brandBtn.contains(e.target)) closeMenu();
     });
-    adminItem.addEventListener('click', () => {
-      if (isAdmin) {
-        alert("Open Admin UI (placeholder).");
+    brandMenu.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
         closeMenu();
+        brandBtn.focus();
       }
+    });
+    adminItem.addEventListener('click', (event) => {
+      if (!isAdmin) {
+        event.preventDefault();
+        return;
+      }
+      alert("Open Admin UI (placeholder).");
+      closeMenu();
     });
     document.getElementById('profileItem').addEventListener('click', () => {
       alert(`Profile for ${currentUserEmail} (placeholder).`); closeMenu();
@@ -158,6 +182,230 @@
     const connLabel = document.getElementById('connLabel');
     const statusDot = document.querySelector('.status-dot');
     const latencyHint = document.getElementById('latencyHint');
+    const voiceLabel = document.getElementById('voiceLabel');
+    const localeLabel = document.getElementById('localeLabel');
+    const textChatForm = document.getElementById('textChatForm');
+    const textChatInput = document.getElementById('textChatInput');
+
+    const voiceState = { voiceId: null, locale: null };
+
+    function renderVoiceState() {
+      if (voiceLabel) {
+        voiceLabel.textContent = voiceState.voiceId || '—';
+      }
+      if (localeLabel) {
+        localeLabel.textContent = voiceState.locale || '—';
+      }
+    }
+
+    function resetVoiceState() {
+      voiceState.voiceId = null;
+      voiceState.locale = null;
+      renderVoiceState();
+    }
+
+    function updateVoiceState(partial) {
+      if (!partial || typeof partial !== 'object') {
+        return;
+      }
+      let updated = false;
+      if (typeof partial.voiceId === 'string') {
+        const trimmed = partial.voiceId.trim();
+        if (trimmed && trimmed !== voiceState.voiceId) {
+          voiceState.voiceId = trimmed;
+          updated = true;
+        }
+      }
+      if (typeof partial.locale === 'string') {
+        const trimmed = partial.locale.trim();
+        if (trimmed && trimmed !== voiceState.locale) {
+          voiceState.locale = trimmed;
+          updated = true;
+        }
+      }
+      if (updated) {
+        renderVoiceState();
+      }
+    }
+
+    function extractVoiceLocale(frame) {
+      if (!frame || typeof frame !== 'object') {
+        return {};
+      }
+      let voiceId = null;
+      let locale = null;
+      if (typeof frame.voice_id === 'string') {
+        voiceId = frame.voice_id;
+      }
+      if (typeof frame.locale === 'string') {
+        locale = frame.locale;
+      }
+      const meta = frame.meta && typeof frame.meta === 'object' ? frame.meta : null;
+      if (meta) {
+        if (!voiceId && typeof meta.voice_id === 'string') {
+          voiceId = meta.voice_id;
+        }
+        if (!locale && typeof meta.locale === 'string') {
+          locale = meta.locale;
+        }
+        const ttsMeta = meta.tts && typeof meta.tts === 'object' ? meta.tts : null;
+        if (ttsMeta) {
+          if (!voiceId && typeof ttsMeta.voice_id === 'string') {
+            voiceId = ttsMeta.voice_id;
+          }
+          if (!locale && typeof ttsMeta.locale === 'string') {
+            locale = ttsMeta.locale;
+          }
+        }
+      }
+      return { voiceId, locale };
+    }
+
+    renderVoiceState();
+
+    let pttEnabled = false;
+    let pttActive = false;
+    let pttMaskState = null;
+
+    function applyPttMask({ force = false } = {}) {
+      if (!window.AudioRecorder || typeof window.AudioRecorder._setMask !== 'function') {
+        return;
+      }
+      const shouldMask = pttEnabled && !pttActive;
+      if (force || pttMaskState !== shouldMask) {
+        try {
+          window.AudioRecorder._setMask(shouldMask);
+          pttMaskState = shouldMask;
+        } catch (err) {
+          console.warn('Failed to toggle push-to-talk mask', err);
+        }
+      }
+    }
+
+    function setPttEnabled(enabled) {
+      if (pttEnabled === enabled) {
+        applyPttMask({ force: true });
+        return;
+      }
+      pttEnabled = enabled;
+      if (!enabled && pttActive) {
+        pttActive = false;
+        if (document.body) {
+          document.body.classList.remove('ptt-hold');
+        }
+      }
+      pttMaskState = null;
+      applyPttMask({ force: true });
+    }
+
+    function setPttActive(active) {
+      if (!pttEnabled) {
+        active = false;
+      }
+      if (pttActive === active) {
+        return;
+      }
+      pttActive = active;
+      if (document.body) {
+        document.body.classList.toggle('ptt-hold', pttActive);
+      }
+      applyPttMask({ force: true });
+    }
+
+    function isInteractiveTarget(target) {
+      if (!target || target === document.body || target === document.documentElement) {
+        return false;
+      }
+      if (target.isContentEditable) {
+        return true;
+      }
+      if (!(target instanceof HTMLElement)) {
+        return false;
+      }
+      const tag = target.tagName;
+      if (tag) {
+        const normalized = tag.toUpperCase();
+        if (normalized === 'INPUT' || normalized === 'TEXTAREA' || normalized === 'SELECT' || normalized === 'BUTTON') {
+          return true;
+        }
+      }
+      if (target.closest('input, textarea, select, button, a[href], [role="textbox"], [role="button"], [role="menuitem"]')) {
+        return true;
+      }
+      return false;
+    }
+
+    function handleGlobalKeyDown(event) {
+      if (event.defaultPrevented) return;
+      const { key, code, ctrlKey, metaKey, altKey, repeat } = event;
+      const isModifier = ctrlKey || metaKey || altKey;
+      if ((key === ' ' || key === 'Spacebar' || code === 'Space') && !isModifier) {
+        if (repeat || isInteractiveTarget(event.target)) {
+          return;
+        }
+        if (!pttEnabled) {
+          return;
+        }
+        event.preventDefault();
+        setPttActive(true);
+        return;
+      }
+      if (key === 'Enter' && !isModifier) {
+        if (isInteractiveTarget(event.target)) {
+          return;
+        }
+        if (textChatInput) {
+          const value = textChatInput.value || '';
+          if (value.trim()) {
+            event.preventDefault();
+            if (textChatForm && typeof textChatForm.requestSubmit === 'function') {
+              textChatForm.requestSubmit();
+            } else if (textChatForm) {
+              textChatForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            }
+          } else {
+            event.preventDefault();
+            textChatInput.focus();
+          }
+        }
+        return;
+      }
+      if (key === 'Escape') {
+        if (brandMenu && brandMenu.classList.contains('open')) {
+          event.preventDefault();
+          closeMenu();
+          brandBtn.focus();
+          return;
+        }
+        if (isInteractiveTarget(event.target)) {
+          return;
+        }
+        const audioPlayer = window.AudioPlayer;
+        if (audioPlayer && typeof audioPlayer.interrupt === 'function') {
+          audioPlayer.interrupt();
+        }
+        return;
+      }
+    }
+
+    function handleGlobalKeyUp(event) {
+      const { key, code, ctrlKey, metaKey, altKey } = event;
+      if ((key === ' ' || key === 'Spacebar' || code === 'Space') && !(ctrlKey || metaKey || altKey)) {
+        if (!pttActive) {
+          return;
+        }
+        event.preventDefault();
+        setPttActive(false);
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
+    window.addEventListener('keyup', handleGlobalKeyUp, true);
+    window.addEventListener('blur', () => {
+      if (pttActive) {
+        setPttActive(false);
+      }
+    });
 
     const accessTokenParam = urlParams.get('access_token') || urlParams.get('token');
     const defaultToken = (window.DEMO_ACCESS_TOKEN || accessTokenParam || '').trim();
@@ -462,16 +710,28 @@
       startBtn.disabled = active;
       endBtn.disabled = !active;
       if (state.latencyMs != null) {
-        latencyHint.textContent = `${Math.round(state.latencyMs)} ms`;
+        latencyHint.textContent = `Latency: ${Math.round(state.latencyMs)} ms`;
       } else {
-        latencyHint.textContent = '—';
+        latencyHint.textContent = 'Latency: —';
       }
+      if (state.connectionState === 'disconnected') {
+        resetVoiceState();
+      } else if (state.infoFrame) {
+        updateVoiceState(extractVoiceLocale(state.infoFrame));
+      }
+      setPttEnabled(state.connectionState === 'connected');
       if (previousConnectionState !== 'connected' && state.connectionState === 'connected') {
         Waveform.start();
         if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-          window.AudioRecorder.start().catch((err) => {
-            console.error('AudioRecorder start error', err);
-          });
+          window.AudioRecorder.start()
+            .then(() => {
+              if (pttEnabled && !pttActive) {
+                applyPttMask({ force: true });
+              }
+            })
+            .catch((err) => {
+              console.error('AudioRecorder start error', err);
+            });
         }
       } else if (previousConnectionState !== 'disconnected' && state.connectionState === 'disconnected') {
         Waveform.stop();
@@ -485,9 +745,30 @@
         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
           window.AudioPlayer.interrupt();
         }
+        setPttActive(false);
       }
       previousConnectionState = state.connectionState;
       updateResumeBanner(state);
+    });
+
+    window.addEventListener('tts.start', (event) => {
+      const detail = event && event.detail;
+      if (detail) {
+        updateVoiceState(extractVoiceLocale(detail));
+      }
+      if (pttEnabled && !pttActive) {
+        applyPttMask({ force: true });
+      }
+    });
+    window.addEventListener('tts.end', () => {
+      if (pttEnabled && !pttActive) {
+        applyPttMask({ force: true });
+      }
+    });
+    window.addEventListener('asr.ready', () => {
+      if (pttEnabled && !pttActive) {
+        applyPttMask({ force: true });
+      }
     });
 
     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
