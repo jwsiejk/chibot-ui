@@ -299,6 +299,26 @@ async def _send_response(send: Callable[[dict], Awaitable[None]], response: Resp
     await send({"type": "http.response.body", "body": response.body, "more_body": False})
 
 
+async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
+    """Emit an HTTP response while still in the WebSocket handshake."""
+
+    headers = list(response.headers)
+    await send(
+        {
+            "type": "websocket.http.response.start",
+            "status": response.status,
+            "headers": headers,
+        }
+    )
+    await send(
+        {
+            "type": "websocket.http.response.body",
+            "body": response.body,
+            "more_body": False,
+        }
+    )
+
+
 def _method_is_get(scope: dict) -> bool:
     """Return True when the incoming HTTP scope uses the GET method."""
 
@@ -329,7 +349,7 @@ async def _reject_origin(
     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
     if origin:
         payload["origin"] = origin
-    await _send_response(send, json_response(status=403, **payload))
+    await _send_ws_response(send, json_response(status=403, **payload))
 
 
 def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:

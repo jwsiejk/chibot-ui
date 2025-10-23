@@ -1,91 +1,182 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 7300ab4e746364fa4e064fa17dabc9d458ac2b52..73e2bdbd4d3e715082aac7d3f9f6bd30d6e35751 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -799,78 +799,83 @@
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index 36e016e0e5d549535d4459ba56c0dfa2414c241d..4ebb5f9aef4de8edcde44bc3bce7ddf9d0b87dec 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -277,81 +277,101 @@ def _resolve_static_path(raw_path: str) -> Optional[Path]:
+ async def _drain_request_body(receive: Callable[[], Awaitable[dict]]) -> None:
+     """Consume and discard the HTTP request body if present."""
+     while True:
+         message = await receive()
+         if message.get("type") != "http.request":
+             break
+         if not message.get("more_body"):
+             break
  
-     let previousConnectionState = AppState.getState().connectionState;
-     AppState.subscribe((state) => {
-       sidText.textContent = state.sid || '—';
-       let label = 'Disconnected';
-       if (state.connectionState === 'connected') label = 'Connected';
-       else if (state.connectionState === 'connecting') label = 'Connecting…';
-       else if (state.connectionState === 'resuming') label = 'Resuming…';
-       connLabel.textContent = label;
-       const active = state.connectionState !== 'disconnected';
-       statusDot.classList.toggle('on', active);
-       startBtn.disabled = active;
-       endBtn.disabled = !active;
-       if (state.latencyMs != null) {
-         latencyHint.textContent = `Latency: ${Math.round(state.latencyMs)} ms`;
-       } else {
-         latencyHint.textContent = 'Latency: —';
-       }
-       if (state.connectionState === 'disconnected') {
-         resetVoiceState();
-         resetSuggestions();
-       } else if (state.infoFrame) {
-         updateVoiceState(extractVoiceLocale(state.infoFrame));
-       }
-       setPttEnabled(state.connectionState === 'connected');
--      if (previousConnectionState !== 'connected' && state.connectionState === 'connected') {
-+      const prevConnectionState = previousConnectionState;
-+      const nextConnectionState = state.connectionState;
-+      const becameConnected = prevConnectionState !== 'connected' && nextConnectionState === 'connected';
-+      const becameDisconnected = prevConnectionState !== 'disconnected' && nextConnectionState === 'disconnected';
-+      previousConnectionState = nextConnectionState;
+ 
+ async def _reject_websocket(receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+     """Politely refuse WebSocket connections on unsupported routes."""
+     message = await receive()
+     if message.get("type") == "websocket.connect":
+         await send({"type": "websocket.close", "code": 1000})
+ 
+ 
+ async def _send_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
+     """Emit a prepared HTTP response through the ASGI channel."""
+ 
+     headers = list(response.headers)
+     await send({"type": "http.response.start", "status": response.status, "headers": headers})
+     await send({"type": "http.response.body", "body": response.body, "more_body": False})
+ 
+ 
++async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
++    """Emit an HTTP response while still in the WebSocket handshake."""
 +
-+      if (becameConnected) {
-         Waveform.start();
-         if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-           window.AudioRecorder.start()
-             .then(() => {
-               if (pttEnabled && !pttActive) {
-                 applyPttMask({ force: true });
-               }
-             })
-             .catch((err) => {
-               console.error('AudioRecorder start error', err);
-             });
-         }
--      } else if (previousConnectionState !== 'disconnected' && state.connectionState === 'disconnected') {
-+      } else if (becameDisconnected) {
-         Waveform.stop();
-         if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
-           try {
-             window.AudioRecorder.stop();
-           } catch (err) {
-             console.warn('AudioRecorder stop error', err);
-           }
-         }
-         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
-           window.AudioPlayer.interrupt();
-         }
-         setPttActive(false);
-       }
--      previousConnectionState = state.connectionState;
-       updateResumeBanner(state);
-     });
++    headers = list(response.headers)
++    await send(
++        {
++            "type": "websocket.http.response.start",
++            "status": response.status,
++            "headers": headers,
++        }
++    )
++    await send(
++        {
++            "type": "websocket.http.response.body",
++            "body": response.body,
++            "more_body": False,
++        }
++    )
++
++
+ def _method_is_get(scope: dict) -> bool:
+     """Return True when the incoming HTTP scope uses the GET method."""
  
-     window.addEventListener('tts.start', (event) => {
-       const detail = event && event.detail;
-       if (detail) {
-         updateVoiceState(extractVoiceLocale(detail));
-       }
-       if (pttEnabled && !pttActive) {
-         applyPttMask({ force: true });
-       }
-     });
-     window.addEventListener('tts.end', () => {
-       if (pttEnabled && !pttActive) {
-         applyPttMask({ force: true });
-       }
-     });
-     window.addEventListener('asr.ready', () => {
-       if (pttEnabled && !pttActive) {
-         applyPttMask({ force: true });
-       }
-     });
+     return scope.get("method", "GET").upper() == "GET"
  
-     window.addEventListener('assistant.suggestions', (event) => {
-       const detail = event && event.detail;
+ 
+ def _get_adapter() -> ChatV2Adapter:
+     """Return a lazily instantiated ChatV2Adapter singleton."""
+     global _adapter
+     if _adapter is None:
+         _adapter = ChatV2Adapter()
+     return _adapter
+ 
+ 
+ async def _reject_origin(
+     scope: dict,
+     origin: Optional[str],
+     receive: Callable[[], Awaitable[dict]],
+     send: Callable[[dict], Awaitable[None]],
+ ) -> None:
+     """Reject a WebSocket handshake because the Origin is not allowed."""
+ 
+     message = await receive()
+     if message.get("type") != "websocket.connect":
+         return
+ 
+     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
+     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
+     if origin:
+         payload["origin"] = origin
+-    await _send_response(send, json_response(status=403, **payload))
++    await _send_ws_response(send, json_response(status=403, **payload))
+ 
+ 
+ def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
+     for header, value in headers:
+         if header == name:
+             try:
+                 return value.decode("latin1").strip()
+             except UnicodeDecodeError:  # pragma: no cover - defensive
+                 return None
+     return None
+ 
+ 
+ def _resolve_origin_policy() -> "_OriginPolicy":
+     raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
+     if raw is not None:
+         entries = tuple(filter(None, (_normalize_origin(item) for item in raw.split(","))))
+         return _OriginPolicy(mode="explicit", values=entries)
+ 
+     env = (os.getenv("ASKCHIP_ENV") or "development").strip().lower()
+     if env in {"production", "prod"}:
+         return _OriginPolicy(mode="explicit", values=())
+ 
+     return _OriginPolicy(mode="localhost", values=("localhost", "127.0.0.1"))
+ 
+ 
+diff --git a/tests/test_ws_origin.py b/tests/test_ws_origin.py
+index 0539c7a67e6e59437372144fb916b2bdae064828..db79d6a321d344a3287151281d81d8acd8339b7e 100644
+--- a/tests/test_ws_origin.py
++++ b/tests/test_ws_origin.py
+@@ -1,39 +1,69 @@
+ """Origin allow-list enforcement for WebSocket handshakes."""
+ from __future__ import annotations
+ 
++import asyncio
++import json
+ import os
+ from typing import Optional
+ from unittest.mock import patch
+ 
+ import pytest
+ 
+-from app.asgi_gateway import _validate_ws_origin
++from app.asgi_gateway import _reject_origin, _validate_ws_origin
+ 
+ 
+ def _make_scope(origin: Optional[str]) -> dict:
+     headers = []
+     if origin is not None:
+         headers.append((b"origin", origin.encode("latin1")))
+     return {"type": "websocket", "path": "/ws/v2/chat", "headers": tuple(headers)}
+ 
+ 
+ @pytest.mark.parametrize(
+     "config, origin, expected",
+     [
+         ({"ASKCHIP_WS_ALLOWED_ORIGINS": "https://app.askchip.ai"}, "https://app.askchip.ai", True),
+         ({"ASKCHIP_WS_ALLOWED_ORIGINS": "https://app.askchip.ai"}, "https://evil.example", False),
+         ({"ASKCHIP_ENV": "development"}, "http://localhost:3000", True),
+         ({"ASKCHIP_ENV": "prod"}, "http://localhost:3000", False),
+     ],
+ )
+ def test_origin_policy(config: dict[str, str], origin: str, expected: bool) -> None:
+     with patch.dict(os.environ, config, clear=True):
+         allowed, _ = _validate_ws_origin(_make_scope(origin))
+         assert allowed is expected
+ 
+ 
+ def test_missing_origin_is_accepted() -> None:
+     with patch.dict(os.environ, {}, clear=True):
+         allowed, origin = _validate_ws_origin(_make_scope(None))
+         assert origin is None
+         assert allowed is True
++
++
++def test_reject_origin_responds_during_handshake() -> None:
++    async def _exercise() -> list[dict]:
++        queue: asyncio.Queue[dict] = asyncio.Queue()
++        await queue.put({"type": "websocket.connect"})
++
++        sent: list[dict] = []
++
++        async def receive() -> dict:
++            return await queue.get()
++
++        async def send(message: dict) -> None:
++            sent.append(message)
++
++        scope = {"type": "websocket", "path": "/ws/v2/chat"}
++        await _reject_origin(scope, "https://evil.example", receive, send)
++        return sent
++
++    messages = asyncio.run(_exercise())
++    assert [message["type"] for message in messages] == [
++        "websocket.http.response.start",
++        "websocket.http.response.body",
++    ]
++    start, body = messages
++    assert start["status"] == 403
++    payload = json.loads(body["body"].decode("utf-8"))
++    assert payload["code"] == "origin_blocked"
