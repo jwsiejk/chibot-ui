@@ -44,4 +44,19 @@
 - **ADR-0017 (2025-10-22)** — **Dual‑VAD Aggregator & Policy (production)**  
   A per‑session VAD aggregator fuses **auto‑VAD** (energy/activity) and **ASR evidence** into a single barge decision while `assistant_speaking`. Policy adds `vad.mode`, `vad.priority`, `min_speech_ms`, `energy_threshold_dbfs`, `hold_ms`, `echo_suppression_ms`, and `barge_cooldown_ms`.  
   The aggregator enforces echo‑suppression, hysteresis, cooldown, and one‑grant‑per‑TTS. It adapts thresholds using noise‑floor tracking and SNR margins and may adjust behavior based on environment classification (quiet/normal/noisy).  
-  Telemetry adds diagnostic `EVT_VAD` and `EVT_VAD_DECISION`; outcomes proceed via `EVT_BARGE_IN`. Provider and client contracts remain unchanged.
+    Telemetry adds diagnostic `EVT_VAD` and `EVT_VAD_DECISION`; outcomes proceed via `EVT_BARGE_IN`. Provider and client contracts remain unchanged.
+
+- **ADR-0018 (2025-10-23)** — Mode-aware persona as single source of truth
+  Persona content (voice, tone, guardrails) and per-mode instructions co-locate in a single file (e.g., `config/personas/chip.yml`). The persona enumerates supported modes: `clarify`, `outline`, `deep_dive`, `compare`, `steps`, `next_actions`.
+  Status: Accepted.
+  Consequences: `nlg/frames.py` becomes redundant; stylistic updates occur via persona-only changes; lowers maintenance overhead.
+
+- **ADR-0019 (2025-10-23)** — Planner → Generator simplification (tiny NLU, focused NLG)
+  Replace the interpreter + policy + frames stack with a Planner that yields `{mode, missing_info, chips}` and a Generator that constructs system/dev/user messages from persona + mode.
+  Status: Accepted.
+  Consequences: `universal_interpreter.py` and most of `dialog/policy.py` are decommissioned post-migration; tests target the plan contract and per-mode snapshots; no WebSocket contract changes.
+
+- **ADR-0020 (2025-10-23)** — Optional dialog.plan telemetry frame
+  The server may emit a `dialog.plan` telemetry frame per user turn for observability; clients are not required to consume it.
+  Status: Accepted.
+  Consequences: Enhances traceability (mode selection, missing info, suggested chips) without altering client behavior; remains aligned with `docs/10_CONTRACT_WS.md`.
