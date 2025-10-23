@@ -22,6 +22,7 @@ EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
 EVT_ASR_FINAL = "EVT_ASR_FINAL"
 EVT_NLU = "EVT_NLU"
 EVT_NLG = "EVT_NLG"
+EVT_DIALOG_PLAN = "EVT_DIALOG_PLAN"
 
 __all__ = [
     "EVT_WS_OPEN",
@@ -42,4 +43,5 @@ __all__ = [
     "EVT_ASR_FINAL",
     "EVT_NLU",
     "EVT_NLG",
+    "EVT_DIALOG_PLAN",
 ]

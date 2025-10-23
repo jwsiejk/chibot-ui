@@ -20,6 +20,7 @@ from app.voice_v2 import (
     EVT_ASR_FINAL,
     EVT_NLG,
     EVT_NLU,
+    EVT_DIALOG_PLAN,
     EVT_POLICY_APPLIED,
     EVT_TTS_END,
     EVT_TTS_START,
@@ -36,6 +37,7 @@ from app.voice_v2.llm import LLMAdapter
 from app.voice_v2.gate import GateController
 from app.voice_v2.conversation_buffer import ConversationBuffer
 from app.voice_v2.vad import VADAggregator
+from app.voice_v2.planner import plan_turn
 
 
 def _now_ms() -> int:
@@ -109,6 +111,7 @@ class _TurnSession:
     nlu_emitted: bool = False
     policy_emitted: bool = False
     nlg_emitted: bool = False
+    plan_emitted: bool = False
 
 
 class _NullExporter:
@@ -373,6 +376,7 @@ class EngineV2:
                 nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
                 self._publish(nlu_event)
                 session.nlu_emitted = True
+                self._emit_dialog_plan(sid, session, req_id, turn_id, text)
                 self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
 
             self._emit_user_chat_message(
@@ -665,6 +669,7 @@ class EngineV2:
             session.nlu_emitted = False
             session.policy_emitted = False
             session.nlg_emitted = False
+            session.plan_emitted = False
             begin_payload = {
                 "turn_id": session.turn_id,
                 "req_id": session.req_id,
@@ -719,6 +724,7 @@ class EngineV2:
             session.nlu_emitted = False
             session.policy_emitted = False
             session.nlg_emitted = False
+            session.plan_emitted = False
 
         session.state = new_state
 
@@ -835,6 +841,57 @@ class EngineV2:
         payload = {"meta": meta, "frame": frame}
         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
         self._publish(event)
+
+    def _emit_dialog_plan(
+        self,
+        sid: str,
+        session: _TurnSession,
+        req_id: str,
+        turn_id: str,
+        user_text: str,
+    ) -> None:
+        if session.plan_emitted:
+            return
+
+        if not isinstance(req_id, str) or not req_id:
+            return
+        if not isinstance(turn_id, str) or not turn_id:
+            return
+
+        plan = plan_turn(user_text)
+        plan_payload = {
+            "req_id": req_id,
+            "turn_id": turn_id,
+            "plan": {
+                "mode": plan.mode,
+                "missing_info": list(plan.missing_info),
+                "chips": list(plan.chips),
+                "reason": plan.reason,
+            },
+        }
+        plan_event = self._envelope(sid, EVT_DIALOG_PLAN, plan_payload)
+        self._publish(plan_event)
+
+        frame = {
+            "type": "dialog.plan",
+            "ts_ms": _now_ms(),
+            "mode": plan.mode,
+            "missing_info": list(plan.missing_info),
+            "chips": list(plan.chips),
+            "reason": plan.reason,
+        }
+        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+        meta = {
+            "ws": {
+                "dir": "out",
+                "size": len(serialized.encode("utf-8")),
+                "preview": serialized,
+            }
+        }
+        payload = {"meta": meta, "frame": frame}
+        frame_event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+        self._publish(frame_event)
+        session.plan_emitted = True
 
     def _maybe_emit_policy_and_nlg(
         self,

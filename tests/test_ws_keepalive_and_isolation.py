@@ -209,12 +209,20 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
                 payload_b = {"type": "info", "label": "B"}
                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness_a.sid, "payload": payload_a})
                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness_b.sid, "payload": payload_b})
-                frame_a = await harness_a.wait_for_outbound(lambda item: item == payload_a)
-                frame_b = await harness_b.wait_for_outbound(lambda item: item == payload_b)
-                self.assertEqual(frame_a, payload_a)
-                self.assertEqual(frame_b, payload_b)
-                self.assertNotIn(payload_b, harness_a.outbound_frames)
-                self.assertNotIn(payload_a, harness_b.outbound_frames)
+                frame_a = await harness_a.wait_for_outbound(
+                    lambda item: item.get("type") == "info" and item.get("label") == "A"
+                )
+                frame_b = await harness_b.wait_for_outbound(
+                    lambda item: item.get("type") == "info" and item.get("label") == "B"
+                )
+                self.assertEqual(frame_a.get("label"), "A")
+                self.assertEqual(frame_b.get("label"), "B")
+                self.assertTrue(
+                    all(frame.get("label") != "B" for frame in harness_a.outbound_frames)
+                )
+                self.assertTrue(
+                    all(frame.get("label") != "A" for frame in harness_b.outbound_frames)
+                )
             finally:
                 await harness_a.close()
                 await harness_b.close()

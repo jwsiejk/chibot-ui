@@ -1,8 +1,60 @@
+diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
+index 6866bee8a3840c58377ac8ac5cee248203beb6c3..0818542cb2842f979e43460ad9bdc7c329fcbb9f 100644
+--- a/app/voice_v2/__init__.py
++++ b/app/voice_v2/__init__.py
+@@ -1,45 +1,47 @@
+ """Event constants for AskChip voice v2 telemetry."""
+ 
+ EVT_WS_OPEN = "EVT_WS_OPEN"
+ EVT_WS_CLOSE = "EVT_WS_CLOSE"
+ EVT_WS_JSON_RECV = "EVT_WS_JSON_RECV"
+ EVT_WS_JSON_SEND = "EVT_WS_JSON_SEND"
+ EVT_WS_AUDIO_RECV = "EVT_WS_AUDIO_RECV"
+ EVT_WS_AUDIO_SEND = "EVT_WS_AUDIO_SEND"
+ EVT_CHAT_USER = "EVT_CHAT_USER"
+ 
+ EVT_TTS_START = "EVT_TTS_START"
+ EVT_TTS_END = "EVT_TTS_END"
+ 
+ EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
+ EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
+ 
+ EVT_MIC_GATE = "EVT_MIC_GATE"
+ EVT_BARGE_IN = "EVT_BARGE_IN"
+ 
+ EVT_ASR_READY = "EVT_ASR_READY"
+ EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
+ EVT_ASR_FINAL = "EVT_ASR_FINAL"
+ EVT_NLU = "EVT_NLU"
+ EVT_NLG = "EVT_NLG"
++EVT_DIALOG_PLAN = "EVT_DIALOG_PLAN"
+ 
+ __all__ = [
+     "EVT_WS_OPEN",
+     "EVT_WS_CLOSE",
+     "EVT_WS_JSON_RECV",
+     "EVT_WS_JSON_SEND",
+     "EVT_WS_AUDIO_RECV",
+     "EVT_WS_AUDIO_SEND",
+     "EVT_CHAT_USER",
+     "EVT_TTS_START",
+     "EVT_TTS_END",
+     "EVT_POLICY_APPLIED",
+     "EVT_ACWR_RECOMPUTE",
+     "EVT_MIC_GATE",
+     "EVT_BARGE_IN",
+     "EVT_ASR_READY",
+     "EVT_ASR_PARTIAL",
+     "EVT_ASR_FINAL",
+     "EVT_NLU",
+     "EVT_NLG",
++    "EVT_DIALOG_PLAN",
+ ]
 diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812b319b954 100644
+index 853ae2ca66d650375f9b2a04ca06a812b319b954..28c77c211a42110730f8b52766e6a8981cb862a0 100644
 --- a/app/voice_v2/engine.py
 +++ b/app/voice_v2/engine.py
-@@ -1,57 +1,60 @@
+@@ -1,63 +1,65 @@
  """Minimal Engine v2 shell with telemetry hooks and session exporting."""
  from __future__ import annotations
  
@@ -23,8 +75,9 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
      EVT_ACWR_RECOMPUTE,
      EVT_CHAT_USER,
      EVT_ASR_FINAL,
-+    EVT_NLG,
+     EVT_NLG,
      EVT_NLU,
++    EVT_DIALOG_PLAN,
      EVT_POLICY_APPLIED,
      EVT_TTS_END,
      EVT_TTS_START,
@@ -36,11 +89,12 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
      EVT_WS_OPEN,
  )
  from app.voice_v2.nlu import NLUAdapter
-+from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
-+from app.voice_v2.llm import LLMAdapter
+ from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
+ from app.voice_v2.llm import LLMAdapter
  from app.voice_v2.gate import GateController
  from app.voice_v2.conversation_buffer import ConversationBuffer
  from app.voice_v2.vad import VADAggregator
++from app.voice_v2.planner import plan_turn
  
  
  def _now_ms() -> int:
@@ -63,9 +117,10 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
      "channels": _PCM_CHANNELS,
  }
  
-@@ -82,83 +85,87 @@ class _Envelope:
-     def to_dict(self) -> Dict[str, Any]:
-         data = {"type": self.type, "sid": self.sid}
+ _DEFAULT_VOICE_ID = "alloy-en-US-001"
+ _DEFAULT_LOCALE = "en-US"
+ 
+@@ -87,50 +89,51 @@ class _Envelope:
          data.update(self.payload)
          if "meta" in data and isinstance(data["meta"], Mapping):
              data["meta"] = dict(data["meta"])
@@ -89,8 +144,9 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
      perf_tts_start_ms: Optional[int] = None
      asr_final_emitted: bool = False
      nlu_emitted: bool = False
-+    policy_emitted: bool = False
-+    nlg_emitted: bool = False
+     policy_emitted: bool = False
+     nlg_emitted: bool = False
++    plan_emitted: bool = False
  
  
  class _NullExporter:
@@ -116,42 +172,7 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
              exporter = _NullExporter()
          self._exporter = exporter
          self._bus = telemetry_bus
-         self._policy_snapshot: Dict[str, Any] | None = None
-         self._last_sid: Optional[str] = None
-         self._gate = GateController(publish=self._publish_gate_event)
-         self._sessions: Dict[str, _TurnSession] = {}
-         self._barge_handles: Dict[str, object] = {}
-         self._aggregators: Dict[str, VADAggregator] = {}
-         self._conversation_buffer = ConversationBuffer()
-         self._nlu = NLUAdapter()
-+        self._policy_decider = PolicyDecider()
-+        self._llm = LLMAdapter(telemetry_bus=self._bus, auto_publish=False)
-         subscribe = getattr(self._bus, "subscribe", None)
-         if callable(subscribe):
-             self._chat_subscription = subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
-             self._ws_send_subscription = subscribe(
-                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
-             )
-         else:
-             self._chat_subscription = None
-             self._ws_send_subscription = bus.subscribe(
-                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
-             )
- 
-     @property
-     def policy_snapshot(self) -> Dict[str, Any] | None:
-         return self._policy_snapshot
- 
-     @policy_snapshot.setter
-     def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
-         self._policy_snapshot = dict(snapshot) if snapshot is not None else None
- 
-     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
-         """Capture a successful WebSocket upgrade."""
-         meta = {"headers": dict(headers), "dir": "in"}
-         event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
-         self._publish(event)
-@@ -344,50 +351,51 @@ class EngineV2:
+@@ -351,50 +354,51 @@ class EngineV2:
              session.perf_final_ms = elapsed
  
          turn_id = session.turn_id or str(uuid.uuid4())
@@ -177,7 +198,8 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
                  nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
                  self._publish(nlu_event)
                  session.nlu_emitted = True
-+                self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
++                self._emit_dialog_plan(sid, session, req_id, turn_id, text)
+                 self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
  
              self._emit_user_chat_message(
                  sid,
@@ -202,10 +224,7 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
              and session.turn_started_ms is not None
              and session.req_id == req_id
          ):
-             elapsed = _now_ms() - session.turn_started_ms
-@@ -633,50 +641,52 @@ class EngineV2:
-         reason = "vad_grant"
-         mode = info.get("mode") if isinstance(info, Mapping) else None
+@@ -643,50 +647,51 @@ class EngineV2:
          if mode == "and":
              reason = "vad_grant_dual"
          self.on_auto_barge_attempt(sid, source, reason=reason)
@@ -229,8 +248,9 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
              session.perf_tts_start_ms = None
              session.asr_final_emitted = False
              session.nlu_emitted = False
-+            session.policy_emitted = False
-+            session.nlg_emitted = False
+             session.policy_emitted = False
+             session.nlg_emitted = False
++            session.plan_emitted = False
              begin_payload = {
                  "turn_id": session.turn_id,
                  "req_id": session.req_id,
@@ -256,9 +276,7 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
              req_id = session.req_id
              end_payload = {
                  "turn_id": turn_id,
-@@ -685,50 +695,52 @@ class EngineV2:
-                     "turn_id": turn_id,
-                     "req_id": req_id,
+@@ -697,50 +702,51 @@ class EngineV2:
                      "duration_ms": duration_ms,
                  },
              }
@@ -282,8 +300,9 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
              session.perf_tts_start_ms = None
              session.asr_final_emitted = False
              session.nlu_emitted = False
-+            session.policy_emitted = False
-+            session.nlg_emitted = False
+             session.policy_emitted = False
+             session.nlg_emitted = False
++            session.plan_emitted = False
  
          session.state = new_state
  
@@ -309,7 +328,7 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
              or session.state == READY
          ):
              return None
-@@ -802,50 +814,99 @@ class EngineV2:
+@@ -814,50 +820,101 @@ class EngineV2:
          self._publish(event)
  
          self._publish_tts_mask(sid, "cleared")
@@ -335,458 +354,513 @@ index 1267acac56dff2e3ee7efe362df81e9ab3631900..853ae2ca66d650375f9b2a04ca06a812
          event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
          self._publish(event)
  
-+    def _maybe_emit_policy_and_nlg(
++    def _emit_dialog_plan(
 +        self,
 +        sid: str,
 +        session: _TurnSession,
-+        nlu_payload: Mapping[str, Any],
++        req_id: str,
++        turn_id: str,
++        user_text: str,
 +    ) -> None:
-+        if session.policy_emitted:
++        if session.plan_emitted:
 +            return
 +
-+        req_id = session.req_id or nlu_payload.get("req_id")
 +        if not isinstance(req_id, str) or not req_id:
 +            return
-+
-+        snapshot = self.policy_snapshot or {}
-+        decision = self._policy_decider.decide(req_id, nlu_payload, snapshot)
-+        policy_payload = {"req_id": req_id, **decision}
-+        policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
-+        self._publish(policy_event)
-+        session.policy_emitted = True
-+
-+        if decision.get("action") != "respond" or session.nlg_emitted:
++        if not isinstance(turn_id, str) or not turn_id:
 +            return
 +
-+        intent = nlu_payload.get("intent")
-+        if not isinstance(intent, str) or not intent:
-+            intent = "chitchat.fallback"
++        plan = plan_turn(user_text)
++        plan_payload = {
++            "req_id": req_id,
++            "turn_id": turn_id,
++            "plan": {
++                "mode": plan.mode,
++                "missing_info": list(plan.missing_info),
++                "chips": list(plan.chips),
++                "reason": plan.reason,
++            },
++        }
++        plan_event = self._envelope(sid, EVT_DIALOG_PLAN, plan_payload)
++        self._publish(plan_event)
 +
-+        entities = nlu_payload.get("entities")
-+        if isinstance(entities, Mapping):
-+            entity_payload = dict(entities)
-+        else:
-+            entity_payload = {}
++        frame = {
++            "type": "dialog.plan",
++            "ts_ms": _now_ms(),
++            "mode": plan.mode,
++            "missing_info": list(plan.missing_info),
++            "chips": list(plan.chips),
++            "reason": plan.reason,
++        }
++        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
++        meta = {
++            "ws": {
++                "dir": "out",
++                "size": len(serialized.encode("utf-8")),
++                "preview": serialized,
++            }
++        }
++        payload = {"meta": meta, "frame": frame}
++        frame_event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
++        self._publish(frame_event)
++        session.plan_emitted = True
 +
-+        llm_result = self._llm.generate(req_id, intent=intent, entities=entity_payload)
-+        if isinstance(llm_result, Mapping):
-+            response_text = llm_result.get("text")
-+        else:
-+            response_text = llm_result
-+
-+        if not isinstance(response_text, str):
-+            response_text = str(response_text)
-+
-+        nlg_payload = {"req_id": req_id, "text": response_text}
-+        nlg_event = self._envelope(sid, EVT_NLG, nlg_payload)
-+        self._publish(nlg_event)
-+        session.nlg_emitted = True
-+
-+        self._llm.publish_chat_message(req_id, response_text)
-+
-     def _emit_user_chat_message(
+     def _maybe_emit_policy_and_nlg(
          self,
          sid: str,
-         text: str,
-         turn_id: str,
-         req_id: str,
-         client_msg_id: Optional[str] = None,
-         *,
-         origin: str = "text",
+         session: _TurnSession,
+         nlu_payload: Mapping[str, Any],
      ) -> None:
-         frame: Dict[str, Any] = {
-             "type": "chat.message",
-             "id": str(uuid.uuid4()),
-             "role": "user",
-             "text": text,
-             "origin": origin,
-             "turn_id": turn_id,
-             "req_id": req_id,
-             "ts_ms": _now_ms(),
-         }
-         if client_msg_id is not None:
-             frame["client_msg_id"] = client_msg_id
+         if session.policy_emitted:
+             return
  
-         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         meta = {
-diff --git a/app/voice_v2/llm.py b/app/voice_v2/llm.py
-index 88d1af60f800a919ea1c91c01514cc648096b332..855d073d72189b34459534de4c27b33568e4aa76 100644
---- a/app/voice_v2/llm.py
-+++ b/app/voice_v2/llm.py
-@@ -1,107 +1,151 @@
--"""Stubbed LLM adapter that emits EVT_NLG telemetry."""
-+"""Stubbed LLM adapter used by the voice engine."""
- from __future__ import annotations
- 
- import json
- import time
- import uuid
--from typing import Any, Dict, Tuple
-+from typing import Any, Mapping
- 
- from app.telemetry import bus
- from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
--from app.voice_v2.engine import EVT_TURN_BEGIN, EVT_TURN_END
- 
-+EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
-+EVT_TURN_END = "EVT_TURN_END"
- 
--class LLMAdapter:
--    """Return canned responses while publishing telemetry events."""
- 
--    def __init__(self, *, telemetry_bus=bus, canned_text: str | None = None) -> None:
-+class LLMAdapter:
-+    """Return canned responses while optionally publishing telemetry events."""
-+
-+    _INTENT_REPLIES = {
-+        "greeting": "Hi there! How can I help you today?",
-+        "goodbye": "Thanks for stopping by. Talk soon!",
-+        "status.check": "Let me pull up the latest status for you.",
-+        "support.request": "I'm here to help. Could you share a few more details?",
-+    }
-+
-+    def __init__(
-+        self,
-+        *,
-+        telemetry_bus=bus,
-+        canned_text: str | None = None,
-+        auto_publish: bool = True,
-+    ) -> None:
-         self._bus = telemetry_bus
-+        self._auto_publish = bool(auto_publish)
-         self._canned_text = canned_text or (
-             "Thanks for chatting with AskChip! How else can I help?"
-         )
--        self._turn_lookup: dict[str, Tuple[str, str]] = {}
--        self._subscriptions = [
--            self._bus.subscribe(EVT_TURN_BEGIN, self._handle_turn_event),
--            self._bus.subscribe(EVT_TURN_END, self._handle_turn_event),
--        ]
--
--    def generate(self, req_id: str, text: str, **_: Any) -> Dict[str, Any]:
--        """Return a canned response and emit an EVT_NLG event."""
-+        self._turn_lookup: dict[str, tuple[str, str]] = {}
-+        subscribe = getattr(self._bus, "subscribe", None)
-+        if callable(subscribe):
-+            self._subscriptions = [
-+                subscribe(EVT_TURN_BEGIN, self._handle_turn_event),
-+                subscribe(EVT_TURN_END, self._handle_turn_event),
-+            ]
-+        else:
-+            self._subscriptions = []
-+
-+    def generate(
-+        self,
-+        req_id: str,
-+        intent: str | None = None,
-+        entities: Mapping[str, Any] | None = None,
-+        **kwargs: Any,
-+    ) -> Mapping[str, Any]:
-+        """Return a canned response for the provided ``intent``.
-+
-+        ``entities`` are currently unused but accepted so future call sites can
-+        pass structured data without needing a signature change. The adapter can
-+        still be called with ``text="..."`` to preserve compatibility with
-+        legacy callers and tests.
-+        """
- 
+         req_id = session.req_id or nlu_payload.get("req_id")
          if not isinstance(req_id, str) or not req_id:
-             raise ValueError("req_id must be a non-empty string")
- 
-+        _ = kwargs.get("text")  # legacy callers provide the user utterance via ``text``
-+        response_text = self._INTENT_REPLIES.get(intent or "", self._canned_text)
-+
-         start = time.perf_counter()
--        response_text = self._canned_text
--        self._publish_nlg(req_id, response_text)
--        self._publish_chat_message(req_id, response_text)
--        elapsed_ms = int((time.perf_counter() - start) * 1000)
--        timing = {"total_ms": max(elapsed_ms, 0)}
-+        timing = {"total_ms": max(int((time.perf_counter() - start) * 1000), 0)}
-+        if self._auto_publish:
-+            self.publish_nlg(req_id, response_text)
-         return {"text": response_text, "timing": timing}
- 
-+    def publish_nlg(self, req_id: str, text: str) -> None:
-+        """Publish EVT_NLG and chat bridge messages when enabled."""
-+
-+        if not self._auto_publish:
-+            # When auto publish is disabled we only emit the bus events when
-+            # this helper is invoked directly (the engine handles it).
-+            return
-+
-+        self._publish_nlg(req_id, text)
-+        self._publish_chat_message(req_id, text)
-+
-+    def publish_chat_message(self, req_id: str, text: str) -> None:
-+        """Manually mirror the assistant message into the chat stream."""
-+
-+        self._publish_chat_message(req_id, text)
-+
-     def _publish_nlg(self, req_id: str, text: str) -> None:
--        event = {
--            "type": EVT_NLG,
--            "req_id": req_id,
--            "text": text,
--            "source": "llm_adapter",
--        }
-+        event = {"type": EVT_NLG, "req_id": req_id, "text": text, "source": "llm_adapter"}
-         self._bus.publish(event)
- 
-     def _publish_chat_message(self, req_id: str, text: str) -> None:
-         mapping = self._turn_lookup.get(req_id)
-         if not mapping:
              return
  
-         sid, turn_id = mapping
-         if not sid or not turn_id:
+         snapshot = self.policy_snapshot or {}
+         decision = self._policy_decider.decide(req_id, nlu_payload, snapshot)
+         policy_payload = {"req_id": req_id, **decision}
+         policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
+         self._publish(policy_event)
+         session.policy_emitted = True
+ 
+         if decision.get("action") != "respond" or session.nlg_emitted:
              return
  
-         frame = {
-             "type": "chat.message",
-             "id": str(uuid.uuid4()),
-             "role": "assistant",
-             "text": text,
-             "origin": "voice",
-             "turn_id": turn_id,
-             "req_id": req_id,
-             "ts_ms": int(time.time() * 1000),
-         }
- 
-         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         payload = {
-             "meta": {
-                 "ws": {
-                     "dir": "out",
-                     "size": len(serialized.encode("utf-8")),
-                     "preview": serialized,
-                 }
-             },
-             "frame": frame,
-         }
- 
-         event = {"type": EVT_WS_JSON_SEND, "sid": sid, "payload": payload}
-         self._bus.publish(event)
- 
--    def _handle_turn_event(self, event: Dict[str, Any]) -> None:
-+    def _handle_turn_event(self, event: Mapping[str, Any]) -> None:
-         event_type = event.get("type")
-         if event_type == EVT_TURN_BEGIN:
-             sid = event.get("sid")
-             req_id = event.get("req_id")
-             turn_id = event.get("turn_id")
-             if (
-                 isinstance(sid, str)
-                 and sid
-                 and isinstance(req_id, str)
-                 and req_id
-                 and isinstance(turn_id, str)
-                 and turn_id
-             ):
-                 self._turn_lookup[req_id] = (sid, turn_id)
-         elif event_type == EVT_TURN_END:
-             req_id = event.get("req_id")
-             if isinstance(req_id, str) and req_id:
-                 self._turn_lookup.pop(req_id, None)
- 
- 
- __all__ = ["LLMAdapter"]
-diff --git a/app/voice_v2/policy_decider.py b/app/voice_v2/policy_decider.py
+         intent = nlu_payload.get("intent")
+         if not isinstance(intent, str) or not intent:
+diff --git a/app/voice_v2/persona.py b/app/voice_v2/persona.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..ccf9d2d8f3681b75dc52f77fc7f4aa9a509fc469
+index 0000000000000000000000000000000000000000..33a61d85d1a7075f1af898b117baabf68c46b9e2
 --- /dev/null
-+++ b/app/voice_v2/policy_decider.py
-@@ -0,0 +1,42 @@
-+"""Deterministic policy decider used by the voice engine."""
++++ b/app/voice_v2/persona.py
+@@ -0,0 +1,56 @@
++"""Persona loader and system preamble helpers for Chip."""
 +from __future__ import annotations
 +
-+from typing import Mapping, MutableMapping
++import json
++import os
++from pathlib import Path
++from typing import Any, Dict, Mapping
++
++_PERSONA_ENV_VAR = "ASKCHIP_PERSONA_PATH"
++_DEFAULT_PERSONA_PATH = Path(__file__).resolve().parents[2] / "config" / "personas" / "chip.json"
++
++_persona_cache: Dict[str, Any] | None = None
 +
 +
-+EVT_POLICY_DECISION = "EVT_POLICY_DECISION"
++def _resolve_persona_path() -> Path:
++    override = os.environ.get(_PERSONA_ENV_VAR)
++    if override:
++        return Path(override).expanduser()
++    return _DEFAULT_PERSONA_PATH
 +
 +
-+class PolicyDecider:
-+    """Return simple policy decisions based on the current snapshot."""
++def load_persona() -> Dict[str, Any]:
++    """Load Chip's persona JSON with an mtime-aware cache."""
 +
-+    def decide(
-+        self,
-+        req_id: str,
-+        nlu: Mapping[str, object] | None,
-+        policy_snapshot: Mapping[str, object] | None,
-+    ) -> MutableMapping[str, object]:
-+        """Compute the dialog action for the current turn.
++    global _persona_cache
 +
-+        The implementation is intentionally lightweight. It inspects the
-+        provided ``policy_snapshot`` (if any) to mirror the boolean flags that
-+        downstream components expect while always returning an action of
-+        ``"respond"`` so the stubbed LLM path can be exercised in tests.
-+        """
++    persona_path = _resolve_persona_path()
++    stat = persona_path.stat()
++    mtime = stat.st_mtime
 +
-+        if not isinstance(req_id, str) or not req_id:
-+            raise ValueError("req_id must be a non-empty string")
++    if (
++        _persona_cache is not None
++        and _persona_cache.get("path") == persona_path
++        and _persona_cache.get("mtime") == mtime
++    ):
++        cached = _persona_cache.get("persona")
++        if isinstance(cached, dict):
++            return cached
 +
-+        snapshot = dict(policy_snapshot or {})
-+        action = "respond"
-+        barge_in_enabled = bool(snapshot.get("barge_in_enabled", False))
-+        auto_commit = bool(snapshot.get("auto_commit_when_ready", False))
++    with persona_path.open("r", encoding="utf-8") as handle:
++        persona = json.load(handle)
 +
-+        return {
-+            "action": action,
-+            "barge_in_enabled": barge_in_enabled,
-+            "auto_commit_when_ready": auto_commit,
-+        }
++    _persona_cache = {"path": persona_path, "mtime": mtime, "persona": persona}
++    return persona
 +
 +
-+__all__ = ["PolicyDecider", "EVT_POLICY_DECISION"]
-diff --git a/scripts/run_build05_tests.sh b/scripts/run_build05_tests.sh
-index fa5c478a42330fcdecb604106483fe529206d334..0d3ac3be60bdd97bcfeeae63d98e29a3266993b4 100644
---- a/scripts/run_build05_tests.sh
-+++ b/scripts/run_build05_tests.sh
-@@ -1,12 +1,13 @@
- #!/usr/bin/env bash
- set -euo pipefail
- export PYTHONPATH="${PYTHONPATH:-.}:."
- PY="${PYTHON:=python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python
- "$PY" -m unittest -v \
-   tests.test_asr_readiness_gate \
-   tests.test_asr_adapter_basic \
-   tests.test_llm_stub \
-   tests.test_dual_vad_arbiter \
-   tests.test_tts_stub
- "$PY" -m unittest -v tests.test_nlu_once_per_turn
-+"$PY" -m unittest -v tests.test_policy_nlg_once_per_turn
- echo "BUILD_05_TESTS: PASS"
-diff --git a/tests/test_policy_nlg_once_per_turn.py b/tests/test_policy_nlg_once_per_turn.py
++def build_system_preamble(persona: Mapping[str, Any]) -> str:
++    """Compose the single-line system preamble for Chip."""
++
++    title = persona.get("public_title") or persona.get("role_title") or "Chip"
++    tone = persona.get("tone_preset") or "mentor"
++    domain = persona.get("domain_focus") or "Pure Storage solutions"
++    return (
++        f"You are {title}, the Virtual Partner Technical Manager for Pure Storage partners; "
++        f"respond with a {tone} tone, stay focused on {domain}, and teach through conversation."
++    )
+diff --git a/app/voice_v2/planner.py b/app/voice_v2/planner.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..2772daeb593d6ca91e1d74abdb370f2ecc66ddf1
+index 0000000000000000000000000000000000000000..f8327bbbd1bd6b5e111692138cebc6f6bd88e1ee
 --- /dev/null
-+++ b/tests/test_policy_nlg_once_per_turn.py
-@@ -0,0 +1,127 @@
-+import unittest
++++ b/app/voice_v2/planner.py
+@@ -0,0 +1,78 @@
++"""Lightweight dialog planner for AskChip voice v2."""
++from __future__ import annotations
 +
-+from app.telemetry import bus
-+from app.voice_v2 import EVT_ASR_FINAL, EVT_NLU, EVT_NLG
-+from app.voice_v2.engine import EngineV2
-+from app.voice_v2.policy_decider import EVT_POLICY_DECISION
++from dataclasses import dataclass
++from typing import Dict, List, Literal
 +
-+
-+class TestPolicyAndNLGOncePerTurn(unittest.TestCase):
-+    def setUp(self) -> None:
-+        bus.reset()
-+        self.events: list[dict] = []
-+        self.token = bus.subscribe("*", self.events.append)
-+        self.engine = EngineV2(telemetry_bus=bus)
-+        self.sid = "sid-policy"
-+        self.engine.on_open(self.sid, {})
-+        self.engine.on_audio(self.sid, b"abc", seq=0)
-+
-+    def tearDown(self) -> None:
-+        bus.unsubscribe(self.token)
-+        bus.reset()
-+
-+    def _events(self, event_type: str, *, sid: str | None = None) -> list[dict]:
-+        events = [evt for evt in self.events if evt["type"] == event_type]
-+        if sid is None:
-+            return events
-+        return [evt for evt in events if evt.get("sid") == sid]
-+
-+    def test_happy_path_emits_policy_and_nlg_once(self) -> None:
-+        self.engine.policy_snapshot = {
-+            "barge_in_enabled": True,
-+            "auto_commit_when_ready": True,
-+        }
-+
-+        self.engine.on_asr_final(self.sid, "hello there")
-+
-+        finals = self._events(EVT_ASR_FINAL, sid=self.sid)
-+        nlus = self._events(EVT_NLU, sid=self.sid)
-+        policies = self._events(EVT_POLICY_DECISION, sid=self.sid)
-+        nlgs = self._events(EVT_NLG, sid=self.sid)
-+
-+        self.assertEqual(1, len(finals))
-+        self.assertEqual(1, len(nlus))
-+        self.assertEqual(1, len(policies))
-+        self.assertEqual(1, len(nlgs))
-+
-+        final_event = finals[0]
-+        nlu_event = nlus[0]
-+        policy_event = policies[0]
-+        nlg_event = nlgs[0]
-+
-+        req_id = final_event["req_id"]
-+        self.assertEqual(req_id, nlu_event["req_id"])
-+        self.assertEqual(req_id, policy_event["req_id"])
-+        self.assertEqual(req_id, nlg_event["req_id"])
-+
-+        self.assertEqual("respond", policy_event["action"])
-+        self.assertTrue(policy_event["barge_in_enabled"])
-+        self.assertTrue(policy_event["auto_commit_when_ready"])
-+        self.assertEqual("Hi there! How can I help you today?", nlg_event["text"])
-+
-+        self.assertEqual("1", policy_event["schema_version"])
-+        self.assertEqual("1", nlg_event["schema_version"])
-+
-+        final_index = self.events.index(final_event)
-+        nlu_index = self.events.index(nlu_event)
-+        policy_index = self.events.index(policy_event)
-+        nlg_index = self.events.index(nlg_event)
-+
-+        self.assertLess(final_index, nlu_index)
-+        self.assertLess(nlu_index, policy_index)
-+        self.assertLess(policy_index, nlg_index)
-+
-+    def test_duplicate_finals_deduped(self) -> None:
-+        self.engine.policy_snapshot = {
-+            "barge_in_enabled": False,
-+            "auto_commit_when_ready": False,
-+        }
-+
-+        self.engine.on_asr_final(self.sid, "status update please")
-+        self.engine.on_asr_final(self.sid, "status update please")
-+
-+        policies = self._events(EVT_POLICY_DECISION, sid=self.sid)
-+        nlgs = self._events(EVT_NLG, sid=self.sid)
-+
-+        self.assertEqual(1, len(policies))
-+        self.assertEqual(1, len(nlgs))
-+
-+    def test_sessions_do_not_cross(self) -> None:
-+        sid_two = "sid-policy-2"
-+        self.engine.on_open(sid_two, {})
-+        self.engine.on_audio(sid_two, b"xyz", seq=0)
-+
-+        self.engine.policy_snapshot = {
-+            "barge_in_enabled": True,
-+            "auto_commit_when_ready": False,
-+        }
-+
-+        self.engine.on_asr_final(self.sid, "need help with order 123")
-+        self.engine.on_asr_final(sid_two, "hello agent")
-+
-+        policies = self._events(EVT_POLICY_DECISION)
-+        nlgs = self._events(EVT_NLG)
-+
-+        self.assertEqual(2, len(policies))
-+        self.assertEqual(2, len(nlgs))
-+
-+        sid_to_policy = {evt["sid"]: evt for evt in policies}
-+        sid_to_nlg = {evt["sid"]: evt for evt in nlgs}
-+
-+        self.assertIn(self.sid, sid_to_policy)
-+        self.assertIn(sid_two, sid_to_policy)
-+        self.assertIn(self.sid, sid_to_nlg)
-+        self.assertIn(sid_two, sid_to_nlg)
-+
-+        for sid, evt in sid_to_policy.items():
-+            self.assertEqual(sid, evt["sid"])
-+            self.assertEqual("respond", evt["action"])
-+            self.assertEqual("1", evt["schema_version"])
-+
-+        for sid, evt in sid_to_nlg.items():
-+            self.assertEqual(sid, evt["sid"])
-+            self.assertEqual("1", evt["schema_version"])
++PlanMode = Literal["clarify", "outline", "deep_dive", "compare", "steps", "next_actions"]
 +
 +
-+if __name__ == "__main__":
-+    unittest.main()
++@dataclass
++class Plan:
++    """Represents the planner outcome for a user turn."""
++
++    mode: PlanMode
++    missing_info: List[str]
++    chips: List[str]
++    reason: str
++
++
++_MODE_CHIPS: Dict[PlanMode, List[str]] = {
++    "clarify": [
++        "Confirm Pure Storage product",
++        "Clarify customer workload",
++        "Ask for timeline",
++    ],
++    "outline": [
++        "State customer objective",
++        "Highlight Pure differentiators",
++        "Note partner resources",
++    ],
++    "deep_dive": [
++        "Detail FlashArray configuration",
++        "Discuss data reduction plan",
++        "Cover integration dependencies",
++    ],
++    "compare": [
++        "FlashArray vs FlashBlade fit",
++        "Differentiate Evergreen benefits",
++        "Match workload to model",
++    ],
++    "steps": [
++        "Run environment precheck",
++        "Validate network zoning",
++        "Schedule go-live rehearsal",
++    ],
++    "next_actions": [
++        "Share Pure enablement link",
++        "Coordinate customer workshop",
++        "Log follow-up in CRM",
++    ],
++}
++
++
++def plan_turn(text: str) -> Plan:
++    """Select the dialog mode and supporting metadata for a user utterance."""
++
++    normalized = (text or "").strip().lower()
++    word_count = len([token for token in normalized.split() if token])
++
++    if word_count < 5:
++        mode: PlanMode = "clarify"
++        reason = "short utterance"
++        missing = ["intent", "details"]
++    elif any(token in normalized for token in [" vs ", "compare", "versus"]):
++        mode = "compare"
++        reason = "comparison cue"
++        missing = []
++    elif any(keyword in normalized for keyword in ["step", "guide", "walkthrough", "setup", "install"]):
++        mode = "steps"
++        reason = "steps cue"
++        missing = []
++    else:
++        mode = "outline"
++        reason = "default outline"
++        missing = []
++
++    chips = list(_MODE_CHIPS.get(mode, []))
++    return Plan(mode=mode, missing_info=missing, chips=chips, reason=reason)
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index a9b0490490b4d033e2cdf04b8265eab0acc3d3ae..3e9a57967782e3c1a5e7305a3053b1e3ed0933ef 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -39,50 +39,51 @@ AUDIO_SEQ_WINDOW = 8
+ 
+ QUEUE_ON_THRESHOLD = 12
+ QUEUE_OFF_THRESHOLD = 6
+ 
+ _DEFAULT_WS_PING_INTERVAL_MS = 25_000
+ 
+ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
+ 
+ EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
+ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
+ 
+ EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
+ 
+ _OUTBOUND_ALLOWED_TYPES = {
+     "policy.interaction",
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
+     "asr.partial",
+     "asr.final",
+     "error",
+     "chat.message",
+     "chat.history",
++    "dialog.plan",
+ }
+ 
+ _OUTBOX_MAXSIZE = 256
+ 
+ _RESUME_TTL_MS = 10_000
+ _RESUME_MARKER_TYPES = {"tts.start", "tts.end", "asr.final"}
+ _RESUME_MARKER_LIMIT = 10
+ 
+ _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
+ 
+ _logger = logging.getLogger(__name__)
+ 
+ _ALLOWED_TEXT_FRAME_TYPES = {
+     "client.ready",
+     "audio.header",
+     "admin.toggle",
+     "chat.user",
+ }
+ 
+ 
+ class TokenBucket:
+     """Simple in-memory token bucket."""
+ 
+     def __init__(self, capacity: int, refill_seconds: float) -> None:
+         self.capacity = capacity
+diff --git a/config/personas/chip.json b/config/personas/chip.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..9f65f7c63f357dda6e87862f8dd5e363aaf21fd4
+--- /dev/null
++++ b/config/personas/chip.json
+@@ -0,0 +1,89 @@
++{
++  "id": "chip_vptm",
++  "role_title": "Virtual Partner Technical Manager (vPTM)",
++  "public_title": "Chip, your Pure Storage partner guide",
++  "voice": "steady-midwest",
++  "tone_preset": "mentor",
++  "domain_focus": "Pure Storage data platforms, partner enablement, and customer outcomes",
++  "guardrails": {
++    "focus_on_pure": true
++  },
++  "modes": {
++    "clarify": {
++      "instruction": "Ask concise follow-ups to uncover the Pure Storage scenario before recommending a path.",
++      "chips": [
++        "Confirm Pure Storage product",
++        "Clarify customer workload",
++        "Ask for timeline"
++      ]
++    },
++    "outline": {
++      "instruction": "Summarize the Pure Storage solution path, spotlighting architecture pillars and success criteria.",
++      "chips": [
++        "State customer objective",
++        "Highlight Pure differentiators",
++        "Note partner resources"
++      ]
++    },
++    "deep_dive": {
++      "instruction": "Walk through the technical layers of the Pure Storage design with data-backed rationale.",
++      "chips": [
++        "Detail FlashArray configuration",
++        "Discuss data reduction plan",
++        "Cover integration dependencies"
++      ]
++    },
++    "compare": {
++      "instruction": "Contrast relevant Pure Storage options and explain why one path best serves the requirement.",
++      "chips": [
++        "FlashArray vs FlashBlade fit",
++        "Differentiate Evergreen benefits",
++        "Match workload to model"
++      ]
++    },
++    "steps": {
++      "instruction": "Lay out the step-by-step Pure Storage implementation sequence with checkpoints.",
++      "chips": [
++        "Run environment precheck",
++        "Validate network zoning",
++        "Schedule go-live rehearsal"
++      ]
++    },
++    "next_actions": {
++      "instruction": "Assign the immediate partner actions that sustain Pure Storage momentum after the call.",
++      "chips": [
++        "Share Pure enablement link",
++        "Coordinate customer workshop",
++        "Log follow-up in CRM"
++      ]
++    }
++  },
++  "quotes": [
++    "Nebraska skies remind us to see the whole architecture.",
++    "Out here, steady wins — same with Pure Storage deployments.",
++    "Nebraska mornings start with a checklist, just like a good rollout.",
++    "We plan like the Huskers drive — disciplined and deliberate.",
++    "In Nebraska, neighbors help neighbors; partners help customers succeed.",
++    "Prairie winds teach us to design for change.",
++    "Nebraska sunsets prove that clarity comes with patience.",
++    "We respect the work ethic — Pure projects need that same grit.",
++    "Around here, we measure twice and install once.",
++    "Nebraska fields thrive with preparation, and so do data strategies.",
++    "A Nebraska handshake means commitment; deliver that with Pure Storage."
++  ],
++  "quote_policy": {
++    "modes_allowed": [
++      "outline",
++      "deep_dive",
++      "compare",
++      "steps",
++      "next_actions"
++    ],
++    "cooldown_turns": 3,
++    "rate_percent": 20,
++    "forbid_on_clarify": true
++  },
++  "tts": {
++    "voice_id": "alloy-en-US-001"
++  }
++}
+diff --git a/tests/test_flow_zip_foundation.py b/tests/test_flow_zip_foundation.py
+index ef102f51c79469e6105147e03b62f8d252eb2b99..12d106f1e04e2867ab2098334a9799a02b182cd0 100644
+--- a/tests/test_flow_zip_foundation.py
++++ b/tests/test_flow_zip_foundation.py
+@@ -21,55 +21,65 @@ class BuildFlowZipFoundationTest(unittest.TestCase):
+             "started_ms": 1_732_200_000_000,
+             "open": False,
+             "events_written": 2,
+             "by_type": {"test": 2},
+         }
+         (session_dir / "manifest.json").write_text(
+             json.dumps(manifest, separators=(",", ":")), encoding="utf-8"
+         )
+         (session_dir / "events.ndjson").write_text("{}\n{}\n", encoding="utf-8")
+ 
+         return session_dir
+ 
+     def test_build_flow_zip_foundation(self) -> None:
+         with tempfile.TemporaryDirectory() as tmp:
+             tmp_path = Path(tmp)
+             root = tmp_path / "exports"
+             sid = "sid-test"
+             session_dir = self._prepare_session(root, sid)
+ 
+             archive_path = build_flow_zip(sid, root=root)
+             self.assertEqual(archive_path, session_dir / "flow.zip")
+             self.assertTrue(archive_path.exists())
+ 
+             with ZipFile(archive_path) as zf:
+                 names = zf.namelist()
+-                self.assertEqual(names, ["README.txt", "events.ndjson", "manifest.json"])
++                self.assertEqual(
++                    names,
++                    [
++                        "README.txt",
++                        "events.redacted.ndjson",
++                        "flow_timeline.ndjson",
++                        "manifest.json",
++                        "nlg.ndjson",
++                        "nlu.ndjson",
++                    ],
++                )
+                 readme = zf.read("README.txt").decode("utf-8")
+ 
+             self.assertIn(sid, readme)
+-            self.assertIn("BUILD 06 Task C", readme)
++            self.assertIn("privacy-safe flow artifacts", readme)
+             self.assertNotIn("1732200000000", readme)  # ensure human friendly timestamp
+ 
+             digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+             archive_path_second = build_flow_zip(sid, root=root)
+             self.assertEqual(archive_path_second.read_bytes(), archive_path.read_bytes())
+             self.assertEqual(
+                 hashlib.sha256(archive_path_second.read_bytes()).hexdigest(), digest
+             )
+ 
+     def test_build_flow_zip_requires_artifacts(self) -> None:
+         with tempfile.TemporaryDirectory() as tmp:
+             tmp_path = Path(tmp)
+             root = tmp_path / "exports"
+             sid = "missing"
+             session_dir = root / sid
+             session_dir.mkdir(parents=True, exist_ok=True)
+ 
+             # Only manifest present
+             (session_dir / "manifest.json").write_text("{}", encoding="utf-8")
+             with self.assertRaises(FileNotFoundError):
+                 build_flow_zip(sid, root=root)
+ 
+             # Remove manifest, only events present
+             (session_dir / "manifest.json").unlink()
+             (session_dir / "events.ndjson").write_text("{}\n", encoding="utf-8")
+diff --git a/tests/test_ws_keepalive_and_isolation.py b/tests/test_ws_keepalive_and_isolation.py
+index 9d71281f4ce01148c9b3924c04ecd724630c727f..be3d770350bb079242c643e86fea3eb4eb9b6eb9 100644
+--- a/tests/test_ws_keepalive_and_isolation.py
++++ b/tests/test_ws_keepalive_and_isolation.py
+@@ -187,46 +187,54 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
+                 frame = await harness.wait_for_outbound(lambda item: item.get("type") == "policy.interaction")
+                 self.assertEqual(frame, snapshot)
+                 await asyncio.sleep(0.05)
+                 frames = [f for f in harness.outbound_frames if f.get("type") == "policy.interaction"]
+                 self.assertEqual(len(frames), 1)
+                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": snapshot})
+                 await asyncio.sleep(0.05)
+                 frames = [f for f in harness.outbound_frames if f.get("type") == "policy.interaction"]
+                 self.assertEqual(len(frames), 1)
+             finally:
+                 await harness.close()
+ 
+     async def _test_multi_session_isolation(self) -> None:
+         engine = LabelRecordingEngine()
+         with patch.dict(os.environ, {"WS_PING_INTERVAL_MS": "0"}, clear=False):
+             adapter = ChatV2Adapter(engine=engine)
+             harness_a = AdapterHarness(adapter, engine, label="A")
+             harness_b = AdapterHarness(adapter, engine, label="B")
+             await harness_a.start()
+             await harness_b.start()
+             try:
+                 payload_a = {"type": "info", "label": "A"}
+                 payload_b = {"type": "info", "label": "B"}
+                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness_a.sid, "payload": payload_a})
+                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness_b.sid, "payload": payload_b})
+-                frame_a = await harness_a.wait_for_outbound(lambda item: item == payload_a)
+-                frame_b = await harness_b.wait_for_outbound(lambda item: item == payload_b)
+-                self.assertEqual(frame_a, payload_a)
+-                self.assertEqual(frame_b, payload_b)
+-                self.assertNotIn(payload_b, harness_a.outbound_frames)
+-                self.assertNotIn(payload_a, harness_b.outbound_frames)
++                frame_a = await harness_a.wait_for_outbound(
++                    lambda item: item.get("type") == "info" and item.get("label") == "A"
++                )
++                frame_b = await harness_b.wait_for_outbound(
++                    lambda item: item.get("type") == "info" and item.get("label") == "B"
++                )
++                self.assertEqual(frame_a.get("label"), "A")
++                self.assertEqual(frame_b.get("label"), "B")
++                self.assertTrue(
++                    all(frame.get("label") != "B" for frame in harness_a.outbound_frames)
++                )
++                self.assertTrue(
++                    all(frame.get("label") != "A" for frame in harness_b.outbound_frames)
++                )
+             finally:
+                 await harness_a.close()
+                 await harness_b.close()
+ 
+     @staticmethod
+     def _count_keepalives(fake_ws: FakeDeepgramWebSocket) -> int:
+         return sum(
+             1
+             for message in fake_ws.sent
+             if json.loads(message).get("type") == "KeepAlive"
+         )
+ 
+ 
+ if __name__ == "__main__":  # pragma: no cover - convenience
+     unittest.main()

@@ -61,6 +61,7 @@ _OUTBOUND_ALLOWED_TYPES = {
     "error",
     "chat.message",
     "chat.history",
+    "dialog.plan",
 }
 
 _OUTBOX_MAXSIZE = 256

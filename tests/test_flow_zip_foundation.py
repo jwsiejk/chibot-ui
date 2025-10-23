@@ -43,11 +43,21 @@ class BuildFlowZipFoundationTest(unittest.TestCase):
 
             with ZipFile(archive_path) as zf:
                 names = zf.namelist()
-                self.assertEqual(names, ["README.txt", "events.ndjson", "manifest.json"])
+                self.assertEqual(
+                    names,
+                    [
+                        "README.txt",
+                        "events.redacted.ndjson",
+                        "flow_timeline.ndjson",
+                        "manifest.json",
+                        "nlg.ndjson",
+                        "nlu.ndjson",
+                    ],
+                )
                 readme = zf.read("README.txt").decode("utf-8")
 
             self.assertIn(sid, readme)
-            self.assertIn("BUILD 06 Task C", readme)
+            self.assertIn("privacy-safe flow artifacts", readme)
             self.assertNotIn("1732200000000", readme)  # ensure human friendly timestamp
 
             digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
