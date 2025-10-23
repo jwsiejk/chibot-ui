@@ -37,6 +37,9 @@
     if (!window.AudioRecorder) {
       await loadScript("./audio_recorder.js");
     }
+    if (!window.PolicyBadges) {
+      await loadScript("./policy_badges.js");
+    }
   }
 
   async function init() {
@@ -44,6 +47,13 @@
 
     const AppState = window.AppState;
     const WSClient = window.WSClient;
+    if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
+      try {
+        window.PolicyBadges.init();
+      } catch (err) {
+        console.warn("Failed to initialize PolicyBadges", err);
+      }
+    }
 
     // --- Config & mock current user for gating ---
     window.ADMIN_EMAILS = (window.ADMIN_EMAILS || ["admin@askchip.ai"]).map(e => e.toLowerCase());

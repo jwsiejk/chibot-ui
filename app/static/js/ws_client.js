@@ -93,6 +93,33 @@
     }
   }
 
+  function sanitizePolicyFrame(frame) {
+    const safe = { type: "policy.interaction" };
+    if (!frame || typeof frame !== "object") {
+      safe.policy = {};
+      return safe;
+    }
+    Object.keys(frame).forEach((key) => {
+      if (key === "policy") return;
+      safe[key] = frame[key];
+    });
+    const policy = {};
+    const source = frame.policy;
+    if (source && typeof source === "object") {
+      if (typeof source.mode === "string") {
+        policy.mode = source.mode;
+      }
+      if (typeof source.allow_auto_vad === "boolean") {
+        policy.allow_auto_vad = source.allow_auto_vad;
+      }
+      if (typeof source.barge_in_enabled === "boolean") {
+        policy.barge_in_enabled = source.barge_in_enabled;
+      }
+    }
+    safe.policy = policy;
+    return safe;
+  }
+
   function handleInfoFrame(frame) {
     const meta = frame && frame.meta;
     if (!meta || typeof meta.sid !== "string") {
@@ -153,6 +180,10 @@
       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
         audioPlayer.handleTtsEnd(frame);
       }
+    } else if (frame.type === "policy.interaction") {
+      const sanitized = sanitizePolicyFrame(frame);
+      dispatchFrame(sanitized);
+      return;
     } else if (frame.type === "asr.partial") {
       const view = window.TranscriptView;
       if (view && typeof view.handlePartial === "function") {

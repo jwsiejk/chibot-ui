@@ -1,8 +1,443 @@
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index debb3c5baa6db590f1d6a56a7ea5e457b0c131e8..3cc72e0cf9cab415b8ae07d82b3ee55bad81b7e4 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -15,57 +15,67 @@
+       el.src = src;
+       el.async = false;
+       el.dataset.dynamic = src;
+       el.addEventListener("load", () => {
+         el.dataset.loaded = "true";
+         resolve();
+       }, { once: true });
+       el.addEventListener("error", reject, { once: true });
+       document.head.appendChild(el);
+     });
+   }
+ 
+   async function ensureRuntimeModules() {
+     if (!window.AppState) {
+       await loadScript("./state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("./audio_player.js");
+     }
+     if (!window.WSClient) {
+       await loadScript("./ws_client.js");
+     }
+     if (!window.AudioRecorder) {
+       await loadScript("./audio_recorder.js");
+     }
++    if (!window.PolicyBadges) {
++      await loadScript("./policy_badges.js");
++    }
+   }
+ 
+   async function init() {
+     await ensureRuntimeModules();
+ 
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
++    if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
++      try {
++        window.PolicyBadges.init();
++      } catch (err) {
++        console.warn("Failed to initialize PolicyBadges", err);
++      }
++    }
+ 
+     // --- Config & mock current user for gating ---
+     window.ADMIN_EMAILS = (window.ADMIN_EMAILS || ["admin@askchip.ai"]).map(e => e.toLowerCase());
+     const urlParams = new URLSearchParams(window.location.search);
+     const currentUserEmail = (urlParams.get("email") || "user@example.com").toLowerCase();
+     const isAdmin = window.ADMIN_EMAILS.includes(currentUserEmail);
+ 
+     // --- Top-right brand dropdown ---
+     const brandBtn = document.getElementById('brandBtn');
+     const brandMenu = document.getElementById('brandMenu');
+     const adminItem = document.getElementById('adminItem');
+     if (!isAdmin) {
+       adminItem.setAttribute('aria-disabled', 'true');
+       adminItem.title = "Admins only";
+     }
+     function closeMenu(){ brandMenu.classList.remove('open'); brandBtn.setAttribute('aria-expanded','false'); }
+     brandBtn.addEventListener('click', (e) => {
+       const open = brandMenu.classList.toggle('open');
+       brandBtn.setAttribute('aria-expanded', String(open));
+     });
+     document.addEventListener('click', (e) => {
+       if (!brandMenu.contains(e.target) && !brandBtn.contains(e.target)) closeMenu();
+     });
+     adminItem.addEventListener('click', () => {
+       if (isAdmin) {
+diff --git a/app/static/js/policy_badges.js b/app/static/js/policy_badges.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..a011b2ea4778300e0ab3c0723e3dc18e7e50ada8
+--- /dev/null
++++ b/app/static/js/policy_badges.js
+@@ -0,0 +1,279 @@
++(() => {
++  const KEY_CONFIG = [
++    {
++      key: "mode",
++      label: "Mode",
++      format(value) {
++        if (typeof value === "string" && value.trim()) {
++          return value;
++        }
++        return "—";
++      }
++    },
++    {
++      key: "allow_auto_vad",
++      label: "Auto VAD",
++      format(value) {
++        if (typeof value === "boolean") {
++          return value ? "On" : "Off";
++        }
++        return "—";
++      }
++    },
++    {
++      key: "barge_in_enabled",
++      label: "Barge",
++      format(value) {
++        if (typeof value === "boolean") {
++          return value ? "On" : "Off";
++        }
++        return "—";
++      }
++    }
++  ];
++
++  const CLASS_HIDDEN = "hidden";
++
++  const currentPolicy = Object.create(null);
++  const badgeRefs = new Map();
++
++  let initialized = false;
++  let host = null;
++  let micGateBadge = null;
++  let micGateActive = false;
++  let micGateTimerId = null;
++  let micGateHoldMs = 0;
++  let bargeInEnabled = true;
++
++  function ensureHost() {
++    if (host && document.body.contains(host)) {
++      return host;
++    }
++    const existing = document.querySelector("[data-policy-badges]");
++    if (existing) {
++      host = existing;
++      return host;
++    }
++    const topbarLeft = document.querySelector(".topbar-left");
++    if (!topbarLeft) {
++      return null;
++    }
++    const container = document.createElement("div");
++    container.dataset.policyBadges = "true";
++    container.style.display = "flex";
++    container.style.alignItems = "center";
++    container.style.gap = "8px";
++    container.style.flexWrap = "wrap";
++    container.style.fontSize = "11px";
++    container.style.fontWeight = "600";
++    topbarLeft.appendChild(container);
++    host = container;
++    return host;
++  }
++
++  function styleBadge(el) {
++    el.style.display = "inline-flex";
++    el.style.alignItems = "center";
++    el.style.gap = "4px";
++    el.style.padding = "4px 10px";
++    el.style.borderRadius = "999px";
++    el.style.background = "rgba(255,255,255,0.08)";
++    el.style.border = "1px solid rgba(255,255,255,0.12)";
++    el.style.color = "var(--muted)";
++    el.style.letterSpacing = "0.2px";
++  }
++
++  function ensureBadgeElements() {
++    const container = ensureHost();
++    if (!container) {
++      return;
++    }
++    KEY_CONFIG.forEach(({ key }) => {
++      if (badgeRefs.has(key)) {
++        return;
++      }
++      const el = document.createElement("span");
++      el.dataset.policyBadge = key;
++      el.setAttribute("role", "status");
++      styleBadge(el);
++      container.appendChild(el);
++      badgeRefs.set(key, el);
++    });
++  }
++
++  function ensureMicGateBadge() {
++    if (micGateBadge && document.body.contains(micGateBadge)) {
++      return micGateBadge;
++    }
++    const statusContainer = document.querySelector(".chip-status");
++    if (!statusContainer) {
++      return null;
++    }
++    const badge = document.createElement("span");
++    badge.dataset.micGate = "true";
++    badge.textContent = "Mic gated (TTS active)";
++    badge.setAttribute("role", "status");
++    badge.classList.add(CLASS_HIDDEN);
++    badge.style.marginLeft = "8px";
++    badge.style.padding = "4px 10px";
++    badge.style.borderRadius = "999px";
++    badge.style.background = "rgba(255,91,110,0.16)";
++    badge.style.border = "1px solid rgba(255,91,110,0.35)";
++    badge.style.color = "var(--danger)";
++    badge.style.fontSize = "12px";
++    badge.style.fontWeight = "600";
++    badge.style.letterSpacing = "0.2px";
++    statusContainer.appendChild(badge);
++    micGateBadge = badge;
++    return micGateBadge;
++  }
++
++  function formatValue(key, value) {
++    const config = KEY_CONFIG.find((item) => item.key === key);
++    if (!config) {
++      return "";
++    }
++    try {
++      return config.format(value);
++    } catch (err) {
++      console.warn("PolicyBadges: failed to format value", key, err);
++      return "—";
++    }
++  }
++
++  function renderBadges() {
++    ensureBadgeElements();
++    KEY_CONFIG.forEach(({ key, label }) => {
++      const el = badgeRefs.get(key);
++      if (!el) {
++        return;
++      }
++      const hasValue = Object.prototype.hasOwnProperty.call(currentPolicy, key);
++      const value = hasValue ? currentPolicy[key] : undefined;
++      el.textContent = `${label}: ${formatValue(key, value)}`;
++    });
++  }
++
++  function clearMicGateTimer() {
++    if (micGateTimerId) {
++      clearTimeout(micGateTimerId);
++      micGateTimerId = null;
++    }
++  }
++
++  function hideMicGate() {
++    const badge = ensureMicGateBadge();
++    if (!badge) {
++      return;
++    }
++    badge.classList.add(CLASS_HIDDEN);
++    badge.setAttribute("aria-hidden", "true");
++    micGateActive = false;
++  }
++
++  function showMicGate() {
++    const badge = ensureMicGateBadge();
++    if (!badge) {
++      return;
++    }
++    clearMicGateTimer();
++    badge.classList.remove(CLASS_HIDDEN);
++    badge.removeAttribute("aria-hidden");
++    micGateActive = true;
++  }
++
++  function scheduleMicGateRelease(delayMs) {
++    clearMicGateTimer();
++    if (!micGateActive) {
++      return;
++    }
++    if (delayMs > 0) {
++      micGateTimerId = setTimeout(() => {
++        micGateTimerId = null;
++        hideMicGate();
++      }, delayMs);
++    } else {
++      hideMicGate();
++    }
++  }
++
++  function handlePolicyInteraction(event) {
++    const detail = event && event.detail;
++    const policy = detail && detail.policy;
++    if (!policy || typeof policy !== "object") {
++      return;
++    }
++    let updated = false;
++    KEY_CONFIG.forEach(({ key }) => {
++      if (!Object.prototype.hasOwnProperty.call(policy, key)) {
++        return;
++      }
++      currentPolicy[key] = policy[key];
++      if (key === "barge_in_enabled" && typeof policy[key] === "boolean") {
++        bargeInEnabled = policy[key];
++      }
++      updated = true;
++    });
++    if (updated) {
++      renderBadges();
++    }
++    if (Object.prototype.hasOwnProperty.call(policy, "barge_in_enabled") && policy.barge_in_enabled !== false && micGateActive) {
++      hideMicGate();
++    }
++  }
++
++  function parseHoldMs(detail) {
++    const hold = Number(detail && detail.post_hold_ms);
++    if (Number.isFinite(hold) && hold > 0) {
++      return hold;
++    }
++    return 0;
++  }
++
++  function handleTtsStart(event) {
++    const detail = event && event.detail;
++    micGateHoldMs = parseHoldMs(detail);
++    if (bargeInEnabled === false) {
++      showMicGate();
++    }
++  }
++
++  function handleTtsEnd(event) {
++    if (!micGateActive) {
++      return;
++    }
++    const hold = parseHoldMs(event && event.detail);
++    const delay = hold > 0 ? hold : micGateHoldMs;
++    micGateHoldMs = 0;
++    scheduleMicGateRelease(delay);
++  }
++
++  function reset() {
++    clearMicGateTimer();
++    hideMicGate();
++    micGateHoldMs = 0;
++    KEY_CONFIG.forEach(({ key }) => {
++      delete currentPolicy[key];
++    });
++    bargeInEnabled = true;
++    renderBadges();
++  }
++
++  const PolicyBadges = {
++    init() {
++      if (initialized) {
++        return;
++      }
++      initialized = true;
++      ensureBadgeElements();
++      ensureMicGateBadge();
++      renderBadges();
++      window.addEventListener("policy.interaction", handlePolicyInteraction);
++      window.addEventListener("tts.start", handleTtsStart);
++      window.addEventListener("tts.end", handleTtsEnd);
++      window.addEventListener("ws.close", reset);
++    }
++  };
++
++  window.PolicyBadges = PolicyBadges;
++})();
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 05d5429808e9ff24112f2ee62c9bb2ab0119f2ce..fed9fc45eb4a608ea9702373f2d3fc8a618032bd 100644
+index fed9fc45eb4a608ea9702373f2d3fc8a618032bd..d6f5918cdd3b7ae31ab6e7cbc4ea2092df4b7da0 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -131,50 +131,68 @@
+@@ -71,50 +71,77 @@
+     updateState({ lastPingAt });
+     sendJson({ type: "ping" });
+   }
+ 
+   function startHeartbeat() {
+     clearHeartbeat();
+     sendPing();
+     heartbeatTimerId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
+     updateState({ heartbeatTimerId });
+   }
+ 
+   function dispatchFrame(frame) {
+     if (!frame || typeof frame.type !== "string") return;
+     const type = frame.type;
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail: frame }));
+       if (type.includes(".")) {
+         const baseType = type.split(".")[0];
+         window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
+       }
+     } catch (err) {
+       console.warn("WSClient dispatch error", err);
+     }
+   }
+ 
++  function sanitizePolicyFrame(frame) {
++    const safe = { type: "policy.interaction" };
++    if (!frame || typeof frame !== "object") {
++      safe.policy = {};
++      return safe;
++    }
++    Object.keys(frame).forEach((key) => {
++      if (key === "policy") return;
++      safe[key] = frame[key];
++    });
++    const policy = {};
++    const source = frame.policy;
++    if (source && typeof source === "object") {
++      if (typeof source.mode === "string") {
++        policy.mode = source.mode;
++      }
++      if (typeof source.allow_auto_vad === "boolean") {
++        policy.allow_auto_vad = source.allow_auto_vad;
++      }
++      if (typeof source.barge_in_enabled === "boolean") {
++        policy.barge_in_enabled = source.barge_in_enabled;
++      }
++    }
++    safe.policy = policy;
++    return safe;
++  }
++
+   function handleInfoFrame(frame) {
+     const meta = frame && frame.meta;
+     if (!meta || typeof meta.sid !== "string") {
+       console.error("Invalid info frame", frame);
+       close("bad_info_frame");
+       return;
+     }
+     expectInfoFrame = false;
+     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
+     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
+     const expiresAt = resumeToken && resumeTtlMs ? Date.now() + resumeTtlMs : null;
+     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
+     const audioPlayer = getAudioPlayer();
+     if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+       audioPlayer.setDescriptor(descriptor);
+     }
+     updateState({
+       connectionState: "connected",
+       sid: meta.sid,
+       resumeToken,
+       resumeTtlMs,
+       resumeExpiresAt: expiresAt,
+       infoFrame: frame
+     });
+     startHeartbeat();
+@@ -131,50 +158,54 @@
      if (expectInfoFrame) {
        if (frame.type !== "info") {
          console.error("Expected info frame first, received", frame.type);
@@ -28,24 +463,28 @@ index 05d5429808e9ff24112f2ee62c9bb2ab0119f2ce..fed9fc45eb4a608ea9702373f2d3fc8a
        if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
          audioPlayer.handleTtsEnd(frame);
        }
-+    } else if (frame.type === "asr.partial") {
-+      const view = window.TranscriptView;
-+      if (view && typeof view.handlePartial === "function") {
-+        try {
-+          view.handlePartial(frame);
-+        } catch (err) {
-+          console.warn("TranscriptView partial handler error", err);
-+        }
-+      }
-+    } else if (frame.type === "asr.final") {
-+      const view = window.TranscriptView;
-+      if (view && typeof view.handleFinal === "function") {
-+        try {
-+          view.handleFinal(frame);
-+        } catch (err) {
-+          console.warn("TranscriptView final handler error", err);
-+        }
-+      }
++    } else if (frame.type === "policy.interaction") {
++      const sanitized = sanitizePolicyFrame(frame);
++      dispatchFrame(sanitized);
++      return;
+     } else if (frame.type === "asr.partial") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handlePartial === "function") {
+         try {
+           view.handlePartial(frame);
+         } catch (err) {
+           console.warn("TranscriptView partial handler error", err);
+         }
+       }
+     } else if (frame.type === "asr.final") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleFinal === "function") {
+         try {
+           view.handleFinal(frame);
+         } catch (err) {
+           console.warn("TranscriptView final handler error", err);
+         }
+       }
      }
      dispatchFrame(frame);
    }
@@ -53,21 +492,3 @@ index 05d5429808e9ff24112f2ee62c9bb2ab0119f2ce..fed9fc45eb4a608ea9702373f2d3fc8a
    function parseFrame(event) {
      const { data } = event;
      if (typeof data === "string") {
-       try {
-         const frame = JSON.parse(data);
-         handleMessageFrame(frame);
-       } catch (err) {
-         console.error("Failed to parse WS frame", err, data);
-       }
-       return;
-     }
-     if (data instanceof Blob) {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(data);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-       return;
-     }
-     console.warn("Unknown WS frame type", data);
-   }
