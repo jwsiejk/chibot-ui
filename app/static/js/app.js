@@ -1,7 +1,39 @@
 (() => {
+  const STATIC_JS_BASE = (() => {
+    if (typeof document === "undefined") {
+      return "/static/js/";
+    }
+
+    const script = document.currentScript || document.querySelector('script[src$="/static/js/app.js"]');
+    if (script && script.src) {
+      try {
+        const url = new URL(script.src, window.location.href);
+        return url.pathname.replace(/[^/]+$/, "");
+      } catch (err) {
+        console.warn("Failed to parse static script URL", err);
+      }
+    }
+
+    return "/static/js/";
+  })();
+
+  function resolveScriptSrc(src) {
+    if (!src || typeof src !== "string") {
+      return src;
+    }
+
+    if (/^(?:[a-z]+:)?\/\//i.test(src) || src.startsWith("/")) {
+      return src;
+    }
+
+    const normalized = src.replace(/^\.\//, "");
+    return `${STATIC_JS_BASE.replace(/\/?$/, '/')}${normalized}`;
+  }
+
   function loadScript(src) {
+    const resolvedSrc = resolveScriptSrc(src);
     return new Promise((resolve, reject) => {
-      const existing = document.querySelector(`script[data-dynamic="${src}"]`);
+      const existing = document.querySelector(`script[data-dynamic="${resolvedSrc}"]`);
       if (existing) {
         if (existing.dataset.loaded === "true") {
           resolve();
@@ -12,9 +44,9 @@
         return;
       }
       const el = document.createElement("script");
-      el.src = src;
+      el.src = resolvedSrc;
       el.async = false;
-      el.dataset.dynamic = src;
+      el.dataset.dynamic = resolvedSrc;
       el.addEventListener("load", () => {
         el.dataset.loaded = "true";
         resolve();
@@ -62,7 +94,7 @@
       return;
     }
     try {
-      await loadScript("./inspector.js");
+      await loadScript("inspector.js");
       if (window.DevInspector && typeof window.DevInspector.init === "function") {
         window.DevInspector.init({ env, AppState: window.AppState });
       }
@@ -73,19 +105,19 @@
 
   async function ensureRuntimeModules() {
     if (!window.AppState) {
-      await loadScript("./state.js");
+      await loadScript("state.js");
     }
     if (!window.AudioPlayer) {
-      await loadScript("./audio_player.js");
+      await loadScript("audio_player.js");
     }
     if (!window.WSClient) {
-      await loadScript("./ws_client.js");
+      await loadScript("ws_client.js");
     }
     if (!window.AudioRecorder) {
-      await loadScript("./audio_recorder.js");
+      await loadScript("audio_recorder.js");
     }
     if (!window.PolicyBadges) {
-      await loadScript("./policy_badges.js");
+      await loadScript("policy_badges.js");
     }
   }
 
