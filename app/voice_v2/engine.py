@@ -17,6 +17,8 @@ from app.telemetry.exporter import FileExporter
 from app.voice_v2 import (
     EVT_ACWR_RECOMPUTE,
     EVT_CHAT_USER,
+    EVT_ASR_FINAL,
+    EVT_NLU,
     EVT_POLICY_APPLIED,
     EVT_TTS_END,
     EVT_TTS_START,
@@ -27,6 +29,7 @@ from app.voice_v2 import (
     EVT_WS_JSON_SEND,
     EVT_WS_OPEN,
 )
+from app.voice_v2.nlu import NLUAdapter
 from app.voice_v2.gate import GateController
 from app.voice_v2.conversation_buffer import ConversationBuffer
 from app.voice_v2.vad import VADAggregator
@@ -99,6 +102,8 @@ class _TurnSession:
     perf_first_partial_ms: Optional[int] = None
     perf_final_ms: Optional[int] = None
     perf_tts_start_ms: Optional[int] = None
+    asr_final_emitted: bool = False
+    nlu_emitted: bool = False
 
 
 class _NullExporter:
@@ -131,6 +136,7 @@ class EngineV2:
         self._barge_handles: Dict[str, object] = {}
         self._aggregators: Dict[str, VADAggregator] = {}
         self._conversation_buffer = ConversationBuffer()
+        self._nlu = NLUAdapter()
         subscribe = getattr(self._bus, "subscribe", None)
         if callable(subscribe):
             self._chat_subscription = subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
@@ -342,13 +348,32 @@ class EngineV2:
         session.turn_id = turn_id
         session.req_id = req_id
 
-        self._emit_user_chat_message(
-            sid,
-            text,
-            turn_id,
-            req_id,
-            origin="voice",
-        )
+        if not session.asr_final_emitted:
+            session.asr_final_emitted = True
+
+            final_payload: Dict[str, Any] = {
+                "req_id": req_id,
+                "turn_id": turn_id,
+                "text": text,
+                "confidence": 0.9,
+            }
+            final_event = self._envelope(sid, EVT_ASR_FINAL, final_payload)
+            self._publish(final_event)
+
+            if not session.nlu_emitted:
+                nlu_result = self._nlu.extract(req_id, text)
+                nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
+                nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
+                self._publish(nlu_event)
+                session.nlu_emitted = True
+
+            self._emit_user_chat_message(
+                sid,
+                text,
+                turn_id,
+                req_id,
+                origin="voice",
+            )
 
         self._set_state(sid, THINKING, reason="asr_final")
 
@@ -628,6 +653,8 @@ class EngineV2:
             session.perf_first_partial_ms = None
             session.perf_final_ms = None
             session.perf_tts_start_ms = None
+            session.asr_final_emitted = False
+            session.nlu_emitted = False
             begin_payload = {
                 "turn_id": session.turn_id,
                 "req_id": session.req_id,
@@ -678,6 +705,8 @@ class EngineV2:
             session.perf_first_partial_ms = None
             session.perf_final_ms = None
             session.perf_tts_start_ms = None
+            session.asr_final_emitted = False
+            session.nlu_emitted = False
 
         session.state = new_state
 

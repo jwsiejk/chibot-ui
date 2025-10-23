@@ -1,129 +1,499 @@
-diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
-index 23656ebf117f0babf56f946cfe7ecf8c3dcee714..15b241ae73be6e98f34a1b901cbd86dcf5cb35bd 100644
---- a/docs/10_CONTRACT_WS.md
-+++ b/docs/10_CONTRACT_WS.md
-@@ -93,91 +93,124 @@ Copy code
- {"type":"client.resume","resume_token":"<string>"}
- Server → Client frames
- json
- Copy code
- {"type":"pong","t":1730000000000}
- Policy (client-visible subset)
- The server may push policy updates. Client-visible frames follow the telemetry
- envelope (`type`, `ts_ms`, `level`, …) and the server **strips any policy keys
- outside the stable subset** before sending to browsers. The client‑stable subset
- is:
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index eb99c99ca8fcd8a912e961798f795606d0c14e52..1267acac56dff2e3ee7efe362df81e9ab3631900 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -1,54 +1,57 @@
+ """Minimal Engine v2 shell with telemetry hooks and session exporting."""
+ from __future__ import annotations
  
- json
- Copy code
- {
-   "type": "policy.interaction",
-   "ts_ms": 1730000000000,
-   "level": "info",  
-   "policy": {
-     "mode": "idle",                  // "idle" | "assistant_speaking" | ...
-     "allow_auto_vad": true,
-     "barge_in_enabled": true
-   }
+ import asyncio
+ from dataclasses import dataclass
+ import json
+ import logging
+ import threading
+ import time
+ import uuid
+ from typing import Any, Dict, Mapping, Optional
+ 
+ from app.policy.loader import load_interaction_policy
+ from app.policy.watch import compute_diff, should_reapply
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ACWR_RECOMPUTE,
+     EVT_CHAT_USER,
++    EVT_ASR_FINAL,
++    EVT_NLU,
+     EVT_POLICY_APPLIED,
+     EVT_TTS_END,
+     EVT_TTS_START,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_CLOSE,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+     EVT_WS_OPEN,
+ )
++from app.voice_v2.nlu import NLUAdapter
+ from app.voice_v2.gate import GateController
+ from app.voice_v2.conversation_buffer import ConversationBuffer
+ from app.voice_v2.vad import VADAggregator
+ 
+ 
+ def _now_ms() -> int:
+     """Return the current epoch timestamp in milliseconds."""
+     return int(time.time() * 1000)
+ 
+ 
+ READY = "Ready"
+ LISTENING = "Listening"
+ THINKING = "Thinking"
+ RESPONDING = "Responding"
+ CONFIRMING_BARGE = "ConfirmingBarge"
+ 
+ _PCM_CODEC = "pcm_s16le"
+ _PCM_RATE_HZ = 16000
+ _PCM_CHANNELS = 1
+ _PCM_DESCRIPTOR = {
+     "codec": _PCM_CODEC,
+     "rate_hz": _PCM_RATE_HZ,
+     "channels": _PCM_CHANNELS,
  }
- Other internal policy keys (e.g., telemetry, sampling) may be present in server telemetry/export, but MUST NOT be sent over WS to browsers as part of policy.interaction. (See ADR notes.)
  
-+### Persona modes & generation (informational)
+@@ -77,82 +80,85 @@ class _Envelope:
+     payload: Dict[str, Any]
+ 
+     def to_dict(self) -> Dict[str, Any]:
+         data = {"type": self.type, "sid": self.sid}
+         data.update(self.payload)
+         if "meta" in data and isinstance(data["meta"], Mapping):
+             data["meta"] = dict(data["meta"])
+         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
+             data["ts_ms"] = _now_ms()
+         data.setdefault("who", "server")
+         data.setdefault("source", "voice_engine")
+         data.setdefault("level", "debug")
+         return data
+ 
+ 
+ @dataclass
+ class _TurnSession:
+     state: str = READY
+     turn_id: Optional[str] = None
+     turn_started_ms: Optional[int] = None
+     tts_utt_id: Optional[str] = None
+     req_id: Optional[str] = None
+     perf_first_partial_ms: Optional[int] = None
+     perf_final_ms: Optional[int] = None
+     perf_tts_start_ms: Optional[int] = None
++    asr_final_emitted: bool = False
++    nlu_emitted: bool = False
+ 
+ 
+ class _NullExporter:
+     """Exporter stub used when no exporter is provided."""
+ 
+     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
+         return
+ 
+ 
+ class EngineV2:
+     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
+ 
+     def __init__(
+         self,
+         exporter: FileExporter | None = None,
+         *,
+         telemetry_bus=bus,
+         fake_exporter: FileExporter | None = None,
+     ) -> None:
+         if exporter is None:
+             exporter = fake_exporter
+         if exporter is None:
+             exporter = _NullExporter()
+         self._exporter = exporter
+         self._bus = telemetry_bus
+         self._policy_snapshot: Dict[str, Any] | None = None
+         self._last_sid: Optional[str] = None
+         self._gate = GateController(publish=self._publish_gate_event)
+         self._sessions: Dict[str, _TurnSession] = {}
+         self._barge_handles: Dict[str, object] = {}
+         self._aggregators: Dict[str, VADAggregator] = {}
+         self._conversation_buffer = ConversationBuffer()
++        self._nlu = NLUAdapter()
+         subscribe = getattr(self._bus, "subscribe", None)
+         if callable(subscribe):
+             self._chat_subscription = subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
+             self._ws_send_subscription = subscribe(
+                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
+             )
+         else:
+             self._chat_subscription = None
+             self._ws_send_subscription = bus.subscribe(
+                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
+             )
+ 
+     @property
+     def policy_snapshot(self) -> Dict[str, Any] | None:
+         return self._policy_snapshot
+ 
+     @policy_snapshot.setter
+     def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
+         self._policy_snapshot = dict(snapshot) if snapshot is not None else None
+ 
+     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
+         """Capture a successful WebSocket upgrade."""
+         meta = {"headers": dict(headers), "dir": "in"}
+         event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
+         self._publish(event)
+@@ -320,57 +326,76 @@ class EngineV2:
+ 
+         meta = {
+             "byte_count": byte_count,
+             "audio": dict(_PCM_DESCRIPTOR),
+             "ws": {"dir": "out", "size": byte_count},
+         }
+         payload: Dict[str, Any] = {"meta": meta, "chunk": pcm_chunk}
+         event = self._envelope(sid, EVT_WS_AUDIO_SEND, payload)
+         self._publish(event)
+ 
+     def on_asr_final(self, sid: str, text: str) -> None:
+         """Observe the final ASR transcript for a turn."""
+ 
+         session = self._ensure_session(sid)
+         if session.turn_started_ms is not None:
+             elapsed = _now_ms() - session.turn_started_ms
+             if elapsed < 0:
+                 elapsed = 0
+             session.perf_final_ms = elapsed
+ 
+         turn_id = session.turn_id or str(uuid.uuid4())
+         req_id = session.req_id or f"req-{uuid.uuid4().hex}"
+         session.turn_id = turn_id
+         session.req_id = req_id
+ 
+-        self._emit_user_chat_message(
+-            sid,
+-            text,
+-            turn_id,
+-            req_id,
+-            origin="voice",
+-        )
++        if not session.asr_final_emitted:
++            session.asr_final_emitted = True
 +
-+- The server’s Generator composes messages using a mode-aware persona (single source of truth).
-+- Modes (enum): `clarify`, `outline`, `deep_dive`, `compare`, `steps`, `next_actions`.
-+- Each mode has a short instruction that shapes the assistant’s response; these are server-side and not sent to the client.
-+- The Planner selects one mode; the server may expose the selection via `dialog.plan` telemetry.
++            final_payload: Dict[str, Any] = {
++                "req_id": req_id,
++                "turn_id": turn_id,
++                "text": text,
++                "confidence": 0.9,
++            }
++            final_event = self._envelope(sid, EVT_ASR_FINAL, final_payload)
++            self._publish(final_event)
 +
- Initial info frame (emitted after handshake)
- The server emits a single info frame containing connection/session hints:
- 
- json
- Copy code
- {
-   "type": "info",
-   "audio": { "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 },
-   "slo": {
-     "first_partial_ms": { "target": 450, "p95": 750 },
-     "final_ms":         { "target": 2000, "p95": 3000 },
-     "tts_start_ms":     { "target": 350,  "p95": 600 }
-   },
-   "voice_id": "alloy-en-US-001",
-   "locale": "en-US",
-   "meta": {
-     "sid": "a1b2c3",
-     "version": "2",
-     "features": ["tts","asr","barge_in"],
-     "resume_token": "rTok_4nA7...", "resume_ttl_ms": 10000
-   }
- }
- info.audio describes server→client playback format (binary WS messages, see “Binary audio framing”).
- 
- slo provides advisory UI thresholds. The block is optional; clients MUST handle
- connections where it is absent.
- 
- voice_id/locale let the client label playback.
- 
- - `voice_id` is a stable string slug that identifies the TTS configuration. It
-   follows the `<provider>-<locale>-<variant>` pattern (for example
-   `alloy-en-US-001`).
- - `locale` is a BCP 47 language tag constrained to `ll-CC` casing (`en-US`,
-   `fr-FR`, `es-ES`, …). This is the locale the server will narrate in and
-   should inform captioning or playback labels.
-+- `persona_mode_hints`: informational array (for example,
-+  `["clarify","outline","deep_dive","compare","steps","next_actions"]`) that the
-+  server MAY include to describe available planner modes. Servers may omit this
-+  field without changing client behavior.
- 
- The server **always** populates `info.voice_id` and `info.locale`. Every
- `tts.start` telemetry envelope mirrors the same identifiers in
- `meta.voice_id`/`meta.locale` so the client can update UI state when playback
- begins.
- 
-+### Dialog planning (optional telemetry)
++            if not session.nlu_emitted:
++                nlu_result = self._nlu.extract(req_id, text)
++                nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
++                nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
++                self._publish(nlu_event)
++                session.nlu_emitted = True
 +
-+The server may emit a lightweight telemetry frame to describe planner intent:
++            self._emit_user_chat_message(
++                sid,
++                text,
++                turn_id,
++                req_id,
++                origin="voice",
++            )
+ 
+         self._set_state(sid, THINKING, reason="asr_final")
+ 
+     def on_asr_partial(
+         self,
+         sid: str,
+         req_id: str,
+         confidence: float,
+         partial_text: Optional[str] = None,
+     ) -> None:
+         session = self._ensure_session(sid)
+         if (
+             session.perf_first_partial_ms is None
+             and session.turn_started_ms is not None
+             and session.req_id == req_id
+         ):
+             elapsed = _now_ms() - session.turn_started_ms
+             if elapsed < 0:
+                 elapsed = 0
+             session.perf_first_partial_ms = elapsed
+ 
+         aggregator = self._aggregators.get(sid)
+         if aggregator is not None:
+             aggregator.feed_asr_evidence(req_id, confidence, partial_text)
+ 
+@@ -606,100 +631,104 @@ class EngineV2:
+ 
+     def _handle_vad_grant(self, sid: str, source: str, info: Dict[str, Any]) -> None:
+         reason = "vad_grant"
+         mode = info.get("mode") if isinstance(info, Mapping) else None
+         if mode == "and":
+             reason = "vad_grant_dual"
+         self.on_auto_barge_attempt(sid, source, reason=reason)
+ 
+     def _set_state(self, sid: str, new_state: str, *, reason: str | None = None) -> None:
+         """Transition the session state machine and emit telemetry breadcrumbs."""
+ 
+         session = self._ensure_session(sid)
+         previous = session.state
+         if previous == new_state:
+             return
+ 
+         now_ms = _now_ms()
+ 
+         if new_state == LISTENING:
+             session.turn_id = str(uuid.uuid4())
+             session.req_id = f"req-{uuid.uuid4().hex}"
+             session.turn_started_ms = now_ms
+             session.perf_first_partial_ms = None
+             session.perf_final_ms = None
+             session.perf_tts_start_ms = None
++            session.asr_final_emitted = False
++            session.nlu_emitted = False
+             begin_payload = {
+                 "turn_id": session.turn_id,
+                 "req_id": session.req_id,
+                 "meta": {
+                     "turn_id": session.turn_id,
+                     "req_id": session.req_id,
+                     "state": LISTENING,
+                 },
+             }
+             begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
+             self._publish(begin_event)
+ 
+         if (
+             new_state == READY
+             and previous in {LISTENING, THINKING, RESPONDING}
+             and session.turn_id
+         ):
+             start_ms = session.turn_started_ms or now_ms
+             duration_ms = now_ms - start_ms
+             if duration_ms <= 0:
+                 duration_ms = 1
+             turn_id = session.turn_id
+             req_id = session.req_id
+             end_payload = {
+                 "turn_id": turn_id,
+                 "req_id": req_id,
+                 "meta": {
+                     "turn_id": turn_id,
+                     "req_id": req_id,
+                     "duration_ms": duration_ms,
+                 },
+             }
+             end_event = self._envelope(sid, EVT_TURN_END, end_payload)
+             self._publish(end_event)
+             summary_payload = {
+                 "turn_id": turn_id,
+                 "req_id": req_id,
+                 "t_first_partial_ms": session.perf_first_partial_ms,
+                 "t_final_ms": session.perf_final_ms,
+                 "t_tts_start_ms": session.perf_tts_start_ms,
+             }
+             perf_event = self._envelope(sid, EVT_PERF_SUMMARY, summary_payload)
+             self._publish(perf_event)
+             session.turn_id = None
+             session.turn_started_ms = None
+             session.tts_utt_id = None
+             session.req_id = None
+             session.perf_first_partial_ms = None
+             session.perf_final_ms = None
+             session.perf_tts_start_ms = None
++            session.asr_final_emitted = False
++            session.nlu_emitted = False
+ 
+         session.state = new_state
+ 
+         aggregator = self._aggregators.get(sid)
+         if aggregator is not None:
+             aggregator.on_engine_mode_change(new_state)
+ 
+         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
+         if reason is not None:
+             breadcrumb_meta["reason"] = reason
+         breadcrumb_payload = {"meta": breadcrumb_meta}
+         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
+         self._publish(breadcrumb_event)
+ 
+     def turn_context(self, sid: str) -> Optional[Dict[str, str]]:
+         """Return the active turn context for ``sid`` if a turn is in progress."""
+ 
+         session = self._sessions.get(sid)
+         if (
+             session is None
+             or session.turn_id is None
+             or session.req_id is None
+             or session.state == READY
+         ):
+             return None
+diff --git a/app/voice_v2/nlu.py b/app/voice_v2/nlu.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d2ced5ab36df305695215e2c8058656fcb8e1b6
+--- /dev/null
++++ b/app/voice_v2/nlu.py
+@@ -0,0 +1,60 @@
++"""Rule-based NLU adapter used by the voice engine."""
++from __future__ import annotations
 +
-+```json
-+{
-+  "type": "dialog.plan",
-+  "ts_ms": 1730000000000,
-+  "mode": "clarify | outline | deep_dive | compare | steps | next_actions",
-+  "missing_info": ["intent", "details"],
-+  "chips": ["Share more context", "Show an example"],
-+  "reason": "short note for observability only"
-+}
-+```
++import re
++from typing import Dict
 +
-+Notes:
 +
-+- Emitted at most once per user turn, after ASR final and before assistant chunks.
-+- Purely telemetry; clients don’t need it to function.
-+- The mode constrains the response style used by the NLG Generator.
-+- If absent, client behavior is unchanged.
++class NLUAdapter:
++    """Deterministic, lightweight intent and entity extractor."""
 +
- ### Binary audio framing (server → client TTS)
- 
- - Codec: **PCM s16le**, mono, **16 kHz** (`info.audio` announces the descriptor).
- - The server emits one PCM buffer per **binary WebSocket message**. No frame headers or chunk counters are prepended.
- - Each chunk length MUST be a multiple of `channels * 2` bytes (16‑bit samples).
- - The existing binary routing guard still rejects non-audio payloads.
- 
- Client decoding example (WebAudio):
- 
- ```js
- const sampleRate = 16000;
- const audioCtx = new AudioContext({ sampleRate });
- 
- function playPcmChunk(arrayBuffer) {
-   const int16 = new Int16Array(arrayBuffer);
-   const float32 = new Float32Array(int16.length);
-   for (let i = 0; i < int16.length; i += 1) {
-     float32[i] = Math.max(-1, Math.min(1, int16[i] / 32768));
-   }
- 
-   const buffer = audioCtx.createBuffer(1, float32.length, sampleRate);
-   buffer.copyToChannel(float32, 0);
- 
-   const source = audioCtx.createBufferSource();
-   source.buffer = buffer;
++    _INTENT_KEYWORDS = {
++        "greeting": {"hello", "hi", "hey"},
++        "goodbye": {"bye", "goodbye", "see you"},
++        "status.check": {"status", "progress", "update"},
++        "support.request": {"help", "support", "assist", "issue"},
++        "order.lookup": {"order", "shipment", "tracking"},
++    }
++    _ORDER_RE = re.compile(r"\border(?:\s+number)?\s*(?P<order>[A-Za-z0-9-]{3,})", re.IGNORECASE)
++    _PRODUCT_RE = re.compile(r"\bproduct\s+(?P<product>[A-Za-z0-9-]+)", re.IGNORECASE)
++    _TICKET_RE = re.compile(r"\b(ticket|case)\s*(?P<ticket>[A-Za-z0-9-]{3,})", re.IGNORECASE)
++
++    def extract(self, req_id: str, text: str) -> Dict[str, object]:
++        """Return a stable NLU interpretation for ``text``.
++
++        The adapter intentionally keeps the implementation minimal so it can
++        run synchronously inside the engine hot path. Keyword matching is used
++        to infer intents and a few regexes capture simple entity candidates.
++        ``req_id`` is unused by the extractor today but is accepted so callers
++        can pass through contextual identifiers without branching.
++        """
++
++        source = text or ""
++        normalized = source.strip().lower()
++        intent = "chitchat.fallback"
++        confidence = 0.35
++
++        for candidate, keywords in self._INTENT_KEYWORDS.items():
++            if any(keyword in normalized for keyword in keywords):
++                intent = candidate
++                confidence = 0.82
++                break
++
++        entities: Dict[str, str] = {}
++        if normalized:
++            order_match = self._ORDER_RE.search(source)
++            if order_match:
++                entities["order"] = order_match.group("order")
++
++            product_match = self._PRODUCT_RE.search(source)
++            if product_match:
++                entities["product"] = product_match.group("product")
++
++            ticket_match = self._TICKET_RE.search(source)
++            if ticket_match:
++                entities["ticket"] = ticket_match.group("ticket")
++
++        return {"intent": intent, "entities": entities, "confidence": confidence}
++
++
++__all__ = ["NLUAdapter"]
+diff --git a/scripts/run_build05_tests.sh b/scripts/run_build05_tests.sh
+index c9be3c3f8ed41676b7bc3ff273dc45466ec9beec..fa5c478a42330fcdecb604106483fe529206d334 100644
+--- a/scripts/run_build05_tests.sh
++++ b/scripts/run_build05_tests.sh
+@@ -1,11 +1,12 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ export PYTHONPATH="${PYTHONPATH:-.}:."
+ PY="${PYTHON:=python3}"; command -v "$PY" >/dev/null 2>&1 || PY=python
+ "$PY" -m unittest -v \
+   tests.test_asr_readiness_gate \
+   tests.test_asr_adapter_basic \
+   tests.test_llm_stub \
+   tests.test_dual_vad_arbiter \
+   tests.test_tts_stub
++"$PY" -m unittest -v tests.test_nlu_once_per_turn
+ echo "BUILD_05_TESTS: PASS"
+diff --git a/tests/test_nlu_once_per_turn.py b/tests/test_nlu_once_per_turn.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..5e0e55df3dbb463d630b777082b760446b6b31fb
+--- /dev/null
++++ b/tests/test_nlu_once_per_turn.py
+@@ -0,0 +1,73 @@
++import unittest
++
++from app.telemetry import bus
++from app.voice_v2 import EVT_ASR_FINAL, EVT_NLU
++from app.voice_v2.engine import EngineV2
++
++
++class TestNLUOncePerTurn(unittest.TestCase):
++    def setUp(self) -> None:
++        bus.reset()
++        self.events: list[dict] = []
++        self.token = bus.subscribe("*", self.events.append)
++        self.engine = EngineV2(telemetry_bus=bus)
++        self.sid = "sid-nlu"
++        self.engine.on_open(self.sid, {})
++        self.engine.on_audio(self.sid, b"abc", seq=0)
++
++    def tearDown(self) -> None:
++        bus.unsubscribe(self.token)
++        bus.reset()
++
++    def _events(self, event_type: str) -> list[dict]:
++        return [evt for evt in self.events if evt["type"] == event_type]
++
++    def test_single_final_emits_nlu_once(self) -> None:
++        self.engine.on_asr_final(self.sid, "hello there order 12345")
++
++        finals = self._events(EVT_ASR_FINAL)
++        nlus = self._events(EVT_NLU)
++        self.assertEqual(1, len(finals))
++        self.assertEqual(1, len(nlus))
++
++        final_event = finals[0]
++        nlu_event = nlus[0]
++        self.assertEqual(final_event["req_id"], nlu_event["req_id"])
++        self.assertEqual("1", nlu_event["schema_version"])
++        self.assertIn("intent", nlu_event)
++        self.assertIn("entities", nlu_event)
++        self.assertIn("confidence", nlu_event)
++
++        final_index = self.events.index(final_event)
++        nlu_index = self.events.index(nlu_event)
++        self.assertLess(final_index, nlu_index)
++
++    def test_duplicate_finals_deduped(self) -> None:
++        self.engine.on_asr_final(self.sid, "status update please")
++        self.engine.on_asr_final(self.sid, "status update please")
++
++        finals = self._events(EVT_ASR_FINAL)
++        nlus = self._events(EVT_NLU)
++        self.assertEqual(1, len(finals))
++        self.assertEqual(1, len(nlus))
++
++    def test_sessions_do_not_cross(self) -> None:
++        sid_two = "sid-nlu-2"
++        self.engine.on_open(sid_two, {})
++        self.engine.on_audio(sid_two, b"def", seq=0)
++
++        self.engine.on_asr_final(self.sid, "hello order 456")
++        self.engine.on_asr_final(sid_two, "need help with product zenith")
++
++        nlus = self._events(EVT_NLU)
++        self.assertEqual(2, len(nlus))
++
++        sid_map = {evt["sid"]: evt for evt in nlus}
++        self.assertIn(self.sid, sid_map)
++        self.assertIn(sid_two, sid_map)
++        self.assertEqual(self.sid, sid_map[self.sid]["sid"])
++        self.assertEqual(sid_two, sid_map[sid_two]["sid"])
++
++
++if __name__ == "__main__":
++    unittest.main()
