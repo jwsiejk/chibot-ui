@@ -14,6 +14,8 @@
   let expectInfoFrame = true;
   let lastPingAt = null;
   let transportFactory = (url, protocol) => new WebSocket(url, protocol);
+  let rateLimitRetryTimerId = null;
+  let rateLimitRetryCount = 0;
 
   function updateState(patch) {
     AppState.setState(patch);
@@ -33,6 +35,54 @@
       heartbeatTimerId = null;
     }
     updateState({ heartbeatTimerId: null, lastPingAt: null });
+  }
+
+  function clearRateLimitRetryTimer() {
+    if (rateLimitRetryTimerId) {
+      clearTimeout(rateLimitRetryTimerId);
+      rateLimitRetryTimerId = null;
+    }
+  }
+
+  function resetRateLimitRecovery() {
+    clearRateLimitRetryTimer();
+    rateLimitRetryCount = 0;
+    if (window.WSErrorUI && typeof window.WSErrorUI.clearRateLimitToast === "function") {
+      try {
+        window.WSErrorUI.clearRateLimitToast();
+      } catch (err) {
+        console.warn("Failed to clear rate limit toast", err);
+      }
+    }
+  }
+
+  function scheduleRateLimitRetry(delayMs, callbacks = {}) {
+    const delay = Number(delayMs);
+    if (!Number.isFinite(delay) || delay <= 0) return false;
+    if (rateLimitRetryTimerId || rateLimitRetryCount >= 1) return false;
+    rateLimitRetryCount += 1;
+    rateLimitRetryTimerId = setTimeout(() => {
+      rateLimitRetryTimerId = null;
+      if (callbacks && typeof callbacks.onRetryStart === "function") {
+        try {
+          callbacks.onRetryStart();
+        } catch (err) {
+          console.warn("Auto-retry callback failed", err);
+        }
+      }
+      const state = AppState.getState();
+      const token = state.accessToken;
+      if (!token) {
+        console.warn("Auto-retry skipped: missing access token");
+        return;
+      }
+      try {
+        open(token, { resumeToken: state.resumeToken, skipRateLimitCancel: true });
+      } catch (err) {
+        console.error("Auto-retry open failed", err);
+      }
+    }, delay);
+    return true;
   }
 
   function sendRaw(payload) {
@@ -128,6 +178,7 @@
       return;
     }
     expectInfoFrame = false;
+    resetRateLimitRecovery();
     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
     const expiresAt = resumeToken && resumeTtlMs ? Date.now() + resumeTtlMs : null;
@@ -170,6 +221,15 @@
       sendJson({ type: "pong", t: Date.now() });
     } else if (frame.type === "error") {
       console.error("WS error frame", frame);
+      if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+        try {
+          window.WSErrorUI.handleFrame(frame, {
+            scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
+          });
+        } catch (err) {
+          console.warn("Error handler threw", err);
+        }
+      }
     } else if (frame.type === "tts.start") {
       const audioPlayer = getAudioPlayer();
       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
@@ -281,14 +341,26 @@
     }
   }
 
-  function open(accessToken, { resumeToken = null } = {}) {
+  function open(accessToken, options = {}) {
     if (!accessToken) {
       throw new Error("accessToken is required to open the chat socket");
     }
+    const { resumeToken = null, skipRateLimitCancel = false } = options;
     if (socket) {
       cleanupSocket(socket, "superseded");
     }
     expectInfoFrame = true;
+    if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+      try {
+        window.WSErrorUI.cancelRateLimitCountdown("manual");
+      } catch (err) {
+        console.warn("Failed to cancel rate limit countdown", err);
+      }
+    }
+    if (!skipRateLimitCancel) {
+      clearRateLimitRetryTimer();
+      rateLimitRetryCount = 0;
+    }
     const url = computeUrl(accessToken, resumeToken);
     const ws = transportFactory(url, SUBPROTOCOL);
     socket = ws;
@@ -311,6 +383,15 @@
     const ws = socket;
     cleanupSocket(ws, reason);
     clearHeartbeat();
+    clearRateLimitRetryTimer();
+    rateLimitRetryCount = 0;
+    if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+      try {
+        window.WSErrorUI.cancelRateLimitCountdown(reason);
+      } catch (err) {
+        console.warn("Failed to cancel countdown on close", err);
+      }
+    }
     updateState({ connectionState: "disconnected", websocket: null });
   }
 
