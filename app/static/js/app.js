@@ -821,7 +821,13 @@
         updateVoiceState(extractVoiceLocale(state.infoFrame));
       }
       setPttEnabled(state.connectionState === 'connected');
-      if (previousConnectionState !== 'connected' && state.connectionState === 'connected') {
+      const prevConnectionState = previousConnectionState;
+      const nextConnectionState = state.connectionState;
+      const becameConnected = prevConnectionState !== 'connected' && nextConnectionState === 'connected';
+      const becameDisconnected = prevConnectionState !== 'disconnected' && nextConnectionState === 'disconnected';
+      previousConnectionState = nextConnectionState;
+
+      if (becameConnected) {
         Waveform.start();
         if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
           window.AudioRecorder.start()
@@ -834,7 +840,7 @@
               console.error('AudioRecorder start error', err);
             });
         }
-      } else if (previousConnectionState !== 'disconnected' && state.connectionState === 'disconnected') {
+      } else if (becameDisconnected) {
         Waveform.stop();
         if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
           try {
@@ -848,7 +854,6 @@
         }
         setPttActive(false);
       }
-      previousConnectionState = state.connectionState;
       updateResumeBanner(state);
     });
 

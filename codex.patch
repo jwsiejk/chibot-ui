@@ -1,56 +1,91 @@
-diff --git a/app/templates/index.html b/app/templates/index.html
-index cb6d02611e8c44ada0a117d7fc26824b6214ba48..a0a59826ae32141353a35d390b1f925b5d2e31ec 100644
---- a/app/templates/index.html
-+++ b/app/templates/index.html
-@@ -2,50 +2,51 @@
- <html lang="en" data-askchip-env="development">
-   <head>
-     <meta charset="utf-8" />
-     <meta name="viewport" content="width=device-width, initial-scale=1" />
-     <meta name="askchip-env" content="development" />
-     <title>AskChip UI</title>
-     <link rel="icon" href="/static/favicon.ico" />
-     <link rel="stylesheet" href="/static/css/styles.css" />
-   </head>
-   <body data-askchip-env="development">
-     <div id="app">
-       <header class="topbar" role="banner">
-         <div class="topbar-left">
-           <span class="env-badge" aria-label="Environment">Development</span>
-           <span class="sid" id="sid-text">SID: —</span>
-         </div>
-         <div class="topbar-right">
-           <div class="brand-menu">
-             <button
-               id="brandBtn"
-               class="brand-btn"
-               type="button"
-               aria-haspopup="true"
-               aria-expanded="false"
-             >
-+              <img src="/static/chip/chip.png" alt="AskChip logo" class="brand-logo" />
-               <span class="brand-text">AskChip</span>
-               <span aria-hidden="true">▾</span>
-             </button>
-             <div id="brandMenu" class="menu" role="menu" aria-hidden="true">
-               <button id="profileItem" class="menu-item" type="button" role="menuitem">Profile</button>
-               <button id="adminItem" class="menu-item" type="button" role="menuitem">Admin UI</button>
-               <button id="logoutItem" class="menu-item" type="button" role="menuitem">Sign out</button>
-             </div>
-           </div>
-         </div>
-       </header>
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 7300ab4e746364fa4e064fa17dabc9d458ac2b52..73e2bdbd4d3e715082aac7d3f9f6bd30d6e35751 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -799,78 +799,83 @@
  
-       <main class="layout" role="main">
-         <section class="stage" aria-labelledby="connLabel">
-           <div class="chip-window">
-             <canvas
-               id="waveCanvas"
-               class="wave-canvas"
-               role="img"
-               aria-label="Live audio visualization"
-             ></canvas>
-             <div class="chip-overlay">
-               <div class="chip-status" role="status" aria-live="polite">
-                 <span class="status-dot" aria-hidden="true"></span>
-                 <span id="connLabel">Disconnected</span>
+     let previousConnectionState = AppState.getState().connectionState;
+     AppState.subscribe((state) => {
+       sidText.textContent = state.sid || '—';
+       let label = 'Disconnected';
+       if (state.connectionState === 'connected') label = 'Connected';
+       else if (state.connectionState === 'connecting') label = 'Connecting…';
+       else if (state.connectionState === 'resuming') label = 'Resuming…';
+       connLabel.textContent = label;
+       const active = state.connectionState !== 'disconnected';
+       statusDot.classList.toggle('on', active);
+       startBtn.disabled = active;
+       endBtn.disabled = !active;
+       if (state.latencyMs != null) {
+         latencyHint.textContent = `Latency: ${Math.round(state.latencyMs)} ms`;
+       } else {
+         latencyHint.textContent = 'Latency: —';
+       }
+       if (state.connectionState === 'disconnected') {
+         resetVoiceState();
+         resetSuggestions();
+       } else if (state.infoFrame) {
+         updateVoiceState(extractVoiceLocale(state.infoFrame));
+       }
+       setPttEnabled(state.connectionState === 'connected');
+-      if (previousConnectionState !== 'connected' && state.connectionState === 'connected') {
++      const prevConnectionState = previousConnectionState;
++      const nextConnectionState = state.connectionState;
++      const becameConnected = prevConnectionState !== 'connected' && nextConnectionState === 'connected';
++      const becameDisconnected = prevConnectionState !== 'disconnected' && nextConnectionState === 'disconnected';
++      previousConnectionState = nextConnectionState;
++
++      if (becameConnected) {
+         Waveform.start();
+         if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+           window.AudioRecorder.start()
+             .then(() => {
+               if (pttEnabled && !pttActive) {
+                 applyPttMask({ force: true });
+               }
+             })
+             .catch((err) => {
+               console.error('AudioRecorder start error', err);
+             });
+         }
+-      } else if (previousConnectionState !== 'disconnected' && state.connectionState === 'disconnected') {
++      } else if (becameDisconnected) {
+         Waveform.stop();
+         if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+           try {
+             window.AudioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
+           }
+         }
+         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+           window.AudioPlayer.interrupt();
+         }
+         setPttActive(false);
+       }
+-      previousConnectionState = state.connectionState;
+       updateResumeBanner(state);
+     });
+ 
+     window.addEventListener('tts.start', (event) => {
+       const detail = event && event.detail;
+       if (detail) {
+         updateVoiceState(extractVoiceLocale(detail));
+       }
+       if (pttEnabled && !pttActive) {
+         applyPttMask({ force: true });
+       }
+     });
+     window.addEventListener('tts.end', () => {
+       if (pttEnabled && !pttActive) {
+         applyPttMask({ force: true });
+       }
+     });
+     window.addEventListener('asr.ready', () => {
+       if (pttEnabled && !pttActive) {
+         applyPttMask({ force: true });
+       }
+     });
+ 
+     window.addEventListener('assistant.suggestions', (event) => {
+       const detail = event && event.detail;
