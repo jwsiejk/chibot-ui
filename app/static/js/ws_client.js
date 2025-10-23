@@ -270,6 +270,21 @@
     }
   }
 
+  function handleChatHistoryFrame(frame) {
+    const view = window.TranscriptView;
+    const messages = Array.isArray(frame.messages) ? frame.messages : [];
+    if (view && typeof view.handleChatMessage === "function" && messages.length) {
+      for (const message of messages) {
+        try {
+          view.handleChatMessage(message);
+        } catch (err) {
+          console.warn("TranscriptView chat history handler error", err);
+          break;
+        }
+      }
+    }
+  }
+
   function handleMessageFrame(frame) {
     if (frame.type === "keepalive") {
       // Some transports may emit a keepalive frame before the info frame has
@@ -284,12 +299,16 @@
     }
 
     if (expectInfoFrame) {
-      if (frame.type !== "info") {
+      if (frame.type === "chat.history") {
+        handleChatHistoryFrame(frame);
+      } else if (frame.type !== "info") {
         console.error("Expected info frame first, received", frame.type);
         close("bad_info_sequence");
         return;
       }
-      handleInfoFrame(frame);
+      if (frame.type === "info") {
+        handleInfoFrame(frame);
+      }
     } else if (frame.type === "info") {
       handleInfoFrame(frame);
     } else if (frame.type === "pong") {
@@ -355,18 +374,7 @@
         }
       }
     } else if (frame.type === "chat.history") {
-      const view = window.TranscriptView;
-      const messages = Array.isArray(frame.messages) ? frame.messages : [];
-      if (view && typeof view.handleChatMessage === "function" && messages.length) {
-        for (const message of messages) {
-          try {
-            view.handleChatMessage(message);
-          } catch (err) {
-            console.warn("TranscriptView chat history handler error", err);
-            break;
-          }
-        }
-      }
+      handleChatHistoryFrame(frame);
     }
     dispatchFrame(frame);
   }

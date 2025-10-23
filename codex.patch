@@ -1,104 +1,160 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 4ebb5f9aef4de8edcde44bc3bce7ddf9d0b87dec..7f3b2909d7aa40781cff7870ebf8b78cbd023087 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -1,42 +1,44 @@
- """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
- from __future__ import annotations
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 5b1c1641a104354c06f524bc11bde7bddf5b3f84..0c50527a5008cda9c3c237fd7ad7707643df2747 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -248,70 +248,89 @@
+       assignResume(resumeToken, resumeTtlMs);
+     } else {
+       clearResumeState();
+     }
+     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
+     const audioPlayer = getAudioPlayer();
+     if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+       audioPlayer.setDescriptor(descriptor);
+     }
+     updateState({
+       connectionState: "connected",
+       sid: meta.sid,
+       infoFrame: frame,
+       resumeError: null
+     });
+     startHeartbeat();
+   }
  
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
- from urllib.parse import urlparse
+   function handlePongFrame() {
+     if (typeof lastPingAt === "number") {
+       const latency = Math.max(0, Date.now() - lastPingAt);
+       updateState({ latencyMs: latency });
+     }
+   }
  
- from app.admin.flow_api import handle_flow_trace, handle_flow_zip
-+from app.telemetry.exporter import FileExporter
-+from app.voice_v2.engine import EngineV2
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
++  function handleChatHistoryFrame(frame) {
++    const view = window.TranscriptView;
++    const messages = Array.isArray(frame.messages) ? frame.messages : [];
++    if (view && typeof view.handleChatMessage === "function" && messages.length) {
++      for (const message of messages) {
++        try {
++          view.handleChatMessage(message);
++        } catch (err) {
++          console.warn("TranscriptView chat history handler error", err);
++          break;
++        }
++      }
++    }
++  }
++
+   function handleMessageFrame(frame) {
+     if (frame.type === "keepalive") {
+       // Some transports may emit a keepalive frame before the info frame has
+       // been sent. Treat it as a no-op and continue waiting for the info
+       // frame so we do not close the connection prematurely.
+       return;
+     }
  
- logger = logging.getLogger(__name__)
+     if (frame.type === "ping") {
+       sendJson({ type: "pong", t: Date.now() });
+       return;
+     }
  
- 
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
- 
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
- 
- 
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
- 
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
- 
- 
-@@ -307,51 +309,53 @@ async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: R
-         {
-             "type": "websocket.http.response.start",
-             "status": response.status,
-             "headers": headers,
+     if (expectInfoFrame) {
+-      if (frame.type !== "info") {
++      if (frame.type === "chat.history") {
++        handleChatHistoryFrame(frame);
++      } else if (frame.type !== "info") {
+         console.error("Expected info frame first, received", frame.type);
+         close("bad_info_sequence");
+         return;
+       }
+-      handleInfoFrame(frame);
++      if (frame.type === "info") {
++        handleInfoFrame(frame);
++      }
+     } else if (frame.type === "info") {
+       handleInfoFrame(frame);
+     } else if (frame.type === "pong") {
+       handlePongFrame();
+     } else if (frame.type === "error") {
+       console.error("WS error frame", frame);
+       const isResumeInvalid = frame && frame.code === "resume_invalid";
+       if (isResumeInvalid) {
+         clearResumeState();
+         updateState({ resumeError: "invalid" });
+       }
+       if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+         try {
+           window.WSErrorUI.handleFrame(frame, {
+             scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
+           });
+         } catch (err) {
+           console.warn("Error handler threw", err);
          }
-     )
-     await send(
-         {
-             "type": "websocket.http.response.body",
-             "body": response.body,
-             "more_body": False,
+       }
+       if (isResumeInvalid) {
+         close("resume_invalid");
+       }
+     } else if (frame.type === "tts.start") {
+       const audioPlayer = getAudioPlayer();
+@@ -333,62 +352,51 @@
+         try {
+           view.handlePartial(frame);
+         } catch (err) {
+           console.warn("TranscriptView partial handler error", err);
          }
-     )
+       }
+     } else if (frame.type === "asr.final") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleFinal === "function") {
+         try {
+           view.handleFinal(frame);
+         } catch (err) {
+           console.warn("TranscriptView final handler error", err);
+         }
+       }
+     } else if (frame.type === "chat.message") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleChatMessage === "function") {
+         try {
+           view.handleChatMessage(frame);
+         } catch (err) {
+           console.warn("TranscriptView chat handler error", err);
+         }
+       }
+     } else if (frame.type === "chat.history") {
+-      const view = window.TranscriptView;
+-      const messages = Array.isArray(frame.messages) ? frame.messages : [];
+-      if (view && typeof view.handleChatMessage === "function" && messages.length) {
+-        for (const message of messages) {
+-          try {
+-            view.handleChatMessage(message);
+-          } catch (err) {
+-            console.warn("TranscriptView chat history handler error", err);
+-            break;
+-          }
+-        }
+-      }
++      handleChatHistoryFrame(frame);
+     }
+     dispatchFrame(frame);
+   }
  
- 
- def _method_is_get(scope: dict) -> bool:
-     """Return True when the incoming HTTP scope uses the GET method."""
- 
-     return scope.get("method", "GET").upper() == "GET"
- 
- 
- def _get_adapter() -> ChatV2Adapter:
-     """Return a lazily instantiated ChatV2Adapter singleton."""
-     global _adapter
-     if _adapter is None:
--        _adapter = ChatV2Adapter()
-+        exporter = FileExporter(EXPORT_ROOT)
-+        engine = EngineV2(exporter=exporter)
-+        _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
-     return _adapter
- 
- 
- async def _reject_origin(
-     scope: dict,
-     origin: Optional[str],
-     receive: Callable[[], Awaitable[dict]],
-     send: Callable[[dict], Awaitable[None]],
- ) -> None:
-     """Reject a WebSocket handshake because the Origin is not allowed."""
- 
-     message = await receive()
-     if message.get("type") != "websocket.connect":
-         return
- 
-     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
-     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
-     if origin:
-         payload["origin"] = origin
-     await _send_ws_response(send, json_response(status=403, **payload))
- 
- 
- def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
-     for header, value in headers:
-         if header == name:
+   function parseFrame(event) {
+     const { data } = event;
+     if (typeof data === "string") {
+       try {
+         const frame = JSON.parse(data);
+         handleMessageFrame(frame);
+       } catch (err) {
+         console.error("Failed to parse WS frame", err, data);
+       }
+       return;
+     }
+     if (data instanceof Blob) {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(data);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+       return;
+     }
+     console.warn("Unknown WS frame type", data);
+   }
