@@ -5,12 +5,114 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AskChip — Live</title>
   <meta name="color-scheme" content="dark light">
+  <meta name="askchip-env" content="{{ ASKCHIP_ENV|default('prod') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./styles.css" />
+  <style>
+    .dev-inspector-toggle {
+      position: fixed;
+      right: 24px;
+      bottom: 96px;
+      z-index: 190;
+      padding: 8px 14px;
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    .dev-inspector {
+      position: fixed;
+      right: 24px;
+      bottom: 168px;
+      width: min(420px, calc(100% - 48px));
+      max-height: calc(100vh - 220px);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px;
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(10, 14, 24, 0.96), rgba(8, 12, 20, 0.94));
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      z-index: 185;
+    }
+
+    .dev-inspector__header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .dev-inspector__title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: .3px;
+    }
+
+    .dev-inspector__sid {
+      display: block;
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-all;
+    }
+
+    .dev-inspector__actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .dev-inspector__action {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      cursor: pointer;
+      text-decoration: none;
+      transition: background .2s ease;
+    }
+
+    .dev-inspector__action:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .dev-inspector__action[aria-disabled="true"] {
+      opacity: .4;
+      pointer-events: none;
+    }
+
+    .dev-inspector__output {
+      margin: 0;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.32);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: "JetBrains Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    .dev-inspector__message {
+      font-size: 12px;
+      color: var(--muted);
+    }
+  </style>
 </head>
-<body>
+<body data-askchip-env="{{ ASKCHIP_ENV|default('prod') }}">
   <div id="toast-root" class="toast-container" aria-live="assertive" aria-atomic="true"></div>
   <div id="app" class="app">
     <!-- Top Bar -->
@@ -106,6 +208,25 @@
       </div>
     </footer>
   </div>
+
+  <button id="devInspectorToggle" class="pill secondary dev-inspector-toggle" type="button" hidden aria-haspopup="true" aria-expanded="false" aria-controls="devInspectorPanel">
+    Inspector
+  </button>
+  <section id="devInspectorPanel" class="dev-inspector" role="region" aria-label="Dev inspector" hidden>
+    <header class="dev-inspector__header">
+      <div>
+        <span class="dev-inspector__title">Flow Inspector</span>
+        <span id="devInspectorSid" class="dev-inspector__sid">SID: —</span>
+      </div>
+      <div class="dev-inspector__actions">
+        <button id="devInspectorRefresh" type="button" class="dev-inspector__action">Refresh</button>
+        <a id="devInspectorDownload" class="dev-inspector__action" href="#" aria-disabled="true">Download export</a>
+        <button id="devInspectorClose" type="button" class="dev-inspector__action">Close</button>
+      </div>
+    </header>
+    <pre id="devInspectorOutput" class="dev-inspector__output" aria-live="polite"></pre>
+    <p id="devInspectorStatus" class="dev-inspector__message">Connect to capture flow events.</p>
+  </section>
 
   <script src="./transcript_view.js"></script>
   <script src="./errors.js"></script>
