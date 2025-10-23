@@ -189,6 +189,73 @@
 
     const voiceState = { voiceId: null, locale: null };
 
+    const modeSuggestionsEl = document.getElementById('modeSuggestions');
+    const modeSuggestionsLabelEl = document.getElementById('modeSuggestionsLabel');
+    const modeSuggestionsChipsEl = document.getElementById('modeSuggestionsChips');
+    const modeSuggestionsState = { mode: null, items: [] };
+
+    function formatModeLabel(value) {
+      if (typeof value !== 'string') return '';
+      const normalized = value.trim().replace(/[_\s]+/g, ' ');
+      if (!normalized) return '';
+      return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+    }
+
+    function resetSuggestions() {
+      modeSuggestionsState.mode = null;
+      modeSuggestionsState.items = [];
+      renderSuggestions();
+    }
+
+    function renderSuggestions() {
+      if (!modeSuggestionsEl || !modeSuggestionsChipsEl) {
+        return;
+      }
+      const items = Array.isArray(modeSuggestionsState.items)
+        ? modeSuggestionsState.items
+        : [];
+      const hasItems = items.length > 0;
+      modeSuggestionsEl.classList.toggle('hidden', !hasItems);
+      modeSuggestionsChipsEl.replaceChildren();
+      if (!hasItems) {
+        if (modeSuggestionsLabelEl) {
+          modeSuggestionsLabelEl.textContent = '';
+        }
+        return;
+      }
+      for (const label of items) {
+        const chip = document.createElement('span');
+        chip.className = 'mode-chip';
+        chip.textContent = label;
+        chip.setAttribute('role', 'listitem');
+        modeSuggestionsChipsEl.appendChild(chip);
+      }
+      if (modeSuggestionsLabelEl) {
+        const formatted = formatModeLabel(modeSuggestionsState.mode);
+        modeSuggestionsLabelEl.textContent = formatted
+          ? `${formatted} suggestions`
+          : 'Suggested actions';
+      }
+    }
+
+    function applySuggestionsFrame(detail) {
+      if (!detail || typeof detail !== 'object') {
+        resetSuggestions();
+        return;
+      }
+      const rawItems = Array.isArray(detail.items) ? detail.items : [];
+      const cleaned = [];
+      for (const item of rawItems) {
+        if (!item || typeof item !== 'object') continue;
+        const label = typeof item.label === 'string' ? item.label.trim() : '';
+        if (!label) continue;
+        cleaned.push(label);
+      }
+      modeSuggestionsState.mode = typeof detail.mode === 'string' ? detail.mode : null;
+      modeSuggestionsState.items = cleaned;
+      renderSuggestions();
+    }
+
     function renderVoiceState() {
       if (voiceLabel) {
         voiceLabel.textContent = voiceState.voiceId || '—';
@@ -262,6 +329,7 @@
     }
 
     renderVoiceState();
+    renderSuggestions();
 
     let pttEnabled = false;
     let pttActive = false;
@@ -716,6 +784,7 @@
       }
       if (state.connectionState === 'disconnected') {
         resetVoiceState();
+        resetSuggestions();
       } else if (state.infoFrame) {
         updateVoiceState(extractVoiceLocale(state.infoFrame));
       }
@@ -769,6 +838,15 @@
       if (pttEnabled && !pttActive) {
         applyPttMask({ force: true });
       }
+    });
+
+    window.addEventListener('assistant.suggestions', (event) => {
+      const detail = event && event.detail;
+      applySuggestionsFrame(detail);
+    });
+
+    window.addEventListener('ws.close', () => {
+      resetSuggestions();
     });
 
     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---

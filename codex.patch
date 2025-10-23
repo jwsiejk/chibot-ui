@@ -1,428 +1,966 @@
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 1bc6a8c6b1904d9c76a68b271d51abcbb25ae625..876e157476b4c894374f335727f208b8094f1685 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -16,50 +16,51 @@ from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ACWR_RECOMPUTE,
-     EVT_CHAT_USER,
-     EVT_ASR_FINAL,
-     EVT_NLG,
-     EVT_NLU,
-     EVT_DIALOG_PLAN,
-     EVT_POLICY_APPLIED,
-     EVT_TTS_END,
-     EVT_TTS_START,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- from app.voice_v2.nlu import NLUAdapter
- from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
- from app.voice_v2.llm import LLMAdapter
- from app.voice_v2.gate import GateController
- from app.voice_v2.conversation_buffer import ConversationBuffer
- from app.voice_v2.vad import VADAggregator
- from app.voice_v2.planner import plan_turn
-+from app.voice_v2.persona import default_chips_for_mode, load_persona
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
- READY = "Ready"
- LISTENING = "Listening"
- THINKING = "Thinking"
- RESPONDING = "Responding"
- CONFIRMING_BARGE = "ConfirmingBarge"
- 
- _PCM_CODEC = "pcm_s16le"
- _PCM_RATE_HZ = 16000
- _PCM_CHANNELS = 1
- _PCM_DESCRIPTOR = {
-     "codec": _PCM_CODEC,
-     "rate_hz": _PCM_RATE_HZ,
-     "channels": _PCM_CHANNELS,
+diff --git a/app/static/css/styles.css b/app/static/css/styles.css
+index 55ff35254d3c2d98fd26f70e7a2b2c8212ddd8d3..cf3197bfb9b125ec7c53e31937bccc657f59abc3 100644
+--- a/app/static/css/styles.css
++++ b/app/static/css/styles.css
+@@ -103,50 +103,92 @@ body{
+ }
+ .chip-window{
+   position:relative;
+   width:min(1200px, 100%); aspect-ratio:16/9;
+   border-radius:20px;
+   background:linear-gradient(180deg, #0E1627 0%, #0A0F1B 100%);
+   box-shadow:var(--shadow);
+   overflow:hidden;
+   border:1px solid var(--border);
+ }
+ .wave-canvas{
+   position:absolute; inset:0; width:100%; height:100%;
+   filter: contrast(1.15) saturate(1.2);
+ }
+ .chip-overlay{
+   position:absolute; inset:0; display:flex; flex-direction:column;
+   justify-content:space-between; pointer-events:none; padding:16px;
+ }
+ .chip-status{
+   align-self:flex-start; display:flex; align-items:center; gap:8px;
+   padding:8px 12px; border-radius:999px;
+   background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.22);
+   backdrop-filter: blur(6px);
+   font-weight:600; letter-spacing:.2px;
+ }
++.mode-suggestions{
++  align-self:center;
++  display:flex;
++  flex-direction:column;
++  gap:10px;
++  padding:14px 18px;
++  border-radius:18px;
++  background:rgba(8,12,20,.55);
++  border:1px solid rgba(255,255,255,.18);
++  box-shadow:0 18px 36px rgba(0,0,0,.45);
++  backdrop-filter:blur(12px);
++  color:var(--text);
++  text-align:center;
++  max-width:min(80%, 520px);
++  margin:0 auto;
++}
++.mode-suggestions.hidden{display:none}
++.mode-suggestions__label{
++  font-size:11px;
++  letter-spacing:.35px;
++  text-transform:uppercase;
++  color:var(--muted);
++}
++.mode-suggestions__chips{
++  display:flex;
++  flex-wrap:wrap;
++  gap:12px;
++  justify-content:center;
++}
++.mode-chip{
++  display:inline-flex;
++  align-items:center;
++  justify-content:center;
++  padding:8px 16px;
++  border-radius:999px;
++  background:linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.16));
++  border:1px solid rgba(255,255,255,.18);
++  color:var(--text);
++  font-weight:600;
++  letter-spacing:.25px;
++  box-shadow:0 10px 22px rgba(0,0,0,.35);
++}
+ .status-dot{width:8px;height:8px;border-radius:50%;background:#999; display:inline-block}
+ .status-dot.on{background:var(--success)}
+ .voice-chip{
+   align-self:flex-end; display:flex; gap:8px; align-items:center;
+   padding:8px 14px; border-radius:999px;
+   background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.22);
+   backdrop-filter: blur(6px);
+   color:var(--text); font-weight:600;
+ }
+ .sep{opacity:.5}
+ .chip-label{
+   font-size:12px;
+   text-transform:uppercase;
+   letter-spacing:.4px;
+   color:var(--muted);
  }
  
- _DEFAULT_VOICE_ID = "alloy-en-US-001"
- _DEFAULT_LOCALE = "en-US"
+ /* Chat */
+ .chat{
+   display:flex; flex-direction:column; gap:0;
+   border:1px solid var(--border); border-radius:16px;
+   background:linear-gradient(180deg, #0e1422, #0b101b);
+   overflow:hidden;
+ }
+ .chat-header{
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index a1caf30fbe8653dec6e48bf95c4b89b964a6fccb..7fddbe52bbe116f5c267438c4784232531aa177c 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -167,50 +167,117 @@
+       alert("Logging out… (placeholder)"); closeMenu();
+     });    
  
-@@ -91,50 +92,51 @@ class _Envelope:
-             data["meta"] = dict(data["meta"])
-         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
-             data["ts_ms"] = _now_ms()
-         data.setdefault("who", "server")
-         data.setdefault("source", "voice_engine")
-         data.setdefault("level", "debug")
-         return data
+     // --- Chat toggle ---
+     const openChatBtn = document.getElementById('openChatBtn');
+     const chatPanel = document.querySelector('.chat');
+     openChatBtn.addEventListener('click', () => {
+       const hidden = chatPanel.classList.toggle('hidden');
+       openChatBtn.setAttribute('aria-pressed', String(!hidden));
+     });
  
+     // --- Start/End button wiring ---
+     const startBtn = document.getElementById('startBtn');
+     const endBtn = document.getElementById('endBtn');
+     const sidText = document.getElementById('sid-text');
+     const connLabel = document.getElementById('connLabel');
+     const statusDot = document.querySelector('.status-dot');
+     const latencyHint = document.getElementById('latencyHint');
+     const voiceLabel = document.getElementById('voiceLabel');
+     const localeLabel = document.getElementById('localeLabel');
+     const textChatForm = document.getElementById('textChatForm');
+     const textChatInput = document.getElementById('textChatInput');
  
- @dataclass
- class _TurnSession:
-     state: str = READY
-     turn_id: Optional[str] = None
-     turn_started_ms: Optional[int] = None
-     tts_utt_id: Optional[str] = None
-     req_id: Optional[str] = None
-     perf_first_partial_ms: Optional[int] = None
-     perf_final_ms: Optional[int] = None
-     perf_tts_start_ms: Optional[int] = None
-     asr_final_emitted: bool = False
-     nlu_emitted: bool = False
-     policy_emitted: bool = False
-     nlg_emitted: bool = False
-     plan_emitted: bool = False
-     plan: Optional[Dict[str, Any]] = None
-+    suggestions_emitted: bool = False
+     const voiceState = { voiceId: null, locale: null };
  
++    const modeSuggestionsEl = document.getElementById('modeSuggestions');
++    const modeSuggestionsLabelEl = document.getElementById('modeSuggestionsLabel');
++    const modeSuggestionsChipsEl = document.getElementById('modeSuggestionsChips');
++    const modeSuggestionsState = { mode: null, items: [] };
++
++    function formatModeLabel(value) {
++      if (typeof value !== 'string') return '';
++      const normalized = value.trim().replace(/[_\s]+/g, ' ');
++      if (!normalized) return '';
++      return normalized.charAt(0).toUpperCase() + normalized.slice(1);
++    }
++
++    function resetSuggestions() {
++      modeSuggestionsState.mode = null;
++      modeSuggestionsState.items = [];
++      renderSuggestions();
++    }
++
++    function renderSuggestions() {
++      if (!modeSuggestionsEl || !modeSuggestionsChipsEl) {
++        return;
++      }
++      const items = Array.isArray(modeSuggestionsState.items)
++        ? modeSuggestionsState.items
++        : [];
++      const hasItems = items.length > 0;
++      modeSuggestionsEl.classList.toggle('hidden', !hasItems);
++      modeSuggestionsChipsEl.replaceChildren();
++      if (!hasItems) {
++        if (modeSuggestionsLabelEl) {
++          modeSuggestionsLabelEl.textContent = '';
++        }
++        return;
++      }
++      for (const label of items) {
++        const chip = document.createElement('span');
++        chip.className = 'mode-chip';
++        chip.textContent = label;
++        chip.setAttribute('role', 'listitem');
++        modeSuggestionsChipsEl.appendChild(chip);
++      }
++      if (modeSuggestionsLabelEl) {
++        const formatted = formatModeLabel(modeSuggestionsState.mode);
++        modeSuggestionsLabelEl.textContent = formatted
++          ? `${formatted} suggestions`
++          : 'Suggested actions';
++      }
++    }
++
++    function applySuggestionsFrame(detail) {
++      if (!detail || typeof detail !== 'object') {
++        resetSuggestions();
++        return;
++      }
++      const rawItems = Array.isArray(detail.items) ? detail.items : [];
++      const cleaned = [];
++      for (const item of rawItems) {
++        if (!item || typeof item !== 'object') continue;
++        const label = typeof item.label === 'string' ? item.label.trim() : '';
++        if (!label) continue;
++        cleaned.push(label);
++      }
++      modeSuggestionsState.mode = typeof detail.mode === 'string' ? detail.mode : null;
++      modeSuggestionsState.items = cleaned;
++      renderSuggestions();
++    }
++
+     function renderVoiceState() {
+       if (voiceLabel) {
+         voiceLabel.textContent = voiceState.voiceId || '—';
+       }
+       if (localeLabel) {
+         localeLabel.textContent = voiceState.locale || '—';
+       }
+     }
  
- class _NullExporter:
-     """Exporter stub used when no exporter is provided."""
+     function resetVoiceState() {
+       voiceState.voiceId = null;
+       voiceState.locale = null;
+       renderVoiceState();
+     }
  
-     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
-         return
- 
- 
- class EngineV2:
-     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
- 
-     def __init__(
-         self,
-         exporter: FileExporter | None = None,
-         *,
-         telemetry_bus=bus,
-         fake_exporter: FileExporter | None = None,
-     ) -> None:
-         if exporter is None:
-             exporter = fake_exporter
-         if exporter is None:
-             exporter = _NullExporter()
-         self._exporter = exporter
-         self._bus = telemetry_bus
-@@ -649,50 +651,51 @@ class EngineV2:
-             reason = "vad_grant_dual"
-         self.on_auto_barge_attempt(sid, source, reason=reason)
- 
-     def _set_state(self, sid: str, new_state: str, *, reason: str | None = None) -> None:
-         """Transition the session state machine and emit telemetry breadcrumbs."""
- 
-         session = self._ensure_session(sid)
-         previous = session.state
-         if previous == new_state:
-             return
- 
-         now_ms = _now_ms()
- 
-         if new_state == LISTENING:
-             session.turn_id = str(uuid.uuid4())
-             session.req_id = f"req-{uuid.uuid4().hex}"
-             session.turn_started_ms = now_ms
-             session.perf_first_partial_ms = None
-             session.perf_final_ms = None
-             session.perf_tts_start_ms = None
-             session.asr_final_emitted = False
-             session.nlu_emitted = False
-             session.policy_emitted = False
-             session.nlg_emitted = False
-             session.plan_emitted = False
-+            session.suggestions_emitted = False
-             session.plan = None
-             begin_payload = {
-                 "turn_id": session.turn_id,
-                 "req_id": session.req_id,
-                 "meta": {
-                     "turn_id": session.turn_id,
-                     "req_id": session.req_id,
-                     "state": LISTENING,
-                 },
-             }
-             begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
-             self._publish(begin_event)
- 
-         if (
-             new_state == READY
-             and previous in {LISTENING, THINKING, RESPONDING}
-             and session.turn_id
-         ):
-             start_ms = session.turn_started_ms or now_ms
-             duration_ms = now_ms - start_ms
-             if duration_ms <= 0:
-                 duration_ms = 1
-             turn_id = session.turn_id
-             req_id = session.req_id
-             end_payload = {
-@@ -705,50 +708,51 @@ class EngineV2:
-                 },
-             }
-             end_event = self._envelope(sid, EVT_TURN_END, end_payload)
-             self._publish(end_event)
-             summary_payload = {
-                 "turn_id": turn_id,
-                 "req_id": req_id,
-                 "t_first_partial_ms": session.perf_first_partial_ms,
-                 "t_final_ms": session.perf_final_ms,
-                 "t_tts_start_ms": session.perf_tts_start_ms,
-             }
-             perf_event = self._envelope(sid, EVT_PERF_SUMMARY, summary_payload)
-             self._publish(perf_event)
-             session.turn_id = None
-             session.turn_started_ms = None
-             session.tts_utt_id = None
-             session.req_id = None
-             session.perf_first_partial_ms = None
-             session.perf_final_ms = None
-             session.perf_tts_start_ms = None
-             session.asr_final_emitted = False
-             session.nlu_emitted = False
-             session.policy_emitted = False
-             session.nlg_emitted = False
-             session.plan_emitted = False
-+            session.suggestions_emitted = False
-             session.plan = None
- 
-         session.state = new_state
- 
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_engine_mode_change(new_state)
- 
-         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
-         if reason is not None:
-             breadcrumb_meta["reason"] = reason
-         breadcrumb_payload = {"meta": breadcrumb_meta}
-         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
-         self._publish(breadcrumb_event)
- 
-     def turn_context(self, sid: str) -> Optional[Dict[str, str]]:
-         """Return the active turn context for ``sid`` if a turn is in progress."""
- 
-         session = self._sessions.get(sid)
-         if (
-             session is None
-             or session.turn_id is None
-             or session.req_id is None
-             or session.state == READY
-         ):
-@@ -872,50 +876,96 @@ class EngineV2:
-                 "reason": plan.reason,
-             },
+     function updateVoiceState(partial) {
+       if (!partial || typeof partial !== 'object') {
+         return;
+       }
+       let updated = false;
+       if (typeof partial.voiceId === 'string') {
+         const trimmed = partial.voiceId.trim();
+         if (trimmed && trimmed !== voiceState.voiceId) {
+           voiceState.voiceId = trimmed;
+           updated = true;
+@@ -240,50 +307,51 @@
+       if (typeof frame.locale === 'string') {
+         locale = frame.locale;
+       }
+       const meta = frame.meta && typeof frame.meta === 'object' ? frame.meta : null;
+       if (meta) {
+         if (!voiceId && typeof meta.voice_id === 'string') {
+           voiceId = meta.voice_id;
          }
-         plan_event = self._envelope(sid, EVT_DIALOG_PLAN, plan_payload)
-         self._publish(plan_event)
- 
-         frame = {
-             "type": "dialog.plan",
-             "ts_ms": _now_ms(),
-             "mode": plan.mode,
-             "missing_info": list(plan.missing_info),
-             "chips": list(plan.chips),
-             "reason": plan.reason,
+         if (!locale && typeof meta.locale === 'string') {
+           locale = meta.locale;
          }
-         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         meta = {
-             "ws": {
-                 "dir": "out",
-                 "size": len(serialized.encode("utf-8")),
-                 "preview": serialized,
-             }
+         const ttsMeta = meta.tts && typeof meta.tts === 'object' ? meta.tts : null;
+         if (ttsMeta) {
+           if (!voiceId && typeof ttsMeta.voice_id === 'string') {
+             voiceId = ttsMeta.voice_id;
+           }
+           if (!locale && typeof ttsMeta.locale === 'string') {
+             locale = ttsMeta.locale;
+           }
          }
-         payload = {"meta": meta, "frame": frame}
-         frame_event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-         self._publish(frame_event)
-+
-+        if not session.suggestions_emitted:
-+            chips: list[str] = []
-+            for chip in list(plan.chips):
-+                if isinstance(chip, str):
-+                    label = chip.strip()
-+                    if label:
-+                        chips.append(label)
-+                if len(chips) >= 3:
-+                    break
-+
-+            if not chips:
-+                try:
-+                    persona_candidate = load_persona()
-+                except Exception:
-+                    persona_candidate = None
-+                persona = persona_candidate if isinstance(persona_candidate, dict) else {}
-+                fallback = default_chips_for_mode(persona, plan.mode)
-+                chips = [
-+                    str(item).strip()
-+                    for item in fallback
-+                    if isinstance(item, str) and str(item).strip()
-+                ][:3]
-+
-+            if chips:
-+                suggestions_frame = {
-+                    "type": "assistant.suggestions",
-+                    "ts_ms": _now_ms(),
-+                    "items": [{"label": label, "kind": "action"} for label in chips],
-+                    "mode": plan.mode,
-+                }
-+                suggestions_serialized = json.dumps(
-+                    suggestions_frame, ensure_ascii=False, separators=(",", ":")
-+                )
-+                suggestions_meta = {
-+                    "ws": {
-+                        "dir": "out",
-+                        "size": len(suggestions_serialized.encode("utf-8")),
-+                        "preview": suggestions_serialized,
-+                    }
-+                }
-+                suggestions_payload = {"meta": suggestions_meta, "frame": suggestions_frame}
-+                suggestions_event = self._envelope(sid, EVT_WS_JSON_SEND, suggestions_payload)
-+                self._publish(suggestions_event)
-+                session.suggestions_emitted = True
-+
-         session.plan_emitted = True
-         session.plan = {
-             "req_id": req_id,
-             "turn_id": turn_id,
-             "mode": plan.mode,
-             "missing_info": list(plan.missing_info),
-             "chips": list(plan.chips),
-             "reason": plan.reason,
-             "user_text": (user_text or "").strip(),
+       }
+       return { voiceId, locale };
+     }
+ 
+     renderVoiceState();
++    renderSuggestions();
+ 
+     let pttEnabled = false;
+     let pttActive = false;
+     let pttMaskState = null;
+ 
+     function applyPttMask({ force = false } = {}) {
+       if (!window.AudioRecorder || typeof window.AudioRecorder._setMask !== 'function') {
+         return;
+       }
+       const shouldMask = pttEnabled && !pttActive;
+       if (force || pttMaskState !== shouldMask) {
+         try {
+           window.AudioRecorder._setMask(shouldMask);
+           pttMaskState = shouldMask;
+         } catch (err) {
+           console.warn('Failed to toggle push-to-talk mask', err);
          }
+       }
+     }
  
-     def _maybe_emit_policy_and_nlg(
-         self,
-         sid: str,
-         session: _TurnSession,
-         nlu_payload: Mapping[str, Any],
-     ) -> None:
-         if session.policy_emitted:
-             return
+     function setPttEnabled(enabled) {
+       if (pttEnabled === enabled) {
+         applyPttMask({ force: true });
+         return;
+       }
+@@ -694,50 +762,51 @@
+         if (audioCtx){ try{ audioCtx.close(); }catch{} audioCtx = null; }
+       }
+       drawBackground(); drawSynth();
+       return { start, stop };
+     })();
  
-         req_id = session.req_id or nlu_payload.get("req_id")
-         if not isinstance(req_id, str) or not req_id:
-             return
+     let previousConnectionState = AppState.getState().connectionState;
+     AppState.subscribe((state) => {
+       sidText.textContent = state.sid || '—';
+       let label = 'Disconnected';
+       if (state.connectionState === 'connected') label = 'Connected';
+       else if (state.connectionState === 'connecting') label = 'Connecting…';
+       else if (state.connectionState === 'resuming') label = 'Resuming…';
+       connLabel.textContent = label;
+       const active = state.connectionState !== 'disconnected';
+       statusDot.classList.toggle('on', active);
+       startBtn.disabled = active;
+       endBtn.disabled = !active;
+       if (state.latencyMs != null) {
+         latencyHint.textContent = `Latency: ${Math.round(state.latencyMs)} ms`;
+       } else {
+         latencyHint.textContent = 'Latency: —';
+       }
+       if (state.connectionState === 'disconnected') {
+         resetVoiceState();
++        resetSuggestions();
+       } else if (state.infoFrame) {
+         updateVoiceState(extractVoiceLocale(state.infoFrame));
+       }
+       setPttEnabled(state.connectionState === 'connected');
+       if (previousConnectionState !== 'connected' && state.connectionState === 'connected') {
+         Waveform.start();
+         if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+           window.AudioRecorder.start()
+             .then(() => {
+               if (pttEnabled && !pttActive) {
+                 applyPttMask({ force: true });
+               }
+             })
+             .catch((err) => {
+               console.error('AudioRecorder start error', err);
+             });
+         }
+       } else if (previousConnectionState !== 'disconnected' && state.connectionState === 'disconnected') {
+         Waveform.stop();
+         if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+           try {
+             window.AudioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
+           }
+@@ -749,50 +818,59 @@
+       }
+       previousConnectionState = state.connectionState;
+       updateResumeBanner(state);
+     });
  
-         snapshot = self.policy_snapshot or {}
-diff --git a/app/voice_v2/persona.py b/app/voice_v2/persona.py
-index aa4a409bc492a4f239bee382393739bc228b4e6f..c78a8f03ff405f8a346eff1cf2d9ec15b6bf95ca 100644
---- a/app/voice_v2/persona.py
-+++ b/app/voice_v2/persona.py
-@@ -137,35 +137,42 @@ def select_quote(
+     window.addEventListener('tts.start', (event) => {
+       const detail = event && event.detail;
+       if (detail) {
+         updateVoiceState(extractVoiceLocale(detail));
+       }
+       if (pttEnabled && !pttActive) {
+         applyPttMask({ force: true });
+       }
+     });
+     window.addEventListener('tts.end', () => {
+       if (pttEnabled && !pttActive) {
+         applyPttMask({ force: true });
+       }
+     });
+     window.addEventListener('asr.ready', () => {
+       if (pttEnabled && !pttActive) {
+         applyPttMask({ force: true });
+       }
+     });
  
++    window.addEventListener('assistant.suggestions', (event) => {
++      const detail = event && event.detail;
++      applySuggestionsFrame(detail);
++    });
++
++    window.addEventListener('ws.close', () => {
++      resetSuggestions();
++    });
++
+     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
+     if (urlParams.get('wsSmoke') === '1') {
+       const transitions = [];
+       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
  
- def maybe_pick_quote_for_sid(
-     persona: Mapping[str, Any] | MutableMapping[str, Any] | None,
-     sid: str,
-     mode: str,
-     turn_no: int,
- ) -> Dict[str, str] | None:
-     """Return a persona quote for the given session when policy allows."""
+       class MockSocket extends EventTarget {
+         constructor() {
+           super();
+           this.readyState = WebSocket.CONNECTING;
+           setTimeout(() => {
+             this.readyState = WebSocket.OPEN;
+             this.dispatchEvent(new Event('open'));
+           }, 0);
+         }
+         send(payload) {
+           this.lastSent = payload;
+         }
+         close(code = 1000, reason = '') {
+           this.readyState = WebSocket.CLOSED;
+           const ev = new Event('close');
+           ev.code = code;
+           ev.reason = reason;
+           ev.wasClean = true;
+           this.dispatchEvent(ev);
+         }
+diff --git a/app/static/js/transcript_view.js b/app/static/js/transcript_view.js
+index 76bdd6e3643a76346db86870cffed52d5ba964c3..3ff77869fa9b4949a9dc195953ceb7411f91921e 100644
+--- a/app/static/js/transcript_view.js
++++ b/app/static/js/transcript_view.js
+@@ -1,167 +1,197 @@
+ (() => {
+   const view = {
+     handlePartial: () => {},
+     handleFinal: () => {},
++    handleChatMessage: () => {},
+     addUserMessage: () => {},
+     reset: () => {}
+   };
  
-     if not isinstance(sid, str) or not sid:
-         return None
+   function init() {
+     const container = document.getElementById("messages");
+     if (!container) {
+       console.warn("TranscriptView: messages container not found");
+       return;
+     }
+     const form = document.getElementById("textChatForm");
+     const input = document.getElementById("textChatInput");
  
-     last_turn = _quote_last_turn_by_sid.get(sid)
-     if last_turn is not None and turn_no >= last_turn:
-         delta = turn_no - last_turn
-     else:
-         delta = None
+     const PARTIAL_THROTTLE_MS = 50;
  
-     quote = select_quote(persona, mode, delta, rng_seed=turn_no)
-     if quote:
-         _quote_last_turn_by_sid[sid] = turn_no
-     return quote
+     let partialNode = null;
+     let pendingPartial = null;
+     let partialTimer = null;
+     let lastPartialSeq = null;
+     let lastPartialReqId = null;
+     let lastPartialRenderAt = 0;
+     let bargeInEnabled = true;
++    const messageNodesById = new Map();
++    const messageNodesByClientId = new Map();
++    const messageNodesByReqId = new Map();
++
++    function setNodeRole(node, role) {
++      if (!node) return;
++      const wrapper = node;
++      if (!(wrapper instanceof HTMLElement)) return;
++      wrapper.dataset.role = role;
++      wrapper.classList.remove("assistant", "user");
++      if (role === "assistant" || role === "user") {
++        wrapper.classList.add(role);
++      }
++    }
  
+     function scrollToBottom() {
+       try {
+         container.scrollTop = container.scrollHeight;
+       } catch (err) {
+         console.warn("TranscriptView: failed to scroll", err);
+       }
+     }
  
-+def default_chips_for_mode(p: dict, mode: str) -> list[str]:
-+    try:
-+        return list((p.get("modes") or {}).get(mode, {}).get("chips") or [])[:3]
-+    except Exception:
-+        return []
-+
-+
- def build_system_preamble(persona: Mapping[str, Any]) -> str:
-     """Compose the single-line system preamble for Chip."""
+     function ensureParagraph(node) {
+       if (!node) return null;
+       const bubble = node.querySelector(".bubble");
+       if (!bubble) return null;
+       let paragraph = bubble.querySelector("p");
+       if (!paragraph) {
+         paragraph = document.createElement("p");
+         bubble.appendChild(paragraph);
+       }
+       return paragraph;
+     }
  
-     title = persona.get("public_title") or persona.get("role_title") or "Chip"
-     tone = persona.get("tone_preset") or "mentor"
-     domain = persona.get("domain_focus") or "Pure Storage solutions"
-     return (
-         f"You are {title}, the Virtual Partner Technical Manager for Pure Storage partners; "
-         f"respond with a {tone} tone, stay focused on {domain}, and teach through conversation."
-     )
-diff --git a/tests/test_suggestions_frame.py b/tests/test_suggestions_frame.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..5f3c9464d0c53b077e919a079d4808919789f775
---- /dev/null
-+++ b/tests/test_suggestions_frame.py
-@@ -0,0 +1,66 @@
-+from __future__ import annotations
+     function setNodeText(node, text) {
+       const paragraph = ensureParagraph(node);
+       if (!paragraph) return;
+       const safe = typeof text === "string" && text.length ? text : "\u00a0";
+       paragraph.textContent = safe;
+     }
+ 
+-    function updateMeta(node, role, { partial = false } = {}) {
++    function updateMeta(node, role, { partial = false, pending = false } = {}) {
+       const meta = node.querySelector(".meta");
+       if (!meta) return;
+       if (role === "user") {
+-        meta.textContent = "you · now";
++        if (partial) {
++          meta.textContent = "you · speaking…";
++        } else if (pending) {
++          meta.textContent = "you · sending…";
++        } else {
++          meta.textContent = "you · just now";
++        }
+       } else if (partial) {
+         meta.textContent = "assistant · transcribing…";
+       } else {
+         meta.textContent = "assistant · just now";
+       }
+     }
+ 
+     function createMessage(role, text, { partial = false } = {}) {
+       const wrapper = document.createElement("div");
+       wrapper.className = `msg ${role}${partial ? " partial" : ""}`;
+       if (partial) {
+         wrapper.dataset.partial = "true";
+       }
++      setNodeRole(wrapper, role);
+       const bubble = document.createElement("div");
+       bubble.className = "bubble";
+       const paragraph = document.createElement("p");
+       bubble.appendChild(paragraph);
+       wrapper.appendChild(bubble);
+       const meta = document.createElement("div");
+       meta.className = "meta";
+       wrapper.appendChild(meta);
+       setNodeText(wrapper, text);
+       updateMeta(wrapper, role, { partial });
+       return wrapper;
+     }
+ 
+     function ensurePartialNode() {
+       if (partialNode && partialNode.isConnected) {
+         return partialNode;
+       }
+-      partialNode = createMessage("assistant", "", { partial: true });
++      partialNode = createMessage("user", "", { partial: true });
+       container.appendChild(partialNode);
+       return partialNode;
+     }
+ 
+     function cancelPartialTimer() {
+       if (!partialTimer) return;
+       clearTimeout(partialTimer);
+       partialTimer = null;
+     }
+ 
+     function flushPartial(text) {
+       const node = ensurePartialNode();
+       node.classList.add("partial");
+       node.dataset.partial = "true";
+       if (lastPartialReqId) {
+         node.dataset.reqId = lastPartialReqId;
++        messageNodesByReqId.set(lastPartialReqId, { node, role: "user" });
+       } else {
+         delete node.dataset.reqId;
+       }
+       setNodeText(node, text);
+-      updateMeta(node, "assistant", { partial: true });
++      setNodeRole(node, "user");
++      updateMeta(node, "user", { partial: true });
+       lastPartialRenderAt = Date.now();
+       scrollToBottom();
+     }
+ 
+     function schedulePartialRender() {
+       if (!pendingPartial) return;
+       const now = Date.now();
+       const elapsed = now - lastPartialRenderAt;
+       if (elapsed >= PARTIAL_THROTTLE_MS) {
+         const text = pendingPartial.text;
+         pendingPartial = null;
+         flushPartial(text);
+         return;
+       }
+       if (partialTimer) return;
+       const wait = Math.max(0, PARTIAL_THROTTLE_MS - elapsed);
+       partialTimer = setTimeout(() => {
+         partialTimer = null;
+         if (!pendingPartial) return;
+         const text = pendingPartial.text;
+         pendingPartial = null;
+         flushPartial(text);
+         if (pendingPartial) {
+           schedulePartialRender();
+         }
+       }, wait);
+     }
+ 
+     function clearPartial({ removeNode = false } = {}) {
+       cancelPartialTimer();
+       pendingPartial = null;
++      if (removeNode && lastPartialReqId && messageNodesByReqId.has(lastPartialReqId)) {
++        const entry = messageNodesByReqId.get(lastPartialReqId);
++        if (entry && entry.node === partialNode) {
++          messageNodesByReqId.delete(lastPartialReqId);
++        }
++      }
+       lastPartialSeq = null;
+       lastPartialReqId = null;
+       lastPartialRenderAt = 0;
+       if (removeNode && partialNode && partialNode.isConnected) {
+         partialNode.remove();
+       }
+       if (removeNode) {
+         partialNode = null;
+       }
+     }
+ 
+     function handlePartial(frame) {
+       if (!frame || typeof frame.text !== "string") return;
+       const text = frame.text;
+       const reqId = typeof frame.req_id === "string" ? frame.req_id : null;
+       if (reqId && lastPartialReqId && reqId !== lastPartialReqId) {
+         lastPartialSeq = null;
+       }
+       if (reqId) {
+         lastPartialReqId = reqId;
+       }
+       const seqCandidate = Number(frame.partial_seq);
+       if (Number.isFinite(seqCandidate)) {
+         if (lastPartialSeq !== null && seqCandidate < lastPartialSeq) {
+           return;
+@@ -178,129 +208,224 @@
+         return;
+       }
+       const text = frame.text;
+       const reqId = typeof frame.req_id === "string" ? frame.req_id : null;
+       cancelPartialTimer();
+       pendingPartial = null;
+       if (
+         reqId &&
+         lastPartialReqId &&
+         reqId !== lastPartialReqId &&
+         partialNode &&
+         partialNode.isConnected
+       ) {
+         partialNode.remove();
+         partialNode = null;
+       }
+       let node = null;
+       if (
+         partialNode &&
+         partialNode.isConnected &&
+         (!reqId || !lastPartialReqId || reqId === lastPartialReqId)
+       ) {
+         node = partialNode;
+       }
+       if (!node) {
+-        node = createMessage("assistant", "");
++        node = createMessage("user", "");
+         container.appendChild(node);
+       }
+       node.classList.remove("partial");
+       delete node.dataset.partial;
+-      delete node.dataset.reqId;
++      if (reqId) {
++        node.dataset.reqId = reqId;
++        messageNodesByReqId.set(reqId, { node, role: "user" });
++      } else {
++        delete node.dataset.reqId;
++      }
+       setNodeText(node, text);
+-      updateMeta(node, "assistant", { partial: false });
++      setNodeRole(node, "user");
++      updateMeta(node, "user", { partial: false });
+       scrollToBottom();
+       partialNode = null;
+       lastPartialSeq = null;
+       lastPartialReqId = null;
+       lastPartialRenderAt = Date.now();
+     }
+ 
+-    function addUserMessage(text) {
++    function addUserMessage(text, { clientMsgId = null, pending = false } = {}) {
+       const normalized = typeof text === "string" ? text.trim() : "";
+-      if (!normalized) return;
+-      const node = createMessage("user", normalized);
++      if (!normalized) return null;
++      const node = createMessage("user", normalized, { partial: false });
++      if (pending) {
++        updateMeta(node, "user", { pending: true });
++      }
++      if (clientMsgId) {
++        node.dataset.clientMsgId = clientMsgId;
++        messageNodesByClientId.set(clientMsgId, node);
++      }
+       container.appendChild(node);
+       scrollToBottom();
++      return node;
+     }
+ 
+-    function sendChatPayload(text) {
++    function generateClientMsgId() {
++      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
++        try {
++          return crypto.randomUUID();
++        } catch (err) {
++          console.warn("TranscriptView: crypto.randomUUID failed", err);
++        }
++      }
++      const random = Math.random().toString(36).slice(2, 10);
++      return `client-${Date.now().toString(36)}-${random}`;
++    }
 +
-+import unittest
++    function sendChatPayload(text, clientMsgId) {
+       const payload = { type: "chat.user", text };
++      if (clientMsgId) {
++        payload.client_msg_id = clientMsgId;
++      }
+       const WSClient = window.WSClient;
+       if (WSClient && typeof WSClient.send === "function") {
+         try {
+           WSClient.send(payload);
+         } catch (err) {
+           console.error("TranscriptView: failed to send chat.user", err);
+         }
+       } else {
+         console.warn("TranscriptView: WSClient unavailable for chat.user");
+       }
+     }
+ 
+     function maybeInterruptForBarge() {
+       const AppState = window.AppState;
+       if (!AppState || typeof AppState.getState !== "function") return;
+       const state = AppState.getState();
+       const speaking = !!(state && state.ttsUttId);
+       if (!speaking || !bargeInEnabled) return;
+       const audioPlayer = window.AudioPlayer;
+       if (audioPlayer && typeof audioPlayer.interrupt === "function") {
+         audioPlayer.interrupt();
+       }
+       if (typeof AppState.setState === "function") {
+         AppState.setState({ engineMode: "Listening" });
+       }
+       try {
+         window.dispatchEvent(
+           new CustomEvent("engine.mode", { detail: { mode: "Listening", source: "text_barge" } })
+         );
+       } catch (err) {
+         console.warn("TranscriptView: failed to emit engine.mode", err);
+       }
+     }
+ 
+     function handleSubmit(event) {
+       event.preventDefault();
+       if (!input) return;
+       const raw = input.value || "";
+       const trimmed = raw.trim();
+       if (!trimmed) return;
+       input.value = "";
+-      addUserMessage(trimmed);
+-      sendChatPayload(trimmed);
++      const clientMsgId = generateClientMsgId();
++      addUserMessage(trimmed, { clientMsgId, pending: true });
++      sendChatPayload(trimmed, clientMsgId);
+       maybeInterruptForBarge();
+       input.focus();
+     }
+ 
++    function handleChatMessage(frame) {
++      if (!frame || typeof frame !== "object") return;
++      const text = typeof frame.text === "string" ? frame.text.trim() : "";
++      if (!text) return;
++      const role = frame.role === "assistant" ? "assistant" : "user";
++      const messageId = typeof frame.id === "string" ? frame.id : null;
++      const clientMsgId = typeof frame.client_msg_id === "string" ? frame.client_msg_id : null;
++      const reqId = typeof frame.req_id === "string" ? frame.req_id : null;
 +
-+from app.telemetry import bus
-+from app.voice_v2 import EVT_WS_JSON_SEND
-+from app.voice_v2.engine import EngineV2
++      let node = null;
 +
++      if (messageId && messageNodesById.has(messageId)) {
++        node = messageNodesById.get(messageId);
++      }
++      if (!node && clientMsgId && messageNodesByClientId.has(clientMsgId)) {
++        node = messageNodesByClientId.get(clientMsgId);
++      }
++      if (!node && role === "user" && reqId && messageNodesByReqId.has(reqId)) {
++        const entry = messageNodesByReqId.get(reqId);
++        if (entry && entry.node) {
++          if (!entry.role || entry.role === role) {
++            node = entry.node;
++          }
++        }
++      }
 +
-+class TestAssistantSuggestionsFrame(unittest.TestCase):
-+    def setUp(self) -> None:
-+        bus.reset()
-+        self.events: list[dict] = []
-+        self.token = bus.subscribe("*", self.events.append)
-+        self.engine = EngineV2(telemetry_bus=bus)
-+        self.sid = "sid-suggestions"
-+        self.engine.on_open(self.sid, {})
-+        self.engine.on_audio(self.sid, b"pcm", seq=0)
++      if (!node) {
++        node = createMessage(role, text);
++        container.appendChild(node);
++      } else {
++        setNodeRole(node, role);
++      }
 +
-+    def tearDown(self) -> None:
-+        bus.unsubscribe(self.token)
-+        bus.reset()
++      node.classList.remove("partial");
++      delete node.dataset.partial;
++      setNodeText(node, text);
++      updateMeta(node, role, { partial: false });
 +
-+    def _ws_frames(self, frame_type: str) -> list[dict]:
-+        return [
-+            evt
-+            for evt in self.events
-+            if evt["type"] == EVT_WS_JSON_SEND
-+            and isinstance(evt.get("frame"), dict)
-+            and evt["frame"].get("type") == frame_type
-+        ]
++      if (messageId) {
++        messageNodesById.set(messageId, node);
++        node.dataset.messageId = messageId;
++      } else {
++        delete node.dataset.messageId;
++      }
 +
-+    def test_emits_single_suggestions_frame(self) -> None:
-+        utterance = "can you walk me through the install steps"
-+        self.engine.on_asr_final(self.sid, utterance)
++      if (clientMsgId) {
++        messageNodesByClientId.set(clientMsgId, node);
++        node.dataset.clientMsgId = clientMsgId;
++      } else {
++        delete node.dataset.clientMsgId;
++      }
 +
-+        suggestion_frames = self._ws_frames("assistant.suggestions")
-+        plan_frames = self._ws_frames("dialog.plan")
++      if (reqId && role === "user") {
++        messageNodesByReqId.set(reqId, { node, role });
++        node.dataset.reqId = reqId;
++      } else if (reqId) {
++        node.dataset.reqId = reqId;
++      } else {
++        delete node.dataset.reqId;
++      }
 +
-+        self.assertEqual(1, len(plan_frames))
-+        self.assertEqual(1, len(suggestion_frames))
++      scrollToBottom();
++    }
 +
-+        plan_index = self.events.index(plan_frames[0])
-+        suggestions_index = self.events.index(suggestion_frames[0])
-+        self.assertLess(plan_index, suggestions_index)
-+
-+        items = suggestion_frames[0]["frame"].get("items")
-+        self.assertIsInstance(items, list)
-+        self.assertGreaterEqual(len(items), 1)
-+        self.assertLessEqual(len(items), 3)
-+        for item in items:
-+            self.assertIsInstance(item, dict)
-+            self.assertEqual("action", item.get("kind"))
-+            label = item.get("label")
-+            self.assertIsInstance(label, str)
-+            self.assertTrue(label)
-+
-+        self.assertEqual("steps", suggestion_frames[0]["frame"].get("mode"))
-+
-+        # A duplicate final should not emit a second suggestions frame.
-+        self.engine.on_asr_final(self.sid, utterance)
-+        self.assertEqual(1, len(self._ws_frames("assistant.suggestions")))
-+
-+
-+if __name__ == "__main__":  # pragma: no cover - convenience
-+    unittest.main()
+     function handlePolicyInteraction(event) {
+       const detail = event && event.detail;
+       const policy = detail && detail.policy;
+       if (policy && typeof policy.barge_in_enabled === "boolean") {
+         bargeInEnabled = policy.barge_in_enabled;
+       }
+     }
+ 
+     if (form && input) {
+       form.addEventListener("submit", handleSubmit);
+     }
+ 
+     window.addEventListener("policy.interaction", handlePolicyInteraction);
+     window.addEventListener("ws.close", () => {
+       bargeInEnabled = true;
+       clearPartial({ removeNode: true });
+     });
+ 
+     view.handlePartial = handlePartial;
+     view.handleFinal = handleFinal;
++    view.handleChatMessage = handleChatMessage;
+     view.addUserMessage = addUserMessage;
+     view.reset = () => clearPartial({ removeNode: true });
+   }
+ 
+   window.TranscriptView = view;
+ 
+   if (document.readyState === "loading") {
+     document.addEventListener("DOMContentLoaded", init);
+   } else {
+     init();
+   }
+ })();
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index e92c4705ab2a6df523933c51f9e5f69ff99b1f3f..1279639befadccb93740deee513322011467eb22 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -313,50 +313,72 @@
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+     } else if (frame.type === "policy.interaction") {
+       const sanitized = sanitizePolicyFrame(frame);
+       dispatchFrame(sanitized);
+       return;
+     } else if (frame.type === "asr.partial") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handlePartial === "function") {
+         try {
+           view.handlePartial(frame);
+         } catch (err) {
+           console.warn("TranscriptView partial handler error", err);
+         }
+       }
+     } else if (frame.type === "asr.final") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleFinal === "function") {
+         try {
+           view.handleFinal(frame);
+         } catch (err) {
+           console.warn("TranscriptView final handler error", err);
+         }
+       }
++    } else if (frame.type === "chat.message") {
++      const view = window.TranscriptView;
++      if (view && typeof view.handleChatMessage === "function") {
++        try {
++          view.handleChatMessage(frame);
++        } catch (err) {
++          console.warn("TranscriptView chat handler error", err);
++        }
++      }
++    } else if (frame.type === "chat.history") {
++      const view = window.TranscriptView;
++      const messages = Array.isArray(frame.messages) ? frame.messages : [];
++      if (view && typeof view.handleChatMessage === "function" && messages.length) {
++        for (const message of messages) {
++          try {
++            view.handleChatMessage(message);
++          } catch (err) {
++            console.warn("TranscriptView chat history handler error", err);
++            break;
++          }
++        }
++      }
+     }
+     dispatchFrame(frame);
+   }
+ 
+   function parseFrame(event) {
+     const { data } = event;
+     if (typeof data === "string") {
+       try {
+         const frame = JSON.parse(data);
+         handleMessageFrame(frame);
+       } catch (err) {
+         console.error("Failed to parse WS frame", err, data);
+       }
+       return;
+     }
+     if (data instanceof Blob) {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(data);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+       return;
+     }
+     console.warn("Unknown WS frame type", data);
+   }
+diff --git a/app/templates/index.html b/app/templates/index.html
+index a35fbddc592e8fb3ba2fe92508e653da581c69f7..d03f0461dd076a486314016ca61bd75fb9c46fe7 100644
+--- a/app/templates/index.html
++++ b/app/templates/index.html
+@@ -134,50 +134,61 @@
+             </button>
+             <button class="menu-item" role="menuitem" id="profileItem">
+               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>
+               <span>Profile</span>
+             </button>
+             <button class="menu-item" role="menuitem" id="logoutItem">
+               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 13v-2H7V8l-5 4 5 4v-3zM20 3h-8v2h8v14h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
+               <span>Logout</span>
+             </button>
+           </div>
+         </div>
+       </div>
+     </header>
+ 
+     <!-- Main Layout -->
+     <main class="layout" role="main">
+       <!-- Center Stage (Zoom-like "Chip window") -->
+       <section class="stage" aria-label="Chip window">
+         <div class="chip-window">
+           <canvas id="waveCanvas" class="wave-canvas" aria-hidden="true"></canvas>
+           <div class="chip-overlay">
+             <div class="chip-status" role="status" aria-live="polite" aria-atomic="true">
+               <span class="status-dot on"></span>
+               <span id="connLabel">Connected</span>
+             </div>
++            <div
++              class="mode-suggestions hidden"
++              id="modeSuggestions"
++              role="status"
++              aria-live="polite"
++              aria-atomic="true"
++              aria-label="Suggested actions"
++            >
++              <span class="mode-suggestions__label" id="modeSuggestionsLabel"></span>
++              <div class="mode-suggestions__chips" id="modeSuggestionsChips" role="list"></div>
++            </div>
+             <div class="voice-chip" role="status" aria-live="polite" aria-atomic="true">
+               <span class="chip-label">Voice</span>
+               <span id="voiceLabel">—</span>
+               <span class="sep" aria-hidden="true">•</span>
+               <span class="chip-label">Locale</span>
+               <span id="localeLabel">—</span>
+             </div>
+           </div>
+         </div>
+       </section>
+ 
+       <!-- Chat Panel -->
+       <aside class="chat" aria-label="Conversation">
+         <header class="chat-header">
+           <h2>Conversation</h2>
+         </header>
+         <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions text" aria-label="Conversation transcript">
+           <div class="msg assistant">
+             <div class="bubble">
+               <p>Welcome to AskChip. Tap <strong>Start</strong> below to begin.</p>
+             </div>
+             <div class="meta">assistant · now</div>
+           </div>
+         </div>
+       </aside>

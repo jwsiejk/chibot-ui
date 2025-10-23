@@ -2,6 +2,7 @@
   const view = {
     handlePartial: () => {},
     handleFinal: () => {},
+    handleChatMessage: () => {},
     addUserMessage: () => {},
     reset: () => {}
   };
@@ -24,6 +25,20 @@
     let lastPartialReqId = null;
     let lastPartialRenderAt = 0;
     let bargeInEnabled = true;
+    const messageNodesById = new Map();
+    const messageNodesByClientId = new Map();
+    const messageNodesByReqId = new Map();
+
+    function setNodeRole(node, role) {
+      if (!node) return;
+      const wrapper = node;
+      if (!(wrapper instanceof HTMLElement)) return;
+      wrapper.dataset.role = role;
+      wrapper.classList.remove("assistant", "user");
+      if (role === "assistant" || role === "user") {
+        wrapper.classList.add(role);
+      }
+    }
 
     function scrollToBottom() {
       try {
@@ -52,11 +67,17 @@
       paragraph.textContent = safe;
     }
 
-    function updateMeta(node, role, { partial = false } = {}) {
+    function updateMeta(node, role, { partial = false, pending = false } = {}) {
       const meta = node.querySelector(".meta");
       if (!meta) return;
       if (role === "user") {
-        meta.textContent = "you · now";
+        if (partial) {
+          meta.textContent = "you · speaking…";
+        } else if (pending) {
+          meta.textContent = "you · sending…";
+        } else {
+          meta.textContent = "you · just now";
+        }
       } else if (partial) {
         meta.textContent = "assistant · transcribing…";
       } else {
@@ -70,6 +91,7 @@
       if (partial) {
         wrapper.dataset.partial = "true";
       }
+      setNodeRole(wrapper, role);
       const bubble = document.createElement("div");
       bubble.className = "bubble";
       const paragraph = document.createElement("p");
@@ -87,7 +109,7 @@
       if (partialNode && partialNode.isConnected) {
         return partialNode;
       }
-      partialNode = createMessage("assistant", "", { partial: true });
+      partialNode = createMessage("user", "", { partial: true });
       container.appendChild(partialNode);
       return partialNode;
     }
@@ -104,11 +126,13 @@
       node.dataset.partial = "true";
       if (lastPartialReqId) {
         node.dataset.reqId = lastPartialReqId;
+        messageNodesByReqId.set(lastPartialReqId, { node, role: "user" });
       } else {
         delete node.dataset.reqId;
       }
       setNodeText(node, text);
-      updateMeta(node, "assistant", { partial: true });
+      setNodeRole(node, "user");
+      updateMeta(node, "user", { partial: true });
       lastPartialRenderAt = Date.now();
       scrollToBottom();
     }
@@ -140,6 +164,12 @@
     function clearPartial({ removeNode = false } = {}) {
       cancelPartialTimer();
       pendingPartial = null;
+      if (removeNode && lastPartialReqId && messageNodesByReqId.has(lastPartialReqId)) {
+        const entry = messageNodesByReqId.get(lastPartialReqId);
+        if (entry && entry.node === partialNode) {
+          messageNodesByReqId.delete(lastPartialReqId);
+        }
+      }
       lastPartialSeq = null;
       lastPartialReqId = null;
       lastPartialRenderAt = 0;
@@ -200,14 +230,20 @@
         node = partialNode;
       }
       if (!node) {
-        node = createMessage("assistant", "");
+        node = createMessage("user", "");
         container.appendChild(node);
       }
       node.classList.remove("partial");
       delete node.dataset.partial;
-      delete node.dataset.reqId;
+      if (reqId) {
+        node.dataset.reqId = reqId;
+        messageNodesByReqId.set(reqId, { node, role: "user" });
+      } else {
+        delete node.dataset.reqId;
+      }
       setNodeText(node, text);
-      updateMeta(node, "assistant", { partial: false });
+      setNodeRole(node, "user");
+      updateMeta(node, "user", { partial: false });
       scrollToBottom();
       partialNode = null;
       lastPartialSeq = null;
@@ -215,16 +251,39 @@
       lastPartialRenderAt = Date.now();
     }
 
-    function addUserMessage(text) {
+    function addUserMessage(text, { clientMsgId = null, pending = false } = {}) {
       const normalized = typeof text === "string" ? text.trim() : "";
-      if (!normalized) return;
-      const node = createMessage("user", normalized);
+      if (!normalized) return null;
+      const node = createMessage("user", normalized, { partial: false });
+      if (pending) {
+        updateMeta(node, "user", { pending: true });
+      }
+      if (clientMsgId) {
+        node.dataset.clientMsgId = clientMsgId;
+        messageNodesByClientId.set(clientMsgId, node);
+      }
       container.appendChild(node);
       scrollToBottom();
+      return node;
     }
 
-    function sendChatPayload(text) {
+    function generateClientMsgId() {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        try {
+          return crypto.randomUUID();
+        } catch (err) {
+          console.warn("TranscriptView: crypto.randomUUID failed", err);
+        }
+      }
+      const random = Math.random().toString(36).slice(2, 10);
+      return `client-${Date.now().toString(36)}-${random}`;
+    }
+
+    function sendChatPayload(text, clientMsgId) {
       const payload = { type: "chat.user", text };
+      if (clientMsgId) {
+        payload.client_msg_id = clientMsgId;
+      }
       const WSClient = window.WSClient;
       if (WSClient && typeof WSClient.send === "function") {
         try {
@@ -266,10 +325,75 @@
       const trimmed = raw.trim();
       if (!trimmed) return;
       input.value = "";
-      addUserMessage(trimmed);
-      sendChatPayload(trimmed);
+      const clientMsgId = generateClientMsgId();
+      addUserMessage(trimmed, { clientMsgId, pending: true });
+      sendChatPayload(trimmed, clientMsgId);
       maybeInterruptForBarge();
       input.focus();
+    }
+
+    function handleChatMessage(frame) {
+      if (!frame || typeof frame !== "object") return;
+      const text = typeof frame.text === "string" ? frame.text.trim() : "";
+      if (!text) return;
+      const role = frame.role === "assistant" ? "assistant" : "user";
+      const messageId = typeof frame.id === "string" ? frame.id : null;
+      const clientMsgId = typeof frame.client_msg_id === "string" ? frame.client_msg_id : null;
+      const reqId = typeof frame.req_id === "string" ? frame.req_id : null;
+
+      let node = null;
+
+      if (messageId && messageNodesById.has(messageId)) {
+        node = messageNodesById.get(messageId);
+      }
+      if (!node && clientMsgId && messageNodesByClientId.has(clientMsgId)) {
+        node = messageNodesByClientId.get(clientMsgId);
+      }
+      if (!node && role === "user" && reqId && messageNodesByReqId.has(reqId)) {
+        const entry = messageNodesByReqId.get(reqId);
+        if (entry && entry.node) {
+          if (!entry.role || entry.role === role) {
+            node = entry.node;
+          }
+        }
+      }
+
+      if (!node) {
+        node = createMessage(role, text);
+        container.appendChild(node);
+      } else {
+        setNodeRole(node, role);
+      }
+
+      node.classList.remove("partial");
+      delete node.dataset.partial;
+      setNodeText(node, text);
+      updateMeta(node, role, { partial: false });
+
+      if (messageId) {
+        messageNodesById.set(messageId, node);
+        node.dataset.messageId = messageId;
+      } else {
+        delete node.dataset.messageId;
+      }
+
+      if (clientMsgId) {
+        messageNodesByClientId.set(clientMsgId, node);
+        node.dataset.clientMsgId = clientMsgId;
+      } else {
+        delete node.dataset.clientMsgId;
+      }
+
+      if (reqId && role === "user") {
+        messageNodesByReqId.set(reqId, { node, role });
+        node.dataset.reqId = reqId;
+      } else if (reqId) {
+        node.dataset.reqId = reqId;
+      } else {
+        delete node.dataset.reqId;
+      }
+
+      scrollToBottom();
     }
 
     function handlePolicyInteraction(event) {
@@ -292,6 +416,7 @@
 
     view.handlePartial = handlePartial;
     view.handleFinal = handleFinal;
+    view.handleChatMessage = handleChatMessage;
     view.addUserMessage = addUserMessage;
     view.reset = () => clearPartial({ removeNode: true });
   }

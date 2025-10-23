@@ -335,6 +335,28 @@
           console.warn("TranscriptView final handler error", err);
         }
       }
+    } else if (frame.type === "chat.message") {
+      const view = window.TranscriptView;
+      if (view && typeof view.handleChatMessage === "function") {
+        try {
+          view.handleChatMessage(frame);
+        } catch (err) {
+          console.warn("TranscriptView chat handler error", err);
+        }
+      }
+    } else if (frame.type === "chat.history") {
+      const view = window.TranscriptView;
+      const messages = Array.isArray(frame.messages) ? frame.messages : [];
+      if (view && typeof view.handleChatMessage === "function" && messages.length) {
+        for (const message of messages) {
+          try {
+            view.handleChatMessage(message);
+          } catch (err) {
+            console.warn("TranscriptView chat history handler error", err);
+            break;
+          }
+        }
+      }
     }
     dispatchFrame(frame);
   }
