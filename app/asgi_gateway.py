@@ -1,6 +1,7 @@
 """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import mimetypes
@@ -15,6 +16,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
+from app.versioning import get_build_id, inject_static_version
 from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_runtime import TTSRuntime
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
@@ -183,8 +185,15 @@ async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> 
         return json_response(status=405, error="method_not_allowed")
 
     await _drain_request_body(receive)
-    body = _load_index_html()
-    return _html_response(body)
+    raw_html = _load_index_html()
+    try:
+        html_text = raw_html.decode("utf-8")
+    except UnicodeDecodeError:
+        html_text = raw_html.decode("utf-8", errors="replace")
+    rewritten = inject_static_version(html_text)
+    body = rewritten.encode("utf-8")
+    build_id = get_build_id()
+    return _html_response(body, build_id=build_id)
 
 
 async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
@@ -195,7 +204,8 @@ async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -
         return json_response(status=405, error="method_not_allowed")
 
     await _drain_request_body(receive)
-    response = _build_static_response(FAVICON_PATH)
+    if_none_match = _get_request_header(scope, b"if-none-match")
+    response = _build_static_response(FAVICON_PATH, if_none_match=if_none_match)
     if response is None:
         headers = ((b"content-length", b"0"),)
         return Response(status=204, body=b"", headers=headers)
@@ -218,7 +228,8 @@ async def _handle_static(
     resolved = _resolve_static_path(raw_path)
     if resolved is None:
         return json_response(status=404, error="not_found")
-    response = _build_static_response(resolved)
+    if_none_match = _get_request_header(scope, b"if-none-match")
+    response = _build_static_response(resolved, if_none_match=if_none_match)
     if response is None:
         return json_response(status=404, error="not_found")
     return response
@@ -231,19 +242,37 @@ def _load_index_html() -> bytes:
         return _DEFAULT_INDEX_HTML
 
 
-def _html_response(body: bytes) -> Response:
-    headers = (
+def _html_response(body: bytes, *, build_id: Optional[str] = None) -> Response:
+    headers: list[tuple[bytes, bytes]] = [
         (b"content-type", b"text/html; charset=utf-8"),
+        (b"cache-control", b"no-store, no-cache, must-revalidate"),
+        (b"pragma", b"no-cache"),
+        (b"expires", b"0"),
         (b"content-length", str(len(body)).encode("ascii")),
-    )
-    return Response(status=200, body=body, headers=headers)
+    ]
+    if build_id is not None:
+        headers.append((b"x-build-id", build_id.encode("utf-8")))
+    return Response(status=200, body=body, headers=tuple(headers))
 
 
-def _build_static_response(path: Path) -> Optional[Response]:
+def _build_static_response(path: Path, *, if_none_match: Optional[str] = None) -> Optional[Response]:
     try:
         data = path.read_bytes()
     except OSError:
         return None
+
+    digest = hashlib.sha256(data).hexdigest()
+    etag = f'"{digest}"'
+
+    if if_none_match:
+        candidates = {value.strip() for value in if_none_match.split(",") if value.strip()}
+        if "*" in candidates or etag in candidates:
+            headers = (
+                (b"cache-control", b"public, max-age=31536000, immutable"),
+                (b"etag", etag.encode("ascii")),
+                (b"content-length", b"0"),
+            )
+            return Response(status=304, body=b"", headers=headers)
 
     content_type, encoding = mimetypes.guess_type(path.name)
     if content_type is None:
@@ -254,6 +283,8 @@ def _build_static_response(path: Path) -> Optional[Response]:
     headers: list[tuple[bytes, bytes]] = [
         (b"content-type", content_type.encode("latin1")),
         (b"content-length", str(len(data)).encode("ascii")),
+        (b"cache-control", b"public, max-age=31536000, immutable"),
+        (b"etag", etag.encode("ascii")),
     ]
     if encoding:
         headers.append((b"content-encoding", encoding.encode("latin1")))
@@ -368,3 +399,14 @@ async def _enforce_admin_auth(
 asgi = app
 
 __all__ = ["app", "asgi"]
+
+
+def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
+    headers = scope.get("headers") or []
+    for name, value in headers:
+        if name == header_name:
+            try:
+                return value.decode("latin1")
+            except UnicodeDecodeError:
+                return value.decode("latin1", errors="ignore")
+    return None
