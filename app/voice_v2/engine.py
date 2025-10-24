@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -44,6 +45,14 @@ from app.voice_v2.persona import default_chips_for_mode, load_persona
 def _now_ms() -> int:
     """Return the current epoch timestamp in milliseconds."""
     return int(time.time() * 1000)
+
+
+def _slugify_action_label(label: str) -> str:
+    """Normalize a suggestion label into a stable slug identifier."""
+
+    normalized = re.sub(r"[^a-z0-9]+", "-", label.strip().lower())
+    slug = normalized.strip("-")
+    return slug or "action"
 
 
 READY = "Ready"
@@ -692,7 +701,17 @@ class EngineV2:
             on_connect = False
             count_candidate = None
 
+        actions_block = snapshot.get("actions")
+        surface_actions = True
+        if isinstance(actions_block, Mapping):
+            surface_candidate = actions_block.get("surface_via_suggestions")
+            if isinstance(surface_candidate, bool):
+                surface_actions = surface_candidate
+
         if not on_connect:
+            return
+
+        if not surface_actions:
             return
 
         max_items = 3
@@ -716,10 +735,16 @@ class EngineV2:
         if not limited_items:
             return
 
+        suggestion_items = []
+        for label in limited_items:
+            item: Dict[str, Any] = {"label": label, "kind": "action"}
+            item["id"] = _slugify_action_label(label)
+            suggestion_items.append(item)
+
         suggestions_frame = {
             "type": "assistant.suggestions",
             "ts_ms": _now_ms(),
-            "items": [{"label": label, "kind": "action"} for label in limited_items],
+            "items": suggestion_items,
             "mode": "outline",
         }
         serialized = json.dumps(suggestions_frame, ensure_ascii=False, separators=(",", ":"))

@@ -1,8 +1,8 @@
 diff --git a/app/policy/loader.py b/app/policy/loader.py
-index 484eba2742fe041d25001f8f4a3cd837e0a885f8..8422cc4fff38046aa4f9b4ca184c2efe3ac68028 100644
+index 8422cc4fff38046aa4f9b4ca184c2efe3ac68028..68176cb887736a7312354024f8b139bd117b4cd6 100644
 --- a/app/policy/loader.py
 +++ b/app/policy/loader.py
-@@ -1,42 +1,45 @@
+@@ -1,45 +1,46 @@
  """Utilities for loading the interaction policy snapshot."""
  from __future__ import annotations
  
@@ -20,9 +20,10 @@ index 484eba2742fe041d25001f8f4a3cd837e0a885f8..8422cc4fff38046aa4f9b4ca184c2efe
      "allow_auto_vad": True,
      "barge_in_enabled": True,
      "auto_commit_when_ready": True,
-+    "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
-+    "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
-+    "suggestions": {"on_connect": True, "count": 3},
+     "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
+     "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
+     "suggestions": {"on_connect": True, "count": 3},
++    "actions": {"allowed": ["answer"], "surface_via_suggestions": True},
      "telemetry": {
          "enabled": True,
          "level": "debug",
@@ -49,311 +50,181 @@ index 484eba2742fe041d25001f8f4a3cd837e0a885f8..8422cc4fff38046aa4f9b4ca184c2efe
      overrides: Dict[str, Any] | None = None,
  ) -> InteractionPolicySnapshot:
 diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 7d9026288e6b788279270682a02fb53a08944c03..c1ad7b88ea7fcfb57e8a1cd184b41f65ae60145f 100644
+index c1ad7b88ea7fcfb57e8a1cd184b41f65ae60145f..e2e0c5eb338fb1c15f784ca4bc0730d3d05f2bef 100644
 --- a/app/voice_v2/engine.py
 +++ b/app/voice_v2/engine.py
-@@ -91,50 +91,51 @@ class _Envelope:
-         if "meta" in data and isinstance(data["meta"], Mapping):
-             data["meta"] = dict(data["meta"])
-         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
-             data["ts_ms"] = _now_ms()
-         data.setdefault("who", "server")
-         data.setdefault("source", "voice_engine")
-         data.setdefault("level", "debug")
-         return data
+@@ -1,73 +1,82 @@
+ """Minimal Engine v2 shell with telemetry hooks and session exporting."""
+ from __future__ import annotations
+ 
+ import asyncio
+ from dataclasses import dataclass
+ import json
+ import logging
++import re
+ import threading
+ import time
+ import uuid
+ from typing import Any, Dict, Mapping, Optional
+ 
+ from app.policy.loader import load_interaction_policy
+ from app.policy.watch import compute_diff, should_reapply
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ACWR_RECOMPUTE,
+     EVT_CHAT_USER,
+     EVT_ASR_FINAL,
+     EVT_NLG,
+     EVT_NLU,
+     EVT_DIALOG_PLAN,
+     EVT_POLICY_APPLIED,
+     EVT_TTS_END,
+     EVT_TTS_START,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_CLOSE,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+     EVT_WS_OPEN,
+ )
+ from app.voice_v2.nlu import NLUAdapter
+ from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
+ from app.voice_v2.llm import LLMAdapter
+ from app.voice_v2.gate import GateController
+ from app.voice_v2.conversation_buffer import ConversationBuffer
+ from app.voice_v2.vad import VADAggregator
+ from app.voice_v2.planner import plan_turn
+ from app.voice_v2.persona import default_chips_for_mode, load_persona
  
  
- @dataclass
- class _TurnSession:
-     state: str = READY
-     turn_id: Optional[str] = None
-     turn_started_ms: Optional[int] = None
-     tts_utt_id: Optional[str] = None
-     req_id: Optional[str] = None
-     perf_first_partial_ms: Optional[int] = None
-     perf_final_ms: Optional[int] = None
-     perf_tts_start_ms: Optional[int] = None
-     asr_final_emitted: bool = False
-     nlu_emitted: bool = False
-     policy_emitted: bool = False
-     nlg_emitted: bool = False
-     plan_emitted: bool = False
-+    greet_emitted: bool = False
-     plan: Optional[Dict[str, Any]] = None
-     suggestions_emitted: bool = False
+ def _now_ms() -> int:
+     """Return the current epoch timestamp in milliseconds."""
+     return int(time.time() * 1000)
  
  
- class _NullExporter:
-     """Exporter stub used when no exporter is provided."""
++def _slugify_action_label(label: str) -> str:
++    """Normalize a suggestion label into a stable slug identifier."""
++
++    normalized = re.sub(r"[^a-z0-9]+", "-", label.strip().lower())
++    slug = normalized.strip("-")
++    return slug or "action"
++
++
+ READY = "Ready"
+ LISTENING = "Listening"
+ THINKING = "Thinking"
+ RESPONDING = "Responding"
+ CONFIRMING_BARGE = "ConfirmingBarge"
  
-     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
-         return
+ _PCM_CODEC = "pcm_s16le"
+ _PCM_RATE_HZ = 16000
+ _PCM_CHANNELS = 1
+ _PCM_DESCRIPTOR = {
+     "codec": _PCM_CODEC,
+     "rate_hz": _PCM_RATE_HZ,
+     "channels": _PCM_CHANNELS,
+ }
  
+ _DEFAULT_VOICE_ID = "alloy-en-US-001"
+ _DEFAULT_LOCALE = "en-US"
  
- class EngineV2:
-     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
+ _INFO_SLO = {
+     "first_partial_ms": {"target": 450, "p95": 750},
+     "final_ms": {"target": 2000, "p95": 3000},
+     "tts_start_ms": {"target": 350, "p95": 600},
+ }
+ _PCM_SAMPLE_BYTES = 2 * _PCM_CHANNELS
  
-     def __init__(
-         self,
-         exporter: FileExporter | None = None,
-         *,
-         telemetry_bus=bus,
-         fake_exporter: FileExporter | None = None,
-     ) -> None:
-         if exporter is None:
-             exporter = fake_exporter
-         if exporter is None:
-             exporter = _NullExporter()
-@@ -157,54 +158,56 @@ class EngineV2:
-                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
-             )
-         else:
-             self._chat_subscription = None
-             self._ws_send_subscription = bus.subscribe(
-                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
-             )
- 
-     @property
-     def policy_snapshot(self) -> Dict[str, Any] | None:
-         return self._policy_snapshot
- 
-     @policy_snapshot.setter
-     def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
-         self._policy_snapshot = dict(snapshot) if snapshot is not None else None
- 
-     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
-         """Capture a successful WebSocket upgrade."""
-         meta = {"headers": dict(headers), "dir": "in"}
-         event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
-         self._publish(event)
- 
-         self._last_sid = sid
-         self._policy_snapshot = None
-         self._ensure_session(sid)
-+        self.reapply_policy()
-         self._emit_info_frame(sid)
-         self._publish_chat_history(sid)
-         self._set_state(sid, READY, reason="ws_open")
--        self.reapply_policy()
-+        self._maybe_emit_greeting(sid)
-+        self._maybe_emit_connect_suggestions(sid)
- 
-     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
-         """Capture a validated JSON frame from the adapter."""
-         turn_id: Optional[Any] = None
-         meta: Dict[str, Any] = {"dir": "in"}
-         frame_type: Optional[str] = None
-         if isinstance(frame, Mapping):
-             frame_type = frame.get("type")
-             if isinstance(frame_type, str):
-                 meta["frame_type"] = frame_type
-             turn_id = frame.get("turn_id")
-         else:
-             frame = {}
-         try:
-             serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         except (TypeError, ValueError):
-             serialized = "{}"
-         meta["byte_count"] = len(serialized.encode("utf-8"))
-         payload: Dict[str, Any] = {"meta": meta}
-         if turn_id is not None:
-             payload["turn_id"] = turn_id
-         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
-         self._publish(event)
-         if frame_type == "client.resume":
-             self._publish_chat_history(sid)
-@@ -547,50 +550,216 @@ class EngineV2:
-         frame = {"type": "chat.history", "messages": messages, "next_cursor": None}
-         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         meta = {
-             "ws": {
-                 "dir": "out",
-                 "size": len(serialized.encode("utf-8")),
-                 "preview": serialized,
-             }
+@@ -670,78 +679,94 @@ class EngineV2:
+                     "size": len(serialized.encode("utf-8")),
+                     "preview": serialized,
+                 }
+             },
+             "frame": frame,
          }
-         payload = {"meta": meta, "frame": frame}
          event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
          self._publish(event)
  
-     def _publish_gate_event(self, event: Dict[str, Any]) -> None:
-         """Publish gate controller events through the standard telemetry path."""
+         session.greet_emitted = True
  
-         envelope = dict(event)
-         sid = envelope.get("sid") or self._last_sid
-         if not isinstance(sid, str) or not sid:
+     def _maybe_emit_connect_suggestions(self, sid: str) -> None:
+         session = self._ensure_session(sid)
+         if session.suggestions_emitted:
              return
-         envelope.setdefault("sid", sid)
-         envelope.setdefault("who", "server")
-         envelope.setdefault("source", "voice_engine")
-         self._publish(envelope)
  
-+    def _maybe_emit_greeting(self, sid: str) -> None:
-+        session = self._ensure_session(sid)
-+        if session.greet_emitted:
+         snapshot = self.policy_snapshot or {}
+         suggestions_block = snapshot.get("suggestions")
+         if isinstance(suggestions_block, Mapping):
+             on_connect = bool(suggestions_block.get("on_connect"))
+             count_candidate = suggestions_block.get("count")
+         else:
+             on_connect = False
+             count_candidate = None
+ 
++        actions_block = snapshot.get("actions")
++        surface_actions = True
++        if isinstance(actions_block, Mapping):
++            surface_candidate = actions_block.get("surface_via_suggestions")
++            if isinstance(surface_candidate, bool):
++                surface_actions = surface_candidate
++
+         if not on_connect:
+             return
+ 
++        if not surface_actions:
 +            return
 +
-+        snapshot = self.policy_snapshot or {}
-+        greet_block = snapshot.get("greet")
-+        if isinstance(greet_block, Mapping):
-+            enabled = bool(greet_block.get("enabled", True))
-+            mode = greet_block.get("mode")
-+            post_hold = greet_block.get("post_hold_ms")
-+        else:
-+            enabled = True
-+            mode = "persona"
-+            post_hold = None
+         max_items = 3
+         if isinstance(count_candidate, (int, float)):
+             normalized = int(count_candidate)
+             if normalized > 0:
+                 max_items = normalized
+ 
+         try:
+             persona = load_persona()
+         except Exception:
+             logging.getLogger(__name__).exception("Failed to load persona for connect suggestions")
+             persona = {}
+ 
+         chips = default_chips_for_mode(persona if isinstance(persona, dict) else {}, "outline")
+         items = [str(label).strip() for label in chips if isinstance(label, str) and label.strip()]
+         if not items:
+             return
+ 
+         limited_items = items[:max_items]
+         if not limited_items:
+             return
+ 
++        suggestion_items = []
++        for label in limited_items:
++            item: Dict[str, Any] = {"label": label, "kind": "action"}
++            item["id"] = _slugify_action_label(label)
++            suggestion_items.append(item)
 +
-+        if not enabled:
-+            return
-+
-+        greet_mode = mode if isinstance(mode, str) and mode else "persona"
-+        post_hold_ms = None
-+        if isinstance(post_hold, (int, float)):
-+            candidate_post_hold = int(post_hold)
-+            if candidate_post_hold >= 0:
-+                post_hold_ms = candidate_post_hold
-+
-+        turn_id = str(uuid.uuid4())
-+        req_id = f"req-{uuid.uuid4().hex}"
-+        plan_payload: Dict[str, Any] = {
-+            "mode": "outline",
-+            "chips": [],
-+            "missing_info": [],
-+            "reason": "greet",
-+        }
-+
-+        persona: Dict[str, Any] = {}
-+        try:
-+            persona_candidate = load_persona()
-+        except Exception:
-+            logging.getLogger(__name__).exception("Failed to load persona for greeting")
-+        else:
-+            if isinstance(persona_candidate, dict):
-+                persona = persona_candidate
-+
-+        fallback_copy = persona.get("greet_copy") if isinstance(persona, dict) else None
-+        if not isinstance(fallback_copy, str) or not fallback_copy.strip():
-+            fallback_copy = "Hi there! I'm Chip. How can I help you today?"
-+
-+        greeting_text: str
-+        if greet_mode == "persona":
-+            try:
-+                greeting_candidate = self._llm.generate_persona(
-+                    sid,
-+                    turn_id,
-+                    req_id,
-+                    "",
-+                    plan_payload,
-+                )
-+            except Exception:
-+                logging.getLogger(__name__).exception(
-+                    "Persona greeting generation failed; falling back to static copy"
-+                )
-+                greeting_candidate = None
-+            greeting_text = greeting_candidate if isinstance(greeting_candidate, str) else ""
-+        else:
-+            greeting_text = ""
-+
-+        if not greeting_text.strip():
-+            greeting_text = fallback_copy.strip()
-+
-+        nlg_payload: Dict[str, Any] = {
-+            "req_id": req_id,
-+            "text": greeting_text,
-+            "meta": {"reason": "greet"},
-+        }
-+        if post_hold_ms is not None:
-+            nlg_payload.setdefault("meta", {})["post_hold_ms"] = post_hold_ms
-+        nlg_event = self._envelope(sid, EVT_NLG, nlg_payload)
-+        self._publish(nlg_event)
-+
-+        frame = {
-+            "type": "chat.message",
-+            "id": str(uuid.uuid4()),
-+            "role": "assistant",
-+            "text": greeting_text,
-+            "origin": "voice",
-+            "turn_id": turn_id,
-+            "req_id": req_id,
-+            "ts_ms": _now_ms(),
-+        }
-+        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-+        payload = {
-+            "meta": {
-+                "ws": {
-+                    "dir": "out",
-+                    "size": len(serialized.encode("utf-8")),
-+                    "preview": serialized,
-+                }
-+            },
-+            "frame": frame,
-+        }
-+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-+        self._publish(event)
-+
-+        session.greet_emitted = True
-+
-+    def _maybe_emit_connect_suggestions(self, sid: str) -> None:
-+        session = self._ensure_session(sid)
-+        if session.suggestions_emitted:
-+            return
-+
-+        snapshot = self.policy_snapshot or {}
-+        suggestions_block = snapshot.get("suggestions")
-+        if isinstance(suggestions_block, Mapping):
-+            on_connect = bool(suggestions_block.get("on_connect"))
-+            count_candidate = suggestions_block.get("count")
-+        else:
-+            on_connect = False
-+            count_candidate = None
-+
-+        if not on_connect:
-+            return
-+
-+        max_items = 3
-+        if isinstance(count_candidate, (int, float)):
-+            normalized = int(count_candidate)
-+            if normalized > 0:
-+                max_items = normalized
-+
-+        try:
-+            persona = load_persona()
-+        except Exception:
-+            logging.getLogger(__name__).exception("Failed to load persona for connect suggestions")
-+            persona = {}
-+
-+        chips = default_chips_for_mode(persona if isinstance(persona, dict) else {}, "outline")
-+        items = [str(label).strip() for label in chips if isinstance(label, str) and label.strip()]
-+        if not items:
-+            return
-+
-+        limited_items = items[:max_items]
-+        if not limited_items:
-+            return
-+
-+        suggestions_frame = {
-+            "type": "assistant.suggestions",
-+            "ts_ms": _now_ms(),
-+            "items": [{"label": label, "kind": "action"} for label in limited_items],
-+            "mode": "outline",
-+        }
-+        serialized = json.dumps(suggestions_frame, ensure_ascii=False, separators=(",", ":"))
-+        payload = {
-+            "meta": {
-+                "ws": {
-+                    "dir": "out",
-+                    "size": len(serialized.encode("utf-8")),
-+                    "preview": serialized,
-+                }
-+            },
-+            "frame": suggestions_frame,
-+        }
-+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-+        self._publish(event)
-+
-+        session.suggestions_emitted = True
-+
+         suggestions_frame = {
+             "type": "assistant.suggestions",
+             "ts_ms": _now_ms(),
+-            "items": [{"label": label, "kind": "action"} for label in limited_items],
++            "items": suggestion_items,
+             "mode": "outline",
+         }
+         serialized = json.dumps(suggestions_frame, ensure_ascii=False, separators=(",", ":"))
+         payload = {
+             "meta": {
+                 "ws": {
+                     "dir": "out",
+                     "size": len(serialized.encode("utf-8")),
+                     "preview": serialized,
+                 }
+             },
+             "frame": suggestions_frame,
+         }
+         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+         self._publish(event)
+ 
+         session.suggestions_emitted = True
+ 
      def _publish_barge(
          self, sid: str, source: str, granted: bool, reason: str | None = None
      ) -> None:
@@ -361,56 +232,3 @@ index 7d9026288e6b788279270682a02fb53a08944c03..c1ad7b88ea7fcfb57e8a1cd184b41f65
  
          if source not in {"auto_vad", "asr_evidence", "text"}:
              return
- 
-         meta: Dict[str, Any] = {"barge": {"source": source, "granted": granted}}
-         if reason is not None:
-             meta["barge"]["reason"] = reason
-         event = self._envelope(sid, "EVT_BARGE_IN", {"meta": meta})
-         self._publish(event)
- 
-     def _schedule_barge_confirmation(self, sid: str) -> None:
-         """Transition from confirming to listening after a short delay."""
- 
-         async def _confirm() -> None:
-             await asyncio.sleep(0.5)
-             self._complete_auto_barge(sid)
- 
-         self._cancel_barge_confirmation(sid)
- 
-         try:
-             loop = asyncio.get_running_loop()
-diff --git a/config/personas/chip.json b/config/personas/chip.json
-index 9f65f7c63f357dda6e87862f8dd5e363aaf21fd4..7e9e3aff758f5733d702c10058bfdd160407af05 100644
---- a/config/personas/chip.json
-+++ b/config/personas/chip.json
-@@ -1,29 +1,30 @@
- {
-   "id": "chip_vptm",
-   "role_title": "Virtual Partner Technical Manager (vPTM)",
-   "public_title": "Chip, your Pure Storage partner guide",
-+  "greet_copy": "Hi, Heya, I'm Chip—What do you want to accomplish today?",
-   "voice": "steady-midwest",
-   "tone_preset": "mentor",
-   "domain_focus": "Pure Storage data platforms, partner enablement, and customer outcomes",
-   "guardrails": {
-     "focus_on_pure": true
-   },
-   "modes": {
-     "clarify": {
-       "instruction": "Ask concise follow-ups to uncover the Pure Storage scenario before recommending a path.",
-       "chips": [
-         "Confirm Pure Storage product",
-         "Clarify customer workload",
-         "Ask for timeline"
-       ]
-     },
-     "outline": {
-       "instruction": "Summarize the Pure Storage solution path, spotlighting architecture pillars and success criteria.",
-       "chips": [
-         "State customer objective",
-         "Highlight Pure differentiators",
-         "Note partner resources"
-       ]
-     },
-     "deep_dive": {
-       "instruction": "Walk through the technical layers of the Pure Storage design with data-backed rationale.",

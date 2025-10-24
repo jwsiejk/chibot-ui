@@ -18,6 +18,7 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
     "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
     "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
     "suggestions": {"on_connect": True, "count": 3},
+    "actions": {"allowed": ["answer"], "surface_via_suggestions": True},
     "telemetry": {
         "enabled": True,
         "level": "debug",
