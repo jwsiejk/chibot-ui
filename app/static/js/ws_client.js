@@ -18,6 +18,25 @@
   let rateLimitRetryCount = 0;
   let autoResumeAttemptToken = null;
 
+  function normalizeWsAuthMode(value) {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const normalized = value.trim().toLowerCase();
+    return normalized || null;
+  }
+
+  function getWsAuthMode(state) {
+    if (!state || typeof state !== "object") {
+      return null;
+    }
+    return normalizeWsAuthMode(state.wsAuthMode);
+  }
+
+  function shouldSendAccessToken(state) {
+    return getWsAuthMode(state) !== "disabled";
+  }
+
   function getResumeState() {
     const state = AppState.getState();
     const resume = state && typeof state.resume === "object" ? state.resume : null;
@@ -51,7 +70,9 @@
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const base = `${protocol}//${window.location.host}/ws/v2/chat`;
     const params = new URLSearchParams();
-    if (typeof accessToken === "string" && accessToken.trim()) {
+    const state = AppState.getState();
+    const allowAccessToken = shouldSendAccessToken(state);
+    if (allowAccessToken && typeof accessToken === "string" && accessToken.trim()) {
       params.set("access_token", accessToken.trim());
     }
     if (typeof resumeToken === "string" && resumeToken.trim()) {
@@ -234,6 +255,9 @@
       if (typeof source.barge_in_enabled === "boolean") {
         policy.barge_in_enabled = source.barge_in_enabled;
       }
+      if (typeof source.ws_auth_mode === "string" && source.ws_auth_mode.trim()) {
+        policy.ws_auth_mode = source.ws_auth_mode.trim();
+      }
     }
     safe.policy = policy;
     return safe;
@@ -357,6 +381,15 @@
       }
     } else if (frame.type === "policy.interaction") {
       const sanitized = sanitizePolicyFrame(frame);
+      const policy = sanitized && sanitized.policy;
+      if (policy && Object.prototype.hasOwnProperty.call(policy, "ws_auth_mode")) {
+        const mode = normalizeWsAuthMode(policy.ws_auth_mode);
+        const patch = { wsAuthMode: mode };
+        if (mode === "disabled") {
+          patch.accessToken = null;
+        }
+        updateState(patch);
+      }
       dispatchFrame(sanitized);
       return;
     } else if (frame.type === "asr.partial") {
@@ -480,7 +513,11 @@
 
   function open(accessToken, options = {}) {
     const { resumeToken = null, skipRateLimitCancel = false } = options;
-    const accessTokenValue = typeof accessToken === "string" && accessToken.trim() ? accessToken.trim() : null;
+    const state = AppState.getState();
+    const allowAccessToken = shouldSendAccessToken(state);
+    const accessTokenValue = allowAccessToken && typeof accessToken === "string" && accessToken.trim()
+      ? accessToken.trim()
+      : null;
     const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
     if (socket) {
       cleanupSocket(socket, "superseded");
