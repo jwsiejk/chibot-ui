@@ -1,432 +1,164 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 1c9227a3883039acb82edd727c6eafcf6419ca5f..d961aeca5c1bd1ff91e626ab8c2f51e5a697a18f 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -1,121 +1,114 @@
- """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
- from __future__ import annotations
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index d632dd12bbd71ba1b7e86a57ed435dc837591979..ff0b50d7d66c854699034752f3135d05cb423d1e 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -34,127 +34,74 @@
+     const resolvedSrc = resolveScriptSrc(src);
+     return new Promise((resolve, reject) => {
+       const existing = document.querySelector(`script[data-dynamic="${resolvedSrc}"]`);
+       if (existing) {
+         if (existing.dataset.loaded === "true") {
+           resolve();
+         } else {
+           existing.addEventListener("load", resolve, { once: true });
+           existing.addEventListener("error", reject, { once: true });
+         }
+         return;
+       }
+       const el = document.createElement("script");
+       el.src = resolvedSrc;
+       el.async = false;
+       el.dataset.dynamic = resolvedSrc;
+       el.addEventListener("load", () => {
+         el.dataset.loaded = "true";
+         resolve();
+       }, { once: true });
+       el.addEventListener("error", reject, { once: true });
+       document.head.appendChild(el);
+     });
+   }
  
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
- from urllib.parse import urlparse
- 
--from app.admin.flow_api import handle_flow_trace, handle_flow_zip
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- 
- logger = logging.getLogger(__name__)
- 
- 
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
- 
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
- 
- 
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
- 
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
- 
- 
- WS_ROUTE = "/ws/v2/chat"
- HEALTH_ROUTE = "/api/v1/health"
- LIVE_ROUTE = "/api/v1/live"
- READY_ROUTE = "/api/v1/ready"
- INFO_ROUTE = "/api/v1/info"
- ROOT_ROUTE = "/"
- FAVICON_ROUTE = "/favicon.ico"
- STATIC_ROUTE_PREFIX = "/static/"
- EXPORT_ROOT = Path("exports")
- BASE_DIR = Path(__file__).resolve().parent
- STATIC_ROOT = BASE_DIR / "static"
- TEMPLATES_ROOT = BASE_DIR / "templates"
- INDEX_PATH = TEMPLATES_ROOT / "index.html"
- FAVICON_PATH = STATIC_ROOT / "favicon.ico"
--_ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
--_TRACE_SEGMENT = "trace"
--_ZIP_SEGMENT = "zip"
+-  function sanitizeEnvCandidate(value) {
+-    if (!value || typeof value !== "string") return null;
+-    const trimmed = value.trim();
+-    if (!trimmed) return null;
+-    if (trimmed.includes("{{") || trimmed.includes("}}")) return null;
+-    if (trimmed.includes("{") || trimmed.includes("}")) return null;
+-    return trimmed;
+-  }
 -
- _DEFAULT_INDEX_HTML = (
-     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
- )
- 
- 
- HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
- 
- _adapter: Optional[ChatV2Adapter] = None
- 
- 
- async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
-     scope_type = scope.get("type")
-     path = (scope.get("root_path") or "") + scope.get("path", "")
- 
-     if scope_type == "websocket":
-         if path == WS_ROUTE:
-             allowed, blocked_origin = _validate_ws_origin(scope)
-             if not allowed:
-                 await _reject_origin(scope, blocked_origin, receive, send)
-                 return
-             await _get_adapter()(scope, receive, send)
-         else:
-             await _reject_websocket(receive, send)
-         return
- 
-     if scope_type == "http":
-         handler = _HTTP_ROUTES.get(path)
-         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
-             handler = partial(_handle_static, raw_path=path)
--        if handler is None:
--            handler = _resolve_admin_route(path)
-         if handler is None:
-             await _drain_request_body(receive)
-             await _send_response(send, json_response(status=404, error="not_found"))
-         else:
-             response = await handler(scope, receive)
-             await _send_response(send, response)
-         return
- 
-     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
- 
- 
- async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Return a static JSON document for health checks."""
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
-     return json_response(ok=True, engine="v2", ws_subprotocol=CHAT_V2_SUBPROTOCOL)
- 
- 
- async def _handle_live(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Expose a lightweight pulse indicating the event loop is responsive."""
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-@@ -397,214 +390,98 @@ def _derive_scope_origin(scope: dict) -> Optional[str]:
-     normalized_host = host.strip().lower()
-     if not normalized_host:
-         return None
- 
-     return f"{scheme}://{normalized_host}"
- 
- 
- def _is_default_port(scheme: str, port: Any) -> bool:
-     try:
-         value = int(port)
-     except (TypeError, ValueError):
-         return False
-     if scheme == "https":
-         return value == 443
-     if scheme == "http":
-         return value == 80
-     return False
- 
- 
- def _resolve_origin_policy() -> "_OriginPolicy":
-     raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
-     if raw is not None:
-         entries = tuple(filter(None, (_normalize_origin(item) for item in raw.split(","))))
-         return _OriginPolicy(mode="explicit", values=entries)
- 
--    env = (os.getenv("ASKCHIP_ENV") or "development").strip().lower()
--    if env in {"production", "prod"}:
--        return _OriginPolicy(mode="explicit", values=())
+-  function detectEnvironment() {
+-    const html = typeof document !== "undefined" ? document.documentElement : null;
+-    const body = typeof document !== "undefined" ? document.body : null;
+-    const meta = typeof document !== "undefined" ? document.querySelector('meta[name="askchip-env"]') : null;
+-    const candidates = [
+-      sanitizeEnvCandidate(window.ASKCHIP_ENV),
+-      html ? sanitizeEnvCandidate(html.getAttribute("data-askchip-env")) : null,
+-      body ? sanitizeEnvCandidate(body.getAttribute("data-askchip-env")) : null,
+-      meta ? sanitizeEnvCandidate(meta.getAttribute("content")) : null
+-    ];
+-    for (const candidate of candidates) {
+-      if (candidate) {
+-        return candidate.toLowerCase();
+-      }
+-    }
+-    return "prod";
+-  }
 -
--    return _OriginPolicy(mode="localhost", values=("localhost", "127.0.0.1"))
-+    return _OriginPolicy(mode="explicit", values=())
+-  function isProdEnv(value) {
+-    if (!value || typeof value !== "string") return true;
+-    const normalized = value.trim().toLowerCase();
+-    return normalized === "prod" || normalized === "production";
+-  }
+-
+-  async function maybeInitInspector(env) {
+-    if (isProdEnv(env)) {
+-      return;
+-    }
+-    try {
+-      await loadScript("inspector.js");
+-      if (window.DevInspector && typeof window.DevInspector.init === "function") {
+-        window.DevInspector.init({ env, AppState: window.AppState });
+-      }
+-    } catch (err) {
+-      console.warn("Dev inspector initialization failed", err);
+-    }
+-  }
+-
+   async function ensureRuntimeModules() {
+     if (!window.AppState) {
+       await loadScript("state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("audio_player.js");
+     }
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.AudioRecorder) {
+       await loadScript("audio_recorder.js");
+     }
+     if (!window.PolicyBadges) {
+       await loadScript("policy_badges.js");
+     }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+   }
  
+   async function init() {
+     await ensureRuntimeModules();
  
- def _is_origin_allowed(origin: str, policy: "_OriginPolicy") -> bool:
-     if policy.mode == "explicit":
-         normalized = _normalize_origin(origin)
--        if normalized is None or not policy.values:
--            return normalized in policy.values
--        return normalized in policy.values
--
--    if policy.mode == "localhost":
--        host = _extract_hostname(origin)
--        if host is None:
-+        if normalized is None:
-             return False
--        return host in policy.values
-+        return normalized in policy.values
- 
-     return False
- 
- 
- def _normalize_origin(value: str) -> Optional[str]:
-     raw = value.strip()
-     if not raw:
-         return None
- 
-     parsed = urlparse(raw)
-     if parsed.scheme and parsed.netloc:
-         scheme = parsed.scheme.lower()
-         netloc = parsed.netloc.lower()
-         return f"{scheme}://{netloc}"
- 
-     lowered = raw.lower()
-     if lowered == "*":
-         return None
-     return lowered
- 
- 
--def _extract_hostname(value: str) -> Optional[str]:
--    parsed = urlparse(value)
--    if not parsed.hostname:
--        return None
--    return parsed.hostname.lower()
--
--
- @dataclass(frozen=True)
- class _OriginPolicy:
-     mode: str
-     values: tuple[str, ...]
- 
- 
- def _validate_ws_origin(scope: dict) -> tuple[bool, Optional[str]]:
-     """Validate the Origin header for incoming WebSocket handshakes."""
- 
-     origin = _decode_header(scope.get("headers", ()), b"origin")
-     if origin is None:
-         return True, None
- 
-     policy = _resolve_origin_policy()
-     if policy.mode == "explicit" and not policy.values:
-         derived = _derive_scope_origin(scope)
-         if derived is not None and _normalize_origin(origin) == _normalize_origin(derived):
-             return True, None
-     if _is_origin_allowed(origin, policy):
-         return True, None
- 
-     return False, origin
- 
- 
- _HTTP_ROUTES: Dict[str, HttpHandler] = {
-     ROOT_ROUTE: _handle_index,
-     FAVICON_ROUTE: _handle_favicon,
-     HEALTH_ROUTE: _handle_health,
-     LIVE_ROUTE: _handle_live,
-     READY_ROUTE: _handle_ready,
-     INFO_ROUTE: _handle_info,
- }
- 
- 
--def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
--    if not path.startswith(_ADMIN_FLOW_PREFIX):
--        return None
--
--    suffix = path[len(_ADMIN_FLOW_PREFIX) :]
--    if not suffix:
--        return None
--
--    segments = suffix.split("/")
--    if len(segments) != 2:
--        return None
--
--    sid, action = segments
--    if not sid:
--        return None
--
--    handler: Optional[HttpHandler]
--    if action == _TRACE_SEGMENT:
--        handler = partial(handle_flow_trace, sid=sid)
--    elif action == _ZIP_SEGMENT:
--        handler = partial(handle_flow_zip, sid=sid)
--    else:
--        handler = None
--
--    if handler is None:
--        return None
--
--    handler = partial(_enforce_admin_auth, handler)
--    if _admin_cors_enabled():
--        return partial(_apply_admin_cors, handler)
--
--    return handler
--
--
--async def _apply_admin_cors(
--    handler: HttpHandler,
--    scope: dict,
--    receive: Callable[[], Awaitable[dict]],
--) -> Response:
--    response = await handler(scope, receive)
--    allow_origin = _resolve_admin_cors_origin(scope)
--    if allow_origin is None:
--        return response
--
--    encoded_origin = _encode_header_value(allow_origin)
--    if encoded_origin is None:
--        return response
--
--    headers = tuple(response.headers) + (
--        (b"access-control-allow-origin", encoded_origin),
--        (b"access-control-allow-methods", b"GET"),
--    )
--    return Response(status=response.status, body=response.body, headers=headers)
--
--
--def _admin_cors_enabled() -> bool:
--    env = (os.getenv("ASKCHIP_ENV") or "").strip().lower()
--    return env in {"dev", "staging"}
--
--
--def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
--    allowed = _parse_admin_cors_origins()
--    if not allowed:
--        return None
--
--    if "*" in allowed:
--        return "*"
--
--    origin = _decode_header(scope.get("headers", ()), b"origin")
--    if origin is None:
--        return None
--
--    normalized = origin.strip()
--    for entry in allowed:
--        if normalized == entry:
--            return normalized
--    return None
--
--
--def _parse_admin_cors_origins() -> tuple[str, ...]:
--    raw = os.getenv("ASKCHIP_ADMIN_CORS_ORIGINS")
--    if not raw:
--        return ()
--
--    entries = []
--    for item in raw.split(","):
--        value = item.strip()
--        if value:
--            entries.append(value)
--    return tuple(entries)
--
--
--def _encode_header_value(value: str) -> Optional[bytes]:
--    try:
--        return value.encode("latin1")
--    except UnicodeEncodeError:  # pragma: no cover - defensive
--        return None
--
--
- async def _enforce_admin_auth(
-     handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-     return await handler(scope, receive)
- 
- 
- asgi = app
- 
- __all__ = ["app", "asgi"]
-diff --git a/tests/test_admin_cors.py b/tests/test_admin_cors.py
-deleted file mode 100644
-index 345786ac5ce962a14ef4b62d39a51d8def12e20e..0000000000000000000000000000000000000000
---- a/tests/test_admin_cors.py
-+++ /dev/null
-@@ -1,82 +0,0 @@
--from __future__ import annotations
--
--import asyncio
--from typing import Awaitable, Callable, Dict, Tuple
--
--import pytest
--
--from app import asgi_gateway
--
--
--def _make_scope(path: str, origin: str | None) -> Dict[str, object]:
--    headers: list[Tuple[bytes, bytes]] = []
--    if origin is not None:
--        headers.append((b"origin", origin.encode("latin1")))
--    return {
--        "type": "http",
--        "method": "GET",
--        "path": path,
--        "query_string": b"",
--        "headers": headers,
+-    const runtimeEnv = detectEnvironment();
+-    window.ASKCHIP_ENV = runtimeEnv;
+-    if (document.body) {
+-      document.body.dataset.askchipEnv = runtimeEnv;
 -    }
 -
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
+     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
+       try {
+         window.PolicyBadges.init();
+       } catch (err) {
+         console.warn("Failed to initialize PolicyBadges", err);
+       }
+     }
+ 
+     // --- Config & mock current user for gating ---
+     window.ADMIN_EMAILS = (window.ADMIN_EMAILS || ["admin@askchip.ai"]).map(e => e.toLowerCase());
+     const urlParams = new URLSearchParams(window.location.search);
+     const currentUserEmail = (urlParams.get("email") || "user@example.com").toLowerCase();
+     const isAdmin = window.ADMIN_EMAILS.includes(currentUserEmail);
+ 
+     // --- Top-right brand dropdown ---
+     const brandBtn = document.getElementById('brandBtn');
+     const brandMenu = document.getElementById('brandMenu');
+     const adminItem = document.getElementById('adminItem');
+     brandMenu.setAttribute('aria-hidden', 'true');
+     function syncAdminItem() {
+       if (isAdmin) {
+         adminItem.removeAttribute('aria-disabled');
+         adminItem.disabled = false;
+@@ -922,31 +869,29 @@
+         const mock = new MockSocket();
+         sockets.push(mock);
+         return mock;
+       });
+ 
+       startBtn.click();
+ 
+       setTimeout(() => {
+         const mock = sockets[0];
+         if (!mock) return;
+         mock.simulateMessage({
+           type: 'info',
+           meta: { sid: 'smoke-sid', resume_token: 'smoke-resume', resume_ttl_ms: 5000 }
+         });
+         WSClient.__debug.recordPing(Date.now() - 42);
+         mock.simulateMessage({ type: 'pong', t: Date.now() });
+         setTimeout(() => {
+           endBtn.click();
+           console.log('WSClient smoke transitions', transitions);
+           console.log('WSClient smoke latency', AppState.getState().latencyMs);
+           WSClient.__debug.resetTransportFactory();
+           unsubscribe();
+         }, 20);
+       }, 20);
+     }
 -
--def _make_receive() -> Callable[[], Awaitable[Dict[str, object]]]:
--    messages = [
--        {"type": "http.request", "body": b"", "more_body": False},
--    ]
--
--    async def _receive() -> Dict[str, object]:
--        if messages:
--            return messages.pop(0)
--        return {"type": "http.disconnect"}
--
--    return _receive
--
--
--@pytest.mark.parametrize(
--    "env",
--    ["dev", "staging"],
--)
--def test_admin_cors_enabled_for_non_prod(monkeypatch: pytest.MonkeyPatch, env: str) -> None:
--    monkeypatch.setenv("ASKCHIP_ENV", env)
--    monkeypatch.setenv("ASKCHIP_ADMIN_CORS_ORIGINS", "http://localhost:3000")
--
--    handler = asgi_gateway._resolve_admin_route("/api/v1/admin/flow/sid-123/trace")
--    assert handler is not None
--
--    scope = _make_scope("/api/v1/admin/flow/sid-123/trace", "http://localhost:3000")
--    response = asyncio.run(handler(scope, _make_receive()))
--
--    header_map = dict(response.headers)
--    assert header_map[b"access-control-allow-origin"] == b"http://localhost:3000"
--    assert header_map[b"access-control-allow-methods"] == b"GET"
--
--
--def test_admin_cors_respects_origin_allow_list(monkeypatch: pytest.MonkeyPatch) -> None:
--    monkeypatch.setenv("ASKCHIP_ENV", "dev")
--    monkeypatch.setenv("ASKCHIP_ADMIN_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
--
--    handler = asgi_gateway._resolve_admin_route("/api/v1/admin/flow/sid-123/trace")
--    assert handler is not None
--
--    scope = _make_scope("/api/v1/admin/flow/sid-123/trace", "http://127.0.0.1:3000")
--    response = asyncio.run(handler(scope, _make_receive()))
--
--    header_map = dict(response.headers)
--    assert header_map[b"access-control-allow-origin"] == b"http://127.0.0.1:3000"
--
--
--def test_admin_cors_disabled_in_prod(monkeypatch: pytest.MonkeyPatch) -> None:
--    monkeypatch.setenv("ASKCHIP_ENV", "prod")
--    monkeypatch.setenv("ASKCHIP_ADMIN_CORS_ORIGINS", "http://localhost:3000")
--
--    handler = asgi_gateway._resolve_admin_route("/api/v1/admin/flow/sid-123/trace")
--    assert handler is not None
--
--    scope = _make_scope("/api/v1/admin/flow/sid-123/trace", "http://localhost:3000")
--    response = asyncio.run(handler(scope, _make_receive()))
--
--    header_map = dict(response.headers)
--    assert b"access-control-allow-origin" not in header_map
--    assert b"access-control-allow-methods" not in header_map
+-    maybeInitInspector(runtimeEnv);
+   }
+ 
+   init();
+ })();

@@ -56,53 +56,6 @@
     });
   }
 
-  function sanitizeEnvCandidate(value) {
-    if (!value || typeof value !== "string") return null;
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    if (trimmed.includes("{{") || trimmed.includes("}}")) return null;
-    if (trimmed.includes("{") || trimmed.includes("}")) return null;
-    return trimmed;
-  }
-
-  function detectEnvironment() {
-    const html = typeof document !== "undefined" ? document.documentElement : null;
-    const body = typeof document !== "undefined" ? document.body : null;
-    const meta = typeof document !== "undefined" ? document.querySelector('meta[name="askchip-env"]') : null;
-    const candidates = [
-      sanitizeEnvCandidate(window.ASKCHIP_ENV),
-      html ? sanitizeEnvCandidate(html.getAttribute("data-askchip-env")) : null,
-      body ? sanitizeEnvCandidate(body.getAttribute("data-askchip-env")) : null,
-      meta ? sanitizeEnvCandidate(meta.getAttribute("content")) : null
-    ];
-    for (const candidate of candidates) {
-      if (candidate) {
-        return candidate.toLowerCase();
-      }
-    }
-    return "prod";
-  }
-
-  function isProdEnv(value) {
-    if (!value || typeof value !== "string") return true;
-    const normalized = value.trim().toLowerCase();
-    return normalized === "prod" || normalized === "production";
-  }
-
-  async function maybeInitInspector(env) {
-    if (isProdEnv(env)) {
-      return;
-    }
-    try {
-      await loadScript("inspector.js");
-      if (window.DevInspector && typeof window.DevInspector.init === "function") {
-        window.DevInspector.init({ env, AppState: window.AppState });
-      }
-    } catch (err) {
-      console.warn("Dev inspector initialization failed", err);
-    }
-  }
-
   async function ensureRuntimeModules() {
     if (!window.AppState) {
       await loadScript("state.js");
@@ -126,12 +79,6 @@
 
   async function init() {
     await ensureRuntimeModules();
-
-    const runtimeEnv = detectEnvironment();
-    window.ASKCHIP_ENV = runtimeEnv;
-    if (document.body) {
-      document.body.dataset.askchipEnv = runtimeEnv;
-    }
 
     const AppState = window.AppState;
     const WSClient = window.WSClient;
@@ -944,8 +891,6 @@
         }, 20);
       }, 20);
     }
-
-    maybeInitInspector(runtimeEnv);
   }
 
   init();

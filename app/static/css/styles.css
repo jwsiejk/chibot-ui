@@ -35,12 +35,6 @@ body{
   backdrop-filter:saturate(140%) blur(6px);
 }
 .topbar-left{display:flex;gap:10px;align-items:center}
-.env-badge{
-  background: linear-gradient(135deg, var(--brand), #ff914d);
-  color:#0b0f16; font-weight:700; letter-spacing:.3px;
-  padding:4px 8px; border-radius:999px; font-size:12px;
-  box-shadow:var(--shadow);
-}
 .sid{color:var(--muted);font-size:12px}
 
 /* Brand menu */
