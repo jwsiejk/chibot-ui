@@ -67,13 +67,32 @@ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response
 _adapter: Optional[ChatV2Adapter] = None
 
 
+def _ws_route_matches(scope: dict, expected: str) -> bool:
+    """
+    Return True when the incoming websocket request targets the expected route,
+    robust to deployments mounted under a non-empty ASGI root_path.
+    """
+
+    raw_path = scope.get("path", "") or ""
+    root_path = scope.get("root_path") or ""
+    # Direct match (no prefix)
+    if raw_path == expected:
+        return True
+    # Combined path match (some servers expect root_path + path)
+    combined = f"{root_path}{raw_path}" if root_path else raw_path
+    if combined == expected:
+        return True
+    # Prefix-mount: accept if the combined path ends with expected
+    return combined.endswith(expected)
+
+
 async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
     scope_type = scope.get("type")
     path = (scope.get("root_path") or "") + scope.get("path", "")
 
     if scope_type == "websocket":
-        if path == WS_ROUTE:
+        if _ws_route_matches(scope, WS_ROUTE):
             allowed, blocked_origin = _validate_ws_origin(scope)
             if not allowed:
                 await _reject_origin(scope, blocked_origin, receive, send)

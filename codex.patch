@@ -1,247 +1,117 @@
 diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index d961aeca5c1bd1ff91e626ab8c2f51e5a697a18f..79b75e5fb4213d6c8d0f12dc5665b0ae365e967f 100644
+index 79b75e5fb4213d6c8d0f12dc5665b0ae365e967f..b362883111d7a36813b2c45190c8097c52d7f581 100644
 --- a/app/asgi_gateway.py
 +++ b/app/asgi_gateway.py
-@@ -341,79 +341,137 @@ async def _reject_origin(
-     send: Callable[[dict], Awaitable[None]],
- ) -> None:
-     """Reject a WebSocket handshake because the Origin is not allowed."""
+@@ -45,57 +45,76 @@ def json_response(*, status: int = 200, **payload: Any) -> Response:
  
-     message = await receive()
-     if message.get("type") != "websocket.connect":
+ WS_ROUTE = "/ws/v2/chat"
+ HEALTH_ROUTE = "/api/v1/health"
+ LIVE_ROUTE = "/api/v1/live"
+ READY_ROUTE = "/api/v1/ready"
+ INFO_ROUTE = "/api/v1/info"
+ ROOT_ROUTE = "/"
+ FAVICON_ROUTE = "/favicon.ico"
+ STATIC_ROUTE_PREFIX = "/static/"
+ EXPORT_ROOT = Path("exports")
+ BASE_DIR = Path(__file__).resolve().parent
+ STATIC_ROOT = BASE_DIR / "static"
+ TEMPLATES_ROOT = BASE_DIR / "templates"
+ INDEX_PATH = TEMPLATES_ROOT / "index.html"
+ FAVICON_PATH = STATIC_ROOT / "favicon.ico"
+ _DEFAULT_INDEX_HTML = (
+     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
+ )
+ 
+ 
+ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
+ 
+ _adapter: Optional[ChatV2Adapter] = None
+ 
+ 
++def _ws_route_matches(scope: dict, expected: str) -> bool:
++    """
++    Return True when the incoming websocket request targets the expected route,
++    robust to deployments mounted under a non-empty ASGI root_path.
++    """
++
++    raw_path = scope.get("path", "") or ""
++    root_path = scope.get("root_path") or ""
++    # Direct match (no prefix)
++    if raw_path == expected:
++        return True
++    # Combined path match (some servers expect root_path + path)
++    combined = f"{root_path}{raw_path}" if root_path else raw_path
++    if combined == expected:
++        return True
++    # Prefix-mount: accept if the combined path ends with expected
++    return combined.endswith(expected)
++
++
+ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
+     scope_type = scope.get("type")
+     path = (scope.get("root_path") or "") + scope.get("path", "")
+ 
+     if scope_type == "websocket":
+-        if path == WS_ROUTE:
++        if _ws_route_matches(scope, WS_ROUTE):
+             allowed, blocked_origin = _validate_ws_origin(scope)
+             if not allowed:
+                 await _reject_origin(scope, blocked_origin, receive, send)
+                 return
+             await _get_adapter()(scope, receive, send)
+         else:
+             await _reject_websocket(receive, send)
          return
  
-     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
-     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
-     if origin:
-         payload["origin"] = origin
-     await _send_ws_response(send, json_response(status=403, **payload))
+     if scope_type == "http":
+         handler = _HTTP_ROUTES.get(path)
+         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
+             handler = partial(_handle_static, raw_path=path)
+         if handler is None:
+             await _drain_request_body(receive)
+             await _send_response(send, json_response(status=404, error="not_found"))
+         else:
+             response = await handler(scope, receive)
+             await _send_response(send, response)
+         return
+ 
+     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
  
  
- def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
-     for header, value in headers:
-         if header == name:
-             try:
-                 return value.decode("latin1").strip()
-             except UnicodeDecodeError:  # pragma: no cover - defensive
-                 return None
-     return None
- 
- 
-+def _first_forwarded_value(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
-+    value = _decode_header(headers, name)
-+    if not value:
-+        return None
-+
-+    for part in value.split(","):
-+        candidate = part.strip()
-+        if candidate:
-+            return candidate
-+    return None
-+
-+
-+def _parse_forwarded_header(headers: Iterable[tuple[bytes, bytes]]) -> tuple[Optional[str], Optional[str]]:
-+    raw = _decode_header(headers, b"forwarded")
-+    if not raw:
-+        return None, None
-+
-+    first_element = raw.split(",", 1)[0].strip()
-+    if not first_element:
-+        return None, None
-+
-+    proto: Optional[str] = None
-+    host: Optional[str] = None
-+    for part in first_element.split(";"):
-+        if "=" not in part:
-+            continue
-+        key, value = part.split("=", 1)
-+        key = key.strip().lower()
-+        raw_value = value.strip()
-+        if not raw_value:
-+            continue
-+        if raw_value.startswith('"') and raw_value.endswith('"') and len(raw_value) >= 2:
-+            raw_value = raw_value[1:-1]
-+        if key == "proto" and not proto:
-+            proto = raw_value
-+        elif key == "host" and not host:
-+            host = raw_value
-+
-+    if proto is None and host is None:
-+        return None, None
-+    return proto, host
-+
-+
- def _derive_scope_origin(scope: dict) -> Optional[str]:
-     """Best-effort reconstruction of the request origin from an ASGI scope."""
- 
--    scheme = (scope.get("scheme") or "").lower()
--    if scheme in {"https", "wss"}:
-+    headers = scope.get("headers", ())
-+
-+    forwarded_proto, forwarded_host = _parse_forwarded_header(headers)
-+    fallback_proto = _first_forwarded_value(headers, b"x-forwarded-proto")
-+    forwarded_port = _first_forwarded_value(headers, b"x-forwarded-port")
-+    header_host = forwarded_host or _first_forwarded_value(headers, b"x-forwarded-host")
-+
-+    raw_scheme = (forwarded_proto or fallback_proto or scope.get("scheme") or "").lower()
-+    if raw_scheme in {"https", "wss"}:
-         scheme = "https"
-     else:
-         scheme = "http"
- 
--    host = _decode_header(scope.get("headers", ()), b"host")
--    if not host:
-+    # Security note: Forwarded/X-Forwarded headers are used only to reconstruct the effective
-+    # origin for same-origin equivalence behind proxies. They do not expand accepted origins
-+    # beyond same-origin or the explicit allow-list.
-+    host = header_host or _decode_header(headers, b"host")
-+    if host:
-+        normalized_host = host.strip()
-+        if forwarded_port and ":" not in normalized_host:
-+            port_candidate = forwarded_port.strip()
-+            if port_candidate and not _is_default_port(scheme, port_candidate):
-+                normalized_host = f"{normalized_host}:{port_candidate}"
-+    else:
-+        normalized_host = ""
-+
-+    if not normalized_host:
-         server = scope.get("server")
-         if isinstance(server, (list, tuple)) and server:
-             hostname = (server[0] or "").strip()
-             port = server[1] if len(server) > 1 else None
-             if hostname:
-+                normalized_host = hostname
-                 if port and not _is_default_port(scheme, port):
--                    host = f"{hostname}:{port}"
--                else:
--                    host = hostname
--
--    if not host:
--        return None
-+                    normalized_host = f"{hostname}:{port}"
- 
--    normalized_host = host.strip().lower()
-+    normalized_host = normalized_host.strip()
-     if not normalized_host:
-         return None
- 
--    return f"{scheme}://{normalized_host}"
-+    return f"{scheme}://{normalized_host.lower()}"
- 
- 
- def _is_default_port(scheme: str, port: Any) -> bool:
-     try:
-         value = int(port)
-     except (TypeError, ValueError):
-         return False
-     if scheme == "https":
-         return value == 443
-     if scheme == "http":
-         return value == 80
-     return False
- 
- 
- def _resolve_origin_policy() -> "_OriginPolicy":
-     raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
-     if raw is not None:
-         entries = tuple(filter(None, (_normalize_origin(item) for item in raw.split(","))))
-         return _OriginPolicy(mode="explicit", values=entries)
- 
-     return _OriginPolicy(mode="explicit", values=())
- 
- 
- def _is_origin_allowed(origin: str, policy: "_OriginPolicy") -> bool:
-     if policy.mode == "explicit":
-diff --git a/tests/test_ws_origin_forwarded.py b/tests/test_ws_origin_forwarded.py
+ async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+diff --git a/tests/test_ws_route_root_path.py b/tests/test_ws_route_root_path.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..107972e5fa38a041d828cac9a3779d7d7c7ea410
+index 0000000000000000000000000000000000000000..0abe973659dd3b49fe5faf450f51b9af6d6bc451
 --- /dev/null
-+++ b/tests/test_ws_origin_forwarded.py
-@@ -0,0 +1,87 @@
-+import pytest
++++ b/tests/test_ws_route_root_path.py
+@@ -0,0 +1,29 @@
++"""Tests for websocket route matching with varying ASGI root_path values."""
 +
-+from app.asgi_gateway import _derive_scope_origin, _validate_ws_origin
-+
-+
-+def _build_headers(pairs):
-+    return [(name.encode("latin1"), value.encode("latin1")) for name, value in pairs]
++from app.asgi_gateway import WS_ROUTE, _ws_route_matches
 +
 +
-+@pytest.mark.parametrize(
-+    "scheme, header_pairs, expected_origin, origin_header, expected_allowed",
-+    [
-+        (
-+            "http",
-+            [("host", "example.com")],
-+            "http://example.com",
-+            "http://example.com",
-+            True,
-+        ),
-+        (
-+            "http",
-+            [
-+                ("host", "chibot-ui.onrender.com"),
-+                ("x-forwarded-proto", "https"),
-+            ],
-+            "https://chibot-ui.onrender.com",
-+            "https://chibot-ui.onrender.com",
-+            True,
-+        ),
-+        (
-+            "http",
-+            [
-+                ("host", "chibot-ui.onrender.com"),
-+                ("forwarded", "proto=https; host=chibot-ui.onrender.com"),
-+            ],
-+            "https://chibot-ui.onrender.com",
-+            "https://chibot-ui.onrender.com",
-+            True,
-+        ),
-+        (
-+            "http",
-+            [
-+                ("host", "app.example.com"),
-+                ("x-forwarded-proto", "https"),
-+                ("x-forwarded-host", "app.example.com"),
-+                ("x-forwarded-port", "8443"),
-+            ],
-+            "https://app.example.com:8443",
-+            "https://app.example.com:8443",
-+            True,
-+        ),
-+        (
-+            "http",
-+            [
-+                ("host", "a.example.com"),
-+                ("x-forwarded-proto", "https"),
-+            ],
-+            "https://a.example.com",
-+            "https://b.example.com",
-+            False,
-+        ),
-+    ],
-+)
-+def test_derive_scope_origin_forwarded(monkeypatch, scheme, header_pairs, expected_origin, origin_header, expected_allowed):
-+    monkeypatch.delenv("ASKCHIP_WS_ALLOWED_ORIGINS", raising=False)
++def make_scope(*, path: str, root_path: str = "") -> dict:
++    return {"type": "websocket", "path": path, "root_path": root_path}
 +
-+    headers = _build_headers(header_pairs)
-+    scope = {
-+        "type": "websocket",
-+        "scheme": scheme,
-+        "headers": headers,
-+    }
 +
-+    derived = _derive_scope_origin(scope)
-+    assert derived == expected_origin
++def test_ws_route_matches_without_root_path():
++    scope = make_scope(path="/ws/v2/chat", root_path="")
++    assert _ws_route_matches(scope, WS_ROUTE) is True
 +
-+    headers_with_origin = list(headers)
-+    headers_with_origin.append((b"origin", origin_header.encode("latin1")))
-+    scope_with_origin = dict(scope)
-+    scope_with_origin["headers"] = headers_with_origin
 +
-+    allowed, blocked_origin = _validate_ws_origin(scope_with_origin)
-+    assert allowed is expected_allowed
-+    if expected_allowed:
-+        assert blocked_origin is None
-+    else:
-+        assert blocked_origin == origin_header
++def test_ws_route_matches_with_root_path():
++    scope = make_scope(path="/ws/v2/chat", root_path="/chibot-ui")
++    assert _ws_route_matches(scope, WS_ROUTE) is True
++
++
++def test_ws_route_matches_with_prefixed_mount():
++    scope = make_scope(path="/sub/ws/v2/chat", root_path="/prefix")
++    assert _ws_route_matches(scope, WS_ROUTE) is True
++
++
++def test_ws_route_mismatch():
++    scope = make_scope(path="/ws/v3/chat", root_path="")
++    assert _ws_route_matches(scope, WS_ROUTE) is False
++    scope = make_scope(path="/other", root_path="/prefix")
++    assert _ws_route_matches(scope, WS_ROUTE) is False
