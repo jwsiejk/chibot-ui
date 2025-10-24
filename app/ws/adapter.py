@@ -14,6 +14,7 @@ from urllib.parse import parse_qs
 
 import json
 
+from app.policy.service import PolicyService
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
 from app.security.auth import authorize
@@ -47,6 +48,7 @@ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
 EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
 
 EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
+EVT_AUTH_DISABLED = "EVT_AUTH_DISABLED"
 EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
 
 EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
@@ -81,6 +83,9 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "admin.toggle",
     "chat.user",
 }
+
+
+_policy_service = PolicyService()
 
 
 class TokenBucket:
@@ -190,6 +195,7 @@ class AdapterContext:
 
     sid: str
     headers: Dict[str, str]
+    principal: Dict[str, Any] = field(default_factory=dict)
     audio_seq: int = 0
     audio_expected_seq: int = 0
     audio_highest_seq: int = -1
@@ -280,27 +286,39 @@ class ChatV2Adapter:
                 resume_replay = [self._clone_frame(marker) for marker in resume_state.markers]
 
         headers = self._decode_headers(scope.get("headers", ()))
-        allowed, reason, _claims = authorize(
-            headers,
-            allow_query_token=True,
-            scope=scope,
-            require_token=None,
-        )
-        if not allowed:
-            detail = reason or "missing or invalid auth"
+        policy_snapshot = _policy_service.get_auth_policy()
+        auth_mode = policy_snapshot.get("ws_auth_mode", "required")
+        principal: Dict[str, Any]
+        if auth_mode == "disabled":
+            principal = {"sub": "anon"}
             await self._publish(
-                EVT_AUTH_DENIED,
+                EVT_AUTH_DISABLED,
                 sid,
-                {"reason": detail},
+                {"mode": "disabled"},
             )
-            await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
-            await self._send_json(
-                send,
-                sid,
-                {"type": "error", "error": "unauthorized", "detail": detail},
+        else:
+            allowed, reason, claims = authorize(
+                headers,
+                allow_query_token=True,
+                scope=scope,
+                require_token=True,
             )
-            await send({"type": "websocket.close", "code": 1008, "reason": "unauthorized"})
-            return
+            if not allowed:
+                detail = reason or "missing or invalid auth"
+                await self._publish(
+                    EVT_AUTH_DENIED,
+                    sid,
+                    {"reason": detail},
+                )
+                await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+                await self._send_json(
+                    send,
+                    sid,
+                    {"type": "error", "error": "unauthorized", "detail": detail},
+                )
+                await send({"type": "websocket.close", "code": 1008, "reason": "unauthorized"})
+                return
+            principal = dict(claims or {})
 
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
 
@@ -318,7 +336,7 @@ class ChatV2Adapter:
             await send({"type": "websocket.close", "code": 1008, "reason": "resume_invalid"})
             return
 
-        ctx = AdapterContext(sid=sid, headers=dict(headers))
+        ctx = AdapterContext(sid=sid, headers=dict(headers), principal=principal)
         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
         client = scope.get("client")
         ctx.ip = client[0] if isinstance(client, tuple) and client else None
