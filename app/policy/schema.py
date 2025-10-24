@@ -12,7 +12,7 @@ class AuthPolicySnapshot(TypedDict):
     ws_auth_mode: AuthPolicyMode
 
 
-DEFAULT_WS_AUTH_MODE: AuthPolicyMode = "required"
+DEFAULT_WS_AUTH_MODE: AuthPolicyMode = "disabled"
 DEFAULT_AUTH_POLICY: AuthPolicySnapshot = {"ws_auth_mode": DEFAULT_WS_AUTH_MODE}
 
 _VALID_AUTH_MODES = {"required", "disabled"}
