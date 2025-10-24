@@ -14,12 +14,15 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from app.logging_config import configure_logging
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
 from app.versioning import get_build_id, inject_static_version
 from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_runtime import TTSRuntime
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+
+configure_logging()
 
 logger = logging.getLogger(__name__)
 

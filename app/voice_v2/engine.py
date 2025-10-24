@@ -11,6 +11,7 @@ import time
 import uuid
 from typing import Any, Dict, Mapping, Optional
 
+from app.logging_config import apply_logging_policy
 from app.policy.loader import load_interaction_policy
 from app.policy.watch import compute_diff, should_reapply
 from app.telemetry import bus
@@ -494,6 +495,7 @@ class EngineV2:
         diff = compute_diff(previous, snapshot)
         self._policy_snapshot = dict(snapshot)
 
+        apply_logging_policy(snapshot)
         self._emit_policy_frame(sid, snapshot)
         self._emit_policy_applied(sid, previous, diff)
         self._emit_acwr_breadcrumb(sid, snapshot)
