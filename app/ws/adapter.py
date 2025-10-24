@@ -293,6 +293,20 @@ class ChatV2Adapter:
         _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
 
+        now_ms = int(time.time() * 1000)
+        info_frame: Dict[str, Any] = {
+            "type": "info",
+            "protocol": CHAT_V2_SUBPROTOCOL,
+            "sid": sid,
+            "ts_ms": now_ms,
+            "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
+        }
+        policy_snapshot = self._policy_snapshot()
+        if policy_snapshot:
+            info_frame["policy"] = policy_snapshot
+        await self._send_json(send, sid, info_frame)
+        _logger.info("evt=ws_info_sent sid=%s", sid)
+
         if resume_error is not None:
             await self._send_json(
                 send,
@@ -327,7 +341,7 @@ class ChatV2Adapter:
 
         if self.exporter:
             self.exporter.begin(ctx.sid)
-        await self._invoke_engine("on_open", ctx.sid, ctx.headers)
+        asyncio.create_task(self._on_open_and_greet(ctx, resume_state))
 
         for marker in resume_replay:
             await self._send_json(send, ctx.sid, marker)
@@ -1189,6 +1203,37 @@ class ChatV2Adapter:
         result = handler(*args)
         if inspect.isawaitable(result):
             await result
+
+    async def _on_open_and_greet(
+        self,
+        ctx: AdapterContext,
+        resume_state: Optional[_ResumeState],
+    ) -> None:
+        try:
+            await self._invoke_engine("on_open", ctx.sid, ctx.headers)
+            if resume_state is None:
+                await self._invoke_engine("start_greet", ctx.sid)
+        except Exception:  # pragma: no cover - defensive logging
+            _logger.exception("evt=ws_open_task_failed sid=%s", ctx.sid)
+
+    def _policy_snapshot(self) -> Dict[str, Any]:
+        engine = self.engine
+        if not engine:
+            return {}
+        try:
+            snapshot = getattr(engine, "policy_snapshot", None)
+            if callable(snapshot) and not isinstance(snapshot, dict):
+                snapshot = snapshot()
+        except Exception:  # pragma: no cover - defensive logging
+            _logger.exception("evt=ws_policy_snapshot_error")
+            return {}
+        if not isinstance(snapshot, dict):
+            return {}
+        stable: Dict[str, Any] = {}
+        for key in _POLICY_STABLE_KEYS:
+            if key in snapshot:
+                stable[key] = snapshot[key]
+        return stable
 
     @staticmethod
     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:

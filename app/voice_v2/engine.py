@@ -194,6 +194,10 @@ class EngineV2:
         self._emit_info_frame(sid)
         self._publish_chat_history(sid)
         self._set_state(sid, READY, reason="ws_open")
+
+    async def start_greet(self, sid: str) -> None:
+        """Begin the greeting flow asynchronously."""
+        await asyncio.sleep(0)
         self._maybe_emit_greeting(sid)
         self._maybe_emit_connect_suggestions(sid)
 

@@ -1,374 +1,515 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index f5198bb37b25e31611c2742921e07d643bced191..ecc1df251e8ed139d12a5dfa5074b65d51dacbe3 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -1,48 +1,51 @@
- """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
- from __future__ import annotations
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index d3b7255b9f8d7e0546706bf070e6499ac219c43f..ecaf376e36d2e8f3b45219be6c652143fd3ef14e 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,85 +1,102 @@
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 15000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
++  const INFO_DEADLINE_MS = 20000;
  
- import hashlib
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Optional
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading WSClient");
+   }
+   const getAudioPlayer = () => window.AudioPlayer;
  
-+from app.logging_config import configure_logging
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import FileExporter
- from app.versioning import get_build_id, inject_static_version
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
++  let infoWatchdogTimerId = null;
+   let lastPingAt = null;
+   let transportFactory = (url, protocol = SUBPROTOCOL) => new WebSocket(url, protocol);
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
+   let autoResumeAttemptToken = null;
  
-+configure_logging()
-+
- logger = logging.getLogger(__name__)
+   function getResumeState() {
+     const state = AppState.getState();
+     const resume = state && typeof state.resume === "object" ? state.resume : null;
+     if (!resume) return null;
+     const token = typeof resume.token === "string" ? resume.token : null;
+     const ttlMs = Number.isFinite(resume.ttlMs) ? resume.ttlMs : null;
+     const expiresAt = Number.isFinite(resume.expiresAt) ? resume.expiresAt : null;
+     if (!token || !ttlMs || !expiresAt) return null;
+     return { token, ttlMs, expiresAt };
+   }
  
+   function assignResume(token, ttlMs) {
+     if (typeof AppState.setResume === "function") {
+       AppState.setResume(token, ttlMs);
+     }
+     autoResumeAttemptToken = null;
+   }
  
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
+   function clearResumeState() {
+     if (typeof AppState.clearResume === "function") {
+       AppState.clearResume();
+     }
+     autoResumeAttemptToken = null;
+   }
  
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
+   function updateState(patch) {
+     AppState.setState(patch);
+   }
  
+   function computeUrl(resumeToken) {
+     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+     const base = `${protocol}//${window.location.host}/ws/v2/chat`;
+     const params = new URLSearchParams();
+     if (typeof resumeToken === "string" && resumeToken.trim()) {
+       params.set("resume", resumeToken.trim());
+     }
+     const query = params.toString();
+     return query ? `${base}?${query}` : base;
+   }
  
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
++  function clearInfoWatchdog() {
++    if (infoWatchdogTimerId) {
++      clearTimeout(infoWatchdogTimerId);
++      infoWatchdogTimerId = null;
++    }
++  }
++
++  function startInfoWatchdog() {
++    clearInfoWatchdog();
++    infoWatchdogTimerId = setTimeout(() => {
++      infoWatchdogTimerId = null;
++      console.warn("WS info frame not received within deadline");
++    }, INFO_DEADLINE_MS);
++  }
++
+   function clearHeartbeat() {
+     if (heartbeatTimerId) {
+       clearInterval(heartbeatTimerId);
+       heartbeatTimerId = null;
+     }
+     updateState({ heartbeatTimerId: null, lastPingAt: null });
+   }
  
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
+   function clearRateLimitRetryTimer() {
+     if (rateLimitRetryTimerId) {
+       clearTimeout(rateLimitRetryTimerId);
+       rateLimitRetryTimerId = null;
+     }
+   }
  
+   function resetRateLimitRecovery() {
+     clearRateLimitRetryTimer();
+     rateLimitRetryCount = 0;
+     if (window.WSErrorUI && typeof window.WSErrorUI.clearRateLimitToast === "function") {
+       try {
+         window.WSErrorUI.clearRateLimitToast();
+       } catch (err) {
+         console.warn("Failed to clear rate limit toast", err);
+       }
+     }
+@@ -215,50 +232,51 @@
+       if (typeof source.mode === "string") {
+         policy.mode = source.mode;
+       }
+       if (typeof source.allow_auto_vad === "boolean") {
+         policy.allow_auto_vad = source.allow_auto_vad;
+       }
+       if (typeof source.barge_in_enabled === "boolean") {
+         policy.barge_in_enabled = source.barge_in_enabled;
+       }
+       if (typeof source.ws_auth_mode === "string" && source.ws_auth_mode.trim()) {
+         policy.ws_auth_mode = source.ws_auth_mode.trim();
+       }
+     }
+     safe.policy = policy;
+     return safe;
+   }
  
- WS_ROUTE = "/ws/v2/chat"
- HEALTH_ROUTE = "/api/v1/health"
-diff --git a/app/logging_config.py b/app/logging_config.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..c028af770838a364b53d0c8d341646f73b2cd4b3
---- /dev/null
-+++ b/app/logging_config.py
-@@ -0,0 +1,122 @@
-+"""Logging configuration helpers for the AskChip runtime."""
-+
-+from __future__ import annotations
-+
-+import logging
-+from typing import Iterable, Mapping, MutableSet
-+
-+from app.policy.loader import InteractionPolicySnapshot, load_interaction_policy
-+
-+_LEVEL_ALIASES = {
-+    "CRITICAL": logging.CRITICAL,
-+    "ERROR": logging.ERROR,
-+    "WARNING": logging.WARNING,
-+    "WARN": logging.WARNING,
-+    "INFO": logging.INFO,
-+    "DEBUG": logging.DEBUG,
-+    "NOTSET": logging.NOTSET,
-+}
-+
-+_LOG_CONFIGURED = False
-+_MANAGED_LOGGERS: MutableSet[logging.Logger] = set()
-+
-+
-+def _coerce_level(value: object, fallback: int) -> int:
-+    """Translate a level name or number to a logging level constant."""
-+
-+    if value is None:
-+        return fallback
-+
-+    if isinstance(value, (int, float)):
-+        try:
-+            return int(value)
-+        except (TypeError, ValueError):
-+            return fallback
-+
-+    candidate = str(value).strip()
-+    if not candidate:
-+        return fallback
-+
-+    upper = candidate.upper()
-+    if upper in _LEVEL_ALIASES:
-+        return _LEVEL_ALIASES[upper]
-+
-+    try:
-+        numeric = int(candidate)
-+    except ValueError:
-+        return fallback
-+
-+    return numeric
-+
-+
-+def _set_level(logger: logging.Logger, level: int) -> None:
-+    """Apply the resolved level to a logger and its handlers."""
-+
-+    logger.setLevel(level)
-+    for handler in logger.handlers:
-+        handler.setLevel(level)
-+
-+
-+def _apply_level(level: int) -> None:
-+    if not _MANAGED_LOGGERS:
-+        _MANAGED_LOGGERS.add(logging.getLogger())
-+
-+    for logger in _MANAGED_LOGGERS:
-+        _set_level(logger, level)
-+
-+
-+def _extract_telemetry(policy: Mapping[str, object] | None) -> Mapping[str, object]:
-+    if not isinstance(policy, Mapping):
-+        return {}
-+
-+    telemetry = policy.get("telemetry") if "telemetry" in policy else None
-+    if isinstance(telemetry, Mapping):
-+        return telemetry
-+
-+    if any(key in policy for key in ("enabled", "level", "categories", "sampling", "redaction")):
-+        return policy
-+
-+    return {}
-+
-+
-+def apply_logging_policy(policy: InteractionPolicySnapshot | Mapping[str, object] | None) -> None:
-+    """Adjust managed loggers according to the telemetry policy block."""
-+
-+    telemetry = _extract_telemetry(policy)
-+
-+    if not telemetry:
-+        return
-+
-+    enabled = bool(telemetry.get("enabled", True))
-+    fallback_level = logging.WARNING if not enabled else logging.INFO
-+    desired_level = _coerce_level(telemetry.get("level") if enabled else telemetry.get("fallback_level"), fallback_level)
-+    _apply_level(desired_level)
-+
-+
-+def configure_logging(*, extra_loggers: Iterable[str] | None = None) -> None:
-+    """Ensure Python logging follows the interaction policy telemetry settings."""
-+
-+    global _LOG_CONFIGURED
-+    if _LOG_CONFIGURED:
-+        return
-+
-+    root = logging.getLogger()
-+    if not root.handlers:
-+        logging.basicConfig(level=logging.INFO)
-+    _MANAGED_LOGGERS.add(root)
-+
-+    if extra_loggers is None:
-+        extra_loggers = ("uvicorn", "uvicorn.error", "uvicorn.access")
-+
-+    for name in extra_loggers:
-+        logger = logging.getLogger(name)
-+        _MANAGED_LOGGERS.add(logger)
-+
-+    policy = load_interaction_policy()
-+    apply_logging_policy(policy)
-+
-+    _LOG_CONFIGURED = True
-+
-+
-+__all__ = ["apply_logging_policy", "configure_logging"]
-+
+   function handleInfoFrame(frame) {
+     const meta = frame && frame.meta;
+     if (!meta || typeof meta.sid !== "string") {
+       console.error("Invalid info frame", frame);
+       close("bad_info_frame");
+       return;
+     }
+     expectInfoFrame = false;
++    clearInfoWatchdog();
+     resetRateLimitRecovery();
+     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
+     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
+     if (resumeToken && resumeTtlMs) {
+       assignResume(resumeToken, resumeTtlMs);
+     } else {
+       clearResumeState();
+     }
+     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
+     const audioPlayer = getAudioPlayer();
+     if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+       audioPlayer.setDescriptor(descriptor);
+     }
+     updateState({
+       connectionState: "connected",
+       sid: meta.sid,
+       infoFrame: frame,
+       resumeError: null
+     });
+     startHeartbeat();
+   }
+ 
+   function handlePongFrame() {
+     if (typeof lastPingAt === "number") {
+       const latency = Math.max(0, Date.now() - lastPingAt);
+@@ -400,106 +418,109 @@
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(data);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+       return;
+     }
+     console.warn("Unknown WS frame type", data);
+   }
+ 
+   function attachSocket(ws) {
+     ws.__intentionalClose = false;
+     const handlers = {
+       open: () => {
+         updateState({ websocket: ws });
+       },
+       message: parseFrame,
+       error: (event) => {
+         console.error("WebSocket error", event);
+         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
+       },
+       close: (event) => {
+         const expected = ws.__intentionalClose === true;
+         if (socket === ws) {
+           socket = null;
+           expectInfoFrame = true;
++          clearInfoWatchdog();
+         }
+         clearHeartbeat();
+         updateState({ websocket: null });
+         let resumed = false;
+         if (!expected) {
+           resumed = attemptAutoResume();
+         }
+         if (!resumed) {
+           updateState({ connectionState: "disconnected" });
+         }
+         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
+       }
+     };
+     ws.addEventListener("open", handlers.open);
+     ws.addEventListener("message", handlers.message);
+     ws.addEventListener("error", handlers.error);
+     ws.addEventListener("close", handlers.close);
+     ws.__handlers = handlers;
+   }
+ 
+   function detachSocket(ws) {
+     const handlers = ws && ws.__handlers;
+     if (!handlers) return;
+     ws.removeEventListener("open", handlers.open);
+     ws.removeEventListener("message", handlers.message);
+     ws.removeEventListener("error", handlers.error);
+     ws.removeEventListener("close", handlers.close);
+     delete ws.__handlers;
+     delete ws.__intentionalClose;
+   }
+ 
+   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
+     if (!ws) return;
+     detachSocket(ws);
+     ws.__intentionalClose = true;
+     try {
+       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+         ws.close(1000, reason);
+       }
+     } catch (err) {
+       console.warn("WSClient cleanup close error", err);
+     }
+     if (socket === ws) {
+       socket = null;
+       expectInfoFrame = true;
++      clearInfoWatchdog();
+     }
+   }
+ 
+   function open(options = {}) {
+     const { resumeToken = null, skipRateLimitCancel = false } = options;
+     const state = AppState.getState();
+     const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
+     if (socket) {
+       cleanupSocket(socket, "superseded");
+     }
+     expectInfoFrame = true;
++    startInfoWatchdog();
+     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+         window.WSErrorUI.cancelRateLimitCountdown("manual");
+       } catch (err) {
+         console.warn("Failed to cancel rate limit countdown", err);
+       }
+     }
+     if (!skipRateLimitCancel) {
+       clearRateLimitRetryTimer();
+       rateLimitRetryCount = 0;
+     }
+     const url = computeUrl(resumeTokenValue);
+     console.log("WS opening", { url, subprotocol: SUBPROTOCOL });
+     const ws = transportFactory(url, SUBPROTOCOL);
+     ws.onopen = () => {
+       // Lightweight breadcrumb; keep as console.log
+       console.log("WebSocket open", { url, protocol: SUBPROTOCOL });
+     };
+ 
+     ws.onerror = (e) => {
+       console.error("WebSocket error", e, { readyState: ws.readyState });
+     };
+ 
+     ws.onclose = (e) => {
+       console.error("WebSocket closed", {
 diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index e2e0c5eb338fb1c15f784ca4bc0730d3d05f2bef..185bc6976e952d727986d1d8f6e72bf557aa46b1 100644
+index 185bc6976e952d727986d1d8f6e72bf557aa46b1..767a506712f6323ad91db876de4f7356469a7476 100644
 --- a/app/voice_v2/engine.py
 +++ b/app/voice_v2/engine.py
-@@ -1,38 +1,39 @@
- """Minimal Engine v2 shell with telemetry hooks and session exporting."""
- from __future__ import annotations
+@@ -172,50 +172,54 @@ class EngineV2:
+             self._ws_send_subscription = bus.subscribe(
+                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
+             )
  
- import asyncio
- from dataclasses import dataclass
- import json
- import logging
- import re
- import threading
- import time
- import uuid
- from typing import Any, Dict, Mapping, Optional
+     @property
+     def policy_snapshot(self) -> Dict[str, Any] | None:
+         return self._policy_snapshot
  
-+from app.logging_config import apply_logging_policy
- from app.policy.loader import load_interaction_policy
- from app.policy.watch import compute_diff, should_reapply
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ACWR_RECOMPUTE,
-     EVT_CHAT_USER,
-     EVT_ASR_FINAL,
-     EVT_NLG,
-     EVT_NLU,
-     EVT_DIALOG_PLAN,
-     EVT_POLICY_APPLIED,
-     EVT_TTS_END,
-     EVT_TTS_START,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- from app.voice_v2.nlu import NLUAdapter
- from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
- from app.voice_v2.llm import LLMAdapter
- from app.voice_v2.gate import GateController
-@@ -472,50 +473,51 @@ class EngineV2:
-         self._teardown_tts(
-             sid,
-             utt_id,
-             reason=reason,
-             post_hold_ms=0,
-             transition_to_ready=False,
-         )
-         return True
+     @policy_snapshot.setter
+     def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
+         self._policy_snapshot = dict(snapshot) if snapshot is not None else None
  
-     def reapply_policy(self, overrides: Dict[str, Any] | None = None) -> bool:
-         """Reload and re-emit the interaction policy when it changes."""
+     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
+         """Capture a successful WebSocket upgrade."""
+         meta = {"headers": dict(headers), "dir": "in"}
+         event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
+         self._publish(event)
  
-         if not self._last_sid:
-             return False
+         self._last_sid = sid
+         self._policy_snapshot = None
+         self._ensure_session(sid)
+         self.reapply_policy()
+         self._emit_info_frame(sid)
+         self._publish_chat_history(sid)
+         self._set_state(sid, READY, reason="ws_open")
++
++    async def start_greet(self, sid: str) -> None:
++        """Begin the greeting flow asynchronously."""
++        await asyncio.sleep(0)
+         self._maybe_emit_greeting(sid)
+         self._maybe_emit_connect_suggestions(sid)
  
-         sid = self._last_sid
-         snapshot = load_interaction_policy(overrides)
-         previous = self._policy_snapshot
- 
-         if not should_reapply(previous, snapshot):
-             return False
- 
-         diff = compute_diff(previous, snapshot)
-         self._policy_snapshot = dict(snapshot)
- 
-+        apply_logging_policy(snapshot)
-         self._emit_policy_frame(sid, snapshot)
-         self._emit_policy_applied(sid, previous, diff)
-         self._emit_acwr_breadcrumb(sid, snapshot)
-         return True
- 
-     def _envelope(self, sid: str, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-         envelope = _Envelope(event_type, sid, dict(payload))
-         return envelope.to_dict()
- 
-     def _publish(self, event: Dict[str, Any]) -> None:
-         self._bus.publish(dict(event))
- 
-     def _handle_outbound_chat_frame(self, event: Dict[str, Any]) -> None:
-         if event.get("type") != EVT_WS_JSON_SEND:
-             return
-         sid = event.get("sid")
-         if not isinstance(sid, str) or not sid:
-             return
-         frame: Mapping[str, Any] | None = None
-         raw_frame = event.get("frame")
-         if isinstance(raw_frame, Mapping):
-             frame = raw_frame
+     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
+         """Capture a validated JSON frame from the adapter."""
+         turn_id: Optional[Any] = None
+         meta: Dict[str, Any] = {"dir": "in"}
+         frame_type: Optional[str] = None
+         if isinstance(frame, Mapping):
+             frame_type = frame.get("type")
+             if isinstance(frame_type, str):
+                 meta["frame_type"] = frame_type
+             turn_id = frame.get("turn_id")
          else:
-             payload = event.get("payload")
-             if isinstance(payload, Mapping):
-diff --git a/tests/test_logging_config.py b/tests/test_logging_config.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..b99ec9aff87c8e26e6d9a6a2e1f1da9405d9a2ef
---- /dev/null
-+++ b/tests/test_logging_config.py
-@@ -0,0 +1,88 @@
-+"""Tests for the logging configuration helpers."""
+             frame = {}
+         try:
+             serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         except (TypeError, ValueError):
+             serialized = "{}"
+         meta["byte_count"] = len(serialized.encode("utf-8"))
+         payload: Dict[str, Any] = {"meta": meta}
+         if turn_id is not None:
+             payload["turn_id"] = turn_id
+         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
+         self._publish(event)
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index bcaef6a2fcec70c205c2e5a57d323bed94ef016b..efe8eb1dbf8d86b63219ade557a4b251ea358123 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -271,85 +271,99 @@ class ChatV2Adapter:
+             _logger.warning("evt=ws_reject_subprotocol reason=missing_or_mismatch need='chat.v2'")
+             await self._reject_subprotocol(send)
+             return
+ 
+         self._purge_expired_resume_tokens()
+ 
+         resume_token_param, resume_error = self._extract_resume_token(scope)
+         resume_state: Optional[_ResumeState] = None
+         resume_replay: list[Dict[str, Any]] = []
+ 
+         sid = uuid.uuid4().hex
+         if resume_error is None and resume_token_param:
+             resume_state = self._consume_resume_token(resume_token_param)
+             if resume_state is None:
+                 resume_error = "resume_invalid"
+             else:
+                 sid = resume_state.sid
+                 resume_replay = [self._clone_frame(marker) for marker in resume_state.markers]
+ 
+         headers = self._decode_headers(scope.get("headers", ()))
+         principal: Dict[str, Any] = {"sub": "anon"}
+ 
+         _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
+         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+ 
++        now_ms = int(time.time() * 1000)
++        info_frame: Dict[str, Any] = {
++            "type": "info",
++            "protocol": CHAT_V2_SUBPROTOCOL,
++            "sid": sid,
++            "ts_ms": now_ms,
++            "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
++        }
++        policy_snapshot = self._policy_snapshot()
++        if policy_snapshot:
++            info_frame["policy"] = policy_snapshot
++        await self._send_json(send, sid, info_frame)
++        _logger.info("evt=ws_info_sent sid=%s", sid)
 +
-+from __future__ import annotations
+         if resume_error is not None:
+             await self._send_json(
+                 send,
+                 sid,
+                 {
+                     "type": "error",
+                     "code": "resume_invalid",
+                     "detail": "Resume token expired or invalid",
+                     "retryable": False,
+                 },
+             )
+             await send({"type": "websocket.close", "code": 1008, "reason": "resume_invalid"})
+             return
+ 
+         ctx = AdapterContext(sid=sid, headers=dict(headers), principal=principal)
+         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+         client = scope.get("client")
+         ctx.ip = client[0] if isinstance(client, tuple) and client else None
+         if ctx.ip:
+             ctx.ip_bucket = self._ip_buckets.setdefault(
+                 ctx.ip,
+                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+             )
+ 
+         self._contexts[ctx.sid] = ctx
+         self._start_asr_ready_tracker(ctx)
+         self._start_outbound_bridge(ctx, send)
+         self._start_server_keepalive(ctx, send)
+ 
+         if resume_replay:
+             ctx.recent_markers = [self._clone_frame(marker) for marker in resume_replay]
+ 
+         if self.exporter:
+             self.exporter.begin(ctx.sid)
+-        await self._invoke_engine("on_open", ctx.sid, ctx.headers)
++        asyncio.create_task(self._on_open_and_greet(ctx, resume_state))
+ 
+         for marker in resume_replay:
+             await self._send_json(send, ctx.sid, marker)
+ 
+         close_code = 1000
+         close_reason: Optional[str] = None
+ 
+         try:
+             while True:
+                 message = await receive()
+                 msg_type = message.get("type")
+ 
+                 if msg_type == "websocket.receive":
+                     if message.get("text") is not None:
+                         result = await self._handle_text(message["text"], ctx, send)
+                         if not result.should_continue:
+                             close_code = result.close_code or 1000
+                             close_reason = result.close_reason
+                             await send(
+                                 {
+                                     "type": "websocket.close",
+                                     "code": close_code,
+                                     "reason": close_reason,
+                                 }
+                             )
+@@ -1168,50 +1182,81 @@ class ChatV2Adapter:
+                 raise TypeError("queued must be an integer") from exc
+ 
+         await self._update_backpressure(ctx, max(0, queued))
+ 
+     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
+         event = {
+             "schema_version": "1",
+             "type": event_type,
+             "sid": sid,
+             "who": "server",
+             "source": "ws_server",
+             "meta": dict(meta),
+         }
+         bus.publish(event)
+ 
+     async def _invoke_engine(self, hook: str, *args: Any) -> None:
+         if not self.engine:
+             return
+         handler = getattr(self.engine, hook, None)
+         if handler is None:
+             return
+         result = handler(*args)
+         if inspect.isawaitable(result):
+             await result
+ 
++    async def _on_open_and_greet(
++        self,
++        ctx: AdapterContext,
++        resume_state: Optional[_ResumeState],
++    ) -> None:
++        try:
++            await self._invoke_engine("on_open", ctx.sid, ctx.headers)
++            if resume_state is None:
++                await self._invoke_engine("start_greet", ctx.sid)
++        except Exception:  # pragma: no cover - defensive logging
++            _logger.exception("evt=ws_open_task_failed sid=%s", ctx.sid)
 +
-+import logging
-+import unittest
-+from unittest import mock
++    def _policy_snapshot(self) -> Dict[str, Any]:
++        engine = self.engine
++        if not engine:
++            return {}
++        try:
++            snapshot = getattr(engine, "policy_snapshot", None)
++            if callable(snapshot) and not isinstance(snapshot, dict):
++                snapshot = snapshot()
++        except Exception:  # pragma: no cover - defensive logging
++            _logger.exception("evt=ws_policy_snapshot_error")
++            return {}
++        if not isinstance(snapshot, dict):
++            return {}
++        stable: Dict[str, Any] = {}
++        for key in _POLICY_STABLE_KEYS:
++            if key in snapshot:
++                stable[key] = snapshot[key]
++        return stable
 +
-+import app.logging_config as logging_config
-+
-+
-+class LoggingConfigurationTests(unittest.TestCase):
-+    """Validate log level defaults and policy-driven overrides."""
-+
-+    def tearDown(self) -> None:
-+        logging_config._LOG_CONFIGURED = False  # type: ignore[attr-defined]
-+        logging_config._MANAGED_LOGGERS.clear()  # type: ignore[attr-defined]
-+
-+    def _patch_loggers(self):
-+        root_logger = mock.Mock(spec=logging.Logger)
-+        root_logger.handlers = []
-+
-+        named_loggers: dict[str, mock.Mock] = {}
-+
-+        def _get_logger(name: str | None = None):
-+            if name is None:
-+                return root_logger
-+            logger = named_loggers.get(name)
-+            if logger is None:
-+                logger = mock.Mock(spec=logging.Logger)
-+                logger.handlers = []
-+                named_loggers[name] = logger
-+            return logger
-+
-+        return root_logger, named_loggers, mock.patch("logging.getLogger", side_effect=_get_logger)
-+
-+    def _patch_policy(self, telemetry: dict[str, object]):
-+        snapshot = {"telemetry": telemetry}
-+        return mock.patch("app.logging_config.load_interaction_policy", return_value=snapshot)
-+
-+    def test_policy_defaults_drive_debug_logging(self) -> None:
-+        root_logger, named_loggers, patch_logger = self._patch_loggers()
-+
-+        telemetry = {"enabled": True, "level": "debug"}
-+
-+        with patch_logger, self._patch_policy(telemetry), mock.patch("logging.basicConfig") as basic_config:
-+            logging_config.configure_logging()
-+
-+        basic_config.assert_called_once_with(level=logging.INFO)
-+        root_logger.setLevel.assert_called_once_with(logging.DEBUG)
-+        self.assertIn("uvicorn", named_loggers)
-+        named_loggers["uvicorn"].setLevel.assert_called_once_with(logging.DEBUG)
-+
-+    def test_policy_disable_sets_warning_level(self) -> None:
-+        root_logger, named_loggers, patch_logger = self._patch_loggers()
-+
-+        telemetry = {"enabled": False}
-+
-+        with patch_logger, self._patch_policy(telemetry), mock.patch("logging.basicConfig"):
-+            logging_config.configure_logging()
-+
-+        root_logger.setLevel.assert_called_once_with(logging.WARNING)
-+        self.assertIn("uvicorn.error", named_loggers)
-+        named_loggers["uvicorn.error"].setLevel.assert_called_once_with(logging.WARNING)
-+
-+    def test_apply_logging_policy_updates_managed_loggers(self) -> None:
-+        root_logger, named_loggers, patch_logger = self._patch_loggers()
-+
-+        telemetry = {"enabled": True, "level": "info"}
-+
-+        with patch_logger, self._patch_policy(telemetry), mock.patch("logging.basicConfig"):
-+            logging_config.configure_logging()
-+
-+        root_logger.reset_mock()
-+        for logger in named_loggers.values():
-+            logger.reset_mock()
-+
-+        override = {"telemetry": {"enabled": True, "level": "error"}}
-+        logging_config.apply_logging_policy(override)
-+
-+        root_logger.setLevel.assert_called_once_with(logging.ERROR)
-+        for logger in named_loggers.values():
-+            logger.setLevel.assert_called_once_with(logging.ERROR)
-+
-+
-+if __name__ == "__main__":  # pragma: no cover
-+    unittest.main()
-+
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
+     def _purge_expired_resume_tokens(self) -> None:
+         now = self._now_ms()
+         for token, state in list(self._resume_tokens.items()):
+             if state.expiry_ms < now:
+                 self._resume_tokens.pop(token, None)
+ 
+     def _extract_resume_token(self, scope: dict) -> tuple[Optional[str], Optional[str]]:
+         raw_query = scope.get("query_string", b"")
+         if not raw_query:
+             return None, None
+ 
+         if isinstance(raw_query, bytes):
+             try:
+                 query = raw_query.decode("utf-8")
+             except UnicodeDecodeError:
+                 return None, "resume_invalid"
+         else:
+             query = str(raw_query)

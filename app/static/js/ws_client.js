@@ -2,6 +2,7 @@
   const HEARTBEAT_INTERVAL_MS = 15000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";
   const SUBPROTOCOL = "chat.v2";
+  const INFO_DEADLINE_MS = 20000;
 
   const AppState = window.AppState;
   if (!AppState) {
@@ -12,6 +13,7 @@
   let socket = null;
   let heartbeatTimerId = null;
   let expectInfoFrame = true;
+  let infoWatchdogTimerId = null;
   let lastPingAt = null;
   let transportFactory = (url, protocol = SUBPROTOCOL) => new WebSocket(url, protocol);
   let rateLimitRetryTimerId = null;
@@ -56,6 +58,21 @@
     }
     const query = params.toString();
     return query ? `${base}?${query}` : base;
+  }
+
+  function clearInfoWatchdog() {
+    if (infoWatchdogTimerId) {
+      clearTimeout(infoWatchdogTimerId);
+      infoWatchdogTimerId = null;
+    }
+  }
+
+  function startInfoWatchdog() {
+    clearInfoWatchdog();
+    infoWatchdogTimerId = setTimeout(() => {
+      infoWatchdogTimerId = null;
+      console.warn("WS info frame not received within deadline");
+    }, INFO_DEADLINE_MS);
   }
 
   function clearHeartbeat() {
@@ -237,6 +254,7 @@
       return;
     }
     expectInfoFrame = false;
+    clearInfoWatchdog();
     resetRateLimitRecovery();
     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
@@ -422,6 +440,7 @@
         if (socket === ws) {
           socket = null;
           expectInfoFrame = true;
+          clearInfoWatchdog();
         }
         clearHeartbeat();
         updateState({ websocket: null });
@@ -467,6 +486,7 @@
     if (socket === ws) {
       socket = null;
       expectInfoFrame = true;
+      clearInfoWatchdog();
     }
   }
 
@@ -478,6 +498,7 @@
       cleanupSocket(socket, "superseded");
     }
     expectInfoFrame = true;
+    startInfoWatchdog();
     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
       try {
         window.WSErrorUI.cancelRateLimitCountdown("manual");
