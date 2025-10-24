@@ -315,6 +315,12 @@
       return;
     }
 
+    if (frame.type === "policy.interaction") {
+      const sanitized = sanitizePolicyFrame(frame);
+      dispatchFrame(sanitized);
+      return;
+    }
+
     if (expectInfoFrame) {
       if (frame.type === "chat.history") {
         handleChatHistoryFrame(frame);
@@ -345,11 +351,6 @@
       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
         audioPlayer.handleTtsEnd(frame);
       }
-    } else if (frame.type === "policy.interaction") {
-      const sanitized = sanitizePolicyFrame(frame);
-      const policy = sanitized && sanitized.policy;
-      dispatchFrame(sanitized);
-      return;
     } else if (frame.type === "asr.partial") {
       const view = window.TranscriptView;
       if (view && typeof view.handlePartial === "function") {

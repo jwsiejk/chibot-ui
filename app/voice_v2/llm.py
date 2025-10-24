@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import time
@@ -205,11 +206,9 @@ class LLMAdapter:
         except RuntimeError:
             result = asyncio.run(_execute())
         else:
-            loop = asyncio.new_event_loop()
-            try:
-                result = loop.run_until_complete(_execute())
-            finally:
-                loop.close()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, _execute())
+                result = future.result()
 
         return result if isinstance(result, str) else str(result)
 
