@@ -1,337 +1,460 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index e6d10b9eced2adedc544da301feb5f3330bf0691..8415daf9f2aff5bb1e0c6c8f0f8437f490985056 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -492,60 +492,127 @@
-           audioPlayer.interrupt();
-         }
-         return;
-       }
-     }
- 
-     function handleGlobalKeyUp(event) {
-       const { key, code, ctrlKey, metaKey, altKey } = event;
-       if ((key === ' ' || key === 'Spacebar' || code === 'Space') && !(ctrlKey || metaKey || altKey)) {
-         if (!pttActive) {
-           return;
-         }
-         event.preventDefault();
-         setPttActive(false);
-       }
-     }
- 
-     window.addEventListener('keydown', handleGlobalKeyDown, true);
-     window.addEventListener('keyup', handleGlobalKeyUp, true);
-     window.addEventListener('blur', () => {
-       if (pttActive) {
-         setPttActive(false);
-       }
-     });
- 
--    const accessTokenParam = urlParams.get('access_token') || urlParams.get('token');
--    const defaultToken = (window.DEMO_ACCESS_TOKEN || accessTokenParam || '').trim();
-+    const ACCESS_TOKEN_STORAGE_KEY = 'access_token';
- 
--    function resolveAccessToken() {
--      return defaultToken || 'demo-token';
-+    function normalizeAccessToken(raw) {
-+      if (typeof raw !== 'string') {
-+        return null;
-+      }
-+      const trimmed = raw.trim();
-+      if (!trimmed) {
-+        return null;
-+      }
-+      if (/^Bearer\s+/i.test(trimmed)) {
-+        const withoutPrefix = trimmed.replace(/^Bearer\s+/i, '').trim();
-+        return withoutPrefix || null;
-+      }
-+      return trimmed;
-+    }
+diff --git a/app/db/admin_settings.py b/app/db/admin_settings.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..348f35e79a91b0742790a64053f1e66dd7fa9a5b
+--- /dev/null
++++ b/app/db/admin_settings.py
+@@ -0,0 +1,201 @@
++"""Persistence helpers for the ``admin_settings`` table."""
++from __future__ import annotations
 +
-+    function storeAccessToken(token) {
-+      if (!token) {
-+        return;
-+      }
-+      try {
-+        const storage = window.sessionStorage;
-+        if (!storage) {
-+          return;
-+        }
-+        storage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
-+      } catch (err) {
-+        console.warn('Failed to persist access token to sessionStorage', err);
-+      }
-+    }
++import logging
++import threading
++from typing import Callable, Optional
 +
-+    function getAccessToken() {
-+      try {
-+        const storage = window.sessionStorage;
-+        if (!storage) {
-+          return null;
-+        }
-+        const stored = storage.getItem(ACCESS_TOKEN_STORAGE_KEY);
-+        if (typeof stored !== 'string') {
-+          return null;
-+        }
-+        const normalized = normalizeAccessToken(stored);
-+        if (!normalized) {
-+          return null;
-+        }
-+        if (normalized !== stored) {
-+          try {
-+            storage.setItem(ACCESS_TOKEN_STORAGE_KEY, normalized);
-+          } catch (err) {
-+            console.warn('Failed to normalize stored access token', err);
-+          }
-+        }
-+        return normalized;
-+      } catch (err) {
-+        console.warn('Failed to read access token from sessionStorage', err);
-+        return null;
-+      }
-     }
- 
-+    (function persistAccessTokenFromUrl() {
-+      const candidates = [
-+        urlParams.get('access_token'),
-+        urlParams.get('token')
-+      ];
-+      for (const candidate of candidates) {
-+        const normalized = normalizeAccessToken(candidate);
-+        if (normalized) {
-+          storeAccessToken(normalized);
-+          break;
-+        }
-+      }
-+    })();
++from app.config import get_env
 +
-     startBtn.addEventListener('click', async () => {
-       startBtn.disabled = true;
--      const accessToken = resolveAccessToken();
-+      const accessToken = getAccessToken();
-       const state = AppState.getState();
-       const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
-       let resumeToken = null;
-       if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
-         resumeToken = resumeState.token;
-       }
-       try {
-         const options = resumeToken ? { resumeToken } : undefined;
-         AppState.setState({ resumeError: null });
-         if (options) {
-           WSClient.open(accessToken, options);
-         } else {
-           WSClient.open(accessToken);
-         }
-       } catch (err) {
-         console.error('Failed to open WS client', err);
-         AppState.setState({ connectionState: 'disconnected' });
-         startBtn.disabled = false;
-         endBtn.disabled = true;
-       }
-     });
- 
-     endBtn.addEventListener('click', () => {
-       WSClient.close('user_requested');
-       if (typeof AppState.clearResume === 'function') {
-@@ -658,51 +725,51 @@
- 
-     function updateResumeBanner(state) {
-       const hasCountdown = state.connectionState === 'resuming' && state.resume && Number.isFinite(state.resume.expiresAt);
-       if (hasCountdown) {
-         showResumeCountdown();
-         return;
-       }
-       if (state.resumeError === 'invalid') {
-         showResumeError();
-         return;
-       }
-       hideResumeBanner();
-     }
- 
-     resumeAction.addEventListener('click', () => {
-       resumeAction.disabled = true;
-       try {
-         WSClient.close('user_restart');
-       } catch (err) {
-         console.warn('Resume banner close failed', err);
-       }
-       if (typeof AppState.clearResume === 'function') {
-         AppState.clearResume();
-       }
-       AppState.setState({ resumeError: null });
--      const accessToken = resolveAccessToken();
-+      const accessToken = getAccessToken();
-       try {
-         WSClient.open(accessToken);
-       } catch (err) {
-         console.error('Failed to start new session', err);
-         AppState.setState({ connectionState: 'disconnected' });
-       } finally {
-         resumeAction.disabled = false;
-       }
-     });
- 
-     // --- Waveform visual inside the Chip window ---
-     const Waveform = (() => {
-       const canvas = document.getElementById('waveCanvas');
-       const ctx = canvas.getContext('2d', {alpha:false});
-       let raf = 0, analyser = null, source = null, audioCtx = null, dataArray = null;
-       let synthMode = true, t = 0;
- 
-       function resizeCanvas(){
-         const dpr = Math.max(1, window.devicePixelRatio || 1);
-         canvas.width = canvas.clientWidth * dpr;
-         canvas.height = canvas.clientHeight * dpr;
-         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-       }
-       window.addEventListener('resize', resizeCanvas, {passive:true});
-       resizeCanvas();
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 470ab8ba54434a2cbeee4fb0fd759d07e00d5ead..e9422df21d1361ed7e2fe7afbb4172b11328229c 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -28,53 +28,59 @@
-     if (!token || !ttlMs || !expiresAt) return null;
-     return { token, ttlMs, expiresAt };
-   }
- 
-   function assignResume(token, ttlMs) {
-     if (typeof AppState.setResume === "function") {
-       AppState.setResume(token, ttlMs);
-     }
-     autoResumeAttemptToken = null;
-   }
- 
-   function clearResumeState() {
-     if (typeof AppState.clearResume === "function") {
-       AppState.clearResume();
-     }
-     autoResumeAttemptToken = null;
-   }
- 
-   function updateState(patch) {
-     AppState.setState(patch);
-   }
- 
-   function computeUrl(accessToken, resumeToken) {
-     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-     const base = `${protocol}//${window.location.host}/ws/v2/chat`;
--    const params = new URLSearchParams({ access_token: accessToken });
--    if (resumeToken) params.set("resume", resumeToken);
--    return `${base}?${params.toString()}`;
-+    const params = new URLSearchParams();
-+    if (typeof accessToken === "string" && accessToken.trim()) {
-+      params.set("access_token", accessToken.trim());
-+    }
-+    if (typeof resumeToken === "string" && resumeToken.trim()) {
-+      params.set("resume", resumeToken.trim());
-+    }
-+    const query = params.toString();
-+    return query ? `${base}?${query}` : base;
-   }
- 
-   function clearHeartbeat() {
-     if (heartbeatTimerId) {
-       clearInterval(heartbeatTimerId);
-       heartbeatTimerId = null;
-     }
-     updateState({ heartbeatTimerId: null, lastPingAt: null });
-   }
- 
-   function clearRateLimitRetryTimer() {
-     if (rateLimitRetryTimerId) {
-       clearTimeout(rateLimitRetryTimerId);
-       rateLimitRetryTimerId = null;
-     }
-   }
- 
-   function resetRateLimitRecovery() {
-     clearRateLimitRetryTimer();
-     rateLimitRetryCount = 0;
-     if (window.WSErrorUI && typeof window.WSErrorUI.clearRateLimitToast === "function") {
-       try {
-         window.WSErrorUI.clearRateLimitToast();
-       } catch (err) {
-         console.warn("Failed to clear rate limit toast", err);
-@@ -451,76 +457,74 @@
-     ws.removeEventListener("message", handlers.message);
-     ws.removeEventListener("error", handlers.error);
-     ws.removeEventListener("close", handlers.close);
-     delete ws.__handlers;
-     delete ws.__intentionalClose;
-   }
- 
-   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
-     if (!ws) return;
-     detachSocket(ws);
-     ws.__intentionalClose = true;
-     try {
-       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-         ws.close(1000, reason);
-       }
-     } catch (err) {
-       console.warn("WSClient cleanup close error", err);
-     }
-     if (socket === ws) {
-       socket = null;
-       expectInfoFrame = true;
-     }
-   }
- 
-   function open(accessToken, options = {}) {
--    if (!accessToken) {
--      throw new Error("accessToken is required to open the chat socket");
--    }
-     const { resumeToken = null, skipRateLimitCancel = false } = options;
-+    const accessTokenValue = typeof accessToken === "string" && accessToken.trim() ? accessToken.trim() : null;
-     const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
-     if (socket) {
-       cleanupSocket(socket, "superseded");
-     }
-     expectInfoFrame = true;
-     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
-       try {
-         window.WSErrorUI.cancelRateLimitCountdown("manual");
-       } catch (err) {
-         console.warn("Failed to cancel rate limit countdown", err);
-       }
-     }
-     if (!skipRateLimitCancel) {
-       clearRateLimitRetryTimer();
-       rateLimitRetryCount = 0;
-     }
--    const url = computeUrl(accessToken, resumeTokenValue);
-+    const url = computeUrl(accessTokenValue, resumeTokenValue);
-     const ws = transportFactory(url, SUBPROTOCOL);
-     socket = ws;
-     updateState({
-       connectionState: resumeTokenValue ? "resuming" : "connecting",
--      accessToken,
-+      accessToken: accessTokenValue,
-       websocket: ws,
-       latencyMs: null,
-       lastPingAt: null,
-       resumeError: null
-     });
-     attachSocket(ws);
-     return ws;
-   }
- 
-   function close(reason = DEFAULT_CLOSE_REASON) {
-     if (!socket) {
-       updateState({ connectionState: "disconnected" });
-       return;
-     }
-     const ws = socket;
-     cleanupSocket(ws, reason);
-     clearHeartbeat();
-     clearRateLimitRetryTimer();
-     rateLimitRetryCount = 0;
-     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
-       try {
-         window.WSErrorUI.cancelRateLimitCountdown(reason);
-       } catch (err) {
-         console.warn("Failed to cancel countdown on close", err);
-       }
++try:  # pragma: no cover - optional dependency guard
++    import psycopg  # type: ignore
++    from psycopg import errors as psy_errors  # type: ignore
++except Exception:  # pragma: no cover - defensive fallback when psycopg missing
++    psycopg = None  # type: ignore
++    psy_errors = None  # type: ignore
++
++
++_LOGGER = logging.getLogger(__name__)
++
++_SettingsValue = Optional[str]
++_ConnectionFactory = Callable[[], "psycopg.Connection"]  # type: ignore[name-defined]
++
++
++def _detect_column_error(exc: Exception) -> bool:
++    """Return ``True`` when the exception indicates a missing column."""
++
++    if psy_errors is None:  # pragma: no cover - dependency missing in runtime
++        return False
++
++    if isinstance(exc, psy_errors.UndefinedColumn):
++        return True
++
++    pgcode = getattr(exc, "pgcode", None)
++    if pgcode in {getattr(psy_errors, "UNDEFINED_COLUMN", None)}:
++        return True
++
++    return False
++
++
++def _coerce_value(value: object) -> _SettingsValue:
++    """Normalize database values to plain strings."""
++
++    if value is None:
++        return None
++    if isinstance(value, memoryview):
++        value = value.tobytes()
++    if isinstance(value, (bytes, bytearray)):
++        try:
++            return value.decode("utf-8")
++        except UnicodeDecodeError:
++            return value.decode("latin1", "ignore")
++    return str(value)
++
++
++def _build_default_factory() -> _ConnectionFactory | None:
++    """Create a connection factory from environment configuration when possible."""
++
++    if psycopg is None:  # pragma: no cover - dependency missing
++        return None
++
++    dsn = get_env("DATABASE_URL")
++    if not dsn:
++        return None
++
++    def _factory() -> "psycopg.Connection":  # type: ignore[name-defined]
++        return psycopg.connect(dsn)  # type: ignore[call-arg]
++
++    return _factory
++
++
++class AdminSettingsStore:
++    """Lightweight helper for reading and writing admin settings."""
++
++    _QUERY_PRIMARY = "SELECT value FROM admin_settings WHERE key = %s LIMIT 1"
++    _UPSERT_PRIMARY = (
++        "INSERT INTO admin_settings (key, value) VALUES (%s, %s) "
++        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
++    )
++    _DELETE_PRIMARY = "DELETE FROM admin_settings WHERE key = %s"
++
++    _QUERY_FALLBACK = (
++        "SELECT settings_value FROM admin_settings WHERE settings_key = %s LIMIT 1"
++    )
++    _UPSERT_FALLBACK = (
++        "INSERT INTO admin_settings (settings_key, settings_value) VALUES (%s, %s) "
++        "ON CONFLICT (settings_key) DO UPDATE SET settings_value = EXCLUDED.settings_value"
++    )
++    _DELETE_FALLBACK = "DELETE FROM admin_settings WHERE settings_key = %s"
++
++    def __init__(
++        self,
++        conn_factory: _ConnectionFactory | None = None,
++        *,
++        allow_memory_fallback: bool = True,
++    ) -> None:
++        self._conn_factory = conn_factory or _build_default_factory()
++        self._allow_memory_fallback = allow_memory_fallback
++        self._memory: dict[str, str] = {}
++        self._lock = threading.RLock()
++
++    def _get_connection(self):
++        if self._conn_factory is None:
++            return None
++        try:
++            conn = self._conn_factory()
++        except Exception as exc:  # pragma: no cover - connection failures
++            _LOGGER.warning("AdminSettingsStore failed to connect: %s", exc)
++            return None
++        try:
++            if hasattr(conn, "autocommit"):
++                conn.autocommit = True  # type: ignore[attr-defined]
++        except Exception:  # pragma: no cover - attribute missing
++            pass
++        return conn
++
++    def _select(self, cursor, key: str):
++        try:
++            cursor.execute(self._QUERY_PRIMARY, (key,))
++        except Exception as exc:
++            if _detect_column_error(exc):
++                cursor.execute(self._QUERY_FALLBACK, (key,))
++            else:
++                raise
++        return cursor.fetchone()
++
++    def _upsert(self, cursor, key: str, value: str | None) -> None:
++        if value is None:
++            try:
++                cursor.execute(self._DELETE_PRIMARY, (key,))
++            except Exception as exc:
++                if _detect_column_error(exc):
++                    cursor.execute(self._DELETE_FALLBACK, (key,))
++                else:
++                    raise
++            return
++        try:
++            cursor.execute(self._UPSERT_PRIMARY, (key, value))
++        except Exception as exc:
++            if _detect_column_error(exc):
++                cursor.execute(self._UPSERT_FALLBACK, (key, value))
++            else:
++                raise
++
++    def get(self, key: str) -> _SettingsValue:
++        """Return the string value for ``key`` or ``None`` when unset."""
++
++        conn = self._get_connection()
++        if conn is None:
++            if not self._allow_memory_fallback:
++                return None
++            with self._lock:
++                return self._memory.get(key)
++
++        try:
++            with conn.cursor() as cursor:
++                row = self._select(cursor, key)
++        finally:
++            try:
++                conn.close()
++            except Exception:  # pragma: no cover - defensive
++                pass
++
++        return _coerce_value(row[0]) if row else None
++
++    def set(self, key: str, value: str | None) -> None:
++        """Persist ``value`` for ``key`` in the admin settings store."""
++
++        if value is not None:
++            coerced = _coerce_value(value)
++            if coerced is None:
++                coerced = ""
++            value = coerced
++
++        conn = self._get_connection()
++        if conn is None:
++            if not self._allow_memory_fallback:
++                raise RuntimeError("AdminSettingsStore has no database connection")
++            with self._lock:
++                if value is None:
++                    self._memory.pop(key, None)
++                else:
++                    self._memory[key] = value
++            return
++
++        try:
++            with conn.cursor() as cursor:
++                self._upsert(cursor, key, value)
++        finally:
++            try:
++                conn.close()
++            except Exception:  # pragma: no cover - defensive
++                pass
++
++    def snapshot(self) -> dict[str, str]:
++        """Return a best-effort in-memory snapshot of cached settings."""
++
++        with self._lock:
++            return dict(self._memory)
++
++
++__all__ = ["AdminSettingsStore"]
+diff --git a/app/policy/schema.py b/app/policy/schema.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c4dbead3fd26fde4ae2a828df0b1d05825e1946b
+--- /dev/null
++++ b/app/policy/schema.py
+@@ -0,0 +1,53 @@
++"""Policy snapshot schemas for runtime consumers."""
++from __future__ import annotations
++
++from typing import Literal, Mapping, TypedDict, cast
++
++AuthPolicyMode = Literal["required", "disabled"]
++
++
++class AuthPolicySnapshot(TypedDict):
++    """Minimal snapshot describing the active WebSocket auth policy."""
++
++    ws_auth_mode: AuthPolicyMode
++
++
++DEFAULT_WS_AUTH_MODE: AuthPolicyMode = "required"
++DEFAULT_AUTH_POLICY: AuthPolicySnapshot = {"ws_auth_mode": DEFAULT_WS_AUTH_MODE}
++
++_VALID_AUTH_MODES = {"required", "disabled"}
++
++
++def coerce_ws_auth_mode(value: object, default: AuthPolicyMode = DEFAULT_WS_AUTH_MODE) -> AuthPolicyMode:
++    """Return a normalized auth mode with validation."""
++
++    if isinstance(value, str):
++        candidate = value.strip().lower()
++        if candidate in _VALID_AUTH_MODES:
++            return cast(AuthPolicyMode, candidate)
++    return default
++
++
++def build_auth_policy_snapshot(
++    payload: Mapping[str, object] | None,
++    *,
++    default: AuthPolicySnapshot | None = None,
++) -> AuthPolicySnapshot:
++    """Normalize a mapping into an :class:`AuthPolicySnapshot`."""
++
++    base = dict(default or DEFAULT_AUTH_POLICY)
++    if payload is None:
++        return base
++
++    raw_mode = payload.get("ws_auth_mode") if isinstance(payload, Mapping) else None
++    return {"ws_auth_mode": coerce_ws_auth_mode(raw_mode, base["ws_auth_mode"])}
++
++
++__all__ = [
++    "AuthPolicyMode",
++    "AuthPolicySnapshot",
++    "DEFAULT_AUTH_POLICY",
++    "DEFAULT_WS_AUTH_MODE",
++    "build_auth_policy_snapshot",
++    "coerce_ws_auth_mode",
++]
+diff --git a/app/policy/service.py b/app/policy/service.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..59640161e7457a84472c13ed369961260e44e32d
+--- /dev/null
++++ b/app/policy/service.py
+@@ -0,0 +1,188 @@
++"""Policy management service providing runtime snapshots and broadcasts."""
++from __future__ import annotations
++
++import logging
++import threading
++from typing import Callable, Dict, Iterable, List, Mapping, Optional
++
++from app.db.admin_settings import AdminSettingsStore
++from app.policy.schema import (
++    AuthPolicyMode,
++    AuthPolicySnapshot,
++    DEFAULT_AUTH_POLICY,
++    DEFAULT_WS_AUTH_MODE,
++    build_auth_policy_snapshot,
++    coerce_ws_auth_mode,
++)
++from app.telemetry import bus as telemetry_bus
++
++_LOGGER = logging.getLogger(__name__)
++
++PolicyListener = Callable[[Dict[str, object]], None]
++
++
++class PolicyService:
++    """Runtime accessors for policy state derived from admin settings."""
++
++    _AUTH_MODE_KEY = "ws_auth_mode"
++
++    def __init__(
++        self,
++        store: AdminSettingsStore | None = None,
++        *,
++        bus=telemetry_bus,
++    ) -> None:
++        self._store = store or AdminSettingsStore()
++        self._bus = bus
++        self._lock = threading.RLock()
++        self._snapshot: AuthPolicySnapshot = dict(DEFAULT_AUTH_POLICY)
++        self._ws_listeners: List[PolicyListener] = []
++        self._sse_listeners: List[PolicyListener] = []
++        self._load_initial_snapshot()
++
++    # ------------------------------------------------------------------
++    # Snapshot lifecycle helpers
++    # ------------------------------------------------------------------
++    def _load_initial_snapshot(self) -> None:
++        snapshot = self._load_snapshot_from_store()
++        with self._lock:
++            self._snapshot = snapshot
++        self._publish_snapshot(snapshot, reason="load")
++
++    def _load_snapshot_from_store(self) -> AuthPolicySnapshot:
++        value = self._store.get(self._AUTH_MODE_KEY)
++        payload: Mapping[str, object] | None
++        if value is None:
++            payload = None
++        else:
++            payload = {self._AUTH_MODE_KEY: value}
++        return build_auth_policy_snapshot(payload)
++
++    def _publish_snapshot(self, snapshot: AuthPolicySnapshot, *, reason: str) -> None:
++        try:
++            self._bus.publish(
++                {
++                    "type": "EVT_POLICY_SNAPSHOT",
++                    "level": "info",
++                    "meta": {
++                        "ws_auth_mode": snapshot["ws_auth_mode"],
++                        "reason": reason,
++                    },
++                }
++            )
++        except Exception:  # pragma: no cover - telemetry must not break flow
++            _LOGGER.exception("Failed to publish policy snapshot telemetry")
++
++        payload = {"type": "policy_updated", "policy": dict(snapshot)}
++        self._notify_listeners(self._ws_listeners, payload)
++        self._notify_listeners(self._sse_listeners, payload)
++
++    def _notify_listeners(self, listeners: Iterable[PolicyListener], payload: Dict[str, object]) -> None:
++        for callback in list(listeners):
++            try:
++                callback(dict(payload))
++            except Exception:  # pragma: no cover - defensive around callbacks
++                _LOGGER.exception("Policy listener error for payload %s", payload.get("type"))
++
++    # ------------------------------------------------------------------
++    # Public API
++    # ------------------------------------------------------------------
++    def get_auth_policy(self) -> AuthPolicySnapshot:
++        """Return the cached auth policy snapshot."""
++
++        with self._lock:
++            return dict(self._snapshot)
++
++    def set_ws_auth_mode(self, mode: AuthPolicyMode | str) -> AuthPolicySnapshot:
++        """Persist the provided auth mode and broadcast updates when needed."""
++
++        normalized = coerce_ws_auth_mode(mode)
++        existing = self.get_auth_policy()
++        if existing["ws_auth_mode"] == normalized:
++            return existing
++
++        self._store.set(self._AUTH_MODE_KEY, normalized)
++        snapshot = {"ws_auth_mode": normalized}
++        with self._lock:
++            self._snapshot = snapshot
++        self._publish_snapshot(snapshot, reason="change")
++        return dict(snapshot)
++
++    def refresh(self) -> AuthPolicySnapshot:
++        """Reload the snapshot from the backing store and broadcast changes."""
++
++        snapshot = self._load_snapshot_from_store()
++        with self._lock:
++            if snapshot == self._snapshot:
++                return dict(self._snapshot)
++            self._snapshot = snapshot
++        self._publish_snapshot(snapshot, reason="refresh")
++        return dict(snapshot)
++
++    def handle_admin_setting_change(
++        self, key: str, value: Optional[str] = None
++    ) -> Optional[AuthPolicySnapshot]:
++        """Handle an external admin_settings update notification."""
++
++        if key != self._AUTH_MODE_KEY:
++            return None
++        if value is not None:
++            normalized = coerce_ws_auth_mode(value, DEFAULT_WS_AUTH_MODE)
++            snapshot = {"ws_auth_mode": normalized}
++            with self._lock:
++                if snapshot == self._snapshot:
++                    return dict(self._snapshot)
++                self._snapshot = snapshot
++            self._publish_snapshot(snapshot, reason="change")
++            return dict(snapshot)
++        return self.refresh()
++
++    # ------------------------------------------------------------------
++    # Listener registration
++    # ------------------------------------------------------------------
++    def register_ws_listener(self, callback: PolicyListener, *, replay: bool = False) -> Callable[[], None]:
++        """Register a callback for WebSocket broadcasts."""
++
++        if not callable(callback):
++            raise TypeError("callback must be callable")
++
++        with self._lock:
++            self._ws_listeners.append(callback)
++            snapshot = dict(self._snapshot)
++
++        if replay:
++            callback({"type": "policy_updated", "policy": snapshot})
++
++        def _unsubscribe() -> None:
++            with self._lock:
++                try:
++                    self._ws_listeners.remove(callback)
++                except ValueError:
++                    pass
++
++        return _unsubscribe
++
++    def register_sse_listener(self, callback: PolicyListener, *, replay: bool = False) -> Callable[[], None]:
++        """Register a callback for server-sent event broadcasts."""
++
++        if not callable(callback):
++            raise TypeError("callback must be callable")
++
++        with self._lock:
++            self._sse_listeners.append(callback)
++            snapshot = dict(self._snapshot)
++
++        if replay:
++            callback({"type": "policy_updated", "policy": snapshot})
++
++        def _unsubscribe() -> None:
++            with self._lock:
++                try:
++                    self._sse_listeners.remove(callback)
++                except ValueError:
++                    pass
++
++        return _unsubscribe
++
++
++__all__ = ["PolicyService", "PolicyListener"]
