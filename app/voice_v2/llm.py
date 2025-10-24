@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, Mapping
 
+from app.services.llm.provider import create_from_env
 from app.telemetry import bus
 from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
 from app.voice_v2 import generator
@@ -52,7 +53,7 @@ class LLMAdapter:
         self._canned_text = canned_text or (
             "Thanks for chatting with AskChip! How else can I help?"
         )
-        self._provider = provider
+        self._provider = provider or create_from_env(telemetry_bus=telemetry_bus)
         self._turn_lookup: dict[str, tuple[str, str]] = {}
         self._turn_counter_by_sid: Dict[str, int] = {}
         subscribe = getattr(self._bus, "subscribe", None)

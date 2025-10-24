@@ -1,240 +1,69 @@
-diff --git a/.env.example b/.env.example
-index 0c35d44a9b654eb75f8333b5325c977a8d8b0f8a..474d90e4d893b04cba73ff365b871c1c0c7bc695 100644
---- a/.env.example
-+++ b/.env.example
-@@ -14,49 +14,54 @@ DEEPGRAM_LISTEN_URL=wss://api.deepgram.com/v1/listen
- DEEPGRAM_UTTERANCE_END_MS=3000
- DG_ENABLE_PARTIALS=true
- DG_FINAL_WAIT_S=20
- DG_LINGER_MS=8000
- DG_OPEN_MICRO_WAIT_S=.60
- ELEVEN_INACTIVITY=180
- ELEVEN_MODEL_ID=eleven_flash_v2_5
- ELEVEN_OUTPUT_FORMAT=pcm_24000
- ELEVEN_OUTPUT_FORMAT_WS=pcm_24000
- EMAIL_FROM_NAME=Chip
- EMAIL_HOST=smtp.gmail.com
- EMAIL_HOST_USER=you@example.com
- EMAIL_PORT=587
- EMAIL_USE_TLS=True
- EMAIL_WEBHOOK_SECRET=<set-if-used>
- EMAIL_WEBHOOK_URL=<set-if-used>
- ENABLE_ADMIN_SSE=true
- ENABLE_NLU_LOGGING=1
- FEATURE_ADMIN_UI=1
- FEATURE_AUDIO=1
- FEATURE_TOOLS=1
- FROM_EMAIL=you@example.com
- GUNICORN_GRACEFUL_TIMEOUT=45
- GUNICORN_KEEP_ALIVE=75
- GUNICORN_TIMEOUT=90
-+LLM_VENDOR=openai
-+LLM_MODEL=gpt-4o-mini
-+LLM_TIMEOUT_S=12
-+LLM_RETRIES=1
- MIC_CAPTURE=1
- MIC_ECHO_WS=1
- PIP_ONLY_BINARY=numpy,pandas,PyMuPDF
- PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
- SESSION_TYPE=filesystem
- SUGGESTION_MAX=3
- WEB_CONCURRENCY=1
- WS_BEARER_ONLY=1
- WS_FAIL_LIMIT=10
- WS_FAIL_WINDOW_SEC=60
- WS_FINAL_GUARD_MS=900
- WS_NO_AUDIO_DETECT_WINDOW_S=10
- WS_NO_AUDIO_NUDGE_ONLY=1
- WS_TOKEN_REQUIRED=1
- stt_mode=streaming
- 
- # Render UI secrets (leave blank locally; set in Render dashboard)
- ADMIN_SSE_E2E_KEY=
- DEEPGRAM_API_KEY=
- ELEVENLABS_API_KEY=
- ELEVENLABS_VOICE_ID=
- EMAIL_HOST_PASSWORD=
- OPENAI_API_KEY=
-+OPENAI_BASE_URL=
- SECRET_KEY=
-diff --git a/app/services/llm/openai_client.py b/app/services/llm/openai_client.py
+diff --git a/app/services/llm/provider.py b/app/services/llm/provider.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..6a2ea74a6a84b18354a555b6ea186a010b5e6f04
+index 0000000000000000000000000000000000000000..da9f50a3ae4892044e2e9550ed742eae231e82f9
 --- /dev/null
-+++ b/app/services/llm/openai_client.py
-@@ -0,0 +1,135 @@
-+"""OpenAI LLM provider implementation with circuit breaker integration."""
++++ b/app/services/llm/provider.py
+@@ -0,0 +1,23 @@
++"""Provider factory helpers for LLM integrations."""
 +
 +from __future__ import annotations
 +
-+from typing import Any, Dict, Iterable, List
++from typing import Optional
 +
-+import logging
-+
-+from openai import AsyncOpenAI
-+
-+from app.config import get_env
-+from app.telemetry import bus
-+from app.voice_v2.llm_base import LLMProviderBase
-+
-+_logger = logging.getLogger(__name__)
++from app.services.llm.openai_client import OpenAILLMProvider
 +
 +
-+def _coerce_float(value: Any, default: float) -> float:
-+    try:
-+        parsed = float(value)
-+    except (TypeError, ValueError):
-+        return default
-+    return parsed if parsed > 0 else default
++def create_from_env(*, telemetry_bus=None, clock=None) -> Optional[OpenAILLMProvider]:
++    """Instantiate the default provider when the runtime is configured."""
++
++    kwargs = {}
++    if telemetry_bus is not None:
++        kwargs["telemetry_bus"] = telemetry_bus
++    if clock is not None:
++        kwargs["clock"] = clock
++
++    provider = OpenAILLMProvider(**kwargs)
++    return provider if provider.is_configured else None
 +
 +
-+def _coerce_int(value: Any, default: int) -> int:
-+    try:
-+        parsed = int(value)
-+    except (TypeError, ValueError):
-+        return default
-+    return parsed if parsed >= 0 else default
-+
-+
-+class OpenAILLMProvider(LLMProviderBase):
-+    """Production OpenAI client wired into the shared provider base."""
-+
-+    def __init__(
-+        self,
-+        *,
-+        telemetry_bus=bus,
-+        clock=None,
-+    ) -> None:
-+        api_key = get_env("OPENAI_API_KEY")
-+        base_url = get_env("OPENAI_BASE_URL") or None
-+        model = get_env("LLM_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
-+        timeout_s = _coerce_float(get_env("LLM_TIMEOUT_S"), 12.0)
-+        retries = _coerce_int(get_env("LLM_RETRIES"), 1)
-+
-+        super().__init__(
-+            vendor="openai",
-+            telemetry_bus=telemetry_bus,
-+            retries=retries,
-+            timeout_s=timeout_s,
-+            clock=clock,
-+        )
-+
-+        self._api_key = api_key
-+        self._base_url = base_url
-+        self._default_model = model
-+        self._client = (
-+            AsyncOpenAI(api_key=api_key, base_url=base_url or None)
-+            if api_key
-+            else None
-+        )
-+
-+    @property
-+    def is_configured(self) -> bool:
-+        return self._client is not None
-+
-+    @property
-+    def default_model(self) -> str:
-+        return self._default_model
-+
-+    async def _generate_impl(self, messages: List[Dict[str, Any]], **kwargs: Any) -> str:
-+        if not self.is_configured:
-+            raise RuntimeError("OpenAI provider not configured")
-+
-+        if not isinstance(messages, list) or not messages:
-+            raise ValueError("messages must be a non-empty list")
-+
-+        prepared: List[Dict[str, str]] = []
-+        for item in messages:
-+            if not isinstance(item, dict):
-+                raise TypeError("each message must be a dict")
-+            role = item.get("role")
-+            content = item.get("content")
-+            if not isinstance(role, str) or not isinstance(content, str):
-+                raise TypeError("message role/content must be strings")
-+            prepared.append({"role": role, "content": content})
-+
-+        client = self._client
-+        assert client is not None  # for type-checkers
-+
-+        model = kwargs.get("model") or self._default_model
-+        temperature = kwargs.get("temperature")
-+
-+        response = await client.chat.completions.create(
-+            model=model,
-+            messages=prepared,
-+            temperature=temperature,
-+        )
-+
-+        try:
-+            choice = response.choices[0]
-+        except (AttributeError, IndexError) as exc:  # pragma: no cover - defensive
-+            raise RuntimeError("OpenAI response missing choices") from exc
-+
-+        message = getattr(choice, "message", None)
-+        content: Any | None = None
-+        if message is not None:
-+            content = getattr(message, "content", None)
-+
-+        if isinstance(content, str):
-+            text = content.strip()
-+            if text:
-+                return text
-+        elif isinstance(content, Iterable):
-+            parts: List[str] = []
-+            for part in content:
-+                if isinstance(part, dict):
-+                    if part.get("type") == "text":
-+                        part_text = part.get("text")
-+                        if isinstance(part_text, str):
-+                            parts.append(part_text)
-+                elif isinstance(part, str):
-+                    parts.append(part)
-+            combined = "".join(parts).strip()
-+            if combined:
-+                return combined
-+
-+        _logger.warning("OpenAI response missing text payload; falling back to empty string")
-+        return ""
-+
-+
-+__all__ = ["OpenAILLMProvider"]
++__all__ = ["create_from_env"]
 diff --git a/app/voice_v2/llm.py b/app/voice_v2/llm.py
-index eae3c5448efe182ca3b1a701c1e891165d7ca3af..2b1055e13b2e2690d7e9dd0ce62e0043aa4e03e8 100644
+index 2b1055e13b2e2690d7e9dd0ce62e0043aa4e03e8..bdaa53c2f0c8e68ca2a50c291625149445dd4b34 100644
 --- a/app/voice_v2/llm.py
 +++ b/app/voice_v2/llm.py
-@@ -1,144 +1,239 @@
+@@ -1,80 +1,81 @@
  """Stubbed LLM adapter used by the voice engine."""
  from __future__ import annotations
  
-+import asyncio
+ import asyncio
  import json
-+import logging
+ import logging
  import time
  import uuid
  from typing import Any, Dict, Mapping
  
++from app.services.llm.provider import create_from_env
  from app.telemetry import bus
  from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
  from app.voice_v2 import generator
--from app.voice_v2.persona import load_persona, maybe_pick_quote_for_sid
-+from app.voice_v2.llm_base import (
-+    LLMProviderBase,
-+    ProviderCircuitOpenError,
-+    ProviderTimeoutError,
-+)
-+from app.voice_v2.persona import (
-+    build_system_preamble,
-+    load_persona,
-+    maybe_pick_quote_for_sid,
-+)
+ from app.voice_v2.llm_base import (
+     LLMProviderBase,
+     ProviderCircuitOpenError,
+     ProviderTimeoutError,
+ )
+ from app.voice_v2.persona import (
+     build_system_preamble,
+     load_persona,
+     maybe_pick_quote_for_sid,
+ )
  
  EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
  EVT_TURN_END = "EVT_TURN_END"
  
  
-+_logger = logging.getLogger(__name__)
-+
-+
+ _logger = logging.getLogger(__name__)
+ 
+ 
  class LLMAdapter:
      """Return canned responses while optionally publishing telemetry events."""
  
@@ -249,7 +78,7 @@ index eae3c5448efe182ca3b1a701c1e891165d7ca3af..2b1055e13b2e2690d7e9dd0ce62e0043
          self,
          *,
          telemetry_bus=bus,
-+        provider: LLMProviderBase | None = None,
+         provider: LLMProviderBase | None = None,
          canned_text: str | None = None,
          auto_publish: bool = True,
      ) -> None:
@@ -258,7 +87,8 @@ index eae3c5448efe182ca3b1a701c1e891165d7ca3af..2b1055e13b2e2690d7e9dd0ce62e0043
          self._canned_text = canned_text or (
              "Thanks for chatting with AskChip! How else can I help?"
          )
-+        self._provider = provider
+-        self._provider = provider
++        self._provider = provider or create_from_env(telemetry_bus=telemetry_bus)
          self._turn_lookup: dict[str, tuple[str, str]] = {}
          self._turn_counter_by_sid: Dict[str, int] = {}
          subscribe = getattr(self._bus, "subscribe", None)
@@ -284,168 +114,3 @@ index eae3c5448efe182ca3b1a701c1e891165d7ca3af..2b1055e13b2e2690d7e9dd0ce62e0043
          still be called with ``text="..."`` to preserve compatibility with
          legacy callers and tests.
          """
- 
-         if not isinstance(req_id, str) or not req_id:
-             raise ValueError("req_id must be a non-empty string")
- 
-         _ = kwargs.get("text")  # legacy callers provide the user utterance via ``text``
-         response_text = self._INTENT_REPLIES.get(intent or "", self._canned_text)
- 
-         start = time.perf_counter()
-         timing = {"total_ms": max(int((time.perf_counter() - start) * 1000), 0)}
-         if self._auto_publish:
-             self.publish_nlg(req_id, response_text)
-         return {"text": response_text, "timing": timing}
- 
-     def generate_persona(
-         self,
-         sid: str,
-         turn_id: str,
-         req_id: str,
-         user_text: str,
-         plan: Mapping[str, Any] | object,
-     ) -> str:
--        """Return a persona-aligned reply using the rule-based generator."""
-+        """Return a persona-aligned reply using either the provider or fallback."""
- 
-         if not isinstance(req_id, str) or not req_id:
-             raise ValueError("req_id must be a non-empty string")
- 
-         persona = load_persona()
--        messages = generator.build_messages(persona, plan, user_text)
--        reply = generator.render_reply(messages)
--        if not isinstance(reply, str):
--            reply = str(reply)
-+        rule_based_messages = generator.build_messages(persona, plan, user_text)
-+        system_preamble = build_system_preamble(persona)
-+
-+        # Prepend the explicit persona preamble for LLM providers while keeping the
-+        # remainder of the deterministic stack intact for fallback use.
-+        provider_messages: list[dict[str, str]] = [{"role": "system", "content": system_preamble}]
-+        skipped_system = False
-+        for message in rule_based_messages:
-+            if (
-+                not skipped_system
-+                and isinstance(message, Mapping)
-+                and message.get("role") == "system"
-+            ):
-+                skipped_system = True
-+                continue
-+            if isinstance(message, Mapping):
-+                provider_messages.append({
-+                    "role": str(message.get("role", "")),
-+                    "content": str(message.get("content", "")),
-+                })
-+
-+        reply: str | None = None
-+        fallback_reason: str | None = None
-+        provider = self._provider
-+        provider_ready = bool(provider and getattr(provider, "is_configured", False))
-+        if provider_ready:
-+            model_name = getattr(provider, "default_model", None) or "gpt-4o-mini"
-+            try:
-+                reply_candidate = self._invoke_provider(
-+                    provider,
-+                    provider_messages,
-+                    model=model_name,
-+                    temperature=0.6,
-+                )
-+            except ProviderCircuitOpenError:
-+                fallback_reason = "breaker_open"
-+            except ProviderTimeoutError:
-+                fallback_reason = "timeout"
-+            except Exception:  # pragma: no cover - defensive logging
-+                fallback_reason = "error"
-+                _logger.exception("LLM provider invocation failed; falling back to generator")
-+            else:
-+                if isinstance(reply_candidate, str) and reply_candidate.strip():
-+                    reply = reply_candidate
-+                else:
-+                    fallback_reason = "empty_response"
-+
-+        if reply is None:
-+            reply = generator.render_reply(rule_based_messages)
-+            if not isinstance(reply, str):
-+                reply = str(reply)
-         metadata: Dict[str, Any] | None = None
-+        if fallback_reason:
-+            metadata = {"source": "llm_fallback", "reason": fallback_reason}
-         sid_key: str | None = sid if isinstance(sid, str) and sid else None
-         if sid_key:
-             turn_no = self._turn_counter_by_sid.get(sid_key, 0) + 1
-             self._turn_counter_by_sid[sid_key] = turn_no
-             mode = ""
-             if isinstance(plan, Mapping):
-                 candidate_mode = plan.get("mode")
-                 if isinstance(candidate_mode, str):
-                     mode = candidate_mode
-             quote = maybe_pick_quote_for_sid(persona, sid_key, mode, turn_no)
-             if quote:
-                 quote_text = quote.get("text")
-                 quote_id = quote.get("id")
-                 if isinstance(quote_text, str) and quote_text:
-                     reply = f"{reply.rstrip()} (As my granddad would say: \"{quote_text}\")"
-                     if isinstance(quote_id, str) and quote_id:
-                         identifier = quote_id
-                     else:
-                         identifier = f"quote_turn_{turn_no}"
--                    metadata = {"quote_id": identifier}
-+                    if metadata is None:
-+                        metadata = {}
-+                    metadata["quote_id"] = identifier
-         self.publish_nlg(req_id, reply, metadata=metadata)
-         return reply
- 
-+    def _invoke_provider(
-+        self,
-+        provider: LLMProviderBase,
-+        messages: list[dict[str, str]],
-+        *,
-+        model: str,
-+        temperature: float,
-+    ) -> str:
-+        async def _execute() -> Any:
-+            return await provider.generate(
-+                messages=messages,
-+                model=model,
-+                temperature=temperature,
-+            )
-+
-+        try:
-+            asyncio.get_running_loop()
-+        except RuntimeError:
-+            result = asyncio.run(_execute())
-+        else:
-+            loop = asyncio.new_event_loop()
-+            try:
-+                result = loop.run_until_complete(_execute())
-+            finally:
-+                loop.close()
-+
-+        return result if isinstance(result, str) else str(result)
-+
-     def publish_nlg(
-         self,
-         req_id: str,
-         text: str,
-         *,
-         metadata: Mapping[str, Any] | None = None,
-     ) -> None:
-         """Publish EVT_NLG and chat bridge messages when enabled."""
- 
-         if not self._auto_publish:
-             # When auto publish is disabled we only emit the bus events when
-             # this helper is invoked directly (the engine handles it).
-             return
- 
-         self._publish_nlg(req_id, text, metadata=metadata)
-         self._publish_chat_message(req_id, text)
- 
-     def publish_chat_message(self, req_id: str, text: str) -> None:
-         """Manually mirror the assistant message into the chat stream."""
- 
-         self._publish_chat_message(req_id, text)
- 
-     def _publish_nlg(
-         self,
-         req_id: str,
