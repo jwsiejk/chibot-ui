@@ -21,6 +21,7 @@ from app.voice_v2 import (
     EVT_ASR_READY,
     EVT_CHAT_USER,
     EVT_WS_AUDIO_RECV,
+    EVT_WS_AUDIO_SEND,
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
 )
@@ -206,6 +207,8 @@ class AdapterContext:
     outbox: asyncio.Queue[Dict[str, Any]] | None = None
     outbound_task: asyncio.Task[None] | None = None
     subscription_token: Optional[str] = None
+    audio_subscription_token: Optional[str] = None
+    audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
     asr_ready: bool = False
     asr_subscription_token: Optional[str] = None
     server_keepalive_task: asyncio.Task[None] | None = None
@@ -215,6 +218,7 @@ class AdapterContext:
     recent_markers: list[Dict[str, Any]] = field(default_factory=list)
     partial_seq: int = 0
     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+    send_lock: asyncio.Lock | None = None
 
 
 @dataclass
@@ -916,6 +920,37 @@ class ChatV2Adapter:
                 pass
 
         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
+
+        def _handle_audio_event(event: dict) -> None:
+            if event.get("sid") != ctx.sid:
+                return
+            chunk = event.get("chunk")
+            if isinstance(chunk, (bytes, bytearray, memoryview)):
+                chunk_bytes = bytes(chunk)
+            else:
+                return
+
+            def _deliver() -> None:
+                task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
+                ctx.audio_tasks.add(task)
+
+                def _on_done(done: asyncio.Task[None]) -> None:
+                    ctx.audio_tasks.discard(done)
+                    try:
+                        done.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:  # pragma: no cover - defensive logging
+                        _logger.exception("Failed to deliver audio chunk for sid %s", ctx.sid)
+
+                task.add_done_callback(_on_done)
+
+            try:
+                loop.call_soon_threadsafe(_deliver)
+            except RuntimeError:
+                pass
+
+        ctx.audio_subscription_token = bus.subscribe(EVT_WS_AUDIO_SEND, _handle_audio_event)
         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
 
     def _offer_partial_frame(
@@ -1047,7 +1082,7 @@ class ChatV2Adapter:
             while True:
                 payload = await queue.get()
                 try:
-                    await self._send_outbound_frame(send, payload)
+                    await self._send_outbound_frame(ctx, send, payload)
                 except asyncio.CancelledError:
                     raise
                 except Exception:  # pragma: no cover - defensive
@@ -1060,16 +1095,36 @@ class ChatV2Adapter:
             ctx.outbox = None
 
     async def _send_outbound_frame(
-        self, send: Callable[[dict], Awaitable[None]], payload: Dict[str, Any]
+        self,
+        ctx: AdapterContext,
+        send: Callable[[dict], Awaitable[None]],
+        payload: Dict[str, Any],
     ) -> None:
-        text = json.dumps(payload, separators=(",", ":"))
-        await send({"type": "websocket.send", "text": text})
+        lock = self._ensure_send_lock(ctx)
+        async with lock:
+            text = json.dumps(payload, separators=(",", ":"))
+            await send({"type": "websocket.send", "text": text})
+
+    async def _send_audio_frame(
+        self,
+        ctx: AdapterContext,
+        send: Callable[[dict], Awaitable[None]],
+        chunk: bytes,
+    ) -> None:
+        lock = self._ensure_send_lock(ctx)
+        async with lock:
+            await send({"type": "websocket.send", "bytes": chunk})
 
     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
         token = ctx.subscription_token
         ctx.subscription_token = None
         if token:
             bus.unsubscribe(token)
+
+        audio_token = ctx.audio_subscription_token
+        ctx.audio_subscription_token = None
+        if audio_token:
+            bus.unsubscribe(audio_token)
 
         task = ctx.outbound_task
         ctx.outbound_task = None
@@ -1079,6 +1134,12 @@ class ChatV2Adapter:
                 await task
 
         ctx.partial_coalescer.cancel()
+
+        for task in list(ctx.audio_tasks):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        ctx.audio_tasks.clear()
 
         ctx.outbox = None
 
@@ -1295,6 +1356,14 @@ class ChatV2Adapter:
                 ctx.sid,
                 {"queue_depth": queued, "state": "off"},
             )
+
+    @staticmethod
+    def _ensure_send_lock(ctx: AdapterContext) -> asyncio.Lock:
+        lock = ctx.send_lock
+        if lock is None:
+            lock = asyncio.Lock()
+            ctx.send_lock = lock
+        return lock
 
 
 __all__ = [

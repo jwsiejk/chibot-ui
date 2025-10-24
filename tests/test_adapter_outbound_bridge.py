@@ -7,7 +7,7 @@ import unittest
 from typing import Any, Callable, Dict
 
 from app.telemetry import bus
-from app.voice_v2 import EVT_WS_JSON_SEND
+from app.voice_v2 import EVT_WS_AUDIO_SEND, EVT_WS_JSON_SEND
 from app.ws.adapter import (
     CHAT_V2_SUBPROTOCOL,
     EVT_WS_OUTBOX_DROP,
@@ -40,6 +40,7 @@ class OutboundHarness:
         self._inbound: asyncio.Queue[dict] = asyncio.Queue()
         self.sent: list[dict] = []
         self.outbound_frames: list[Dict[str, Any]] = []
+        self.binary_frames: list[bytes] = []
         self.accepted = False
         self._task: asyncio.Task[None] | None = None
 
@@ -58,6 +59,8 @@ class OutboundHarness:
             self.accepted = True
         if message.get("type") == "websocket.send" and message.get("text") is not None:
             self.outbound_frames.append(json.loads(message["text"]))
+        if message.get("type") == "websocket.send" and message.get("bytes") is not None:
+            self.binary_frames.append(message["bytes"])
 
     async def wait_for(self, predicate: Callable[[], bool], timeout: float = 1.0) -> None:
         loop = asyncio.get_running_loop()
@@ -93,6 +96,19 @@ class OutboundHarness:
         if sid is None:
             raise RuntimeError("connection not yet open")
         return sid
+
+    async def wait_for_binary(
+        self, predicate: Callable[[bytes], bool], timeout: float = 1.0
+    ) -> bytes:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            for chunk in self.binary_frames:
+                if predicate(chunk):
+                    return chunk
+            if loop.time() >= deadline:
+                raise TimeoutError("timed out waiting for binary frame")
+            await asyncio.sleep(0.01)
 
 
 class TestAdapterOutboundBridge(unittest.TestCase):
@@ -135,6 +151,9 @@ class TestAdapterOutboundBridge(unittest.TestCase):
 
     def test_backpressure_reports_drops(self) -> None:
         asyncio.run(self._test_backpressure())
+
+    def test_audio_frames_forwarded_as_binary_messages(self) -> None:
+        asyncio.run(self._test_audio_forwarding())
 
     async def _test_happy_path(self) -> None:
         engine = RecordingEngine()
@@ -241,6 +260,26 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             await harness.wait_for(lambda: drop_count > 0)
         finally:
             bus.unsubscribe(token)
+            await harness.close()
+
+    async def _test_audio_forwarding(self) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+        try:
+            chunk = b"\x01\x02" * 80
+            event = {
+                "type": EVT_WS_AUDIO_SEND,
+                "sid": harness.sid,
+                "chunk": chunk,
+                "meta": {"byte_count": len(chunk)},
+            }
+            bus.publish(event)
+
+            received = await harness.wait_for_binary(lambda data: data == chunk)
+            self.assertEqual(received, chunk)
+        finally:
             await harness.close()
 
 

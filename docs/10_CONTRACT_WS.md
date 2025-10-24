@@ -92,9 +92,15 @@ json
 Copy code
 {"type":"client.resume","resume_token":"<string>"}
 Server → Client frames
-json
-Copy code
+
+- **JSON text frames** (policy/info/chat/etc.) follow the telemetry envelope shown below. Examples:
+
+```json
 {"type":"pong","t":1730000000000}
+```
+
+- **Binary audio frames** carry raw PCM s16le chunks at **16 kHz mono**. The playback descriptor is announced once per connection via `info.audio`, which already includes `{ "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }`. Each binary frame is a contiguous PCM buffer with no additional header bytes.
+
 Policy (client-visible subset)
 The server may push policy updates. Client-visible frames follow the telemetry
 envelope (`type`, `ts_ms`, `level`, …) and the server **strips any policy keys

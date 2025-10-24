@@ -1,599 +1,660 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 7f3b2909d7aa40781cff7870ebf8b78cbd023087..939f4af9bc7e499543cfee7e4d3a74ec32c45530 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -1,44 +1,45 @@
- """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 21f34092d187a2e0235abc75547c392509a9a248..2f2a5cb0373b1f28224c47866442cf04c8f8b30b 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -1,48 +1,49 @@
+ """chat.v2 WebSocket adapter for AskChip."""
  from __future__ import annotations
  
- import json
+ import asyncio
+ import contextlib
+ import inspect
  import logging
- import mimetypes
  import os
  import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
- from urllib.parse import urlparse
+ import uuid
+ from dataclasses import dataclass, field
+ from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
+ from urllib.parse import parse_qs
  
- from app.admin.flow_api import handle_flow_trace, handle_flow_zip
+ import json
+ 
+ from app.telemetry import bus
  from app.telemetry.exporter import FileExporter
- from app.voice_v2.engine import EngineV2
-+from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+ from app.security.auth import authorize
+ from app.voice_v2 import (
+     EVT_ASR_READY,
+     EVT_CHAT_USER,
+     EVT_WS_AUDIO_RECV,
++    EVT_WS_AUDIO_SEND,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.ws.validator import validate_frame
  
- logger = logging.getLogger(__name__)
+ CHAT_V2_SUBPROTOCOL = "chat.v2"
+ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
+ BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ PING_MIN_INTERVAL_MS = 500
+ RATE_LIMIT_CAPACITY = 25
+ RATE_LIMIT_WINDOW_SECONDS = 2.0
+ RATE_LIMIT_CLOSE_CODE = 1013
+ _AUDIO_VIOLATION_LIMIT = 3
  
+ AUDIO_SEQ_WINDOW = 8
  
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
+ QUEUE_ON_THRESHOLD = 12
+ QUEUE_OFF_THRESHOLD = 6
  
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
+ _DEFAULT_WS_PING_INTERVAL_MS = 25_000
  
+ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
  
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
- 
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
- 
- 
-@@ -311,51 +312,53 @@ async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: R
-             "status": response.status,
-             "headers": headers,
-         }
-     )
-     await send(
-         {
-             "type": "websocket.http.response.body",
-             "body": response.body,
-             "more_body": False,
-         }
-     )
+ EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
+@@ -184,59 +185,62 @@ class EngineHooks(Protocol):
  
  
- def _method_is_get(scope: dict) -> bool:
-     """Return True when the incoming HTTP scope uses the GET method."""
+ @dataclass
+ class AdapterContext:
+     """Per-connection state."""
  
-     return scope.get("method", "GET").upper() == "GET"
+     sid: str
+     headers: Dict[str, str]
+     audio_seq: int = 0
+     audio_expected_seq: int = 0
+     audio_highest_seq: int = -1
+     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
+     audio_window: int = AUDIO_SEQ_WINDOW
+     last_pong_sent_ms: int = 0
+     ip: Optional[str] = None
+     sid_bucket: Optional[TokenBucket] = None
+     ip_bucket: Optional[TokenBucket] = None
+     audio_profile: Optional[Dict[str, Any]] = None
+     accepting_audio: bool = True
+     audio_violation_count: int = 0
+     outbound_queue_depth: int = 0
+     backpressure_state: Literal["off", "on"] = "off"
+     outbox: asyncio.Queue[Dict[str, Any]] | None = None
+     outbound_task: asyncio.Task[None] | None = None
+     subscription_token: Optional[str] = None
++    audio_subscription_token: Optional[str] = None
++    audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+     asr_ready: bool = False
+     asr_subscription_token: Optional[str] = None
+     server_keepalive_task: asyncio.Task[None] | None = None
+     last_policy_interaction: Optional[Dict[str, Any]] = None
+     resume_token: Optional[str] = None
+     resume_expiry_ms: int = 0
+     recent_markers: list[Dict[str, Any]] = field(default_factory=list)
+     partial_seq: int = 0
+     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
++    send_lock: asyncio.Lock | None = None
  
  
- def _get_adapter() -> ChatV2Adapter:
-     """Return a lazily instantiated ChatV2Adapter singleton."""
-     global _adapter
-     if _adapter is None:
-         exporter = FileExporter(EXPORT_ROOT)
-         engine = EngineV2(exporter=exporter)
-+        tts_runtime = TTSRuntime(engine=engine)
-         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
-+        _adapter.tts_runtime = tts_runtime
-     return _adapter
+ @dataclass
+ class _ResumeState:
+     sid: str
+     expiry_ms: int
+     markers: list[Dict[str, Any]]
  
  
- async def _reject_origin(
-     scope: dict,
-     origin: Optional[str],
-     receive: Callable[[], Awaitable[dict]],
-     send: Callable[[dict], Awaitable[None]],
- ) -> None:
-     """Reject a WebSocket handshake because the Origin is not allowed."""
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
  
-     message = await receive()
-     if message.get("type") != "websocket.connect":
-         return
+     def __init__(
+         self,
+         engine: EngineHooks | None = None,
+         exporter: FileExporter | None = None,
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+@@ -894,50 +898,81 @@ class ChatV2Adapter:
+                 self._offer_partial_frame(
+                     ctx,
+                     loop,
+                     payload,
+                     lambda frame: _queue_payload(frame, clone=False),
+                 )
+                 return
+             _queue_payload(payload)
  
-     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
-     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
-     if origin:
-         payload["origin"] = origin
-     await _send_ws_response(send, json_response(status=403, **payload))
+         def _handle_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+             payload = self._extract_outbound_payload(ctx, event)
+             if payload is None:
+                 return
  
+             def _on_loop() -> None:
+                 _enqueue(payload)
  
- def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
-     for header, value in headers:
-         if header == name:
-diff --git a/app/services/tts/elevenlabs_client.py b/app/services/tts/elevenlabs_client.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..2c2f78264379a0edc6fa2d2d27efe243f14bd811
---- /dev/null
-+++ b/app/services/tts/elevenlabs_client.py
-@@ -0,0 +1,184 @@
-+"""ElevenLabs TTS provider that streams PCM16 audio for Engine v2."""
-+from __future__ import annotations
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
 +
-+import asyncio
-+import contextlib
-+import logging
-+import os
-+from dataclasses import dataclass
-+from typing import Any, AsyncIterator, Dict, Optional
++        def _handle_audio_event(event: dict) -> None:
++            if event.get("sid") != ctx.sid:
++                return
++            chunk = event.get("chunk")
++            if isinstance(chunk, (bytes, bytearray, memoryview)):
++                chunk_bytes = bytes(chunk)
++            else:
++                return
 +
-+import httpx
++            def _deliver() -> None:
++                task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
++                ctx.audio_tasks.add(task)
 +
-+from app.telemetry import bus
-+from app.voice_v2.tts_base import TTSProviderBase
++                def _on_done(done: asyncio.Task[None]) -> None:
++                    ctx.audio_tasks.discard(done)
++                    try:
++                        done.result()
++                    except asyncio.CancelledError:
++                        pass
++                    except Exception:  # pragma: no cover - defensive logging
++                        _logger.exception("Failed to deliver audio chunk for sid %s", ctx.sid)
 +
-+_logger = logging.getLogger(__name__)
++                task.add_done_callback(_on_done)
 +
-+_API_BASE_URL = "https://api.elevenlabs.io/v1"
-+_OUTPUT_FORMAT = "pcm_16000"
-+_SAMPLE_RATE_HZ = 16000
-+_CHANNELS = 1
-+_SAMPLE_WIDTH_BYTES = 2  # 16-bit
-+# Emit roughly 40 ms of audio per chunk (16 kHz mono => 1280 bytes per slice).
-+_CHUNK_BYTES = int(_SAMPLE_RATE_HZ * _CHANNELS * _SAMPLE_WIDTH_BYTES * 0.04)
-+
-+
-+@dataclass
-+class ElevenLabsStream:
-+    """Asynchronous iterator that yields PCM chunks from ElevenLabs."""
-+
-+    response_cm: Any
-+    chunk_bytes: int = _CHUNK_BYTES
-+
-+    def __post_init__(self) -> None:
-+        self._response: httpx.Response | None = None
-+        self._queue: asyncio.Queue[bytes | object] = asyncio.Queue()
-+        self._producer: asyncio.Task[None] | None = None
-+        self._sentinel = object()
-+        self._error: BaseException | None = None
-+        self._closed = False
-+
-+    def __await__(self):  # type: ignore[override]
-+        return self._start().__await__()
-+
-+    async def _start(self) -> "ElevenLabsStream":
-+        response = await self.response_cm.__aenter__()
-+        self._response = response
-+        response.raise_for_status()
-+        self._producer = asyncio.create_task(self._drain())
-+        return self
-+
-+    async def _drain(self) -> None:
-+        assert self._response is not None
-+        buffer = bytearray()
-+        try:
-+            async for data in self._response.aiter_bytes():
-+                if not data:
-+                    continue
-+                buffer.extend(data)
-+                while len(buffer) >= self.chunk_bytes:
-+                    await self._queue.put(bytes(buffer[: self.chunk_bytes]))
-+                    del buffer[: self.chunk_bytes]
-+            if buffer:
-+                await self._queue.put(bytes(buffer))
-+        except asyncio.CancelledError:
-+            raise
-+        except Exception as exc:  # pragma: no cover - defensive
-+            self._error = exc
-+        finally:
-+            await self._queue.put(self._sentinel)
-+            await self._close_response()
-+
-+    def __aiter__(self) -> AsyncIterator[bytes]:
-+        return self._iterate()
-+
-+    async def _iterate(self) -> AsyncIterator[bytes]:
-+        while True:
-+            item = await self._queue.get()
-+            if item is self._sentinel:
-+                break
-+            yield bytes(item)
-+        if self._error is not None:
-+            raise self._error
-+
-+    async def aclose(self) -> None:
-+        if self._closed:
-+            return
-+        producer = self._producer
-+        if producer is not None and not producer.done():
-+            producer.cancel()
-+        if producer is not None:
-+            with contextlib.suppress(asyncio.CancelledError):
-+                await producer
-+        await self._close_response()
-+
-+    async def cancel(self) -> None:
-+        await self.aclose()
-+
-+    async def _close_response(self) -> None:
-+        if self._closed:
-+            return
-+        self._closed = True
-+        if self._response is not None:
 +            try:
-+                await self.response_cm.__aexit__(None, None, None)
-+            finally:
-+                self._response = None
++                loop.call_soon_threadsafe(_deliver)
++            except RuntimeError:
++                pass
 +
-+
-+class ElevenLabsTTSProvider(TTSProviderBase):
-+    """TTS provider that requests streaming PCM 16 kHz audio from ElevenLabs."""
-+
-+    def __init__(
++        ctx.audio_subscription_token = bus.subscribe(EVT_WS_AUDIO_SEND, _handle_audio_event)
+         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
+ 
+     def _offer_partial_frame(
+         self,
+         ctx: AdapterContext,
+         loop: asyncio.AbstractEventLoop,
+         payload: Dict[str, Any],
+         enqueue: Callable[[Dict[str, Any]], None],
+     ) -> None:
+         def _emit(frame: Dict[str, Any]) -> None:
+             prepared = self._prepare_partial_frame(ctx, frame)
+             enqueue(prepared)
+ 
+         ctx.partial_coalescer.offer(
+             payload,
+             now_ms=self._now_ms(),
+             loop=loop,
+             emit=_emit,
+         )
+ 
+     def _prepare_partial_frame(self, ctx: AdapterContext, payload: Dict[str, Any]) -> Dict[str, Any]:
+         prepared = dict(payload)
+         seq_value = prepared.get("partial_seq")
+         if isinstance(seq_value, int) and seq_value > ctx.partial_seq:
+             ctx.partial_seq = seq_value
+@@ -1025,83 +1060,109 @@ class ChatV2Adapter:
+         return sanitized
+ 
+     @staticmethod
+     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
+         if isinstance(raw, dict):
+             return raw
+         if isinstance(raw, str):
+             try:
+                 decoded = json.loads(raw)
+             except json.JSONDecodeError:
+                 return None
+             if isinstance(decoded, dict):
+                 return decoded
+         return None
+ 
+     async def _run_outbound_sender(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> None:
+         queue = ctx.outbox
+         if queue is None:
+             return
+         try:
+             while True:
+                 payload = await queue.get()
+                 try:
+-                    await self._send_outbound_frame(send, payload)
++                    await self._send_outbound_frame(ctx, send, payload)
+                 except asyncio.CancelledError:
+                     raise
+                 except Exception:  # pragma: no cover - defensive
+                     _logger.exception("Failed to deliver outbound frame for sid %s", ctx.sid)
+                 finally:
+                     queue.task_done()
+         except asyncio.CancelledError:
+             raise
+         finally:
+             ctx.outbox = None
+ 
+     async def _send_outbound_frame(
+-        self, send: Callable[[dict], Awaitable[None]], payload: Dict[str, Any]
 +        self,
-+        *,
-+        telemetry_bus=bus,
-+        retries: Optional[int] = None,
-+        timeout_s: Optional[float] = None,
-+    ) -> None:
-+        api_key = os.getenv("ELEVENLABS_API_KEY")
-+        if not api_key:
-+            raise RuntimeError("ELEVENLABS_API_KEY must be set for ElevenLabsTTSProvider")
-+        default_voice = os.getenv("ELEVENLABS_VOICE_ID") or None
-+        retry_count = retries if retries is not None else int(os.getenv("TTS_RETRIES", "1") or 1)
-+        timeout = timeout_s if timeout_s is not None else float(os.getenv("TTS_TIMEOUT_S", "8") or 8)
++        ctx: AdapterContext,
++        send: Callable[[dict], Awaitable[None]],
++        payload: Dict[str, Any],
+     ) -> None:
+-        text = json.dumps(payload, separators=(",", ":"))
+-        await send({"type": "websocket.send", "text": text})
++        lock = self._ensure_send_lock(ctx)
++        async with lock:
++            text = json.dumps(payload, separators=(",", ":"))
++            await send({"type": "websocket.send", "text": text})
 +
-+        super().__init__(
-+            vendor="elevenlabs",
-+            telemetry_bus=telemetry_bus,
-+            retries=max(0, retry_count),
-+            timeout_s=max(float(timeout), 0.1),
-+        )
-+        self._api_key = api_key
-+        self._default_voice_id = default_voice
-+        self._client: httpx.AsyncClient | None = None
-+        self._client_lock = asyncio.Lock()
-+        self._timeout = httpx.Timeout(None, connect=5.0, write=5.0, read=None)
-+
-+    @property
-+    def default_voice_id(self) -> str | None:
-+        return self._default_voice_id
-+
-+    async def aclose(self) -> None:
-+        client = self._client
-+        self._client = None
-+        if client is not None:
-+            await client.aclose()
-+
-+    async def _synthesize_impl(self, text: str, *, voice_id: Optional[str] = None, **kwargs) -> ElevenLabsStream:
-+        if not isinstance(text, str):
-+            raise TypeError("text must be a string")
-+        if not text:
-+            raise ValueError("text must not be empty")
-+        target_voice = voice_id or self._default_voice_id
-+        if not target_voice:
-+            raise RuntimeError("voice_id must be provided for ElevenLabs synthesis")
-+
-+        client = await self._get_client()
-+        payload: Dict[str, object] = {"text": text, "output_format": _OUTPUT_FORMAT}
-+        model_id = kwargs.get("model_id") or os.getenv("ELEVENLABS_MODEL_ID")
-+        if isinstance(model_id, str) and model_id:
-+            payload["model_id"] = model_id
-+
-+        headers = {"xi-api-key": self._api_key, "accept": "application/octet-stream"}
-+        response_cm = client.stream(
-+            "POST",
-+            f"/text-to-speech/{target_voice}/stream",
-+            json=payload,
-+            headers=headers,
-+            params={"optimize_streaming_latency": "4"},
-+        )
-+        return ElevenLabsStream(response_cm=response_cm)
-+
-+    async def _get_client(self) -> httpx.AsyncClient:
-+        client = self._client
-+        if client is not None:
-+            return client
-+        async with self._client_lock:
-+            if self._client is None:
-+                self._client = httpx.AsyncClient(base_url=_API_BASE_URL, timeout=self._timeout)
-+            return self._client
-+
-+
-+__all__ = ["ElevenLabsTTSProvider", "ElevenLabsStream"]
-diff --git a/app/voice_v2/tts_runtime.py b/app/voice_v2/tts_runtime.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..94774def31a32a32463e7fa92f669aa78db360e1
---- /dev/null
-+++ b/app/voice_v2/tts_runtime.py
-@@ -0,0 +1,299 @@
-+"""Runtime that bridges EVT_NLG events to ElevenLabs streaming synthesis."""
-+from __future__ import annotations
-+
-+import asyncio
-+import logging
-+import os
-+import uuid
-+from dataclasses import dataclass
-+from typing import Any, Dict, Mapping, Optional
-+
-+from app.telemetry import bus
-+from app.voice_v2 import EVT_NLG, EVT_TTS_END
-+from app.voice_v2.engine import EngineV2
-+from app.voice_v2.tts_base import (
-+    ProviderCircuitOpenError,
-+    ProviderTimeoutError,
-+    TTSProviderBase,
-+)
-+from app.services.tts.elevenlabs_client import ElevenLabsStream, ElevenLabsTTSProvider
-+
-+_logger = logging.getLogger(__name__)
-+
-+
-+@dataclass
-+class _SynthesisState:
-+    """Track an in-flight synthesis task for a session."""
-+
-+    utt_id: str
-+    post_hold_ms: int
-+    emit_end: bool = True
-+    task: asyncio.Task[Any] | None = None
-+    stream: ElevenLabsStream | None = None
-+
-+
-+class TTSRuntime:
-+    """Subscribe to NLG telemetry and orchestrate server-side TTS."""
-+
-+    def __init__(
++    async def _send_audio_frame(
 +        self,
-+        *,
-+        engine: EngineV2,
-+        provider: TTSProviderBase | None = None,
-+        telemetry_bus=bus,
++        ctx: AdapterContext,
++        send: Callable[[dict], Awaitable[None]],
++        chunk: bytes,
 +    ) -> None:
-+        if engine is None:
-+            raise ValueError("engine must be provided")
++        lock = self._ensure_send_lock(ctx)
++        async with lock:
++            await send({"type": "websocket.send", "bytes": chunk})
+ 
+     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
+         token = ctx.subscription_token
+         ctx.subscription_token = None
+         if token:
+             bus.unsubscribe(token)
+ 
++        audio_token = ctx.audio_subscription_token
++        ctx.audio_subscription_token = None
++        if audio_token:
++            bus.unsubscribe(audio_token)
 +
-+        self._engine = engine
-+        self._bus = telemetry_bus
-+        self._loop: asyncio.AbstractEventLoop | None = None
-+        self._default_post_hold_ms = self._load_default_post_hold()
-+        self._utt_seq: Dict[str, int] = {}
-+        self._states: Dict[str, _SynthesisState] = {}
-+        self._subscriptions: list[str] = []
-+
-+        if provider is None:
-+            provider = self._build_provider()
-+        self._provider = provider
-+
-+        if self._provider is None:
-+            _logger.info("TTS runtime disabled: ELEVENLABS_API_KEY not configured")
-+            return
-+
-+        self._subscriptions.append(self._bus.subscribe(EVT_NLG, self._handle_nlg_event))
-+        self._subscriptions.append(self._bus.subscribe(EVT_TTS_END, self._handle_tts_end_event))
-+
-+    # ------------------------------------------------------------------
-+    # Event handlers
-+    # ------------------------------------------------------------------
-+    def _handle_nlg_event(self, event: Dict[str, Any]) -> None:
-+        provider = self._provider
-+        if provider is None:
-+            return
-+
-+        sid = event.get("sid")
-+        text = event.get("text")
-+        req_id = event.get("req_id")
-+
-+        if not isinstance(sid, str) or not sid:
-+            return
-+        if not isinstance(text, str) or not text.strip():
-+            return
-+        if not isinstance(req_id, str) or not req_id:
-+            req_id = f"req-{uuid.uuid4().hex}"
-+
-+        loop = self._ensure_loop()
-+        if loop is None:
-+            _logger.warning("No running event loop for TTS synthesis", extra={"sid": sid})
-+            return
-+
-+        utt_id = self._next_utt_id(sid)
-+        post_hold_ms = self._resolve_post_hold_ms()
-+        voice_id = self._resolve_voice_id(provider)
-+
-+        if voice_id is None:
-+            _logger.warning("Skipping TTS synthesis; no voice_id available", extra={"sid": sid})
-+            return
-+
-+        self._cancel_state(sid, reason="superseded")
-+
-+        state = _SynthesisState(utt_id=utt_id, post_hold_ms=post_hold_ms)
-+        self._states[sid] = state
-+
-+        task = loop.create_task(
-+            self._run_synthesis(sid, req_id, text, voice_id, state),
-+            name=f"tts-runtime-{sid}-{utt_id}",
-+        )
-+        state.task = task
-+        task.add_done_callback(lambda task, sid=sid, state=state: self._on_task_done(sid, state, task))
-+
-+    def _handle_tts_end_event(self, event: Dict[str, Any]) -> None:
-+        sid = event.get("sid")
-+        if not isinstance(sid, str) or not sid:
-+            return
-+
-+        state = self._states.get(sid)
-+        if state is None:
-+            return
-+
-+        utt_meta = self._extract_utt_id(event.get("meta"))
-+        if utt_meta != state.utt_id:
-+            return
-+
-+        if event.get("reason") == "canceled":
-+            state.emit_end = False
-+            task = state.task
-+            if task is not None and not task.done():
-+                task.cancel()
-+
-+    # ------------------------------------------------------------------
-+    # Synthesis lifecycle
-+    # ------------------------------------------------------------------
-+    async def _run_synthesis(
-+        self,
-+        sid: str,
-+        req_id: str,
-+        text: str,
-+        voice_id: Optional[str],
-+        state: _SynthesisState,
-+    ) -> None:
-+        provider = self._provider
-+        if provider is None:
-+            return
-+
-+        stream: ElevenLabsStream | None = None
-+        start_emitted = False
-+
-+        try:
-+            stream = await provider.synthesize(text, voice_id=voice_id)
-+            state.stream = stream
-+        except ProviderCircuitOpenError:
-+            _logger.warning("ElevenLabs circuit open; skipping synthesis", extra={"sid": sid})
-+            return
-+        except ProviderTimeoutError:
-+            _logger.warning("ElevenLabs synthesis timed out", extra={"sid": sid})
-+            return
-+        except asyncio.CancelledError:
-+            raise
-+        except Exception as exc:  # pragma: no cover - defensive
-+            _logger.exception("ElevenLabs synthesis failed", extra={"sid": sid, "error": str(exc)})
-+            return
-+
-+        if self._states.get(sid) is not state:
-+            if stream is not None:
-+                await stream.aclose()
-+            return
-+
-+        try:
-+            self._engine.on_tts_start(sid, state.utt_id, state.post_hold_ms)
-+            start_emitted = True
-+
-+            async for chunk in stream:
-+                if not chunk:
-+                    continue
-+                self._engine.emit_tts_audio_chunk(sid, chunk)
-+        except asyncio.CancelledError:
-+            raise
-+        except Exception as exc:  # pragma: no cover - defensive
-+            _logger.exception(
-+                "Error streaming ElevenLabs audio", extra={"sid": sid, "utt_id": state.utt_id, "error": str(exc)}
-+            )
-+        finally:
-+            if stream is not None:
-+                try:
-+                    await stream.aclose()
-+                except Exception:  # pragma: no cover - defensive
-+                    _logger.debug("Error closing ElevenLabs stream", exc_info=True)
-+            if start_emitted and state.emit_end:
-+                self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
-+
-+    def _on_task_done(self, sid: str, state: _SynthesisState, task: asyncio.Task[Any]) -> None:
-+        current = self._states.get(sid)
-+        if current is state:
-+            self._states.pop(sid, None)
-+
-+        try:
-+            task.result()
-+        except asyncio.CancelledError:
-+            pass
-+        except Exception:  # pragma: no cover - defensive
-+            _logger.exception("TTS synthesis task failed", extra={"sid": sid})
-+
-+    # ------------------------------------------------------------------
-+    # Helpers
-+    # ------------------------------------------------------------------
-+    def _build_provider(self) -> TTSProviderBase | None:
-+        api_key = os.getenv("ELEVENLABS_API_KEY")
-+        if not api_key:
-+            return None
-+        try:
-+            return ElevenLabsTTSProvider(telemetry_bus=self._bus)
-+        except Exception:  # pragma: no cover - defensive
-+            _logger.exception("Failed to initialize ElevenLabsTTSProvider")
-+            return None
-+
-+    def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
-+        loop = self._loop
-+        if loop is not None and loop.is_running():
-+            return loop
-+        try:
-+            loop = asyncio.get_running_loop()
-+        except RuntimeError:
-+            return None
-+        self._loop = loop
-+        return loop
-+
-+    def _next_utt_id(self, sid: str) -> str:
-+        current = self._utt_seq.get(sid, 0) + 1
-+        self._utt_seq[sid] = current
-+        return f"utt-{current:05d}"
-+
-+    def _resolve_post_hold_ms(self) -> int:
-+        snapshot = self._engine.policy_snapshot or {}
-+        hold: Optional[int] = None
-+        voice_block = snapshot.get("voice")
-+        if isinstance(voice_block, Mapping):
-+            candidate = voice_block.get("post_hold_ms")
-+            if isinstance(candidate, (int, float)):
-+                hold = int(candidate)
-+        if hold is None:
-+            candidate = snapshot.get("post_hold_ms")
-+            if isinstance(candidate, (int, float)):
-+                hold = int(candidate)
-+        if hold is None or hold < 0:
-+            hold = self._default_post_hold_ms
-+        return hold
-+
-+    def _resolve_voice_id(self, provider: TTSProviderBase) -> Optional[str]:
-+        resolver = getattr(self._engine, "_voice_profile", None)
-+        if callable(resolver):
-+            try:
-+                voice_id, _ = resolver()
-+                if isinstance(voice_id, str) and voice_id:
-+                    return voice_id
-+            except Exception:  # pragma: no cover - defensive
-+                _logger.debug("Unable to resolve voice profile from engine", exc_info=True)
-+        default_voice = getattr(provider, "default_voice_id", None)
-+        if isinstance(default_voice, str) and default_voice:
-+            return default_voice
-+        return None
-+
-+    def _cancel_state(self, sid: str, *, reason: str) -> None:
-+        state = self._states.pop(sid, None)
-+        if state is None:
-+            return
-+        state.emit_end = False
-+        task = state.task
-+        if task is not None and not task.done():
+         task = ctx.outbound_task
+         ctx.outbound_task = None
+         if task:
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task
+ 
+         ctx.partial_coalescer.cancel()
+ 
++        for task in list(ctx.audio_tasks):
 +            task.cancel()
-+        try:
-+            self._engine.cancel_current_tts(sid, reason=reason)
-+        except Exception:  # pragma: no cover - defensive
-+            _logger.debug("Engine cancel_current_tts failed", exc_info=True)
++            with contextlib.suppress(asyncio.CancelledError):
++                await task
++        ctx.audio_tasks.clear()
 +
+         ctx.outbox = None
+ 
+     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
+         token = ctx.asr_subscription_token
+         ctx.asr_subscription_token = None
+         if token:
+             bus.unsubscribe(token)
+         ctx.asr_ready = False
+ 
+     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
+         """Record the estimated outbound queue depth and emit diagnostics if needed."""
+ 
+         ctx = self._contexts.get(sid)
+         if ctx is None:
+             return
+ 
+         if not isinstance(queued, int):
+             try:
+                 queued = int(queued)
+             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+                 raise TypeError("queued must be an integer") from exc
+ 
+         await self._update_backpressure(ctx, max(0, queued))
+ 
+     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
+@@ -1274,35 +1335,43 @@ class ChatV2Adapter:
+         if not payload:
+             return None
+         preview = payload.decode("utf-8", "replace")
+         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
+         if len(preview) > limit:
+             return f"{preview[: limit - 1]}…"
+         return preview
+ 
+     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
+         ctx.outbound_queue_depth = queued
+         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
+             ctx.backpressure_state = "on"
+             await self._publish(
+                 EVT_BACKPRESSURE_ON,
+                 ctx.sid,
+                 {"queue_depth": queued, "state": "on"},
+             )
+         elif ctx.backpressure_state == "on" and queued < QUEUE_OFF_THRESHOLD:
+             ctx.backpressure_state = "off"
+             await self._publish(
+                 EVT_BACKPRESSURE_OFF,
+                 ctx.sid,
+                 {"queue_depth": queued, "state": "off"},
+             )
+ 
 +    @staticmethod
-+    def _extract_utt_id(meta: Any) -> Optional[str]:
-+        if not isinstance(meta, Mapping):
-+            return None
-+        tts_meta = meta.get("tts")
-+        if not isinstance(tts_meta, Mapping):
-+            return None
-+        utt_id = tts_meta.get("utt_id")
-+        if isinstance(utt_id, str):
-+            return utt_id
-+        return None
++    def _ensure_send_lock(ctx: AdapterContext) -> asyncio.Lock:
++        lock = ctx.send_lock
++        if lock is None:
++            lock = asyncio.Lock()
++            ctx.send_lock = lock
++        return lock
 +
-+    def _load_default_post_hold(self) -> int:
-+        raw = os.getenv("TTS_POST_HOLD_MS")
-+        if raw is None:
-+            return 200
+ 
+ __all__ = [
+     "ChatV2Adapter",
+     "CHAT_V2_SUBPROTOCOL",
+     "QUEUE_ON_THRESHOLD",
+     "QUEUE_OFF_THRESHOLD",
+     "EVT_BACKPRESSURE_ON",
+     "EVT_BACKPRESSURE_OFF",
+     "EVT_WS_OUTBOX_DROP",
+ ]
+diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
+index 15b241ae73be6e98f34a1b901cbd86dcf5cb35bd..46cfcac6fa98bca3986209d87d94b3f6214c4a8b 100644
+--- a/docs/10_CONTRACT_WS.md
++++ b/docs/10_CONTRACT_WS.md
+@@ -70,53 +70,59 @@ Copy code
+   "type": "asr.ready",
+   "vendor": "speechmatics",
+   "input": { "container": "raw", "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }
+ }
+ Binary message rule: each WS binary message carries an arbitrary contiguous chunk of the current input stream (WebM segment/cluster bytes for Opus, or a raw PCM chunk). The server assigns/validates sequencing (see “Binary audio sequencing & jitter buffer”).
+ 
+ audio.header (optional, not for selecting codecs):
+ Clients may not override format. audio.header can supply stream hints like a starting sequence index:
+ 
+ json
+ Copy code
+ {"type":"audio.header","seq_start":0}
+ Optional admin toggle (dev only):
+ 
+ json
+ Copy code
+ {"type":"admin.toggle","barge_in_enabled":true}
+ Provider selection is policy‑controlled; do not flip providers via WS.
+ 
+ Optional resume handshake (see “Reconnect / Resume”):
+ 
+ json
+ Copy code
+ {"type":"client.resume","resume_token":"<string>"}
+ Server → Client frames
+-json
+-Copy code
++
++- **JSON text frames** (policy/info/chat/etc.) follow the telemetry envelope shown below. Examples:
++
++```json
+ {"type":"pong","t":1730000000000}
++```
++
++- **Binary audio frames** carry raw PCM s16le chunks at **16 kHz mono**. The playback descriptor is announced once per connection via `info.audio`, which already includes `{ "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }`. Each binary frame is a contiguous PCM buffer with no additional header bytes.
++
+ Policy (client-visible subset)
+ The server may push policy updates. Client-visible frames follow the telemetry
+ envelope (`type`, `ts_ms`, `level`, …) and the server **strips any policy keys
+ outside the stable subset** before sending to browsers. The client‑stable subset
+ is:
+ 
+ json
+ Copy code
+ {
+   "type": "policy.interaction",
+   "ts_ms": 1730000000000,
+   "level": "info",  
+   "policy": {
+     "mode": "idle",                  // "idle" | "assistant_speaking" | ...
+     "allow_auto_vad": true,
+     "barge_in_enabled": true
+   }
+ }
+ Other internal policy keys (e.g., telemetry, sampling) may be present in server telemetry/export, but MUST NOT be sent over WS to browsers as part of policy.interaction. (See ADR notes.)
+ 
+ ### Persona modes & generation (informational)
+ 
+ - The server’s Generator composes messages using a mode-aware persona (single source of truth).
+ - Modes (enum): `clarify`, `outline`, `deep_dive`, `compare`, `steps`, `next_actions`.
+ - Each mode has a short instruction that shapes the assistant’s response; these are server-side and not sent to the client.
+diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
+index c2d249feaebc4d9d9259dc6ab0f32df2c371e498..f74b128b633ee4fc21ec8c8d1ada42900f5d8125 100644
+--- a/tests/test_adapter_outbound_bridge.py
++++ b/tests/test_adapter_outbound_bridge.py
+@@ -1,163 +1,182 @@
+ """Tests for the outbound WebSocket bridge in the chat.v2 adapter."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import json
+ import unittest
+ from typing import Any, Callable, Dict
+ 
+ from app.telemetry import bus
+-from app.voice_v2 import EVT_WS_JSON_SEND
++from app.voice_v2 import EVT_WS_AUDIO_SEND, EVT_WS_JSON_SEND
+ from app.ws.adapter import (
+     CHAT_V2_SUBPROTOCOL,
+     EVT_WS_OUTBOX_DROP,
+     ChatV2Adapter,
+ )
+ 
+ 
+ class RecordingEngine:
+     """Engine stub that captures the opened session identifier."""
+ 
+     def __init__(self) -> None:
+         self.open_sid: str | None = None
+ 
+     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
+         self.open_sid = sid
+ 
+ 
+ class OutboundHarness:
+     """Helper for driving the adapter within an asyncio test."""
+ 
+     def __init__(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
+         self.adapter = adapter
+         self.engine = engine
+         self.scope = {
+             "type": "websocket",
+             "subprotocols": [CHAT_V2_SUBPROTOCOL],
+             "headers": [(b"authorization", b"Bearer test-token")],
+             "client": ("127.0.0.1", 1234),
+         }
+         self._inbound: asyncio.Queue[dict] = asyncio.Queue()
+         self.sent: list[dict] = []
+         self.outbound_frames: list[Dict[str, Any]] = []
++        self.binary_frames: list[bytes] = []
+         self.accepted = False
+         self._task: asyncio.Task[None] | None = None
+ 
+     async def start(self) -> None:
+         self._task = asyncio.create_task(self.adapter(self.scope, self._receive, self._send))
+         await self._inbound.put({"type": "websocket.connect"})
+         await self.wait_for(lambda: self.accepted)
+         await self.wait_for(lambda: self.engine.open_sid is not None)
+ 
+     async def _receive(self) -> dict:
+         return await self._inbound.get()
+ 
+     async def _send(self, message: dict) -> None:
+         self.sent.append(message)
+         if message.get("type") == "websocket.accept":
+             self.accepted = True
+         if message.get("type") == "websocket.send" and message.get("text") is not None:
+             self.outbound_frames.append(json.loads(message["text"]))
++        if message.get("type") == "websocket.send" and message.get("bytes") is not None:
++            self.binary_frames.append(message["bytes"])
+ 
+     async def wait_for(self, predicate: Callable[[], bool], timeout: float = 1.0) -> None:
+         loop = asyncio.get_running_loop()
+         deadline = loop.time() + timeout
+         while not predicate():
+             if loop.time() >= deadline:
+                 raise TimeoutError("timed out waiting for condition")
+             await asyncio.sleep(0.01)
+ 
+     async def wait_for_outbound(
+         self, predicate: Callable[[Dict[str, Any]], bool], timeout: float = 1.0
+     ) -> Dict[str, Any]:
+         loop = asyncio.get_running_loop()
+         deadline = loop.time() + timeout
+         while True:
+             for frame in self.outbound_frames:
+                 if predicate(frame):
+                     return frame
+             if loop.time() >= deadline:
+                 raise TimeoutError("timed out waiting for outbound frame")
+             await asyncio.sleep(0.01)
+ 
+     async def close(self) -> None:
+         if self._task is None:
+             return
+         await self._inbound.put({"type": "websocket.disconnect", "code": 1000})
+         await self._task
+         self._task = None
+ 
+     @property
+     def sid(self) -> str:
+         sid = self.engine.open_sid
+         if sid is None:
+             raise RuntimeError("connection not yet open")
+         return sid
+ 
++    async def wait_for_binary(
++        self, predicate: Callable[[bytes], bool], timeout: float = 1.0
++    ) -> bytes:
++        loop = asyncio.get_running_loop()
++        deadline = loop.time() + timeout
++        while True:
++            for chunk in self.binary_frames:
++                if predicate(chunk):
++                    return chunk
++            if loop.time() >= deadline:
++                raise TimeoutError("timed out waiting for binary frame")
++            await asyncio.sleep(0.01)
++
+ 
+ class TestAdapterOutboundBridge(unittest.TestCase):
+     """Integration tests covering the server-to-client outbound bridge."""
+ 
+     def setUp(self) -> None:
+         bus.reset()
+ 
+     def tearDown(self) -> None:
+         bus.reset()
+ 
+     def test_happy_path_delivers_policy_interaction(self) -> None:
+         asyncio.run(self._test_happy_path())
+ 
+     def test_chat_message_forwarded_with_matching_sid(self) -> None:
+         asyncio.run(
+             self._test_payload_forwarded({"type": "chat.message", "message_id": "m-1"})
+         )
+ 
+     def test_chat_history_forwarded_with_matching_sid(self) -> None:
+         asyncio.run(
+             self._test_payload_forwarded(
+                 {
+                     "type": "chat.history",
+                     "messages": [{"id": "m-1", "role": "user", "text": "hi"}],
+                 }
+             )
+         )
+ 
+     def test_sid_isolation_drops_other_sessions(self) -> None:
+         asyncio.run(self._test_sid_isolation())
+ 
+     def test_chat_message_dropped_for_other_sessions(self) -> None:
+         asyncio.run(
+             self._test_payload_other_sid_drop({"type": "chat.message", "message_id": "ignored"})
+         )
+ 
+     def test_allow_list_blocks_unknown_types(self) -> None:
+         asyncio.run(self._test_allow_list())
+ 
+     def test_backpressure_reports_drops(self) -> None:
+         asyncio.run(self._test_backpressure())
+ 
++    def test_audio_frames_forwarded_as_binary_messages(self) -> None:
++        asyncio.run(self._test_audio_forwarding())
++
+     async def _test_happy_path(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+             payload = {"type": "policy.interaction", "interaction_id": "abc123"}
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+ 
+             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction")
+             self.assertEqual(frame, payload)
+ 
+             frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
+             self.assertEqual(len(frames), 1)
+         finally:
+             await harness.close()
+ 
+     async def _test_payload_forwarded(self, payload: Dict[str, Any]) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+ 
+@@ -221,28 +240,48 @@ class TestAdapterOutboundBridge(unittest.TestCase):
+ 
+         def _record_drop(event: dict) -> None:
+             nonlocal drop_count
+             meta = event.get("meta") or {}
+             dropped = meta.get("dropped")
+             if isinstance(dropped, int):
+                 drop_count += dropped
+ 
+         token = bus.subscribe(EVT_WS_OUTBOX_DROP, _record_drop)
+         try:
+             for idx in range(300):
+                 bus.publish(
+                     {
+                         "type": EVT_WS_JSON_SEND,
+                         "sid": harness.sid,
+                         "payload": {"type": "info", "seq": idx},
+                     }
+                 )
+ 
+             await harness.wait_for_outbound(lambda data: data.get("type") == "info")
+             await harness.wait_for(lambda: drop_count > 0)
+         finally:
+             bus.unsubscribe(token)
+             await harness.close()
+ 
++    async def _test_audio_forwarding(self) -> None:
++        engine = RecordingEngine()
++        adapter = ChatV2Adapter(engine=engine)
++        harness = OutboundHarness(adapter, engine)
++        await harness.start()
 +        try:
-+            value = int(float(raw))
-+        except (TypeError, ValueError):
-+            _logger.warning("Invalid TTS_POST_HOLD_MS=%r; defaulting to 200", raw)
-+            return 200
-+        return max(0, value)
++            chunk = b"\x01\x02" * 80
++            event = {
++                "type": EVT_WS_AUDIO_SEND,
++                "sid": harness.sid,
++                "chunk": chunk,
++                "meta": {"byte_count": len(chunk)},
++            }
++            bus.publish(event)
 +
++            received = await harness.wait_for_binary(lambda data: data == chunk)
++            self.assertEqual(received, chunk)
++        finally:
++            await harness.close()
 +
-+__all__ = ["TTSRuntime"]
+ 
+ if __name__ == "__main__":  # pragma: no cover - convenience
+     unittest.main()
