@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
 from app.admin.flow_api import handle_flow_trace, handle_flow_zip
+from app.security.auth import authorize_admin
 from app.telemetry.exporter import FileExporter
 from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_runtime import TTSRuntime
@@ -479,6 +480,7 @@ def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
     if handler is None:
         return None
 
+    handler = partial(_enforce_admin_auth, handler)
     if _admin_cors_enabled():
         return partial(_apply_admin_cors, handler)
 
@@ -548,6 +550,23 @@ def _encode_header_value(value: str) -> Optional[bytes]:
         return value.encode("latin1")
     except UnicodeEncodeError:  # pragma: no cover - defensive
         return None
+
+
+async def _enforce_admin_auth(
+    handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
+) -> Response:
+    raw_headers = scope.get("headers", ())
+    auth_value = _decode_header(raw_headers, b"authorization")
+    headers = {}
+    if auth_value is not None:
+        headers["authorization"] = auth_value
+
+    authorized, reason, _claims = authorize_admin(headers, scope)
+    if not authorized:
+        await _drain_request_body(receive)
+        return json_response(status=401, error="unauthorized", detail=reason)
+
+    return await handler(scope, receive)
 
 asgi = app
 

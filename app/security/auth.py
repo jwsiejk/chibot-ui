@@ -11,6 +11,7 @@ import requests
 
 from app.config import get_env
 from app.security.browser_token import extract_bearer_from_query
+from app.telemetry import bus as telemetry_bus
 
 # JWKS cache keyed by kid or the fallback marker for kid-less tokens.
 _JWKS_CACHE: Dict[str, Dict[str, int]] = {}
@@ -286,4 +287,78 @@ def authorize(
     return result[:2] if legacy_mode else result
 
 
-__all__ = ["authorize", "verify_jwt"]
+def authorize_admin(
+    headers: Dict[str, str] | None,
+    scope: Dict[str, object],
+    *,
+    require_token: bool | None = None,
+) -> Tuple[bool, str | None, Dict[str, object] | None]:
+    """Authorize admin HTTP requests with query-token support and telemetry."""
+
+    cache_key = "_admin_auth_cache"
+    cache = scope.get(cache_key)
+    lookup_key = require_token if require_token is not None else "__default__"
+    if isinstance(cache, dict) and lookup_key in cache:
+        cached = cache[lookup_key]
+        if isinstance(cached, tuple) and len(cached) == 3:
+            return cached  # type: ignore[return-value]
+
+    headers_dict = headers or {}
+    authorized, reason, claims = authorize(
+        headers_dict,
+        allow_query_token=True,
+        scope=scope,
+        require_token=require_token,
+    )
+
+    if not authorized:
+        _log_admin_unauthorized(scope, headers_dict, reason)
+
+    if not isinstance(cache, dict):
+        cache = {}
+        scope[cache_key] = cache
+    cache[lookup_key] = (authorized, reason, claims)
+    return authorized, reason, claims
+
+
+def _log_admin_unauthorized(
+    scope: Dict[str, object], headers: Dict[str, str], reason: str | None
+) -> None:
+    """Emit a single telemetry breadcrumb for unauthorized admin access."""
+
+    try:
+        query_token, _ = extract_bearer_from_query(scope)
+    except Exception:  # pragma: no cover - defensive
+        query_token = None
+
+    path_value = scope.get("path")
+    if isinstance(path_value, bytes):
+        path_value = path_value.decode("latin1", "ignore")
+    elif not isinstance(path_value, str):
+        path_value = "" if path_value is None else str(path_value)
+
+    method_value = scope.get("method")
+    if isinstance(method_value, bytes):
+        method_value = method_value.decode("latin1", "ignore")
+    elif not isinstance(method_value, str):
+        method_value = "GET" if method_value is None else str(method_value)
+
+    meta: Dict[str, object] = {
+        "path": path_value or "",
+        "method": method_value or "GET",
+        "auth_header": "present" if headers.get("authorization") else "absent",
+        "query_token": "present" if query_token else "absent",
+    }
+    if reason:
+        meta["reason"] = reason
+
+    telemetry_bus.publish(
+        {
+            "type": "EVT_ADMIN_AUTH",
+            "level": "warn" if _is_prod() else "info",
+            "meta": meta,
+        }
+    )
+
+
+__all__ = ["authorize", "authorize_admin", "verify_jwt"]

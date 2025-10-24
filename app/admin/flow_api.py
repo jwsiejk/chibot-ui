@@ -9,7 +9,7 @@ from typing import Awaitable, Callable, Dict, Iterable, Optional, Sequence
 from urllib.parse import parse_qs
 
 from app.admin.flow_zip import build_flow_zip
-from app.security.auth import authorize
+from app.security.auth import authorize_admin
 
 
 EXPORT_ROOT = Path("exports")
@@ -33,7 +33,7 @@ async def handle_flow_trace(
     await _drain_body(receive)
 
     headers = _decode_headers(scope.get("headers", ()))
-    authorized, reason = authorize(headers)
+    authorized, reason, _claims = authorize_admin(headers, scope)
     if not authorized:
         return json_response(status=401, error="unauthorized", detail=reason)
 
@@ -72,7 +72,7 @@ async def handle_flow_zip(
     await _drain_body(receive)
 
     headers = _decode_headers(scope.get("headers", ()))
-    authorized, reason = authorize(headers)
+    authorized, reason, _claims = authorize_admin(headers, scope)
     if not authorized:
         return json_response(status=401, error="unauthorized", detail=reason)
 
