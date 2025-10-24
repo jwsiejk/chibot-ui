@@ -1,191 +1,181 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 4088b38f8815143d7b408f8f2ee52bada5853fcc..98fcf39a3324255174e3ab9a8d136a676e033174 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -1,43 +1,45 @@
- """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
- from __future__ import annotations
+diff --git a/app/admin/flow_zip.py b/app/admin/flow_zip.py
+index 2cded5e60d0fa90be11e89a22e7e8e87e7e1a75d..68aeb684663dea58a49c2a78e67425539572b7fc 100644
+--- a/app/admin/flow_zip.py
++++ b/app/admin/flow_zip.py
+@@ -11,51 +11,53 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
  
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
- from urllib.parse import urlparse
- 
- from app.admin.flow_api import handle_flow_trace, handle_flow_zip
-+from app.policy.service import PolicyService
- from app.security.auth import authorize_admin
-+from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- 
- logger = logging.getLogger(__name__)
+ from app.telemetry import bus as telemetry_bus
+ from app.telemetry.exporter import compute_sha256
  
  
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
- 
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
+ __all__ = ["build_flow_zip"]
  
  
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
+ _ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+ _README_NAME = "README.txt"
+ _MANIFEST_NAME = "manifest.json"
+ _EVENTS_NAME = "events.ndjson"
+ _EVENTS_REDACTED_NAME = "events.redacted.ndjson"
+ _TIMELINE_NAME = "flow_timeline.ndjson"
+ _NLU_NAME = "nlu.ndjson"
+ _NLG_NAME = "nlg.ndjson"
  
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-@@ -48,50 +50,51 @@ WS_ROUTE = "/ws/v2/chat"
- HEALTH_ROUTE = "/api/v1/health"
- LIVE_ROUTE = "/api/v1/live"
- READY_ROUTE = "/api/v1/ready"
- INFO_ROUTE = "/api/v1/info"
- ROOT_ROUTE = "/"
- FAVICON_ROUTE = "/favicon.ico"
- STATIC_ROUTE_PREFIX = "/static/"
- EXPORT_ROOT = Path("exports")
- BASE_DIR = Path(__file__).resolve().parent
- STATIC_ROOT = BASE_DIR / "static"
- TEMPLATES_ROOT = BASE_DIR / "templates"
- INDEX_PATH = TEMPLATES_ROOT / "index.html"
- FAVICON_PATH = STATIC_ROOT / "favicon.ico"
- _ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
- _TRACE_SEGMENT = "trace"
- _ZIP_SEGMENT = "zip"
+ _TIMELINE_TYPES = {
+     "EVT_TURN_BEGIN",
+     "EVT_TURN_END",
+     "EVT_TTS_START",
+     "EVT_TTS_END",
+     "EVT_TTS_MASK",
+     "EVT_MIC_GATE",
+     "EVT_POLICY_APPLIED",
++    "EVT_POLICY_SNAPSHOT",
+     "EVT_BARGE_IN",
++    "EVT_AUTH_DISABLED",
+ }
+ _WS_PREFIX = "EVT_WS_"
+ _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SEND"}
+ _PARTIAL_TYPES = {"EVT_ASR_PARTIAL"}
  
- _DEFAULT_INDEX_HTML = (
-     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
- )
+ _DEFAULT_CAP_BYTES = 25 * 1024 * 1024
  
  
- HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
+ class _EventWrapper(dict):
+     """Container storing a redacted event and its truncation category."""
  
- _adapter: Optional[ChatV2Adapter] = None
-+_policy_service: Optional[PolicyService] = None
+     __slots__ = ()
  
+     @property
+     def event(self) -> Dict[str, object]:
+         return self["event"]
  
- async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
-     scope_type = scope.get("type")
-     path = (scope.get("root_path") or "") + scope.get("path", "")
- 
-     if scope_type == "websocket":
-         if path == WS_ROUTE:
-             allowed, blocked_origin = _validate_ws_origin(scope)
-             if not allowed:
-                 await _reject_origin(scope, blocked_origin, receive, send)
-                 return
-             await _get_adapter()(scope, receive, send)
-         else:
-             await _reject_websocket(receive, send)
-         return
- 
-     if scope_type == "http":
-         handler = _HTTP_ROUTES.get(path)
-         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
-             handler = partial(_handle_static, raw_path=path)
-         if handler is None:
-             handler = _resolve_admin_route(path)
-         if handler is None:
-@@ -533,41 +536,88 @@ def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
+     @property
+     def category(self) -> str:
+         return self["category"]
  
  
- def _parse_admin_cors_origins() -> tuple[str, ...]:
-     raw = os.getenv("ASKCHIP_ADMIN_CORS_ORIGINS")
-     if not raw:
-         return ()
+ def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _DEFAULT_CAP_BYTES) -> Path:
+     """Package the flow artifacts for ``sid`` into a deterministic ZIP archive."""
  
-     entries = []
-     for item in raw.split(","):
-         value = item.strip()
-         if value:
-             entries.append(value)
-     return tuple(entries)
+@@ -276,49 +278,56 @@ def _render_archive(entries: Dict[str, bytes]) -> bytes:
+ 
+ def _drop_next_event(events: List[_EventWrapper], drop_counts: Dict[str, int]) -> bool:
+     for category in ("vendor_debug", "partials"):
+         idx = _find_last_index(events, category)
+         if idx is not None:
+             events.pop(idx)
+             drop_counts[category] = drop_counts.get(category, 0) + 1
+             return True
+ 
+     if events:
+         events.pop()
+         drop_counts["events_tail"] = drop_counts.get("events_tail", 0) + 1
+         return True
+ 
+     return False
  
  
- def _encode_header_value(value: str) -> Optional[bytes]:
-     try:
-         return value.encode("latin1")
-     except UnicodeEncodeError:  # pragma: no cover - defensive
-         return None
+ def _find_last_index(events: List[_EventWrapper], category: str) -> int | None:
+     for index in range(len(events) - 1, -1, -1):
+         if events[index].category == category:
+             return index
+     return None
  
  
- async def _enforce_admin_auth(
-     handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-+    policy = _get_policy_service().get_auth_policy()
-+    if policy.get("ws_auth_mode") == "disabled":
-+        await _drain_request_body(receive)
-+        _publish_admin_deny(scope, reason="ws_auth_disabled")
-+        return json_response(
-+            status=403,
-+            error="forbidden",
-+            detail="admin disabled when ws_auth_mode=disabled",
-+        )
-+
-     raw_headers = scope.get("headers", ())
-     auth_value = _decode_header(raw_headers, b"authorization")
-     headers = {}
-     if auth_value is not None:
-         headers["authorization"] = auth_value
- 
-     authorized, reason, _claims = authorize_admin(headers, scope)
-     if not authorized:
-         await _drain_request_body(receive)
-         return json_response(status=401, error="unauthorized", detail=reason)
- 
-     return await handler(scope, receive)
- 
-+
-+def _get_policy_service() -> PolicyService:
-+    global _policy_service
-+    if isinstance(_policy_service, PolicyService):
-+        return _policy_service
-+
-+    try:  # pragma: no cover - adapter import may fail in some contexts
-+        from app.ws.adapter import _policy_service as ws_policy_service  # type: ignore[attr-defined]
-+    except Exception:  # pragma: no cover - defensive import
-+        ws_policy_service = None
-+
-+    if isinstance(ws_policy_service, PolicyService):
-+        _policy_service = ws_policy_service
-+        return ws_policy_service
-+
-+    _policy_service = PolicyService()
-+    return _policy_service
-+
-+
-+def _publish_admin_deny(scope: dict, *, reason: str) -> None:
-+    path_value = scope.get("path")
-+    if isinstance(path_value, bytes):
-+        path_value = path_value.decode("latin1", "ignore")
-+    elif not isinstance(path_value, str):
-+        path_value = "" if path_value is None else str(path_value)
-+
-+    payload = {
-+        "type": "EVT_ADMIN_DENY",
-+        "level": "warn",
-+        "meta": {"route": path_value or "", "reason": reason},
-+    }
-+
+ def _redact_event(event: Dict[str, object]) -> Dict[str, object]:
+-    redacted = dict(event)
+-    if "meta" in redacted:
 +    try:
-+        telemetry_bus.publish(payload)
-+    except Exception:  # pragma: no cover - telemetry failures must not break flow
-+        logger.exception("Failed to publish admin deny telemetry for %s", path_value)
++        redacted = telemetry_bus.redact_payload(event)
++        if isinstance(redacted, dict):
++            return redacted
++    except Exception:  # pragma: no cover - redaction must not break packaging
++        pass
 +
- asgi = app
++    redacted_copy = dict(event)
++    if "meta" in redacted_copy:
+         try:
+-            redacted["meta"] = telemetry_bus._redact_meta(redacted["meta"])
++            redacted_copy["meta"] = telemetry_bus._redact_meta(redacted_copy["meta"])
+         except Exception:  # pragma: no cover - redaction must not break packaging
+-            redacted["meta"] = redacted["meta"]
+-    return redacted
++            redacted_copy["meta"] = redacted_copy["meta"]
++    return redacted_copy
  
- __all__ = ["app", "asgi"]
+ 
+ def _load_events(path: Path) -> List[Dict[str, object]]:
+     events: List[Dict[str, object]] = []
+     with path.open("r", encoding="utf-8") as handle:
+         for idx, raw_line in enumerate(handle, start=1):
+             line = raw_line.strip()
+             if not line:
+                 continue
+             try:
+                 parsed = json.loads(line)
+             except json.JSONDecodeError as exc:
+                 raise ValueError(f"Invalid JSON on line {idx} of {path.name}") from exc
+             if not isinstance(parsed, dict):
+                 raise ValueError(f"Event on line {idx} of {path.name} must be a JSON object")
+             events.append(parsed)
+     return events
+diff --git a/app/telemetry/bus.py b/app/telemetry/bus.py
+index e47ec694a9a4037af5cd53c9375656b2d3c88e12..9541ffa8425c0331fe13022d28f36b5f9824fc41 100644
+--- a/app/telemetry/bus.py
++++ b/app/telemetry/bus.py
+@@ -108,50 +108,56 @@ def _redact_string(raw: str, key_hint: str | None = None) -> str:
+ 
+     # Opaque secret masking.
+     if _OPAQUE_RE.match(value):
+         value = _shorten_opaque(value)
+ 
+     # Generic long string collapse.
+     if len(value) > 128:
+         value = _shorten_generic(value)
+ 
+     return value
+ 
+ 
+ def _redact_meta(meta: Any, key_hint: str | None = None) -> Any:
+     """Return a deep-redacted copy of the provided meta payload."""
+     if isinstance(meta, dict):
+         return {key: _redact_meta(value, key) for key, value in meta.items()}
+     if isinstance(meta, list):
+         return [_redact_meta(item) for item in meta]
+     if isinstance(meta, tuple):
+         return tuple(_redact_meta(item) for item in meta)
+     if isinstance(meta, str):
+         return _redact_string(meta, key_hint)
+     return meta
+ 
+ 
++def redact_payload(payload: Any) -> Any:
++    """Return a deep-redacted copy of an arbitrary telemetry payload."""
++
++    return _redact_meta(payload)
++
++
+ def subscribe(event_type: str, handler: Callable[[dict], None]) -> str:
+     """Register a handler for a specific event type or wildcard."""
+     if not isinstance(event_type, str) or not event_type:
+         raise ValueError("event_type must be a non-empty string")
+     if not callable(handler):
+         raise ValueError("handler must be callable")
+ 
+     token = f"sub_{uuid.uuid4().hex}"
+     _subscriptions[token] = (event_type, handler)
+     _event_index.setdefault(event_type, set()).add(token)
+     return token
+ 
+ 
+ def unsubscribe(token: str) -> bool:
+     """Remove a previously registered subscription."""
+     subscription = _subscriptions.pop(token, None)
+     if not subscription:
+         return False
+ 
+     event_type, _ = subscription
+     tokens = _event_index.get(event_type)
+     if tokens is not None:
+         tokens.discard(token)
+         if not tokens:
+             _event_index.pop(event_type, None)

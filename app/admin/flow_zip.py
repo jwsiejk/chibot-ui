@@ -33,7 +33,9 @@ _TIMELINE_TYPES = {
     "EVT_TTS_MASK",
     "EVT_MIC_GATE",
     "EVT_POLICY_APPLIED",
+    "EVT_POLICY_SNAPSHOT",
     "EVT_BARGE_IN",
+    "EVT_AUTH_DISABLED",
 }
 _WS_PREFIX = "EVT_WS_"
 _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SEND"}
@@ -298,13 +300,20 @@ def _find_last_index(events: List[_EventWrapper], category: str) -> int | None:
 
 
 def _redact_event(event: Dict[str, object]) -> Dict[str, object]:
-    redacted = dict(event)
-    if "meta" in redacted:
+    try:
+        redacted = telemetry_bus.redact_payload(event)
+        if isinstance(redacted, dict):
+            return redacted
+    except Exception:  # pragma: no cover - redaction must not break packaging
+        pass
+
+    redacted_copy = dict(event)
+    if "meta" in redacted_copy:
         try:
-            redacted["meta"] = telemetry_bus._redact_meta(redacted["meta"])
+            redacted_copy["meta"] = telemetry_bus._redact_meta(redacted_copy["meta"])
         except Exception:  # pragma: no cover - redaction must not break packaging
-            redacted["meta"] = redacted["meta"]
-    return redacted
+            redacted_copy["meta"] = redacted_copy["meta"]
+    return redacted_copy
 
 
 def _load_events(path: Path) -> List[Dict[str, object]]:

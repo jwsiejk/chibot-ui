@@ -130,6 +130,12 @@ def _redact_meta(meta: Any, key_hint: str | None = None) -> Any:
     return meta
 
 
+def redact_payload(payload: Any) -> Any:
+    """Return a deep-redacted copy of an arbitrary telemetry payload."""
+
+    return _redact_meta(payload)
+
+
 def subscribe(event_type: str, handler: Callable[[dict], None]) -> str:
     """Register a handler for a specific event type or wildcard."""
     if not isinstance(event_type, str) or not event_type:
