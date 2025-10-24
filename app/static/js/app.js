@@ -514,16 +514,83 @@
       }
     });
 
-    const accessTokenParam = urlParams.get('access_token') || urlParams.get('token');
-    const defaultToken = (window.DEMO_ACCESS_TOKEN || accessTokenParam || '').trim();
+    const ACCESS_TOKEN_STORAGE_KEY = 'access_token';
 
-    function resolveAccessToken() {
-      return defaultToken || 'demo-token';
+    function normalizeAccessToken(raw) {
+      if (typeof raw !== 'string') {
+        return null;
+      }
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        return null;
+      }
+      if (/^Bearer\s+/i.test(trimmed)) {
+        const withoutPrefix = trimmed.replace(/^Bearer\s+/i, '').trim();
+        return withoutPrefix || null;
+      }
+      return trimmed;
     }
+
+    function storeAccessToken(token) {
+      if (!token) {
+        return;
+      }
+      try {
+        const storage = window.sessionStorage;
+        if (!storage) {
+          return;
+        }
+        storage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
+      } catch (err) {
+        console.warn('Failed to persist access token to sessionStorage', err);
+      }
+    }
+
+    function getAccessToken() {
+      try {
+        const storage = window.sessionStorage;
+        if (!storage) {
+          return null;
+        }
+        const stored = storage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+        if (typeof stored !== 'string') {
+          return null;
+        }
+        const normalized = normalizeAccessToken(stored);
+        if (!normalized) {
+          return null;
+        }
+        if (normalized !== stored) {
+          try {
+            storage.setItem(ACCESS_TOKEN_STORAGE_KEY, normalized);
+          } catch (err) {
+            console.warn('Failed to normalize stored access token', err);
+          }
+        }
+        return normalized;
+      } catch (err) {
+        console.warn('Failed to read access token from sessionStorage', err);
+        return null;
+      }
+    }
+
+    (function persistAccessTokenFromUrl() {
+      const candidates = [
+        urlParams.get('access_token'),
+        urlParams.get('token')
+      ];
+      for (const candidate of candidates) {
+        const normalized = normalizeAccessToken(candidate);
+        if (normalized) {
+          storeAccessToken(normalized);
+          break;
+        }
+      }
+    })();
 
     startBtn.addEventListener('click', async () => {
       startBtn.disabled = true;
-      const accessToken = resolveAccessToken();
+      const accessToken = getAccessToken();
       const state = AppState.getState();
       const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
       let resumeToken = null;
@@ -680,7 +747,7 @@
         AppState.clearResume();
       }
       AppState.setState({ resumeError: null });
-      const accessToken = resolveAccessToken();
+      const accessToken = getAccessToken();
       try {
         WSClient.open(accessToken);
       } catch (err) {

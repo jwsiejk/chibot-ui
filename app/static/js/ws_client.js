@@ -50,9 +50,15 @@
   function computeUrl(accessToken, resumeToken) {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const base = `${protocol}//${window.location.host}/ws/v2/chat`;
-    const params = new URLSearchParams({ access_token: accessToken });
-    if (resumeToken) params.set("resume", resumeToken);
-    return `${base}?${params.toString()}`;
+    const params = new URLSearchParams();
+    if (typeof accessToken === "string" && accessToken.trim()) {
+      params.set("access_token", accessToken.trim());
+    }
+    if (typeof resumeToken === "string" && resumeToken.trim()) {
+      params.set("resume", resumeToken.trim());
+    }
+    const query = params.toString();
+    return query ? `${base}?${query}` : base;
   }
 
   function clearHeartbeat() {
@@ -473,10 +479,8 @@
   }
 
   function open(accessToken, options = {}) {
-    if (!accessToken) {
-      throw new Error("accessToken is required to open the chat socket");
-    }
     const { resumeToken = null, skipRateLimitCancel = false } = options;
+    const accessTokenValue = typeof accessToken === "string" && accessToken.trim() ? accessToken.trim() : null;
     const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
     if (socket) {
       cleanupSocket(socket, "superseded");
@@ -493,12 +497,12 @@
       clearRateLimitRetryTimer();
       rateLimitRetryCount = 0;
     }
-    const url = computeUrl(accessToken, resumeTokenValue);
+    const url = computeUrl(accessTokenValue, resumeTokenValue);
     const ws = transportFactory(url, SUBPROTOCOL);
     socket = ws;
     updateState({
       connectionState: resumeTokenValue ? "resuming" : "connecting",
-      accessToken,
+      accessToken: accessTokenValue,
       websocket: ws,
       latencyMs: null,
       lastPingAt: null,

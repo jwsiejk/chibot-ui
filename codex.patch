@@ -1,127 +1,337 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 0c50527a5008cda9c3c237fd7ad7707643df2747..470ab8ba54434a2cbeee4fb0fd759d07e00d5ead 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -263,97 +263,104 @@
-     startHeartbeat();
-   }
- 
-   function handlePongFrame() {
-     if (typeof lastPingAt === "number") {
-       const latency = Math.max(0, Date.now() - lastPingAt);
-       updateState({ latencyMs: latency });
-     }
-   }
- 
-   function handleChatHistoryFrame(frame) {
-     const view = window.TranscriptView;
-     const messages = Array.isArray(frame.messages) ? frame.messages : [];
-     if (view && typeof view.handleChatMessage === "function" && messages.length) {
-       for (const message of messages) {
-         try {
-           view.handleChatMessage(message);
-         } catch (err) {
-           console.warn("TranscriptView chat history handler error", err);
-           break;
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index e6d10b9eced2adedc544da301feb5f3330bf0691..8415daf9f2aff5bb1e0c6c8f0f8437f490985056 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -492,60 +492,127 @@
+           audioPlayer.interrupt();
          }
-       }
-     }
-   }
- 
-+  function handleErrorFrame(frame) {
-+    console.error("WS error frame", frame);
-+    const isResumeInvalid = frame && frame.code === "resume_invalid";
-+    if (isResumeInvalid) {
-+      clearResumeState();
-+      updateState({ resumeError: "invalid" });
-+    }
-+    if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
-+      try {
-+        window.WSErrorUI.handleFrame(frame, {
-+          scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
-+        });
-+      } catch (err) {
-+        console.warn("Error handler threw", err);
-+      }
-+    }
-+    if (isResumeInvalid) {
-+      close("resume_invalid");
-+    }
-+  }
-+
-   function handleMessageFrame(frame) {
-     if (frame.type === "keepalive") {
-       // Some transports may emit a keepalive frame before the info frame has
-       // been sent. Treat it as a no-op and continue waiting for the info
-       // frame so we do not close the connection prematurely.
-       return;
-     }
- 
-     if (frame.type === "ping") {
-       sendJson({ type: "pong", t: Date.now() });
-       return;
-     }
- 
-     if (expectInfoFrame) {
-       if (frame.type === "chat.history") {
-         handleChatHistoryFrame(frame);
-+      } else if (frame.type === "error") {
-+        handleErrorFrame(frame);
-+        return;
-       } else if (frame.type !== "info") {
-         console.error("Expected info frame first, received", frame.type);
-         close("bad_info_sequence");
          return;
        }
-       if (frame.type === "info") {
-         handleInfoFrame(frame);
-       }
-     } else if (frame.type === "info") {
-       handleInfoFrame(frame);
-     } else if (frame.type === "pong") {
-       handlePongFrame();
-     } else if (frame.type === "error") {
--      console.error("WS error frame", frame);
--      const isResumeInvalid = frame && frame.code === "resume_invalid";
--      if (isResumeInvalid) {
--        clearResumeState();
--        updateState({ resumeError: "invalid" });
--      }
--      if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
--        try {
--          window.WSErrorUI.handleFrame(frame, {
--            scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
--          });
--        } catch (err) {
--          console.warn("Error handler threw", err);
--        }
--      }
--      if (isResumeInvalid) {
--        close("resume_invalid");
--      }
-+      handleErrorFrame(frame);
-     } else if (frame.type === "tts.start") {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
-         audioPlayer.handleTtsStart(frame);
-       }
-     } else if (frame.type === "tts.end") {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
-         audioPlayer.handleTtsEnd(frame);
-       }
-     } else if (frame.type === "policy.interaction") {
-       const sanitized = sanitizePolicyFrame(frame);
-       dispatchFrame(sanitized);
-       return;
-     } else if (frame.type === "asr.partial") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handlePartial === "function") {
-         try {
-           view.handlePartial(frame);
-         } catch (err) {
-           console.warn("TranscriptView partial handler error", err);
+     }
+ 
+     function handleGlobalKeyUp(event) {
+       const { key, code, ctrlKey, metaKey, altKey } = event;
+       if ((key === ' ' || key === 'Spacebar' || code === 'Space') && !(ctrlKey || metaKey || altKey)) {
+         if (!pttActive) {
+           return;
          }
+         event.preventDefault();
+         setPttActive(false);
        }
-     } else if (frame.type === "asr.final") {
-       const view = window.TranscriptView;
+     }
+ 
+     window.addEventListener('keydown', handleGlobalKeyDown, true);
+     window.addEventListener('keyup', handleGlobalKeyUp, true);
+     window.addEventListener('blur', () => {
+       if (pttActive) {
+         setPttActive(false);
+       }
+     });
+ 
+-    const accessTokenParam = urlParams.get('access_token') || urlParams.get('token');
+-    const defaultToken = (window.DEMO_ACCESS_TOKEN || accessTokenParam || '').trim();
++    const ACCESS_TOKEN_STORAGE_KEY = 'access_token';
+ 
+-    function resolveAccessToken() {
+-      return defaultToken || 'demo-token';
++    function normalizeAccessToken(raw) {
++      if (typeof raw !== 'string') {
++        return null;
++      }
++      const trimmed = raw.trim();
++      if (!trimmed) {
++        return null;
++      }
++      if (/^Bearer\s+/i.test(trimmed)) {
++        const withoutPrefix = trimmed.replace(/^Bearer\s+/i, '').trim();
++        return withoutPrefix || null;
++      }
++      return trimmed;
++    }
++
++    function storeAccessToken(token) {
++      if (!token) {
++        return;
++      }
++      try {
++        const storage = window.sessionStorage;
++        if (!storage) {
++          return;
++        }
++        storage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
++      } catch (err) {
++        console.warn('Failed to persist access token to sessionStorage', err);
++      }
++    }
++
++    function getAccessToken() {
++      try {
++        const storage = window.sessionStorage;
++        if (!storage) {
++          return null;
++        }
++        const stored = storage.getItem(ACCESS_TOKEN_STORAGE_KEY);
++        if (typeof stored !== 'string') {
++          return null;
++        }
++        const normalized = normalizeAccessToken(stored);
++        if (!normalized) {
++          return null;
++        }
++        if (normalized !== stored) {
++          try {
++            storage.setItem(ACCESS_TOKEN_STORAGE_KEY, normalized);
++          } catch (err) {
++            console.warn('Failed to normalize stored access token', err);
++          }
++        }
++        return normalized;
++      } catch (err) {
++        console.warn('Failed to read access token from sessionStorage', err);
++        return null;
++      }
+     }
+ 
++    (function persistAccessTokenFromUrl() {
++      const candidates = [
++        urlParams.get('access_token'),
++        urlParams.get('token')
++      ];
++      for (const candidate of candidates) {
++        const normalized = normalizeAccessToken(candidate);
++        if (normalized) {
++          storeAccessToken(normalized);
++          break;
++        }
++      }
++    })();
++
+     startBtn.addEventListener('click', async () => {
+       startBtn.disabled = true;
+-      const accessToken = resolveAccessToken();
++      const accessToken = getAccessToken();
+       const state = AppState.getState();
+       const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
+       let resumeToken = null;
+       if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
+         resumeToken = resumeState.token;
+       }
+       try {
+         const options = resumeToken ? { resumeToken } : undefined;
+         AppState.setState({ resumeError: null });
+         if (options) {
+           WSClient.open(accessToken, options);
+         } else {
+           WSClient.open(accessToken);
+         }
+       } catch (err) {
+         console.error('Failed to open WS client', err);
+         AppState.setState({ connectionState: 'disconnected' });
+         startBtn.disabled = false;
+         endBtn.disabled = true;
+       }
+     });
+ 
+     endBtn.addEventListener('click', () => {
+       WSClient.close('user_requested');
+       if (typeof AppState.clearResume === 'function') {
+@@ -658,51 +725,51 @@
+ 
+     function updateResumeBanner(state) {
+       const hasCountdown = state.connectionState === 'resuming' && state.resume && Number.isFinite(state.resume.expiresAt);
+       if (hasCountdown) {
+         showResumeCountdown();
+         return;
+       }
+       if (state.resumeError === 'invalid') {
+         showResumeError();
+         return;
+       }
+       hideResumeBanner();
+     }
+ 
+     resumeAction.addEventListener('click', () => {
+       resumeAction.disabled = true;
+       try {
+         WSClient.close('user_restart');
+       } catch (err) {
+         console.warn('Resume banner close failed', err);
+       }
+       if (typeof AppState.clearResume === 'function') {
+         AppState.clearResume();
+       }
+       AppState.setState({ resumeError: null });
+-      const accessToken = resolveAccessToken();
++      const accessToken = getAccessToken();
+       try {
+         WSClient.open(accessToken);
+       } catch (err) {
+         console.error('Failed to start new session', err);
+         AppState.setState({ connectionState: 'disconnected' });
+       } finally {
+         resumeAction.disabled = false;
+       }
+     });
+ 
+     // --- Waveform visual inside the Chip window ---
+     const Waveform = (() => {
+       const canvas = document.getElementById('waveCanvas');
+       const ctx = canvas.getContext('2d', {alpha:false});
+       let raf = 0, analyser = null, source = null, audioCtx = null, dataArray = null;
+       let synthMode = true, t = 0;
+ 
+       function resizeCanvas(){
+         const dpr = Math.max(1, window.devicePixelRatio || 1);
+         canvas.width = canvas.clientWidth * dpr;
+         canvas.height = canvas.clientHeight * dpr;
+         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+       }
+       window.addEventListener('resize', resizeCanvas, {passive:true});
+       resizeCanvas();
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 470ab8ba54434a2cbeee4fb0fd759d07e00d5ead..e9422df21d1361ed7e2fe7afbb4172b11328229c 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -28,53 +28,59 @@
+     if (!token || !ttlMs || !expiresAt) return null;
+     return { token, ttlMs, expiresAt };
+   }
+ 
+   function assignResume(token, ttlMs) {
+     if (typeof AppState.setResume === "function") {
+       AppState.setResume(token, ttlMs);
+     }
+     autoResumeAttemptToken = null;
+   }
+ 
+   function clearResumeState() {
+     if (typeof AppState.clearResume === "function") {
+       AppState.clearResume();
+     }
+     autoResumeAttemptToken = null;
+   }
+ 
+   function updateState(patch) {
+     AppState.setState(patch);
+   }
+ 
+   function computeUrl(accessToken, resumeToken) {
+     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+     const base = `${protocol}//${window.location.host}/ws/v2/chat`;
+-    const params = new URLSearchParams({ access_token: accessToken });
+-    if (resumeToken) params.set("resume", resumeToken);
+-    return `${base}?${params.toString()}`;
++    const params = new URLSearchParams();
++    if (typeof accessToken === "string" && accessToken.trim()) {
++      params.set("access_token", accessToken.trim());
++    }
++    if (typeof resumeToken === "string" && resumeToken.trim()) {
++      params.set("resume", resumeToken.trim());
++    }
++    const query = params.toString();
++    return query ? `${base}?${query}` : base;
+   }
+ 
+   function clearHeartbeat() {
+     if (heartbeatTimerId) {
+       clearInterval(heartbeatTimerId);
+       heartbeatTimerId = null;
+     }
+     updateState({ heartbeatTimerId: null, lastPingAt: null });
+   }
+ 
+   function clearRateLimitRetryTimer() {
+     if (rateLimitRetryTimerId) {
+       clearTimeout(rateLimitRetryTimerId);
+       rateLimitRetryTimerId = null;
+     }
+   }
+ 
+   function resetRateLimitRecovery() {
+     clearRateLimitRetryTimer();
+     rateLimitRetryCount = 0;
+     if (window.WSErrorUI && typeof window.WSErrorUI.clearRateLimitToast === "function") {
+       try {
+         window.WSErrorUI.clearRateLimitToast();
+       } catch (err) {
+         console.warn("Failed to clear rate limit toast", err);
+@@ -451,76 +457,74 @@
+     ws.removeEventListener("message", handlers.message);
+     ws.removeEventListener("error", handlers.error);
+     ws.removeEventListener("close", handlers.close);
+     delete ws.__handlers;
+     delete ws.__intentionalClose;
+   }
+ 
+   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
+     if (!ws) return;
+     detachSocket(ws);
+     ws.__intentionalClose = true;
+     try {
+       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+         ws.close(1000, reason);
+       }
+     } catch (err) {
+       console.warn("WSClient cleanup close error", err);
+     }
+     if (socket === ws) {
+       socket = null;
+       expectInfoFrame = true;
+     }
+   }
+ 
+   function open(accessToken, options = {}) {
+-    if (!accessToken) {
+-      throw new Error("accessToken is required to open the chat socket");
+-    }
+     const { resumeToken = null, skipRateLimitCancel = false } = options;
++    const accessTokenValue = typeof accessToken === "string" && accessToken.trim() ? accessToken.trim() : null;
+     const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
+     if (socket) {
+       cleanupSocket(socket, "superseded");
+     }
+     expectInfoFrame = true;
+     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+         window.WSErrorUI.cancelRateLimitCountdown("manual");
+       } catch (err) {
+         console.warn("Failed to cancel rate limit countdown", err);
+       }
+     }
+     if (!skipRateLimitCancel) {
+       clearRateLimitRetryTimer();
+       rateLimitRetryCount = 0;
+     }
+-    const url = computeUrl(accessToken, resumeTokenValue);
++    const url = computeUrl(accessTokenValue, resumeTokenValue);
+     const ws = transportFactory(url, SUBPROTOCOL);
+     socket = ws;
+     updateState({
+       connectionState: resumeTokenValue ? "resuming" : "connecting",
+-      accessToken,
++      accessToken: accessTokenValue,
+       websocket: ws,
+       latencyMs: null,
+       lastPingAt: null,
+       resumeError: null
+     });
+     attachSocket(ws);
+     return ws;
+   }
+ 
+   function close(reason = DEFAULT_CLOSE_REASON) {
+     if (!socket) {
+       updateState({ connectionState: "disconnected" });
+       return;
+     }
+     const ws = socket;
+     cleanupSocket(ws, reason);
+     clearHeartbeat();
+     clearRateLimitRetryTimer();
+     rateLimitRetryCount = 0;
+     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+         window.WSErrorUI.cancelRateLimitCountdown(reason);
+       } catch (err) {
+         console.warn("Failed to cancel countdown on close", err);
+       }
