@@ -1,0 +1,135 @@
+"""OpenAI LLM provider implementation with circuit breaker integration."""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Iterable, List
+
+import logging
+
+from openai import AsyncOpenAI
+
+from app.config import get_env
+from app.telemetry import bus
+from app.voice_v2.llm_base import LLMProviderBase
+
+_logger = logging.getLogger(__name__)
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+
+class OpenAILLMProvider(LLMProviderBase):
+    """Production OpenAI client wired into the shared provider base."""
+
+    def __init__(
+        self,
+        *,
+        telemetry_bus=bus,
+        clock=None,
+    ) -> None:
+        api_key = get_env("OPENAI_API_KEY")
+        base_url = get_env("OPENAI_BASE_URL") or None
+        model = get_env("LLM_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
+        timeout_s = _coerce_float(get_env("LLM_TIMEOUT_S"), 12.0)
+        retries = _coerce_int(get_env("LLM_RETRIES"), 1)
+
+        super().__init__(
+            vendor="openai",
+            telemetry_bus=telemetry_bus,
+            retries=retries,
+            timeout_s=timeout_s,
+            clock=clock,
+        )
+
+        self._api_key = api_key
+        self._base_url = base_url
+        self._default_model = model
+        self._client = (
+            AsyncOpenAI(api_key=api_key, base_url=base_url or None)
+            if api_key
+            else None
+        )
+
+    @property
+    def is_configured(self) -> bool:
+        return self._client is not None
+
+    @property
+    def default_model(self) -> str:
+        return self._default_model
+
+    async def _generate_impl(self, messages: List[Dict[str, Any]], **kwargs: Any) -> str:
+        if not self.is_configured:
+            raise RuntimeError("OpenAI provider not configured")
+
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("messages must be a non-empty list")
+
+        prepared: List[Dict[str, str]] = []
+        for item in messages:
+            if not isinstance(item, dict):
+                raise TypeError("each message must be a dict")
+            role = item.get("role")
+            content = item.get("content")
+            if not isinstance(role, str) or not isinstance(content, str):
+                raise TypeError("message role/content must be strings")
+            prepared.append({"role": role, "content": content})
+
+        client = self._client
+        assert client is not None  # for type-checkers
+
+        model = kwargs.get("model") or self._default_model
+        temperature = kwargs.get("temperature")
+
+        response = await client.chat.completions.create(
+            model=model,
+            messages=prepared,
+            temperature=temperature,
+        )
+
+        try:
+            choice = response.choices[0]
+        except (AttributeError, IndexError) as exc:  # pragma: no cover - defensive
+            raise RuntimeError("OpenAI response missing choices") from exc
+
+        message = getattr(choice, "message", None)
+        content: Any | None = None
+        if message is not None:
+            content = getattr(message, "content", None)
+
+        if isinstance(content, str):
+            text = content.strip()
+            if text:
+                return text
+        elif isinstance(content, Iterable):
+            parts: List[str] = []
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        part_text = part.get("text")
+                        if isinstance(part_text, str):
+                            parts.append(part_text)
+                elif isinstance(part, str):
+                    parts.append(part)
+            combined = "".join(parts).strip()
+            if combined:
+                return combined
+
+        _logger.warning("OpenAI response missing text payload; falling back to empty string")
+        return ""
+
+
+__all__ = ["OpenAILLMProvider"]

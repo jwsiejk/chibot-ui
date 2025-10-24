@@ -1,7 +1,9 @@
 """Stubbed LLM adapter used by the voice engine."""
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import time
 import uuid
 from typing import Any, Dict, Mapping
@@ -9,10 +11,22 @@ from typing import Any, Dict, Mapping
 from app.telemetry import bus
 from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
 from app.voice_v2 import generator
-from app.voice_v2.persona import load_persona, maybe_pick_quote_for_sid
+from app.voice_v2.llm_base import (
+    LLMProviderBase,
+    ProviderCircuitOpenError,
+    ProviderTimeoutError,
+)
+from app.voice_v2.persona import (
+    build_system_preamble,
+    load_persona,
+    maybe_pick_quote_for_sid,
+)
 
 EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
 EVT_TURN_END = "EVT_TURN_END"
+
+
+_logger = logging.getLogger(__name__)
 
 
 class LLMAdapter:
@@ -29,6 +43,7 @@ class LLMAdapter:
         self,
         *,
         telemetry_bus=bus,
+        provider: LLMProviderBase | None = None,
         canned_text: str | None = None,
         auto_publish: bool = True,
     ) -> None:
@@ -37,6 +52,7 @@ class LLMAdapter:
         self._canned_text = canned_text or (
             "Thanks for chatting with AskChip! How else can I help?"
         )
+        self._provider = provider
         self._turn_lookup: dict[str, tuple[str, str]] = {}
         self._turn_counter_by_sid: Dict[str, int] = {}
         subscribe = getattr(self._bus, "subscribe", None)
@@ -83,17 +99,66 @@ class LLMAdapter:
         user_text: str,
         plan: Mapping[str, Any] | object,
     ) -> str:
-        """Return a persona-aligned reply using the rule-based generator."""
+        """Return a persona-aligned reply using either the provider or fallback."""
 
         if not isinstance(req_id, str) or not req_id:
             raise ValueError("req_id must be a non-empty string")
 
         persona = load_persona()
-        messages = generator.build_messages(persona, plan, user_text)
-        reply = generator.render_reply(messages)
-        if not isinstance(reply, str):
-            reply = str(reply)
+        rule_based_messages = generator.build_messages(persona, plan, user_text)
+        system_preamble = build_system_preamble(persona)
+
+        # Prepend the explicit persona preamble for LLM providers while keeping the
+        # remainder of the deterministic stack intact for fallback use.
+        provider_messages: list[dict[str, str]] = [{"role": "system", "content": system_preamble}]
+        skipped_system = False
+        for message in rule_based_messages:
+            if (
+                not skipped_system
+                and isinstance(message, Mapping)
+                and message.get("role") == "system"
+            ):
+                skipped_system = True
+                continue
+            if isinstance(message, Mapping):
+                provider_messages.append({
+                    "role": str(message.get("role", "")),
+                    "content": str(message.get("content", "")),
+                })
+
+        reply: str | None = None
+        fallback_reason: str | None = None
+        provider = self._provider
+        provider_ready = bool(provider and getattr(provider, "is_configured", False))
+        if provider_ready:
+            model_name = getattr(provider, "default_model", None) or "gpt-4o-mini"
+            try:
+                reply_candidate = self._invoke_provider(
+                    provider,
+                    provider_messages,
+                    model=model_name,
+                    temperature=0.6,
+                )
+            except ProviderCircuitOpenError:
+                fallback_reason = "breaker_open"
+            except ProviderTimeoutError:
+                fallback_reason = "timeout"
+            except Exception:  # pragma: no cover - defensive logging
+                fallback_reason = "error"
+                _logger.exception("LLM provider invocation failed; falling back to generator")
+            else:
+                if isinstance(reply_candidate, str) and reply_candidate.strip():
+                    reply = reply_candidate
+                else:
+                    fallback_reason = "empty_response"
+
+        if reply is None:
+            reply = generator.render_reply(rule_based_messages)
+            if not isinstance(reply, str):
+                reply = str(reply)
         metadata: Dict[str, Any] | None = None
+        if fallback_reason:
+            metadata = {"source": "llm_fallback", "reason": fallback_reason}
         sid_key: str | None = sid if isinstance(sid, str) and sid else None
         if sid_key:
             turn_no = self._turn_counter_by_sid.get(sid_key, 0) + 1
@@ -113,9 +178,39 @@ class LLMAdapter:
                         identifier = quote_id
                     else:
                         identifier = f"quote_turn_{turn_no}"
-                    metadata = {"quote_id": identifier}
+                    if metadata is None:
+                        metadata = {}
+                    metadata["quote_id"] = identifier
         self.publish_nlg(req_id, reply, metadata=metadata)
         return reply
+
+    def _invoke_provider(
+        self,
+        provider: LLMProviderBase,
+        messages: list[dict[str, str]],
+        *,
+        model: str,
+        temperature: float,
+    ) -> str:
+        async def _execute() -> Any:
+            return await provider.generate(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+            )
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            result = asyncio.run(_execute())
+        else:
+            loop = asyncio.new_event_loop()
+            try:
+                result = loop.run_until_complete(_execute())
+            finally:
+                loop.close()
+
+        return result if isinstance(result, str) else str(result)
 
     def publish_nlg(
         self,
