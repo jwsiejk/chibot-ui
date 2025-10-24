@@ -1,70 +1,58 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 91c834dd2358856d878e9674b18396142dd2feb0..21f34092d187a2e0235abc75547c392509a9a248 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -941,59 +941,61 @@ class ChatV2Adapter:
-         seq_value = prepared.get("partial_seq")
-         if isinstance(seq_value, int) and seq_value > ctx.partial_seq:
-             ctx.partial_seq = seq_value
-         else:
-             ctx.partial_seq += 1
-             prepared["partial_seq"] = ctx.partial_seq
-         return prepared
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 2a66143af23b1d38d613c80e06db2e153b317f6a..e6d10b9eced2adedc544da301feb5f3330bf0691 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -97,50 +97,53 @@
+       await loadScript("inspector.js");
+       if (window.DevInspector && typeof window.DevInspector.init === "function") {
+         window.DevInspector.init({ env, AppState: window.AppState });
+       }
+     } catch (err) {
+       console.warn("Dev inspector initialization failed", err);
+     }
+   }
  
-     def _start_asr_ready_tracker(self, ctx: AdapterContext) -> None:
-         if ctx.asr_subscription_token is not None:
-             return
+   async function ensureRuntimeModules() {
+     if (!window.AppState) {
+       await loadScript("state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("audio_player.js");
+     }
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.AudioRecorder) {
+       await loadScript("audio_recorder.js");
+     }
+     if (!window.PolicyBadges) {
+       await loadScript("policy_badges.js");
+     }
++    if (!window.TranscriptView) {
++      await loadScript("transcript_view.js");
++    }
+   }
  
-         def _handle(event: dict) -> None:
-             if event.get("type") != EVT_ASR_READY:
-                 return
-             if event.get("sid") != ctx.sid:
-                 return
-             ctx.asr_ready = True
+   async function init() {
+     await ensureRuntimeModules();
  
-         ctx.asr_subscription_token = bus.subscribe(EVT_ASR_READY, _handle)
+     const runtimeEnv = detectEnvironment();
+     window.ASKCHIP_ENV = runtimeEnv;
+     if (document.body) {
+       document.body.dataset.askchipEnv = runtimeEnv;
+     }
  
-     def _extract_outbound_payload(
-         self, ctx: AdapterContext, event: dict
-     ) -> Optional[Dict[str, Any]]:
-         payload = self._coerce_payload(event.get("payload"))
-+        if payload is None:
-+            payload = self._coerce_payload(event.get("frame"))
-+
-         if payload is None:
-             meta = event.get("meta")
-             if isinstance(meta, dict):
-                 ws_meta = meta.get("ws")
-                 if isinstance(ws_meta, dict):
--                    frame = ws_meta.get("frame")
--                    if frame is None:
--                        frame = ws_meta.get("preview")
--                    payload = self._coerce_payload(frame)
-+                    payload = self._coerce_payload(ws_meta.get("frame"))
-+                    if payload is None:
-+                        payload = self._coerce_payload(ws_meta.get("preview"))
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
+     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
+       try {
+         window.PolicyBadges.init();
+       } catch (err) {
+         console.warn("Failed to initialize PolicyBadges", err);
+       }
+     }
  
-         if payload is None:
-             return None
- 
-         frame_type = payload.get("type") if isinstance(payload, dict) else None
-         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
-             return None
-         normalized = dict(payload)
-         if frame_type == "policy.interaction":
-             normalized = self._sanitize_policy_interaction(normalized)
-             last_policy = ctx.last_policy_interaction
-             if last_policy is not None and last_policy == normalized:
-                 return None
-             ctx.last_policy_interaction = json.loads(
-                 json.dumps(normalized, separators=(",", ":"))
-             )
-         if frame_type == "info":
-             self._ensure_resume_token(ctx)
-             meta = {}
-             source_meta = normalized.get("meta")
-             if isinstance(source_meta, dict):
-                 meta = dict(source_meta)
-             meta["sid"] = ctx.sid
-             if ctx.resume_token:
-                 normalized["resume_token"] = ctx.resume_token
+     // --- Config & mock current user for gating ---
+     window.ADMIN_EMAILS = (window.ADMIN_EMAILS || ["admin@askchip.ai"]).map(e => e.toLowerCase());
+     const urlParams = new URLSearchParams(window.location.search);
+     const currentUserEmail = (urlParams.get("email") || "user@example.com").toLowerCase();

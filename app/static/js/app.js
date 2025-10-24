@@ -119,6 +119,9 @@
     if (!window.PolicyBadges) {
       await loadScript("policy_badges.js");
     }
+    if (!window.TranscriptView) {
+      await loadScript("transcript_view.js");
+    }
   }
 
   async function init() {
