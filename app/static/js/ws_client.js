@@ -491,6 +491,23 @@
     }
     const url = computeUrl(resumeTokenValue);
     const ws = transportFactory(url, SUBPROTOCOL);
+    ws.onopen = () => {
+      // Lightweight breadcrumb; keep as console.log
+      console.log("WebSocket open", { url, protocol: SUBPROTOCOL });
+    };
+
+    ws.onerror = (e) => {
+      console.error("WebSocket error", e, { readyState: ws.readyState });
+    };
+
+    ws.onclose = (e) => {
+      console.error("WebSocket closed", {
+        code: e.code,
+        reason: e.reason,
+        wasClean: e.wasClean,
+        readyState: ws.readyState,
+      });
+    };
     socket = ws;
     updateState({
       connectionState: resumeTokenValue ? "resuming" : "connecting",

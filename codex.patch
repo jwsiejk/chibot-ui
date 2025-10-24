@@ -1,299 +1,217 @@
 diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 4d55ddb9b234655cc475b927d0123ef4c3f0e332..fb62d913a3b92140c0c7e23981115e63caa1356d 100644
+index fb62d913a3b92140c0c7e23981115e63caa1356d..f5198bb37b25e31611c2742921e07d643bced191 100644
 --- a/app/asgi_gateway.py
 +++ b/app/asgi_gateway.py
-@@ -1,42 +1,44 @@
- """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
- from __future__ import annotations
+@@ -66,50 +66,60 @@ _DEFAULT_INDEX_HTML = (
+ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
  
-+import hashlib
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Optional
- 
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import FileExporter
-+from app.versioning import get_build_id, inject_static_version
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- 
- logger = logging.getLogger(__name__)
+ _adapter: Optional[ChatV2Adapter] = None
  
  
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
+ def _ws_route_matches(scope: dict, expected: str) -> bool:
+     """
+     Return True when the incoming websocket request targets the expected route,
+     robust to deployments mounted under a non-empty ASGI root_path.
+     """
  
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
- 
- 
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
- 
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
-@@ -161,121 +163,150 @@ async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) ->
- async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Return build metadata derived from environment configuration."""
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
- 
-     version = os.getenv("APP_VERSION") or "0.0.0+dev"
-     raw_sha = os.getenv("GIT_SHA") or ""
-     git_sha = raw_sha[:7] if raw_sha else "unknown"
-     built_at = os.getenv("BUILD_TIME") or datetime.now(timezone.utc).isoformat()
- 
-     payload = {"version": version, "git_sha": git_sha, "built_at": built_at}
-     return json_response(**payload)
+     raw_path = scope.get("path", "") or ""
+     root_path = scope.get("root_path") or ""
+     # Direct match (no prefix)
+     if raw_path == expected:
+         return True
+     # Combined path match (some servers expect root_path + path)
+     combined = f"{root_path}{raw_path}" if root_path else raw_path
+     if combined == expected:
+         return True
+     # Prefix-mount: accept if the combined path ends with expected
+     return combined.endswith(expected)
  
  
- async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Serve the primary HTML shell for the single-page application."""
+ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
++    # Log raw scope for the chat WS route before any routing/validation
++    p = (scope.get("path") or "")
++    if p.endswith("/ws/v2/chat"):
++        # Keep formatting consistent with this module's logging style
++        logger.info(
++            "evt=ws_entry path=%s type=%s subs=%s query=%s root_path=%s",
++            scope.get("path"), scope.get("type"),
++            scope.get("subprotocols"), scope.get("query_string"),
++            scope.get("root_path"),
++        )
+     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
+     scope_type = scope.get("type")
+     path = (scope.get("root_path") or "") + scope.get("path", "")
  
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
+     if scope_type == "websocket":
+         if _ws_route_matches(scope, WS_ROUTE):
+             # Origin checks removed — accept and hand off to adapter
+             await _get_adapter()(scope, receive, send)
+         else:
+             await _reject_websocket(receive, send)
+         return
  
-     await _drain_request_body(receive)
--    body = _load_index_html()
--    return _html_response(body)
-+    raw_html = _load_index_html()
-+    try:
-+        html_text = raw_html.decode("utf-8")
-+    except UnicodeDecodeError:
-+        html_text = raw_html.decode("utf-8", errors="replace")
-+    rewritten = inject_static_version(html_text)
-+    body = rewritten.encode("utf-8")
-+    build_id = get_build_id()
-+    return _html_response(body, build_id=build_id)
+     if scope_type == "http":
+         handler = _HTTP_ROUTES.get(path)
+         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
+             handler = partial(_handle_static, raw_path=path)
+         if handler is None:
+             await _drain_request_body(receive)
+             await _send_response(send, json_response(status=404, error="not_found"))
+         else:
+             response = await handler(scope, receive)
+             await _send_response(send, response)
+         return
  
+     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index dad99767666f38e8a6d8acefb8d80e23bd41a630..50bff474303535ca21cc4af1618176ce955521c5 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -469,50 +469,67 @@
+       expectInfoFrame = true;
+     }
+   }
  
- async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Serve the site favicon when available."""
- 
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
--    response = _build_static_response(FAVICON_PATH)
-+    if_none_match = _get_request_header(scope, b"if-none-match")
-+    response = _build_static_response(FAVICON_PATH, if_none_match=if_none_match)
-     if response is None:
-         headers = ((b"content-length", b"0"),)
-         return Response(status=204, body=b"", headers=headers)
-     return response
- 
- 
- async def _handle_static(
-     scope: dict,
-     receive: Callable[[], Awaitable[dict]],
-     *,
-     raw_path: str,
- ) -> Response:
-     """Serve files from the bundled static asset directory."""
- 
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
-     resolved = _resolve_static_path(raw_path)
-     if resolved is None:
-         return json_response(status=404, error="not_found")
--    response = _build_static_response(resolved)
-+    if_none_match = _get_request_header(scope, b"if-none-match")
-+    response = _build_static_response(resolved, if_none_match=if_none_match)
-     if response is None:
-         return json_response(status=404, error="not_found")
-     return response
- 
- 
- def _load_index_html() -> bytes:
-     try:
-         return INDEX_PATH.read_bytes()
-     except OSError:
-         return _DEFAULT_INDEX_HTML
- 
- 
--def _html_response(body: bytes) -> Response:
--    headers = (
-+def _html_response(body: bytes, *, build_id: Optional[str] = None) -> Response:
-+    headers: list[tuple[bytes, bytes]] = [
-         (b"content-type", b"text/html; charset=utf-8"),
-+        (b"cache-control", b"no-store, no-cache, must-revalidate"),
-+        (b"pragma", b"no-cache"),
-+        (b"expires", b"0"),
-         (b"content-length", str(len(body)).encode("ascii")),
--    )
--    return Response(status=200, body=body, headers=headers)
-+    ]
-+    if build_id is not None:
-+        headers.append((b"x-build-id", build_id.encode("utf-8")))
-+    return Response(status=200, body=body, headers=tuple(headers))
- 
- 
--def _build_static_response(path: Path) -> Optional[Response]:
-+def _build_static_response(path: Path, *, if_none_match: Optional[str] = None) -> Optional[Response]:
-     try:
-         data = path.read_bytes()
-     except OSError:
-         return None
- 
-+    digest = hashlib.sha256(data).hexdigest()
-+    etag = f'"{digest}"'
+   function open(options = {}) {
+     const { resumeToken = null, skipRateLimitCancel = false } = options;
+     const state = AppState.getState();
+     const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
+     if (socket) {
+       cleanupSocket(socket, "superseded");
+     }
+     expectInfoFrame = true;
+     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+         window.WSErrorUI.cancelRateLimitCountdown("manual");
+       } catch (err) {
+         console.warn("Failed to cancel rate limit countdown", err);
+       }
+     }
+     if (!skipRateLimitCancel) {
+       clearRateLimitRetryTimer();
+       rateLimitRetryCount = 0;
+     }
+     const url = computeUrl(resumeTokenValue);
+     const ws = transportFactory(url, SUBPROTOCOL);
++    ws.onopen = () => {
++      // Lightweight breadcrumb; keep as console.log
++      console.log("WebSocket open", { url, protocol: SUBPROTOCOL });
++    };
 +
-+    if if_none_match:
-+        candidates = {value.strip() for value in if_none_match.split(",") if value.strip()}
-+        if "*" in candidates or etag in candidates:
-+            headers = (
-+                (b"cache-control", b"public, max-age=31536000, immutable"),
-+                (b"etag", etag.encode("ascii")),
-+                (b"content-length", b"0"),
-+            )
-+            return Response(status=304, body=b"", headers=headers)
++    ws.onerror = (e) => {
++      console.error("WebSocket error", e, { readyState: ws.readyState });
++    };
 +
-     content_type, encoding = mimetypes.guess_type(path.name)
-     if content_type is None:
-         content_type = "application/octet-stream"
-     elif content_type.startswith("text/") and "charset=" not in content_type:
-         content_type = f"{content_type}; charset=utf-8"
++    ws.onclose = (e) => {
++      console.error("WebSocket closed", {
++        code: e.code,
++        reason: e.reason,
++        wasClean: e.wasClean,
++        readyState: ws.readyState,
++      });
++    };
+     socket = ws;
+     updateState({
+       connectionState: resumeTokenValue ? "resuming" : "connecting",
+       websocket: ws,
+       latencyMs: null,
+       lastPingAt: null,
+       resumeError: null
+     });
+     attachSocket(ws);
+     return ws;
+   }
  
-     headers: list[tuple[bytes, bytes]] = [
-         (b"content-type", content_type.encode("latin1")),
-         (b"content-length", str(len(data)).encode("ascii")),
-+        (b"cache-control", b"public, max-age=31536000, immutable"),
-+        (b"etag", etag.encode("ascii")),
-     ]
-     if encoding:
-         headers.append((b"content-encoding", encoding.encode("latin1")))
+   function close(reason = DEFAULT_CLOSE_REASON) {
+     if (!socket) {
+       updateState({ connectionState: "disconnected" });
+       return;
+     }
+     const ws = socket;
+     cleanupSocket(ws, reason);
+     clearHeartbeat();
+     clearRateLimitRetryTimer();
+     rateLimitRetryCount = 0;
+     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+         window.WSErrorUI.cancelRateLimitCountdown(reason);
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 21750627924c5ba7c68f12429695e6a639856348..fbda2591c079f255d5704bcc586ceaf728238d40 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -244,72 +244,75 @@ class ChatV2Adapter:
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._resume_tokens: Dict[str, _ResumeState] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+         )
  
-     return Response(status=200, body=data, headers=tuple(headers))
+     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+         if scope.get("type") != "websocket":
+             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
  
+         connect_event = await receive()
+         if connect_event.get("type") != "websocket.connect":
+             return
  
- def _resolve_static_path(raw_path: str) -> Optional[Path]:
-     if not raw_path.startswith(STATIC_ROUTE_PREFIX):
-         return None
+         subprotocols = scope.get("subprotocols") or []
++        _logger.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
+         if CHAT_V2_SUBPROTOCOL not in subprotocols:
++            _logger.warning("evt=ws_reject_subprotocol reason=missing_or_mismatch need='chat.v2'")
+             await self._reject_subprotocol(send)
+             return
  
-     relative = raw_path[len(STATIC_ROUTE_PREFIX) :]
-     if not relative:
-         return None
+         self._purge_expired_resume_tokens()
  
-     target = STATIC_ROOT / relative
-     try:
-         resolved = target.resolve(strict=False)
-     except OSError:
-         return None
+         resume_token_param, resume_error = self._extract_resume_token(scope)
+         resume_state: Optional[_ResumeState] = None
+         resume_replay: list[Dict[str, Any]] = []
  
-     try:
-         resolved.relative_to(STATIC_ROOT)
-     except ValueError:
-         return None
-@@ -346,25 +377,36 @@ def _get_adapter() -> ChatV2Adapter:
-         tts_runtime = TTSRuntime(engine=engine)
-         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
-         _adapter.tts_runtime = tts_runtime
-     return _adapter
+         sid = uuid.uuid4().hex
+         if resume_error is None and resume_token_param:
+             resume_state = self._consume_resume_token(resume_token_param)
+             if resume_state is None:
+                 resume_error = "resume_invalid"
+             else:
+                 sid = resume_state.sid
+                 resume_replay = [self._clone_frame(marker) for marker in resume_state.markers]
  
+         headers = self._decode_headers(scope.get("headers", ()))
+         principal: Dict[str, Any] = {"sub": "anon"}
  
- _HTTP_ROUTES: Dict[str, HttpHandler] = {
-     ROOT_ROUTE: _handle_index,
-     FAVICON_ROUTE: _handle_favicon,
-     HEALTH_ROUTE: _handle_health,
-     LIVE_ROUTE: _handle_live,
-     READY_ROUTE: _handle_ready,
-     INFO_ROUTE: _handle_info,
- }
++        _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
+         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
  
+         if resume_error is not None:
+             await self._send_json(
+                 send,
+                 sid,
+                 {
+                     "type": "error",
+                     "code": "resume_invalid",
+                     "detail": "Resume token expired or invalid",
+                     "retryable": False,
+                 },
+             )
+             await send({"type": "websocket.close", "code": 1008, "reason": "resume_invalid"})
+             return
  
- async def _enforce_admin_auth(
-     handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-     return await handler(scope, receive)
- 
- 
- asgi = app
- 
- __all__ = ["app", "asgi"]
-+
-+
-+def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
-+    headers = scope.get("headers") or []
-+    for name, value in headers:
-+        if name == header_name:
-+            try:
-+                return value.decode("latin1")
-+            except UnicodeDecodeError:
-+                return value.decode("latin1", errors="ignore")
-+    return None
-diff --git a/app/versioning.py b/app/versioning.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..381f013a4b79ffffc0648ad6e6491e0e423923c7
---- /dev/null
-+++ b/app/versioning.py
-@@ -0,0 +1,47 @@
-+"""Helpers for static asset versioning and build metadata."""
-+from __future__ import annotations
-+
-+import os
-+import re
-+from datetime import datetime, timezone
-+from typing import Optional
-+
-+_BUILD_ID: Optional[str] = None
-+_STATIC_ATTR_PATTERN = re.compile(
-+    r"(?P<attr>\b(?:src|href))(?P<before_eq>\s*)=(?P<after_eq>\s*)(?P<quote>['\"])(?P<url>/static/[^'\"]*)(?P=quote)",
-+    re.IGNORECASE,
-+)
-+
-+
-+def get_build_id() -> str:
-+    """Return a stable identifier for the current build."""
-+
-+    global _BUILD_ID
-+    if _BUILD_ID is None:
-+        for env_var in ("BUILD_ID", "RENDER_GIT_COMMIT", "GIT_SHA"):
-+            value = os.getenv(env_var)
-+            if value:
-+                _BUILD_ID = value
-+                break
-+        else:
-+            now = datetime.now(timezone.utc)
-+            _BUILD_ID = now.strftime("%Y%m%d%H%M%S")
-+    return _BUILD_ID
-+
-+
-+def inject_static_version(html: str) -> str:
-+    """Append a cache-busting query string to static asset references."""
-+
-+    build_id = get_build_id()
-+
-+    def _replace(match: re.Match[str]) -> str:
-+        url = match.group("url")
-+        if "?" in url:
-+            return match.group(0)
-+        attr = match.group("attr")
-+        before_eq = match.group("before_eq")
-+        after_eq = match.group("after_eq")
-+        quote = match.group("quote")
-+        return f"{attr}{before_eq}={after_eq}{quote}{url}?v={build_id}{quote}"
-+
-+    return _STATIC_ATTR_PATTERN.sub(_replace, html)
+         ctx = AdapterContext(sid=sid, headers=dict(headers), principal=principal)
+         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+         client = scope.get("client")
+         ctx.ip = client[0] if isinstance(client, tuple) and client else None
+         if ctx.ip:
+             ctx.ip_bucket = self._ip_buckets.setdefault(
+                 ctx.ip,
+                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+             )

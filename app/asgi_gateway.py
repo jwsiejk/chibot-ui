@@ -88,6 +88,16 @@ def _ws_route_matches(scope: dict, expected: str) -> bool:
 
 
 async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+    # Log raw scope for the chat WS route before any routing/validation
+    p = (scope.get("path") or "")
+    if p.endswith("/ws/v2/chat"):
+        # Keep formatting consistent with this module's logging style
+        logger.info(
+            "evt=ws_entry path=%s type=%s subs=%s query=%s root_path=%s",
+            scope.get("path"), scope.get("type"),
+            scope.get("subprotocols"), scope.get("query_string"),
+            scope.get("root_path"),
+        )
     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
     scope_type = scope.get("type")
     path = (scope.get("root_path") or "") + scope.get("path", "")

@@ -266,7 +266,9 @@ class ChatV2Adapter:
             return
 
         subprotocols = scope.get("subprotocols") or []
+        _logger.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
         if CHAT_V2_SUBPROTOCOL not in subprotocols:
+            _logger.warning("evt=ws_reject_subprotocol reason=missing_or_mismatch need='chat.v2'")
             await self._reject_subprotocol(send)
             return
 
@@ -288,6 +290,7 @@ class ChatV2Adapter:
         headers = self._decode_headers(scope.get("headers", ()))
         principal: Dict[str, Any] = {"sub": "anon"}
 
+        _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
 
         if resume_error is not None:
