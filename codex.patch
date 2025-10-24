@@ -1,545 +1,156 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 2f2a5cb0373b1f28224c47866442cf04c8f8b30b..f19cac16186bc7a9b23bf73c94323dd59cb1a7e5 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -258,107 +258,109 @@ class ChatV2Adapter:
-         connect_event = await receive()
-         if connect_event.get("type") != "websocket.connect":
-             return
+diff --git a/app/security/auth.py b/app/security/auth.py
+index bbd0461c2336bfb7fee007db77540152f5908fee..dc0dd3665ac87cb849626572e852b57d609f554e 100644
+--- a/app/security/auth.py
++++ b/app/security/auth.py
+@@ -1,72 +1,75 @@
+ """Authentication helpers for WebSocket adapters."""
+ from __future__ import annotations
  
-         subprotocols = scope.get("subprotocols") or []
-         if CHAT_V2_SUBPROTOCOL not in subprotocols:
-             await self._reject_subprotocol(send)
-             return
+ import base64
+ import binascii
+ import json
+ import time
+ from typing import Dict, Tuple, cast
  
-         self._purge_expired_resume_tokens()
+ import requests
  
-         resume_token_param, resume_error = self._extract_resume_token(scope)
-         resume_state: Optional[_ResumeState] = None
-         resume_replay: list[Dict[str, Any]] = []
+ from app.config import get_env
+ from app.security.browser_token import extract_bearer_from_query
+ from app.telemetry import bus as telemetry_bus
  
-         sid = uuid.uuid4().hex
-         if resume_error is None and resume_token_param:
-             resume_state = self._consume_resume_token(resume_token_param)
-             if resume_state is None:
-                 resume_error = "resume_invalid"
-             else:
-                 sid = resume_state.sid
-                 resume_replay = [self._clone_frame(marker) for marker in resume_state.markers]
+ # JWKS cache keyed by kid or the fallback marker for kid-less tokens.
+ _JWKS_CACHE: Dict[str, Dict[str, int]] = {}
+ _JWKS_CACHE_MARKER = "__default__"
++_JWKS_CACHE_TTL_SECONDS = 600
++_JWKS_CACHE_EXPIRES_AT = 0.0
  
-         headers = self._decode_headers(scope.get("headers", ()))
--        auth_headers, detail = self._prepare_authorization_headers(scope, headers)
--        if detail:
-+        allowed, reason, _claims = authorize(
-+            headers,
-+            allow_query_token=True,
-+            scope=scope,
-+            require_token=None,
-+        )
-+        if not allowed:
-+            detail = reason or "missing or invalid auth"
-             await self._publish(
-                 EVT_AUTH_DENIED,
-                 sid,
-                 {"reason": detail},
-             )
--            await self._deny_http(send, detail)
--            return
--
--        allowed, reason = authorize(auth_headers)
--        if not allowed:
--            await self._publish(
--                EVT_AUTH_DENIED,
-+            await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
-+            await self._send_json(
-+                send,
-                 sid,
--                {"reason": reason or "missing or invalid auth"},
-+                {"type": "error", "error": "unauthorized", "detail": detail},
-             )
--            await self._deny_http(send, "missing or invalid auth")
-+            await send({"type": "websocket.close", "code": 1008, "reason": "unauthorized"})
-             return
+ # ASN.1 DER prefix for SHA-256 used in PKCS#1 v1.5 signatures.
+ _RSA_SHA256_PREFIX = bytes.fromhex(
+     "3031300d060960864801650304020105000420"
+ )
  
-         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
  
-         if resume_error is not None:
-             await self._send_json(
-                 send,
-                 sid,
-                 {
-                     "type": "error",
-                     "code": "resume_invalid",
-                     "detail": "Resume token expired or invalid",
-                     "retryable": False,
-                 },
-             )
-             await send({"type": "websocket.close", "code": 1008, "reason": "resume_invalid"})
-             return
+ def _is_prod() -> bool:
+     env = (get_env("ASKCHIP_ENV", "development") or "development").strip().lower()
+     return env in {"prod", "production"}
  
--        ctx = AdapterContext(sid=sid, headers=auth_headers)
-+        ctx = AdapterContext(sid=sid, headers=dict(headers))
-         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-         client = scope.get("client")
-         ctx.ip = client[0] if isinstance(client, tuple) and client else None
-         if ctx.ip:
-             ctx.ip_bucket = self._ip_buckets.setdefault(
-                 ctx.ip,
-                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-             )
  
-         self._contexts[ctx.sid] = ctx
-         self._start_asr_ready_tracker(ctx)
-         self._start_outbound_bridge(ctx, send)
-         self._start_server_keepalive(ctx, send)
+ def _b64url_decode(data: str, *, context: str) -> Tuple[bytes | None, str | None]:
+     data = data.strip()
+     padding = "=" * (-len(data) % 4)
+     try:
+         return base64.urlsafe_b64decode(data + padding), None
+     except (ValueError, binascii.Error):
+         return None, f"invalid base64 in {context}"
  
-         if resume_replay:
-             ctx.recent_markers = [self._clone_frame(marker) for marker in resume_replay]
  
-         if self.exporter:
-             self.exporter.begin(ctx.sid)
--        await self._invoke_engine("on_open", ctx.sid, auth_headers)
-+        await self._invoke_engine("on_open", ctx.sid, ctx.headers)
+ def _load_json(data: bytes, *, context: str) -> Tuple[Dict[str, object] | None, str | None]:
+     try:
+         return cast(Dict[str, object], json.loads(data.decode("utf-8"))), None
+     except (ValueError, UnicodeDecodeError):
+         return None, f"invalid {context} json"
  
-         for marker in resume_replay:
-             await self._send_json(send, ctx.sid, marker)
  
-         close_code = 1000
-         close_reason: Optional[str] = None
+ def _jwks_refresh() -> Tuple[bool, str | None]:
++    global _JWKS_CACHE_EXPIRES_AT
+     url = get_env("AUTH_JWKS_URL")
+     if not url:
+         if _is_prod():
+             return False, "missing AUTH_JWKS_URL"
+         return False, "missing AUTH_JWKS_URL"
  
-         try:
-             while True:
-                 message = await receive()
-                 msg_type = message.get("type")
+     try:
+         response = requests.get(url, timeout=5)
+         response.raise_for_status()
+         payload = response.json()
+     except requests.RequestException as exc:  # pragma: no cover - network errors
+         return False, f"failed to fetch JWKS: {exc}"
+     except ValueError:
+         return False, "invalid JWKS payload"
  
-                 if msg_type == "websocket.receive":
-                     if message.get("text") is not None:
-                         result = await self._handle_text(message["text"], ctx, send)
-                         if not result.should_continue:
-                             close_code = result.close_code or 1000
-                             close_reason = result.close_reason
-                             await send(
-                                 {
-                                     "type": "websocket.close",
-                                     "code": close_code,
-                                     "reason": close_reason,
-                                 }
-                             )
-@@ -1154,59 +1156,50 @@ class ChatV2Adapter:
-         """Record the estimated outbound queue depth and emit diagnostics if needed."""
+     keys = payload.get("keys") if isinstance(payload, dict) else None
+     if not keys or not isinstance(keys, list):
+         return False, "JWKS missing keys"
  
-         ctx = self._contexts.get(sid)
-         if ctx is None:
-             return
+     _JWKS_CACHE.clear()
+     fallback_set = False
  
-         if not isinstance(queued, int):
-             try:
-                 queued = int(queued)
-             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
-                 raise TypeError("queued must be an integer") from exc
+     for raw_key in keys:
+         if not isinstance(raw_key, dict):
+             continue
+@@ -76,60 +79,73 @@ def _jwks_refresh() -> Tuple[bool, str | None]:
+         e_b64 = raw_key.get("e")
+         if not isinstance(n_b64, str) or not isinstance(e_b64, str):
+             continue
+         n_bytes_err = _b64url_decode(n_b64, context="jwks.n")
+         e_bytes_err = _b64url_decode(e_b64, context="jwks.e")
+         n_bytes, n_err = n_bytes_err
+         e_bytes, e_err = e_bytes_err
+         if n_err or e_err or n_bytes is None or e_bytes is None:
+             continue
+         n_int = int.from_bytes(n_bytes, "big", signed=False)
+         e_int = int.from_bytes(e_bytes, "big", signed=False)
+         if n_int <= 0 or e_int <= 0:
+             continue
+         key_size = (n_int.bit_length() + 7) // 8
+         cache_entry = {"n": n_int, "e": e_int, "size": key_size}
+         kid = raw_key.get("kid") if isinstance(raw_key.get("kid"), str) else None
+         if kid:
+             _JWKS_CACHE[kid] = cache_entry
+         if not fallback_set:
+             _JWKS_CACHE[_JWKS_CACHE_MARKER] = cache_entry
+             fallback_set = True
  
-         await self._update_backpressure(ctx, max(0, queued))
+     if not _JWKS_CACHE:
+         return False, "JWKS has no usable RSA keys"
  
-     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
-         event = {
-             "schema_version": "1",
-             "type": event_type,
-             "sid": sid,
-             "who": "server",
-             "source": "ws_server",
-             "meta": dict(meta),
-         }
-         bus.publish(event)
++    _JWKS_CACHE_EXPIRES_AT = time.time() + _JWKS_CACHE_TTL_SECONDS
+     return True, None
  
--    async def _deny_http(self, send: Callable[[dict], Awaitable[None]], detail: str) -> None:
--        body = json.dumps({"type": "error", "code": "unauthorized", "detail": detail}).encode("utf-8")
--        headers = [
--            (b"content-type", b"application/json"),
--            (b"content-length", str(len(body)).encode("ascii")),
--        ]
--        await send({"type": "websocket.http.response.start", "status": 401, "headers": headers})
--        await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
--
-     async def _invoke_engine(self, hook: str, *args: Any) -> None:
-         if not self.engine:
-             return
-         handler = getattr(self.engine, hook, None)
-         if handler is None:
-             return
-         result = handler(*args)
-         if inspect.isawaitable(result):
-             await result
  
-     @staticmethod
-     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
-         decoded: Dict[str, str] = {}
-         for key, value in headers:
-             decoded[key.decode("latin1").lower()] = value.decode("latin1")
-         return decoded
- 
-     def _purge_expired_resume_tokens(self) -> None:
-         now = self._now_ms()
-         for token, state in list(self._resume_tokens.items()):
-             if state.expiry_ms < now:
-                 self._resume_tokens.pop(token, None)
- 
-     def _extract_resume_token(self, scope: dict) -> tuple[Optional[str], Optional[str]]:
-         raw_query = scope.get("query_string", b"")
-@@ -1260,98 +1253,50 @@ class ChatV2Adapter:
-             sid=ctx.sid,
-             expiry_ms=expiry,
-             markers=[self._clone_frame(marker) for marker in ctx.recent_markers],
-         )
- 
-     def _record_resume_marker(self, ctx: AdapterContext, payload: Dict[str, Any]) -> None:
-         clone = self._clone_frame(payload)
-         ctx.recent_markers.append(clone)
-         if len(ctx.recent_markers) > _RESUME_MARKER_LIMIT:
-             ctx.recent_markers = ctx.recent_markers[-_RESUME_MARKER_LIMIT :]
- 
-         token = ctx.resume_token
-         if token:
-             state = self._resume_tokens.get(token)
-             if state:
-                 state.markers = [self._clone_frame(marker) for marker in ctx.recent_markers]
- 
-     @staticmethod
-     def _clone_frame(payload: Dict[str, Any]) -> Dict[str, Any]:
-         return json.loads(json.dumps(payload, separators=(",", ":")))
- 
-     @staticmethod
-     def _now_ms() -> int:
-         return int(time.time() * 1000)
- 
--    @staticmethod
--    def _extract_browser_token(scope: dict) -> tuple[Optional[str], Optional[str]]:
--        """Extract a browser-supplied access token from the query string."""
--
--        raw_query = scope.get("query_string", b"")
--        if not raw_query:
--            return None, None
--
--        if isinstance(raw_query, bytes):
--            try:
--                query = raw_query.decode("utf-8")
--            except UnicodeDecodeError:
--                return None, "missing or invalid auth"
--        else:
--            query = str(raw_query)
--
--        params = parse_qs(query, keep_blank_values=True)
--        tokens = params.get("access_token")
--        if not tokens:
--            return None, None
--        if len(tokens) != 1:
--            return None, "ambiguous auth"
--
--        token = tokens[0]
--        if not token:
--            return None, "missing or invalid auth"
--
--        return token, None
--
--    def _prepare_authorization_headers(
--        self, scope: dict, headers: Dict[str, str]
--    ) -> tuple[Dict[str, str], Optional[str]]:
--        """Overlay Authorization header based on browser token rules."""
--
--        token, error = self._extract_browser_token(scope)
--        if error:
--            return dict(headers), error
--
--        header_auth = headers.get("authorization")
--        if token:
--            if header_auth:
--                return dict(headers), "ambiguous auth"
--            updated = dict(headers)
--            updated["authorization"] = f"Bearer {token}"
--            return updated, None
--
--        return dict(headers), None
--
-     @staticmethod
-     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
-         if not payload:
-             return None
-         preview = payload.decode("utf-8", "replace")
-         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
-         if len(preview) > limit:
-             return f"{preview[: limit - 1]}…"
-         return preview
- 
-     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
-         ctx.outbound_queue_depth = queued
-         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
-             ctx.backpressure_state = "on"
-             await self._publish(
-                 EVT_BACKPRESSURE_ON,
-                 ctx.sid,
-                 {"queue_depth": queued, "state": "on"},
-             )
-         elif ctx.backpressure_state == "on" and queued < QUEUE_OFF_THRESHOLD:
-             ctx.backpressure_state = "off"
-             await self._publish(
-                 EVT_BACKPRESSURE_OFF,
-                 ctx.sid,
-                 {"queue_depth": queued, "state": "off"},
-diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
-index 46cfcac6fa98bca3986209d87d94b3f6214c4a8b..6458f62d6e322be64117a65ce0d7198db84182d1 100644
---- a/docs/10_CONTRACT_WS.md
-+++ b/docs/10_CONTRACT_WS.md
-@@ -1,44 +1,52 @@
- # WebSocket Contract — `chat.v2`
- 
- **Endpoint:** `/ws/v2/chat` (ASGI WS)  
- **Required subprotocol:** `chat.v2`  
- 
- ---
- 
- ## Handshake & Authentication (browser-safe)
- 
- - **Single path & protocol:** only `/ws/v2/chat` with `Sec-WebSocket-Protocol: chat.v2`.  
--- **Auth (browser-compatible):** client connects with a short‑lived bearer **query token**:
-+- **Auth (browser-compatible):** clients send a short-lived bearer JWT using either the HTTP header or a browser-safe query para
-+  meter:
- 
-+Authorization: Bearer <JWT>
-+-- or --
- wss://<host>/ws/v2/chat?access_token=<JWT>
- Sec-WebSocket-Protocol: chat.v2
- Origin: https://app.askchip.ai
- 
- csharp
- Copy code
- 
-+- **Token requirements:** production deployments require a valid JWT for every upgrade. Development builds may opt in to headerl
-+  ess sessions by exporting `WS_TOKEN_REQUIRED=0` (the default is to require tokens when `WS_TOKEN_REQUIRED=1`). The WebSocket ga
-+  te shares the same rules and JWT verifier as `/api/v1/admin/flow/*`, and the HTTP routes accept the same `?access_token=` quer
-+  y parameter.
+ def _get_jwks_key(kid: str | None) -> Tuple[Dict[str, int] | None, str | None]:
++    global _JWKS_CACHE_EXPIRES_AT
 +
- - **Origin allow‑list:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
+     cache_key = kid if kid else _JWKS_CACHE_MARKER
+-    if cache_key not in _JWKS_CACHE:
++    now = time.time()
++
++    if now >= _JWKS_CACHE_EXPIRES_AT:
++        success, error = _jwks_refresh()
++        if not success:
++            return None, error
++
++    key = _JWKS_CACHE.get(cache_key)
++    if key is None:
+         success, error = _jwks_refresh()
+         if not success:
+             return None, error
+-    return _JWKS_CACHE.get(cache_key), None
++        key = _JWKS_CACHE.get(cache_key)
++
++    return key, None
  
- ### Origin allow‑list configuration
  
- - `ASKCHIP_WS_ALLOWED_ORIGINS` — comma‑separated list of exact origins (`https://app.askchip.ai`, `https://console.askchip.ai`).
-   - Origins are matched case‑insensitively after normalizing scheme + host + optional port.
-   - Do **not** include wildcard (`*`) entries; they are ignored.
- - If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, the server looks at `ASKCHIP_ENV`:
-   - `ASKCHIP_ENV=production` (or `prod`) → reject every browser Origin by default.
-   - Any other value (or unset) → allow only localhost loopback origins (host `localhost`/`127.0.0.1`).
- - Missing `Origin` headers (non‑browser clients) are accepted.
+ def _verify_rs256(signing_input: bytes, signature: bytes, key: Dict[str, int]) -> bool:
+     import hashlib
  
- Deployment guidance:
+     key_size = key.get("size") or 0
+     if key_size <= 0:
+         return False
+     if len(signature) != key_size:
+         if len(signature) > key_size:
+             return False
+         signature = signature.rjust(key_size, b"\x00")
  
- - Production deployments **must** set `ASKCHIP_WS_ALLOWED_ORIGINS` to the exact list of UI origins.
- - Development builds can omit the variable to allow local tooling (`http://localhost:3000`, `https://127.0.0.1:5173`, etc.).
- - When a connection is rejected the HTTP response is `403` with `{ "code": "origin_blocked" }`; browsers should surface this clearly to the user.
- - Admin flow exports (`/api/v1/admin/flow/*`) stay server-side in production; dev/staging builds enable CORS for these routes via `ASKCHIP_ADMIN_CORS_ORIGINS` so the browser Inspector can call them.
+     n = key["n"]
+     e = key["e"]
+     sig_int = int.from_bytes(signature, "big", signed=False)
+     if sig_int >= n:
+         return False
  
- - **Version negotiation:** if the subprotocol is missing/mismatched, the server replies **426** with a JSON body `{ "code": "bad_subprotocol" }`.
- 
- On successful upgrade, the server emits an initial `info` frame with connection metadata (see “Initial `info` frame”).
- 
- ---
- 
-@@ -179,50 +187,51 @@ The server may emit a lightweight telemetry frame to describe planner intent:
- 
- ```json
- {
-   "type": "dialog.plan",
-   "ts_ms": 1730000000000,
-   "mode": "clarify | outline | deep_dive | compare | steps | next_actions",
-   "missing_info": ["intent", "details"],
-   "chips": ["Share more context", "Show an example"],
-   "reason": "short note for observability only"
- }
- ```
- 
- Notes:
- 
- - Emitted at most once per user turn, after ASR final and before assistant chunks.
- - Purely telemetry; clients don’t need it to function.
- - The mode constrains the response style used by the NLG Generator.
- - If absent, client behavior is unchanged.
- 
- ### Binary audio framing (server → client TTS)
- 
- - Codec: **PCM s16le**, mono, **16 kHz** (`info.audio` announces the descriptor).
- - The server emits one PCM buffer per **binary WebSocket message**. No frame headers or chunk counters are prepended.
- - Each chunk length MUST be a multiple of `channels * 2` bytes (16‑bit samples).
- - The existing binary routing guard still rejects non-audio payloads.
-+- Playback ordering is deterministic: every utterance is bracketed by a `tts.start` JSON frame, contiguous PCM binary messages, and a matching `tts.end` frame.
- 
- Client decoding example (WebAudio):
- 
- ```js
- const sampleRate = 16000;
- const audioCtx = new AudioContext({ sampleRate });
- 
- function playPcmChunk(arrayBuffer) {
-   const int16 = new Int16Array(arrayBuffer);
-   const float32 = new Float32Array(int16.length);
-   for (let i = 0; i < int16.length; i += 1) {
-     float32[i] = Math.max(-1, Math.min(1, int16[i] / 32768));
-   }
- 
-   const buffer = audioCtx.createBuffer(1, float32.length, sampleRate);
-   buffer.copyToChannel(float32, 0);
- 
-   const source = audioCtx.createBufferSource();
-   source.buffer = buffer;
-   source.connect(audioCtx.destination);
-   source.start();
- }
- ```
- 
- Core event schemas
-diff --git a/tests/test_auth_paths.py b/tests/test_auth_paths.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..dde02c1797ecd9ca61a48154dc21f3f276f8254f
---- /dev/null
-+++ b/tests/test_auth_paths.py
-@@ -0,0 +1,143 @@
-+"""Smoke tests covering shared auth paths for WS and admin HTTP."""
-+from __future__ import annotations
-+
-+import asyncio
-+import json
-+import os
-+from typing import Any, Dict, List
-+from unittest import mock
-+
-+from app.asgi_gateway import _enforce_admin_auth, json_response
-+from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
-+
-+
-+def _ws_scope(**overrides: Any) -> Dict[str, Any]:
-+    scope: Dict[str, Any] = {
-+        "type": "websocket",
-+        "subprotocols": [CHAT_V2_SUBPROTOCOL],
-+        "headers": [],
-+        "query_string": b"",
-+        "client": ("127.0.0.1", 1234),
-+    }
-+    scope.update(overrides)
-+    return scope
-+
-+
-+async def _run_ws(adapter: ChatV2Adapter, scope: Dict[str, Any], events: List[dict]) -> List[dict]:
-+    queue: asyncio.Queue[dict] = asyncio.Queue()
-+    for event in events:
-+        queue.put_nowait(event)
-+
-+    sent: List[dict] = []
-+
-+    async def receive() -> dict:
-+        return await queue.get()
-+
-+    async def send(message: dict) -> None:
-+        sent.append(message)
-+
-+    await adapter(scope, receive, send)
-+    return sent
-+
-+
-+def _drive_ws(scope: Dict[str, Any], events: List[dict]) -> List[dict]:
-+    adapter = ChatV2Adapter()
-+    return asyncio.run(_run_ws(adapter, scope, events))
-+
-+
-+async def _admin_handler(scope: Dict[str, Any], receive: Any) -> Any:  # pragma: no cover - signature stub
-+    return json_response(ok=True)
-+
-+
-+async def _admin_receive() -> dict:
-+    return {"type": "http.request", "body": b"", "more_body": False}
-+
-+
-+def _run_admin(scope: Dict[str, Any]) -> Any:
-+    return asyncio.run(_enforce_admin_auth(_admin_handler, scope, _admin_receive))
-+
-+
-+def test_ws_valid_query_token_allows_upgrade() -> None:
-+    scope = _ws_scope(query_string=b"access_token=good")
-+    events = [
-+        {"type": "websocket.connect"},
-+        {"type": "websocket.disconnect", "code": 1000},
-+    ]
-+    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "1"}, clear=False):
-+        with mock.patch("app.security.auth.verify_jwt", return_value=(True, None, {"sub": "demo"})):
-+            sent = _drive_ws(scope, events)
-+
-+    accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-+    assert accepts and accepts[0].get("subprotocol") == CHAT_V2_SUBPROTOCOL
-+
-+    payloads = [json.loads(msg["text"]) for msg in sent if msg.get("type") == "websocket.send"]
-+    assert all(frame.get("error") != "unauthorized" for frame in payloads)
-+
-+
-+def test_ws_invalid_token_closes_with_error() -> None:
-+    scope = _ws_scope(query_string=b"access_token=bad")
-+    events = [{"type": "websocket.connect"}]
-+    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "1"}, clear=False):
-+        with mock.patch("app.security.auth.verify_jwt", return_value=(False, "bad token", None)):
-+            sent = _drive_ws(scope, events)
-+
-+    payloads = [json.loads(msg["text"]) for msg in sent if msg.get("type") == "websocket.send"]
-+    assert payloads == [{"type": "error", "error": "unauthorized", "detail": "bad token"}]
-+
-+    closes = [msg for msg in sent if msg.get("type") == "websocket.close"]
-+    assert closes and closes[0].get("code") == 1008
-+
-+
-+def test_ws_dev_mode_allows_missing_token() -> None:
-+    scope = _ws_scope()
-+    events = [
-+        {"type": "websocket.connect"},
-+        {"type": "websocket.disconnect", "code": 1000},
-+    ]
-+    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "0"}, clear=False):
-+        with mock.patch("app.security.auth.verify_jwt") as verify:
-+            sent = _drive_ws(scope, events)
-+    verify.assert_not_called()
-+
-+    accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-+    assert accepts
-+
-+
-+def test_admin_http_valid_token_allows_request() -> None:
-+    scope = {
-+        "type": "http",
-+        "query_string": b"access_token=good",
-+        "headers": [],
-+    }
-+    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "1"}, clear=False):
-+        with mock.patch("app.security.auth.verify_jwt", return_value=(True, None, {"sub": "demo"})):
-+            response = _run_admin(scope)
-+
-+    assert response.status == 200
-+    assert json.loads(response.body.decode("utf-8")) == {"ok": True}
-+
-+
-+def test_admin_http_invalid_token_returns_401() -> None:
-+    scope = {
-+        "type": "http",
-+        "query_string": b"access_token=bad",
-+        "headers": [],
-+    }
-+    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "1"}, clear=False):
-+        with mock.patch("app.security.auth.verify_jwt", return_value=(False, "bad token", None)):
-+            response = _run_admin(scope)
-+
-+    assert response.status == 401
-+    body = json.loads(response.body.decode("utf-8"))
-+    assert body == {"error": "unauthorized", "detail": "bad token"}
-+
-+
-+def test_admin_http_dev_mode_allows_missing_token() -> None:
-+    scope = {"type": "http", "query_string": b"", "headers": []}
-+    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "0"}, clear=False):
-+        with mock.patch("app.security.auth.verify_jwt") as verify:
-+            response = _run_admin(scope)
-+    verify.assert_not_called()
-+
-+    assert response.status == 200
-+    assert json.loads(response.body.decode("utf-8")) == {"ok": True}
+     em_int = pow(sig_int, e, n)
+     em = em_int.to_bytes(key_size, "big")
+     if len(em) < len(_RSA_SHA256_PREFIX) + 11:
+         return False
+     if em[0] != 0x00 or em[1] != 0x01:
+         return False

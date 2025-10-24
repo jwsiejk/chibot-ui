@@ -16,6 +16,8 @@ from app.telemetry import bus as telemetry_bus
 # JWKS cache keyed by kid or the fallback marker for kid-less tokens.
 _JWKS_CACHE: Dict[str, Dict[str, int]] = {}
 _JWKS_CACHE_MARKER = "__default__"
+_JWKS_CACHE_TTL_SECONDS = 600
+_JWKS_CACHE_EXPIRES_AT = 0.0
 
 # ASN.1 DER prefix for SHA-256 used in PKCS#1 v1.5 signatures.
 _RSA_SHA256_PREFIX = bytes.fromhex(
@@ -45,6 +47,7 @@ def _load_json(data: bytes, *, context: str) -> Tuple[Dict[str, object] | None, 
 
 
 def _jwks_refresh() -> Tuple[bool, str | None]:
+    global _JWKS_CACHE_EXPIRES_AT
     url = get_env("AUTH_JWKS_URL")
     if not url:
         if _is_prod():
@@ -98,16 +101,29 @@ def _jwks_refresh() -> Tuple[bool, str | None]:
     if not _JWKS_CACHE:
         return False, "JWKS has no usable RSA keys"
 
+    _JWKS_CACHE_EXPIRES_AT = time.time() + _JWKS_CACHE_TTL_SECONDS
     return True, None
 
 
 def _get_jwks_key(kid: str | None) -> Tuple[Dict[str, int] | None, str | None]:
+    global _JWKS_CACHE_EXPIRES_AT
+
     cache_key = kid if kid else _JWKS_CACHE_MARKER
-    if cache_key not in _JWKS_CACHE:
+    now = time.time()
+
+    if now >= _JWKS_CACHE_EXPIRES_AT:
         success, error = _jwks_refresh()
         if not success:
             return None, error
-    return _JWKS_CACHE.get(cache_key), None
+
+    key = _JWKS_CACHE.get(cache_key)
+    if key is None:
+        success, error = _jwks_refresh()
+        if not success:
+            return None, error
+        key = _JWKS_CACHE.get(cache_key)
+
+    return key, None
 
 
 def _verify_rs256(signing_input: bytes, signature: bytes, key: Dict[str, int]) -> bool:
