@@ -1,199 +1,247 @@
-diff --git a/.env.example b/.env.example
-index 6fe2d0cf9172cdf2307cbb3bb6f70cee97832d0c..25d443784c35f0e601452868a4d5f664a3b26f24 100644
---- a/.env.example
-+++ b/.env.example
-@@ -1,30 +1,31 @@
- # Non-secrets (safe defaults for local)
- ADMIN_EMAILS=jwsiejk@purestorage.com
- ADVANCED_LOGGING_ENABLED=True
--APP_ENV=production
- ASKCHIP_AUTO_ARM_MS=250
-+# Optional: comma-separated WS Origin allow-list (e.g., https://example.com,https://admin.example.com). Leave empty for same-origin only.
-+ASKCHIP_WS_ALLOWED_ORIGINS=
- ASR_FINAL_GRACE_S=1.0
- ASR_POST_FLUSH_WAIT_S=1.0
- ASR_READY_WAIT_S=1.5
- CHIBOT_DISABLE_RAW_FALLBACK=1
- CSRF_ENFORCED=true
- DATABASE_URL=postgresql://<user>:<pass>@<host>/<db>?sslmode=require
- DD_TRACE_ENABLED=0
- DEEPGRAM_LISTEN_URL=wss://api.deepgram.com/v1/listen
- DEEPGRAM_UTTERANCE_END_MS=3000
- DG_ENABLE_PARTIALS=true
- DG_FINAL_WAIT_S=20
- DG_LINGER_MS=8000
- DG_OPEN_MICRO_WAIT_S=.60
- ELEVEN_INACTIVITY=180
- ELEVEN_MODEL_ID=eleven_flash_v2_5
- ELEVEN_OUTPUT_FORMAT=pcm_24000
- ELEVEN_OUTPUT_FORMAT_WS=pcm_24000
- EMAIL_FROM_NAME=Chip
- EMAIL_HOST=smtp.gmail.com
- EMAIL_HOST_USER=you@example.com
- EMAIL_PORT=587
- EMAIL_USE_TLS=True
- EMAIL_WEBHOOK_SECRET=<set-if-used>
- EMAIL_WEBHOOK_URL=<set-if-used>
- ENABLE_ADMIN_SSE=true
-diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
-index 7c754a8e8968476d04078d59ccf3de7f80b1ad2e..134cb746e920a223bef19bd0fbb829cfc9e3087b 100644
---- a/docs/10_CONTRACT_WS.md
-+++ b/docs/10_CONTRACT_WS.md
-@@ -1,99 +1,95 @@
- # WebSocket Contract — `chat.v2`
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index d961aeca5c1bd1ff91e626ab8c2f51e5a697a18f..79b75e5fb4213d6c8d0f12dc5665b0ae365e967f 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -341,79 +341,137 @@ async def _reject_origin(
+     send: Callable[[dict], Awaitable[None]],
+ ) -> None:
+     """Reject a WebSocket handshake because the Origin is not allowed."""
  
- **Endpoint:** `/ws/v2/chat` (ASGI WS)  
- **Required subprotocol:** `chat.v2`  
+     message = await receive()
+     if message.get("type") != "websocket.connect":
+         return
  
- ---
+     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
+     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
+     if origin:
+         payload["origin"] = origin
+     await _send_ws_response(send, json_response(status=403, **payload))
  
- ## Handshake & Authentication (browser-safe)
  
- - **Single path & protocol:** only `/ws/v2/chat` with `Sec-WebSocket-Protocol: chat.v2`.
- - **Authentication:** bearer tokens are no longer required. Any `Authorization` header or `access_token` query parameter is ignored. Restrict access using network controls (VPN, IP allow-lists) if needed.
--- **Origin allow‑list:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
-+- **Origin policy:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
+ def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
+     for header, value in headers:
+         if header == name:
+             try:
+                 return value.decode("latin1").strip()
+             except UnicodeDecodeError:  # pragma: no cover - defensive
+                 return None
+     return None
  
- ### Origin allow‑list configuration
  
--- `ASKCHIP_WS_ALLOWED_ORIGINS` — comma‑separated list of exact origins (`https://app.askchip.ai`, `https://console.askchip.ai`).
-+- `ASKCHIP_WS_ALLOWED_ORIGINS` — optional comma‑separated list of exact origins (for example, `https://app.askchip.ai`, `https://console.askchip.ai`).
-   - Origins are matched case‑insensitively after normalizing scheme + host + optional port.
-   - Do **not** include wildcard (`*`) entries; they are ignored.
--- If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, the server looks at `ASKCHIP_ENV`:
--  - `ASKCHIP_ENV=production` (or `prod`) → reject every browser Origin by default.
--  - Any other value (or unset) → allow only localhost loopback origins (host `localhost`/`127.0.0.1`).
-+- If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, only same‑origin browser requests are accepted.
- - Missing `Origin` headers (non‑browser clients) are accepted.
++def _first_forwarded_value(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
++    value = _decode_header(headers, name)
++    if not value:
++        return None
++
++    for part in value.split(","):
++        candidate = part.strip()
++        if candidate:
++            return candidate
++    return None
++
++
++def _parse_forwarded_header(headers: Iterable[tuple[bytes, bytes]]) -> tuple[Optional[str], Optional[str]]:
++    raw = _decode_header(headers, b"forwarded")
++    if not raw:
++        return None, None
++
++    first_element = raw.split(",", 1)[0].strip()
++    if not first_element:
++        return None, None
++
++    proto: Optional[str] = None
++    host: Optional[str] = None
++    for part in first_element.split(";"):
++        if "=" not in part:
++            continue
++        key, value = part.split("=", 1)
++        key = key.strip().lower()
++        raw_value = value.strip()
++        if not raw_value:
++            continue
++        if raw_value.startswith('"') and raw_value.endswith('"') and len(raw_value) >= 2:
++            raw_value = raw_value[1:-1]
++        if key == "proto" and not proto:
++            proto = raw_value
++        elif key == "host" and not host:
++            host = raw_value
++
++    if proto is None and host is None:
++        return None, None
++    return proto, host
++
++
+ def _derive_scope_origin(scope: dict) -> Optional[str]:
+     """Best-effort reconstruction of the request origin from an ASGI scope."""
  
- Deployment guidance:
+-    scheme = (scope.get("scheme") or "").lower()
+-    if scheme in {"https", "wss"}:
++    headers = scope.get("headers", ())
++
++    forwarded_proto, forwarded_host = _parse_forwarded_header(headers)
++    fallback_proto = _first_forwarded_value(headers, b"x-forwarded-proto")
++    forwarded_port = _first_forwarded_value(headers, b"x-forwarded-port")
++    header_host = forwarded_host or _first_forwarded_value(headers, b"x-forwarded-host")
++
++    raw_scheme = (forwarded_proto or fallback_proto or scope.get("scheme") or "").lower()
++    if raw_scheme in {"https", "wss"}:
+         scheme = "https"
+     else:
+         scheme = "http"
  
--- Production deployments **must** set `ASKCHIP_WS_ALLOWED_ORIGINS` to the exact list of UI origins.
--- Development builds can omit the variable to allow local tooling (`http://localhost:3000`, `https://127.0.0.1:5173`, etc.).
-+- Default production behavior is same-origin enforcement. Set `ASKCHIP_WS_ALLOWED_ORIGINS` to list any additional trusted Origins.
- - When a connection is rejected the HTTP response is `403` with `{ "code": "origin_blocked" }`; browsers should surface this clearly to the user.
--- Admin flow exports (`/api/v1/admin/flow/*`) stay server-side in production; dev/staging builds enable CORS for these routes via `ASKCHIP_ADMIN_CORS_ORIGINS` so the browser Inspector can call them.
+-    host = _decode_header(scope.get("headers", ()), b"host")
+-    if not host:
++    # Security note: Forwarded/X-Forwarded headers are used only to reconstruct the effective
++    # origin for same-origin equivalence behind proxies. They do not expand accepted origins
++    # beyond same-origin or the explicit allow-list.
++    host = header_host or _decode_header(headers, b"host")
++    if host:
++        normalized_host = host.strip()
++        if forwarded_port and ":" not in normalized_host:
++            port_candidate = forwarded_port.strip()
++            if port_candidate and not _is_default_port(scheme, port_candidate):
++                normalized_host = f"{normalized_host}:{port_candidate}"
++    else:
++        normalized_host = ""
++
++    if not normalized_host:
+         server = scope.get("server")
+         if isinstance(server, (list, tuple)) and server:
+             hostname = (server[0] or "").strip()
+             port = server[1] if len(server) > 1 else None
+             if hostname:
++                normalized_host = hostname
+                 if port and not _is_default_port(scheme, port):
+-                    host = f"{hostname}:{port}"
+-                else:
+-                    host = hostname
+-
+-    if not host:
+-        return None
++                    normalized_host = f"{hostname}:{port}"
  
- - **Version negotiation:** if the subprotocol is missing/mismatched, the server replies **426** with a JSON body `{ "code": "bad_subprotocol" }`.
+-    normalized_host = host.strip().lower()
++    normalized_host = normalized_host.strip()
+     if not normalized_host:
+         return None
  
- On successful upgrade, the server emits an initial `info` frame with connection metadata (see “Initial `info` frame”).
+-    return f"{scheme}://{normalized_host}"
++    return f"{scheme}://{normalized_host.lower()}"
  
- ---
  
- ## Client → Server frames
+ def _is_default_port(scheme: str, port: Any) -> bool:
+     try:
+         value = int(port)
+     except (TypeError, ValueError):
+         return False
+     if scheme == "https":
+         return value == 443
+     if scheme == "http":
+         return value == 80
+     return False
  
- - `{"type":"ping"}`
- - `{"type":"client.ready"}`
  
- - **Audio (binary frames):**  
-   The **server policy** selects the ASR provider and **required input audio**. Clients **MUST** follow the descriptor the server announces (see `asr.ready`). The client **MUST NOT** change codecs/containers; format is controlled by policy (Deepgram primary, Speechmatics secondary).  
+ def _resolve_origin_policy() -> "_OriginPolicy":
+     raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
+     if raw is not None:
+         entries = tuple(filter(None, (_normalize_origin(item) for item in raw.split(","))))
+         return _OriginPolicy(mode="explicit", values=entries)
  
-   - **Primary (Deepgram):** **WebM containerized Opus**, mono, **48 kHz**.  
-     The browser typically produces this via `MediaRecorder('audio/webm;codecs=opus')`.  
-   - **Secondary (Speechmatics):** **RAW PCM s16le**, mono, **16 kHz**.
+     return _OriginPolicy(mode="explicit", values=())
  
-   The server signals readiness and the required input descriptor via:
  
-   ```json
-   {
-     "type": "asr.ready",
-     "vendor": "deepgram",
-     "input": { "container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1 }
-   }
- or
- 
- json
- Copy code
- {
-   "type": "asr.ready",
-   "vendor": "speechmatics",
-   "input": { "container": "raw", "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }
- }
- Binary message rule: each WS binary message carries an arbitrary contiguous chunk of the current input stream (WebM segment/cluster bytes for Opus, or a raw PCM chunk). The server assigns/validates sequencing (see “Binary audio sequencing & jitter buffer”).
- 
- audio.header (optional, not for selecting codecs):
- Clients may not override format. audio.header can supply stream hints like a starting sequence index:
- 
- json
- Copy code
- {"type":"audio.header","seq_start":0}
--Optional admin toggle (dev only):
-+Optional admin toggle:
- 
- json
- Copy code
- {"type":"admin.toggle","barge_in_enabled":true}
- Provider selection is policy‑controlled; do not flip providers via WS.
- 
- Optional resume handshake (see “Reconnect / Resume”):
- 
- json
- Copy code
- {"type":"client.resume","resume_token":"<string>"}
- Server → Client frames
- 
- - **JSON text frames** (policy/info/chat/etc.) follow the telemetry envelope shown below. Examples:
- 
- ```json
- {"type":"pong","t":1730000000000}
- ```
- 
- - **Binary audio frames** carry raw PCM s16le chunks at **16 kHz mono**. The playback descriptor is announced once per connection via `info.audio`, which already includes `{ "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }`. Each binary frame is a contiguous PCM buffer with no additional header bytes.
- 
- Policy (client-visible subset)
- The server may push policy updates. Client-visible frames follow the telemetry
- envelope (`type`, `ts_ms`, `level`, …) and the server **strips any policy keys
- outside the stable subset** before sending to browsers. The client‑stable subset
-@@ -246,51 +242,51 @@ Copy code
-   "code":"rate_limited",          // enum
-   "message":"Too many connections",
-   "retryable": true,
-   "retry_in_ms": 3000             // optional when retryable==true
- }
- 
- ### Error taxonomy
- 
- | Code               | Retryable | When it is emitted                                             | Retry guidance                                          |
- | ------------------ | --------- | --------------------------------------------------------------- | ------------------------------------------------------- |
- | `auth_failed`      | No        | Missing or invalid `access_token` query token.                 | Fix authentication and reconnect immediately.           |
- | `origin_blocked`   | No        | Origin header not in allow-list.                               | Update the allow-list before attempting again.          |
- | `version_mismatch` | No        | WebSocket subprotocol negotiation failed.                      | Connect with `chat.v2` and retry immediately.           |
- | `rate_limited`     | Yes       | Connection/session exceeds token bucket limits.                | Wait `retry_in_ms` when provided; otherwise back off.   |
- | `provider_down`    | Yes       | Downstream ASR/TTS/LLM vendor outage.                          | Retry with exponential backoff until the service recovers. |
- | `resume_invalid`   | No        | Provided resume token is expired or already used.              | Start a new session and obtain a fresh resume token.    |
- | `invalid_message`  | No        | JSON frame is malformed or unsupported for the current policy. | Correct the payload before retrying.                    |
- 
- `retry_in_ms` is only present when the server can provide a concrete wait time for retryable errors.
- 
- Behavioral rules
- Connection & Version Negotiation
- Only subprotocol chat.v2 is accepted. Clients missing it receive HTTP 426 with { "code": "bad_subprotocol" }.
- 
- Authorization, Origin, Rate Limits
--Authorization: query token ?access_token=<JWT> is required unless explicitly disabled for dev. Invalid/missing → error{code:"auth_failed"} then close 1008.
-+Authorization: query token ?access_token=<JWT> is required unless explicitly disabled. Invalid/missing → error{code:"auth_failed"} then close 1008.
- 
- Origin allow‑list: reject disallowed origins with 403 or close 1008 + error{code:"origin_blocked"}.
- 
- Rate limits: over‑rate → error{code:"rate_limited", retry_in_ms:<ms>} then close 1008.
- 
- Frame validation
- Invalid JSON → schema_invalid or invalid_message. Connection typically remains open unless otherwise specified.
- 
- Backpressure & partial coalescing
- Outbound WS outbox is bounded; on overflow the server emits telemetry EVT_WS_OUTBOX_DROP and may coalesce asr.partial frames (client should expect fewer partials; asr.final is authoritative).
- 
- asr.partial MAY include partial_seq (monotonic). Under backlog, intermediate partials MAY be dropped; the most recent text is delivered at most once per throttle interval.
- 
- Mode & Barge rules
- While mode: "assistant_speaking":
- 
- If barge_in_enabled: true → auto‑VAD or ASR evidence may interrupt TTS.
- 
- If false → ignore speech until tts.end + post_hold_ms.
- In mode: "idle", allow_auto_vad MUST be true and ACWR effective.
- 
- Telemetry Envelope v1
- All events share this shape:
- 
- json
+ def _is_origin_allowed(origin: str, policy: "_OriginPolicy") -> bool:
+     if policy.mode == "explicit":
+diff --git a/tests/test_ws_origin_forwarded.py b/tests/test_ws_origin_forwarded.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..107972e5fa38a041d828cac9a3779d7d7c7ea410
+--- /dev/null
++++ b/tests/test_ws_origin_forwarded.py
+@@ -0,0 +1,87 @@
++import pytest
++
++from app.asgi_gateway import _derive_scope_origin, _validate_ws_origin
++
++
++def _build_headers(pairs):
++    return [(name.encode("latin1"), value.encode("latin1")) for name, value in pairs]
++
++
++@pytest.mark.parametrize(
++    "scheme, header_pairs, expected_origin, origin_header, expected_allowed",
++    [
++        (
++            "http",
++            [("host", "example.com")],
++            "http://example.com",
++            "http://example.com",
++            True,
++        ),
++        (
++            "http",
++            [
++                ("host", "chibot-ui.onrender.com"),
++                ("x-forwarded-proto", "https"),
++            ],
++            "https://chibot-ui.onrender.com",
++            "https://chibot-ui.onrender.com",
++            True,
++        ),
++        (
++            "http",
++            [
++                ("host", "chibot-ui.onrender.com"),
++                ("forwarded", "proto=https; host=chibot-ui.onrender.com"),
++            ],
++            "https://chibot-ui.onrender.com",
++            "https://chibot-ui.onrender.com",
++            True,
++        ),
++        (
++            "http",
++            [
++                ("host", "app.example.com"),
++                ("x-forwarded-proto", "https"),
++                ("x-forwarded-host", "app.example.com"),
++                ("x-forwarded-port", "8443"),
++            ],
++            "https://app.example.com:8443",
++            "https://app.example.com:8443",
++            True,
++        ),
++        (
++            "http",
++            [
++                ("host", "a.example.com"),
++                ("x-forwarded-proto", "https"),
++            ],
++            "https://a.example.com",
++            "https://b.example.com",
++            False,
++        ),
++    ],
++)
++def test_derive_scope_origin_forwarded(monkeypatch, scheme, header_pairs, expected_origin, origin_header, expected_allowed):
++    monkeypatch.delenv("ASKCHIP_WS_ALLOWED_ORIGINS", raising=False)
++
++    headers = _build_headers(header_pairs)
++    scope = {
++        "type": "websocket",
++        "scheme": scheme,
++        "headers": headers,
++    }
++
++    derived = _derive_scope_origin(scope)
++    assert derived == expected_origin
++
++    headers_with_origin = list(headers)
++    headers_with_origin.append((b"origin", origin_header.encode("latin1")))
++    scope_with_origin = dict(scope)
++    scope_with_origin["headers"] = headers_with_origin
++
++    allowed, blocked_origin = _validate_ws_origin(scope_with_origin)
++    assert allowed is expected_allowed
++    if expected_allowed:
++        assert blocked_origin is None
++    else:
++        assert blocked_origin == origin_header
