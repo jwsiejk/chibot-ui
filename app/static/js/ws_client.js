@@ -18,25 +18,6 @@
   let rateLimitRetryCount = 0;
   let autoResumeAttemptToken = null;
 
-  function normalizeWsAuthMode(value) {
-    if (typeof value !== "string") {
-      return null;
-    }
-    const normalized = value.trim().toLowerCase();
-    return normalized || null;
-  }
-
-  function getWsAuthMode(state) {
-    if (!state || typeof state !== "object") {
-      return null;
-    }
-    return normalizeWsAuthMode(state.wsAuthMode);
-  }
-
-  function shouldSendAccessToken(state) {
-    return getWsAuthMode(state) !== "disabled";
-  }
-
   function getResumeState() {
     const state = AppState.getState();
     const resume = state && typeof state.resume === "object" ? state.resume : null;
@@ -66,15 +47,10 @@
     AppState.setState(patch);
   }
 
-  function computeUrl(accessToken, resumeToken) {
+  function computeUrl(resumeToken) {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const base = `${protocol}//${window.location.host}/ws/v2/chat`;
     const params = new URLSearchParams();
-    const state = AppState.getState();
-    const allowAccessToken = shouldSendAccessToken(state);
-    if (allowAccessToken && typeof accessToken === "string" && accessToken.trim()) {
-      params.set("access_token", accessToken.trim());
-    }
     if (typeof resumeToken === "string" && resumeToken.trim()) {
       params.set("resume", resumeToken.trim());
     }
@@ -124,18 +100,13 @@
         }
       }
       const state = AppState.getState();
-      const token = state.accessToken;
-      if (!token) {
-        console.warn("Auto-retry skipped: missing access token");
-        return;
-      }
       const resumeState = state && typeof state.resume === "object" ? state.resume : null;
       let resumeToken = null;
       if (resumeState && typeof resumeState.token === "string" && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
         resumeToken = resumeState.token;
       }
       try {
-        open(token, { resumeToken, skipRateLimitCancel: true });
+        open({ resumeToken, skipRateLimitCancel: true });
       } catch (err) {
         console.error("Auto-retry open failed", err);
       }
@@ -198,18 +169,13 @@
       return false;
     }
     const state = AppState.getState();
-    const accessToken = state && state.accessToken;
-    if (!accessToken) {
-      console.warn("Auto-resume skipped: missing access token");
-      return false;
-    }
     if (autoResumeAttemptToken === resume.token) {
       return false;
     }
     autoResumeAttemptToken = resume.token;
     updateState({ connectionState: "resuming", resumeError: null });
     try {
-      open(accessToken, { resumeToken: resume.token, skipRateLimitCancel: true });
+      open({ resumeToken: resume.token, skipRateLimitCancel: true });
       return true;
     } catch (err) {
       console.error("Auto-resume open failed", err);
@@ -382,14 +348,6 @@
     } else if (frame.type === "policy.interaction") {
       const sanitized = sanitizePolicyFrame(frame);
       const policy = sanitized && sanitized.policy;
-      if (policy && Object.prototype.hasOwnProperty.call(policy, "ws_auth_mode")) {
-        const mode = normalizeWsAuthMode(policy.ws_auth_mode);
-        const patch = { wsAuthMode: mode };
-        if (mode === "disabled") {
-          patch.accessToken = null;
-        }
-        updateState(patch);
-      }
       dispatchFrame(sanitized);
       return;
     } else if (frame.type === "asr.partial") {
@@ -511,13 +469,9 @@
     }
   }
 
-  function open(accessToken, options = {}) {
+  function open(options = {}) {
     const { resumeToken = null, skipRateLimitCancel = false } = options;
     const state = AppState.getState();
-    const allowAccessToken = shouldSendAccessToken(state);
-    const accessTokenValue = allowAccessToken && typeof accessToken === "string" && accessToken.trim()
-      ? accessToken.trim()
-      : null;
     const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
     if (socket) {
       cleanupSocket(socket, "superseded");
@@ -534,12 +488,11 @@
       clearRateLimitRetryTimer();
       rateLimitRetryCount = 0;
     }
-    const url = computeUrl(accessTokenValue, resumeTokenValue);
+    const url = computeUrl(resumeTokenValue);
     const ws = transportFactory(url, SUBPROTOCOL);
     socket = ws;
     updateState({
       connectionState: resumeTokenValue ? "resuming" : "connecting",
-      accessToken: accessTokenValue,
       websocket: ws,
       latencyMs: null,
       lastPingAt: null,

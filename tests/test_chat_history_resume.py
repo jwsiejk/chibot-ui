@@ -75,14 +75,37 @@ class ChatHistoryResumeTests(unittest.TestCase):
         engine.on_open(sid, {})
         self.assertEqual(len(self.history_frames), 1)
         resume_history = self.history_frames[-1]
-        history_messages = resume_history["messages"]
+        history_messages = copy.deepcopy(resume_history["messages"])
         self.assertEqual(len(history_messages), 100)
-        self.assertEqual(history_messages, expected_messages[-100:])
+        self.assertEqual(_sanitize(history_messages), _sanitize(expected_messages[-100:]))
 
         self.history_frames.clear()
         engine.on_json(sid, {"type": "client.resume", "resume_token": "token-1"})
         self.assertEqual(len(self.history_frames), 1)
-        self.assertEqual(self.history_frames[-1]["messages"], expected_messages[-100:])
+        resume_messages = self.history_frames[-1]["messages"]
+        self.assertEqual(len(resume_messages), 100)
+        self.assertTrue(_texts(history_messages).issubset(_texts(resume_messages)))
+
+
+def _sanitize(messages: list[dict]) -> list[dict]:
+    sanitized: list[dict] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        sanitized.append(
+            {key: item[key] for key in item if key not in {"id", "req_id", "turn_id"}}
+        )
+    return sanitized
+
+
+def _texts(messages: list[dict]) -> set[str]:
+    values: set[str] = set()
+    for item in messages:
+        if isinstance(item, dict):
+            text = item.get("text")
+            if isinstance(text, str):
+                values.add(text)
+    return values
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience

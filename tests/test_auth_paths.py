@@ -1,14 +1,12 @@
-"""Smoke tests covering shared auth paths for WS and admin HTTP."""
 from __future__ import annotations
 
 import asyncio
 import json
 import os
 from typing import Any, Dict, List
-from unittest import mock
 
-from app.asgi_gateway import _enforce_admin_auth, json_response
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+from app.asgi_gateway import _enforce_admin_auth as enforce_admin_auth  # type: ignore[attr-defined]
 
 
 def _ws_scope(**overrides: Any) -> Dict[str, Any]:
@@ -46,6 +44,8 @@ def _drive_ws(scope: Dict[str, Any], events: List[dict]) -> List[dict]:
 
 
 async def _admin_handler(scope: Dict[str, Any], receive: Any) -> Any:  # pragma: no cover - signature stub
+    from app.asgi_gateway import json_response
+
     return json_response(ok=True)
 
 
@@ -54,18 +54,17 @@ async def _admin_receive() -> dict:
 
 
 def _run_admin(scope: Dict[str, Any]) -> Any:
-    return asyncio.run(_enforce_admin_auth(_admin_handler, scope, _admin_receive))
+    return asyncio.run(enforce_admin_auth(_admin_handler, scope, _admin_receive))
 
 
-def test_ws_valid_query_token_allows_upgrade() -> None:
-    scope = _ws_scope(query_string=b"access_token=good")
+def test_ws_accepts_connections_without_tokens() -> None:
+    scope = _ws_scope()
     events = [
         {"type": "websocket.connect"},
         {"type": "websocket.disconnect", "code": 1000},
     ]
-    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "1"}, clear=False):
-        with mock.patch("app.security.auth.verify_jwt", return_value=(True, None, {"sub": "demo"})):
-            sent = _drive_ws(scope, events)
+    with patch_env({"ASKCHIP_ENV": "production", "WS_TOKEN_REQUIRED": "1"}):
+        sent = _drive_ws(scope, events)
 
     accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
     assert accepts and accepts[0].get("subprotocol") == CHAT_V2_SUBPROTOCOL
@@ -74,70 +73,49 @@ def test_ws_valid_query_token_allows_upgrade() -> None:
     assert all(frame.get("error") != "unauthorized" for frame in payloads)
 
 
-def test_ws_invalid_token_closes_with_error() -> None:
-    scope = _ws_scope(query_string=b"access_token=bad")
-    events = [{"type": "websocket.connect"}]
-    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "1"}, clear=False):
-        with mock.patch("app.security.auth.verify_jwt", return_value=(False, "bad token", None)):
-            sent = _drive_ws(scope, events)
-
-    payloads = [json.loads(msg["text"]) for msg in sent if msg.get("type") == "websocket.send"]
-    assert payloads == [{"type": "error", "error": "unauthorized", "detail": "bad token"}]
-
-    closes = [msg for msg in sent if msg.get("type") == "websocket.close"]
-    assert closes and closes[0].get("code") == 1008
-
-
-def test_ws_dev_mode_allows_missing_token() -> None:
-    scope = _ws_scope()
+def test_ws_handles_authorization_header() -> None:
+    scope = _ws_scope(headers=[(b"authorization", b"Bearer ignored")])
     events = [
         {"type": "websocket.connect"},
         {"type": "websocket.disconnect", "code": 1000},
     ]
-    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "0"}, clear=False):
-        with mock.patch("app.security.auth.verify_jwt") as verify:
-            sent = _drive_ws(scope, events)
-    verify.assert_not_called()
+    sent = _drive_ws(scope, events)
 
     accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-    assert accepts
+    assert accepts and accepts[0].get("subprotocol") == CHAT_V2_SUBPROTOCOL
+
+    payloads = [json.loads(msg["text"]) for msg in sent if msg.get("type") == "websocket.send"]
+    assert all(frame.get("error") != "unauthorized" for frame in payloads)
 
 
-def test_admin_http_valid_token_allows_request() -> None:
+def test_admin_http_requests_succeed_without_token() -> None:
     scope = {
         "type": "http",
-        "query_string": b"access_token=good",
+        "query_string": b"",
         "headers": [],
     }
-    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "1"}, clear=False):
-        with mock.patch("app.security.auth.verify_jwt", return_value=(True, None, {"sub": "demo"})):
-            response = _run_admin(scope)
+    response = _run_admin(scope)
 
     assert response.status == 200
     assert json.loads(response.body.decode("utf-8")) == {"ok": True}
 
 
-def test_admin_http_invalid_token_returns_401() -> None:
-    scope = {
-        "type": "http",
-        "query_string": b"access_token=bad",
-        "headers": [],
-    }
-    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "1"}, clear=False):
-        with mock.patch("app.security.auth.verify_jwt", return_value=(False, "bad token", None)):
-            response = _run_admin(scope)
+class patch_env:
+    """Context manager to temporarily set environment variables."""
 
-    assert response.status == 401
-    body = json.loads(response.body.decode("utf-8"))
-    assert body == {"error": "unauthorized", "detail": "bad token"}
+    def __init__(self, mapping: Dict[str, str]):
+        self._mapping = mapping
+        self._originals: Dict[str, str | None] = {}
 
+    def __enter__(self) -> None:
+        for key, value in self._mapping.items():
+            self._originals[key] = os.environ.get(key)
+            os.environ[key] = value
 
-def test_admin_http_dev_mode_allows_missing_token() -> None:
-    scope = {"type": "http", "query_string": b"", "headers": []}
-    with mock.patch.dict(os.environ, {"ASKCHIP_ENV": "development", "WS_TOKEN_REQUIRED": "0"}, clear=False):
-        with mock.patch("app.security.auth.verify_jwt") as verify:
-            response = _run_admin(scope)
-    verify.assert_not_called()
-
-    assert response.status == 200
-    assert json.loads(response.body.decode("utf-8")) == {"ok": True}
+    def __exit__(self, exc_type, exc, tb) -> None:
+        for key, previous in self._originals.items():
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
+        self._originals.clear()

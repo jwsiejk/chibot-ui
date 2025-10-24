@@ -46,7 +46,7 @@ class AdminFlowApiTest(unittest.TestCase):
     def _restore_export_root(self) -> None:
         flow_api.EXPORT_ROOT = self._original_export_root
 
-    def test_trace_requires_authorization(self) -> None:
+    def test_trace_accessible_without_authorization(self) -> None:
         events = [
             {"type": "EVT_TURN_BEGIN", "ts_ms": 75, "sid": self.sid, "meta": {}},
         ]
@@ -59,9 +59,11 @@ class AdminFlowApiTest(unittest.TestCase):
         )
         response = asyncio.run(flow_api.handle_flow_trace(scope, self._receive(), sid=self.sid))
 
-        self.assertEqual(response.status, 401)
-        payload = json.loads(response.body.decode("utf-8"))
-        self.assertEqual(payload.get("error"), "unauthorized")
+        self.assertEqual(response.status, 200)
+        body_lines = [line for line in response.body.decode("utf-8").splitlines() if line]
+        self.assertEqual(len(body_lines), 1)
+        event = json.loads(body_lines[0])
+        self.assertEqual(event.get("type"), "EVT_TURN_BEGIN")
 
     def test_trace_filters_by_type_and_limit(self) -> None:
         events = [
@@ -72,11 +74,10 @@ class AdminFlowApiTest(unittest.TestCase):
         self._write_events(events)
 
         query = b"type=EVT_TURN_BEGIN&since_ms=75&limit=1"
-        headers = ((b"authorization", b"Bearer admin-token"),)
         scope = self._make_scope(
             path=f"/api/v1/admin/flow/{self.sid}/trace",
             query_string=query,
-            headers=headers,
+            headers=(),
         )
 
         response = asyncio.run(flow_api.handle_flow_trace(scope, self._receive(), sid=self.sid))
@@ -99,11 +100,10 @@ class AdminFlowApiTest(unittest.TestCase):
         ]
         self._write_events(events)
 
-        headers = ((b"authorization", b"Bearer admin-token"),)
         scope = self._make_scope(
             path=f"/api/v1/admin/flow/{self.sid}/zip",
             query_string=b"",
-            headers=headers,
+            headers=(),
         )
 
         response = asyncio.run(flow_api.handle_flow_zip(scope, self._receive(), sid=self.sid))

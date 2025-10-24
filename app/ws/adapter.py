@@ -14,10 +14,8 @@ from urllib.parse import parse_qs
 
 import json
 
-from app.policy.service import PolicyService
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
-from app.security.auth import authorize
 from app.voice_v2 import (
     EVT_ASR_READY,
     EVT_CHAT_USER,
@@ -47,8 +45,6 @@ _DEFAULT_WS_PING_INTERVAL_MS = 25_000
 EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
 EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
 
-EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
-EVT_AUTH_DISABLED = "EVT_AUTH_DISABLED"
 EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
 
 EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
@@ -83,9 +79,6 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "admin.toggle",
     "chat.user",
 }
-
-
-_policy_service = PolicyService()
 
 
 class TokenBucket:
@@ -286,39 +279,7 @@ class ChatV2Adapter:
                 resume_replay = [self._clone_frame(marker) for marker in resume_state.markers]
 
         headers = self._decode_headers(scope.get("headers", ()))
-        policy_snapshot = _policy_service.get_auth_policy()
-        auth_mode = policy_snapshot.get("ws_auth_mode", "required")
-        principal: Dict[str, Any]
-        if auth_mode == "disabled":
-            principal = {"sub": "anon"}
-            await self._publish(
-                EVT_AUTH_DISABLED,
-                sid,
-                {"mode": "disabled"},
-            )
-        else:
-            allowed, reason, claims = authorize(
-                headers,
-                allow_query_token=True,
-                scope=scope,
-                require_token=True,
-            )
-            if not allowed:
-                detail = reason or "missing or invalid auth"
-                await self._publish(
-                    EVT_AUTH_DENIED,
-                    sid,
-                    {"reason": detail},
-                )
-                await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
-                await self._send_json(
-                    send,
-                    sid,
-                    {"type": "error", "error": "unauthorized", "detail": detail},
-                )
-                await send({"type": "websocket.close", "code": 1008, "reason": "unauthorized"})
-                return
-            principal = dict(claims or {})
+        principal: Dict[str, Any] = {"sub": "anon"}
 
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
 

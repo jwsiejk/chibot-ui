@@ -514,153 +514,8 @@
       }
     });
 
-    const ACCESS_TOKEN_STORAGE_KEY = 'access_token';
-
-    function normalizeWsAuthMode(value) {
-      if (typeof value !== 'string') {
-        return null;
-      }
-      const normalized = value.trim().toLowerCase();
-      return normalized || null;
-    }
-
-    function getWsAuthModeFromState(state) {
-      if (!state || typeof state !== 'object') {
-        return null;
-      }
-      return normalizeWsAuthMode(state.wsAuthMode);
-    }
-
-    function isWsAuthDisabled(state) {
-      return getWsAuthModeFromState(state) === 'disabled';
-    }
-
-    function normalizeAccessToken(raw) {
-      if (typeof raw !== 'string') {
-        return null;
-      }
-      const trimmed = raw.trim();
-      if (!trimmed) {
-        return null;
-      }
-      if (/^Bearer\s+/i.test(trimmed)) {
-        const withoutPrefix = trimmed.replace(/^Bearer\s+/i, '').trim();
-        return withoutPrefix || null;
-      }
-      return trimmed;
-    }
-
-    function clearStoredAccessToken() {
-      try {
-        const storage = window.sessionStorage;
-        if (!storage) {
-          return;
-        }
-        storage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
-      } catch (err) {
-        console.warn('Failed to clear access token from sessionStorage', err);
-      }
-    }
-
-    function storeAccessToken(token, state) {
-      if (!token) {
-        return;
-      }
-      const snapshot = state || AppState.getState();
-      if (isWsAuthDisabled(snapshot)) {
-        return;
-      }
-      try {
-        const storage = window.sessionStorage;
-        if (!storage) {
-          return;
-        }
-        storage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
-      } catch (err) {
-        console.warn('Failed to persist access token to sessionStorage', err);
-      }
-    }
-
-    function readStoredAccessToken() {
-      try {
-        const storage = window.sessionStorage;
-        if (!storage) {
-          return null;
-        }
-        const stored = storage.getItem(ACCESS_TOKEN_STORAGE_KEY);
-        if (typeof stored !== 'string') {
-          return null;
-        }
-        const normalized = normalizeAccessToken(stored);
-        if (!normalized) {
-          return null;
-        }
-        if (normalized !== stored) {
-          try {
-            storage.setItem(ACCESS_TOKEN_STORAGE_KEY, normalized);
-          } catch (err) {
-            console.warn('Failed to normalize stored access token', err);
-          }
-        }
-        return normalized;
-      } catch (err) {
-        console.warn('Failed to read access token from sessionStorage', err);
-        return null;
-      }
-    }
-
-    function readAccessTokenFromUrl() {
-      const candidates = [
-        urlParams.get('access_token'),
-        urlParams.get('token')
-      ];
-      for (const candidate of candidates) {
-        const normalized = normalizeAccessToken(candidate);
-        if (normalized) {
-          return normalized;
-        }
-      }
-      return null;
-    }
-
-    function getAccessToken() {
-      const state = AppState.getState();
-      if (isWsAuthDisabled(state)) {
-        clearStoredAccessToken();
-        return null;
-      }
-      const stored = readStoredAccessToken();
-      if (stored) {
-        return stored;
-      }
-      const fromUrl = readAccessTokenFromUrl();
-      if (fromUrl) {
-        storeAccessToken(fromUrl, state);
-        return fromUrl;
-      }
-      return null;
-    }
-
-    (function watchWsAuthMode() {
-      if (!AppState || typeof AppState.subscribe !== 'function') {
-        return;
-      }
-      let lastMode = getWsAuthModeFromState(AppState.getState());
-      AppState.subscribe((state) => {
-        const mode = getWsAuthModeFromState(state);
-        if (mode === lastMode) {
-          return;
-        }
-        lastMode = mode;
-        if (mode === 'disabled') {
-          clearStoredAccessToken();
-        }
-      });
-    })();
-
     startBtn.addEventListener('click', async () => {
       startBtn.disabled = true;
-      const accessToken = getAccessToken();
       const state = AppState.getState();
       const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
       let resumeToken = null;
@@ -671,9 +526,9 @@
         const options = resumeToken ? { resumeToken } : undefined;
         AppState.setState({ resumeError: null });
         if (options) {
-          WSClient.open(accessToken, options);
+          WSClient.open(options);
         } else {
-          WSClient.open(accessToken);
+          WSClient.open();
         }
       } catch (err) {
         console.error('Failed to open WS client', err);
@@ -817,9 +672,8 @@
         AppState.clearResume();
       }
       AppState.setState({ resumeError: null });
-      const accessToken = getAccessToken();
       try {
-        WSClient.open(accessToken);
+        WSClient.open();
       } catch (err) {
         console.error('Failed to start new session', err);
         AppState.setState({ connectionState: 'disconnected' });

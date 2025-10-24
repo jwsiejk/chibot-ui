@@ -1,7 +1,6 @@
 (() => {
   const initialState = {
     connectionState: "disconnected",
-    accessToken: null,
     sid: null,
     resume: null,
     resumeError: null,

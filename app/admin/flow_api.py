@@ -5,11 +5,10 @@ from __future__ import annotations
 import json
 from io import BytesIO
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, Iterable, Optional, Sequence
+from typing import Awaitable, Callable, Dict, Optional
 from urllib.parse import parse_qs
 
 from app.admin.flow_zip import build_flow_zip
-from app.security.auth import authorize_admin
 
 
 EXPORT_ROOT = Path("exports")
@@ -31,11 +30,6 @@ async def handle_flow_trace(
         return json_response(status=405, error="method_not_allowed")
 
     await _drain_body(receive)
-
-    headers = _decode_headers(scope.get("headers", ()))
-    authorized, reason, _claims = authorize_admin(headers, scope)
-    if not authorized:
-        return json_response(status=401, error="unauthorized", detail=reason)
 
     try:
         requested_types, since_ms, limit = _parse_trace_filters(scope.get("query_string", b""))
@@ -71,11 +65,6 @@ async def handle_flow_zip(
 
     await _drain_body(receive)
 
-    headers = _decode_headers(scope.get("headers", ()))
-    authorized, reason, _claims = authorize_admin(headers, scope)
-    if not authorized:
-        return json_response(status=401, error="unauthorized", detail=reason)
-
     session_dir = EXPORT_ROOT / sid
     if not session_dir.exists():
         return json_response(status=404, error="not_found")
@@ -97,13 +86,6 @@ async def handle_flow_zip(
 
 def _method(scope: dict) -> str:
     return scope.get("method", "GET").upper()
-
-
-def _decode_headers(raw_headers: Iterable[Sequence[bytes]]) -> Dict[str, str]:
-    headers: Dict[str, str] = {}
-    for name, value in raw_headers:
-        headers[name.decode("latin1").lower()] = value.decode("latin1")
-    return headers
 
 
 async def _drain_body(receive: Callable[[], Awaitable[dict]]) -> None:

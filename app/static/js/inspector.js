@@ -20,21 +20,17 @@
     return `/api/v1/admin/flow/${encodeURIComponent(sid)}/zip`;
   }
 
-  function applyDownloadState(link, sid, token) {
+  function applyDownloadState(link, sid) {
     if (!link) return;
     link.href = "#";
-    if (sid && token) {
+    if (sid) {
       link.removeAttribute("aria-disabled");
       link.removeAttribute("tabindex");
       link.title = "Download flow.zip archive";
     } else {
       link.setAttribute("aria-disabled", "true");
       link.setAttribute("tabindex", "-1");
-      if (!sid) {
-        link.title = "Start a session to enable export downloads.";
-      } else {
-        link.title = "Access token required to download export.";
-      }
+      link.title = "Start a session to enable export downloads.";
     }
   }
 
@@ -66,7 +62,6 @@
     const getState = () => (AppState && typeof AppState.getState === "function") ? AppState.getState() : {};
 
     let latestSid = null;
-    let latestToken = null;
     let isOpen = false;
     let currentAbort = null;
     let isFetching = false;
@@ -95,10 +90,6 @@
         setStatus("Connect to capture flow events.");
         return;
       }
-      if (!latestToken) {
-        setStatus("Access token unavailable; start a session to authorize trace calls.");
-        return;
-      }
       if (currentAbort) {
         currentAbort.abort();
         currentAbort = null;
@@ -112,7 +103,6 @@
       const headers = {
         Accept: "application/x-ndjson, application/json"
       };
-      headers.Authorization = `Bearer ${latestToken}`;
       try {
         const response = await fetch(url, {
           method: "GET",
@@ -170,15 +160,10 @@
 
     function handleStateChange(state) {
       const sid = normalizeString(state && state.sid);
-      const token = normalizeString(state && state.accessToken);
-      if (token !== latestToken) {
-        latestToken = token;
-        applyDownloadState(downloadLink, latestSid, latestToken);
-      }
       if (sid !== latestSid) {
         latestSid = sid;
         renderSid(latestSid);
-        applyDownloadState(downloadLink, latestSid, latestToken);
+        applyDownloadState(downloadLink, latestSid);
         if (!latestSid) {
           resetOutput();
           setStatus("Connect to capture flow events.");
@@ -200,7 +185,7 @@
     if (!latestSid && initialState) {
       handleStateChange(initialState);
     }
-    applyDownloadState(downloadLink, latestSid, latestToken);
+    applyDownloadState(downloadLink, latestSid);
     if (!latestSid) {
       setStatus("Connect to capture flow events.");
     }
@@ -211,13 +196,11 @@
       panel.setAttribute("aria-hidden", "false");
       toggle.setAttribute("aria-expanded", "true");
       isOpen = true;
-      if (latestSid && latestToken) {
+      if (latestSid) {
         loadTrace();
       } else if (!latestSid) {
         resetOutput();
         setStatus("Connect to capture flow events.");
-      } else {
-        setStatus("Access token unavailable; start a session to authorize trace calls.");
       }
     }
 
@@ -263,10 +246,6 @@
         setStatus("Connect to capture flow events.");
         return;
       }
-      if (!latestToken) {
-        setStatus("Access token unavailable; start a session to authorize trace calls.");
-        return;
-      }
       if (isDownloading) {
         return;
       }
@@ -276,7 +255,6 @@
       try {
         const response = await fetch(url, {
           method: "GET",
-          headers: { Authorization: `Bearer ${latestToken}` },
           credentials: "include",
           cache: "no-store"
         });
