@@ -15,6 +15,9 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
     "allow_auto_vad": True,
     "barge_in_enabled": True,
     "auto_commit_when_ready": True,
+    "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
+    "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
+    "suggestions": {"on_connect": True, "count": 3},
     "telemetry": {
         "enabled": True,
         "level": "debug",

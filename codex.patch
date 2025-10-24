@@ -1,660 +1,416 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 21f34092d187a2e0235abc75547c392509a9a248..2f2a5cb0373b1f28224c47866442cf04c8f8b30b 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1,48 +1,49 @@
- """chat.v2 WebSocket adapter for AskChip."""
+diff --git a/app/policy/loader.py b/app/policy/loader.py
+index 484eba2742fe041d25001f8f4a3cd837e0a885f8..8422cc4fff38046aa4f9b4ca184c2efe3ac68028 100644
+--- a/app/policy/loader.py
++++ b/app/policy/loader.py
+@@ -1,42 +1,45 @@
+ """Utilities for loading the interaction policy snapshot."""
  from __future__ import annotations
  
- import asyncio
- import contextlib
- import inspect
- import logging
- import os
- import time
- import uuid
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
- from urllib.parse import parse_qs
+ from copy import deepcopy
+ from typing import Any, Dict
  
- import json
+ InteractionPolicySnapshot = Dict[str, Any]
  
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.security.auth import authorize
- from app.voice_v2 import (
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_WS_AUDIO_RECV,
-+    EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_frame
- 
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
- RATE_LIMIT_WINDOW_SECONDS = 2.0
- RATE_LIMIT_CLOSE_CODE = 1013
- _AUDIO_VIOLATION_LIMIT = 3
- 
- AUDIO_SEQ_WINDOW = 8
- 
- QUEUE_ON_THRESHOLD = 12
- QUEUE_OFF_THRESHOLD = 6
- 
- _DEFAULT_WS_PING_INTERVAL_MS = 25_000
- 
- EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
- 
- EVT_AUTH_DENIED = "EVT_AUTH_DENIED"
-@@ -184,59 +185,62 @@ class EngineHooks(Protocol):
+ # NOTE: These defaults represent the deterministic policy snapshot returned by
+ # ``load_interaction_policy`` when no overrides are provided. The structure is
+ # intentionally shallow so that overrides replace entire child objects rather
+ # than performing recursive merges.
+ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
+     "mode": "idle",
+     "allow_auto_vad": True,
+     "barge_in_enabled": True,
+     "auto_commit_when_ready": True,
++    "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
++    "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
++    "suggestions": {"on_connect": True, "count": 3},
+     "telemetry": {
+         "enabled": True,
+         "level": "debug",
+         "categories": {
+             "ws": True,
+             "audio": True,
+             "policy": True,
+             "tts": True,
+             "gate": True,
+             "barge": True,
+             "asr": True,
+             "nlu": True,
+             "nlg": True,
+             "client_ui": True,
+             "provider_debug": True,
+         },
+         "redaction": {"pii": True, "secrets": True, "text": False},
+         "sampling": {"percent": 100},
+     },
+ }
  
  
- @dataclass
- class AdapterContext:
-     """Per-connection state."""
- 
-     sid: str
-     headers: Dict[str, str]
-     audio_seq: int = 0
-     audio_expected_seq: int = 0
-     audio_highest_seq: int = -1
-     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
-     audio_window: int = AUDIO_SEQ_WINDOW
-     last_pong_sent_ms: int = 0
-     ip: Optional[str] = None
-     sid_bucket: Optional[TokenBucket] = None
-     ip_bucket: Optional[TokenBucket] = None
-     audio_profile: Optional[Dict[str, Any]] = None
-     accepting_audio: bool = True
-     audio_violation_count: int = 0
-     outbound_queue_depth: int = 0
-     backpressure_state: Literal["off", "on"] = "off"
-     outbox: asyncio.Queue[Dict[str, Any]] | None = None
-     outbound_task: asyncio.Task[None] | None = None
-     subscription_token: Optional[str] = None
-+    audio_subscription_token: Optional[str] = None
-+    audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
-     asr_ready: bool = False
-     asr_subscription_token: Optional[str] = None
-     server_keepalive_task: asyncio.Task[None] | None = None
-     last_policy_interaction: Optional[Dict[str, Any]] = None
-     resume_token: Optional[str] = None
-     resume_expiry_ms: int = 0
-     recent_markers: list[Dict[str, Any]] = field(default_factory=list)
-     partial_seq: int = 0
-     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
-+    send_lock: asyncio.Lock | None = None
+ def load_interaction_policy(
+     overrides: Dict[str, Any] | None = None,
+ ) -> InteractionPolicySnapshot:
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index 7d9026288e6b788279270682a02fb53a08944c03..c1ad7b88ea7fcfb57e8a1cd184b41f65ae60145f 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -91,50 +91,51 @@ class _Envelope:
+         if "meta" in data and isinstance(data["meta"], Mapping):
+             data["meta"] = dict(data["meta"])
+         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
+             data["ts_ms"] = _now_ms()
+         data.setdefault("who", "server")
+         data.setdefault("source", "voice_engine")
+         data.setdefault("level", "debug")
+         return data
  
  
  @dataclass
- class _ResumeState:
-     sid: str
-     expiry_ms: int
-     markers: list[Dict[str, Any]]
+ class _TurnSession:
+     state: str = READY
+     turn_id: Optional[str] = None
+     turn_started_ms: Optional[int] = None
+     tts_utt_id: Optional[str] = None
+     req_id: Optional[str] = None
+     perf_first_partial_ms: Optional[int] = None
+     perf_final_ms: Optional[int] = None
+     perf_tts_start_ms: Optional[int] = None
+     asr_final_emitted: bool = False
+     nlu_emitted: bool = False
+     policy_emitted: bool = False
+     nlg_emitted: bool = False
+     plan_emitted: bool = False
++    greet_emitted: bool = False
+     plan: Optional[Dict[str, Any]] = None
+     suggestions_emitted: bool = False
  
  
- class ChatV2Adapter:
-     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
+ class _NullExporter:
+     """Exporter stub used when no exporter is provided."""
+ 
+     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
+         return
+ 
+ 
+ class EngineV2:
+     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
  
      def __init__(
          self,
-         engine: EngineHooks | None = None,
          exporter: FileExporter | None = None,
          *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+         telemetry_bus=bus,
+         fake_exporter: FileExporter | None = None,
      ) -> None:
-         self.engine = engine
-         self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
-         self._ip_buckets: Dict[str, TokenBucket] = {}
-@@ -894,50 +898,81 @@ class ChatV2Adapter:
-                 self._offer_partial_frame(
-                     ctx,
-                     loop,
-                     payload,
-                     lambda frame: _queue_payload(frame, clone=False),
-                 )
-                 return
-             _queue_payload(payload)
- 
-         def _handle_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid or ctx.outbox is None:
-                 return
-             payload = self._extract_outbound_payload(ctx, event)
-             if payload is None:
-                 return
- 
-             def _on_loop() -> None:
-                 _enqueue(payload)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
-+
-+        def _handle_audio_event(event: dict) -> None:
-+            if event.get("sid") != ctx.sid:
-+                return
-+            chunk = event.get("chunk")
-+            if isinstance(chunk, (bytes, bytearray, memoryview)):
-+                chunk_bytes = bytes(chunk)
-+            else:
-+                return
-+
-+            def _deliver() -> None:
-+                task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
-+                ctx.audio_tasks.add(task)
-+
-+                def _on_done(done: asyncio.Task[None]) -> None:
-+                    ctx.audio_tasks.discard(done)
-+                    try:
-+                        done.result()
-+                    except asyncio.CancelledError:
-+                        pass
-+                    except Exception:  # pragma: no cover - defensive logging
-+                        _logger.exception("Failed to deliver audio chunk for sid %s", ctx.sid)
-+
-+                task.add_done_callback(_on_done)
-+
-+            try:
-+                loop.call_soon_threadsafe(_deliver)
-+            except RuntimeError:
-+                pass
-+
-+        ctx.audio_subscription_token = bus.subscribe(EVT_WS_AUDIO_SEND, _handle_audio_event)
-         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
- 
-     def _offer_partial_frame(
-         self,
-         ctx: AdapterContext,
-         loop: asyncio.AbstractEventLoop,
-         payload: Dict[str, Any],
-         enqueue: Callable[[Dict[str, Any]], None],
-     ) -> None:
-         def _emit(frame: Dict[str, Any]) -> None:
-             prepared = self._prepare_partial_frame(ctx, frame)
-             enqueue(prepared)
- 
-         ctx.partial_coalescer.offer(
-             payload,
-             now_ms=self._now_ms(),
-             loop=loop,
-             emit=_emit,
-         )
- 
-     def _prepare_partial_frame(self, ctx: AdapterContext, payload: Dict[str, Any]) -> Dict[str, Any]:
-         prepared = dict(payload)
-         seq_value = prepared.get("partial_seq")
-         if isinstance(seq_value, int) and seq_value > ctx.partial_seq:
-             ctx.partial_seq = seq_value
-@@ -1025,83 +1060,109 @@ class ChatV2Adapter:
-         return sanitized
- 
-     @staticmethod
-     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
-         if isinstance(raw, dict):
-             return raw
-         if isinstance(raw, str):
-             try:
-                 decoded = json.loads(raw)
-             except json.JSONDecodeError:
-                 return None
-             if isinstance(decoded, dict):
-                 return decoded
-         return None
- 
-     async def _run_outbound_sender(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> None:
-         queue = ctx.outbox
-         if queue is None:
-             return
-         try:
-             while True:
-                 payload = await queue.get()
-                 try:
--                    await self._send_outbound_frame(send, payload)
-+                    await self._send_outbound_frame(ctx, send, payload)
-                 except asyncio.CancelledError:
-                     raise
-                 except Exception:  # pragma: no cover - defensive
-                     _logger.exception("Failed to deliver outbound frame for sid %s", ctx.sid)
-                 finally:
-                     queue.task_done()
-         except asyncio.CancelledError:
-             raise
-         finally:
-             ctx.outbox = None
- 
-     async def _send_outbound_frame(
--        self, send: Callable[[dict], Awaitable[None]], payload: Dict[str, Any]
-+        self,
-+        ctx: AdapterContext,
-+        send: Callable[[dict], Awaitable[None]],
-+        payload: Dict[str, Any],
-     ) -> None:
--        text = json.dumps(payload, separators=(",", ":"))
--        await send({"type": "websocket.send", "text": text})
-+        lock = self._ensure_send_lock(ctx)
-+        async with lock:
-+            text = json.dumps(payload, separators=(",", ":"))
-+            await send({"type": "websocket.send", "text": text})
-+
-+    async def _send_audio_frame(
-+        self,
-+        ctx: AdapterContext,
-+        send: Callable[[dict], Awaitable[None]],
-+        chunk: bytes,
-+    ) -> None:
-+        lock = self._ensure_send_lock(ctx)
-+        async with lock:
-+            await send({"type": "websocket.send", "bytes": chunk})
- 
-     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
-         token = ctx.subscription_token
-         ctx.subscription_token = None
-         if token:
-             bus.unsubscribe(token)
- 
-+        audio_token = ctx.audio_subscription_token
-+        ctx.audio_subscription_token = None
-+        if audio_token:
-+            bus.unsubscribe(audio_token)
-+
-         task = ctx.outbound_task
-         ctx.outbound_task = None
-         if task:
-             task.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await task
- 
-         ctx.partial_coalescer.cancel()
- 
-+        for task in list(ctx.audio_tasks):
-+            task.cancel()
-+            with contextlib.suppress(asyncio.CancelledError):
-+                await task
-+        ctx.audio_tasks.clear()
-+
-         ctx.outbox = None
- 
-     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
-         token = ctx.asr_subscription_token
-         ctx.asr_subscription_token = None
-         if token:
-             bus.unsubscribe(token)
-         ctx.asr_ready = False
- 
-     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
-         """Record the estimated outbound queue depth and emit diagnostics if needed."""
- 
-         ctx = self._contexts.get(sid)
-         if ctx is None:
-             return
- 
-         if not isinstance(queued, int):
-             try:
-                 queued = int(queued)
-             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
-                 raise TypeError("queued must be an integer") from exc
- 
-         await self._update_backpressure(ctx, max(0, queued))
- 
-     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
-@@ -1274,35 +1335,43 @@ class ChatV2Adapter:
-         if not payload:
-             return None
-         preview = payload.decode("utf-8", "replace")
-         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
-         if len(preview) > limit:
-             return f"{preview[: limit - 1]}…"
-         return preview
- 
-     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
-         ctx.outbound_queue_depth = queued
-         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
-             ctx.backpressure_state = "on"
-             await self._publish(
-                 EVT_BACKPRESSURE_ON,
-                 ctx.sid,
-                 {"queue_depth": queued, "state": "on"},
+         if exporter is None:
+             exporter = fake_exporter
+         if exporter is None:
+             exporter = _NullExporter()
+@@ -157,54 +158,56 @@ class EngineV2:
+                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
              )
-         elif ctx.backpressure_state == "on" and queued < QUEUE_OFF_THRESHOLD:
-             ctx.backpressure_state = "off"
-             await self._publish(
-                 EVT_BACKPRESSURE_OFF,
-                 ctx.sid,
-                 {"queue_depth": queued, "state": "off"},
+         else:
+             self._chat_subscription = None
+             self._ws_send_subscription = bus.subscribe(
+                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
              )
- 
-+    @staticmethod
-+    def _ensure_send_lock(ctx: AdapterContext) -> asyncio.Lock:
-+        lock = ctx.send_lock
-+        if lock is None:
-+            lock = asyncio.Lock()
-+            ctx.send_lock = lock
-+        return lock
-+
- 
- __all__ = [
-     "ChatV2Adapter",
-     "CHAT_V2_SUBPROTOCOL",
-     "QUEUE_ON_THRESHOLD",
-     "QUEUE_OFF_THRESHOLD",
-     "EVT_BACKPRESSURE_ON",
-     "EVT_BACKPRESSURE_OFF",
-     "EVT_WS_OUTBOX_DROP",
- ]
-diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
-index 15b241ae73be6e98f34a1b901cbd86dcf5cb35bd..46cfcac6fa98bca3986209d87d94b3f6214c4a8b 100644
---- a/docs/10_CONTRACT_WS.md
-+++ b/docs/10_CONTRACT_WS.md
-@@ -70,53 +70,59 @@ Copy code
-   "type": "asr.ready",
-   "vendor": "speechmatics",
-   "input": { "container": "raw", "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }
- }
- Binary message rule: each WS binary message carries an arbitrary contiguous chunk of the current input stream (WebM segment/cluster bytes for Opus, or a raw PCM chunk). The server assigns/validates sequencing (see “Binary audio sequencing & jitter buffer”).
- 
- audio.header (optional, not for selecting codecs):
- Clients may not override format. audio.header can supply stream hints like a starting sequence index:
- 
- json
- Copy code
- {"type":"audio.header","seq_start":0}
- Optional admin toggle (dev only):
- 
- json
- Copy code
- {"type":"admin.toggle","barge_in_enabled":true}
- Provider selection is policy‑controlled; do not flip providers via WS.
- 
- Optional resume handshake (see “Reconnect / Resume”):
- 
- json
- Copy code
- {"type":"client.resume","resume_token":"<string>"}
- Server → Client frames
--json
--Copy code
-+
-+- **JSON text frames** (policy/info/chat/etc.) follow the telemetry envelope shown below. Examples:
-+
-+```json
- {"type":"pong","t":1730000000000}
-+```
-+
-+- **Binary audio frames** carry raw PCM s16le chunks at **16 kHz mono**. The playback descriptor is announced once per connection via `info.audio`, which already includes `{ "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }`. Each binary frame is a contiguous PCM buffer with no additional header bytes.
-+
- Policy (client-visible subset)
- The server may push policy updates. Client-visible frames follow the telemetry
- envelope (`type`, `ts_ms`, `level`, …) and the server **strips any policy keys
- outside the stable subset** before sending to browsers. The client‑stable subset
- is:
- 
- json
- Copy code
- {
-   "type": "policy.interaction",
-   "ts_ms": 1730000000000,
-   "level": "info",  
-   "policy": {
-     "mode": "idle",                  // "idle" | "assistant_speaking" | ...
-     "allow_auto_vad": true,
-     "barge_in_enabled": true
-   }
- }
- Other internal policy keys (e.g., telemetry, sampling) may be present in server telemetry/export, but MUST NOT be sent over WS to browsers as part of policy.interaction. (See ADR notes.)
- 
- ### Persona modes & generation (informational)
- 
- - The server’s Generator composes messages using a mode-aware persona (single source of truth).
- - Modes (enum): `clarify`, `outline`, `deep_dive`, `compare`, `steps`, `next_actions`.
- - Each mode has a short instruction that shapes the assistant’s response; these are server-side and not sent to the client.
-diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
-index c2d249feaebc4d9d9259dc6ab0f32df2c371e498..f74b128b633ee4fc21ec8c8d1ada42900f5d8125 100644
---- a/tests/test_adapter_outbound_bridge.py
-+++ b/tests/test_adapter_outbound_bridge.py
-@@ -1,163 +1,182 @@
- """Tests for the outbound WebSocket bridge in the chat.v2 adapter."""
- from __future__ import annotations
- 
- import asyncio
- import json
- import unittest
- from typing import Any, Callable, Dict
- 
- from app.telemetry import bus
--from app.voice_v2 import EVT_WS_JSON_SEND
-+from app.voice_v2 import EVT_WS_AUDIO_SEND, EVT_WS_JSON_SEND
- from app.ws.adapter import (
-     CHAT_V2_SUBPROTOCOL,
-     EVT_WS_OUTBOX_DROP,
-     ChatV2Adapter,
- )
- 
- 
- class RecordingEngine:
-     """Engine stub that captures the opened session identifier."""
- 
-     def __init__(self) -> None:
-         self.open_sid: str | None = None
- 
-     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
-         self.open_sid = sid
- 
- 
- class OutboundHarness:
-     """Helper for driving the adapter within an asyncio test."""
- 
-     def __init__(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
-         self.adapter = adapter
-         self.engine = engine
-         self.scope = {
-             "type": "websocket",
-             "subprotocols": [CHAT_V2_SUBPROTOCOL],
-             "headers": [(b"authorization", b"Bearer test-token")],
-             "client": ("127.0.0.1", 1234),
-         }
-         self._inbound: asyncio.Queue[dict] = asyncio.Queue()
-         self.sent: list[dict] = []
-         self.outbound_frames: list[Dict[str, Any]] = []
-+        self.binary_frames: list[bytes] = []
-         self.accepted = False
-         self._task: asyncio.Task[None] | None = None
- 
-     async def start(self) -> None:
-         self._task = asyncio.create_task(self.adapter(self.scope, self._receive, self._send))
-         await self._inbound.put({"type": "websocket.connect"})
-         await self.wait_for(lambda: self.accepted)
-         await self.wait_for(lambda: self.engine.open_sid is not None)
- 
-     async def _receive(self) -> dict:
-         return await self._inbound.get()
- 
-     async def _send(self, message: dict) -> None:
-         self.sent.append(message)
-         if message.get("type") == "websocket.accept":
-             self.accepted = True
-         if message.get("type") == "websocket.send" and message.get("text") is not None:
-             self.outbound_frames.append(json.loads(message["text"]))
-+        if message.get("type") == "websocket.send" and message.get("bytes") is not None:
-+            self.binary_frames.append(message["bytes"])
- 
-     async def wait_for(self, predicate: Callable[[], bool], timeout: float = 1.0) -> None:
-         loop = asyncio.get_running_loop()
-         deadline = loop.time() + timeout
-         while not predicate():
-             if loop.time() >= deadline:
-                 raise TimeoutError("timed out waiting for condition")
-             await asyncio.sleep(0.01)
- 
-     async def wait_for_outbound(
-         self, predicate: Callable[[Dict[str, Any]], bool], timeout: float = 1.0
-     ) -> Dict[str, Any]:
-         loop = asyncio.get_running_loop()
-         deadline = loop.time() + timeout
-         while True:
-             for frame in self.outbound_frames:
-                 if predicate(frame):
-                     return frame
-             if loop.time() >= deadline:
-                 raise TimeoutError("timed out waiting for outbound frame")
-             await asyncio.sleep(0.01)
- 
-     async def close(self) -> None:
-         if self._task is None:
-             return
-         await self._inbound.put({"type": "websocket.disconnect", "code": 1000})
-         await self._task
-         self._task = None
  
      @property
-     def sid(self) -> str:
-         sid = self.engine.open_sid
-         if sid is None:
-             raise RuntimeError("connection not yet open")
-         return sid
+     def policy_snapshot(self) -> Dict[str, Any] | None:
+         return self._policy_snapshot
  
-+    async def wait_for_binary(
-+        self, predicate: Callable[[bytes], bool], timeout: float = 1.0
-+    ) -> bytes:
-+        loop = asyncio.get_running_loop()
-+        deadline = loop.time() + timeout
-+        while True:
-+            for chunk in self.binary_frames:
-+                if predicate(chunk):
-+                    return chunk
-+            if loop.time() >= deadline:
-+                raise TimeoutError("timed out waiting for binary frame")
-+            await asyncio.sleep(0.01)
+     @policy_snapshot.setter
+     def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
+         self._policy_snapshot = dict(snapshot) if snapshot is not None else None
+ 
+     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
+         """Capture a successful WebSocket upgrade."""
+         meta = {"headers": dict(headers), "dir": "in"}
+         event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
+         self._publish(event)
+ 
+         self._last_sid = sid
+         self._policy_snapshot = None
+         self._ensure_session(sid)
++        self.reapply_policy()
+         self._emit_info_frame(sid)
+         self._publish_chat_history(sid)
+         self._set_state(sid, READY, reason="ws_open")
+-        self.reapply_policy()
++        self._maybe_emit_greeting(sid)
++        self._maybe_emit_connect_suggestions(sid)
+ 
+     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
+         """Capture a validated JSON frame from the adapter."""
+         turn_id: Optional[Any] = None
+         meta: Dict[str, Any] = {"dir": "in"}
+         frame_type: Optional[str] = None
+         if isinstance(frame, Mapping):
+             frame_type = frame.get("type")
+             if isinstance(frame_type, str):
+                 meta["frame_type"] = frame_type
+             turn_id = frame.get("turn_id")
+         else:
+             frame = {}
+         try:
+             serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         except (TypeError, ValueError):
+             serialized = "{}"
+         meta["byte_count"] = len(serialized.encode("utf-8"))
+         payload: Dict[str, Any] = {"meta": meta}
+         if turn_id is not None:
+             payload["turn_id"] = turn_id
+         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
+         self._publish(event)
+         if frame_type == "client.resume":
+             self._publish_chat_history(sid)
+@@ -547,50 +550,216 @@ class EngineV2:
+         frame = {"type": "chat.history", "messages": messages, "next_cursor": None}
+         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {
+             "ws": {
+                 "dir": "out",
+                 "size": len(serialized.encode("utf-8")),
+                 "preview": serialized,
+             }
+         }
+         payload = {"meta": meta, "frame": frame}
+         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+         self._publish(event)
+ 
+     def _publish_gate_event(self, event: Dict[str, Any]) -> None:
+         """Publish gate controller events through the standard telemetry path."""
+ 
+         envelope = dict(event)
+         sid = envelope.get("sid") or self._last_sid
+         if not isinstance(sid, str) or not sid:
+             return
+         envelope.setdefault("sid", sid)
+         envelope.setdefault("who", "server")
+         envelope.setdefault("source", "voice_engine")
+         self._publish(envelope)
+ 
++    def _maybe_emit_greeting(self, sid: str) -> None:
++        session = self._ensure_session(sid)
++        if session.greet_emitted:
++            return
 +
- 
- class TestAdapterOutboundBridge(unittest.TestCase):
-     """Integration tests covering the server-to-client outbound bridge."""
- 
-     def setUp(self) -> None:
-         bus.reset()
- 
-     def tearDown(self) -> None:
-         bus.reset()
- 
-     def test_happy_path_delivers_policy_interaction(self) -> None:
-         asyncio.run(self._test_happy_path())
- 
-     def test_chat_message_forwarded_with_matching_sid(self) -> None:
-         asyncio.run(
-             self._test_payload_forwarded({"type": "chat.message", "message_id": "m-1"})
-         )
- 
-     def test_chat_history_forwarded_with_matching_sid(self) -> None:
-         asyncio.run(
-             self._test_payload_forwarded(
-                 {
-                     "type": "chat.history",
-                     "messages": [{"id": "m-1", "role": "user", "text": "hi"}],
-                 }
-             )
-         )
- 
-     def test_sid_isolation_drops_other_sessions(self) -> None:
-         asyncio.run(self._test_sid_isolation())
- 
-     def test_chat_message_dropped_for_other_sessions(self) -> None:
-         asyncio.run(
-             self._test_payload_other_sid_drop({"type": "chat.message", "message_id": "ignored"})
-         )
- 
-     def test_allow_list_blocks_unknown_types(self) -> None:
-         asyncio.run(self._test_allow_list())
- 
-     def test_backpressure_reports_drops(self) -> None:
-         asyncio.run(self._test_backpressure())
- 
-+    def test_audio_frames_forwarded_as_binary_messages(self) -> None:
-+        asyncio.run(self._test_audio_forwarding())
++        snapshot = self.policy_snapshot or {}
++        greet_block = snapshot.get("greet")
++        if isinstance(greet_block, Mapping):
++            enabled = bool(greet_block.get("enabled", True))
++            mode = greet_block.get("mode")
++            post_hold = greet_block.get("post_hold_ms")
++        else:
++            enabled = True
++            mode = "persona"
++            post_hold = None
 +
-     async def _test_happy_path(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             payload = {"type": "policy.interaction", "interaction_id": "abc123"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
- 
-             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction")
-             self.assertEqual(frame, payload)
- 
-             frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
-             self.assertEqual(len(frames), 1)
-         finally:
-             await harness.close()
- 
-     async def _test_payload_forwarded(self, payload: Dict[str, Any]) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
- 
-@@ -221,28 +240,48 @@ class TestAdapterOutboundBridge(unittest.TestCase):
- 
-         def _record_drop(event: dict) -> None:
-             nonlocal drop_count
-             meta = event.get("meta") or {}
-             dropped = meta.get("dropped")
-             if isinstance(dropped, int):
-                 drop_count += dropped
- 
-         token = bus.subscribe(EVT_WS_OUTBOX_DROP, _record_drop)
-         try:
-             for idx in range(300):
-                 bus.publish(
-                     {
-                         "type": EVT_WS_JSON_SEND,
-                         "sid": harness.sid,
-                         "payload": {"type": "info", "seq": idx},
-                     }
-                 )
- 
-             await harness.wait_for_outbound(lambda data: data.get("type") == "info")
-             await harness.wait_for(lambda: drop_count > 0)
-         finally:
-             bus.unsubscribe(token)
-             await harness.close()
- 
-+    async def _test_audio_forwarding(self) -> None:
-+        engine = RecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+        harness = OutboundHarness(adapter, engine)
-+        await harness.start()
++        if not enabled:
++            return
++
++        greet_mode = mode if isinstance(mode, str) and mode else "persona"
++        post_hold_ms = None
++        if isinstance(post_hold, (int, float)):
++            candidate_post_hold = int(post_hold)
++            if candidate_post_hold >= 0:
++                post_hold_ms = candidate_post_hold
++
++        turn_id = str(uuid.uuid4())
++        req_id = f"req-{uuid.uuid4().hex}"
++        plan_payload: Dict[str, Any] = {
++            "mode": "outline",
++            "chips": [],
++            "missing_info": [],
++            "reason": "greet",
++        }
++
++        persona: Dict[str, Any] = {}
 +        try:
-+            chunk = b"\x01\x02" * 80
-+            event = {
-+                "type": EVT_WS_AUDIO_SEND,
-+                "sid": harness.sid,
-+                "chunk": chunk,
-+                "meta": {"byte_count": len(chunk)},
-+            }
-+            bus.publish(event)
++            persona_candidate = load_persona()
++        except Exception:
++            logging.getLogger(__name__).exception("Failed to load persona for greeting")
++        else:
++            if isinstance(persona_candidate, dict):
++                persona = persona_candidate
 +
-+            received = await harness.wait_for_binary(lambda data: data == chunk)
-+            self.assertEqual(received, chunk)
-+        finally:
-+            await harness.close()
++        fallback_copy = persona.get("greet_copy") if isinstance(persona, dict) else None
++        if not isinstance(fallback_copy, str) or not fallback_copy.strip():
++            fallback_copy = "Hi there! I'm Chip. How can I help you today?"
 +
++        greeting_text: str
++        if greet_mode == "persona":
++            try:
++                greeting_candidate = self._llm.generate_persona(
++                    sid,
++                    turn_id,
++                    req_id,
++                    "",
++                    plan_payload,
++                )
++            except Exception:
++                logging.getLogger(__name__).exception(
++                    "Persona greeting generation failed; falling back to static copy"
++                )
++                greeting_candidate = None
++            greeting_text = greeting_candidate if isinstance(greeting_candidate, str) else ""
++        else:
++            greeting_text = ""
++
++        if not greeting_text.strip():
++            greeting_text = fallback_copy.strip()
++
++        nlg_payload: Dict[str, Any] = {
++            "req_id": req_id,
++            "text": greeting_text,
++            "meta": {"reason": "greet"},
++        }
++        if post_hold_ms is not None:
++            nlg_payload.setdefault("meta", {})["post_hold_ms"] = post_hold_ms
++        nlg_event = self._envelope(sid, EVT_NLG, nlg_payload)
++        self._publish(nlg_event)
++
++        frame = {
++            "type": "chat.message",
++            "id": str(uuid.uuid4()),
++            "role": "assistant",
++            "text": greeting_text,
++            "origin": "voice",
++            "turn_id": turn_id,
++            "req_id": req_id,
++            "ts_ms": _now_ms(),
++        }
++        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
++        payload = {
++            "meta": {
++                "ws": {
++                    "dir": "out",
++                    "size": len(serialized.encode("utf-8")),
++                    "preview": serialized,
++                }
++            },
++            "frame": frame,
++        }
++        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
++        self._publish(event)
++
++        session.greet_emitted = True
++
++    def _maybe_emit_connect_suggestions(self, sid: str) -> None:
++        session = self._ensure_session(sid)
++        if session.suggestions_emitted:
++            return
++
++        snapshot = self.policy_snapshot or {}
++        suggestions_block = snapshot.get("suggestions")
++        if isinstance(suggestions_block, Mapping):
++            on_connect = bool(suggestions_block.get("on_connect"))
++            count_candidate = suggestions_block.get("count")
++        else:
++            on_connect = False
++            count_candidate = None
++
++        if not on_connect:
++            return
++
++        max_items = 3
++        if isinstance(count_candidate, (int, float)):
++            normalized = int(count_candidate)
++            if normalized > 0:
++                max_items = normalized
++
++        try:
++            persona = load_persona()
++        except Exception:
++            logging.getLogger(__name__).exception("Failed to load persona for connect suggestions")
++            persona = {}
++
++        chips = default_chips_for_mode(persona if isinstance(persona, dict) else {}, "outline")
++        items = [str(label).strip() for label in chips if isinstance(label, str) and label.strip()]
++        if not items:
++            return
++
++        limited_items = items[:max_items]
++        if not limited_items:
++            return
++
++        suggestions_frame = {
++            "type": "assistant.suggestions",
++            "ts_ms": _now_ms(),
++            "items": [{"label": label, "kind": "action"} for label in limited_items],
++            "mode": "outline",
++        }
++        serialized = json.dumps(suggestions_frame, ensure_ascii=False, separators=(",", ":"))
++        payload = {
++            "meta": {
++                "ws": {
++                    "dir": "out",
++                    "size": len(serialized.encode("utf-8")),
++                    "preview": serialized,
++                }
++            },
++            "frame": suggestions_frame,
++        }
++        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
++        self._publish(event)
++
++        session.suggestions_emitted = True
++
+     def _publish_barge(
+         self, sid: str, source: str, granted: bool, reason: str | None = None
+     ) -> None:
+         """Publish EVT_BARGE_IN envelope with meta.barge.{source,granted,reason}."""
  
- if __name__ == "__main__":  # pragma: no cover - convenience
-     unittest.main()
+         if source not in {"auto_vad", "asr_evidence", "text"}:
+             return
+ 
+         meta: Dict[str, Any] = {"barge": {"source": source, "granted": granted}}
+         if reason is not None:
+             meta["barge"]["reason"] = reason
+         event = self._envelope(sid, "EVT_BARGE_IN", {"meta": meta})
+         self._publish(event)
+ 
+     def _schedule_barge_confirmation(self, sid: str) -> None:
+         """Transition from confirming to listening after a short delay."""
+ 
+         async def _confirm() -> None:
+             await asyncio.sleep(0.5)
+             self._complete_auto_barge(sid)
+ 
+         self._cancel_barge_confirmation(sid)
+ 
+         try:
+             loop = asyncio.get_running_loop()
+diff --git a/config/personas/chip.json b/config/personas/chip.json
+index 9f65f7c63f357dda6e87862f8dd5e363aaf21fd4..7e9e3aff758f5733d702c10058bfdd160407af05 100644
+--- a/config/personas/chip.json
++++ b/config/personas/chip.json
+@@ -1,29 +1,30 @@
+ {
+   "id": "chip_vptm",
+   "role_title": "Virtual Partner Technical Manager (vPTM)",
+   "public_title": "Chip, your Pure Storage partner guide",
++  "greet_copy": "Hi, Heya, I'm Chip—What do you want to accomplish today?",
+   "voice": "steady-midwest",
+   "tone_preset": "mentor",
+   "domain_focus": "Pure Storage data platforms, partner enablement, and customer outcomes",
+   "guardrails": {
+     "focus_on_pure": true
+   },
+   "modes": {
+     "clarify": {
+       "instruction": "Ask concise follow-ups to uncover the Pure Storage scenario before recommending a path.",
+       "chips": [
+         "Confirm Pure Storage product",
+         "Clarify customer workload",
+         "Ask for timeline"
+       ]
+     },
+     "outline": {
+       "instruction": "Summarize the Pure Storage solution path, spotlighting architecture pillars and success criteria.",
+       "chips": [
+         "State customer objective",
+         "Highlight Pure differentiators",
+         "Note partner resources"
+       ]
+     },
+     "deep_dive": {
+       "instruction": "Walk through the technical layers of the Pure Storage design with data-backed rationale.",

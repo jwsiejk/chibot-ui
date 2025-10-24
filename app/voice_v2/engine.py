@@ -113,6 +113,7 @@ class _TurnSession:
     policy_emitted: bool = False
     nlg_emitted: bool = False
     plan_emitted: bool = False
+    greet_emitted: bool = False
     plan: Optional[Dict[str, Any]] = None
     suggestions_emitted: bool = False
 
@@ -179,10 +180,12 @@ class EngineV2:
         self._last_sid = sid
         self._policy_snapshot = None
         self._ensure_session(sid)
+        self.reapply_policy()
         self._emit_info_frame(sid)
         self._publish_chat_history(sid)
         self._set_state(sid, READY, reason="ws_open")
-        self.reapply_policy()
+        self._maybe_emit_greeting(sid)
+        self._maybe_emit_connect_suggestions(sid)
 
     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
         """Capture a validated JSON frame from the adapter."""
@@ -568,6 +571,172 @@ class EngineV2:
         envelope.setdefault("who", "server")
         envelope.setdefault("source", "voice_engine")
         self._publish(envelope)
+
+    def _maybe_emit_greeting(self, sid: str) -> None:
+        session = self._ensure_session(sid)
+        if session.greet_emitted:
+            return
+
+        snapshot = self.policy_snapshot or {}
+        greet_block = snapshot.get("greet")
+        if isinstance(greet_block, Mapping):
+            enabled = bool(greet_block.get("enabled", True))
+            mode = greet_block.get("mode")
+            post_hold = greet_block.get("post_hold_ms")
+        else:
+            enabled = True
+            mode = "persona"
+            post_hold = None
+
+        if not enabled:
+            return
+
+        greet_mode = mode if isinstance(mode, str) and mode else "persona"
+        post_hold_ms = None
+        if isinstance(post_hold, (int, float)):
+            candidate_post_hold = int(post_hold)
+            if candidate_post_hold >= 0:
+                post_hold_ms = candidate_post_hold
+
+        turn_id = str(uuid.uuid4())
+        req_id = f"req-{uuid.uuid4().hex}"
+        plan_payload: Dict[str, Any] = {
+            "mode": "outline",
+            "chips": [],
+            "missing_info": [],
+            "reason": "greet",
+        }
+
+        persona: Dict[str, Any] = {}
+        try:
+            persona_candidate = load_persona()
+        except Exception:
+            logging.getLogger(__name__).exception("Failed to load persona for greeting")
+        else:
+            if isinstance(persona_candidate, dict):
+                persona = persona_candidate
+
+        fallback_copy = persona.get("greet_copy") if isinstance(persona, dict) else None
+        if not isinstance(fallback_copy, str) or not fallback_copy.strip():
+            fallback_copy = "Hi there! I'm Chip. How can I help you today?"
+
+        greeting_text: str
+        if greet_mode == "persona":
+            try:
+                greeting_candidate = self._llm.generate_persona(
+                    sid,
+                    turn_id,
+                    req_id,
+                    "",
+                    plan_payload,
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Persona greeting generation failed; falling back to static copy"
+                )
+                greeting_candidate = None
+            greeting_text = greeting_candidate if isinstance(greeting_candidate, str) else ""
+        else:
+            greeting_text = ""
+
+        if not greeting_text.strip():
+            greeting_text = fallback_copy.strip()
+
+        nlg_payload: Dict[str, Any] = {
+            "req_id": req_id,
+            "text": greeting_text,
+            "meta": {"reason": "greet"},
+        }
+        if post_hold_ms is not None:
+            nlg_payload.setdefault("meta", {})["post_hold_ms"] = post_hold_ms
+        nlg_event = self._envelope(sid, EVT_NLG, nlg_payload)
+        self._publish(nlg_event)
+
+        frame = {
+            "type": "chat.message",
+            "id": str(uuid.uuid4()),
+            "role": "assistant",
+            "text": greeting_text,
+            "origin": "voice",
+            "turn_id": turn_id,
+            "req_id": req_id,
+            "ts_ms": _now_ms(),
+        }
+        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+        payload = {
+            "meta": {
+                "ws": {
+                    "dir": "out",
+                    "size": len(serialized.encode("utf-8")),
+                    "preview": serialized,
+                }
+            },
+            "frame": frame,
+        }
+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+        self._publish(event)
+
+        session.greet_emitted = True
+
+    def _maybe_emit_connect_suggestions(self, sid: str) -> None:
+        session = self._ensure_session(sid)
+        if session.suggestions_emitted:
+            return
+
+        snapshot = self.policy_snapshot or {}
+        suggestions_block = snapshot.get("suggestions")
+        if isinstance(suggestions_block, Mapping):
+            on_connect = bool(suggestions_block.get("on_connect"))
+            count_candidate = suggestions_block.get("count")
+        else:
+            on_connect = False
+            count_candidate = None
+
+        if not on_connect:
+            return
+
+        max_items = 3
+        if isinstance(count_candidate, (int, float)):
+            normalized = int(count_candidate)
+            if normalized > 0:
+                max_items = normalized
+
+        try:
+            persona = load_persona()
+        except Exception:
+            logging.getLogger(__name__).exception("Failed to load persona for connect suggestions")
+            persona = {}
+
+        chips = default_chips_for_mode(persona if isinstance(persona, dict) else {}, "outline")
+        items = [str(label).strip() for label in chips if isinstance(label, str) and label.strip()]
+        if not items:
+            return
+
+        limited_items = items[:max_items]
+        if not limited_items:
+            return
+
+        suggestions_frame = {
+            "type": "assistant.suggestions",
+            "ts_ms": _now_ms(),
+            "items": [{"label": label, "kind": "action"} for label in limited_items],
+            "mode": "outline",
+        }
+        serialized = json.dumps(suggestions_frame, ensure_ascii=False, separators=(",", ":"))
+        payload = {
+            "meta": {
+                "ws": {
+                    "dir": "out",
+                    "size": len(serialized.encode("utf-8")),
+                    "preview": serialized,
+                }
+            },
+            "frame": suggestions_frame,
+        }
+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+        self._publish(event)
+
+        session.suggestions_emitted = True
 
     def _publish_barge(
         self, sid: str, source: str, granted: bool, reason: str | None = None
