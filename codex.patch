@@ -1,94 +1,155 @@
-diff --git a/app/voice_v2/llm.py b/app/voice_v2/llm.py
-index bdaa53c2f0c8e68ca2a50c291625149445dd4b34..fc2518237ba6331c4e4118d82d1cbc0d62e06eab 100644
---- a/app/voice_v2/llm.py
-+++ b/app/voice_v2/llm.py
-@@ -1,29 +1,30 @@
- """Stubbed LLM adapter used by the voice engine."""
- from __future__ import annotations
- 
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 4759c80c6b9fa426e067910e3978a3684d239c51..21750627924c5ba7c68f12429695e6a639856348 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -4,50 +4,57 @@ from __future__ import annotations
  import asyncio
-+from concurrent.futures import ThreadPoolExecutor
- import json
+ import contextlib
+ import inspect
  import logging
+ import os
  import time
  import uuid
- from typing import Any, Dict, Mapping
+ from dataclasses import dataclass, field
+ from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
+ from urllib.parse import parse_qs
  
- from app.services.llm.provider import create_from_env
+ import json
+ 
  from app.telemetry import bus
- from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
- from app.voice_v2 import generator
- from app.voice_v2.llm_base import (
-     LLMProviderBase,
-     ProviderCircuitOpenError,
-     ProviderTimeoutError,
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ASR_READY,
+     EVT_CHAT_USER,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
  )
- from app.voice_v2.persona import (
-     build_system_preamble,
-     load_persona,
-     maybe_pick_quote_for_sid,
- )
+ from app.ws.validator import validate_frame
  
- EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
- EVT_TURN_END = "EVT_TURN_END"
++try:  # pragma: no cover - uvicorn is an optional dependency in tests
++    from uvicorn.protocols.utils import ClientDisconnected
++except Exception:  # pragma: no cover - fallback when uvicorn missing
++    class ClientDisconnected(Exception):  # type: ignore[no-redef]
++        """Fallback placeholder when uvicorn is unavailable."""
++
++
+ CHAT_V2_SUBPROTOCOL = "chat.v2"
+ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
+ BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ PING_MIN_INTERVAL_MS = 500
+ RATE_LIMIT_CAPACITY = 25
+ RATE_LIMIT_WINDOW_SECONDS = 2.0
+ RATE_LIMIT_CLOSE_CODE = 1013
+ _AUDIO_VIOLATION_LIMIT = 3
  
+ AUDIO_SEQ_WINDOW = 8
  
-@@ -183,55 +184,53 @@ class LLMAdapter:
-                         metadata = {}
-                     metadata["quote_id"] = identifier
-         self.publish_nlg(req_id, reply, metadata=metadata)
-         return reply
+ QUEUE_ON_THRESHOLD = 12
+ QUEUE_OFF_THRESHOLD = 6
  
-     def _invoke_provider(
-         self,
-         provider: LLMProviderBase,
-         messages: list[dict[str, str]],
-         *,
-         model: str,
-         temperature: float,
-     ) -> str:
-         async def _execute() -> Any:
-             return await provider.generate(
-                 messages=messages,
-                 model=model,
-                 temperature=temperature,
-             )
+ _DEFAULT_WS_PING_INTERVAL_MS = 25_000
  
-         try:
-             asyncio.get_running_loop()
-         except RuntimeError:
-             result = asyncio.run(_execute())
-         else:
--            loop = asyncio.new_event_loop()
--            try:
--                result = loop.run_until_complete(_execute())
--            finally:
--                loop.close()
-+            with ThreadPoolExecutor(max_workers=1) as executor:
-+                future = executor.submit(asyncio.run, _execute())
-+                result = future.result()
+ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
  
-         return result if isinstance(result, str) else str(result)
+ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
  
-     def publish_nlg(
-         self,
-         req_id: str,
-         text: str,
-         *,
-         metadata: Mapping[str, Any] | None = None,
+ EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
+ 
+ _OUTBOUND_ALLOWED_TYPES = {
+     "policy.interaction",
+@@ -1044,79 +1051,91 @@ class ChatV2Adapter:
+     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
+         if isinstance(raw, dict):
+             return raw
+         if isinstance(raw, str):
+             try:
+                 decoded = json.loads(raw)
+             except json.JSONDecodeError:
+                 return None
+             if isinstance(decoded, dict):
+                 return decoded
+         return None
+ 
+     async def _run_outbound_sender(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
      ) -> None:
-         """Publish EVT_NLG and chat bridge messages when enabled."""
- 
-         if not self._auto_publish:
-             # When auto publish is disabled we only emit the bus events when
-             # this helper is invoked directly (the engine handles it).
+         queue = ctx.outbox
+         if queue is None:
              return
+         try:
+             while True:
+                 payload = await queue.get()
+                 try:
+                     await self._send_outbound_frame(ctx, send, payload)
+                 except asyncio.CancelledError:
+                     raise
++                except ClientDisconnected:
++                    _logger.info(
++                        "Client disconnected while delivering outbound frame for sid %s",
++                        ctx.sid,
++                    )
++                    break
+                 except Exception:  # pragma: no cover - defensive
+                     _logger.exception("Failed to deliver outbound frame for sid %s", ctx.sid)
+                 finally:
+                     queue.task_done()
+         except asyncio.CancelledError:
+             raise
+         finally:
+             ctx.outbox = None
  
-         self._publish_nlg(req_id, text, metadata=metadata)
-         self._publish_chat_message(req_id, text)
+     async def _send_outbound_frame(
+         self,
+         ctx: AdapterContext,
+         send: Callable[[dict], Awaitable[None]],
+         payload: Dict[str, Any],
+     ) -> None:
+         lock = self._ensure_send_lock(ctx)
+         async with lock:
+             text = json.dumps(payload, separators=(",", ":"))
+             await send({"type": "websocket.send", "text": text})
  
-     def publish_chat_message(self, req_id: str, text: str) -> None:
-         """Manually mirror the assistant message into the chat stream."""
+     async def _send_audio_frame(
+         self,
+         ctx: AdapterContext,
+         send: Callable[[dict], Awaitable[None]],
+         chunk: bytes,
+     ) -> None:
+         lock = self._ensure_send_lock(ctx)
+         async with lock:
+-            await send({"type": "websocket.send", "bytes": chunk})
++            try:
++                await send({"type": "websocket.send", "bytes": chunk})
++            except ClientDisconnected:
++                _logger.info(
++                    "Client disconnected while delivering audio chunk for sid %s",
++                    ctx.sid,
++                )
  
-         self._publish_chat_message(req_id, text)
+     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
+         token = ctx.subscription_token
+         ctx.subscription_token = None
+         if token:
+             bus.unsubscribe(token)
  
+         audio_token = ctx.audio_subscription_token
+         ctx.audio_subscription_token = None
+         if audio_token:
+             bus.unsubscribe(audio_token)
+ 
+         task = ctx.outbound_task
+         ctx.outbound_task = None
+         if task:
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task
+ 
+         ctx.partial_coalescer.cancel()
+ 
+         for task in list(ctx.audio_tasks):
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task

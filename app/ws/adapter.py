@@ -26,6 +26,13 @@ from app.voice_v2 import (
 )
 from app.ws.validator import validate_frame
 
+try:  # pragma: no cover - uvicorn is an optional dependency in tests
+    from uvicorn.protocols.utils import ClientDisconnected
+except Exception:  # pragma: no cover - fallback when uvicorn missing
+    class ClientDisconnected(Exception):  # type: ignore[no-redef]
+        """Fallback placeholder when uvicorn is unavailable."""
+
+
 CHAT_V2_SUBPROTOCOL = "chat.v2"
 TEXT_FRAME_LIMIT_BYTES = 64 * 1024
 BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
@@ -1066,6 +1073,12 @@ class ChatV2Adapter:
                     await self._send_outbound_frame(ctx, send, payload)
                 except asyncio.CancelledError:
                     raise
+                except ClientDisconnected:
+                    _logger.info(
+                        "Client disconnected while delivering outbound frame for sid %s",
+                        ctx.sid,
+                    )
+                    break
                 except Exception:  # pragma: no cover - defensive
                     _logger.exception("Failed to deliver outbound frame for sid %s", ctx.sid)
                 finally:
@@ -1094,7 +1107,13 @@ class ChatV2Adapter:
     ) -> None:
         lock = self._ensure_send_lock(ctx)
         async with lock:
-            await send({"type": "websocket.send", "bytes": chunk})
+            try:
+                await send({"type": "websocket.send", "bytes": chunk})
+            except ClientDisconnected:
+                _logger.info(
+                    "Client disconnected while delivering audio chunk for sid %s",
+                    ctx.sid,
+                )
 
     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
         token = ctx.subscription_token
