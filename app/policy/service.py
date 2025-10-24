@@ -10,11 +10,8 @@ from app.policy.schema import (
     AuthPolicyMode,
     AuthPolicySnapshot,
     DEFAULT_AUTH_POLICY,
-    DEFAULT_LOGGING_LEVEL,
     DEFAULT_WS_AUTH_MODE,
-    LoggingLevel,
     build_auth_policy_snapshot,
-    coerce_logging_level,
     coerce_ws_auth_mode,
 )
 from app.telemetry import bus as telemetry_bus
@@ -28,7 +25,6 @@ class PolicyService:
     """Runtime accessors for policy state derived from admin settings."""
 
     _AUTH_MODE_KEY = "ws_auth_mode"
-    _LOGGING_LEVEL_KEY = "logging_level"
 
     def __init__(
         self,
@@ -54,15 +50,12 @@ class PolicyService:
         self._publish_snapshot(snapshot, reason="load")
 
     def _load_snapshot_from_store(self) -> AuthPolicySnapshot:
-        auth_mode = self._store.get(self._AUTH_MODE_KEY)
-        logging_level = self._store.get(self._LOGGING_LEVEL_KEY)
+        value = self._store.get(self._AUTH_MODE_KEY)
         payload: Mapping[str, object] | None
-        collected: Dict[str, object] = {}
-        if auth_mode is not None:
-            collected[self._AUTH_MODE_KEY] = auth_mode
-        if logging_level is not None:
-            collected[self._LOGGING_LEVEL_KEY] = logging_level
-        payload = collected or None
+        if value is None:
+            payload = None
+        else:
+            payload = {self._AUTH_MODE_KEY: value}
         return build_auth_policy_snapshot(payload)
 
     def _publish_snapshot(self, snapshot: AuthPolicySnapshot, *, reason: str) -> None:
@@ -73,7 +66,6 @@ class PolicyService:
                     "level": "info",
                     "meta": {
                         "ws_auth_mode": snapshot["ws_auth_mode"],
-                        "logging_level": snapshot["logging_level"],
                         "reason": reason,
                     },
                 }
@@ -95,44 +87,22 @@ class PolicyService:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def get_snapshot(self) -> AuthPolicySnapshot:
+    def get_auth_policy(self) -> AuthPolicySnapshot:
         """Return the cached auth policy snapshot."""
 
         with self._lock:
             return dict(self._snapshot)
 
-    def get_auth_policy(self) -> AuthPolicySnapshot:
-        """Backward compatible accessor for the policy snapshot."""
-
-        return self.get_snapshot()
-
     def set_ws_auth_mode(self, mode: AuthPolicyMode | str) -> AuthPolicySnapshot:
         """Persist the provided auth mode and broadcast updates when needed."""
 
         normalized = coerce_ws_auth_mode(mode)
-        existing = self.get_snapshot()
+        existing = self.get_auth_policy()
         if existing["ws_auth_mode"] == normalized:
             return existing
 
         self._store.set(self._AUTH_MODE_KEY, normalized)
-        snapshot = dict(existing)
-        snapshot["ws_auth_mode"] = normalized
-        with self._lock:
-            self._snapshot = snapshot
-        self._publish_snapshot(snapshot, reason="change")
-        return dict(snapshot)
-
-    def set_logging_level(self, level: LoggingLevel | str) -> AuthPolicySnapshot:
-        """Persist the provided logging level and broadcast updates when needed."""
-
-        normalized = coerce_logging_level(level)
-        existing = self.get_snapshot()
-        if existing["logging_level"] == normalized:
-            return existing
-
-        self._store.set(self._LOGGING_LEVEL_KEY, normalized)
-        snapshot = dict(existing)
-        snapshot["logging_level"] = normalized
+        snapshot = {"ws_auth_mode": normalized}
         with self._lock:
             self._snapshot = snapshot
         self._publish_snapshot(snapshot, reason="change")
@@ -154,29 +124,17 @@ class PolicyService:
     ) -> Optional[AuthPolicySnapshot]:
         """Handle an external admin_settings update notification."""
 
-        if key not in {self._AUTH_MODE_KEY, self._LOGGING_LEVEL_KEY}:
+        if key != self._AUTH_MODE_KEY:
             return None
-
         if value is not None:
-            with self._lock:
-                current = dict(self._snapshot)
-
-            if key == self._AUTH_MODE_KEY:
-                normalized = coerce_ws_auth_mode(value, DEFAULT_WS_AUTH_MODE)
-                snapshot = dict(current)
-                snapshot["ws_auth_mode"] = normalized
-            else:
-                normalized = coerce_logging_level(value, DEFAULT_LOGGING_LEVEL)
-                snapshot = dict(current)
-                snapshot["logging_level"] = normalized
-
+            normalized = coerce_ws_auth_mode(value, DEFAULT_WS_AUTH_MODE)
+            snapshot = {"ws_auth_mode": normalized}
             with self._lock:
                 if snapshot == self._snapshot:
                     return dict(self._snapshot)
                 self._snapshot = snapshot
             self._publish_snapshot(snapshot, reason="change")
             return dict(snapshot)
-
         return self.refresh()
 
     # ------------------------------------------------------------------
