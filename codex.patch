@@ -1,113 +1,205 @@
 diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 79072b0c16502d502a865026c077bdbc08549540..1c9227a3883039acb82edd727c6eafcf6419ca5f 100644
+index 1c9227a3883039acb82edd727c6eafcf6419ca5f..d961aeca5c1bd1ff91e626ab8c2f51e5a697a18f 100644
 --- a/app/asgi_gateway.py
 +++ b/app/asgi_gateway.py
-@@ -348,50 +348,93 @@ async def _reject_origin(
-     send: Callable[[dict], Awaitable[None]],
- ) -> None:
-     """Reject a WebSocket handshake because the Origin is not allowed."""
+@@ -1,121 +1,114 @@
+ """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
+ from __future__ import annotations
  
-     message = await receive()
-     if message.get("type") != "websocket.connect":
+ import json
+ import logging
+ import mimetypes
+ import os
+ import time
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from functools import partial
+ from pathlib import Path
+ from tempfile import NamedTemporaryFile
+ from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
+ from urllib.parse import urlparse
+ 
+-from app.admin.flow_api import handle_flow_trace, handle_flow_zip
+ from app.telemetry import bus as telemetry_bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2.engine import EngineV2
+ from app.voice_v2.tts_runtime import TTSRuntime
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ @dataclass(frozen=True)
+ class Response:
+     """Immutable container describing a serialized HTTP response."""
+ 
+     status: int
+     body: bytes
+     headers: tuple[tuple[bytes, bytes], ...]
+ 
+ 
+ def json_response(*, status: int = 200, **payload: Any) -> Response:
+     """Serialize a payload to JSON using a compact representation."""
+ 
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
+     )
+     return Response(status=status, body=body, headers=headers)
+ 
+ 
+ WS_ROUTE = "/ws/v2/chat"
+ HEALTH_ROUTE = "/api/v1/health"
+ LIVE_ROUTE = "/api/v1/live"
+ READY_ROUTE = "/api/v1/ready"
+ INFO_ROUTE = "/api/v1/info"
+ ROOT_ROUTE = "/"
+ FAVICON_ROUTE = "/favicon.ico"
+ STATIC_ROUTE_PREFIX = "/static/"
+ EXPORT_ROOT = Path("exports")
+ BASE_DIR = Path(__file__).resolve().parent
+ STATIC_ROOT = BASE_DIR / "static"
+ TEMPLATES_ROOT = BASE_DIR / "templates"
+ INDEX_PATH = TEMPLATES_ROOT / "index.html"
+ FAVICON_PATH = STATIC_ROOT / "favicon.ico"
+-_ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
+-_TRACE_SEGMENT = "trace"
+-_ZIP_SEGMENT = "zip"
+-
+ _DEFAULT_INDEX_HTML = (
+     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
+ )
+ 
+ 
+ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
+ 
+ _adapter: Optional[ChatV2Adapter] = None
+ 
+ 
+ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
+     scope_type = scope.get("type")
+     path = (scope.get("root_path") or "") + scope.get("path", "")
+ 
+     if scope_type == "websocket":
+         if path == WS_ROUTE:
+             allowed, blocked_origin = _validate_ws_origin(scope)
+             if not allowed:
+                 await _reject_origin(scope, blocked_origin, receive, send)
+                 return
+             await _get_adapter()(scope, receive, send)
+         else:
+             await _reject_websocket(receive, send)
          return
  
-     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
-     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
-     if origin:
-         payload["origin"] = origin
-     await _send_ws_response(send, json_response(status=403, **payload))
+     if scope_type == "http":
+         handler = _HTTP_ROUTES.get(path)
+         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
+             handler = partial(_handle_static, raw_path=path)
+-        if handler is None:
+-            handler = _resolve_admin_route(path)
+         if handler is None:
+             await _drain_request_body(receive)
+             await _send_response(send, json_response(status=404, error="not_found"))
+         else:
+             response = await handler(scope, receive)
+             await _send_response(send, response)
+         return
+ 
+     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
  
  
- def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
-     for header, value in headers:
-         if header == name:
-             try:
-                 return value.decode("latin1").strip()
-             except UnicodeDecodeError:  # pragma: no cover - defensive
-                 return None
-     return None
+ async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Return a static JSON document for health checks."""
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+         return json_response(status=405, error="method_not_allowed")
+ 
+     await _drain_request_body(receive)
+     return json_response(ok=True, engine="v2", ws_subprotocol=CHAT_V2_SUBPROTOCOL)
  
  
-+def _derive_scope_origin(scope: dict) -> Optional[str]:
-+    """Best-effort reconstruction of the request origin from an ASGI scope."""
-+
-+    scheme = (scope.get("scheme") or "").lower()
-+    if scheme in {"https", "wss"}:
-+        scheme = "https"
-+    else:
-+        scheme = "http"
-+
-+    host = _decode_header(scope.get("headers", ()), b"host")
-+    if not host:
-+        server = scope.get("server")
-+        if isinstance(server, (list, tuple)) and server:
-+            hostname = (server[0] or "").strip()
-+            port = server[1] if len(server) > 1 else None
-+            if hostname:
-+                if port and not _is_default_port(scheme, port):
-+                    host = f"{hostname}:{port}"
-+                else:
-+                    host = hostname
-+
-+    if not host:
-+        return None
-+
-+    normalized_host = host.strip().lower()
-+    if not normalized_host:
-+        return None
-+
-+    return f"{scheme}://{normalized_host}"
-+
-+
-+def _is_default_port(scheme: str, port: Any) -> bool:
-+    try:
-+        value = int(port)
-+    except (TypeError, ValueError):
-+        return False
-+    if scheme == "https":
-+        return value == 443
-+    if scheme == "http":
-+        return value == 80
-+    return False
-+
-+
+ async def _handle_live(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Expose a lightweight pulse indicating the event loop is responsive."""
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+@@ -397,214 +390,98 @@ def _derive_scope_origin(scope: dict) -> Optional[str]:
+     normalized_host = host.strip().lower()
+     if not normalized_host:
+         return None
+ 
+     return f"{scheme}://{normalized_host}"
+ 
+ 
+ def _is_default_port(scheme: str, port: Any) -> bool:
+     try:
+         value = int(port)
+     except (TypeError, ValueError):
+         return False
+     if scheme == "https":
+         return value == 443
+     if scheme == "http":
+         return value == 80
+     return False
+ 
+ 
  def _resolve_origin_policy() -> "_OriginPolicy":
      raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
      if raw is not None:
          entries = tuple(filter(None, (_normalize_origin(item) for item in raw.split(","))))
          return _OriginPolicy(mode="explicit", values=entries)
  
-     env = (os.getenv("ASKCHIP_ENV") or "development").strip().lower()
-     if env in {"production", "prod"}:
-         return _OriginPolicy(mode="explicit", values=())
- 
-     return _OriginPolicy(mode="localhost", values=("localhost", "127.0.0.1"))
+-    env = (os.getenv("ASKCHIP_ENV") or "development").strip().lower()
+-    if env in {"production", "prod"}:
+-        return _OriginPolicy(mode="explicit", values=())
+-
+-    return _OriginPolicy(mode="localhost", values=("localhost", "127.0.0.1"))
++    return _OriginPolicy(mode="explicit", values=())
  
  
  def _is_origin_allowed(origin: str, policy: "_OriginPolicy") -> bool:
      if policy.mode == "explicit":
          normalized = _normalize_origin(origin)
-         if normalized is None or not policy.values:
-             return normalized in policy.values
-         return normalized in policy.values
- 
-     if policy.mode == "localhost":
-         host = _extract_hostname(origin)
-         if host is None:
+-        if normalized is None or not policy.values:
+-            return normalized in policy.values
+-        return normalized in policy.values
+-
+-    if policy.mode == "localhost":
+-        host = _extract_hostname(origin)
+-        if host is None:
++        if normalized is None:
              return False
-         return host in policy.values
-@@ -415,50 +458,54 @@ def _normalize_origin(value: str) -> Optional[str]:
+-        return host in policy.values
++        return normalized in policy.values
+ 
+     return False
+ 
+ 
+ def _normalize_origin(value: str) -> Optional[str]:
+     raw = value.strip()
+     if not raw:
+         return None
+ 
+     parsed = urlparse(raw)
+     if parsed.scheme and parsed.netloc:
+         scheme = parsed.scheme.lower()
+         netloc = parsed.netloc.lower()
+         return f"{scheme}://{netloc}"
+ 
+     lowered = raw.lower()
+     if lowered == "*":
          return None
      return lowered
  
  
- def _extract_hostname(value: str) -> Optional[str]:
-     parsed = urlparse(value)
-     if not parsed.hostname:
-         return None
-     return parsed.hostname.lower()
- 
- 
+-def _extract_hostname(value: str) -> Optional[str]:
+-    parsed = urlparse(value)
+-    if not parsed.hostname:
+-        return None
+-    return parsed.hostname.lower()
+-
+-
  @dataclass(frozen=True)
  class _OriginPolicy:
      mode: str
@@ -122,10 +214,10 @@ index 79072b0c16502d502a865026c077bdbc08549540..1c9227a3883039acb82edd727c6eafcf
          return True, None
  
      policy = _resolve_origin_policy()
-+    if policy.mode == "explicit" and not policy.values:
-+        derived = _derive_scope_origin(scope)
-+        if derived is not None and _normalize_origin(origin) == _normalize_origin(derived):
-+            return True, None
+     if policy.mode == "explicit" and not policy.values:
+         derived = _derive_scope_origin(scope)
+         if derived is not None and _normalize_origin(origin) == _normalize_origin(derived):
+             return True, None
      if _is_origin_allowed(origin, policy):
          return True, None
  
@@ -142,118 +234,199 @@ index 79072b0c16502d502a865026c077bdbc08549540..1c9227a3883039acb82edd727c6eafcf
  }
  
  
- def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
-     if not path.startswith(_ADMIN_FLOW_PREFIX):
-         return None
+-def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
+-    if not path.startswith(_ADMIN_FLOW_PREFIX):
+-        return None
+-
+-    suffix = path[len(_ADMIN_FLOW_PREFIX) :]
+-    if not suffix:
+-        return None
+-
+-    segments = suffix.split("/")
+-    if len(segments) != 2:
+-        return None
+-
+-    sid, action = segments
+-    if not sid:
+-        return None
+-
+-    handler: Optional[HttpHandler]
+-    if action == _TRACE_SEGMENT:
+-        handler = partial(handle_flow_trace, sid=sid)
+-    elif action == _ZIP_SEGMENT:
+-        handler = partial(handle_flow_zip, sid=sid)
+-    else:
+-        handler = None
+-
+-    if handler is None:
+-        return None
+-
+-    handler = partial(_enforce_admin_auth, handler)
+-    if _admin_cors_enabled():
+-        return partial(_apply_admin_cors, handler)
+-
+-    return handler
+-
+-
+-async def _apply_admin_cors(
+-    handler: HttpHandler,
+-    scope: dict,
+-    receive: Callable[[], Awaitable[dict]],
+-) -> Response:
+-    response = await handler(scope, receive)
+-    allow_origin = _resolve_admin_cors_origin(scope)
+-    if allow_origin is None:
+-        return response
+-
+-    encoded_origin = _encode_header_value(allow_origin)
+-    if encoded_origin is None:
+-        return response
+-
+-    headers = tuple(response.headers) + (
+-        (b"access-control-allow-origin", encoded_origin),
+-        (b"access-control-allow-methods", b"GET"),
+-    )
+-    return Response(status=response.status, body=response.body, headers=headers)
+-
+-
+-def _admin_cors_enabled() -> bool:
+-    env = (os.getenv("ASKCHIP_ENV") or "").strip().lower()
+-    return env in {"dev", "staging"}
+-
+-
+-def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
+-    allowed = _parse_admin_cors_origins()
+-    if not allowed:
+-        return None
+-
+-    if "*" in allowed:
+-        return "*"
+-
+-    origin = _decode_header(scope.get("headers", ()), b"origin")
+-    if origin is None:
+-        return None
+-
+-    normalized = origin.strip()
+-    for entry in allowed:
+-        if normalized == entry:
+-            return normalized
+-    return None
+-
+-
+-def _parse_admin_cors_origins() -> tuple[str, ...]:
+-    raw = os.getenv("ASKCHIP_ADMIN_CORS_ORIGINS")
+-    if not raw:
+-        return ()
+-
+-    entries = []
+-    for item in raw.split(","):
+-        value = item.strip()
+-        if value:
+-            entries.append(value)
+-    return tuple(entries)
+-
+-
+-def _encode_header_value(value: str) -> Optional[bytes]:
+-    try:
+-        return value.encode("latin1")
+-    except UnicodeEncodeError:  # pragma: no cover - defensive
+-        return None
+-
+-
+ async def _enforce_admin_auth(
+     handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
+ ) -> Response:
+     return await handler(scope, receive)
  
-     suffix = path[len(_ADMIN_FLOW_PREFIX) :]
-     if not suffix:
-         return None
  
-     segments = suffix.split("/")
-diff --git a/tests/test_ws_origin.py b/tests/test_ws_origin.py
-index db79d6a321d344a3287151281d81d8acd8339b7e..42edb87252ca43ac44d23a2b48c2d32005a5c641 100644
---- a/tests/test_ws_origin.py
-+++ b/tests/test_ws_origin.py
-@@ -1,68 +1,99 @@
- """Origin allow-list enforcement for WebSocket handshakes."""
- from __future__ import annotations
+ asgi = app
  
- import asyncio
- import json
- import os
- from typing import Optional
- from unittest.mock import patch
- 
- import pytest
- 
- from app.asgi_gateway import _reject_origin, _validate_ws_origin
- 
- 
--def _make_scope(origin: Optional[str]) -> dict:
-+def _make_scope(origin: Optional[str], *, host: Optional[str] = None, scheme: str = "https") -> dict:
-     headers = []
-     if origin is not None:
-         headers.append((b"origin", origin.encode("latin1")))
--    return {"type": "websocket", "path": "/ws/v2/chat", "headers": tuple(headers)}
-+    if host is not None:
-+        headers.append((b"host", host.encode("latin1")))
-+    return {
-+        "type": "websocket",
-+        "path": "/ws/v2/chat",
-+        "headers": tuple(headers),
-+        "scheme": scheme,
-+    }
- 
- 
- @pytest.mark.parametrize(
-     "config, origin, expected",
-     [
-         ({"ASKCHIP_WS_ALLOWED_ORIGINS": "https://app.askchip.ai"}, "https://app.askchip.ai", True),
-         ({"ASKCHIP_WS_ALLOWED_ORIGINS": "https://app.askchip.ai"}, "https://evil.example", False),
-         ({"ASKCHIP_ENV": "development"}, "http://localhost:3000", True),
-         ({"ASKCHIP_ENV": "prod"}, "http://localhost:3000", False),
-     ],
- )
- def test_origin_policy(config: dict[str, str], origin: str, expected: bool) -> None:
-     with patch.dict(os.environ, config, clear=True):
-         allowed, _ = _validate_ws_origin(_make_scope(origin))
-         assert allowed is expected
- 
- 
- def test_missing_origin_is_accepted() -> None:
-     with patch.dict(os.environ, {}, clear=True):
-         allowed, origin = _validate_ws_origin(_make_scope(None))
-         assert origin is None
-         assert allowed is True
- 
- 
-+def test_scope_origin_matches_host_when_policy_empty() -> None:
-+    with patch.dict(os.environ, {"ASKCHIP_ENV": "production"}, clear=True):
-+        scope = _make_scope(
-+            "https://chibot-ui.onrender.com",
-+            host="chibot-ui.onrender.com",
-+            scheme="https",
-+        )
-+        allowed, blocked = _validate_ws_origin(scope)
-+        assert blocked is None
-+        assert allowed is True
-+
-+
-+def test_scope_origin_mismatch_is_rejected_when_policy_empty() -> None:
-+    with patch.dict(os.environ, {"ASKCHIP_ENV": "production"}, clear=True):
-+        scope = _make_scope(
-+            "https://app.askchip.ai",
-+            host="chibot-ui.onrender.com",
-+            scheme="https",
-+        )
-+        allowed, blocked = _validate_ws_origin(scope)
-+        assert allowed is False
-+        assert blocked == "https://app.askchip.ai"
-+
-+
- def test_reject_origin_responds_during_handshake() -> None:
-     async def _exercise() -> list[dict]:
-         queue: asyncio.Queue[dict] = asyncio.Queue()
-         await queue.put({"type": "websocket.connect"})
- 
-         sent: list[dict] = []
- 
-         async def receive() -> dict:
-             return await queue.get()
- 
-         async def send(message: dict) -> None:
-             sent.append(message)
- 
-         scope = {"type": "websocket", "path": "/ws/v2/chat"}
-         await _reject_origin(scope, "https://evil.example", receive, send)
-         return sent
- 
-     messages = asyncio.run(_exercise())
-     assert [message["type"] for message in messages] == [
-         "websocket.http.response.start",
-         "websocket.http.response.body",
-     ]
-     start, body = messages
-     assert start["status"] == 403
-     payload = json.loads(body["body"].decode("utf-8"))
+ __all__ = ["app", "asgi"]
+diff --git a/tests/test_admin_cors.py b/tests/test_admin_cors.py
+deleted file mode 100644
+index 345786ac5ce962a14ef4b62d39a51d8def12e20e..0000000000000000000000000000000000000000
+--- a/tests/test_admin_cors.py
++++ /dev/null
+@@ -1,82 +0,0 @@
+-from __future__ import annotations
+-
+-import asyncio
+-from typing import Awaitable, Callable, Dict, Tuple
+-
+-import pytest
+-
+-from app import asgi_gateway
+-
+-
+-def _make_scope(path: str, origin: str | None) -> Dict[str, object]:
+-    headers: list[Tuple[bytes, bytes]] = []
+-    if origin is not None:
+-        headers.append((b"origin", origin.encode("latin1")))
+-    return {
+-        "type": "http",
+-        "method": "GET",
+-        "path": path,
+-        "query_string": b"",
+-        "headers": headers,
+-    }
+-
+-
+-def _make_receive() -> Callable[[], Awaitable[Dict[str, object]]]:
+-    messages = [
+-        {"type": "http.request", "body": b"", "more_body": False},
+-    ]
+-
+-    async def _receive() -> Dict[str, object]:
+-        if messages:
+-            return messages.pop(0)
+-        return {"type": "http.disconnect"}
+-
+-    return _receive
+-
+-
+-@pytest.mark.parametrize(
+-    "env",
+-    ["dev", "staging"],
+-)
+-def test_admin_cors_enabled_for_non_prod(monkeypatch: pytest.MonkeyPatch, env: str) -> None:
+-    monkeypatch.setenv("ASKCHIP_ENV", env)
+-    monkeypatch.setenv("ASKCHIP_ADMIN_CORS_ORIGINS", "http://localhost:3000")
+-
+-    handler = asgi_gateway._resolve_admin_route("/api/v1/admin/flow/sid-123/trace")
+-    assert handler is not None
+-
+-    scope = _make_scope("/api/v1/admin/flow/sid-123/trace", "http://localhost:3000")
+-    response = asyncio.run(handler(scope, _make_receive()))
+-
+-    header_map = dict(response.headers)
+-    assert header_map[b"access-control-allow-origin"] == b"http://localhost:3000"
+-    assert header_map[b"access-control-allow-methods"] == b"GET"
+-
+-
+-def test_admin_cors_respects_origin_allow_list(monkeypatch: pytest.MonkeyPatch) -> None:
+-    monkeypatch.setenv("ASKCHIP_ENV", "dev")
+-    monkeypatch.setenv("ASKCHIP_ADMIN_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+-
+-    handler = asgi_gateway._resolve_admin_route("/api/v1/admin/flow/sid-123/trace")
+-    assert handler is not None
+-
+-    scope = _make_scope("/api/v1/admin/flow/sid-123/trace", "http://127.0.0.1:3000")
+-    response = asyncio.run(handler(scope, _make_receive()))
+-
+-    header_map = dict(response.headers)
+-    assert header_map[b"access-control-allow-origin"] == b"http://127.0.0.1:3000"
+-
+-
+-def test_admin_cors_disabled_in_prod(monkeypatch: pytest.MonkeyPatch) -> None:
+-    monkeypatch.setenv("ASKCHIP_ENV", "prod")
+-    monkeypatch.setenv("ASKCHIP_ADMIN_CORS_ORIGINS", "http://localhost:3000")
+-
+-    handler = asgi_gateway._resolve_admin_route("/api/v1/admin/flow/sid-123/trace")
+-    assert handler is not None
+-
+-    scope = _make_scope("/api/v1/admin/flow/sid-123/trace", "http://localhost:3000")
+-    response = asyncio.run(handler(scope, _make_receive()))
+-
+-    header_map = dict(response.headers)
+-    assert b"access-control-allow-origin" not in header_map
+-    assert b"access-control-allow-methods" not in header_map

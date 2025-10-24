@@ -14,7 +14,6 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
-from app.admin.flow_api import handle_flow_trace, handle_flow_zip
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
 from app.voice_v2.engine import EngineV2
@@ -58,10 +57,6 @@ STATIC_ROOT = BASE_DIR / "static"
 TEMPLATES_ROOT = BASE_DIR / "templates"
 INDEX_PATH = TEMPLATES_ROOT / "index.html"
 FAVICON_PATH = STATIC_ROOT / "favicon.ico"
-_ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
-_TRACE_SEGMENT = "trace"
-_ZIP_SEGMENT = "zip"
-
 _DEFAULT_INDEX_HTML = (
     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
 )
@@ -92,8 +87,6 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
         handler = _HTTP_ROUTES.get(path)
         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
             handler = partial(_handle_static, raw_path=path)
-        if handler is None:
-            handler = _resolve_admin_route(path)
         if handler is None:
             await _drain_request_body(receive)
             await _send_response(send, json_response(status=404, error="not_found"))
@@ -419,25 +412,15 @@ def _resolve_origin_policy() -> "_OriginPolicy":
         entries = tuple(filter(None, (_normalize_origin(item) for item in raw.split(","))))
         return _OriginPolicy(mode="explicit", values=entries)
 
-    env = (os.getenv("ASKCHIP_ENV") or "development").strip().lower()
-    if env in {"production", "prod"}:
-        return _OriginPolicy(mode="explicit", values=())
-
-    return _OriginPolicy(mode="localhost", values=("localhost", "127.0.0.1"))
+    return _OriginPolicy(mode="explicit", values=())
 
 
 def _is_origin_allowed(origin: str, policy: "_OriginPolicy") -> bool:
     if policy.mode == "explicit":
         normalized = _normalize_origin(origin)
-        if normalized is None or not policy.values:
-            return normalized in policy.values
-        return normalized in policy.values
-
-    if policy.mode == "localhost":
-        host = _extract_hostname(origin)
-        if host is None:
+        if normalized is None:
             return False
-        return host in policy.values
+        return normalized in policy.values
 
     return False
 
@@ -457,13 +440,6 @@ def _normalize_origin(value: str) -> Optional[str]:
     if lowered == "*":
         return None
     return lowered
-
-
-def _extract_hostname(value: str) -> Optional[str]:
-    parsed = urlparse(value)
-    if not parsed.hostname:
-        return None
-    return parsed.hostname.lower()
 
 
 @dataclass(frozen=True)
@@ -498,105 +474,6 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     READY_ROUTE: _handle_ready,
     INFO_ROUTE: _handle_info,
 }
-
-
-def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
-    if not path.startswith(_ADMIN_FLOW_PREFIX):
-        return None
-
-    suffix = path[len(_ADMIN_FLOW_PREFIX) :]
-    if not suffix:
-        return None
-
-    segments = suffix.split("/")
-    if len(segments) != 2:
-        return None
-
-    sid, action = segments
-    if not sid:
-        return None
-
-    handler: Optional[HttpHandler]
-    if action == _TRACE_SEGMENT:
-        handler = partial(handle_flow_trace, sid=sid)
-    elif action == _ZIP_SEGMENT:
-        handler = partial(handle_flow_zip, sid=sid)
-    else:
-        handler = None
-
-    if handler is None:
-        return None
-
-    handler = partial(_enforce_admin_auth, handler)
-    if _admin_cors_enabled():
-        return partial(_apply_admin_cors, handler)
-
-    return handler
-
-
-async def _apply_admin_cors(
-    handler: HttpHandler,
-    scope: dict,
-    receive: Callable[[], Awaitable[dict]],
-) -> Response:
-    response = await handler(scope, receive)
-    allow_origin = _resolve_admin_cors_origin(scope)
-    if allow_origin is None:
-        return response
-
-    encoded_origin = _encode_header_value(allow_origin)
-    if encoded_origin is None:
-        return response
-
-    headers = tuple(response.headers) + (
-        (b"access-control-allow-origin", encoded_origin),
-        (b"access-control-allow-methods", b"GET"),
-    )
-    return Response(status=response.status, body=response.body, headers=headers)
-
-
-def _admin_cors_enabled() -> bool:
-    env = (os.getenv("ASKCHIP_ENV") or "").strip().lower()
-    return env in {"dev", "staging"}
-
-
-def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
-    allowed = _parse_admin_cors_origins()
-    if not allowed:
-        return None
-
-    if "*" in allowed:
-        return "*"
-
-    origin = _decode_header(scope.get("headers", ()), b"origin")
-    if origin is None:
-        return None
-
-    normalized = origin.strip()
-    for entry in allowed:
-        if normalized == entry:
-            return normalized
-    return None
-
-
-def _parse_admin_cors_origins() -> tuple[str, ...]:
-    raw = os.getenv("ASKCHIP_ADMIN_CORS_ORIGINS")
-    if not raw:
-        return ()
-
-    entries = []
-    for item in raw.split(","):
-        value = item.strip()
-        if value:
-            entries.append(value)
-    return tuple(entries)
-
-
-def _encode_header_value(value: str) -> Optional[bytes]:
-    try:
-        return value.encode("latin1")
-    except UnicodeEncodeError:  # pragma: no cover - defensive
-        return None
 
 
 async def _enforce_admin_auth(
