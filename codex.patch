@@ -1,164 +1,199 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index d632dd12bbd71ba1b7e86a57ed435dc837591979..ff0b50d7d66c854699034752f3135d05cb423d1e 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -34,127 +34,74 @@
-     const resolvedSrc = resolveScriptSrc(src);
-     return new Promise((resolve, reject) => {
-       const existing = document.querySelector(`script[data-dynamic="${resolvedSrc}"]`);
-       if (existing) {
-         if (existing.dataset.loaded === "true") {
-           resolve();
-         } else {
-           existing.addEventListener("load", resolve, { once: true });
-           existing.addEventListener("error", reject, { once: true });
-         }
-         return;
-       }
-       const el = document.createElement("script");
-       el.src = resolvedSrc;
-       el.async = false;
-       el.dataset.dynamic = resolvedSrc;
-       el.addEventListener("load", () => {
-         el.dataset.loaded = "true";
-         resolve();
-       }, { once: true });
-       el.addEventListener("error", reject, { once: true });
-       document.head.appendChild(el);
-     });
+diff --git a/.env.example b/.env.example
+index 6fe2d0cf9172cdf2307cbb3bb6f70cee97832d0c..25d443784c35f0e601452868a4d5f664a3b26f24 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,30 +1,31 @@
+ # Non-secrets (safe defaults for local)
+ ADMIN_EMAILS=jwsiejk@purestorage.com
+ ADVANCED_LOGGING_ENABLED=True
+-APP_ENV=production
+ ASKCHIP_AUTO_ARM_MS=250
++# Optional: comma-separated WS Origin allow-list (e.g., https://example.com,https://admin.example.com). Leave empty for same-origin only.
++ASKCHIP_WS_ALLOWED_ORIGINS=
+ ASR_FINAL_GRACE_S=1.0
+ ASR_POST_FLUSH_WAIT_S=1.0
+ ASR_READY_WAIT_S=1.5
+ CHIBOT_DISABLE_RAW_FALLBACK=1
+ CSRF_ENFORCED=true
+ DATABASE_URL=postgresql://<user>:<pass>@<host>/<db>?sslmode=require
+ DD_TRACE_ENABLED=0
+ DEEPGRAM_LISTEN_URL=wss://api.deepgram.com/v1/listen
+ DEEPGRAM_UTTERANCE_END_MS=3000
+ DG_ENABLE_PARTIALS=true
+ DG_FINAL_WAIT_S=20
+ DG_LINGER_MS=8000
+ DG_OPEN_MICRO_WAIT_S=.60
+ ELEVEN_INACTIVITY=180
+ ELEVEN_MODEL_ID=eleven_flash_v2_5
+ ELEVEN_OUTPUT_FORMAT=pcm_24000
+ ELEVEN_OUTPUT_FORMAT_WS=pcm_24000
+ EMAIL_FROM_NAME=Chip
+ EMAIL_HOST=smtp.gmail.com
+ EMAIL_HOST_USER=you@example.com
+ EMAIL_PORT=587
+ EMAIL_USE_TLS=True
+ EMAIL_WEBHOOK_SECRET=<set-if-used>
+ EMAIL_WEBHOOK_URL=<set-if-used>
+ ENABLE_ADMIN_SSE=true
+diff --git a/docs/10_CONTRACT_WS.md b/docs/10_CONTRACT_WS.md
+index 7c754a8e8968476d04078d59ccf3de7f80b1ad2e..134cb746e920a223bef19bd0fbb829cfc9e3087b 100644
+--- a/docs/10_CONTRACT_WS.md
++++ b/docs/10_CONTRACT_WS.md
+@@ -1,99 +1,95 @@
+ # WebSocket Contract — `chat.v2`
+ 
+ **Endpoint:** `/ws/v2/chat` (ASGI WS)  
+ **Required subprotocol:** `chat.v2`  
+ 
+ ---
+ 
+ ## Handshake & Authentication (browser-safe)
+ 
+ - **Single path & protocol:** only `/ws/v2/chat` with `Sec-WebSocket-Protocol: chat.v2`.
+ - **Authentication:** bearer tokens are no longer required. Any `Authorization` header or `access_token` query parameter is ignored. Restrict access using network controls (VPN, IP allow-lists) if needed.
+-- **Origin allow‑list:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
++- **Origin policy:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
+ 
+ ### Origin allow‑list configuration
+ 
+-- `ASKCHIP_WS_ALLOWED_ORIGINS` — comma‑separated list of exact origins (`https://app.askchip.ai`, `https://console.askchip.ai`).
++- `ASKCHIP_WS_ALLOWED_ORIGINS` — optional comma‑separated list of exact origins (for example, `https://app.askchip.ai`, `https://console.askchip.ai`).
+   - Origins are matched case‑insensitively after normalizing scheme + host + optional port.
+   - Do **not** include wildcard (`*`) entries; they are ignored.
+-- If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, the server looks at `ASKCHIP_ENV`:
+-  - `ASKCHIP_ENV=production` (or `prod`) → reject every browser Origin by default.
+-  - Any other value (or unset) → allow only localhost loopback origins (host `localhost`/`127.0.0.1`).
++- If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, only same‑origin browser requests are accepted.
+ - Missing `Origin` headers (non‑browser clients) are accepted.
+ 
+ Deployment guidance:
+ 
+-- Production deployments **must** set `ASKCHIP_WS_ALLOWED_ORIGINS` to the exact list of UI origins.
+-- Development builds can omit the variable to allow local tooling (`http://localhost:3000`, `https://127.0.0.1:5173`, etc.).
++- Default production behavior is same-origin enforcement. Set `ASKCHIP_WS_ALLOWED_ORIGINS` to list any additional trusted Origins.
+ - When a connection is rejected the HTTP response is `403` with `{ "code": "origin_blocked" }`; browsers should surface this clearly to the user.
+-- Admin flow exports (`/api/v1/admin/flow/*`) stay server-side in production; dev/staging builds enable CORS for these routes via `ASKCHIP_ADMIN_CORS_ORIGINS` so the browser Inspector can call them.
+ 
+ - **Version negotiation:** if the subprotocol is missing/mismatched, the server replies **426** with a JSON body `{ "code": "bad_subprotocol" }`.
+ 
+ On successful upgrade, the server emits an initial `info` frame with connection metadata (see “Initial `info` frame”).
+ 
+ ---
+ 
+ ## Client → Server frames
+ 
+ - `{"type":"ping"}`
+ - `{"type":"client.ready"}`
+ 
+ - **Audio (binary frames):**  
+   The **server policy** selects the ASR provider and **required input audio**. Clients **MUST** follow the descriptor the server announces (see `asr.ready`). The client **MUST NOT** change codecs/containers; format is controlled by policy (Deepgram primary, Speechmatics secondary).  
+ 
+   - **Primary (Deepgram):** **WebM containerized Opus**, mono, **48 kHz**.  
+     The browser typically produces this via `MediaRecorder('audio/webm;codecs=opus')`.  
+   - **Secondary (Speechmatics):** **RAW PCM s16le**, mono, **16 kHz**.
+ 
+   The server signals readiness and the required input descriptor via:
+ 
+   ```json
+   {
+     "type": "asr.ready",
+     "vendor": "deepgram",
+     "input": { "container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1 }
    }
+ or
  
--  function sanitizeEnvCandidate(value) {
--    if (!value || typeof value !== "string") return null;
--    const trimmed = value.trim();
--    if (!trimmed) return null;
--    if (trimmed.includes("{{") || trimmed.includes("}}")) return null;
--    if (trimmed.includes("{") || trimmed.includes("}")) return null;
--    return trimmed;
--  }
--
--  function detectEnvironment() {
--    const html = typeof document !== "undefined" ? document.documentElement : null;
--    const body = typeof document !== "undefined" ? document.body : null;
--    const meta = typeof document !== "undefined" ? document.querySelector('meta[name="askchip-env"]') : null;
--    const candidates = [
--      sanitizeEnvCandidate(window.ASKCHIP_ENV),
--      html ? sanitizeEnvCandidate(html.getAttribute("data-askchip-env")) : null,
--      body ? sanitizeEnvCandidate(body.getAttribute("data-askchip-env")) : null,
--      meta ? sanitizeEnvCandidate(meta.getAttribute("content")) : null
--    ];
--    for (const candidate of candidates) {
--      if (candidate) {
--        return candidate.toLowerCase();
--      }
--    }
--    return "prod";
--  }
--
--  function isProdEnv(value) {
--    if (!value || typeof value !== "string") return true;
--    const normalized = value.trim().toLowerCase();
--    return normalized === "prod" || normalized === "production";
--  }
--
--  async function maybeInitInspector(env) {
--    if (isProdEnv(env)) {
--      return;
--    }
--    try {
--      await loadScript("inspector.js");
--      if (window.DevInspector && typeof window.DevInspector.init === "function") {
--        window.DevInspector.init({ env, AppState: window.AppState });
--      }
--    } catch (err) {
--      console.warn("Dev inspector initialization failed", err);
--    }
--  }
--
-   async function ensureRuntimeModules() {
-     if (!window.AppState) {
-       await loadScript("state.js");
-     }
-     if (!window.AudioPlayer) {
-       await loadScript("audio_player.js");
-     }
-     if (!window.WSClient) {
-       await loadScript("ws_client.js");
-     }
-     if (!window.AudioRecorder) {
-       await loadScript("audio_recorder.js");
-     }
-     if (!window.PolicyBadges) {
-       await loadScript("policy_badges.js");
-     }
-     if (!window.TranscriptView) {
-       await loadScript("transcript_view.js");
-     }
-   }
+ json
+ Copy code
+ {
+   "type": "asr.ready",
+   "vendor": "speechmatics",
+   "input": { "container": "raw", "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }
+ }
+ Binary message rule: each WS binary message carries an arbitrary contiguous chunk of the current input stream (WebM segment/cluster bytes for Opus, or a raw PCM chunk). The server assigns/validates sequencing (see “Binary audio sequencing & jitter buffer”).
  
-   async function init() {
-     await ensureRuntimeModules();
+ audio.header (optional, not for selecting codecs):
+ Clients may not override format. audio.header can supply stream hints like a starting sequence index:
  
--    const runtimeEnv = detectEnvironment();
--    window.ASKCHIP_ENV = runtimeEnv;
--    if (document.body) {
--      document.body.dataset.askchipEnv = runtimeEnv;
--    }
--
-     const AppState = window.AppState;
-     const WSClient = window.WSClient;
-     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
-       try {
-         window.PolicyBadges.init();
-       } catch (err) {
-         console.warn("Failed to initialize PolicyBadges", err);
-       }
-     }
+ json
+ Copy code
+ {"type":"audio.header","seq_start":0}
+-Optional admin toggle (dev only):
++Optional admin toggle:
  
-     // --- Config & mock current user for gating ---
-     window.ADMIN_EMAILS = (window.ADMIN_EMAILS || ["admin@askchip.ai"]).map(e => e.toLowerCase());
-     const urlParams = new URLSearchParams(window.location.search);
-     const currentUserEmail = (urlParams.get("email") || "user@example.com").toLowerCase();
-     const isAdmin = window.ADMIN_EMAILS.includes(currentUserEmail);
+ json
+ Copy code
+ {"type":"admin.toggle","barge_in_enabled":true}
+ Provider selection is policy‑controlled; do not flip providers via WS.
  
-     // --- Top-right brand dropdown ---
-     const brandBtn = document.getElementById('brandBtn');
-     const brandMenu = document.getElementById('brandMenu');
-     const adminItem = document.getElementById('adminItem');
-     brandMenu.setAttribute('aria-hidden', 'true');
-     function syncAdminItem() {
-       if (isAdmin) {
-         adminItem.removeAttribute('aria-disabled');
-         adminItem.disabled = false;
-@@ -922,31 +869,29 @@
-         const mock = new MockSocket();
-         sockets.push(mock);
-         return mock;
-       });
+ Optional resume handshake (see “Reconnect / Resume”):
  
-       startBtn.click();
+ json
+ Copy code
+ {"type":"client.resume","resume_token":"<string>"}
+ Server → Client frames
  
-       setTimeout(() => {
-         const mock = sockets[0];
-         if (!mock) return;
-         mock.simulateMessage({
-           type: 'info',
-           meta: { sid: 'smoke-sid', resume_token: 'smoke-resume', resume_ttl_ms: 5000 }
-         });
-         WSClient.__debug.recordPing(Date.now() - 42);
-         mock.simulateMessage({ type: 'pong', t: Date.now() });
-         setTimeout(() => {
-           endBtn.click();
-           console.log('WSClient smoke transitions', transitions);
-           console.log('WSClient smoke latency', AppState.getState().latencyMs);
-           WSClient.__debug.resetTransportFactory();
-           unsubscribe();
-         }, 20);
-       }, 20);
-     }
--
--    maybeInitInspector(runtimeEnv);
-   }
+ - **JSON text frames** (policy/info/chat/etc.) follow the telemetry envelope shown below. Examples:
  
-   init();
- })();
+ ```json
+ {"type":"pong","t":1730000000000}
+ ```
+ 
+ - **Binary audio frames** carry raw PCM s16le chunks at **16 kHz mono**. The playback descriptor is announced once per connection via `info.audio`, which already includes `{ "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }`. Each binary frame is a contiguous PCM buffer with no additional header bytes.
+ 
+ Policy (client-visible subset)
+ The server may push policy updates. Client-visible frames follow the telemetry
+ envelope (`type`, `ts_ms`, `level`, …) and the server **strips any policy keys
+ outside the stable subset** before sending to browsers. The client‑stable subset
+@@ -246,51 +242,51 @@ Copy code
+   "code":"rate_limited",          // enum
+   "message":"Too many connections",
+   "retryable": true,
+   "retry_in_ms": 3000             // optional when retryable==true
+ }
+ 
+ ### Error taxonomy
+ 
+ | Code               | Retryable | When it is emitted                                             | Retry guidance                                          |
+ | ------------------ | --------- | --------------------------------------------------------------- | ------------------------------------------------------- |
+ | `auth_failed`      | No        | Missing or invalid `access_token` query token.                 | Fix authentication and reconnect immediately.           |
+ | `origin_blocked`   | No        | Origin header not in allow-list.                               | Update the allow-list before attempting again.          |
+ | `version_mismatch` | No        | WebSocket subprotocol negotiation failed.                      | Connect with `chat.v2` and retry immediately.           |
+ | `rate_limited`     | Yes       | Connection/session exceeds token bucket limits.                | Wait `retry_in_ms` when provided; otherwise back off.   |
+ | `provider_down`    | Yes       | Downstream ASR/TTS/LLM vendor outage.                          | Retry with exponential backoff until the service recovers. |
+ | `resume_invalid`   | No        | Provided resume token is expired or already used.              | Start a new session and obtain a fresh resume token.    |
+ | `invalid_message`  | No        | JSON frame is malformed or unsupported for the current policy. | Correct the payload before retrying.                    |
+ 
+ `retry_in_ms` is only present when the server can provide a concrete wait time for retryable errors.
+ 
+ Behavioral rules
+ Connection & Version Negotiation
+ Only subprotocol chat.v2 is accepted. Clients missing it receive HTTP 426 with { "code": "bad_subprotocol" }.
+ 
+ Authorization, Origin, Rate Limits
+-Authorization: query token ?access_token=<JWT> is required unless explicitly disabled for dev. Invalid/missing → error{code:"auth_failed"} then close 1008.
++Authorization: query token ?access_token=<JWT> is required unless explicitly disabled. Invalid/missing → error{code:"auth_failed"} then close 1008.
+ 
+ Origin allow‑list: reject disallowed origins with 403 or close 1008 + error{code:"origin_blocked"}.
+ 
+ Rate limits: over‑rate → error{code:"rate_limited", retry_in_ms:<ms>} then close 1008.
+ 
+ Frame validation
+ Invalid JSON → schema_invalid or invalid_message. Connection typically remains open unless otherwise specified.
+ 
+ Backpressure & partial coalescing
+ Outbound WS outbox is bounded; on overflow the server emits telemetry EVT_WS_OUTBOX_DROP and may coalesce asr.partial frames (client should expect fewer partials; asr.final is authoritative).
+ 
+ asr.partial MAY include partial_seq (monotonic). Under backlog, intermediate partials MAY be dropped; the most recent text is delivered at most once per throttle interval.
+ 
+ Mode & Barge rules
+ While mode: "assistant_speaking":
+ 
+ If barge_in_enabled: true → auto‑VAD or ASR evidence may interrupt TTS.
+ 
+ If false → ignore speech until tts.end + post_hold_ms.
+ In mode: "idle", allow_auto_vad MUST be true and ACWR effective.
+ 
+ Telemetry Envelope v1
+ All events share this shape:
+ 
+ json

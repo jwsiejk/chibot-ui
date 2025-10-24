@@ -9,24 +9,20 @@
 
 - **Single path & protocol:** only `/ws/v2/chat` with `Sec-WebSocket-Protocol: chat.v2`.
 - **Authentication:** bearer tokens are no longer required. Any `Authorization` header or `access_token` query parameter is ignored. Restrict access using network controls (VPN, IP allow-lists) if needed.
-- **Origin allow‑list:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
+- **Origin policy:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
 
 ### Origin allow‑list configuration
 
-- `ASKCHIP_WS_ALLOWED_ORIGINS` — comma‑separated list of exact origins (`https://app.askchip.ai`, `https://console.askchip.ai`).
+- `ASKCHIP_WS_ALLOWED_ORIGINS` — optional comma‑separated list of exact origins (for example, `https://app.askchip.ai`, `https://console.askchip.ai`).
   - Origins are matched case‑insensitively after normalizing scheme + host + optional port.
   - Do **not** include wildcard (`*`) entries; they are ignored.
-- If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, the server looks at `ASKCHIP_ENV`:
-  - `ASKCHIP_ENV=production` (or `prod`) → reject every browser Origin by default.
-  - Any other value (or unset) → allow only localhost loopback origins (host `localhost`/`127.0.0.1`).
+- If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, only same‑origin browser requests are accepted.
 - Missing `Origin` headers (non‑browser clients) are accepted.
 
 Deployment guidance:
 
-- Production deployments **must** set `ASKCHIP_WS_ALLOWED_ORIGINS` to the exact list of UI origins.
-- Development builds can omit the variable to allow local tooling (`http://localhost:3000`, `https://127.0.0.1:5173`, etc.).
+- Default production behavior is same-origin enforcement. Set `ASKCHIP_WS_ALLOWED_ORIGINS` to list any additional trusted Origins.
 - When a connection is rejected the HTTP response is `403` with `{ "code": "origin_blocked" }`; browsers should surface this clearly to the user.
-- Admin flow exports (`/api/v1/admin/flow/*`) stay server-side in production; dev/staging builds enable CORS for these routes via `ASKCHIP_ADMIN_CORS_ORIGINS` so the browser Inspector can call them.
 
 - **Version negotiation:** if the subprotocol is missing/mismatched, the server replies **426** with a JSON body `{ "code": "bad_subprotocol" }`.
 
@@ -71,7 +67,7 @@ Clients may not override format. audio.header can supply stream hints like a sta
 json
 Copy code
 {"type":"audio.header","seq_start":0}
-Optional admin toggle (dev only):
+Optional admin toggle:
 
 json
 Copy code
@@ -268,7 +264,7 @@ Connection & Version Negotiation
 Only subprotocol chat.v2 is accepted. Clients missing it receive HTTP 426 with { "code": "bad_subprotocol" }.
 
 Authorization, Origin, Rate Limits
-Authorization: query token ?access_token=<JWT> is required unless explicitly disabled for dev. Invalid/missing → error{code:"auth_failed"} then close 1008.
+Authorization: query token ?access_token=<JWT> is required unless explicitly disabled. Invalid/missing → error{code:"auth_failed"} then close 1008.
 
 Origin allow‑list: reject disallowed origins with 403 or close 1008 + error{code:"origin_blocked"}.
 
