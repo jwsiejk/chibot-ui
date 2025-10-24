@@ -280,24 +280,26 @@ class ChatV2Adapter:
                 resume_replay = [self._clone_frame(marker) for marker in resume_state.markers]
 
         headers = self._decode_headers(scope.get("headers", ()))
-        auth_headers, detail = self._prepare_authorization_headers(scope, headers)
-        if detail:
+        allowed, reason, _claims = authorize(
+            headers,
+            allow_query_token=True,
+            scope=scope,
+            require_token=None,
+        )
+        if not allowed:
+            detail = reason or "missing or invalid auth"
             await self._publish(
                 EVT_AUTH_DENIED,
                 sid,
                 {"reason": detail},
             )
-            await self._deny_http(send, detail)
-            return
-
-        allowed, reason = authorize(auth_headers)
-        if not allowed:
-            await self._publish(
-                EVT_AUTH_DENIED,
+            await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+            await self._send_json(
+                send,
                 sid,
-                {"reason": reason or "missing or invalid auth"},
+                {"type": "error", "error": "unauthorized", "detail": detail},
             )
-            await self._deny_http(send, "missing or invalid auth")
+            await send({"type": "websocket.close", "code": 1008, "reason": "unauthorized"})
             return
 
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
@@ -316,7 +318,7 @@ class ChatV2Adapter:
             await send({"type": "websocket.close", "code": 1008, "reason": "resume_invalid"})
             return
 
-        ctx = AdapterContext(sid=sid, headers=auth_headers)
+        ctx = AdapterContext(sid=sid, headers=dict(headers))
         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
         client = scope.get("client")
         ctx.ip = client[0] if isinstance(client, tuple) and client else None
@@ -336,7 +338,7 @@ class ChatV2Adapter:
 
         if self.exporter:
             self.exporter.begin(ctx.sid)
-        await self._invoke_engine("on_open", ctx.sid, auth_headers)
+        await self._invoke_engine("on_open", ctx.sid, ctx.headers)
 
         for marker in resume_replay:
             await self._send_json(send, ctx.sid, marker)
@@ -1176,15 +1178,6 @@ class ChatV2Adapter:
         }
         bus.publish(event)
 
-    async def _deny_http(self, send: Callable[[dict], Awaitable[None]], detail: str) -> None:
-        body = json.dumps({"type": "error", "code": "unauthorized", "detail": detail}).encode("utf-8")
-        headers = [
-            (b"content-type", b"application/json"),
-            (b"content-length", str(len(body)).encode("ascii")),
-        ]
-        await send({"type": "websocket.http.response.start", "status": 401, "headers": headers})
-        await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
-
     async def _invoke_engine(self, hook: str, *args: Any) -> None:
         if not self.engine:
             return
@@ -1281,54 +1274,6 @@ class ChatV2Adapter:
     @staticmethod
     def _now_ms() -> int:
         return int(time.time() * 1000)
-
-    @staticmethod
-    def _extract_browser_token(scope: dict) -> tuple[Optional[str], Optional[str]]:
-        """Extract a browser-supplied access token from the query string."""
-
-        raw_query = scope.get("query_string", b"")
-        if not raw_query:
-            return None, None
-
-        if isinstance(raw_query, bytes):
-            try:
-                query = raw_query.decode("utf-8")
-            except UnicodeDecodeError:
-                return None, "missing or invalid auth"
-        else:
-            query = str(raw_query)
-
-        params = parse_qs(query, keep_blank_values=True)
-        tokens = params.get("access_token")
-        if not tokens:
-            return None, None
-        if len(tokens) != 1:
-            return None, "ambiguous auth"
-
-        token = tokens[0]
-        if not token:
-            return None, "missing or invalid auth"
-
-        return token, None
-
-    def _prepare_authorization_headers(
-        self, scope: dict, headers: Dict[str, str]
-    ) -> tuple[Dict[str, str], Optional[str]]:
-        """Overlay Authorization header based on browser token rules."""
-
-        token, error = self._extract_browser_token(scope)
-        if error:
-            return dict(headers), error
-
-        header_auth = headers.get("authorization")
-        if token:
-            if header_auth:
-                return dict(headers), "ambiguous auth"
-            updated = dict(headers)
-            updated["authorization"] = f"Bearer {token}"
-            return updated, None
-
-        return dict(headers), None
 
     @staticmethod
     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:

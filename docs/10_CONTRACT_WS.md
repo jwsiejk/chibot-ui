@@ -8,14 +8,22 @@
 ## Handshake & Authentication (browser-safe)
 
 - **Single path & protocol:** only `/ws/v2/chat` with `Sec-WebSocket-Protocol: chat.v2`.  
-- **Auth (browser-compatible):** client connects with a short‑lived bearer **query token**:
+- **Auth (browser-compatible):** clients send a short-lived bearer JWT using either the HTTP header or a browser-safe query para
+  meter:
 
+Authorization: Bearer <JWT>
+-- or --
 wss://<host>/ws/v2/chat?access_token=<JWT>
 Sec-WebSocket-Protocol: chat.v2
 Origin: https://app.askchip.ai
 
 csharp
 Copy code
+
+- **Token requirements:** production deployments require a valid JWT for every upgrade. Development builds may opt in to headerl
+  ess sessions by exporting `WS_TOKEN_REQUIRED=0` (the default is to require tokens when `WS_TOKEN_REQUIRED=1`). The WebSocket ga
+  te shares the same rules and JWT verifier as `/api/v1/admin/flow/*`, and the HTTP routes accept the same `?access_token=` quer
+  y parameter.
 
 - **Origin allow‑list:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
 
@@ -201,6 +209,7 @@ Notes:
 - The server emits one PCM buffer per **binary WebSocket message**. No frame headers or chunk counters are prepended.
 - Each chunk length MUST be a multiple of `channels * 2` bytes (16‑bit samples).
 - The existing binary routing guard still rejects non-audio payloads.
+- Playback ordering is deterministic: every utterance is bracketed by a `tts.start` JSON frame, contiguous PCM binary messages, and a matching `tts.end` frame.
 
 Client decoding example (WebAudio):
 
