@@ -1,116 +1,599 @@
-diff --git a/app/services/llm/provider.py b/app/services/llm/provider.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..da9f50a3ae4892044e2e9550ed742eae231e82f9
---- /dev/null
-+++ b/app/services/llm/provider.py
-@@ -0,0 +1,23 @@
-+"""Provider factory helpers for LLM integrations."""
-+
-+from __future__ import annotations
-+
-+from typing import Optional
-+
-+from app.services.llm.openai_client import OpenAILLMProvider
-+
-+
-+def create_from_env(*, telemetry_bus=None, clock=None) -> Optional[OpenAILLMProvider]:
-+    """Instantiate the default provider when the runtime is configured."""
-+
-+    kwargs = {}
-+    if telemetry_bus is not None:
-+        kwargs["telemetry_bus"] = telemetry_bus
-+    if clock is not None:
-+        kwargs["clock"] = clock
-+
-+    provider = OpenAILLMProvider(**kwargs)
-+    return provider if provider.is_configured else None
-+
-+
-+__all__ = ["create_from_env"]
-diff --git a/app/voice_v2/llm.py b/app/voice_v2/llm.py
-index 2b1055e13b2e2690d7e9dd0ce62e0043aa4e03e8..bdaa53c2f0c8e68ca2a50c291625149445dd4b34 100644
---- a/app/voice_v2/llm.py
-+++ b/app/voice_v2/llm.py
-@@ -1,80 +1,81 @@
- """Stubbed LLM adapter used by the voice engine."""
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index 7f3b2909d7aa40781cff7870ebf8b78cbd023087..939f4af9bc7e499543cfee7e4d3a74ec32c45530 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -1,44 +1,45 @@
+ """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
  from __future__ import annotations
  
- import asyncio
  import json
  import logging
+ import mimetypes
+ import os
  import time
- import uuid
- from typing import Any, Dict, Mapping
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from functools import partial
+ from pathlib import Path
+ from tempfile import NamedTemporaryFile
+ from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
+ from urllib.parse import urlparse
  
-+from app.services.llm.provider import create_from_env
- from app.telemetry import bus
- from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
- from app.voice_v2 import generator
- from app.voice_v2.llm_base import (
-     LLMProviderBase,
-     ProviderCircuitOpenError,
-     ProviderTimeoutError,
- )
- from app.voice_v2.persona import (
-     build_system_preamble,
-     load_persona,
-     maybe_pick_quote_for_sid,
- )
+ from app.admin.flow_api import handle_flow_trace, handle_flow_zip
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2.engine import EngineV2
++from app.voice_v2.tts_runtime import TTSRuntime
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
  
- EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
- EVT_TURN_END = "EVT_TURN_END"
+ logger = logging.getLogger(__name__)
  
  
- _logger = logging.getLogger(__name__)
+ @dataclass(frozen=True)
+ class Response:
+     """Immutable container describing a serialized HTTP response."""
+ 
+     status: int
+     body: bytes
+     headers: tuple[tuple[bytes, bytes], ...]
  
  
- class LLMAdapter:
-     """Return canned responses while optionally publishing telemetry events."""
+ def json_response(*, status: int = 200, **payload: Any) -> Response:
+     """Serialize a payload to JSON using a compact representation."""
  
-     _INTENT_REPLIES = {
-         "greeting": "Hi there! How can I help you today?",
-         "goodbye": "Thanks for stopping by. Talk soon!",
-         "status.check": "Let me pull up the latest status for you.",
-         "support.request": "I'm here to help. Could you share a few more details?",
-     }
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
+     )
+     return Response(status=status, body=body, headers=headers)
  
-     def __init__(
-         self,
-         *,
-         telemetry_bus=bus,
-         provider: LLMProviderBase | None = None,
-         canned_text: str | None = None,
-         auto_publish: bool = True,
-     ) -> None:
-         self._bus = telemetry_bus
-         self._auto_publish = bool(auto_publish)
-         self._canned_text = canned_text or (
-             "Thanks for chatting with AskChip! How else can I help?"
-         )
--        self._provider = provider
-+        self._provider = provider or create_from_env(telemetry_bus=telemetry_bus)
-         self._turn_lookup: dict[str, tuple[str, str]] = {}
-         self._turn_counter_by_sid: Dict[str, int] = {}
-         subscribe = getattr(self._bus, "subscribe", None)
-         if callable(subscribe):
-             self._subscriptions = [
-                 subscribe(EVT_TURN_BEGIN, self._handle_turn_event),
-                 subscribe(EVT_TURN_END, self._handle_turn_event),
-             ]
-         else:
-             self._subscriptions = []
  
-     def generate(
-         self,
-         req_id: str,
-         intent: str | None = None,
-         entities: Mapping[str, Any] | None = None,
-         **kwargs: Any,
-     ) -> Mapping[str, Any]:
-         """Return a canned response for the provided ``intent``.
+@@ -311,51 +312,53 @@ async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: R
+             "status": response.status,
+             "headers": headers,
+         }
+     )
+     await send(
+         {
+             "type": "websocket.http.response.body",
+             "body": response.body,
+             "more_body": False,
+         }
+     )
  
-         ``entities`` are currently unused but accepted so future call sites can
-         pass structured data without needing a signature change. The adapter can
-         still be called with ``text="..."`` to preserve compatibility with
-         legacy callers and tests.
-         """
+ 
+ def _method_is_get(scope: dict) -> bool:
+     """Return True when the incoming HTTP scope uses the GET method."""
+ 
+     return scope.get("method", "GET").upper() == "GET"
+ 
+ 
+ def _get_adapter() -> ChatV2Adapter:
+     """Return a lazily instantiated ChatV2Adapter singleton."""
+     global _adapter
+     if _adapter is None:
+         exporter = FileExporter(EXPORT_ROOT)
+         engine = EngineV2(exporter=exporter)
++        tts_runtime = TTSRuntime(engine=engine)
+         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
++        _adapter.tts_runtime = tts_runtime
+     return _adapter
+ 
+ 
+ async def _reject_origin(
+     scope: dict,
+     origin: Optional[str],
+     receive: Callable[[], Awaitable[dict]],
+     send: Callable[[dict], Awaitable[None]],
+ ) -> None:
+     """Reject a WebSocket handshake because the Origin is not allowed."""
+ 
+     message = await receive()
+     if message.get("type") != "websocket.connect":
+         return
+ 
+     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
+     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
+     if origin:
+         payload["origin"] = origin
+     await _send_ws_response(send, json_response(status=403, **payload))
+ 
+ 
+ def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
+     for header, value in headers:
+         if header == name:
+diff --git a/app/services/tts/elevenlabs_client.py b/app/services/tts/elevenlabs_client.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..2c2f78264379a0edc6fa2d2d27efe243f14bd811
+--- /dev/null
++++ b/app/services/tts/elevenlabs_client.py
+@@ -0,0 +1,184 @@
++"""ElevenLabs TTS provider that streams PCM16 audio for Engine v2."""
++from __future__ import annotations
++
++import asyncio
++import contextlib
++import logging
++import os
++from dataclasses import dataclass
++from typing import Any, AsyncIterator, Dict, Optional
++
++import httpx
++
++from app.telemetry import bus
++from app.voice_v2.tts_base import TTSProviderBase
++
++_logger = logging.getLogger(__name__)
++
++_API_BASE_URL = "https://api.elevenlabs.io/v1"
++_OUTPUT_FORMAT = "pcm_16000"
++_SAMPLE_RATE_HZ = 16000
++_CHANNELS = 1
++_SAMPLE_WIDTH_BYTES = 2  # 16-bit
++# Emit roughly 40 ms of audio per chunk (16 kHz mono => 1280 bytes per slice).
++_CHUNK_BYTES = int(_SAMPLE_RATE_HZ * _CHANNELS * _SAMPLE_WIDTH_BYTES * 0.04)
++
++
++@dataclass
++class ElevenLabsStream:
++    """Asynchronous iterator that yields PCM chunks from ElevenLabs."""
++
++    response_cm: Any
++    chunk_bytes: int = _CHUNK_BYTES
++
++    def __post_init__(self) -> None:
++        self._response: httpx.Response | None = None
++        self._queue: asyncio.Queue[bytes | object] = asyncio.Queue()
++        self._producer: asyncio.Task[None] | None = None
++        self._sentinel = object()
++        self._error: BaseException | None = None
++        self._closed = False
++
++    def __await__(self):  # type: ignore[override]
++        return self._start().__await__()
++
++    async def _start(self) -> "ElevenLabsStream":
++        response = await self.response_cm.__aenter__()
++        self._response = response
++        response.raise_for_status()
++        self._producer = asyncio.create_task(self._drain())
++        return self
++
++    async def _drain(self) -> None:
++        assert self._response is not None
++        buffer = bytearray()
++        try:
++            async for data in self._response.aiter_bytes():
++                if not data:
++                    continue
++                buffer.extend(data)
++                while len(buffer) >= self.chunk_bytes:
++                    await self._queue.put(bytes(buffer[: self.chunk_bytes]))
++                    del buffer[: self.chunk_bytes]
++            if buffer:
++                await self._queue.put(bytes(buffer))
++        except asyncio.CancelledError:
++            raise
++        except Exception as exc:  # pragma: no cover - defensive
++            self._error = exc
++        finally:
++            await self._queue.put(self._sentinel)
++            await self._close_response()
++
++    def __aiter__(self) -> AsyncIterator[bytes]:
++        return self._iterate()
++
++    async def _iterate(self) -> AsyncIterator[bytes]:
++        while True:
++            item = await self._queue.get()
++            if item is self._sentinel:
++                break
++            yield bytes(item)
++        if self._error is not None:
++            raise self._error
++
++    async def aclose(self) -> None:
++        if self._closed:
++            return
++        producer = self._producer
++        if producer is not None and not producer.done():
++            producer.cancel()
++        if producer is not None:
++            with contextlib.suppress(asyncio.CancelledError):
++                await producer
++        await self._close_response()
++
++    async def cancel(self) -> None:
++        await self.aclose()
++
++    async def _close_response(self) -> None:
++        if self._closed:
++            return
++        self._closed = True
++        if self._response is not None:
++            try:
++                await self.response_cm.__aexit__(None, None, None)
++            finally:
++                self._response = None
++
++
++class ElevenLabsTTSProvider(TTSProviderBase):
++    """TTS provider that requests streaming PCM 16 kHz audio from ElevenLabs."""
++
++    def __init__(
++        self,
++        *,
++        telemetry_bus=bus,
++        retries: Optional[int] = None,
++        timeout_s: Optional[float] = None,
++    ) -> None:
++        api_key = os.getenv("ELEVENLABS_API_KEY")
++        if not api_key:
++            raise RuntimeError("ELEVENLABS_API_KEY must be set for ElevenLabsTTSProvider")
++        default_voice = os.getenv("ELEVENLABS_VOICE_ID") or None
++        retry_count = retries if retries is not None else int(os.getenv("TTS_RETRIES", "1") or 1)
++        timeout = timeout_s if timeout_s is not None else float(os.getenv("TTS_TIMEOUT_S", "8") or 8)
++
++        super().__init__(
++            vendor="elevenlabs",
++            telemetry_bus=telemetry_bus,
++            retries=max(0, retry_count),
++            timeout_s=max(float(timeout), 0.1),
++        )
++        self._api_key = api_key
++        self._default_voice_id = default_voice
++        self._client: httpx.AsyncClient | None = None
++        self._client_lock = asyncio.Lock()
++        self._timeout = httpx.Timeout(None, connect=5.0, write=5.0, read=None)
++
++    @property
++    def default_voice_id(self) -> str | None:
++        return self._default_voice_id
++
++    async def aclose(self) -> None:
++        client = self._client
++        self._client = None
++        if client is not None:
++            await client.aclose()
++
++    async def _synthesize_impl(self, text: str, *, voice_id: Optional[str] = None, **kwargs) -> ElevenLabsStream:
++        if not isinstance(text, str):
++            raise TypeError("text must be a string")
++        if not text:
++            raise ValueError("text must not be empty")
++        target_voice = voice_id or self._default_voice_id
++        if not target_voice:
++            raise RuntimeError("voice_id must be provided for ElevenLabs synthesis")
++
++        client = await self._get_client()
++        payload: Dict[str, object] = {"text": text, "output_format": _OUTPUT_FORMAT}
++        model_id = kwargs.get("model_id") or os.getenv("ELEVENLABS_MODEL_ID")
++        if isinstance(model_id, str) and model_id:
++            payload["model_id"] = model_id
++
++        headers = {"xi-api-key": self._api_key, "accept": "application/octet-stream"}
++        response_cm = client.stream(
++            "POST",
++            f"/text-to-speech/{target_voice}/stream",
++            json=payload,
++            headers=headers,
++            params={"optimize_streaming_latency": "4"},
++        )
++        return ElevenLabsStream(response_cm=response_cm)
++
++    async def _get_client(self) -> httpx.AsyncClient:
++        client = self._client
++        if client is not None:
++            return client
++        async with self._client_lock:
++            if self._client is None:
++                self._client = httpx.AsyncClient(base_url=_API_BASE_URL, timeout=self._timeout)
++            return self._client
++
++
++__all__ = ["ElevenLabsTTSProvider", "ElevenLabsStream"]
+diff --git a/app/voice_v2/tts_runtime.py b/app/voice_v2/tts_runtime.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..94774def31a32a32463e7fa92f669aa78db360e1
+--- /dev/null
++++ b/app/voice_v2/tts_runtime.py
+@@ -0,0 +1,299 @@
++"""Runtime that bridges EVT_NLG events to ElevenLabs streaming synthesis."""
++from __future__ import annotations
++
++import asyncio
++import logging
++import os
++import uuid
++from dataclasses import dataclass
++from typing import Any, Dict, Mapping, Optional
++
++from app.telemetry import bus
++from app.voice_v2 import EVT_NLG, EVT_TTS_END
++from app.voice_v2.engine import EngineV2
++from app.voice_v2.tts_base import (
++    ProviderCircuitOpenError,
++    ProviderTimeoutError,
++    TTSProviderBase,
++)
++from app.services.tts.elevenlabs_client import ElevenLabsStream, ElevenLabsTTSProvider
++
++_logger = logging.getLogger(__name__)
++
++
++@dataclass
++class _SynthesisState:
++    """Track an in-flight synthesis task for a session."""
++
++    utt_id: str
++    post_hold_ms: int
++    emit_end: bool = True
++    task: asyncio.Task[Any] | None = None
++    stream: ElevenLabsStream | None = None
++
++
++class TTSRuntime:
++    """Subscribe to NLG telemetry and orchestrate server-side TTS."""
++
++    def __init__(
++        self,
++        *,
++        engine: EngineV2,
++        provider: TTSProviderBase | None = None,
++        telemetry_bus=bus,
++    ) -> None:
++        if engine is None:
++            raise ValueError("engine must be provided")
++
++        self._engine = engine
++        self._bus = telemetry_bus
++        self._loop: asyncio.AbstractEventLoop | None = None
++        self._default_post_hold_ms = self._load_default_post_hold()
++        self._utt_seq: Dict[str, int] = {}
++        self._states: Dict[str, _SynthesisState] = {}
++        self._subscriptions: list[str] = []
++
++        if provider is None:
++            provider = self._build_provider()
++        self._provider = provider
++
++        if self._provider is None:
++            _logger.info("TTS runtime disabled: ELEVENLABS_API_KEY not configured")
++            return
++
++        self._subscriptions.append(self._bus.subscribe(EVT_NLG, self._handle_nlg_event))
++        self._subscriptions.append(self._bus.subscribe(EVT_TTS_END, self._handle_tts_end_event))
++
++    # ------------------------------------------------------------------
++    # Event handlers
++    # ------------------------------------------------------------------
++    def _handle_nlg_event(self, event: Dict[str, Any]) -> None:
++        provider = self._provider
++        if provider is None:
++            return
++
++        sid = event.get("sid")
++        text = event.get("text")
++        req_id = event.get("req_id")
++
++        if not isinstance(sid, str) or not sid:
++            return
++        if not isinstance(text, str) or not text.strip():
++            return
++        if not isinstance(req_id, str) or not req_id:
++            req_id = f"req-{uuid.uuid4().hex}"
++
++        loop = self._ensure_loop()
++        if loop is None:
++            _logger.warning("No running event loop for TTS synthesis", extra={"sid": sid})
++            return
++
++        utt_id = self._next_utt_id(sid)
++        post_hold_ms = self._resolve_post_hold_ms()
++        voice_id = self._resolve_voice_id(provider)
++
++        if voice_id is None:
++            _logger.warning("Skipping TTS synthesis; no voice_id available", extra={"sid": sid})
++            return
++
++        self._cancel_state(sid, reason="superseded")
++
++        state = _SynthesisState(utt_id=utt_id, post_hold_ms=post_hold_ms)
++        self._states[sid] = state
++
++        task = loop.create_task(
++            self._run_synthesis(sid, req_id, text, voice_id, state),
++            name=f"tts-runtime-{sid}-{utt_id}",
++        )
++        state.task = task
++        task.add_done_callback(lambda task, sid=sid, state=state: self._on_task_done(sid, state, task))
++
++    def _handle_tts_end_event(self, event: Dict[str, Any]) -> None:
++        sid = event.get("sid")
++        if not isinstance(sid, str) or not sid:
++            return
++
++        state = self._states.get(sid)
++        if state is None:
++            return
++
++        utt_meta = self._extract_utt_id(event.get("meta"))
++        if utt_meta != state.utt_id:
++            return
++
++        if event.get("reason") == "canceled":
++            state.emit_end = False
++            task = state.task
++            if task is not None and not task.done():
++                task.cancel()
++
++    # ------------------------------------------------------------------
++    # Synthesis lifecycle
++    # ------------------------------------------------------------------
++    async def _run_synthesis(
++        self,
++        sid: str,
++        req_id: str,
++        text: str,
++        voice_id: Optional[str],
++        state: _SynthesisState,
++    ) -> None:
++        provider = self._provider
++        if provider is None:
++            return
++
++        stream: ElevenLabsStream | None = None
++        start_emitted = False
++
++        try:
++            stream = await provider.synthesize(text, voice_id=voice_id)
++            state.stream = stream
++        except ProviderCircuitOpenError:
++            _logger.warning("ElevenLabs circuit open; skipping synthesis", extra={"sid": sid})
++            return
++        except ProviderTimeoutError:
++            _logger.warning("ElevenLabs synthesis timed out", extra={"sid": sid})
++            return
++        except asyncio.CancelledError:
++            raise
++        except Exception as exc:  # pragma: no cover - defensive
++            _logger.exception("ElevenLabs synthesis failed", extra={"sid": sid, "error": str(exc)})
++            return
++
++        if self._states.get(sid) is not state:
++            if stream is not None:
++                await stream.aclose()
++            return
++
++        try:
++            self._engine.on_tts_start(sid, state.utt_id, state.post_hold_ms)
++            start_emitted = True
++
++            async for chunk in stream:
++                if not chunk:
++                    continue
++                self._engine.emit_tts_audio_chunk(sid, chunk)
++        except asyncio.CancelledError:
++            raise
++        except Exception as exc:  # pragma: no cover - defensive
++            _logger.exception(
++                "Error streaming ElevenLabs audio", extra={"sid": sid, "utt_id": state.utt_id, "error": str(exc)}
++            )
++        finally:
++            if stream is not None:
++                try:
++                    await stream.aclose()
++                except Exception:  # pragma: no cover - defensive
++                    _logger.debug("Error closing ElevenLabs stream", exc_info=True)
++            if start_emitted and state.emit_end:
++                self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
++
++    def _on_task_done(self, sid: str, state: _SynthesisState, task: asyncio.Task[Any]) -> None:
++        current = self._states.get(sid)
++        if current is state:
++            self._states.pop(sid, None)
++
++        try:
++            task.result()
++        except asyncio.CancelledError:
++            pass
++        except Exception:  # pragma: no cover - defensive
++            _logger.exception("TTS synthesis task failed", extra={"sid": sid})
++
++    # ------------------------------------------------------------------
++    # Helpers
++    # ------------------------------------------------------------------
++    def _build_provider(self) -> TTSProviderBase | None:
++        api_key = os.getenv("ELEVENLABS_API_KEY")
++        if not api_key:
++            return None
++        try:
++            return ElevenLabsTTSProvider(telemetry_bus=self._bus)
++        except Exception:  # pragma: no cover - defensive
++            _logger.exception("Failed to initialize ElevenLabsTTSProvider")
++            return None
++
++    def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
++        loop = self._loop
++        if loop is not None and loop.is_running():
++            return loop
++        try:
++            loop = asyncio.get_running_loop()
++        except RuntimeError:
++            return None
++        self._loop = loop
++        return loop
++
++    def _next_utt_id(self, sid: str) -> str:
++        current = self._utt_seq.get(sid, 0) + 1
++        self._utt_seq[sid] = current
++        return f"utt-{current:05d}"
++
++    def _resolve_post_hold_ms(self) -> int:
++        snapshot = self._engine.policy_snapshot or {}
++        hold: Optional[int] = None
++        voice_block = snapshot.get("voice")
++        if isinstance(voice_block, Mapping):
++            candidate = voice_block.get("post_hold_ms")
++            if isinstance(candidate, (int, float)):
++                hold = int(candidate)
++        if hold is None:
++            candidate = snapshot.get("post_hold_ms")
++            if isinstance(candidate, (int, float)):
++                hold = int(candidate)
++        if hold is None or hold < 0:
++            hold = self._default_post_hold_ms
++        return hold
++
++    def _resolve_voice_id(self, provider: TTSProviderBase) -> Optional[str]:
++        resolver = getattr(self._engine, "_voice_profile", None)
++        if callable(resolver):
++            try:
++                voice_id, _ = resolver()
++                if isinstance(voice_id, str) and voice_id:
++                    return voice_id
++            except Exception:  # pragma: no cover - defensive
++                _logger.debug("Unable to resolve voice profile from engine", exc_info=True)
++        default_voice = getattr(provider, "default_voice_id", None)
++        if isinstance(default_voice, str) and default_voice:
++            return default_voice
++        return None
++
++    def _cancel_state(self, sid: str, *, reason: str) -> None:
++        state = self._states.pop(sid, None)
++        if state is None:
++            return
++        state.emit_end = False
++        task = state.task
++        if task is not None and not task.done():
++            task.cancel()
++        try:
++            self._engine.cancel_current_tts(sid, reason=reason)
++        except Exception:  # pragma: no cover - defensive
++            _logger.debug("Engine cancel_current_tts failed", exc_info=True)
++
++    @staticmethod
++    def _extract_utt_id(meta: Any) -> Optional[str]:
++        if not isinstance(meta, Mapping):
++            return None
++        tts_meta = meta.get("tts")
++        if not isinstance(tts_meta, Mapping):
++            return None
++        utt_id = tts_meta.get("utt_id")
++        if isinstance(utt_id, str):
++            return utt_id
++        return None
++
++    def _load_default_post_hold(self) -> int:
++        raw = os.getenv("TTS_POST_HOLD_MS")
++        if raw is None:
++            return 200
++        try:
++            value = int(float(raw))
++        except (TypeError, ValueError):
++            _logger.warning("Invalid TTS_POST_HOLD_MS=%r; defaulting to 200", raw)
++            return 200
++        return max(0, value)
++
++
++__all__ = ["TTSRuntime"]

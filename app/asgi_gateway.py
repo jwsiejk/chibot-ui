@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from app.admin.flow_api import handle_flow_trace, handle_flow_zip
 from app.telemetry.exporter import FileExporter
 from app.voice_v2.engine import EngineV2
+from app.voice_v2.tts_runtime import TTSRuntime
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 
 logger = logging.getLogger(__name__)
@@ -333,7 +334,9 @@ def _get_adapter() -> ChatV2Adapter:
     if _adapter is None:
         exporter = FileExporter(EXPORT_ROOT)
         engine = EngineV2(exporter=exporter)
+        tts_runtime = TTSRuntime(engine=engine)
         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
+        _adapter.tts_runtime = tts_runtime
     return _adapter
 
 
