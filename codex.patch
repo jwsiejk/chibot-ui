@@ -1,156 +1,127 @@
-diff --git a/app/security/auth.py b/app/security/auth.py
-index bbd0461c2336bfb7fee007db77540152f5908fee..dc0dd3665ac87cb849626572e852b57d609f554e 100644
---- a/app/security/auth.py
-+++ b/app/security/auth.py
-@@ -1,72 +1,75 @@
- """Authentication helpers for WebSocket adapters."""
- from __future__ import annotations
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 0c50527a5008cda9c3c237fd7ad7707643df2747..470ab8ba54434a2cbeee4fb0fd759d07e00d5ead 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -263,97 +263,104 @@
+     startHeartbeat();
+   }
  
- import base64
- import binascii
- import json
- import time
- from typing import Dict, Tuple, cast
+   function handlePongFrame() {
+     if (typeof lastPingAt === "number") {
+       const latency = Math.max(0, Date.now() - lastPingAt);
+       updateState({ latencyMs: latency });
+     }
+   }
  
- import requests
+   function handleChatHistoryFrame(frame) {
+     const view = window.TranscriptView;
+     const messages = Array.isArray(frame.messages) ? frame.messages : [];
+     if (view && typeof view.handleChatMessage === "function" && messages.length) {
+       for (const message of messages) {
+         try {
+           view.handleChatMessage(message);
+         } catch (err) {
+           console.warn("TranscriptView chat history handler error", err);
+           break;
+         }
+       }
+     }
+   }
  
- from app.config import get_env
- from app.security.browser_token import extract_bearer_from_query
- from app.telemetry import bus as telemetry_bus
- 
- # JWKS cache keyed by kid or the fallback marker for kid-less tokens.
- _JWKS_CACHE: Dict[str, Dict[str, int]] = {}
- _JWKS_CACHE_MARKER = "__default__"
-+_JWKS_CACHE_TTL_SECONDS = 600
-+_JWKS_CACHE_EXPIRES_AT = 0.0
- 
- # ASN.1 DER prefix for SHA-256 used in PKCS#1 v1.5 signatures.
- _RSA_SHA256_PREFIX = bytes.fromhex(
-     "3031300d060960864801650304020105000420"
- )
- 
- 
- def _is_prod() -> bool:
-     env = (get_env("ASKCHIP_ENV", "development") or "development").strip().lower()
-     return env in {"prod", "production"}
- 
- 
- def _b64url_decode(data: str, *, context: str) -> Tuple[bytes | None, str | None]:
-     data = data.strip()
-     padding = "=" * (-len(data) % 4)
-     try:
-         return base64.urlsafe_b64decode(data + padding), None
-     except (ValueError, binascii.Error):
-         return None, f"invalid base64 in {context}"
- 
- 
- def _load_json(data: bytes, *, context: str) -> Tuple[Dict[str, object] | None, str | None]:
-     try:
-         return cast(Dict[str, object], json.loads(data.decode("utf-8"))), None
-     except (ValueError, UnicodeDecodeError):
-         return None, f"invalid {context} json"
- 
- 
- def _jwks_refresh() -> Tuple[bool, str | None]:
-+    global _JWKS_CACHE_EXPIRES_AT
-     url = get_env("AUTH_JWKS_URL")
-     if not url:
-         if _is_prod():
-             return False, "missing AUTH_JWKS_URL"
-         return False, "missing AUTH_JWKS_URL"
- 
-     try:
-         response = requests.get(url, timeout=5)
-         response.raise_for_status()
-         payload = response.json()
-     except requests.RequestException as exc:  # pragma: no cover - network errors
-         return False, f"failed to fetch JWKS: {exc}"
-     except ValueError:
-         return False, "invalid JWKS payload"
- 
-     keys = payload.get("keys") if isinstance(payload, dict) else None
-     if not keys or not isinstance(keys, list):
-         return False, "JWKS missing keys"
- 
-     _JWKS_CACHE.clear()
-     fallback_set = False
- 
-     for raw_key in keys:
-         if not isinstance(raw_key, dict):
-             continue
-@@ -76,60 +79,73 @@ def _jwks_refresh() -> Tuple[bool, str | None]:
-         e_b64 = raw_key.get("e")
-         if not isinstance(n_b64, str) or not isinstance(e_b64, str):
-             continue
-         n_bytes_err = _b64url_decode(n_b64, context="jwks.n")
-         e_bytes_err = _b64url_decode(e_b64, context="jwks.e")
-         n_bytes, n_err = n_bytes_err
-         e_bytes, e_err = e_bytes_err
-         if n_err or e_err or n_bytes is None or e_bytes is None:
-             continue
-         n_int = int.from_bytes(n_bytes, "big", signed=False)
-         e_int = int.from_bytes(e_bytes, "big", signed=False)
-         if n_int <= 0 or e_int <= 0:
-             continue
-         key_size = (n_int.bit_length() + 7) // 8
-         cache_entry = {"n": n_int, "e": e_int, "size": key_size}
-         kid = raw_key.get("kid") if isinstance(raw_key.get("kid"), str) else None
-         if kid:
-             _JWKS_CACHE[kid] = cache_entry
-         if not fallback_set:
-             _JWKS_CACHE[_JWKS_CACHE_MARKER] = cache_entry
-             fallback_set = True
- 
-     if not _JWKS_CACHE:
-         return False, "JWKS has no usable RSA keys"
- 
-+    _JWKS_CACHE_EXPIRES_AT = time.time() + _JWKS_CACHE_TTL_SECONDS
-     return True, None
- 
- 
- def _get_jwks_key(kid: str | None) -> Tuple[Dict[str, int] | None, str | None]:
-+    global _JWKS_CACHE_EXPIRES_AT
++  function handleErrorFrame(frame) {
++    console.error("WS error frame", frame);
++    const isResumeInvalid = frame && frame.code === "resume_invalid";
++    if (isResumeInvalid) {
++      clearResumeState();
++      updateState({ resumeError: "invalid" });
++    }
++    if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
++      try {
++        window.WSErrorUI.handleFrame(frame, {
++          scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
++        });
++      } catch (err) {
++        console.warn("Error handler threw", err);
++      }
++    }
++    if (isResumeInvalid) {
++      close("resume_invalid");
++    }
++  }
 +
-     cache_key = kid if kid else _JWKS_CACHE_MARKER
--    if cache_key not in _JWKS_CACHE:
-+    now = time.time()
-+
-+    if now >= _JWKS_CACHE_EXPIRES_AT:
-+        success, error = _jwks_refresh()
-+        if not success:
-+            return None, error
-+
-+    key = _JWKS_CACHE.get(cache_key)
-+    if key is None:
-         success, error = _jwks_refresh()
-         if not success:
-             return None, error
--    return _JWKS_CACHE.get(cache_key), None
-+        key = _JWKS_CACHE.get(cache_key)
-+
-+    return key, None
+   function handleMessageFrame(frame) {
+     if (frame.type === "keepalive") {
+       // Some transports may emit a keepalive frame before the info frame has
+       // been sent. Treat it as a no-op and continue waiting for the info
+       // frame so we do not close the connection prematurely.
+       return;
+     }
  
+     if (frame.type === "ping") {
+       sendJson({ type: "pong", t: Date.now() });
+       return;
+     }
  
- def _verify_rs256(signing_input: bytes, signature: bytes, key: Dict[str, int]) -> bool:
-     import hashlib
- 
-     key_size = key.get("size") or 0
-     if key_size <= 0:
-         return False
-     if len(signature) != key_size:
-         if len(signature) > key_size:
-             return False
-         signature = signature.rjust(key_size, b"\x00")
- 
-     n = key["n"]
-     e = key["e"]
-     sig_int = int.from_bytes(signature, "big", signed=False)
-     if sig_int >= n:
-         return False
- 
-     em_int = pow(sig_int, e, n)
-     em = em_int.to_bytes(key_size, "big")
-     if len(em) < len(_RSA_SHA256_PREFIX) + 11:
-         return False
-     if em[0] != 0x00 or em[1] != 0x01:
-         return False
+     if (expectInfoFrame) {
+       if (frame.type === "chat.history") {
+         handleChatHistoryFrame(frame);
++      } else if (frame.type === "error") {
++        handleErrorFrame(frame);
++        return;
+       } else if (frame.type !== "info") {
+         console.error("Expected info frame first, received", frame.type);
+         close("bad_info_sequence");
+         return;
+       }
+       if (frame.type === "info") {
+         handleInfoFrame(frame);
+       }
+     } else if (frame.type === "info") {
+       handleInfoFrame(frame);
+     } else if (frame.type === "pong") {
+       handlePongFrame();
+     } else if (frame.type === "error") {
+-      console.error("WS error frame", frame);
+-      const isResumeInvalid = frame && frame.code === "resume_invalid";
+-      if (isResumeInvalid) {
+-        clearResumeState();
+-        updateState({ resumeError: "invalid" });
+-      }
+-      if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+-        try {
+-          window.WSErrorUI.handleFrame(frame, {
+-            scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
+-          });
+-        } catch (err) {
+-          console.warn("Error handler threw", err);
+-        }
+-      }
+-      if (isResumeInvalid) {
+-        close("resume_invalid");
+-      }
++      handleErrorFrame(frame);
+     } else if (frame.type === "tts.start") {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+         audioPlayer.handleTtsStart(frame);
+       }
+     } else if (frame.type === "tts.end") {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+     } else if (frame.type === "policy.interaction") {
+       const sanitized = sanitizePolicyFrame(frame);
+       dispatchFrame(sanitized);
+       return;
+     } else if (frame.type === "asr.partial") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handlePartial === "function") {
+         try {
+           view.handlePartial(frame);
+         } catch (err) {
+           console.warn("TranscriptView partial handler error", err);
+         }
+       }
+     } else if (frame.type === "asr.final") {
+       const view = window.TranscriptView;

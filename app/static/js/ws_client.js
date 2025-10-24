@@ -285,6 +285,27 @@
     }
   }
 
+  function handleErrorFrame(frame) {
+    console.error("WS error frame", frame);
+    const isResumeInvalid = frame && frame.code === "resume_invalid";
+    if (isResumeInvalid) {
+      clearResumeState();
+      updateState({ resumeError: "invalid" });
+    }
+    if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+      try {
+        window.WSErrorUI.handleFrame(frame, {
+          scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
+        });
+      } catch (err) {
+        console.warn("Error handler threw", err);
+      }
+    }
+    if (isResumeInvalid) {
+      close("resume_invalid");
+    }
+  }
+
   function handleMessageFrame(frame) {
     if (frame.type === "keepalive") {
       // Some transports may emit a keepalive frame before the info frame has
@@ -301,6 +322,9 @@
     if (expectInfoFrame) {
       if (frame.type === "chat.history") {
         handleChatHistoryFrame(frame);
+      } else if (frame.type === "error") {
+        handleErrorFrame(frame);
+        return;
       } else if (frame.type !== "info") {
         console.error("Expected info frame first, received", frame.type);
         close("bad_info_sequence");
@@ -314,24 +338,7 @@
     } else if (frame.type === "pong") {
       handlePongFrame();
     } else if (frame.type === "error") {
-      console.error("WS error frame", frame);
-      const isResumeInvalid = frame && frame.code === "resume_invalid";
-      if (isResumeInvalid) {
-        clearResumeState();
-        updateState({ resumeError: "invalid" });
-      }
-      if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
-        try {
-          window.WSErrorUI.handleFrame(frame, {
-            scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
-          });
-        } catch (err) {
-          console.warn("Error handler threw", err);
-        }
-      }
-      if (isResumeInvalid) {
-        close("resume_invalid");
-      }
+      handleErrorFrame(frame);
     } else if (frame.type === "tts.start") {
       const audioPlayer = getAudioPlayer();
       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
