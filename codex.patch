@@ -1,73 +1,52 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index fb62d913a3b92140c0c7e23981115e63caa1356d..f5198bb37b25e31611c2742921e07d643bced191 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -66,50 +66,60 @@ _DEFAULT_INDEX_HTML = (
- HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
- 
- _adapter: Optional[ChatV2Adapter] = None
- 
- 
- def _ws_route_matches(scope: dict, expected: str) -> bool:
-     """
-     Return True when the incoming websocket request targets the expected route,
-     robust to deployments mounted under a non-empty ASGI root_path.
-     """
- 
-     raw_path = scope.get("path", "") or ""
-     root_path = scope.get("root_path") or ""
-     # Direct match (no prefix)
-     if raw_path == expected:
-         return True
-     # Combined path match (some servers expect root_path + path)
-     combined = f"{root_path}{raw_path}" if root_path else raw_path
-     if combined == expected:
-         return True
-     # Prefix-mount: accept if the combined path ends with expected
-     return combined.endswith(expected)
- 
- 
- async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-+    # Log raw scope for the chat WS route before any routing/validation
-+    p = (scope.get("path") or "")
-+    if p.endswith("/ws/v2/chat"):
-+        # Keep formatting consistent with this module's logging style
-+        logger.info(
-+            "evt=ws_entry path=%s type=%s subs=%s query=%s root_path=%s",
-+            scope.get("path"), scope.get("type"),
-+            scope.get("subprotocols"), scope.get("query_string"),
-+            scope.get("root_path"),
-+        )
-     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
-     scope_type = scope.get("type")
-     path = (scope.get("root_path") or "") + scope.get("path", "")
- 
-     if scope_type == "websocket":
-         if _ws_route_matches(scope, WS_ROUTE):
-             # Origin checks removed — accept and hand off to adapter
-             await _get_adapter()(scope, receive, send)
-         else:
-             await _reject_websocket(receive, send)
-         return
- 
-     if scope_type == "http":
-         handler = _HTTP_ROUTES.get(path)
-         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
-             handler = partial(_handle_static, raw_path=path)
-         if handler is None:
-             await _drain_request_body(receive)
-             await _send_response(send, json_response(status=404, error="not_found"))
-         else:
-             response = await handler(scope, receive)
-             await _send_response(send, response)
-         return
- 
-     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index dad99767666f38e8a6d8acefb8d80e23bd41a630..50bff474303535ca21cc4af1618176ce955521c5 100644
+index 50bff474303535ca21cc4af1618176ce955521c5..d3b7255b9f8d7e0546706bf070e6499ac219c43f 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -469,50 +469,67 @@
+@@ -1,41 +1,41 @@
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 15000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+ 
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading WSClient");
+   }
+   const getAudioPlayer = () => window.AudioPlayer;
+ 
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
+   let lastPingAt = null;
+-  let transportFactory = (url, protocol) => new WebSocket(url, protocol);
++  let transportFactory = (url, protocol = SUBPROTOCOL) => new WebSocket(url, protocol);
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
+   let autoResumeAttemptToken = null;
+ 
+   function getResumeState() {
+     const state = AppState.getState();
+     const resume = state && typeof state.resume === "object" ? state.resume : null;
+     if (!resume) return null;
+     const token = typeof resume.token === "string" ? resume.token : null;
+     const ttlMs = Number.isFinite(resume.ttlMs) ? resume.ttlMs : null;
+     const expiresAt = Number.isFinite(resume.expiresAt) ? resume.expiresAt : null;
+     if (!token || !ttlMs || !expiresAt) return null;
+     return { token, ttlMs, expiresAt };
+   }
+ 
+   function assignResume(token, ttlMs) {
+     if (typeof AppState.setResume === "function") {
+       AppState.setResume(token, ttlMs);
+     }
+     autoResumeAttemptToken = null;
+   }
+ 
+   function clearResumeState() {
+     if (typeof AppState.clearResume === "function") {
+       AppState.clearResume();
+@@ -468,50 +468,51 @@
+       socket = null;
        expectInfoFrame = true;
      }
    }
@@ -92,24 +71,25 @@ index dad99767666f38e8a6d8acefb8d80e23bd41a630..50bff474303535ca21cc4af1618176ce
        rateLimitRetryCount = 0;
      }
      const url = computeUrl(resumeTokenValue);
++    console.log("WS opening", { url, subprotocol: SUBPROTOCOL });
      const ws = transportFactory(url, SUBPROTOCOL);
-+    ws.onopen = () => {
-+      // Lightweight breadcrumb; keep as console.log
-+      console.log("WebSocket open", { url, protocol: SUBPROTOCOL });
-+    };
-+
-+    ws.onerror = (e) => {
-+      console.error("WebSocket error", e, { readyState: ws.readyState });
-+    };
-+
-+    ws.onclose = (e) => {
-+      console.error("WebSocket closed", {
-+        code: e.code,
-+        reason: e.reason,
-+        wasClean: e.wasClean,
-+        readyState: ws.readyState,
-+      });
-+    };
+     ws.onopen = () => {
+       // Lightweight breadcrumb; keep as console.log
+       console.log("WebSocket open", { url, protocol: SUBPROTOCOL });
+     };
+ 
+     ws.onerror = (e) => {
+       console.error("WebSocket error", e, { readyState: ws.readyState });
+     };
+ 
+     ws.onclose = (e) => {
+       console.error("WebSocket closed", {
+         code: e.code,
+         reason: e.reason,
+         wasClean: e.wasClean,
+         readyState: ws.readyState,
+       });
+     };
      socket = ws;
      updateState({
        connectionState: resumeTokenValue ? "resuming" : "connecting",
@@ -117,101 +97,65 @@ index dad99767666f38e8a6d8acefb8d80e23bd41a630..50bff474303535ca21cc4af1618176ce
        latencyMs: null,
        lastPingAt: null,
        resumeError: null
-     });
-     attachSocket(ws);
-     return ws;
-   }
- 
-   function close(reason = DEFAULT_CLOSE_REASON) {
-     if (!socket) {
-       updateState({ connectionState: "disconnected" });
-       return;
-     }
-     const ws = socket;
-     cleanupSocket(ws, reason);
-     clearHeartbeat();
-     clearRateLimitRetryTimer();
-     rateLimitRetryCount = 0;
-     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
-       try {
-         window.WSErrorUI.cancelRateLimitCountdown(reason);
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 21750627924c5ba7c68f12429695e6a639856348..fbda2591c079f255d5704bcc586ceaf728238d40 100644
+index fbda2591c079f255d5704bcc586ceaf728238d40..bcaef6a2fcec70c205c2e5a57d323bed94ef016b 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -244,72 +244,75 @@ class ChatV2Adapter:
-         *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
-     ) -> None:
-         self.engine = engine
-         self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
-         self._ip_buckets: Dict[str, TokenBucket] = {}
-         self._contexts: Dict[str, AdapterContext] = {}
-         self._resume_tokens: Dict[str, _ResumeState] = {}
-         self._ping_interval_ms = max(
-             0,
-             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
-         )
+@@ -378,55 +378,56 @@ class ChatV2Adapter:
+             raise
+         finally:
+             await self._stop_server_keepalive(ctx)
+             await self._cleanup_outbound(ctx)
+             self._stop_asr_ready_tracker(ctx)
+             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
+             if self.exporter:
+                 self.exporter.end(ctx.sid, {"close_code": close_code})
+             self._contexts.pop(ctx.sid, None)
  
-     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-         if scope.get("type") != "websocket":
-             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
+     def set_accepting_audio(self, sid: str, accepting: bool) -> None:
+         """Toggle whether the given connection should accept audio frames."""
  
-         connect_event = await receive()
-         if connect_event.get("type") != "websocket.connect":
-             return
+         ctx = self._contexts.get(sid)
+         if ctx is not None:
+             ctx.accepting_audio = accepting
+             if accepting:
+                 ctx.audio_violation_count = 0
  
-         subprotocols = scope.get("subprotocols") or []
-+        _logger.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
-         if CHAT_V2_SUBPROTOCOL not in subprotocols:
-+            _logger.warning("evt=ws_reject_subprotocol reason=missing_or_mismatch need='chat.v2'")
-             await self._reject_subprotocol(send)
-             return
+     def get_context(self, sid: str) -> Optional[AdapterContext]:
+         """Return the adapter context for testing hooks."""
  
-         self._purge_expired_resume_tokens()
+         return self._contexts.get(sid)
  
-         resume_token_param, resume_error = self._extract_resume_token(scope)
-         resume_state: Optional[_ResumeState] = None
-         resume_replay: list[Dict[str, Any]] = []
+     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
++        detail = f"missing required subprotocol '{CHAT_V2_SUBPROTOCOL}'"
+         body = json.dumps(
+             {
+                 "type": "error",
+                 "code": "bad_subprotocol",
+-                "detail": "use chat.v2",
++                "detail": detail,
+             }
+         ).encode("utf-8")
+         headers = [
+             (b"content-type", b"application/json"),
+             (b"content-length", str(len(body)).encode("ascii")),
+         ]
+         await send({"type": "websocket.http.response.start", "status": 426, "headers": headers})
+         await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
  
-         sid = uuid.uuid4().hex
-         if resume_error is None and resume_token_param:
-             resume_state = self._consume_resume_token(resume_token_param)
-             if resume_state is None:
-                 resume_error = "resume_invalid"
-             else:
-                 sid = resume_state.sid
-                 resume_replay = [self._clone_frame(marker) for marker in resume_state.markers]
+     @dataclass
+     class _HandleResult:
+         should_continue: bool
+         close_code: Optional[int] = None
+         close_reason: Optional[str] = None
  
-         headers = self._decode_headers(scope.get("headers", ()))
-         principal: Dict[str, Any] = {"sub": "anon"}
+     async def _handle_text(
+         self, data: str, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> _HandleResult:
+         limited = await self._check_rate_limit(ctx, send)
+         if limited is not None:
+             return limited
  
-+        _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
-         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
- 
-         if resume_error is not None:
-             await self._send_json(
-                 send,
-                 sid,
-                 {
-                     "type": "error",
-                     "code": "resume_invalid",
-                     "detail": "Resume token expired or invalid",
-                     "retryable": False,
-                 },
-             )
-             await send({"type": "websocket.close", "code": 1008, "reason": "resume_invalid"})
-             return
- 
-         ctx = AdapterContext(sid=sid, headers=dict(headers), principal=principal)
-         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-         client = scope.get("client")
-         ctx.ip = client[0] if isinstance(client, tuple) and client else None
-         if ctx.ip:
-             ctx.ip_bucket = self._ip_buckets.setdefault(
-                 ctx.ip,
-                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-             )
+         try:
+             payload_bytes = data.encode("utf-8")
+             byte_count = len(payload_bytes)

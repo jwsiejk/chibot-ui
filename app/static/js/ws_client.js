@@ -13,7 +13,7 @@
   let heartbeatTimerId = null;
   let expectInfoFrame = true;
   let lastPingAt = null;
-  let transportFactory = (url, protocol) => new WebSocket(url, protocol);
+  let transportFactory = (url, protocol = SUBPROTOCOL) => new WebSocket(url, protocol);
   let rateLimitRetryTimerId = null;
   let rateLimitRetryCount = 0;
   let autoResumeAttemptToken = null;
@@ -490,6 +490,7 @@
       rateLimitRetryCount = 0;
     }
     const url = computeUrl(resumeTokenValue);
+    console.log("WS opening", { url, subprotocol: SUBPROTOCOL });
     const ws = transportFactory(url, SUBPROTOCOL);
     ws.onopen = () => {
       // Lightweight breadcrumb; keep as console.log

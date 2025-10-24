@@ -400,11 +400,12 @@ class ChatV2Adapter:
         return self._contexts.get(sid)
 
     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
+        detail = f"missing required subprotocol '{CHAT_V2_SUBPROTOCOL}'"
         body = json.dumps(
             {
                 "type": "error",
                 "code": "bad_subprotocol",
-                "detail": "use chat.v2",
+                "detail": detail,
             }
         ).encode("utf-8")
         headers = [
