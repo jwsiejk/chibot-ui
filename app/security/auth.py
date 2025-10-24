@@ -1,16 +1,289 @@
 """Authentication helpers for WebSocket adapters."""
 from __future__ import annotations
 
-from typing import Dict, Tuple
+import base64
+import binascii
+import json
+import time
+from typing import Dict, Tuple, cast
+
+import requests
+
+from app.config import get_env
+from app.security.browser_token import extract_bearer_from_query
+
+# JWKS cache keyed by kid or the fallback marker for kid-less tokens.
+_JWKS_CACHE: Dict[str, Dict[str, int]] = {}
+_JWKS_CACHE_MARKER = "__default__"
+
+# ASN.1 DER prefix for SHA-256 used in PKCS#1 v1.5 signatures.
+_RSA_SHA256_PREFIX = bytes.fromhex(
+    "3031300d060960864801650304020105000420"
+)
 
 
-def authorize(headers: Dict[str, str]) -> Tuple[bool, str | None]:
-    """Simple bearer-token authorization gate."""
+def _is_prod() -> bool:
+    env = (get_env("ASKCHIP_ENV", "development") or "development").strip().lower()
+    return env in {"prod", "production"}
 
-    auth_header = headers.get("authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return False, "missing or invalid auth"
+
+def _b64url_decode(data: str, *, context: str) -> Tuple[bytes | None, str | None]:
+    data = data.strip()
+    padding = "=" * (-len(data) % 4)
+    try:
+        return base64.urlsafe_b64decode(data + padding), None
+    except (ValueError, binascii.Error):
+        return None, f"invalid base64 in {context}"
+
+
+def _load_json(data: bytes, *, context: str) -> Tuple[Dict[str, object] | None, str | None]:
+    try:
+        return cast(Dict[str, object], json.loads(data.decode("utf-8"))), None
+    except (ValueError, UnicodeDecodeError):
+        return None, f"invalid {context} json"
+
+
+def _jwks_refresh() -> Tuple[bool, str | None]:
+    url = get_env("AUTH_JWKS_URL")
+    if not url:
+        if _is_prod():
+            return False, "missing AUTH_JWKS_URL"
+        return False, "missing AUTH_JWKS_URL"
+
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:  # pragma: no cover - network errors
+        return False, f"failed to fetch JWKS: {exc}"
+    except ValueError:
+        return False, "invalid JWKS payload"
+
+    keys = payload.get("keys") if isinstance(payload, dict) else None
+    if not keys or not isinstance(keys, list):
+        return False, "JWKS missing keys"
+
+    _JWKS_CACHE.clear()
+    fallback_set = False
+
+    for raw_key in keys:
+        if not isinstance(raw_key, dict):
+            continue
+        if raw_key.get("kty") != "RSA":
+            continue
+        n_b64 = raw_key.get("n")
+        e_b64 = raw_key.get("e")
+        if not isinstance(n_b64, str) or not isinstance(e_b64, str):
+            continue
+        n_bytes_err = _b64url_decode(n_b64, context="jwks.n")
+        e_bytes_err = _b64url_decode(e_b64, context="jwks.e")
+        n_bytes, n_err = n_bytes_err
+        e_bytes, e_err = e_bytes_err
+        if n_err or e_err or n_bytes is None or e_bytes is None:
+            continue
+        n_int = int.from_bytes(n_bytes, "big", signed=False)
+        e_int = int.from_bytes(e_bytes, "big", signed=False)
+        if n_int <= 0 or e_int <= 0:
+            continue
+        key_size = (n_int.bit_length() + 7) // 8
+        cache_entry = {"n": n_int, "e": e_int, "size": key_size}
+        kid = raw_key.get("kid") if isinstance(raw_key.get("kid"), str) else None
+        if kid:
+            _JWKS_CACHE[kid] = cache_entry
+        if not fallback_set:
+            _JWKS_CACHE[_JWKS_CACHE_MARKER] = cache_entry
+            fallback_set = True
+
+    if not _JWKS_CACHE:
+        return False, "JWKS has no usable RSA keys"
+
     return True, None
 
 
-__all__ = ["authorize"]
+def _get_jwks_key(kid: str | None) -> Tuple[Dict[str, int] | None, str | None]:
+    cache_key = kid if kid else _JWKS_CACHE_MARKER
+    if cache_key not in _JWKS_CACHE:
+        success, error = _jwks_refresh()
+        if not success:
+            return None, error
+    return _JWKS_CACHE.get(cache_key), None
+
+
+def _verify_rs256(signing_input: bytes, signature: bytes, key: Dict[str, int]) -> bool:
+    import hashlib
+
+    key_size = key.get("size") or 0
+    if key_size <= 0:
+        return False
+    if len(signature) != key_size:
+        if len(signature) > key_size:
+            return False
+        signature = signature.rjust(key_size, b"\x00")
+
+    n = key["n"]
+    e = key["e"]
+    sig_int = int.from_bytes(signature, "big", signed=False)
+    if sig_int >= n:
+        return False
+
+    em_int = pow(sig_int, e, n)
+    em = em_int.to_bytes(key_size, "big")
+    if len(em) < len(_RSA_SHA256_PREFIX) + 11:
+        return False
+    if em[0] != 0x00 or em[1] != 0x01:
+        return False
+    try:
+        separator_index = em.index(b"\x00", 2)
+    except ValueError:
+        return False
+    padding = em[2:separator_index]
+    if not padding or any(byte != 0xFF for byte in padding):
+        return False
+
+    expected = _RSA_SHA256_PREFIX + hashlib.sha256(signing_input).digest()
+    actual = em[separator_index + 1 :]
+    return actual == expected
+
+
+def verify_jwt(token: str) -> Tuple[bool, str | None, Dict[str, object] | None]:
+    token = (token or "").strip()
+    if not token:
+        return False, "empty token", None
+
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False, "invalid token format", None
+
+    header_b64, payload_b64, signature_b64 = parts
+    header_bytes, header_err = _b64url_decode(header_b64, context="header")
+    if header_err or header_bytes is None:
+        return False, header_err, None
+    payload_bytes, payload_err = _b64url_decode(payload_b64, context="payload")
+    if payload_err or payload_bytes is None:
+        return False, payload_err, None
+
+    header, header_json_err = _load_json(header_bytes, context="header")
+    if header_json_err or header is None:
+        return False, header_json_err, None
+    payload, payload_json_err = _load_json(payload_bytes, context="payload")
+    if payload_json_err or payload is None:
+        return False, payload_json_err, None
+
+    alg = header.get("alg") if isinstance(header.get("alg"), str) else None
+    if alg != "RS256":
+        return False, "unsupported alg", None
+
+    signature_bytes, signature_err = _b64url_decode(signature_b64, context="signature")
+    if signature_err or signature_bytes is None:
+        return False, signature_err, None
+
+    kid = header.get("kid") if isinstance(header.get("kid"), str) else None
+    key, key_err = _get_jwks_key(kid)
+    if key_err:
+        return False, key_err, None
+    if key is None:
+        return False, "no matching jwk", None
+
+    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+    if not _verify_rs256(signing_input, signature_bytes, key):
+        return False, "invalid signature", None
+
+    issuer = get_env("AUTH_JWT_ISSUER")
+    if not issuer:
+        if _is_prod():
+            return False, "missing AUTH_JWT_ISSUER", None
+    if issuer and payload.get("iss") != issuer:
+        return False, "invalid issuer", None
+
+    audience_env = get_env("AUTH_AUDIENCE")
+    audience = audience_env if audience_env else ("askchip" if not _is_prod() else None)
+    if _is_prod() and not audience_env:
+        return False, "missing AUTH_AUDIENCE", None
+    if audience:
+        aud_claim = payload.get("aud")
+        if isinstance(aud_claim, str):
+            aud_ok = aud_claim == audience
+        elif isinstance(aud_claim, (list, tuple, set)):
+            aud_ok = audience in aud_claim
+        else:
+            aud_ok = False
+        if not aud_ok:
+            return False, "invalid audience", None
+
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return False, "missing exp", None
+    if exp < time.time():
+        return False, "token expired", None
+
+    nbf = payload.get("nbf")
+    if isinstance(nbf, (int, float)) and nbf > time.time():
+        return False, "token not yet valid", None
+
+    return True, None, payload
+
+
+def authorize(
+    headers: Dict[str, str],
+    *,
+    allow_query_token: bool | None = None,
+    scope: Dict[str, object] | None = None,
+    require_token: bool | None = None,
+):
+    """Bearer-token authorization gate shared by WS and HTTP paths."""
+
+    env = (get_env("ASKCHIP_ENV", "development") or "development").strip().lower()
+    legacy_mode = allow_query_token is None and scope is None and require_token is None
+
+    if allow_query_token is None:
+        allow_query = False
+    else:
+        allow_query = allow_query_token
+
+    if require_token is None:
+        if env in {"prod", "production"}:
+            token_required = True
+        else:
+            token_required = bool(int(get_env("WS_TOKEN_REQUIRED", "0") or 0))
+    else:
+        token_required = require_token
+
+    token: str | None = None
+    error: str | None = None
+
+    auth_header = (headers or {}).get("authorization") if headers else None
+    if auth_header:
+        parts = auth_header.split(" ", 1)
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            token = parts[1].strip()
+            if not token:
+                error = "empty token"
+        else:
+            error = "invalid authorization header"
+    elif allow_query:
+        token, error = extract_bearer_from_query(scope or {})
+
+    if (not token or error) and token_required:
+        if not token:
+            result = (False, "missing token", None)
+            return result[:2] if legacy_mode else result
+        result = (False, error, None)
+        return result[:2] if legacy_mode else result
+
+    if token:
+        ok, reason, claims = verify_jwt(token)
+        if ok:
+            result = (True, None, claims)
+            return result[:2] if legacy_mode else result
+        result = (False, reason, None)
+        return result[:2] if legacy_mode else result
+
+    if token_required:
+        result = (False, error or "missing token", None)
+        return result[:2] if legacy_mode else result
+
+    result = (True, None, {"mode": "dev-no-token"})
+    return result[:2] if legacy_mode else result
+
+
+__all__ = ["authorize", "verify_jwt"]

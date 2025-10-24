@@ -1,234 +1,397 @@
-diff --git a/app/policy/loader.py b/app/policy/loader.py
-index 8422cc4fff38046aa4f9b4ca184c2efe3ac68028..68176cb887736a7312354024f8b139bd117b4cd6 100644
---- a/app/policy/loader.py
-+++ b/app/policy/loader.py
-@@ -1,45 +1,46 @@
- """Utilities for loading the interaction policy snapshot."""
+diff --git a/.env.example b/.env.example
+index 474d90e4d893b04cba73ff365b871c1c0c7bc695..3743d987d7a737c85c943f152090f3022f2af9a2 100644
+--- a/.env.example
++++ b/.env.example
+@@ -31,37 +31,42 @@ ENABLE_ADMIN_SSE=true
+ ENABLE_NLU_LOGGING=1
+ FEATURE_ADMIN_UI=1
+ FEATURE_AUDIO=1
+ FEATURE_TOOLS=1
+ FROM_EMAIL=you@example.com
+ GUNICORN_GRACEFUL_TIMEOUT=45
+ GUNICORN_KEEP_ALIVE=75
+ GUNICORN_TIMEOUT=90
+ LLM_VENDOR=openai
+ LLM_MODEL=gpt-4o-mini
+ LLM_TIMEOUT_S=12
+ LLM_RETRIES=1
+ MIC_CAPTURE=1
+ MIC_ECHO_WS=1
+ PIP_ONLY_BINARY=numpy,pandas,PyMuPDF
+ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+ SESSION_TYPE=filesystem
+ SUGGESTION_MAX=3
+ WEB_CONCURRENCY=1
+ WS_BEARER_ONLY=1
+ WS_FAIL_LIMIT=10
+ WS_FAIL_WINDOW_SEC=60
+ WS_FINAL_GUARD_MS=900
+ WS_NO_AUDIO_DETECT_WINDOW_S=10
+ WS_NO_AUDIO_NUDGE_ONLY=1
+-WS_TOKEN_REQUIRED=1
+ stt_mode=streaming
+ 
+ # Render UI secrets (leave blank locally; set in Render dashboard)
+ ADMIN_SSE_E2E_KEY=
+ DEEPGRAM_API_KEY=
+ ELEVENLABS_API_KEY=
+ ELEVENLABS_VOICE_ID=
+ EMAIL_HOST_PASSWORD=
+ OPENAI_API_KEY=
+ OPENAI_BASE_URL=
+ SECRET_KEY=
++
++# Auth / JWT
++WS_TOKEN_REQUIRED=1
++AUTH_JWKS_URL=
++AUTH_JWT_ISSUER=
++AUTH_AUDIENCE=askchip
+diff --git a/app/security/auth.py b/app/security/auth.py
+index 1e7ae1a755f71a47f865340a69a1ffc2a36284f6..11a673aa330a28e6347d1f026381ef238b63338e 100644
+--- a/app/security/auth.py
++++ b/app/security/auth.py
+@@ -1,16 +1,289 @@
+ """Authentication helpers for WebSocket adapters."""
  from __future__ import annotations
  
- from copy import deepcopy
- from typing import Any, Dict
+-from typing import Dict, Tuple
++import base64
++import binascii
++import json
++import time
++from typing import Dict, Tuple, cast
  
- InteractionPolicySnapshot = Dict[str, Any]
++import requests
  
- # NOTE: These defaults represent the deterministic policy snapshot returned by
- # ``load_interaction_policy`` when no overrides are provided. The structure is
- # intentionally shallow so that overrides replace entire child objects rather
- # than performing recursive merges.
- _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
-     "mode": "idle",
-     "allow_auto_vad": True,
-     "barge_in_enabled": True,
-     "auto_commit_when_ready": True,
-     "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
-     "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
-     "suggestions": {"on_connect": True, "count": 3},
-+    "actions": {"allowed": ["answer"], "surface_via_suggestions": True},
-     "telemetry": {
-         "enabled": True,
-         "level": "debug",
-         "categories": {
-             "ws": True,
-             "audio": True,
-             "policy": True,
-             "tts": True,
-             "gate": True,
-             "barge": True,
-             "asr": True,
-             "nlu": True,
-             "nlg": True,
-             "client_ui": True,
-             "provider_debug": True,
-         },
-         "redaction": {"pii": True, "secrets": True, "text": False},
-         "sampling": {"percent": 100},
-     },
- }
- 
- 
- def load_interaction_policy(
-     overrides: Dict[str, Any] | None = None,
- ) -> InteractionPolicySnapshot:
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index c1ad7b88ea7fcfb57e8a1cd184b41f65ae60145f..e2e0c5eb338fb1c15f784ca4bc0730d3d05f2bef 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -1,73 +1,82 @@
- """Minimal Engine v2 shell with telemetry hooks and session exporting."""
- from __future__ import annotations
- 
- import asyncio
- from dataclasses import dataclass
- import json
- import logging
-+import re
- import threading
- import time
- import uuid
- from typing import Any, Dict, Mapping, Optional
- 
- from app.policy.loader import load_interaction_policy
- from app.policy.watch import compute_diff, should_reapply
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ACWR_RECOMPUTE,
-     EVT_CHAT_USER,
-     EVT_ASR_FINAL,
-     EVT_NLG,
-     EVT_NLU,
-     EVT_DIALOG_PLAN,
-     EVT_POLICY_APPLIED,
-     EVT_TTS_END,
-     EVT_TTS_START,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- from app.voice_v2.nlu import NLUAdapter
- from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
- from app.voice_v2.llm import LLMAdapter
- from app.voice_v2.gate import GateController
- from app.voice_v2.conversation_buffer import ConversationBuffer
- from app.voice_v2.vad import VADAggregator
- from app.voice_v2.planner import plan_turn
- from app.voice_v2.persona import default_chips_for_mode, load_persona
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
-+def _slugify_action_label(label: str) -> str:
-+    """Normalize a suggestion label into a stable slug identifier."""
+-def authorize(headers: Dict[str, str]) -> Tuple[bool, str | None]:
+-    """Simple bearer-token authorization gate."""
++from app.config import get_env
++from app.security.browser_token import extract_bearer_from_query
 +
-+    normalized = re.sub(r"[^a-z0-9]+", "-", label.strip().lower())
-+    slug = normalized.strip("-")
-+    return slug or "action"
++# JWKS cache keyed by kid or the fallback marker for kid-less tokens.
++_JWKS_CACHE: Dict[str, Dict[str, int]] = {}
++_JWKS_CACHE_MARKER = "__default__"
++
++# ASN.1 DER prefix for SHA-256 used in PKCS#1 v1.5 signatures.
++_RSA_SHA256_PREFIX = bytes.fromhex(
++    "3031300d060960864801650304020105000420"
++)
 +
 +
- READY = "Ready"
- LISTENING = "Listening"
- THINKING = "Thinking"
- RESPONDING = "Responding"
- CONFIRMING_BARGE = "ConfirmingBarge"
- 
- _PCM_CODEC = "pcm_s16le"
- _PCM_RATE_HZ = 16000
- _PCM_CHANNELS = 1
- _PCM_DESCRIPTOR = {
-     "codec": _PCM_CODEC,
-     "rate_hz": _PCM_RATE_HZ,
-     "channels": _PCM_CHANNELS,
- }
- 
- _DEFAULT_VOICE_ID = "alloy-en-US-001"
- _DEFAULT_LOCALE = "en-US"
- 
- _INFO_SLO = {
-     "first_partial_ms": {"target": 450, "p95": 750},
-     "final_ms": {"target": 2000, "p95": 3000},
-     "tts_start_ms": {"target": 350, "p95": 600},
- }
- _PCM_SAMPLE_BYTES = 2 * _PCM_CHANNELS
- 
-@@ -670,78 +679,94 @@ class EngineV2:
-                     "size": len(serialized.encode("utf-8")),
-                     "preview": serialized,
-                 }
-             },
-             "frame": frame,
-         }
-         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-         self._publish(event)
- 
-         session.greet_emitted = True
- 
-     def _maybe_emit_connect_suggestions(self, sid: str) -> None:
-         session = self._ensure_session(sid)
-         if session.suggestions_emitted:
-             return
- 
-         snapshot = self.policy_snapshot or {}
-         suggestions_block = snapshot.get("suggestions")
-         if isinstance(suggestions_block, Mapping):
-             on_connect = bool(suggestions_block.get("on_connect"))
-             count_candidate = suggestions_block.get("count")
-         else:
-             on_connect = False
-             count_candidate = None
- 
-+        actions_block = snapshot.get("actions")
-+        surface_actions = True
-+        if isinstance(actions_block, Mapping):
-+            surface_candidate = actions_block.get("surface_via_suggestions")
-+            if isinstance(surface_candidate, bool):
-+                surface_actions = surface_candidate
++def _is_prod() -> bool:
++    env = (get_env("ASKCHIP_ENV", "development") or "development").strip().lower()
++    return env in {"prod", "production"}
 +
-         if not on_connect:
-             return
- 
-+        if not surface_actions:
-+            return
 +
-         max_items = 3
-         if isinstance(count_candidate, (int, float)):
-             normalized = int(count_candidate)
-             if normalized > 0:
-                 max_items = normalized
- 
-         try:
-             persona = load_persona()
-         except Exception:
-             logging.getLogger(__name__).exception("Failed to load persona for connect suggestions")
-             persona = {}
- 
-         chips = default_chips_for_mode(persona if isinstance(persona, dict) else {}, "outline")
-         items = [str(label).strip() for label in chips if isinstance(label, str) and label.strip()]
-         if not items:
-             return
- 
-         limited_items = items[:max_items]
-         if not limited_items:
-             return
- 
-+        suggestion_items = []
-+        for label in limited_items:
-+            item: Dict[str, Any] = {"label": label, "kind": "action"}
-+            item["id"] = _slugify_action_label(label)
-+            suggestion_items.append(item)
++def _b64url_decode(data: str, *, context: str) -> Tuple[bytes | None, str | None]:
++    data = data.strip()
++    padding = "=" * (-len(data) % 4)
++    try:
++        return base64.urlsafe_b64decode(data + padding), None
++    except (ValueError, binascii.Error):
++        return None, f"invalid base64 in {context}"
 +
-         suggestions_frame = {
-             "type": "assistant.suggestions",
-             "ts_ms": _now_ms(),
--            "items": [{"label": label, "kind": "action"} for label in limited_items],
-+            "items": suggestion_items,
-             "mode": "outline",
-         }
-         serialized = json.dumps(suggestions_frame, ensure_ascii=False, separators=(",", ":"))
-         payload = {
-             "meta": {
-                 "ws": {
-                     "dir": "out",
-                     "size": len(serialized.encode("utf-8")),
-                     "preview": serialized,
-                 }
-             },
-             "frame": suggestions_frame,
-         }
-         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-         self._publish(event)
++
++def _load_json(data: bytes, *, context: str) -> Tuple[Dict[str, object] | None, str | None]:
++    try:
++        return cast(Dict[str, object], json.loads(data.decode("utf-8"))), None
++    except (ValueError, UnicodeDecodeError):
++        return None, f"invalid {context} json"
++
++
++def _jwks_refresh() -> Tuple[bool, str | None]:
++    url = get_env("AUTH_JWKS_URL")
++    if not url:
++        if _is_prod():
++            return False, "missing AUTH_JWKS_URL"
++        return False, "missing AUTH_JWKS_URL"
++
++    try:
++        response = requests.get(url, timeout=5)
++        response.raise_for_status()
++        payload = response.json()
++    except requests.RequestException as exc:  # pragma: no cover - network errors
++        return False, f"failed to fetch JWKS: {exc}"
++    except ValueError:
++        return False, "invalid JWKS payload"
++
++    keys = payload.get("keys") if isinstance(payload, dict) else None
++    if not keys or not isinstance(keys, list):
++        return False, "JWKS missing keys"
++
++    _JWKS_CACHE.clear()
++    fallback_set = False
++
++    for raw_key in keys:
++        if not isinstance(raw_key, dict):
++            continue
++        if raw_key.get("kty") != "RSA":
++            continue
++        n_b64 = raw_key.get("n")
++        e_b64 = raw_key.get("e")
++        if not isinstance(n_b64, str) or not isinstance(e_b64, str):
++            continue
++        n_bytes_err = _b64url_decode(n_b64, context="jwks.n")
++        e_bytes_err = _b64url_decode(e_b64, context="jwks.e")
++        n_bytes, n_err = n_bytes_err
++        e_bytes, e_err = e_bytes_err
++        if n_err or e_err or n_bytes is None or e_bytes is None:
++            continue
++        n_int = int.from_bytes(n_bytes, "big", signed=False)
++        e_int = int.from_bytes(e_bytes, "big", signed=False)
++        if n_int <= 0 or e_int <= 0:
++            continue
++        key_size = (n_int.bit_length() + 7) // 8
++        cache_entry = {"n": n_int, "e": e_int, "size": key_size}
++        kid = raw_key.get("kid") if isinstance(raw_key.get("kid"), str) else None
++        if kid:
++            _JWKS_CACHE[kid] = cache_entry
++        if not fallback_set:
++            _JWKS_CACHE[_JWKS_CACHE_MARKER] = cache_entry
++            fallback_set = True
++
++    if not _JWKS_CACHE:
++        return False, "JWKS has no usable RSA keys"
  
-         session.suggestions_emitted = True
+-    auth_header = headers.get("authorization")
+-    if not auth_header or not auth_header.startswith("Bearer "):
+-        return False, "missing or invalid auth"
+     return True, None
  
-     def _publish_barge(
-         self, sid: str, source: str, granted: bool, reason: str | None = None
-     ) -> None:
-         """Publish EVT_BARGE_IN envelope with meta.barge.{source,granted,reason}."""
  
-         if source not in {"auto_vad", "asr_evidence", "text"}:
-             return
+-__all__ = ["authorize"]
++def _get_jwks_key(kid: str | None) -> Tuple[Dict[str, int] | None, str | None]:
++    cache_key = kid if kid else _JWKS_CACHE_MARKER
++    if cache_key not in _JWKS_CACHE:
++        success, error = _jwks_refresh()
++        if not success:
++            return None, error
++    return _JWKS_CACHE.get(cache_key), None
++
++
++def _verify_rs256(signing_input: bytes, signature: bytes, key: Dict[str, int]) -> bool:
++    import hashlib
++
++    key_size = key.get("size") or 0
++    if key_size <= 0:
++        return False
++    if len(signature) != key_size:
++        if len(signature) > key_size:
++            return False
++        signature = signature.rjust(key_size, b"\x00")
++
++    n = key["n"]
++    e = key["e"]
++    sig_int = int.from_bytes(signature, "big", signed=False)
++    if sig_int >= n:
++        return False
++
++    em_int = pow(sig_int, e, n)
++    em = em_int.to_bytes(key_size, "big")
++    if len(em) < len(_RSA_SHA256_PREFIX) + 11:
++        return False
++    if em[0] != 0x00 or em[1] != 0x01:
++        return False
++    try:
++        separator_index = em.index(b"\x00", 2)
++    except ValueError:
++        return False
++    padding = em[2:separator_index]
++    if not padding or any(byte != 0xFF for byte in padding):
++        return False
++
++    expected = _RSA_SHA256_PREFIX + hashlib.sha256(signing_input).digest()
++    actual = em[separator_index + 1 :]
++    return actual == expected
++
++
++def verify_jwt(token: str) -> Tuple[bool, str | None, Dict[str, object] | None]:
++    token = (token or "").strip()
++    if not token:
++        return False, "empty token", None
++
++    parts = token.split(".")
++    if len(parts) != 3:
++        return False, "invalid token format", None
++
++    header_b64, payload_b64, signature_b64 = parts
++    header_bytes, header_err = _b64url_decode(header_b64, context="header")
++    if header_err or header_bytes is None:
++        return False, header_err, None
++    payload_bytes, payload_err = _b64url_decode(payload_b64, context="payload")
++    if payload_err or payload_bytes is None:
++        return False, payload_err, None
++
++    header, header_json_err = _load_json(header_bytes, context="header")
++    if header_json_err or header is None:
++        return False, header_json_err, None
++    payload, payload_json_err = _load_json(payload_bytes, context="payload")
++    if payload_json_err or payload is None:
++        return False, payload_json_err, None
++
++    alg = header.get("alg") if isinstance(header.get("alg"), str) else None
++    if alg != "RS256":
++        return False, "unsupported alg", None
++
++    signature_bytes, signature_err = _b64url_decode(signature_b64, context="signature")
++    if signature_err or signature_bytes is None:
++        return False, signature_err, None
++
++    kid = header.get("kid") if isinstance(header.get("kid"), str) else None
++    key, key_err = _get_jwks_key(kid)
++    if key_err:
++        return False, key_err, None
++    if key is None:
++        return False, "no matching jwk", None
++
++    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
++    if not _verify_rs256(signing_input, signature_bytes, key):
++        return False, "invalid signature", None
++
++    issuer = get_env("AUTH_JWT_ISSUER")
++    if not issuer:
++        if _is_prod():
++            return False, "missing AUTH_JWT_ISSUER", None
++    if issuer and payload.get("iss") != issuer:
++        return False, "invalid issuer", None
++
++    audience_env = get_env("AUTH_AUDIENCE")
++    audience = audience_env if audience_env else ("askchip" if not _is_prod() else None)
++    if _is_prod() and not audience_env:
++        return False, "missing AUTH_AUDIENCE", None
++    if audience:
++        aud_claim = payload.get("aud")
++        if isinstance(aud_claim, str):
++            aud_ok = aud_claim == audience
++        elif isinstance(aud_claim, (list, tuple, set)):
++            aud_ok = audience in aud_claim
++        else:
++            aud_ok = False
++        if not aud_ok:
++            return False, "invalid audience", None
++
++    exp = payload.get("exp")
++    if not isinstance(exp, (int, float)):
++        return False, "missing exp", None
++    if exp < time.time():
++        return False, "token expired", None
++
++    nbf = payload.get("nbf")
++    if isinstance(nbf, (int, float)) and nbf > time.time():
++        return False, "token not yet valid", None
++
++    return True, None, payload
++
++
++def authorize(
++    headers: Dict[str, str],
++    *,
++    allow_query_token: bool | None = None,
++    scope: Dict[str, object] | None = None,
++    require_token: bool | None = None,
++):
++    """Bearer-token authorization gate shared by WS and HTTP paths."""
++
++    env = (get_env("ASKCHIP_ENV", "development") or "development").strip().lower()
++    legacy_mode = allow_query_token is None and scope is None and require_token is None
++
++    if allow_query_token is None:
++        allow_query = False
++    else:
++        allow_query = allow_query_token
++
++    if require_token is None:
++        if env in {"prod", "production"}:
++            token_required = True
++        else:
++            token_required = bool(int(get_env("WS_TOKEN_REQUIRED", "0") or 0))
++    else:
++        token_required = require_token
++
++    token: str | None = None
++    error: str | None = None
++
++    auth_header = (headers or {}).get("authorization") if headers else None
++    if auth_header:
++        parts = auth_header.split(" ", 1)
++        if len(parts) == 2 and parts[0].lower() == "bearer":
++            token = parts[1].strip()
++            if not token:
++                error = "empty token"
++        else:
++            error = "invalid authorization header"
++    elif allow_query:
++        token, error = extract_bearer_from_query(scope or {})
++
++    if (not token or error) and token_required:
++        if not token:
++            result = (False, "missing token", None)
++            return result[:2] if legacy_mode else result
++        result = (False, error, None)
++        return result[:2] if legacy_mode else result
++
++    if token:
++        ok, reason, claims = verify_jwt(token)
++        if ok:
++            result = (True, None, claims)
++            return result[:2] if legacy_mode else result
++        result = (False, reason, None)
++        return result[:2] if legacy_mode else result
++
++    if token_required:
++        result = (False, error or "missing token", None)
++        return result[:2] if legacy_mode else result
++
++    result = (True, None, {"mode": "dev-no-token"})
++    return result[:2] if legacy_mode else result
++
++
++__all__ = ["authorize", "verify_jwt"]
+diff --git a/app/security/browser_token.py b/app/security/browser_token.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6cff8ec359d2cf8d63610450593092e76bde11d1
+--- /dev/null
++++ b/app/security/browser_token.py
+@@ -0,0 +1,42 @@
++"""Helpers for extracting browser-provided tokens."""
++from __future__ import annotations
++
++from typing import Dict, Tuple
++from urllib.parse import parse_qsl
++
++Scope = Dict[str, object]
++
++
++def extract_bearer_from_query(scope: Scope | None) -> Tuple[str | None, str | None]:
++    """Extract a bearer token from the ASGI scope query string.
++
++    Returns a ``(token, error)`` tuple. Errors are descriptive strings while a
++    missing token is signaled via ``token is None`` and ``error is None``. The
++    helper never raises.
++    """
++
++    if not scope:
++        return None, None
++
++    raw_query = scope.get("query_string", b"")
++    if isinstance(raw_query, bytes):
++        query_string = raw_query.decode("utf-8", "ignore")
++    elif isinstance(raw_query, str):
++        query_string = raw_query
++    else:
++        return None, "invalid query string"
++
++    if not query_string:
++        return None, None
++
++    for key, value in parse_qsl(query_string, keep_blank_values=True):
++        if key != "access_token":
++            continue
++        if value:
++            return value, None
++        return None, "empty access_token"
++
++    return None, None
++
++
++__all__ = ["extract_bearer_from_query"]
