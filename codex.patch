@@ -1,579 +1,191 @@
-diff --git a/app/admin/api/settings.py b/app/admin/api/settings.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..5efd5dc7c3ba453520f18f6359134d361815a5f4
---- /dev/null
-+++ b/app/admin/api/settings.py
-@@ -0,0 +1,194 @@
-+"""Admin settings API handlers for runtime configuration."""
-+
-+from __future__ import annotations
-+
-+import json
-+import logging
-+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
-+
-+from app.db.admin_settings import AdminSettingsStore
-+from app.policy.schema import DEFAULT_WS_AUTH_MODE
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index 4088b38f8815143d7b408f8f2ee52bada5853fcc..98fcf39a3324255174e3ab9a8d136a676e033174 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -1,43 +1,45 @@
+ """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
+ from __future__ import annotations
+ 
+ import json
+ import logging
+ import mimetypes
+ import os
+ import time
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from functools import partial
+ from pathlib import Path
+ from tempfile import NamedTemporaryFile
+ from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
+ from urllib.parse import urlparse
+ 
+ from app.admin.flow_api import handle_flow_trace, handle_flow_zip
 +from app.policy.service import PolicyService
-+from app.security.auth import authorize_admin
-+
-+_LOGGER = logging.getLogger(__name__)
-+
-+_SETTINGS_KEY_WS_AUTH_MODE = "ws_auth_mode"
-+_VALID_WS_AUTH_MODES = {"required", "disabled"}
-+
-+
-+_store = AdminSettingsStore()
-+_policy_service: PolicyService | None = None
-+
-+
-+async def handle_admin_settings(scope: dict, receive) -> "Response":
-+    """Handle GET/PATCH requests for the admin settings endpoint."""
-+
-+    method = _method(scope)
-+    if method == "OPTIONS":
-+        await _drain_body(receive)
-+        return _options_response()
-+
-+    if method not in {"GET", "HEAD", "PATCH", "POST"}:
-+        await _drain_body(receive)
-+        return _json_response(status=405, error="method_not_allowed")
-+
-+    headers = _decode_headers(scope.get("headers", ()))
-+    authorized, reason, _claims = authorize_admin(headers, scope)
-+    if not authorized:
-+        await _drain_body(receive)
-+        return _json_response(status=401, error="unauthorized", detail=reason)
-+
-+    if method in {"GET", "HEAD"}:
-+        await _drain_body(receive)
-+        snapshot = _get_policy_service().get_auth_policy()
-+        payload = _serialize_settings(snapshot)
-+        if method == "HEAD":
-+            return _json_response(status=200, **payload, body_only=True)
-+        return _json_response(status=200, **payload)
-+
-+    body_bytes = await _read_body(receive)
-+    if not body_bytes:
-+        return _json_response(status=400, error="invalid_payload", detail="empty body")
-+
-+    try:
-+        parsed = json.loads(body_bytes.decode("utf-8"))
-+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError):
-+        return _json_response(status=400, error="invalid_json")
-+
-+    if not isinstance(parsed, Mapping):
-+        return _json_response(status=400, error="invalid_payload", detail="object required")
-+
-+    settings_payload = parsed.get("settings") if isinstance(parsed.get("settings"), Mapping) else parsed
-+
-+    mode_value = settings_payload.get(_SETTINGS_KEY_WS_AUTH_MODE)
-+    if mode_value is None and "wsAuthMode" in settings_payload:
-+        mode_value = settings_payload.get("wsAuthMode")
-+
-+    normalized = _normalize_mode(mode_value)
-+    if normalized is None:
-+        return _json_response(
-+            status=400,
-+            error="invalid_ws_auth_mode",
-+            detail="ws_auth_mode must be one of: required, disabled",
+ from app.security.auth import authorize_admin
++from app.telemetry import bus as telemetry_bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2.engine import EngineV2
+ from app.voice_v2.tts_runtime import TTSRuntime
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ @dataclass(frozen=True)
+ class Response:
+     """Immutable container describing a serialized HTTP response."""
+ 
+     status: int
+     body: bytes
+     headers: tuple[tuple[bytes, bytes], ...]
+ 
+ 
+ def json_response(*, status: int = 200, **payload: Any) -> Response:
+     """Serialize a payload to JSON using a compact representation."""
+ 
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
+     )
+@@ -48,50 +50,51 @@ WS_ROUTE = "/ws/v2/chat"
+ HEALTH_ROUTE = "/api/v1/health"
+ LIVE_ROUTE = "/api/v1/live"
+ READY_ROUTE = "/api/v1/ready"
+ INFO_ROUTE = "/api/v1/info"
+ ROOT_ROUTE = "/"
+ FAVICON_ROUTE = "/favicon.ico"
+ STATIC_ROUTE_PREFIX = "/static/"
+ EXPORT_ROOT = Path("exports")
+ BASE_DIR = Path(__file__).resolve().parent
+ STATIC_ROOT = BASE_DIR / "static"
+ TEMPLATES_ROOT = BASE_DIR / "templates"
+ INDEX_PATH = TEMPLATES_ROOT / "index.html"
+ FAVICON_PATH = STATIC_ROOT / "favicon.ico"
+ _ADMIN_FLOW_PREFIX = "/api/v1/admin/flow/"
+ _TRACE_SEGMENT = "trace"
+ _ZIP_SEGMENT = "zip"
+ 
+ _DEFAULT_INDEX_HTML = (
+     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
+ )
+ 
+ 
+ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
+ 
+ _adapter: Optional[ChatV2Adapter] = None
++_policy_service: Optional[PolicyService] = None
+ 
+ 
+ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
+     scope_type = scope.get("type")
+     path = (scope.get("root_path") or "") + scope.get("path", "")
+ 
+     if scope_type == "websocket":
+         if path == WS_ROUTE:
+             allowed, blocked_origin = _validate_ws_origin(scope)
+             if not allowed:
+                 await _reject_origin(scope, blocked_origin, receive, send)
+                 return
+             await _get_adapter()(scope, receive, send)
+         else:
+             await _reject_websocket(receive, send)
+         return
+ 
+     if scope_type == "http":
+         handler = _HTTP_ROUTES.get(path)
+         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
+             handler = partial(_handle_static, raw_path=path)
+         if handler is None:
+             handler = _resolve_admin_route(path)
+         if handler is None:
+@@ -533,41 +536,88 @@ def _resolve_admin_cors_origin(scope: dict) -> Optional[str]:
+ 
+ 
+ def _parse_admin_cors_origins() -> tuple[str, ...]:
+     raw = os.getenv("ASKCHIP_ADMIN_CORS_ORIGINS")
+     if not raw:
+         return ()
+ 
+     entries = []
+     for item in raw.split(","):
+         value = item.strip()
+         if value:
+             entries.append(value)
+     return tuple(entries)
+ 
+ 
+ def _encode_header_value(value: str) -> Optional[bytes]:
+     try:
+         return value.encode("latin1")
+     except UnicodeEncodeError:  # pragma: no cover - defensive
+         return None
+ 
+ 
+ async def _enforce_admin_auth(
+     handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
+ ) -> Response:
++    policy = _get_policy_service().get_auth_policy()
++    if policy.get("ws_auth_mode") == "disabled":
++        await _drain_request_body(receive)
++        _publish_admin_deny(scope, reason="ws_auth_disabled")
++        return json_response(
++            status=403,
++            error="forbidden",
++            detail="admin disabled when ws_auth_mode=disabled",
 +        )
 +
-+    policy_service = _get_policy_service()
-+    try:
-+        snapshot = policy_service.set_ws_auth_mode(normalized)
-+    except Exception as exc:  # pragma: no cover - defensive logging
-+        _LOGGER.exception("Failed to persist ws_auth_mode setting", exc_info=exc)
-+        return _json_response(status=500, error="internal_error")
-+
-+    payload = _serialize_settings(snapshot)
-+    return _json_response(status=200, **payload)
-+
-+
-+# ---------------------------------------------------------------------------
-+# Helpers
-+# ---------------------------------------------------------------------------
-+
-+
-+def _normalize_mode(value: object) -> Optional[str]:
-+    if isinstance(value, str):
-+        candidate = value.strip().lower()
-+        if candidate in _VALID_WS_AUTH_MODES:
-+            return candidate
-+    return None
-+
-+
-+def _serialize_settings(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
-+    mode = snapshot.get(_SETTINGS_KEY_WS_AUTH_MODE)
-+    normalized = _normalize_mode(mode) or DEFAULT_WS_AUTH_MODE
-+    return {"settings": {_SETTINGS_KEY_WS_AUTH_MODE: normalized}}
-+
-+
-+async def _read_body(receive) -> bytes:
-+    chunks: list[bytes] = []
-+    while True:
-+        message = await receive()
-+        if message.get("type") != "http.request":
-+            break
-+        body = message.get("body", b"") or b""
-+        if body:
-+            chunks.append(body)
-+        if not message.get("more_body", False):
-+            break
-+    return b"".join(chunks)
-+
-+
-+async def _drain_body(receive) -> None:
-+    while True:
-+        message = await receive()
-+        if message.get("type") != "http.request":
-+            break
-+        if not message.get("more_body", False):
-+            break
-+
-+
-+def _method(scope: Mapping[str, Any]) -> str:
-+    value = scope.get("method")
-+    if isinstance(value, bytes):
-+        value = value.decode("latin1", "ignore")
-+    if not isinstance(value, str):
-+        return "GET"
-+    return value.upper()
-+
-+
-+def _decode_headers(raw_headers: Iterable[Sequence[bytes]]) -> Dict[str, str]:
-+    headers: Dict[str, str] = {}
-+    for item in raw_headers:
-+        if not isinstance(item, Sequence) or len(item) != 2:
-+            continue
-+        name, value = item
-+        try:
-+            name_str = name.decode("latin1").lower()
-+            value_str = value.decode("latin1")
-+        except Exception:  # pragma: no cover - defensive
-+            continue
-+        headers[name_str] = value_str
-+    return headers
-+
-+
-+def _options_response() -> "Response":
-+    from app.asgi_gateway import Response
-+
-+    headers = (
-+        (b"content-length", b"0"),
-+        (b"allow", b"GET,HEAD,PATCH,POST,OPTIONS"),
-+    )
-+    return Response(status=204, body=b"", headers=headers)
-+
-+
-+def _json_response(*, status: int, body_only: bool = False, **payload: Any) -> "Response":
-+    from app.asgi_gateway import Response, json_response
-+
-+    if body_only:
-+        body = json_response(status=status, **payload).body
-+        headers = (
-+            (b"content-type", b"application/json; charset=utf-8"),
-+            (b"content-length", str(len(body)).encode("ascii")),
-+        )
-+        return Response(status=status, body=b"", headers=headers)
-+    return json_response(status=status, **payload)
-+
+     raw_headers = scope.get("headers", ())
+     auth_value = _decode_header(raw_headers, b"authorization")
+     headers = {}
+     if auth_value is not None:
+         headers["authorization"] = auth_value
+ 
+     authorized, reason, _claims = authorize_admin(headers, scope)
+     if not authorized:
+         await _drain_request_body(receive)
+         return json_response(status=401, error="unauthorized", detail=reason)
+ 
+     return await handler(scope, receive)
+ 
 +
 +def _get_policy_service() -> PolicyService:
 +    global _policy_service
-+    if _policy_service is not None:
++    if isinstance(_policy_service, PolicyService):
 +        return _policy_service
 +
 +    try:  # pragma: no cover - adapter import may fail in some contexts
 +        from app.ws.adapter import _policy_service as ws_policy_service  # type: ignore[attr-defined]
-+    except Exception:  # pragma: no cover - adapter import failures
++    except Exception:  # pragma: no cover - defensive import
 +        ws_policy_service = None
 +
 +    if isinstance(ws_policy_service, PolicyService):
 +        _policy_service = ws_policy_service
 +        return ws_policy_service
 +
-+    _policy_service = PolicyService(_store)
++    _policy_service = PolicyService()
 +    return _policy_service
 +
 +
-+__all__ = ["handle_admin_settings"]
-diff --git a/app/admin/ui/config_panel.js b/app/admin/ui/config_panel.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..4245bcf8a944830ecef0e51597f07246cfe7c793
---- /dev/null
-+++ b/app/admin/ui/config_panel.js
-@@ -0,0 +1,373 @@
-+(() => {
-+  const ROOT_SCOPE = typeof window !== "undefined" ? window : typeof globalThis !== "undefined" ? globalThis : {};
-+  const API_ENDPOINT = "/api/v1/admin/settings";
-+  const VALID_MODES = ["required", "disabled"];
-+  const LABELS = {
-+    required: "Required",
-+    disabled: "Disabled"
-+  };
-+  const HINT_TEXT = "WS connects anonymously; admin endpoints may be restricted by policy.";
++def _publish_admin_deny(scope: dict, *, reason: str) -> None:
++    path_value = scope.get("path")
++    if isinstance(path_value, bytes):
++        path_value = path_value.decode("latin1", "ignore")
++    elif not isinstance(path_value, str):
++        path_value = "" if path_value is None else str(path_value)
 +
-+  function normalizeMode(value) {
-+    if (typeof value !== "string") {
-+      return null;
++    payload = {
++        "type": "EVT_ADMIN_DENY",
++        "level": "warn",
++        "meta": {"route": path_value or "", "reason": reason},
 +    }
-+    const candidate = value.trim().toLowerCase();
-+    if (!candidate) {
-+      return null;
-+    }
-+    return VALID_MODES.includes(candidate) ? candidate : null;
-+  }
 +
-+  function extractSettings(payload) {
-+    if (!payload || typeof payload !== "object") {
-+      return { ws_auth_mode: "required" };
-+    }
-+    const root = payload.settings && typeof payload.settings === "object" ? payload.settings : payload;
-+    let raw = root.ws_auth_mode;
-+    if (typeof raw === "undefined") {
-+      raw = root.wsAuthMode;
-+    }
-+    const normalized = normalizeMode(raw) || "required";
-+    return { ws_auth_mode: normalized };
-+  }
++    try:
++        telemetry_bus.publish(payload)
++    except Exception:  # pragma: no cover - telemetry failures must not break flow
++        logger.exception("Failed to publish admin deny telemetry for %s", path_value)
 +
-+  function ensureField(root) {
-+    let field = root.querySelector('[data-setting="ws_auth_mode"]');
-+    if (!field) {
-+      field = document.createElement("div");
-+      field.dataset.setting = "ws_auth_mode";
-+      field.classList.add("config-panel__field");
-+      root.appendChild(field);
-+    }
-+    return field;
-+  }
-+
-+  function ensureLabel(field) {
-+    let label = field.querySelector("label");
-+    if (!label) {
-+      label = document.createElement("label");
-+      field.appendChild(label);
-+    }
-+    label.textContent = "WS Auth Mode";
-+    return label;
-+  }
-+
-+  function ensureSelect(field) {
-+    let select = field.querySelector("select[name='ws_auth_mode']");
-+    if (!select) {
-+      select = document.createElement("select");
-+      select.name = "ws_auth_mode";
-+      select.id = select.id || "wsAuthModeSelect";
-+      select.classList.add("config-panel__select");
-+      select.autocomplete = "off";
-+      field.appendChild(select);
-+    }
-+    const seen = new Set();
-+    Array.from(select.options).forEach((option) => {
-+      const normalized = normalizeMode(option.value);
-+      if (!normalized) {
-+        option.remove();
-+        return;
-+      }
-+      seen.add(normalized);
-+      option.value = normalized;
-+      option.textContent = LABELS[normalized] || normalized;
-+    });
-+    VALID_MODES.forEach((mode) => {
-+      if (seen.has(mode)) {
-+        return;
-+      }
-+      const option = document.createElement("option");
-+      option.value = mode;
-+      option.textContent = LABELS[mode] || mode;
-+      select.appendChild(option);
-+    });
-+    return select;
-+  }
-+
-+  function ensureHint(field) {
-+    let hint = field.querySelector('[data-role="ws-auth-hint"]');
-+    if (!hint) {
-+      hint = document.createElement("p");
-+      hint.dataset.role = "ws-auth-hint";
-+      field.appendChild(hint);
-+    }
-+    hint.textContent = HINT_TEXT;
-+    hint.style.display = "none";
-+    hint.style.margin = "6px 0 0";
-+    hint.style.padding = "6px 8px";
-+    hint.style.borderRadius = "6px";
-+    hint.style.fontSize = "12px";
-+    hint.style.lineHeight = "1.4";
-+    hint.style.background = "rgba(255, 204, 0, 0.2)";
-+    hint.style.color = "#4a3800";
-+    hint.style.border = "1px solid rgba(255, 204, 0, 0.45)";
-+    hint.setAttribute("role", "note");
-+    hint.setAttribute("aria-live", "polite");
-+    return hint;
-+  }
-+
-+  function ensureActions(root) {
-+    let actions = root.querySelector(".config-panel__actions");
-+    if (!actions) {
-+      actions = document.createElement("div");
-+      actions.classList.add("config-panel__actions");
-+      root.appendChild(actions);
-+    }
-+    let save = actions.querySelector('[data-action="save"]');
-+    if (!save) {
-+      save = document.createElement("button");
-+      save.type = "button";
-+      save.dataset.action = "save";
-+      save.classList.add("config-panel__save");
-+      save.textContent = "Save";
-+      actions.appendChild(save);
-+    }
-+    return { actions, save };
-+  }
-+
-+  function ensureStatus(root) {
-+    let status = root.querySelector('[data-role="status"]');
-+    if (!status) {
-+      status = document.createElement("div");
-+      status.dataset.role = "status";
-+      status.classList.add("config-panel__status");
-+      status.setAttribute("role", "status");
-+      status.setAttribute("aria-live", "polite");
-+      root.appendChild(status);
-+    }
-+    return status;
-+  }
-+
-+  function setStatus(el, message, tone) {
-+    if (!el) {
-+      return;
-+    }
-+    el.textContent = message || "";
-+    const tones = ["info", "error", "success"];
-+    tones.forEach((value) => el.classList.remove(`config-panel__status--${value}`));
-+    if (tone && tones.includes(tone)) {
-+      el.classList.add(`config-panel__status--${tone}`);
-+    }
-+  }
-+
-+  function buildHeaders(baseHeaders, extra) {
-+    const headers = {};
-+    [baseHeaders, extra].forEach((source) => {
-+      if (!source) {
-+        return;
-+      }
-+      if (typeof Headers !== "undefined" && source instanceof Headers) {
-+        source.forEach((value, key) => {
-+          if (typeof value === "string") {
-+            headers[key] = value;
-+          }
-+        });
-+        return;
-+      }
-+      if (typeof source !== "object") {
-+        return;
-+      }
-+      for (const key in source) {
-+        if (!Object.prototype.hasOwnProperty.call(source, key)) {
-+          continue;
-+        }
-+        const value = source[key];
-+        if (typeof value === "string") {
-+          headers[key] = value;
-+        }
-+      }
-+    });
-+    return headers;
-+  }
-+
-+  function AdminPanel(root, options) {
-+    this.root = root;
-+    this.options = options;
-+    this.fetchImpl = options.fetchImpl;
-+    this.headers = options.headers;
-+    this.credentials = options.credentials;
-+    this.state = { ws_auth_mode: "required" };
-+    this.field = ensureField(root);
-+    this.label = ensureLabel(this.field);
-+    this.select = ensureSelect(this.field);
-+    if (this.label && this.select && this.select.id) {
-+      this.label.setAttribute("for", this.select.id);
-+    }
-+    this.hint = ensureHint(this.field);
-+    const actionRefs = ensureActions(root);
-+    this.actions = actionRefs.actions;
-+    this.saveButton = actionRefs.save;
-+    this.status = ensureStatus(root);
-+    this.loading = false;
-+
-+    this.onSaveClick = this.onSaveClick.bind(this);
-+    this.onModeChange = this.onModeChange.bind(this);
-+    this.saveButton.addEventListener("click", this.onSaveClick);
-+    this.select.addEventListener("change", this.onModeChange);
-+    this.syncHint(this.state.ws_auth_mode);
-+  }
-+
-+  AdminPanel.prototype.setLoading = function (loading) {
-+    this.loading = Boolean(loading);
-+    this.select.disabled = this.loading;
-+    this.saveButton.disabled = this.loading;
-+  };
-+
-+  AdminPanel.prototype.onModeChange = function () {
-+    this.syncHint(this.select.value);
-+  };
-+
-+  AdminPanel.prototype.syncHint = function (mode) {
-+    const normalized = normalizeMode(mode);
-+    if (!this.hint) {
-+      return;
-+    }
-+    if (normalized === "disabled") {
-+      this.hint.style.display = "block";
-+      this.hint.setAttribute("aria-hidden", "false");
-+    } else {
-+      this.hint.style.display = "none";
-+      this.hint.setAttribute("aria-hidden", "true");
-+    }
-+  };
-+
-+  AdminPanel.prototype.refresh = async function () {
-+    const fetchImpl = this.fetchImpl;
-+    if (typeof fetchImpl !== "function") {
-+      return;
-+    }
-+    this.setLoading(true);
-+    setStatus(this.status, "Loading settings…", "info");
-+    try {
-+      const response = await fetchImpl(API_ENDPOINT, {
-+        method: "GET",
-+        credentials: this.credentials,
-+        headers: buildHeaders(this.headers)
-+      });
-+      if (!response || typeof response.status !== "number") {
-+        throw new Error("Invalid response");
-+      }
-+      if (!response.ok) {
-+        let detail = "Failed to load settings";
-+        try {
-+          const errorData = await response.json();
-+          if (errorData && typeof errorData.detail === "string") {
-+            detail = errorData.detail;
-+          }
-+        } catch (err) {
-+          // ignore JSON errors
-+        }
-+        throw new Error(detail);
-+      }
-+      const data = await response.json();
-+      this.state = extractSettings(data);
-+      this.select.value = this.state.ws_auth_mode;
-+      this.syncHint(this.state.ws_auth_mode);
-+      setStatus(this.status, "Settings up to date.", "success");
-+      if (typeof this.options.onChange === "function") {
-+        this.options.onChange(Object.assign({}, this.state));
-+      }
-+    } catch (err) {
-+      const message = err && err.message ? err.message : "Unable to load settings";
-+      setStatus(this.status, message, "error");
-+    } finally {
-+      this.setLoading(false);
-+    }
-+  };
-+
-+  AdminPanel.prototype.onSaveClick = async function (event) {
-+    event.preventDefault();
-+    await this.save();
-+  };
-+
-+  AdminPanel.prototype.save = async function () {
-+    const fetchImpl = this.fetchImpl;
-+    if (typeof fetchImpl !== "function") {
-+      return;
-+    }
-+    const selected = normalizeMode(this.select.value) || "required";
-+    this.setLoading(true);
-+    setStatus(this.status, "Saving…", "info");
-+    try {
-+      const response = await fetchImpl(API_ENDPOINT, {
-+        method: "PATCH",
-+        credentials: this.credentials,
-+        headers: buildHeaders(this.headers, { "content-type": "application/json" }),
-+        body: JSON.stringify({ ws_auth_mode: selected })
-+      });
-+      if (!response || typeof response.status !== "number") {
-+        throw new Error("Invalid response");
-+      }
-+      if (!response.ok) {
-+        let detail = "Failed to save settings";
-+        try {
-+          const errorData = await response.json();
-+          if (errorData && typeof errorData.detail === "string") {
-+            detail = errorData.detail;
-+          }
-+        } catch (err) {
-+          // ignore JSON errors
-+        }
-+        throw new Error(detail);
-+      }
-+      const data = await response.json();
-+      this.state = extractSettings(data);
-+      this.select.value = this.state.ws_auth_mode;
-+      this.syncHint(this.state.ws_auth_mode);
-+      setStatus(this.status, "Settings saved.", "success");
-+      if (typeof this.options.onChange === "function") {
-+        this.options.onChange(Object.assign({}, this.state));
-+      }
-+    } catch (err) {
-+      const message = err && err.message ? err.message : "Unable to save settings";
-+      setStatus(this.status, message, "error");
-+    } finally {
-+      this.setLoading(false);
-+    }
-+  };
-+
-+  AdminPanel.prototype.destroy = function () {
-+    if (this.saveButton) {
-+      this.saveButton.removeEventListener("click", this.onSaveClick);
-+    }
-+    if (this.select) {
-+      this.select.removeEventListener("change", this.onModeChange);
-+    }
-+  };
-+
-+  function resolveFetch(options) {
-+    if (options && typeof options.fetch === "function") {
-+      return options.fetch;
-+    }
-+    if (ROOT_SCOPE && typeof ROOT_SCOPE.fetch === "function") {
-+      return ROOT_SCOPE.fetch.bind(ROOT_SCOPE);
-+    }
-+    return null;
-+  }
-+
-+  function init(root, opts) {
-+    const options = opts && typeof opts === "object" ? Object.assign({}, opts) : {};
-+    if (!root || typeof root !== "object" || root.nodeType !== 1) {
-+      throw new TypeError("AdminConfigPanel.init requires a root element");
-+    }
-+    if (!root.classList.contains("config-panel")) {
-+      root.classList.add("config-panel");
-+    }
-+    const fetchImpl = resolveFetch(options);
-+    if (typeof fetchImpl !== "function") {
-+      throw new Error("AdminConfigPanel requires window.fetch or a custom fetch option");
-+    }
-+    const panel = new AdminPanel(root, {
-+      fetchImpl,
-+      headers: options.headers || null,
-+      credentials: options.credentials || "same-origin",
-+      onChange: options.onChange
-+    });
-+    panel.refresh();
-+    return panel;
-+  }
-+
-+  ROOT_SCOPE.AdminConfigPanel = Object.assign(ROOT_SCOPE.AdminConfigPanel || {}, { init });
-+})();
+ asgi = app
+ 
+ __all__ = ["app", "asgi"]

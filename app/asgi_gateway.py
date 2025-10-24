@@ -15,7 +15,9 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
 from app.admin.flow_api import handle_flow_trace, handle_flow_zip
+from app.policy.service import PolicyService
 from app.security.auth import authorize_admin
+from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
 from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_runtime import TTSRuntime
@@ -70,6 +72,7 @@ _DEFAULT_INDEX_HTML = (
 HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
 
 _adapter: Optional[ChatV2Adapter] = None
+_policy_service: Optional[PolicyService] = None
 
 
 async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
@@ -555,6 +558,16 @@ def _encode_header_value(value: str) -> Optional[bytes]:
 async def _enforce_admin_auth(
     handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
 ) -> Response:
+    policy = _get_policy_service().get_auth_policy()
+    if policy.get("ws_auth_mode") == "disabled":
+        await _drain_request_body(receive)
+        _publish_admin_deny(scope, reason="ws_auth_disabled")
+        return json_response(
+            status=403,
+            error="forbidden",
+            detail="admin disabled when ws_auth_mode=disabled",
+        )
+
     raw_headers = scope.get("headers", ())
     auth_value = _decode_header(raw_headers, b"authorization")
     headers = {}
@@ -567,6 +580,43 @@ async def _enforce_admin_auth(
         return json_response(status=401, error="unauthorized", detail=reason)
 
     return await handler(scope, receive)
+
+
+def _get_policy_service() -> PolicyService:
+    global _policy_service
+    if isinstance(_policy_service, PolicyService):
+        return _policy_service
+
+    try:  # pragma: no cover - adapter import may fail in some contexts
+        from app.ws.adapter import _policy_service as ws_policy_service  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - defensive import
+        ws_policy_service = None
+
+    if isinstance(ws_policy_service, PolicyService):
+        _policy_service = ws_policy_service
+        return ws_policy_service
+
+    _policy_service = PolicyService()
+    return _policy_service
+
+
+def _publish_admin_deny(scope: dict, *, reason: str) -> None:
+    path_value = scope.get("path")
+    if isinstance(path_value, bytes):
+        path_value = path_value.decode("latin1", "ignore")
+    elif not isinstance(path_value, str):
+        path_value = "" if path_value is None else str(path_value)
+
+    payload = {
+        "type": "EVT_ADMIN_DENY",
+        "level": "warn",
+        "meta": {"route": path_value or "", "reason": reason},
+    }
+
+    try:
+        telemetry_bus.publish(payload)
+    except Exception:  # pragma: no cover - telemetry failures must not break flow
+        logger.exception("Failed to publish admin deny telemetry for %s", path_value)
 
 asgi = app
 
