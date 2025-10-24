@@ -9,22 +9,11 @@
 
 - **Single path & protocol:** only `/ws/v2/chat` with `Sec-WebSocket-Protocol: chat.v2`.
 - **Authentication:** bearer tokens are no longer required. Any `Authorization` header or `access_token` query parameter is ignored. Restrict access using network controls (VPN, IP allow-lists) if needed.
-- **Origin policy:** the server validates the `Origin` header against a configured allow‑list. Disallowed origins are rejected (HTTP 403 before upgrade, or WS close **1008** immediately after upgrade with an `error` frame `code:"origin_blocked"`).
-
-### Origin allow‑list configuration
-
-- `ASKCHIP_WS_ALLOWED_ORIGINS` — optional comma‑separated list of exact origins (for example, `https://app.askchip.ai`, `https://console.askchip.ai`).
-  - Origins are matched case‑insensitively after normalizing scheme + host + optional port.
-  - Do **not** include wildcard (`*`) entries; they are ignored.
-- If `ASKCHIP_WS_ALLOWED_ORIGINS` is **unset**, only same‑origin browser requests are accepted.
-- Missing `Origin` headers (non‑browser clients) are accepted.
-
-Deployment guidance:
-
-- Default production behavior is same-origin enforcement. Set `ASKCHIP_WS_ALLOWED_ORIGINS` to list any additional trusted Origins.
-- When a connection is rejected the HTTP response is `403` with `{ "code": "origin_blocked" }`; browsers should surface this clearly to the user.
-
 - **Version negotiation:** if the subprotocol is missing/mismatched, the server replies **426** with a JSON body `{ "code": "bad_subprotocol" }`.
+
+### Security
+
+- **Origin enforcement:** this build does **not** enforce the `Origin` header during the WebSocket handshake. Deployments should rely on external controls (reverse proxies, firewalls) if Origin restrictions are required.
 
 On successful upgrade, the server emits an initial `info` frame with connection metadata (see “Initial `info` frame”).
 
