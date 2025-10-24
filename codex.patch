@@ -1,155 +1,259 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 4759c80c6b9fa426e067910e3978a3684d239c51..21750627924c5ba7c68f12429695e6a639856348 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -4,50 +4,57 @@ from __future__ import annotations
- import asyncio
- import contextlib
- import inspect
- import logging
- import os
- import time
- import uuid
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
- from urllib.parse import parse_qs
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index 79072b0c16502d502a865026c077bdbc08549540..1c9227a3883039acb82edd727c6eafcf6419ca5f 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -348,50 +348,93 @@ async def _reject_origin(
+     send: Callable[[dict], Awaitable[None]],
+ ) -> None:
+     """Reject a WebSocket handshake because the Origin is not allowed."""
  
- import json
+     message = await receive()
+     if message.get("type") != "websocket.connect":
+         return
  
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_frame
+     logger.warning("Blocked WebSocket origin", extra={"origin": origin, "path": scope.get("path")})
+     payload: Dict[str, Any] = {"code": "origin_blocked", "error": "origin_blocked"}
+     if origin:
+         payload["origin"] = origin
+     await _send_ws_response(send, json_response(status=403, **payload))
  
-+try:  # pragma: no cover - uvicorn is an optional dependency in tests
-+    from uvicorn.protocols.utils import ClientDisconnected
-+except Exception:  # pragma: no cover - fallback when uvicorn missing
-+    class ClientDisconnected(Exception):  # type: ignore[no-redef]
-+        """Fallback placeholder when uvicorn is unavailable."""
-+
-+
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
- RATE_LIMIT_WINDOW_SECONDS = 2.0
- RATE_LIMIT_CLOSE_CODE = 1013
- _AUDIO_VIOLATION_LIMIT = 3
  
- AUDIO_SEQ_WINDOW = 8
- 
- QUEUE_ON_THRESHOLD = 12
- QUEUE_OFF_THRESHOLD = 6
- 
- _DEFAULT_WS_PING_INTERVAL_MS = 25_000
- 
- EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
- 
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
- 
- EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
- 
- _OUTBOUND_ALLOWED_TYPES = {
-     "policy.interaction",
-@@ -1044,79 +1051,91 @@ class ChatV2Adapter:
-     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
-         if isinstance(raw, dict):
-             return raw
-         if isinstance(raw, str):
+ def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optional[str]:
+     for header, value in headers:
+         if header == name:
              try:
-                 decoded = json.loads(raw)
-             except json.JSONDecodeError:
+                 return value.decode("latin1").strip()
+             except UnicodeDecodeError:  # pragma: no cover - defensive
                  return None
-             if isinstance(decoded, dict):
-                 return decoded
+     return None
+ 
+ 
++def _derive_scope_origin(scope: dict) -> Optional[str]:
++    """Best-effort reconstruction of the request origin from an ASGI scope."""
++
++    scheme = (scope.get("scheme") or "").lower()
++    if scheme in {"https", "wss"}:
++        scheme = "https"
++    else:
++        scheme = "http"
++
++    host = _decode_header(scope.get("headers", ()), b"host")
++    if not host:
++        server = scope.get("server")
++        if isinstance(server, (list, tuple)) and server:
++            hostname = (server[0] or "").strip()
++            port = server[1] if len(server) > 1 else None
++            if hostname:
++                if port and not _is_default_port(scheme, port):
++                    host = f"{hostname}:{port}"
++                else:
++                    host = hostname
++
++    if not host:
++        return None
++
++    normalized_host = host.strip().lower()
++    if not normalized_host:
++        return None
++
++    return f"{scheme}://{normalized_host}"
++
++
++def _is_default_port(scheme: str, port: Any) -> bool:
++    try:
++        value = int(port)
++    except (TypeError, ValueError):
++        return False
++    if scheme == "https":
++        return value == 443
++    if scheme == "http":
++        return value == 80
++    return False
++
++
+ def _resolve_origin_policy() -> "_OriginPolicy":
+     raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
+     if raw is not None:
+         entries = tuple(filter(None, (_normalize_origin(item) for item in raw.split(","))))
+         return _OriginPolicy(mode="explicit", values=entries)
+ 
+     env = (os.getenv("ASKCHIP_ENV") or "development").strip().lower()
+     if env in {"production", "prod"}:
+         return _OriginPolicy(mode="explicit", values=())
+ 
+     return _OriginPolicy(mode="localhost", values=("localhost", "127.0.0.1"))
+ 
+ 
+ def _is_origin_allowed(origin: str, policy: "_OriginPolicy") -> bool:
+     if policy.mode == "explicit":
+         normalized = _normalize_origin(origin)
+         if normalized is None or not policy.values:
+             return normalized in policy.values
+         return normalized in policy.values
+ 
+     if policy.mode == "localhost":
+         host = _extract_hostname(origin)
+         if host is None:
+             return False
+         return host in policy.values
+@@ -415,50 +458,54 @@ def _normalize_origin(value: str) -> Optional[str]:
+         return None
+     return lowered
+ 
+ 
+ def _extract_hostname(value: str) -> Optional[str]:
+     parsed = urlparse(value)
+     if not parsed.hostname:
+         return None
+     return parsed.hostname.lower()
+ 
+ 
+ @dataclass(frozen=True)
+ class _OriginPolicy:
+     mode: str
+     values: tuple[str, ...]
+ 
+ 
+ def _validate_ws_origin(scope: dict) -> tuple[bool, Optional[str]]:
+     """Validate the Origin header for incoming WebSocket handshakes."""
+ 
+     origin = _decode_header(scope.get("headers", ()), b"origin")
+     if origin is None:
+         return True, None
+ 
+     policy = _resolve_origin_policy()
++    if policy.mode == "explicit" and not policy.values:
++        derived = _derive_scope_origin(scope)
++        if derived is not None and _normalize_origin(origin) == _normalize_origin(derived):
++            return True, None
+     if _is_origin_allowed(origin, policy):
+         return True, None
+ 
+     return False, origin
+ 
+ 
+ _HTTP_ROUTES: Dict[str, HttpHandler] = {
+     ROOT_ROUTE: _handle_index,
+     FAVICON_ROUTE: _handle_favicon,
+     HEALTH_ROUTE: _handle_health,
+     LIVE_ROUTE: _handle_live,
+     READY_ROUTE: _handle_ready,
+     INFO_ROUTE: _handle_info,
+ }
+ 
+ 
+ def _resolve_admin_route(path: str) -> Optional[HttpHandler]:
+     if not path.startswith(_ADMIN_FLOW_PREFIX):
          return None
  
-     async def _run_outbound_sender(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> None:
-         queue = ctx.outbox
-         if queue is None:
-             return
-         try:
-             while True:
-                 payload = await queue.get()
-                 try:
-                     await self._send_outbound_frame(ctx, send, payload)
-                 except asyncio.CancelledError:
-                     raise
-+                except ClientDisconnected:
-+                    _logger.info(
-+                        "Client disconnected while delivering outbound frame for sid %s",
-+                        ctx.sid,
-+                    )
-+                    break
-                 except Exception:  # pragma: no cover - defensive
-                     _logger.exception("Failed to deliver outbound frame for sid %s", ctx.sid)
-                 finally:
-                     queue.task_done()
-         except asyncio.CancelledError:
-             raise
-         finally:
-             ctx.outbox = None
+     suffix = path[len(_ADMIN_FLOW_PREFIX) :]
+     if not suffix:
+         return None
  
-     async def _send_outbound_frame(
-         self,
-         ctx: AdapterContext,
-         send: Callable[[dict], Awaitable[None]],
-         payload: Dict[str, Any],
-     ) -> None:
-         lock = self._ensure_send_lock(ctx)
-         async with lock:
-             text = json.dumps(payload, separators=(",", ":"))
-             await send({"type": "websocket.send", "text": text})
+     segments = suffix.split("/")
+diff --git a/tests/test_ws_origin.py b/tests/test_ws_origin.py
+index db79d6a321d344a3287151281d81d8acd8339b7e..42edb87252ca43ac44d23a2b48c2d32005a5c641 100644
+--- a/tests/test_ws_origin.py
++++ b/tests/test_ws_origin.py
+@@ -1,68 +1,99 @@
+ """Origin allow-list enforcement for WebSocket handshakes."""
+ from __future__ import annotations
  
-     async def _send_audio_frame(
-         self,
-         ctx: AdapterContext,
-         send: Callable[[dict], Awaitable[None]],
-         chunk: bytes,
-     ) -> None:
-         lock = self._ensure_send_lock(ctx)
-         async with lock:
--            await send({"type": "websocket.send", "bytes": chunk})
-+            try:
-+                await send({"type": "websocket.send", "bytes": chunk})
-+            except ClientDisconnected:
-+                _logger.info(
-+                    "Client disconnected while delivering audio chunk for sid %s",
-+                    ctx.sid,
-+                )
+ import asyncio
+ import json
+ import os
+ from typing import Optional
+ from unittest.mock import patch
  
-     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
-         token = ctx.subscription_token
-         ctx.subscription_token = None
-         if token:
-             bus.unsubscribe(token)
+ import pytest
  
-         audio_token = ctx.audio_subscription_token
-         ctx.audio_subscription_token = None
-         if audio_token:
-             bus.unsubscribe(audio_token)
+ from app.asgi_gateway import _reject_origin, _validate_ws_origin
  
-         task = ctx.outbound_task
-         ctx.outbound_task = None
-         if task:
-             task.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await task
  
-         ctx.partial_coalescer.cancel()
+-def _make_scope(origin: Optional[str]) -> dict:
++def _make_scope(origin: Optional[str], *, host: Optional[str] = None, scheme: str = "https") -> dict:
+     headers = []
+     if origin is not None:
+         headers.append((b"origin", origin.encode("latin1")))
+-    return {"type": "websocket", "path": "/ws/v2/chat", "headers": tuple(headers)}
++    if host is not None:
++        headers.append((b"host", host.encode("latin1")))
++    return {
++        "type": "websocket",
++        "path": "/ws/v2/chat",
++        "headers": tuple(headers),
++        "scheme": scheme,
++    }
  
-         for task in list(ctx.audio_tasks):
-             task.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await task
+ 
+ @pytest.mark.parametrize(
+     "config, origin, expected",
+     [
+         ({"ASKCHIP_WS_ALLOWED_ORIGINS": "https://app.askchip.ai"}, "https://app.askchip.ai", True),
+         ({"ASKCHIP_WS_ALLOWED_ORIGINS": "https://app.askchip.ai"}, "https://evil.example", False),
+         ({"ASKCHIP_ENV": "development"}, "http://localhost:3000", True),
+         ({"ASKCHIP_ENV": "prod"}, "http://localhost:3000", False),
+     ],
+ )
+ def test_origin_policy(config: dict[str, str], origin: str, expected: bool) -> None:
+     with patch.dict(os.environ, config, clear=True):
+         allowed, _ = _validate_ws_origin(_make_scope(origin))
+         assert allowed is expected
+ 
+ 
+ def test_missing_origin_is_accepted() -> None:
+     with patch.dict(os.environ, {}, clear=True):
+         allowed, origin = _validate_ws_origin(_make_scope(None))
+         assert origin is None
+         assert allowed is True
+ 
+ 
++def test_scope_origin_matches_host_when_policy_empty() -> None:
++    with patch.dict(os.environ, {"ASKCHIP_ENV": "production"}, clear=True):
++        scope = _make_scope(
++            "https://chibot-ui.onrender.com",
++            host="chibot-ui.onrender.com",
++            scheme="https",
++        )
++        allowed, blocked = _validate_ws_origin(scope)
++        assert blocked is None
++        assert allowed is True
++
++
++def test_scope_origin_mismatch_is_rejected_when_policy_empty() -> None:
++    with patch.dict(os.environ, {"ASKCHIP_ENV": "production"}, clear=True):
++        scope = _make_scope(
++            "https://app.askchip.ai",
++            host="chibot-ui.onrender.com",
++            scheme="https",
++        )
++        allowed, blocked = _validate_ws_origin(scope)
++        assert allowed is False
++        assert blocked == "https://app.askchip.ai"
++
++
+ def test_reject_origin_responds_during_handshake() -> None:
+     async def _exercise() -> list[dict]:
+         queue: asyncio.Queue[dict] = asyncio.Queue()
+         await queue.put({"type": "websocket.connect"})
+ 
+         sent: list[dict] = []
+ 
+         async def receive() -> dict:
+             return await queue.get()
+ 
+         async def send(message: dict) -> None:
+             sent.append(message)
+ 
+         scope = {"type": "websocket", "path": "/ws/v2/chat"}
+         await _reject_origin(scope, "https://evil.example", receive, send)
+         return sent
+ 
+     messages = asyncio.run(_exercise())
+     assert [message["type"] for message in messages] == [
+         "websocket.http.response.start",
+         "websocket.http.response.body",
+     ]
+     start, body = messages
+     assert start["status"] == 403
+     payload = json.loads(body["body"].decode("utf-8"))

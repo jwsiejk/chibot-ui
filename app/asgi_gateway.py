@@ -370,6 +370,49 @@ def _decode_header(headers: Iterable[tuple[bytes, bytes]], name: bytes) -> Optio
     return None
 
 
+def _derive_scope_origin(scope: dict) -> Optional[str]:
+    """Best-effort reconstruction of the request origin from an ASGI scope."""
+
+    scheme = (scope.get("scheme") or "").lower()
+    if scheme in {"https", "wss"}:
+        scheme = "https"
+    else:
+        scheme = "http"
+
+    host = _decode_header(scope.get("headers", ()), b"host")
+    if not host:
+        server = scope.get("server")
+        if isinstance(server, (list, tuple)) and server:
+            hostname = (server[0] or "").strip()
+            port = server[1] if len(server) > 1 else None
+            if hostname:
+                if port and not _is_default_port(scheme, port):
+                    host = f"{hostname}:{port}"
+                else:
+                    host = hostname
+
+    if not host:
+        return None
+
+    normalized_host = host.strip().lower()
+    if not normalized_host:
+        return None
+
+    return f"{scheme}://{normalized_host}"
+
+
+def _is_default_port(scheme: str, port: Any) -> bool:
+    try:
+        value = int(port)
+    except (TypeError, ValueError):
+        return False
+    if scheme == "https":
+        return value == 443
+    if scheme == "http":
+        return value == 80
+    return False
+
+
 def _resolve_origin_policy() -> "_OriginPolicy":
     raw = os.getenv("ASKCHIP_WS_ALLOWED_ORIGINS")
     if raw is not None:
@@ -437,6 +480,10 @@ def _validate_ws_origin(scope: dict) -> tuple[bool, Optional[str]]:
         return True, None
 
     policy = _resolve_origin_policy()
+    if policy.mode == "explicit" and not policy.values:
+        derived = _derive_scope_origin(scope)
+        if derived is not None and _normalize_origin(origin) == _normalize_origin(derived):
+            return True, None
     if _is_origin_allowed(origin, policy):
         return True, None
 

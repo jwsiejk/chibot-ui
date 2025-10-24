@@ -12,11 +12,18 @@ import pytest
 from app.asgi_gateway import _reject_origin, _validate_ws_origin
 
 
-def _make_scope(origin: Optional[str]) -> dict:
+def _make_scope(origin: Optional[str], *, host: Optional[str] = None, scheme: str = "https") -> dict:
     headers = []
     if origin is not None:
         headers.append((b"origin", origin.encode("latin1")))
-    return {"type": "websocket", "path": "/ws/v2/chat", "headers": tuple(headers)}
+    if host is not None:
+        headers.append((b"host", host.encode("latin1")))
+    return {
+        "type": "websocket",
+        "path": "/ws/v2/chat",
+        "headers": tuple(headers),
+        "scheme": scheme,
+    }
 
 
 @pytest.mark.parametrize(
@@ -39,6 +46,30 @@ def test_missing_origin_is_accepted() -> None:
         allowed, origin = _validate_ws_origin(_make_scope(None))
         assert origin is None
         assert allowed is True
+
+
+def test_scope_origin_matches_host_when_policy_empty() -> None:
+    with patch.dict(os.environ, {"ASKCHIP_ENV": "production"}, clear=True):
+        scope = _make_scope(
+            "https://chibot-ui.onrender.com",
+            host="chibot-ui.onrender.com",
+            scheme="https",
+        )
+        allowed, blocked = _validate_ws_origin(scope)
+        assert blocked is None
+        assert allowed is True
+
+
+def test_scope_origin_mismatch_is_rejected_when_policy_empty() -> None:
+    with patch.dict(os.environ, {"ASKCHIP_ENV": "production"}, clear=True):
+        scope = _make_scope(
+            "https://app.askchip.ai",
+            host="chibot-ui.onrender.com",
+            scheme="https",
+        )
+        allowed, blocked = _validate_ws_origin(scope)
+        assert allowed is False
+        assert blocked == "https://app.askchip.ai"
 
 
 def test_reject_origin_responds_during_handshake() -> None:
