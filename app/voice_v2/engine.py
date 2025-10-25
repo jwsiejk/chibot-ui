@@ -39,7 +39,7 @@ from app.voice_v2.llm import LLMAdapter
 from app.voice_v2.gate import GateController
 from app.voice_v2.conversation_buffer import ConversationBuffer
 from app.voice_v2.vad import VADAggregator
-from app.voice_v2.planner import plan_turn
+from app.voice_v2.planner import _MODE_CHIPS, plan_turn
 from app.voice_v2.persona import default_chips_for_mode, load_persona
 
 
@@ -777,16 +777,45 @@ class EngineV2:
 
         try:
             persona = load_persona()
+            persona_dict = persona if isinstance(persona, Mapping) else {}
         except Exception:
             _logger.exception("Failed to load persona for connect suggestions")
-            persona = {}
+            persona_dict = {}
 
-        chips = default_chips_for_mode(persona if isinstance(persona, dict) else {}, "outline")
-        items = [str(label).strip() for label in chips if isinstance(label, str) and label.strip()]
-        if not items:
+        def _normalize_labels(labels: Any) -> list[str]:
+            seen = set()
+            results = []
+            if isinstance(labels, list):
+                for label in labels:
+                    if not isinstance(label, str):
+                        continue
+                    stripped = label.strip()
+                    if not stripped or stripped in seen:
+                        continue
+                    seen.add(stripped)
+                    results.append(stripped)
+            return results
+
+        selected_mode: Optional[str] = None
+        normalized_items: list[str] = []
+
+        for mode_key in ("greet", "outline"):
+            normalized_items = _normalize_labels(
+                default_chips_for_mode(persona_dict, mode_key)
+            )
+            if normalized_items:
+                selected_mode = mode_key
+                break
+
+        if not normalized_items:
+            normalized_items = _normalize_labels(_MODE_CHIPS.get("clarify", []))
+            if normalized_items:
+                selected_mode = "clarify"
+
+        if not normalized_items or not selected_mode:
             return
 
-        limited_items = items[:max_items]
+        limited_items = normalized_items[:max_items]
         if not limited_items:
             return
 
@@ -800,7 +829,7 @@ class EngineV2:
             "type": "assistant.suggestions",
             "ts_ms": _now_ms(),
             "items": suggestion_items,
-            "mode": "outline",
+            "mode": selected_mode,
         }
         serialized = json.dumps(suggestions_frame, ensure_ascii=False, separators=(",", ":"))
         payload = {

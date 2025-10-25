@@ -22,7 +22,13 @@
       "instruction": "Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.",
       "constraints": {
         "max_words": 8
-      }
+      },
+      "__note_greet_chips": "TEMPLATE: Replace these labels with final copy later; engine reads them dynamically.",
+      "chips": [
+        "Set your objective",
+        "Explore FlashArray fit",
+        "Review solution path"
+      ]
     },
     "outline": {
       "instruction": "Summarize the Pure Storage solution path, spotlighting architecture pillars and success criteria.",
