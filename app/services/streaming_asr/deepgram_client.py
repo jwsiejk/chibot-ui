@@ -13,6 +13,7 @@ from typing import Callable, Deque, Dict, Tuple
 
 import websockets
 from websockets.legacy.client import WebSocketClientProtocol
+from urllib.parse import urlsplit
 
 _logger = logging.getLogger(__name__)
 
@@ -75,15 +76,18 @@ class DeepgramClient:
         *,
         stream_id: str,
         on_close: Callable[[int | None, str | None], None] | None = None,
-    ) -> None:
+    ) -> str:
         if not isinstance(sid, str) or not sid:
             raise ValueError("sid must be a non-empty string")
         if sid in self._streams:
-            return
+            return ""
         if not isinstance(stream_id, str) or not stream_id:
             raise ValueError("stream_id must be a non-empty string")
         loop = asyncio.get_running_loop()
-        headers = {"Authorization": f"Token {self._api_key}"}
+        headers = {
+            "Authorization": f"Token {self._api_key}",
+            "Content-Type": content_type,
+        }
         try:
             websocket = await websockets.connect(
                 self._url,
@@ -123,6 +127,8 @@ class DeepgramClient:
             stream_id,
             self._url,
         )
+        qs = urlsplit(self._url).query
+        return qs
 
     def send_audio(self, sid: str, chunk: bytes) -> None:
         state = self._streams.get(sid)

@@ -20,6 +20,7 @@ from app.voice_v2.engine import EngineV2
 from app.services.streaming_asr.deepgram_client import DeepgramClient
 
 _logger = logging.getLogger(__name__)
+_asr_log = logging.getLogger("app.voice_v2.asr_runtime")
 
 _CONTENT_TYPE = "audio/webm;codecs=opus"
 _PARTIAL_CONFIDENCE = 0.55
@@ -269,7 +270,7 @@ class ASRRuntime:
             state.last_stream_id = stream_id
             state.close_reason = None
             try:
-                await self._client.open_stream(
+                qs = await self._client.open_stream(
                     sid,
                     _CONTENT_TYPE,
                     on_partial=self._make_partial_cb(sid),
@@ -286,6 +287,12 @@ class ASRRuntime:
                 return
 
             state.stream_open = True
+            _asr_log.info(
+                "evt=asr_session_open sid=%s content_type=%s qs=%s",
+                sid,
+                _CONTENT_TYPE,
+                qs or "",
+            )
             if stream_id:
                 _logger.info(
                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',

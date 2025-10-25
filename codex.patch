@@ -1,117 +1,281 @@
-diff --git a/app/services/tts/elevenlabs_client.py b/app/services/tts/elevenlabs_client.py
-index 0ea3e32454b82563c91cb72f035cf9e2afc18c8f..073a72df6205f9423a762113cbd67e5d02f3e578 100644
---- a/app/services/tts/elevenlabs_client.py
-+++ b/app/services/tts/elevenlabs_client.py
-@@ -24,54 +24,64 @@ _SAMPLE_WIDTH_BYTES = 2  # 16-bit
- # Emit roughly 40 ms of audio per chunk (16 kHz mono => 1280 bytes per slice).
- _CHUNK_BYTES = int(_SAMPLE_RATE_HZ * _CHANNELS * _SAMPLE_WIDTH_BYTES * 0.04)
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 0351484b6dd3b4c4293f0d21a7dd9e671b6ef692..5d7c1c282e39d85eacc75eb2a5d41e596e4448cf 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -1,40 +1,41 @@
+ """Deepgram realtime streaming client."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import json
+ import logging
+ import os
+ import time
+ import uuid
+ from collections import deque
+ from dataclasses import dataclass, field
+ from typing import Callable, Deque, Dict, Tuple
+ 
+ import websockets
+ from websockets.legacy.client import WebSocketClientProtocol
++from urllib.parse import urlsplit
+ 
+ _logger = logging.getLogger(__name__)
+ 
+ _DEFAULT_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
+ _DEFAULT_BUFFER_BYTES = 4 * 1024 * 1024
  
  
  @dataclass
- class ElevenLabsStream:
-     """Asynchronous iterator that yields PCM chunks from ElevenLabs."""
+ class _StreamState:
+     sid: str
+     stream_id: str
+     websocket: WebSocketClientProtocol
+     on_partial: Callable[[str, Dict[str, object]], None]
+     on_final: Callable[[str, Dict[str, object]], None]
+     on_error: Callable[[str], None]
+     on_close: Callable[[int | None, str | None], None] | None
+     loop: asyncio.AbstractEventLoop
+     chunks: Deque[Tuple[int, bytes, float]] = field(default_factory=deque)
+     buffered_bytes: int = 0
+     drop_logged: bool = False
+     closing: bool = False
+     sender_task: asyncio.Task[None] | None = None
+     receiver_task: asyncio.Task[None] | None = None
+     data_event: asyncio.Event = field(default_factory=asyncio.Event)
+     finalized: bool = False
+@@ -53,98 +54,103 @@ class DeepgramClient:
+         api_key: str | None = None,
+         url: str | None = None,
+         max_buffer_bytes: int | None = None,
+     ) -> None:
+         self._api_key = (api_key or os.getenv("DEEPGRAM_API_KEY")) or ""
+         self._url = url or os.getenv("DEEPGRAM_LISTEN_URL", _DEFAULT_LISTEN_URL)
+         self._max_buffer_bytes = max_buffer_bytes or _DEFAULT_BUFFER_BYTES
+         if self._max_buffer_bytes <= 0:
+             self._max_buffer_bytes = _DEFAULT_BUFFER_BYTES
+         self._streams: Dict[str, _StreamState] = {}
+         self.idle_close_ms = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
  
-     response_cm: Any
-     chunk_bytes: int = _CHUNK_BYTES
- 
-     def __post_init__(self) -> None:
-         self._response: httpx.Response | None = None
-         self._queue: asyncio.Queue[bytes | object] = asyncio.Queue()
-         self._producer: asyncio.Task[None] | None = None
-         self._sentinel = object()
-         self._error: BaseException | None = None
-         self._closed = False
- 
-     def __await__(self):  # type: ignore[override]
-         return self._start().__await__()
- 
-     async def _start(self) -> "ElevenLabsStream":
-         response = await self.response_cm.__aenter__()
-         self._response = response
-+        request = getattr(response, "request", None)
-+        query_string: str | None = None
-+        if request is not None:
-+            raw_query = request.url.query
-+            if isinstance(raw_query, bytes):
-+                query_string = raw_query.decode()
-+            elif raw_query:
-+                query_string = str(raw_query)
-+        if query_string is None:
-+            query_string = f"optimize_streaming_latency=4&output_format={_OUTPUT_FORMAT}"
-         _tts_provider_log.info(
--            "evt=tts_provider_stream_opened provider=elevenlabs content_type=%s format=%s",
-+            "evt=tts_provider_stream_opened provider=elevenlabs content_type=%s url_qs=%s",
-             response.headers.get("content-type"),
--            _OUTPUT_FORMAT,
-+            query_string,
-         )
-         response.raise_for_status()
-         self._producer = asyncio.create_task(self._drain())
-         return self
- 
-     async def _drain(self) -> None:
-         assert self._response is not None
-         buffer = bytearray()
+     # ------------------------------------------------------------------
+     # Public API
+     # ------------------------------------------------------------------
+     async def open_stream(
+         self,
+         sid: str,
+         content_type: str,
+         on_partial: Callable[[str, Dict[str, object]], None],
+         on_final: Callable[[str, Dict[str, object]], None],
+         on_error: Callable[[str], None],
+         *,
+         stream_id: str,
+         on_close: Callable[[int | None, str | None], None] | None = None,
+-    ) -> None:
++    ) -> str:
+         if not isinstance(sid, str) or not sid:
+             raise ValueError("sid must be a non-empty string")
+         if sid in self._streams:
+-            return
++            return ""
+         if not isinstance(stream_id, str) or not stream_id:
+             raise ValueError("stream_id must be a non-empty string")
+         loop = asyncio.get_running_loop()
+-        headers = {"Authorization": f"Token {self._api_key}"}
++        headers = {
++            "Authorization": f"Token {self._api_key}",
++            "Content-Type": content_type,
++        }
          try:
-             async for data in self._response.aiter_bytes():
-                 if not data:
-                     continue
-                 buffer.extend(data)
-                 while len(buffer) >= self.chunk_bytes:
-                     await self._queue.put(bytes(buffer[: self.chunk_bytes]))
-                     del buffer[: self.chunk_bytes]
-             if buffer:
-                 await self._queue.put(bytes(buffer))
-         except asyncio.CancelledError:
+             websocket = await websockets.connect(
+                 self._url,
+                 extra_headers=headers,
+                 max_size=None,
+                 ping_interval=None,
+             )
+         except Exception as exc:
+             _logger.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
              raise
-         except Exception as exc:  # pragma: no cover - defensive
-             self._error = exc
-         finally:
-             await self._queue.put(self._sentinel)
-             await self._close_response()
-@@ -151,41 +161,44 @@ class ElevenLabsTTSProvider(TTSProviderBase):
-         self._client = None
-         if client is not None:
-             await client.aclose()
  
-     async def _synthesize_impl(self, text: str, *, voice_id: Optional[str] = None, **kwargs) -> ElevenLabsStream:
-         if not isinstance(text, str):
-             raise TypeError("text must be a string")
-         if not text:
-             raise ValueError("text must not be empty")
-         target_voice = voice_id or self._default_voice_id
-         if not target_voice:
-             raise RuntimeError("voice_id must be provided for ElevenLabs synthesis")
+         start_payload = {
+             "type": "StartRequest",
+             "metadata": {"content_type": content_type},
+         }
+         await websocket.send(json.dumps(start_payload, separators=(",", ":")))
  
-         client = await self._get_client()
-         payload: Dict[str, object] = {"text": text, "output_format": _OUTPUT_FORMAT}
-         model_id = kwargs.get("model_id") or os.getenv("ELEVENLABS_MODEL_ID")
-         if isinstance(model_id, str) and model_id:
-             payload["model_id"] = model_id
- 
-         headers = {"xi-api-key": self._api_key, "accept": "application/octet-stream"}
-         response_cm = client.stream(
-             "POST",
-             f"/text-to-speech/{target_voice}/stream",
-             json=payload,
-             headers=headers,
--            params={"optimize_streaming_latency": "4"},
-+            params={
-+                "optimize_streaming_latency": "4",
-+                "output_format": _OUTPUT_FORMAT,
-+            },
+         state = _StreamState(
+             sid=sid,
+             websocket=websocket,
+             on_partial=on_partial,
+             on_final=on_final,
+             on_error=on_error,
+             on_close=on_close,
+             loop=loop,
+             stream_id=stream_id,
          )
-         stream = ElevenLabsStream(response_cm=response_cm)
-         return await stream
+         state.sender_task = loop.create_task(self._sender_loop(state), name=f"dg-send-{sid}")
+         state.receiver_task = loop.create_task(
+             self._receiver_loop(state), name=f"dg-recv-{sid}"
+         )
+         self._streams[sid] = state
+         loop.call_soon(
+             _logger.info,
+             "evt=dg_stream_open sid=%s stream_id=%s url=%s",
+             sid,
+             stream_id,
+             self._url,
+         )
++        qs = urlsplit(self._url).query
++        return qs
  
-     async def _get_client(self) -> httpx.AsyncClient:
-         client = self._client
-         if client is not None:
-             return client
-         async with self._client_lock:
-             if self._client is None:
-                 self._client = httpx.AsyncClient(base_url=_API_BASE_URL, timeout=self._timeout)
-             return self._client
+     def send_audio(self, sid: str, chunk: bytes) -> None:
+         state = self._streams.get(sid)
+         if state is None or state.closing:
+             return
+         if not isinstance(chunk, (bytes, bytearray, memoryview)):
+             raise TypeError("chunk must be bytes-like")
+         data = bytes(chunk)
+         if not data:
+             return
+ 
+         now = time.monotonic()
+         if state.first_audio_ts is None:
+             state.first_audio_ts = now
+         seq_no = state.next_seq_no
+         state.next_seq_no += 1
+         state.chunks.append((seq_no, data, now))
+         state.buffered_bytes += len(data)
+         if state.buffered_bytes > self._max_buffer_bytes:
+             dropped = 0
+             while state.chunks and state.buffered_bytes > self._max_buffer_bytes:
+                 _, removed, _ = state.chunks.popleft()
+                 dropped += len(removed)
+                 state.buffered_bytes -= len(removed)
+             if dropped and not state.drop_logged:
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index c672183b9460f47fa9406db31f05b24145c11890..f053151ae5a879c7ee8e961c640effe3517a4ebb 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -1,47 +1,48 @@
+ """Deepgram-backed ASR runtime for the voice v2 engine."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import logging
+ import time
+ import uuid
+ from collections import deque
+ from dataclasses import dataclass, field
+ from typing import Callable, Deque, Dict, Optional
+ 
+ from app.config import (
+     ASR_BACKPRESSURE_THRESHOLD_BYTES,
+     ASR_IDLE_CLOSE_MS,
+     ASR_TRACE,
+ )
+ from app.telemetry import bus
+ from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
+ from app.voice_v2.engine import EngineV2
+ from app.services.streaming_asr.deepgram_client import DeepgramClient
+ 
+ _logger = logging.getLogger(__name__)
++_asr_log = logging.getLogger("app.voice_v2.asr_runtime")
+ 
+ _CONTENT_TYPE = "audio/webm;codecs=opus"
+ _PARTIAL_CONFIDENCE = 0.55
+ _FINAL_CONFIDENCE = 0.9
+ _DEFAULT_IDLE_CLOSE_MS = 4000
+ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+ _TRACE_ENABLED = bool(ASR_TRACE)
  
  
- __all__ = ["ElevenLabsTTSProvider", "ElevenLabsStream"]
+ @dataclass
+ class _SessionState:
+     """Track per-session streaming state."""
+ 
+     sid: str
+     pending: Deque[bytes] = field(default_factory=deque)
+     buffered_bytes: int = 0
+     req_id: Optional[str] = None
+     stream_open_task: Optional[asyncio.Task[None]] = None
+     stream_open: bool = False
+     last_audio_ts: float = 0.0
+     idle_handle: asyncio.TimerHandle | None = None
+     stream_id: Optional[str] = None
+     close_reason: Optional[str] = None
+     opened_at_ms: int = 0
+     opened_at_monotonic: float = 0.0
+@@ -247,67 +248,73 @@ class ASRRuntime:
+         if isinstance(e2e_latency, (int, float)):
+             log_template += " e2e_latency_ms=%d"
+             log_args.append(int(e2e_latency))
+         _logger.info(log_template, *log_args)
+ 
+     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
+         loop = self._ensure_loop()
+         if loop is None:
+             _logger.warning("evt=asr_no_loop sid=%s", sid)
+             return
+         if state.stream_open:
+             return
+         if not state.pending:
+             return
+         task = state.stream_open_task
+         if task is not None and not task.done():
+             return
+ 
+         async def _open() -> None:
+             if state.stream_id is None:
+                 state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
+             stream_id = state.stream_id
+             state.last_stream_id = stream_id
+             state.close_reason = None
+             try:
+-                await self._client.open_stream(
++                qs = await self._client.open_stream(
+                     sid,
+                     _CONTENT_TYPE,
+                     on_partial=self._make_partial_cb(sid),
+                     on_final=self._make_final_cb(sid),
+                     on_error=self._make_error_cb(sid),
+                     stream_id=stream_id,
+                     on_close=self._make_close_cb(sid, state),
+                 )
+             except asyncio.CancelledError:
+                 raise
+             except Exception:  # pragma: no cover - defensive
+                 _logger.exception("evt=asr_stream_open_failed sid=%s", sid)
+                 state.stream_id = None
+                 return
+ 
+             state.stream_open = True
++            _asr_log.info(
++                "evt=asr_session_open sid=%s content_type=%s qs=%s",
++                sid,
++                _CONTENT_TYPE,
++                qs or "",
++            )
+             if stream_id:
+                 _logger.info(
+                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
+                     sid,
+                     stream_id,
+                     _CONTENT_TYPE,
+                     int(self._idle_close_ms),
+                 )
+             while state.pending:
+                 chunk = state.pending.popleft()
+                 chunk_len = len(chunk)
+                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
+                 state.chunks_sent += 1
+                 state.bytes_sent += chunk_len
+                 self._client.send_audio(sid, chunk)
+             state.stream_open_task = None
+             self._reset_idle_timer(sid, state)
+ 
+         def _on_done(_task: asyncio.Task[None]) -> None:
+             if state.stream_open_task is _task:
+                 state.stream_open_task = None
+ 
+         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
+         state.stream_open_task.add_done_callback(_on_done)
+ 
