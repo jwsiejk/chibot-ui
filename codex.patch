@@ -1,630 +1,384 @@
-diff --git a/app/config.py b/app/config.py
-index 95b63122207f7e9961449969c7cc77756fe9bd88..e5bf7324a85be8f424e370af084fd32988df2362 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -1,19 +1,39 @@
- """Application configuration helpers."""
- 
- import os
- 
- try:
-     from dotenv import load_dotenv  # type: ignore
- except ImportError:  # pragma: no cover - optional dependency
-     load_dotenv = None
- else:  # pragma: no branch
-     load_dotenv(dotenv_path=".env", override=False)
- 
-+
-+def env_bool(name: str, default: bool = False) -> bool:
-+    """Return an environment variable parsed as a boolean."""
-+
-+    value = os.getenv(name)
-+    if value is None:
-+        return bool(default)
-+    value = value.strip().lower()
-+    if value in {"1", "true", "t", "yes", "y", "on"}:
-+        return True
-+    if value in {"0", "false", "f", "no", "n", "off"}:
-+        return False
-+    return bool(default)
-+
-+
- DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-+ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
-+    os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
-+)
- ASR_IDLE_CLOSE_MS = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
-+ASR_TRACE = env_bool("ASR_TRACE", False)
- 
- 
- def get_env(name: str, default=None):
-     """Retrieve an environment variable with an optional default."""
-+
-     value = os.getenv(name)
-     return value if value is not None else default
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index d12c3bf48eb8e3f04d328c93b656a76b0c01f875..c672183b9460f47fa9406db31f05b24145c11890 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -1,253 +1,399 @@
- """Deepgram-backed ASR runtime for the voice v2 engine."""
+diff --git a/app/voice_v2/tts_runtime.py b/app/voice_v2/tts_runtime.py
+index 94774def31a32a32463e7fa92f669aa78db360e1..495dfbae1e7fd6a900318d0f5b34e931678eae55 100644
+--- a/app/voice_v2/tts_runtime.py
++++ b/app/voice_v2/tts_runtime.py
+@@ -1,75 +1,78 @@
+ """Runtime that bridges EVT_NLG events to ElevenLabs streaming synthesis."""
  from __future__ import annotations
  
  import asyncio
  import logging
- import time
+ import os
++import threading
  import uuid
- from collections import deque
- from dataclasses import dataclass, field
- from typing import Callable, Deque, Dict, Optional
++from concurrent.futures import Future as ThreadFuture, CancelledError as ThreadCancelledError
+ from dataclasses import dataclass
+ from typing import Any, Dict, Mapping, Optional
  
-+from app.config import (
-+    ASR_BACKPRESSURE_THRESHOLD_BYTES,
-+    ASR_IDLE_CLOSE_MS,
-+    ASR_TRACE,
-+)
  from app.telemetry import bus
- from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
+ from app.voice_v2 import EVT_NLG, EVT_TTS_END
  from app.voice_v2.engine import EngineV2
- from app.services.streaming_asr.deepgram_client import DeepgramClient
+ from app.voice_v2.tts_base import (
+     ProviderCircuitOpenError,
+     ProviderTimeoutError,
+     TTSProviderBase,
+ )
+ from app.services.tts.elevenlabs_client import ElevenLabsStream, ElevenLabsTTSProvider
  
  _logger = logging.getLogger(__name__)
  
- _CONTENT_TYPE = "audio/webm;codecs=opus"
- _PARTIAL_CONFIDENCE = 0.55
- _FINAL_CONFIDENCE = 0.9
- _DEFAULT_IDLE_CLOSE_MS = 4000
-+_BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
-+_TRACE_ENABLED = bool(ASR_TRACE)
- 
  
  @dataclass
- class _SessionState:
-     """Track per-session streaming state."""
+ class _SynthesisState:
+     """Track an in-flight synthesis task for a session."""
  
-     sid: str
-     pending: Deque[bytes] = field(default_factory=deque)
-+    buffered_bytes: int = 0
-     req_id: Optional[str] = None
-     stream_open_task: Optional[asyncio.Task[None]] = None
-     stream_open: bool = False
-     last_audio_ts: float = 0.0
--    drop_logged: bool = False
-     idle_handle: asyncio.TimerHandle | None = None
-     stream_id: Optional[str] = None
-     close_reason: Optional[str] = None
-+    opened_at_ms: int = 0
-+    opened_at_monotonic: float = 0.0
-+    last_audio_ts_ms: int = 0
-+    chunks_sent: int = 0
-+    bytes_sent: int = 0
-+    dg_msgs_partial: int = 0
-+    dg_msgs_final: int = 0
-+    finals_delivered: int = 0
-+    dropped_chunks: int = 0
-+    last_stream_id: Optional[str] = None
-+
-+    def __post_init__(self) -> None:
-+        now_monotonic = time.monotonic()
-+        now_wall = time.time()
-+        self.opened_at_monotonic = now_monotonic
-+        self.opened_at_ms = int(now_wall * 1000)
-+        self.last_audio_ts = now_monotonic
-+        self.last_audio_ts_ms = int(now_wall * 1000)
+     utt_id: str
+     post_hold_ms: int
+     emit_end: bool = True
+-    task: asyncio.Task[Any] | None = None
++    task: asyncio.Task[Any] | ThreadFuture[Any] | None = None
+     stream: ElevenLabsStream | None = None
  
  
- class ASRRuntime:
-     """Bridge websocket audio to Deepgram realtime transcription."""
+ class TTSRuntime:
+     """Subscribe to NLG telemetry and orchestrate server-side TTS."""
  
-     def __init__(self, engine: EngineV2, client: DeepgramClient) -> None:
+     def __init__(
+         self,
+         *,
+         engine: EngineV2,
+         provider: TTSProviderBase | None = None,
+         telemetry_bus=bus,
+     ) -> None:
          if engine is None:
              raise ValueError("engine must be provided")
-         if client is None:
-             raise ValueError("client must be provided")
  
          self._engine = engine
-         self._client = client
-         self._sessions: Dict[str, _SessionState] = {}
+         self._bus = telemetry_bus
          self._loop: asyncio.AbstractEventLoop | None = None
--        self._idle_close_ms = getattr(client, "idle_close_ms", _DEFAULT_IDLE_CLOSE_MS)
--        if not isinstance(self._idle_close_ms, (int, float)) or self._idle_close_ms < 0:
-+        configured_idle = ASR_IDLE_CLOSE_MS
-+        if not isinstance(configured_idle, (int, float)):
-+            configured_idle = _DEFAULT_IDLE_CLOSE_MS
-+        client_idle = getattr(client, "idle_close_ms", None)
-+        if isinstance(client_idle, (int, float)) and client_idle >= 0:
-+            self._idle_close_ms = int(client_idle)
-+        else:
-+            self._idle_close_ms = int(configured_idle)
-+        if self._idle_close_ms < 0:
-             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
++        self._loop_thread: threading.Thread | None = None
+         self._default_post_hold_ms = self._load_default_post_hold()
+         self._utt_seq: Dict[str, int] = {}
+         self._states: Dict[str, _SynthesisState] = {}
+         self._subscriptions: list[str] = []
  
-     # ------------------------------------------------------------------
-     # Websocket hooks
-     # ------------------------------------------------------------------
-     def on_ws_open(self, sid: str) -> None:
-         self._ensure_loop()
-         self._sessions[sid] = _SessionState(sid=sid)
+         if provider is None:
+             provider = self._build_provider()
+         self._provider = provider
  
-     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
-         if not isinstance(chunk, (bytes, bytearray, memoryview)):
-             raise TypeError("chunk must be bytes-like")
-         data = bytes(chunk)
-         if not data:
+         if self._provider is None:
+             _logger.info("TTS runtime disabled: ELEVENLABS_API_KEY not configured")
              return
  
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
+         self._subscriptions.append(self._bus.subscribe(EVT_NLG, self._handle_nlg_event))
+         self._subscriptions.append(self._bus.subscribe(EVT_TTS_END, self._handle_tts_end_event))
  
--        state.last_audio_ts = time.monotonic()
-+        now_monotonic = time.monotonic()
-+        state.last_audio_ts = now_monotonic
-+        state.last_audio_ts_ms = int(time.time() * 1000)
-+        chunk_len = len(data)
-+
-+        if state.stream_id is None:
-+            state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
-+            state.last_stream_id = state.stream_id
-+
-         if not state.stream_open:
-             state.pending.append(data)
--            self._ensure_stream(sid, state)
-+            state.buffered_bytes += chunk_len
-+            self._apply_backpressure(sid, state)
-+            if state.pending:
-+                self._ensure_stream(sid, state)
-         else:
-+            state.chunks_sent += 1
-+            state.bytes_sent += chunk_len
-             self._client.send_audio(sid, data)
+     # ------------------------------------------------------------------
+     # Event handlers
+     # ------------------------------------------------------------------
+     def _handle_nlg_event(self, event: Dict[str, Any]) -> None:
+         provider = self._provider
+         if provider is None:
+             return
  
-+        if _TRACE_ENABLED:
-+            _logger.debug(
-+                "evt=asr_audio_enqueued sid=%s stream_id=%s bytes=%d buffered_bytes=%d pending_chunks=%d",
-+                sid,
-+                state.stream_id or state.last_stream_id or "",
-+                chunk_len,
-+                state.buffered_bytes,
-+                len(state.pending),
+         sid = event.get("sid")
+@@ -79,54 +82,65 @@ class TTSRuntime:
+         if not isinstance(sid, str) or not sid:
+             return
+         if not isinstance(text, str) or not text.strip():
+             return
+         if not isinstance(req_id, str) or not req_id:
+             req_id = f"req-{uuid.uuid4().hex}"
+ 
+         loop = self._ensure_loop()
+         if loop is None:
+             _logger.warning("No running event loop for TTS synthesis", extra={"sid": sid})
+             return
+ 
+         utt_id = self._next_utt_id(sid)
+         post_hold_ms = self._resolve_post_hold_ms()
+         voice_id = self._resolve_voice_id(provider)
+ 
+         if voice_id is None:
+             _logger.warning("Skipping TTS synthesis; no voice_id available", extra={"sid": sid})
+             return
+ 
+         self._cancel_state(sid, reason="superseded")
+ 
+         state = _SynthesisState(utt_id=utt_id, post_hold_ms=post_hold_ms)
+         self._states[sid] = state
+ 
+-        task = loop.create_task(
+-            self._run_synthesis(sid, req_id, text, voice_id, state),
+-            name=f"tts-runtime-{sid}-{utt_id}",
+-        )
++        coroutine = self._run_synthesis(sid, req_id, text, voice_id, state)
++
++        try:
++            current_loop = asyncio.get_running_loop()
++        except RuntimeError:
++            current_loop = None
++
++        if current_loop is loop:
++            task = loop.create_task(
++                coroutine,
++                name=f"tts-runtime-{sid}-{utt_id}",
 +            )
++        else:
++            task = asyncio.run_coroutine_threadsafe(coroutine, loop)
 +
-         self._reset_idle_timer(sid, state)
+         state.task = task
+         task.add_done_callback(lambda task, sid=sid, state=state: self._on_task_done(sid, state, task))
  
-     def on_ws_close(self, sid: str) -> None:
-         state = self._sessions.pop(sid, None)
+     def _handle_tts_end_event(self, event: Dict[str, Any]) -> None:
+         sid = event.get("sid")
+         if not isinstance(sid, str) or not sid:
+             return
+ 
+         state = self._states.get(sid)
          if state is None:
              return
-         state.close_reason = "client_ws_closed"
-         self._cancel_idle_timer(state)
-         task = state.stream_open_task
-         if task is not None and not task.done():
-             task.cancel()
-         state.stream_open = False
-         try:
-             self._client.close_stream(sid)
-         except Exception:  # pragma: no cover - defensive
-             _logger.exception("evt=asr_stream_close_failed sid=%s", sid)
-+        finally:
-+            self._log_session_rollup(state)
-         state.req_id = None
+ 
+         utt_meta = self._extract_utt_id(event.get("meta"))
+         if utt_meta != state.utt_id:
+             return
+ 
+         if event.get("reason") == "canceled":
+             state.emit_end = False
+             task = state.task
+             if task is not None and not task.done():
+                 task.cancel()
  
      # ------------------------------------------------------------------
-     # Internal helpers
+     # Synthesis lifecycle
      # ------------------------------------------------------------------
+@@ -173,77 +187,92 @@ class TTSRuntime:
+                 if not chunk:
+                     continue
+                 self._engine.emit_tts_audio_chunk(sid, chunk)
+         except asyncio.CancelledError:
+             raise
+         except Exception as exc:  # pragma: no cover - defensive
+             _logger.exception(
+                 "Error streaming ElevenLabs audio", extra={"sid": sid, "utt_id": state.utt_id, "error": str(exc)}
+             )
+         finally:
+             if stream is not None:
+                 try:
+                     await stream.aclose()
+                 except Exception:  # pragma: no cover - defensive
+                     _logger.debug("Error closing ElevenLabs stream", exc_info=True)
+             if start_emitted and state.emit_end:
+                 self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
+ 
+     def _on_task_done(self, sid: str, state: _SynthesisState, task: asyncio.Task[Any]) -> None:
+         current = self._states.get(sid)
+         if current is state:
+             self._states.pop(sid, None)
+ 
+         try:
+             task.result()
+-        except asyncio.CancelledError:
++        except (asyncio.CancelledError, ThreadCancelledError):
+             pass
+         except Exception:  # pragma: no cover - defensive
+             _logger.exception("TTS synthesis task failed", extra={"sid": sid})
+ 
+     # ------------------------------------------------------------------
+     # Helpers
+     # ------------------------------------------------------------------
+     def _build_provider(self) -> TTSProviderBase | None:
+         api_key = os.getenv("ELEVENLABS_API_KEY")
+         if not api_key:
+             return None
+         try:
+             return ElevenLabsTTSProvider(telemetry_bus=self._bus)
+         except Exception:  # pragma: no cover - defensive
+             _logger.exception("Failed to initialize ElevenLabsTTSProvider")
+             return None
+ 
      def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
          loop = self._loop
-         if loop is not None:
+         if loop is not None and loop.is_running():
              return loop
          try:
              loop = asyncio.get_running_loop()
          except RuntimeError:
-             loop = None
-         self._loop = loop
+-            return None
+-        self._loop = loop
++            loop = None
++        else:
++            self._loop = loop
++            return loop
++
++        loop = self._loop
++        if loop is None or loop.is_closed():
++            loop = asyncio.new_event_loop()
++            thread = threading.Thread(
++                target=self._run_background_loop,
++                args=(loop,),
++                name="tts-runtime-loop",
++                daemon=True,
++            )
++            thread.start()
++            self._loop = loop
++            self._loop_thread = thread
          return loop
  
-+    def _apply_backpressure(self, sid: str, state: _SessionState) -> None:
-+        if _BACKPRESSURE_THRESHOLD <= 0:
-+            return
-+        if state.buffered_bytes <= _BACKPRESSURE_THRESHOLD:
-+            return
-+
-+        dropped_chunks = 0
-+        while state.pending and state.buffered_bytes > _BACKPRESSURE_THRESHOLD:
-+            removed = state.pending.popleft()
-+            state.buffered_bytes = max(0, state.buffered_bytes - len(removed))
-+            dropped_chunks += 1
-+
-+        if dropped_chunks:
-+            state.dropped_chunks += dropped_chunks
-+            stream_id = state.stream_id or state.last_stream_id or ""
-+            _logger.info(
-+                "evt=asr_backpressure sid=%s stream_id=%s buffered_bytes=%d threshold=%d action=drop_oldest dropped_chunks=%d",
-+                sid,
-+                stream_id,
-+                state.buffered_bytes,
-+                _BACKPRESSURE_THRESHOLD,
-+                dropped_chunks,
-+            )
-+
-+    def _log_session_rollup(self, state: _SessionState) -> None:
-+        stream_id = state.last_stream_id or state.stream_id or ""
-+        duration_ms = int(
-+            max(0.0, (time.monotonic() - state.opened_at_monotonic) * 1000)
-+        )
-+        _logger.info(
-+            "evt=asr_rollup sid=%s stream_id=%s opened_at_ms=%d last_audio_ts_ms=%d "
-+            "chunks_sent=%d bytes_sent=%d partials=%d finals=%d finals_delivered=%d "
-+            "dropped=%d duration_ms=%d",
-+            state.sid,
-+            stream_id,
-+            state.opened_at_ms,
-+            state.last_audio_ts_ms,
-+            state.chunks_sent,
-+            state.bytes_sent,
-+            state.dg_msgs_partial,
-+            state.dg_msgs_final,
-+            state.finals_delivered,
-+            state.dropped_chunks,
-+            duration_ms,
-+        )
-+
-+    def _log_utterance(
-+        self,
-+        state: _SessionState,
-+        stream_id: str,
-+        req_id: str,
-+        metadata: Dict[str, object],
-+        text: str,
-+    ) -> None:
-+        chars = int(metadata.get("len_chars") or len(text))
-+        words_meta = metadata.get("words")
-+        if isinstance(words_meta, (int, float)):
-+            words = max(0, int(words_meta))
-+        else:
-+            words = len([w for w in text.strip().split() if w])
-+        asr_latency_ms = int(metadata.get("latency_ms") or 0)
-+        log_template = (
-+            "evt=asr_utterance sid=%s stream_id=%s req_id=%s chars=%d words=%d "
-+            "asr_latency_ms=%d"
-+        )
-+        log_args = [
-+            state.sid,
-+            stream_id,
-+            req_id,
-+            chars,
-+            words,
-+            asr_latency_ms,
-+        ]
-+        e2e_latency = metadata.get("e2e_latency_ms")
-+        if isinstance(e2e_latency, (int, float)):
-+            log_template += " e2e_latency_ms=%d"
-+            log_args.append(int(e2e_latency))
-+        _logger.info(log_template, *log_args)
-+
-     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
-         loop = self._ensure_loop()
-         if loop is None:
-             _logger.warning("evt=asr_no_loop sid=%s", sid)
-             return
-         if state.stream_open:
-             return
-+        if not state.pending:
-+            return
-         task = state.stream_open_task
-         if task is not None and not task.done():
-             return
+     def _next_utt_id(self, sid: str) -> str:
+         current = self._utt_seq.get(sid, 0) + 1
+         self._utt_seq[sid] = current
+         return f"utt-{current:05d}"
  
-         async def _open() -> None:
-             if state.stream_id is None:
-                 state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
-             stream_id = state.stream_id
-+            state.last_stream_id = stream_id
-             state.close_reason = None
-             try:
-                 await self._client.open_stream(
-                     sid,
-                     _CONTENT_TYPE,
-                     on_partial=self._make_partial_cb(sid),
-                     on_final=self._make_final_cb(sid),
-                     on_error=self._make_error_cb(sid),
-                     stream_id=stream_id,
-                     on_close=self._make_close_cb(sid, state),
-                 )
-             except asyncio.CancelledError:
-                 raise
-             except Exception:  # pragma: no cover - defensive
-                 _logger.exception("evt=asr_stream_open_failed sid=%s", sid)
-                 state.stream_id = None
-                 return
+     def _resolve_post_hold_ms(self) -> int:
+         snapshot = self._engine.policy_snapshot or {}
+         hold: Optional[int] = None
+         voice_block = snapshot.get("voice")
+         if isinstance(voice_block, Mapping):
+             candidate = voice_block.get("post_hold_ms")
+             if isinstance(candidate, (int, float)):
+                 hold = int(candidate)
+         if hold is None:
+             candidate = snapshot.get("post_hold_ms")
+             if isinstance(candidate, (int, float)):
+                 hold = int(candidate)
+         if hold is None or hold < 0:
+             hold = self._default_post_hold_ms
+         return hold
  
-             state.stream_open = True
-             if stream_id:
-                 _logger.info(
-                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
-                     sid,
-                     stream_id,
-                     _CONTENT_TYPE,
-                     int(self._idle_close_ms),
-                 )
-             while state.pending:
-                 chunk = state.pending.popleft()
-+                chunk_len = len(chunk)
-+                state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
-+                state.chunks_sent += 1
-+                state.bytes_sent += chunk_len
-                 self._client.send_audio(sid, chunk)
-             state.stream_open_task = None
-             self._reset_idle_timer(sid, state)
+     def _resolve_voice_id(self, provider: TTSProviderBase) -> Optional[str]:
+         resolver = getattr(self._engine, "_voice_profile", None)
+@@ -273,27 +302,32 @@ class TTSRuntime:
+             _logger.debug("Engine cancel_current_tts failed", exc_info=True)
  
-         def _on_done(_task: asyncio.Task[None]) -> None:
-             if state.stream_open_task is _task:
-                 state.stream_open_task = None
+     @staticmethod
+     def _extract_utt_id(meta: Any) -> Optional[str]:
+         if not isinstance(meta, Mapping):
+             return None
+         tts_meta = meta.get("tts")
+         if not isinstance(tts_meta, Mapping):
+             return None
+         utt_id = tts_meta.get("utt_id")
+         if isinstance(utt_id, str):
+             return utt_id
+         return None
  
-         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
-         state.stream_open_task.add_done_callback(_on_done)
- 
-     def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
-         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
-             self._on_partial(sid, text, metadata or {})
- 
-         return _callback
- 
-     def _make_final_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
-         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
-             self._on_final(sid, text, metadata or {})
- 
-         return _callback
- 
-     def _make_error_cb(self, sid: str) -> Callable[[str], None]:
-         def _callback(error: str) -> None:
-             self._on_error(sid, error)
- 
-         return _callback
- 
-     def _make_close_cb(self, sid: str, state: _SessionState) -> Callable[[int | None, str | None], None]:
-         def _callback(_code: int | None, _reason: str | None) -> None:
-             stream_id = state.stream_id
-             if not stream_id:
-                 return
-             reason = state.close_reason
-             if reason is None:
-                 reason = "server_shutdown" if _code == 1001 else "error"
-+            state.last_stream_id = stream_id
-             _logger.info(
-                 "evt=asr_session_close sid=%s stream_id=%s reason=%s",
-                 sid,
-                 stream_id,
-                 reason,
-             )
-             state.stream_id = None
-             state.close_reason = None
-             state.stream_open = False
-             state.req_id = None
- 
-         return _callback
- 
-     def _on_partial(
-         self, sid: str, text: str, metadata: Dict[str, object] | None = None
-     ) -> None:
-         if not isinstance(text, str) or not text.strip():
-             return
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
- 
-         metadata = metadata or {}
-         if state.stream_id is None:
-             meta_stream = metadata.get("stream_id")
-             if isinstance(meta_stream, str) and meta_stream:
-                 state.stream_id = meta_stream
-         stream_id = state.stream_id or ""
-         if not stream_id:
-             stream_id = f"dg-stream-{uuid.uuid4().hex}"
-             state.stream_id = stream_id
-+        state.last_stream_id = stream_id
-+        state.dg_msgs_partial += 1
-         len_chars = int(metadata.get("len_chars") or len(text))
-         utterance_id = metadata.get("utterance_id")
-         if not utterance_id:
-             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
-         latency_ms = int(metadata.get("latency_ms") or 0)
- 
-         _logger.debug(
-             "evt=dg_partial sid=%s stream_id=%s len_chars=%d is_final=false "
-             "utterance_id=%s latency_ms=%d",
-             sid,
-             stream_id,
-             len_chars,
-             utterance_id,
-             latency_ms,
-         )
- 
-         req_id = state.req_id
-         if req_id is None:
-             req_id = f"dg-{uuid.uuid4().hex}"
-             state.req_id = req_id
-         session = getattr(self._engine, "_ensure_session", None)
-         if callable(session):
-             engine_session = session(sid)
-             if getattr(engine_session, "req_id", None) != req_id:
-                 engine_session.req_id = req_id
-@@ -264,89 +410,93 @@ class ASRRuntime:
-             "text": text,
-             "confidence": _PARTIAL_CONFIDENCE,
-             "vendor": "deepgram",
-         }
-         bus.publish(event)
- 
-     def _on_final(
-         self, sid: str, text: str, metadata: Dict[str, object] | None = None
-     ) -> None:
-         if not isinstance(text, str) or not text.strip():
-             return
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
- 
-         metadata = metadata or {}
-         if state.stream_id is None:
-             meta_stream = metadata.get("stream_id")
-             if isinstance(meta_stream, str) and meta_stream:
-                 state.stream_id = meta_stream
-         stream_id = state.stream_id or ""
-         if not stream_id:
-             stream_id = f"dg-stream-{uuid.uuid4().hex}"
-             state.stream_id = stream_id
-+        state.last_stream_id = stream_id
-+        state.dg_msgs_final += 1
-         len_chars = int(metadata.get("len_chars") or len(text))
-         utterance_id = metadata.get("utterance_id")
-         if not utterance_id:
-             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
-         latency_ms = int(metadata.get("latency_ms") or 0)
- 
-         req_id = str(uuid.uuid4())
-         state.req_id = None
- 
-         ensure_session = getattr(self._engine, "_ensure_session", None)
-         if callable(ensure_session):
-             engine_session = ensure_session(sid)
-             engine_session.req_id = req_id
- 
-         _logger.debug(
-             "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
-             "utterance_id=%s latency_ms=%d req_id=%s",
-             sid,
-             stream_id,
-             len_chars,
-             utterance_id,
-             latency_ms,
-             req_id,
-         )
- 
+     def _load_default_post_hold(self) -> int:
+         raw = os.getenv("TTS_POST_HOLD_MS")
+         if raw is None:
+             return 200
          try:
-             self._engine.on_asr_final(sid, text, req_id)
-         except Exception:  # pragma: no cover - defensive
-             _logger.exception("evt=asr_engine_final_failed sid=%s", sid)
+             value = int(float(raw))
+         except (TypeError, ValueError):
+             _logger.warning("Invalid TTS_POST_HOLD_MS=%r; defaulting to 200", raw)
+             return 200
+         return max(0, value)
  
-         event = {
-             "type": EVT_ASR_FINAL,
-             "sid": sid,
-             "req_id": req_id,
-             "text": text,
-             "confidence": _FINAL_CONFIDENCE,
-             "vendor": "deepgram",
-         }
-         bus.publish(event)
-+        state.finals_delivered += 1
-+        self._log_utterance(state, stream_id, req_id, metadata, text)
++    @staticmethod
++    def _run_background_loop(loop: asyncio.AbstractEventLoop) -> None:
++        asyncio.set_event_loop(loop)
++        loop.run_forever()
++
  
-     def _on_error(self, sid: str, error: str) -> None:
-         _logger.exception("evt=asr_error sid=%s err=%s", sid, error)
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             return
-         state.close_reason = "error"
-         state.stream_open = False
-         state.req_id = None
-         self._cancel_idle_timer(state)
-         try:
-             self._client.close_stream(sid)
-         except Exception:  # pragma: no cover - defensive
-             _logger.exception("evt=asr_error_close_failed sid=%s", sid)
- 
-     def _cancel_idle_timer(self, state: _SessionState) -> None:
-         handle = state.idle_handle
-         if handle is not None:
-             handle.cancel()
-             state.idle_handle = None
- 
-     def _reset_idle_timer(self, sid: str, state: _SessionState) -> None:
-         threshold_ms = self._idle_close_ms
-         if threshold_ms <= 0:
-@@ -362,58 +512,75 @@ class ASRRuntime:
-             state.idle_handle = None
-             self._handle_idle_timeout(sid, state)
- 
-         state.idle_handle = loop.call_later(delay, _fire)
- 
-     def _handle_idle_timeout(self, sid: str, state: _SessionState) -> None:
-         if not state.stream_open:
-             return
- 
-         state.close_reason = "idle_timeout"
-         ensure_session = getattr(self._engine, "_ensure_session", None)
-         engine_state = None
-         if callable(ensure_session):
-             try:
-                 engine_session = ensure_session(sid)
-             except Exception:  # pragma: no cover - defensive
-                 engine_session = None
-             if engine_session is not None:
-                 engine_state = getattr(engine_session, "state", None)
- 
-         if engine_state not in {"Ready", "Idle"}:
-             # Re-arm the timer to check again once the engine transitions.
-             self._reset_idle_timer(sid, state)
-             return
- 
-+        idle_ms = int(
-+            max(0.0, (time.monotonic() - state.last_audio_ts) * 1000)
-+            if state.last_audio_ts
-+            else self._idle_close_ms
-+        )
-+        stream_id = state.stream_id or state.last_stream_id or ""
-+        _logger.info(
-+            "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
-+            sid,
-+            stream_id,
-+            idle_ms,
-+        )
-         try:
-             self._client.close_stream(sid)
-         except Exception:  # pragma: no cover - defensive
-             _logger.exception("evt=asr_idle_close_failed sid=%s", sid)
--        else:
--            _logger.info(
--                "evt=asr_idle_close sid=%s threshold_ms=%d engine_state=%s",
--                sid,
--                int(self._idle_close_ms),
--                engine_state,
--            )
-         state.stream_open = False
-+        state.last_stream_id = stream_id or state.last_stream_id
-+        state.stream_id = None
-         state.req_id = None
- 
-     # Optional idle guard
-     def close_idle_streams(self) -> None:
-         if self._loop is None:
-             return
-         now = time.monotonic()
-         threshold = self._idle_close_ms / 1000.0
-         for sid, state in list(self._sessions.items()):
-             if not state.stream_open:
-                 continue
-             if threshold <= 0:
-                 continue
-             if state.last_audio_ts and now - state.last_audio_ts >= threshold:
-                 state.close_reason = "idle_timeout"
-                 try:
-+                    stream_id = state.stream_id or state.last_stream_id or ""
-+                    idle_ms = int(max(0.0, (now - state.last_audio_ts) * 1000))
-+                    _logger.info(
-+                        "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
-+                        sid,
-+                        stream_id,
-+                        idle_ms,
-+                    )
-                     self._client.close_stream(sid)
-                 except Exception:  # pragma: no cover - defensive
-                     _logger.exception("evt=asr_idle_close_failed sid=%s", sid)
-                 state.stream_open = False
-+                state.last_stream_id = state.stream_id or state.last_stream_id
-+                state.stream_id = None
-                 state.req_id = None
+ __all__ = ["TTSRuntime"]
+diff --git a/tests/test_tts_runtime.py b/tests/test_tts_runtime.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..5531568fb9452fd60f142c55bd453f26212781ca
+--- /dev/null
++++ b/tests/test_tts_runtime.py
+@@ -0,0 +1,95 @@
++import asyncio
++import time
++import unittest
++
++from app.telemetry import bus
++from app.voice_v2.tts_runtime import TTSRuntime
++from app.voice_v2.tts_base import TTSProviderBase
++
++
++class _StubStream:
++    def __init__(self, chunk: bytes) -> None:
++        self._chunk = chunk
++        self._emitted = False
++        self.closed = False
++
++    def __aiter__(self):
++        return self
++
++    async def __anext__(self) -> bytes:
++        if self._emitted:
++            raise StopAsyncIteration
++        self._emitted = True
++        await asyncio.sleep(0)
++        return self._chunk
++
++    async def aclose(self) -> None:
++        self.closed = True
++
++
++class _StubProvider(TTSProviderBase):
++    def __init__(self) -> None:
++        super().__init__(vendor="stub", telemetry_bus=bus, retries=0, timeout_s=1)
++
++    async def _synthesize_impl(self, text: str, *, voice_id: str | None = None, **kwargs) -> _StubStream:
++        if not voice_id:
++            raise RuntimeError("voice_id required")
++        return _StubStream(b"\x00" * 320)
++
++
++class _StubEngine:
++    def __init__(self) -> None:
++        self.starts: list[tuple[str, str, int]] = []
++        self.chunks: list[tuple[str, bytes]] = []
++        self.ends: list[tuple[str, str, int]] = []
++        self.policy_snapshot: dict[str, object] = {}
++
++    def _voice_profile(self) -> tuple[str, str]:
++        return ("stub-voice", "en-US")
++
++    def on_tts_start(self, sid: str, utt_id: str, post_hold_ms: int | None = None) -> None:
++        self.starts.append((sid, utt_id, int(post_hold_ms or 0)))
++
++    def emit_tts_audio_chunk(self, sid: str, chunk: bytes) -> None:
++        self.chunks.append((sid, bytes(chunk)))
++
++    def on_tts_end(self, sid: str, utt_id: str, post_hold_ms: int | None = None) -> None:
++        self.ends.append((sid, utt_id, int(post_hold_ms or 0)))
++
++    def cancel_current_tts(self, sid: str, *, reason: str) -> None:  # pragma: no cover - not used
++        return
++
++
++class TestTTSRuntimeBackgroundLoop(unittest.TestCase):
++    def setUp(self) -> None:
++        bus.reset()
++
++    def tearDown(self) -> None:
++        bus.reset()
++
++    def test_emits_tts_events_without_running_loop(self) -> None:
++        engine = _StubEngine()
++        provider = _StubProvider()
++        runtime = TTSRuntime(engine=engine, provider=provider, telemetry_bus=bus)
++
++        event = {"sid": "sid-1", "text": "Hello", "req_id": "req-1"}
++        runtime._handle_nlg_event(event)
++
++        deadline = time.time() + 2.0
++        while not engine.ends and time.time() < deadline:
++            time.sleep(0.01)
++
++        self.assertTrue(engine.starts)
++        self.assertTrue(engine.chunks)
++        self.assertTrue(engine.ends)
++
++        loop = runtime._loop
++        if loop is not None and loop.is_running():
++            loop.call_soon_threadsafe(loop.stop)
++        thread = runtime._loop_thread
++        if thread is not None:
++            thread.join(timeout=1)
++
++
++if __name__ == "__main__":
++    unittest.main()

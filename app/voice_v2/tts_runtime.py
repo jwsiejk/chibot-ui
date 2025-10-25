@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import uuid
+from concurrent.futures import Future as ThreadFuture, CancelledError as ThreadCancelledError
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
@@ -28,7 +30,7 @@ class _SynthesisState:
     utt_id: str
     post_hold_ms: int
     emit_end: bool = True
-    task: asyncio.Task[Any] | None = None
+    task: asyncio.Task[Any] | ThreadFuture[Any] | None = None
     stream: ElevenLabsStream | None = None
 
 
@@ -48,6 +50,7 @@ class TTSRuntime:
         self._engine = engine
         self._bus = telemetry_bus
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
         self._default_post_hold_ms = self._load_default_post_hold()
         self._utt_seq: Dict[str, int] = {}
         self._states: Dict[str, _SynthesisState] = {}
@@ -101,10 +104,21 @@ class TTSRuntime:
         state = _SynthesisState(utt_id=utt_id, post_hold_ms=post_hold_ms)
         self._states[sid] = state
 
-        task = loop.create_task(
-            self._run_synthesis(sid, req_id, text, voice_id, state),
-            name=f"tts-runtime-{sid}-{utt_id}",
-        )
+        coroutine = self._run_synthesis(sid, req_id, text, voice_id, state)
+
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if current_loop is loop:
+            task = loop.create_task(
+                coroutine,
+                name=f"tts-runtime-{sid}-{utt_id}",
+            )
+        else:
+            task = asyncio.run_coroutine_threadsafe(coroutine, loop)
+
         state.task = task
         task.add_done_callback(lambda task, sid=sid, state=state: self._on_task_done(sid, state, task))
 
@@ -195,7 +209,7 @@ class TTSRuntime:
 
         try:
             task.result()
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, ThreadCancelledError):
             pass
         except Exception:  # pragma: no cover - defensive
             _logger.exception("TTS synthesis task failed", extra={"sid": sid})
@@ -220,8 +234,23 @@ class TTSRuntime:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            return None
-        self._loop = loop
+            loop = None
+        else:
+            self._loop = loop
+            return loop
+
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            loop = asyncio.new_event_loop()
+            thread = threading.Thread(
+                target=self._run_background_loop,
+                args=(loop,),
+                name="tts-runtime-loop",
+                daemon=True,
+            )
+            thread.start()
+            self._loop = loop
+            self._loop_thread = thread
         return loop
 
     def _next_utt_id(self, sid: str) -> str:
@@ -294,6 +323,11 @@ class TTSRuntime:
             _logger.warning("Invalid TTS_POST_HOLD_MS=%r; defaulting to 200", raw)
             return 200
         return max(0, value)
+
+    @staticmethod
+    def _run_background_loop(loop: asyncio.AbstractEventLoop) -> None:
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
 
 
 __all__ = ["TTSRuntime"]
