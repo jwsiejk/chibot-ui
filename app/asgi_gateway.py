@@ -14,13 +14,17 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from app import config
 from app.logging_config import configure_logging
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
 from app.versioning import get_build_id, inject_static_version
+from app.voice_v2.asr_runtime import ASRRuntime
 from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_runtime import TTSRuntime
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+from app.services.streaming_asr.deepgram_client import DeepgramClient
+ 
 
 configure_logging()
 
@@ -388,8 +392,11 @@ def _get_adapter() -> ChatV2Adapter:
         exporter = FileExporter(EXPORT_ROOT)
         engine = EngineV2(exporter=exporter)
         tts_runtime = TTSRuntime(engine=engine)
+        asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
+        asr_runtime = ASRRuntime(engine=engine, client=asr_client)
         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
         _adapter.tts_runtime = tts_runtime
+        _adapter.asr_runtime = asr_runtime
     return _adapter
 
 

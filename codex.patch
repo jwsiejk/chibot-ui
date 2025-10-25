@@ -1,609 +1,341 @@
-diff --git a/app/config.py b/app/config.py
-index cc801356a85503fd77e929ed2e4c0f47522d17aa..95b63122207f7e9961449969c7cc77756fe9bd88 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -1,16 +1,19 @@
- """Application configuration helpers."""
- 
-+import os
-+
- try:
-     from dotenv import load_dotenv  # type: ignore
- except ImportError:  # pragma: no cover - optional dependency
-     load_dotenv = None
- else:  # pragma: no branch
-     load_dotenv(dotenv_path=".env", override=False)
- 
-+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-+ASR_IDLE_CLOSE_MS = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
-+
- 
- def get_env(name: str, default=None):
-     """Retrieve an environment variable with an optional default."""
--    import os
--
-     value = os.getenv(name)
-     return value if value is not None else default
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index e0ff583ae39a2b9b47127dde297e37ae70ecd9cb..f132294053d875dafc5552f78950192dc71f854e 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -1,124 +1,217 @@
--"""Minimal Deepgram streaming client with provider keepalive support.
--
--This module was introduced in Build 04-G and is shared by higher-level
--adapters (for example :mod:`app.voice_v2.asr`) so that keepalive behaviour
--is implemented exactly once.
--"""
-+"""Deepgram realtime streaming client."""
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index ecc1df251e8ed139d12a5dfa5074b65d51dacbe3..1aa51db6e2e4f2fef59e06f50ec1ddad8bf34b3b 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -1,48 +1,52 @@
+ """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
  from __future__ import annotations
  
- import asyncio
--import contextlib
+ import hashlib
  import json
  import logging
+ import mimetypes
  import os
--from typing import Any, Callable
-+from collections import deque
-+from dataclasses import dataclass, field
-+from typing import Callable, Deque, Dict
-+
-+import websockets
-+from websockets.legacy.client import WebSocketClientProtocol
+ import time
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from functools import partial
+ from pathlib import Path
+ from tempfile import NamedTemporaryFile
+ from typing import Any, Awaitable, Callable, Dict, Optional
  
- _logger = logging.getLogger(__name__)
- 
-+_DEFAULT_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
-+_DEFAULT_BUFFER_BYTES = 4 * 1024 * 1024
- 
--class DeepgramClient:
--    """Client wrapper responsible for maintaining the Deepgram websocket."""
--
--    def __init__(self) -> None:
--        self._ws: Any | None = None
--        self._send_lock = asyncio.Lock()
--        self._keepalive_interval = max(
--            0.0, float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
--        )
--        self._keepalive_task: asyncio.Task[None] | None = None
- 
--    async def connect(self, websocket: Any) -> None:
--        """Attach to an already negotiated websocket transport."""
-+@dataclass
-+class _StreamState:
-+    sid: str
-+    websocket: WebSocketClientProtocol
-+    on_partial: Callable[[str], None]
-+    on_final: Callable[[str], None]
-+    on_error: Callable[[str], None]
-+    loop: asyncio.AbstractEventLoop
-+    chunks: Deque[bytes] = field(default_factory=deque)
-+    buffered_bytes: int = 0
-+    drop_logged: bool = False
-+    closing: bool = False
-+    sender_task: asyncio.Task[None] | None = None
-+    receiver_task: asyncio.Task[None] | None = None
-+    data_event: asyncio.Event = field(default_factory=asyncio.Event)
- 
--        if websocket is None:
--            raise ValueError("websocket must not be None")
- 
--        await self._stop_keepalive()
--        self._ws = websocket
--
--        if self._keepalive_interval > 0:
--            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-+class DeepgramClient:
-+    """Client wrapper responsible for maintaining Deepgram realtime streams."""
-+
-+    def __init__(
-+        self,
-+        *,
-+        api_key: str | None = None,
-+        url: str | None = None,
-+        max_buffer_bytes: int | None = None,
-+    ) -> None:
-+        self._api_key = (api_key or os.getenv("DEEPGRAM_API_KEY")) or ""
-+        self._url = url or os.getenv("DEEPGRAM_LISTEN_URL", _DEFAULT_LISTEN_URL)
-+        self._max_buffer_bytes = max_buffer_bytes or _DEFAULT_BUFFER_BYTES
-+        if self._max_buffer_bytes <= 0:
-+            self._max_buffer_bytes = _DEFAULT_BUFFER_BYTES
-+        self._streams: Dict[str, _StreamState] = {}
-+        self.idle_close_ms = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
-+
-+    # ------------------------------------------------------------------
-+    # Public API
-+    # ------------------------------------------------------------------
-+    async def open_stream(
-+        self,
-+        sid: str,
-+        content_type: str,
-+        on_partial: Callable[[str], None],
-+        on_final: Callable[[str], None],
-+        on_error: Callable[[str], None],
-+    ) -> None:
-+        if not isinstance(sid, str) or not sid:
-+            raise ValueError("sid must be a non-empty string")
-+        if sid in self._streams:
-+            return
-+        loop = asyncio.get_running_loop()
-+        headers = {"Authorization": f"Token {self._api_key}"}
-+        try:
-+            websocket = await websockets.connect(
-+                self._url,
-+                extra_headers=headers,
-+                max_size=None,
-+                ping_interval=None,
-+            )
-+        except Exception as exc:
-+            _logger.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
-+            raise
- 
--    async def close(self) -> None:
--        """Terminate the websocket connection and stop background tasks."""
-+        start_payload = {
-+            "type": "StartRequest",
-+            "metadata": {"content_type": content_type},
-+        }
-+        await websocket.send(json.dumps(start_payload, separators=(",", ":")))
-+
-+        state = _StreamState(
-+            sid=sid,
-+            websocket=websocket,
-+            on_partial=on_partial,
-+            on_final=on_final,
-+            on_error=on_error,
-+            loop=loop,
-+        )
-+        state.sender_task = loop.create_task(self._sender_loop(state), name=f"dg-send-{sid}")
-+        state.receiver_task = loop.create_task(
-+            self._receiver_loop(state), name=f"dg-recv-{sid}"
-+        )
-+        self._streams[sid] = state
- 
--        await self._stop_keepalive()
--        ws = self._ws
--        self._ws = None
--        if ws is None:
-+    def send_audio(self, sid: str, chunk: bytes) -> None:
-+        state = self._streams.get(sid)
-+        if state is None or state.closing:
-             return
--        close: Callable[[], Any] | None = getattr(ws, "close", None)
--        if close is None:
-+        if not isinstance(chunk, (bytes, bytearray, memoryview)):
-+            raise TypeError("chunk must be bytes-like")
-+        data = bytes(chunk)
-+        if not data:
-             return
--        result = close()
--        if asyncio.iscoroutine(result) or asyncio.isfuture(result):
--            await result
--
--    async def send_json(self, payload: dict[str, Any]) -> None:
--        """Send a JSON payload to the provider using the serialized transport."""
--
--        if not isinstance(payload, dict):
--            raise TypeError("payload must be a dict")
--        message = json.dumps(payload, separators=(",", ":"))
--        await self._send_text(message)
--
--    async def _send_text(self, message: str) -> None:
--        ws = self._ws
--        if ws is None:
--            raise RuntimeError("Deepgram websocket not connected")
--
--        sender = getattr(ws, "send", None)
--        if sender is None:
--            sender = getattr(ws, "send_str", None)
--        if sender is None or not callable(sender):
--            raise AttributeError("websocket transport missing send method")
--
--        async with self._send_lock:
--            result = sender(message)
--            if asyncio.iscoroutine(result) or asyncio.isfuture(result):
--                await result
--
--    async def _keepalive_loop(self) -> None:
--        """Send periodic provider keepalive frames until cancelled."""
- 
-+        state.chunks.append(data)
-+        state.buffered_bytes += len(data)
-+        if state.buffered_bytes > self._max_buffer_bytes:
-+            dropped = 0
-+            while state.chunks and state.buffered_bytes > self._max_buffer_bytes:
-+                removed = state.chunks.popleft()
-+                dropped += len(removed)
-+                state.buffered_bytes -= len(removed)
-+            if dropped and not state.drop_logged:
-+                state.drop_logged = True
-+                _logger.warning(
-+                    "evt=deepgram_backpressure sid=%s dropped_bytes=%d", sid, dropped
-+                )
-+        state.data_event.set()
-+
-+    def close_stream(self, sid: str) -> None:
-+        state = self._streams.pop(sid, None)
-+        if state is None:
-+            return
-+        state.closing = True
-+        state.data_event.set()
-+        if state.receiver_task is not None:
-+            state.receiver_task.cancel()
-+        if state.sender_task is not None:
-+            state.sender_task.cancel()
-+        state.loop.create_task(self._shutdown(state))
-+
-+    # ------------------------------------------------------------------
-+    # Internal helpers
-+    # ------------------------------------------------------------------
-+    async def _sender_loop(self, state: _StreamState) -> None:
-         try:
--            if not self._socket_is_open():
--                return
--            await self._send_keepalive()
-             while True:
--                await asyncio.sleep(self._keepalive_interval)
--                if not self._socket_is_open():
-+                await state.data_event.wait()
-+                state.data_event.clear()
-+                while state.chunks:
-+                    chunk = state.chunks.popleft()
-+                    state.buffered_bytes -= len(chunk)
-+                    await state.websocket.send(chunk)
-+                if state.closing:
-                     break
--                await self._send_keepalive()
-         except asyncio.CancelledError:
-             raise
--        except Exception:  # pragma: no cover - defensive
--            _logger.exception("Deepgram keepalive loop failed")
-+        except Exception as exc:  # pragma: no cover - defensive
-+            _logger.exception("evt=deepgram_send_failed sid=%s err=%s", state.sid, exc)
-+            state.on_error(state.sid, str(exc))
-+
-+    async def _receiver_loop(self, state: _StreamState) -> None:
-+        websocket = state.websocket
-+        try:
-+            async for message in websocket:
-+                if isinstance(message, bytes):
-+                    continue
-+                try:
-+                    payload = json.loads(message)
-+                except json.JSONDecodeError:
-+                    continue
-+                self._handle_message(state, payload)
-+        except asyncio.CancelledError:
-+            raise
-+        except Exception as exc:  # pragma: no cover - defensive
-+            _logger.exception("evt=deepgram_recv_failed sid=%s err=%s", state.sid, exc)
-+            state.on_error(state.sid, str(exc))
-         finally:
--            self._keepalive_task = None
--
--    async def _send_keepalive(self) -> None:
--        await self._send_text(json.dumps({"type": "KeepAlive"}, separators=(",", ":")))
--
--    def _socket_is_open(self) -> bool:
--        ws = self._ws
--        if ws is None:
--            return False
--        if getattr(ws, "closed", False):
--            return False
--        close_code = getattr(ws, "close_code", None)
--        if close_code not in (None, 0):
--            return False
--        return True
--
--    async def _stop_keepalive(self) -> None:
--        task = self._keepalive_task
--        self._keepalive_task = None
--        if task is None:
-+            await self._finalize_stream(state)
-+
-+    async def _shutdown(self, state: _StreamState) -> None:
-+        try:
-+            await state.websocket.close()
-+        except Exception:  # pragma: no cover - defensive
-+            _logger.debug("evt=deepgram_ws_close_error sid=%s", state.sid, exc_info=True)
-+        await self._finalize_stream(state)
-+
-+    async def _finalize_stream(self, state: _StreamState) -> None:
-+        try:
-+            await state.websocket.wait_closed()
-+        except Exception:  # pragma: no cover - defensive
-+            pass
-+
-+    def _handle_message(self, state: _StreamState, payload: dict) -> None:
-+        message_type = payload.get("type")
-+        if message_type == "Results":
-+            channel = payload.get("channel") or {}
-+            alternatives = channel.get("alternatives") or []
-+            if not alternatives:
-+                return
-+            transcript = alternatives[0].get("transcript", "").strip()
-+            if not transcript:
-+                return
-+            is_final = bool(channel.get("is_final") or payload.get("speech_final"))
-+            if is_final:
-+                state.on_final(state.sid, transcript)
-+            else:
-+                state.on_partial(state.sid, transcript)
-+            return
-+        if message_type == "error" or message_type == "Error":
-+            error = payload.get("error") or payload.get("message") or str(payload)
-+            state.on_error(state.sid, error)
-             return
--        task.cancel()
--        with contextlib.suppress(asyncio.CancelledError):
--            await task
-+        if "error" in payload:
-+            state.on_error(state.sid, str(payload.get("error")))
- 
- 
- __all__ = ["DeepgramClient"]
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..ff340ba12362b21fa2a740b3dc27846758e1db79
---- /dev/null
-+++ b/app/voice_v2/asr_runtime.py
-@@ -0,0 +1,259 @@
-+"""Deepgram-backed ASR runtime for the voice v2 engine."""
-+from __future__ import annotations
-+
-+import asyncio
-+import logging
-+import time
-+import uuid
-+from collections import deque
-+from dataclasses import dataclass, field
-+from typing import Callable, Deque, Dict, Optional
-+
-+from app.telemetry import bus
-+from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
-+from app.voice_v2.engine import EngineV2
++from app import config
+ from app.logging_config import configure_logging
+ from app.telemetry import bus as telemetry_bus
+ from app.telemetry.exporter import FileExporter
+ from app.versioning import get_build_id, inject_static_version
++from app.voice_v2.asr_runtime import ASRRuntime
+ from app.voice_v2.engine import EngineV2
+ from app.voice_v2.tts_runtime import TTSRuntime
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 +from app.services.streaming_asr.deepgram_client import DeepgramClient
-+
-+_logger = logging.getLogger(__name__)
-+
-+_CONTENT_TYPE = "audio/webm;codecs=opus"
-+_PARTIAL_CONFIDENCE = 0.55
-+_FINAL_CONFIDENCE = 0.9
-+_DEFAULT_IDLE_CLOSE_MS = 4000
-+
-+
-+@dataclass
-+class _SessionState:
-+    """Track per-session streaming state."""
-+
-+    sid: str
-+    pending: Deque[bytes] = field(default_factory=deque)
-+    req_id: Optional[str] = None
-+    stream_open_task: Optional[asyncio.Task[None]] = None
-+    stream_open: bool = False
-+    last_audio_ts: float = 0.0
-+    drop_logged: bool = False
-+
-+
-+class ASRRuntime:
-+    """Bridge websocket audio to Deepgram realtime transcription."""
-+
-+    def __init__(self, engine: EngineV2, client: DeepgramClient) -> None:
-+        if engine is None:
-+            raise ValueError("engine must be provided")
-+        if client is None:
-+            raise ValueError("client must be provided")
-+
-+        self._engine = engine
-+        self._client = client
-+        self._sessions: Dict[str, _SessionState] = {}
-+        self._loop: asyncio.AbstractEventLoop | None = None
-+        self._idle_close_ms = getattr(client, "idle_close_ms", _DEFAULT_IDLE_CLOSE_MS)
-+        if not isinstance(self._idle_close_ms, (int, float)) or self._idle_close_ms < 0:
-+            self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
-+
-+    # ------------------------------------------------------------------
-+    # Websocket hooks
-+    # ------------------------------------------------------------------
-+    def on_ws_open(self, sid: str) -> None:
-+        self._ensure_loop()
-+        self._sessions[sid] = _SessionState(sid=sid)
-+
-+    def on_ws_audio(self, sid: str, chunk: bytes) -> None:
-+        if not isinstance(chunk, (bytes, bytearray, memoryview)):
-+            raise TypeError("chunk must be bytes-like")
-+        data = bytes(chunk)
-+        if not data:
-+            return
-+
-+        state = self._sessions.get(sid)
-+        if state is None:
-+            state = _SessionState(sid=sid)
-+            self._sessions[sid] = state
-+
-+        state.last_audio_ts = time.monotonic()
-+        if not state.stream_open:
-+            state.pending.append(data)
-+            self._ensure_stream(sid, state)
-+            return
-+
-+        self._client.send_audio(sid, data)
-+
-+    def on_ws_close(self, sid: str) -> None:
-+        state = self._sessions.pop(sid, None)
-+        if state is None:
-+            return
-+        task = state.stream_open_task
-+        if task is not None and not task.done():
-+            task.cancel()
-+        try:
-+            self._client.close_stream(sid)
-+        except Exception:  # pragma: no cover - defensive
-+            _logger.exception("evt=asr_stream_close_failed sid=%s", sid)
-+
-+    # ------------------------------------------------------------------
-+    # Internal helpers
-+    # ------------------------------------------------------------------
-+    def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
-+        loop = self._loop
-+        if loop is not None:
-+            return loop
-+        try:
-+            loop = asyncio.get_running_loop()
-+        except RuntimeError:
-+            loop = None
-+        self._loop = loop
-+        return loop
-+
-+    def _ensure_stream(self, sid: str, state: _SessionState) -> None:
-+        loop = self._ensure_loop()
-+        if loop is None:
-+            _logger.warning("evt=asr_no_loop sid=%s", sid)
-+            return
-+        if state.stream_open:
-+            return
-+        task = state.stream_open_task
-+        if task is not None and not task.done():
-+            return
-+
-+        async def _open() -> None:
++ 
+ 
+ configure_logging()
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ @dataclass(frozen=True)
+ class Response:
+     """Immutable container describing a serialized HTTP response."""
+ 
+     status: int
+     body: bytes
+     headers: tuple[tuple[bytes, bytes], ...]
+ 
+ 
+ def json_response(*, status: int = 200, **payload: Any) -> Response:
+     """Serialize a payload to JSON using a compact representation."""
+ 
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
+     )
+     return Response(status=status, body=body, headers=headers)
+ 
+@@ -366,52 +370,55 @@ async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: R
+             "headers": headers,
+         }
+     )
+     await send(
+         {
+             "type": "websocket.http.response.body",
+             "body": response.body,
+             "more_body": False,
+         }
+     )
+ 
+ 
+ def _method_is_get(scope: dict) -> bool:
+     """Return True when the incoming HTTP scope uses the GET method."""
+ 
+     return scope.get("method", "GET").upper() == "GET"
+ 
+ 
+ def _get_adapter() -> ChatV2Adapter:
+     """Return a lazily instantiated ChatV2Adapter singleton."""
+     global _adapter
+     if _adapter is None:
+         exporter = FileExporter(EXPORT_ROOT)
+         engine = EngineV2(exporter=exporter)
+         tts_runtime = TTSRuntime(engine=engine)
++        asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
++        asr_runtime = ASRRuntime(engine=engine, client=asr_client)
+         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
+         _adapter.tts_runtime = tts_runtime
++        _adapter.asr_runtime = asr_runtime
+     return _adapter
+ 
+ 
+ _HTTP_ROUTES: Dict[str, HttpHandler] = {
+     ROOT_ROUTE: _handle_index,
+     FAVICON_ROUTE: _handle_favicon,
+     HEALTH_ROUTE: _handle_health,
+     LIVE_ROUTE: _handle_live,
+     READY_ROUTE: _handle_ready,
+     INFO_ROUTE: _handle_info,
+ }
+ 
+ 
+ async def _enforce_admin_auth(
+     handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
+ ) -> Response:
+     return await handler(scope, receive)
+ 
+ 
+ asgi = app
+ 
+ __all__ = ["app", "asgi"]
+ 
+ 
+ def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 15eb6e1a56a81168eb6b3cf65a8d6c795afba590..f460732b03e7fed41573ce2301ef4bd73cd7aae6 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -218,50 +218,52 @@ class AdapterContext:
+     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+     send_lock: asyncio.Lock | None = None
+ 
+ 
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
+ 
+     def __init__(
+         self,
+         engine: EngineHooks | None = None,
+         exporter: FileExporter | None = None,
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+         )
++        self.tts_runtime = None
++        self.asr_runtime = None
+ 
+     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+         if scope.get("type") != "websocket":
+             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
+ 
+         connect_event = await receive()
+         if connect_event.get("type") != "websocket.connect":
+             return
+ 
+         subprotocols = scope.get("subprotocols") or []
+         _logger.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
+         if CHAT_V2_SUBPROTOCOL not in subprotocols:
+             _logger.warning("evt=ws_reject_subprotocol reason=missing_or_mismatch need='chat.v2'")
+             await self._reject_subprotocol(send)
+             return
+ 
+         sid = uuid.uuid4().hex
+ 
+         headers = self._decode_headers(scope.get("headers", ()))
+         principal: Dict[str, Any] = {"sub": "anon"}
+ 
+         _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
+         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+ 
+         now_ms = int(time.time() * 1000)
+@@ -276,50 +278,56 @@ class ChatV2Adapter:
+         policy_snapshot = self._policy_snapshot()
+         if policy_snapshot:
+             info_frame["policy"] = policy_snapshot
+         await self._send_json(send, sid, info_frame)
+         _logger.info("evt=ws_info_sent sid=%s", sid)
+ 
+         ctx = AdapterContext(sid=sid, headers=dict(headers), principal=principal)
+ 
+         if not (
+             inspect.iscoroutinefunction(self._on_open_and_greet)
+             and inspect.iscoroutinefunction(self._invoke_engine)
+         ):
+             _logger.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
+             raise RuntimeError("WebSocket async contract violation")
+ 
+         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+         client = scope.get("client")
+         ctx.ip = client[0] if isinstance(client, tuple) and client else None
+         if ctx.ip:
+             ctx.ip_bucket = self._ip_buckets.setdefault(
+                 ctx.ip,
+                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+             )
+ 
+         self._contexts[ctx.sid] = ctx
++        asr_runtime = getattr(self, "asr_runtime", None)
++        if asr_runtime is not None:
 +            try:
-+                await self._client.open_stream(
-+                    sid,
-+                    _CONTENT_TYPE,
-+                    on_partial=self._make_partial_cb(sid),
-+                    on_final=self._make_final_cb(sid),
-+                    on_error=self._make_error_cb(sid),
-+                )
-+            except asyncio.CancelledError:
-+                raise
-+            except Exception:  # pragma: no cover - defensive
-+                _logger.exception("evt=asr_stream_open_failed sid=%s", sid)
-+                return
-+
-+            state.stream_open = True
-+            while state.pending:
-+                chunk = state.pending.popleft()
-+                self._client.send_audio(sid, chunk)
-+            state.stream_open_task = None
-+
-+        def _on_done(_task: asyncio.Task[None]) -> None:
-+            if state.stream_open_task is _task:
-+                state.stream_open_task = None
-+
-+        state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
-+        state.stream_open_task.add_done_callback(_on_done)
-+
-+    def _make_partial_cb(self, sid: str) -> Callable[[str], None]:
-+        def _callback(text: str) -> None:
-+            self._on_partial(sid, text)
-+
-+        return _callback
-+
-+    def _make_final_cb(self, sid: str) -> Callable[[str], None]:
-+        def _callback(text: str) -> None:
-+            self._on_final(sid, text)
-+
-+        return _callback
-+
-+    def _make_error_cb(self, sid: str) -> Callable[[str], None]:
-+        def _callback(error: str) -> None:
-+            self._on_error(sid, error)
-+
-+        return _callback
-+
-+    def _on_partial(self, sid: str, text: str) -> None:
-+        if not isinstance(text, str) or not text.strip():
-+            return
-+        state = self._sessions.get(sid)
-+        if state is None:
-+            state = _SessionState(sid=sid)
-+            self._sessions[sid] = state
-+
-+        req_id = state.req_id
-+        if req_id is None:
-+            req_id = f"dg-{uuid.uuid4().hex}"
-+            state.req_id = req_id
-+        session = getattr(self._engine, "_ensure_session", None)
-+        if callable(session):
-+            engine_session = session(sid)
-+            if getattr(engine_session, "req_id", None) != req_id:
-+                engine_session.req_id = req_id
-+
-+        try:
-+            self._engine.on_asr_partial(sid, req_id, _PARTIAL_CONFIDENCE, text)
-+        except Exception:  # pragma: no cover - defensive
-+            _logger.exception("evt=asr_engine_partial_failed sid=%s", sid)
-+
-+        event = {
-+            "type": EVT_ASR_PARTIAL,
-+            "sid": sid,
-+            "req_id": req_id,
-+            "text": text,
-+            "confidence": _PARTIAL_CONFIDENCE,
-+            "vendor": "deepgram",
-+        }
-+        bus.publish(event)
-+
-+    def _on_final(self, sid: str, text: str) -> None:
-+        if not isinstance(text, str) or not text.strip():
-+            return
-+        state = self._sessions.get(sid)
-+        if state is None:
-+            state = _SessionState(sid=sid)
-+            self._sessions[sid] = state
-+
-+        req_id = f"dg-{uuid.uuid4().hex}"
-+        state.req_id = None
-+
-+        ensure_session = getattr(self._engine, "_ensure_session", None)
-+        if callable(ensure_session):
-+            engine_session = ensure_session(sid)
-+            engine_session.req_id = req_id
-+
-+        try:
-+            self._engine.on_asr_final(sid, text)
-+        except Exception:  # pragma: no cover - defensive
-+            _logger.exception("evt=asr_engine_final_failed sid=%s", sid)
-+
-+        event = {
-+            "type": EVT_ASR_FINAL,
-+            "sid": sid,
-+            "req_id": req_id,
-+            "text": text,
-+            "confidence": _FINAL_CONFIDENCE,
-+            "vendor": "deepgram",
-+        }
-+        bus.publish(event)
-+
-+    def _on_error(self, sid: str, error: str) -> None:
-+        _logger.exception("evt=asr_error sid=%s err=%s", sid, error)
-+
-+        state = self._sessions.get(sid)
-+        if state is None:
-+            return
-+        state.stream_open = False
-+        state.req_id = None
-+        try:
-+            self._client.close_stream(sid)
-+        except Exception:  # pragma: no cover - defensive
-+            _logger.exception("evt=asr_error_close_failed sid=%s", sid)
-+
-+    # Optional idle guard
-+    def close_idle_streams(self) -> None:
-+        if self._loop is None:
-+            return
-+        now = time.monotonic()
-+        threshold = self._idle_close_ms / 1000.0
-+        for sid, state in list(self._sessions.items()):
-+            if not state.stream_open:
-+                continue
-+            if threshold <= 0:
-+                continue
-+            if state.last_audio_ts and now - state.last_audio_ts >= threshold:
++                asr_runtime.on_ws_open(ctx.sid)
++            except Exception:  # pragma: no cover - defensive logging
++                _logger.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
+         self._start_asr_ready_tracker(ctx)
+         self._start_outbound_bridge(ctx, send)
+         self._start_server_keepalive(ctx, send)
+ 
+         if self.exporter:
+             self.exporter.begin(ctx.sid)
+ 
+         await self._on_open_and_greet(ctx)
+ 
+         close_code = 1000
+         close_reason: Optional[str] = None
+ 
+         try:
+             while True:
+                 message = await receive()
+                 msg_type = message.get("type")
+ 
+                 if msg_type == "websocket.receive":
+                     if message.get("text") is not None:
+                         result = await self._handle_text(message["text"], ctx, send)
+                         if not result.should_continue:
+                             close_code = result.close_code or 1000
+                             close_reason = result.close_reason
+                             await send(
+                                 {
+@@ -333,50 +341,56 @@ class ChatV2Adapter:
+                         result = await self._handle_binary(message["bytes"], ctx, send)
+                         if not result.should_continue:
+                             close_code = result.close_code or 1000
+                             close_reason = result.close_reason
+                             await send(
+                                 {
+                                     "type": "websocket.close",
+                                     "code": close_code,
+                                     "reason": close_reason,
+                                 }
+                             )
+                             break
+                 elif msg_type == "websocket.disconnect":
+                     close_code = message.get("code", 1000)
+                     close_reason = message.get("reason")
+                     break
+         except Exception:  # pragma: no cover - defensive guard
+             close_code = 1011
+             close_reason = "internal_error"
+             await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
+             raise
+         finally:
+             await self._stop_server_keepalive(ctx)
+             await self._cleanup_outbound(ctx)
+             self._stop_asr_ready_tracker(ctx)
++            asr_runtime = getattr(self, "asr_runtime", None)
++            if asr_runtime is not None:
 +                try:
-+                    self._client.close_stream(sid)
-+                except Exception:  # pragma: no cover - defensive
-+                    _logger.exception("evt=asr_idle_close_failed sid=%s", sid)
-+                state.stream_open = False
-+                state.req_id = None
++                    asr_runtime.on_ws_close(ctx.sid)
++                except Exception:  # pragma: no cover - defensive logging
++                    _logger.exception("evt=ws_asr_close_failed sid=%s", ctx.sid)
+             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
+             if self.exporter:
+                 self.exporter.end(ctx.sid, {"close_code": close_code})
+             self._contexts.pop(ctx.sid, None)
+ 
+     def set_accepting_audio(self, sid: str, accepting: bool) -> None:
+         """Toggle whether the given connection should accept audio frames."""
+ 
+         ctx = self._contexts.get(sid)
+         if ctx is not None:
+             ctx.accepting_audio = accepting
+             if accepting:
+                 ctx.audio_violation_count = 0
+ 
+     def get_context(self, sid: str) -> Optional[AdapterContext]:
+         """Return the adapter context for testing hooks."""
+ 
+         return self._contexts.get(sid)
+ 
+     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
+         detail = f"missing required subprotocol '{CHAT_V2_SUBPROTOCOL}'"
+         body = json.dumps(
+             {
+                 "type": "error",
+                 "code": "bad_subprotocol",
+@@ -739,50 +753,56 @@ class ChatV2Adapter:
+         self._drop_buffer_before(ctx, next_available)
+         ctx.audio_expected_seq = next_available
+         return gap_from, next_available
+ 
+     async def _flush_audio_buffer(self, ctx: AdapterContext) -> None:
+         while True:
+             seq = ctx.audio_expected_seq
+             chunk = ctx.audio_buffer.pop(seq, None)
+             if chunk is None:
+                 break
+             await self._emit_audio_chunk(ctx, chunk, seq)
+             ctx.audio_expected_seq += 1
+         if ctx.audio_buffer:
+             ctx.audio_highest_seq = max(ctx.audio_buffer)
+         else:
+             ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+ 
+     async def _emit_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+         byte_count = len(chunk)
+         meta = {
+             "byte_count": byte_count,
+             "seq": seq,
+             "ws": {"dir": "in", "size": byte_count},
+         }
+         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
++        asr_runtime = getattr(self, "asr_runtime", None)
++        if asr_runtime is not None:
++            try:
++                asr_runtime.on_ws_audio(ctx.sid, chunk)
++            except Exception:  # pragma: no cover - defensive logging
++                _logger.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
+         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
+ 
+     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
+         removed = False
+         for key in list(ctx.audio_buffer):
+             if key < threshold:
+                 ctx.audio_buffer.pop(key, None)
+                 removed = True
+         if removed:
+             if ctx.audio_buffer:
+                 ctx.audio_highest_seq = max(ctx.audio_buffer)
+             else:
+                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+ 
+     async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
+         text = json.dumps(payload, separators=(",", ":"))
+         await send({"type": "websocket.send", "text": text})
+         payload_bytes = text.encode("utf-8")
+         byte_count = len(payload_bytes)
+         meta: Dict[str, Any] = {
+             "byte_count": byte_count,
+             "frame_type": payload.get("type"),
+             "ws": {
+                 "dir": "out",
+                 "size": byte_count,

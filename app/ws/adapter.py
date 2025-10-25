@@ -240,6 +240,8 @@ class ChatV2Adapter:
             0,
             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
         )
+        self.tts_runtime = None
+        self.asr_runtime = None
 
     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
         if scope.get("type") != "websocket":
@@ -298,6 +300,12 @@ class ChatV2Adapter:
             )
 
         self._contexts[ctx.sid] = ctx
+        asr_runtime = getattr(self, "asr_runtime", None)
+        if asr_runtime is not None:
+            try:
+                asr_runtime.on_ws_open(ctx.sid)
+            except Exception:  # pragma: no cover - defensive logging
+                _logger.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
         self._start_asr_ready_tracker(ctx)
         self._start_outbound_bridge(ctx, send)
         self._start_server_keepalive(ctx, send)
@@ -355,6 +363,12 @@ class ChatV2Adapter:
             await self._stop_server_keepalive(ctx)
             await self._cleanup_outbound(ctx)
             self._stop_asr_ready_tracker(ctx)
+            asr_runtime = getattr(self, "asr_runtime", None)
+            if asr_runtime is not None:
+                try:
+                    asr_runtime.on_ws_close(ctx.sid)
+                except Exception:  # pragma: no cover - defensive logging
+                    _logger.exception("evt=ws_asr_close_failed sid=%s", ctx.sid)
             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
             if self.exporter:
                 self.exporter.end(ctx.sid, {"close_code": close_code})
@@ -761,6 +775,12 @@ class ChatV2Adapter:
             "ws": {"dir": "in", "size": byte_count},
         }
         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+        asr_runtime = getattr(self, "asr_runtime", None)
+        if asr_runtime is not None:
+            try:
+                asr_runtime.on_ws_audio(ctx.sid, chunk)
+            except Exception:  # pragma: no cover - defensive logging
+                _logger.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
 
     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
