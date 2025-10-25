@@ -15,7 +15,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from app import config
-from app.auth.http_handlers import post_ws_token
+from app.auth.http_handlers import get_me, post_login, post_profile, post_ws_token
 from app.db.neon import init_schema
 from app.logging_config import configure_logging
 from app.telemetry import bus as telemetry_bus
@@ -65,6 +65,9 @@ LIVE_ROUTE = "/api/v1/live"
 READY_ROUTE = "/api/v1/ready"
 INFO_ROUTE = "/api/v1/info"
 WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
+LOGIN_ROUTE = "/api/v1/auth/login"
+ME_ROUTE = "/api/v1/auth/me"
+PROFILE_ROUTE = "/api/v1/auth/profile"
 ROOT_ROUTE = "/"
 FAVICON_ROUTE = "/favicon.ico"
 STATIC_ROUTE_PREFIX = "/static/"
@@ -422,6 +425,9 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     READY_ROUTE: _handle_ready,
     INFO_ROUTE: _handle_info,
     WS_TOKEN_ROUTE: post_ws_token,
+    LOGIN_ROUTE: post_login,
+    ME_ROUTE: get_me,
+    PROFILE_ROUTE: post_profile,
 }
 
 
