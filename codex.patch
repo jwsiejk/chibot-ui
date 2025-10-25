@@ -1,77 +1,159 @@
-diff --git a/app/services/llm/openai_client.py b/app/services/llm/openai_client.py
-index 6a2ea74a6a84b18354a555b6ea186a010b5e6f04..2707cafe5760e66dfff630ba9e9e3d9381c35408 100644
---- a/app/services/llm/openai_client.py
-+++ b/app/services/llm/openai_client.py
-@@ -71,55 +71,58 @@ class OpenAILLMProvider(LLMProviderBase):
-     def default_model(self) -> str:
-         return self._default_model
- 
-     async def _generate_impl(self, messages: List[Dict[str, Any]], **kwargs: Any) -> str:
-         if not self.is_configured:
-             raise RuntimeError("OpenAI provider not configured")
- 
-         if not isinstance(messages, list) or not messages:
-             raise ValueError("messages must be a non-empty list")
- 
-         prepared: List[Dict[str, str]] = []
-         for item in messages:
-             if not isinstance(item, dict):
-                 raise TypeError("each message must be a dict")
-             role = item.get("role")
-             content = item.get("content")
-             if not isinstance(role, str) or not isinstance(content, str):
-                 raise TypeError("message role/content must be strings")
-             prepared.append({"role": role, "content": content})
- 
-         client = self._client
-         assert client is not None  # for type-checkers
- 
-         model = kwargs.get("model") or self._default_model
-         temperature = kwargs.get("temperature")
-+        max_tokens = kwargs.get("max_tokens")
-+        kwargs.pop("purpose", None)
- 
-         response = await client.chat.completions.create(
-             model=model,
-             messages=prepared,
-             temperature=temperature,
-+            max_tokens=max_tokens,
-         )
- 
-         try:
-             choice = response.choices[0]
-         except (AttributeError, IndexError) as exc:  # pragma: no cover - defensive
-             raise RuntimeError("OpenAI response missing choices") from exc
- 
-         message = getattr(choice, "message", None)
-         content: Any | None = None
-         if message is not None:
-             content = getattr(message, "content", None)
- 
-         if isinstance(content, str):
-             text = content.strip()
-             if text:
-                 return text
-         elif isinstance(content, Iterable):
-             parts: List[str] = []
-             for part in content:
-                 if isinstance(part, dict):
-                     if part.get("type") == "text":
-                         part_text = part.get("text")
-                         if isinstance(part_text, str):
-                             parts.append(part_text)
-                 elif isinstance(part, str):
 diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 767a506712f6323ad91db876de4f7356469a7476..50f0e88b13fb6f5a73933b7c4cb0e08c0c5abc9a 100644
+index 50f0e88b13fb6f5a73933b7c4cb0e08c0c5abc9a..89ef1cd2c3c61708545a4fba828c3f0d23b63b91 100644
 --- a/app/voice_v2/engine.py
 +++ b/app/voice_v2/engine.py
-@@ -593,78 +593,72 @@ class EngineV2:
+@@ -21,92 +21,97 @@ from app.voice_v2 import (
+     EVT_CHAT_USER,
+     EVT_ASR_FINAL,
+     EVT_NLG,
+     EVT_NLU,
+     EVT_DIALOG_PLAN,
+     EVT_POLICY_APPLIED,
+     EVT_TTS_END,
+     EVT_TTS_START,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_CLOSE,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+     EVT_WS_OPEN,
+ )
+ from app.voice_v2.nlu import NLUAdapter
+ from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
+ from app.voice_v2.llm import LLMAdapter
+ from app.voice_v2.gate import GateController
+ from app.voice_v2.conversation_buffer import ConversationBuffer
+ from app.voice_v2.vad import VADAggregator
+ from app.voice_v2.planner import plan_turn
+ from app.voice_v2.persona import default_chips_for_mode, load_persona
+ 
+ 
++_logger = logging.getLogger(__name__)
++
++
+ def _now_ms() -> int:
+     """Return the current epoch timestamp in milliseconds."""
+     return int(time.time() * 1000)
+ 
+ 
+ def _slugify_action_label(label: str) -> str:
+     """Normalize a suggestion label into a stable slug identifier."""
+ 
+     normalized = re.sub(r"[^a-z0-9]+", "-", label.strip().lower())
+     slug = normalized.strip("-")
+     return slug or "action"
+ 
+ 
+ READY = "Ready"
+ LISTENING = "Listening"
+ THINKING = "Thinking"
+ RESPONDING = "Responding"
+ CONFIRMING_BARGE = "ConfirmingBarge"
+ 
+ _PCM_CODEC = "pcm_s16le"
+ _PCM_RATE_HZ = 16000
+ _PCM_CHANNELS = 1
+ _PCM_DESCRIPTOR = {
+     "codec": _PCM_CODEC,
+     "rate_hz": _PCM_RATE_HZ,
+     "channels": _PCM_CHANNELS,
+ }
+ 
+ _DEFAULT_VOICE_ID = "alloy-en-US-001"
+ _DEFAULT_LOCALE = "en-US"
+ 
+ _INFO_SLO = {
+     "first_partial_ms": {"target": 450, "p95": 750},
+     "final_ms": {"target": 2000, "p95": 3000},
+     "tts_start_ms": {"target": 350, "p95": 600},
+ }
+ _PCM_SAMPLE_BYTES = 2 * _PCM_CHANNELS
+ 
+ EVT_TURN_STATE = "EVT_TURN_STATE"
+ EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
+ EVT_TURN_END = "EVT_TURN_END"
+ EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
++EVT_LLM_REQUEST = "EVT_LLM_REQUEST"
++EVT_LLM_COMPLETE = "EVT_LLM_COMPLETE"
+ 
+ 
+ @dataclass
+ class _Envelope:
+     """Normalized telemetry envelope returned by the engine hooks."""
+ 
+     type: str
+     sid: str
+     payload: Dict[str, Any]
+ 
+     def to_dict(self) -> Dict[str, Any]:
+         data = {"type": self.type, "sid": self.sid}
+         data.update(self.payload)
+         if "meta" in data and isinstance(data["meta"], Mapping):
+             data["meta"] = dict(data["meta"])
+         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
+             data["ts_ms"] = _now_ms()
+         data.setdefault("who", "server")
+         data.setdefault("source", "voice_engine")
+         data.setdefault("level", "debug")
+         return data
+ 
+ 
+ @dataclass
+ class _TurnSession:
+@@ -440,51 +445,51 @@ class EngineV2:
              return
  
-         snapshot = self.policy_snapshot or {}
-         greet_block = snapshot.get("greet")
-         if isinstance(greet_block, Mapping):
-             enabled = bool(greet_block.get("enabled", True))
+         session = self._ensure_session(sid)
+         current_state = session.state
+ 
+         policy = self.policy_snapshot or {}
+         policy_enabled = bool(policy.get("barge_in_enabled"))
+ 
+         granted = bool(policy_enabled and current_state == RESPONDING)
+ 
+         deny_reason = reason
+         if current_state != RESPONDING:
+             granted = False
+             deny_reason = deny_reason or "state_not_responding"
+         elif not policy_enabled:
+             granted = False
+             deny_reason = deny_reason or "policy_disabled"
+ 
+         self._publish_barge(sid, source, granted, reason if granted else deny_reason)
+ 
+         if granted:
+             self.cancel_current_tts(sid, reason="canceled")
+             self._set_state(sid, CONFIRMING_BARGE, reason="auto_barge")
+             self._schedule_barge_confirmation(sid)
+         else:
+-            logging.getLogger(__name__).info(
++            _logger.info(
+                 "Auto barge denied", extra={"sid": sid, "source": source, "reason": deny_reason}
+             )
+ 
+     def cancel_current_tts(self, sid: str, *, reason: str = "canceled") -> bool:
+         """Cancel the active TTS stream for the session if present."""
+ 
+         session = self._ensure_session(sid)
+         utt_id = session.tts_utt_id
+         if not utt_id:
+             return False
+ 
+         self._teardown_tts(
+             sid,
+             utt_id,
+             reason=reason,
+             post_hold_ms=0,
+             transition_to_ready=False,
+         )
+         return True
+ 
+     def reapply_policy(self, overrides: Dict[str, Any] | None = None) -> bool:
+         """Reload and re-emit the interaction policy when it changes."""
+ 
+         if not self._last_sid:
+             return False
+@@ -599,73 +604,123 @@ class EngineV2:
              mode = greet_block.get("mode")
              post_hold = greet_block.get("post_hold_ms")
          else:
@@ -91,19 +173,14 @@ index 767a506712f6323ad91db876de4f7356469a7476..50f0e88b13fb6f5a73933b7c4cb0e08c
  
          turn_id = str(uuid.uuid4())
          req_id = f"req-{uuid.uuid4().hex}"
--        plan_payload: Dict[str, Any] = {
--            "mode": "outline",
--            "chips": [],
--            "missing_info": [],
--            "reason": "greet",
--        }
-+        plan_payload: Dict[str, Any] = {"mode": "greet", "reason": "session_open"}
+         plan_payload: Dict[str, Any] = {"mode": "greet", "reason": "session_open"}
  
          persona: Dict[str, Any] = {}
          try:
              persona_candidate = load_persona()
          except Exception:
-             logging.getLogger(__name__).exception("Failed to load persona for greeting")
+-            logging.getLogger(__name__).exception("Failed to load persona for greeting")
++            _logger.exception("Failed to load persona for greeting")
          else:
              if isinstance(persona_candidate, dict):
                  persona = persona_candidate
@@ -114,20 +191,71 @@ index 767a506712f6323ad91db876de4f7356469a7476..50f0e88b13fb6f5a73933b7c4cb0e08c
  
          greeting_text: str
          if greet_mode == "persona":
++            provider = getattr(self._llm, "_provider", None)
++            model_name = getattr(provider, "default_model", None)
++            if not isinstance(model_name, str) or not model_name.strip():
++                model_name = "gpt-4o-mini"
++            temperature = 0.4
++            max_tokens = 30
++            msg_counts = {"system": 1, "developer": 1, "user": 1}
++
++            policy_payload = {"rule": "session_open.greet", "actions": ["assistant.say"]}
++            policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
++            self._publish(policy_event)
++
++            _logger.debug(
++                "evt=greet_llm_request sid=%s purpose=%s model=%s temp=%s max_tokens=%s msg_counts=%s",
++                sid,
++                "greet",
++                model_name,
++                temperature,
++                max_tokens,
++                msg_counts,
++            )
++
++            request_payload = {
++                "purpose": "greet",
++                "model": model_name,
++                "temp": temperature,
++                "max_tokens": max_tokens,
++                "msg_counts": msg_counts,
++            }
++            request_event = self._envelope(sid, EVT_LLM_REQUEST, request_payload)
++            self._publish(request_event)
++
++            greeting_candidate: str | None = None
++            start_time = time.perf_counter()
              try:
--                greeting_candidate = self._llm.generate_persona(
-+                greeting_candidate = self._llm.generate_greeting(
+                 greeting_candidate = self._llm.generate_greeting(
                      sid,
                      turn_id,
                      req_id,
--                    "",
                      plan_payload,
                  )
              except Exception:
-                 logging.getLogger(__name__).exception(
-                     "Persona greeting generation failed; falling back to static copy"
-                 )
+-                logging.getLogger(__name__).exception(
+-                    "Persona greeting generation failed; falling back to static copy"
+-                )
++                _logger.exception("evt=greet_llm_failed sid=%s", sid)
                  greeting_candidate = None
++            else:
++                latency_ms = max(int((time.perf_counter() - start_time) * 1000), 0)
++                complete_payload = {
++                    "purpose": "greet",
++                    "latency_ms": latency_ms,
++                    "model": model_name,
++                }
++                complete_event = self._envelope(
++                    sid, EVT_LLM_COMPLETE, complete_payload
++                )
++                self._publish(complete_event)
++                _logger.debug(
++                    "evt=greet_llm_complete sid=%s purpose=%s latency_ms=%s model=%s",
++                    sid,
++                    "greet",
++                    latency_ms,
++                    model_name,
++                )
              greeting_text = greeting_candidate if isinstance(greeting_candidate, str) else ""
          else:
              greeting_text = ""
@@ -146,180 +274,63 @@ index 767a506712f6323ad91db876de4f7356469a7476..50f0e88b13fb6f5a73933b7c4cb0e08c
          self._publish(nlg_event)
  
          frame = {
-diff --git a/app/voice_v2/llm.py b/app/voice_v2/llm.py
-index fc2518237ba6331c4e4118d82d1cbc0d62e06eab..9afe3eeecf1303ede9d9c007c6f33461870d3e84 100644
---- a/app/voice_v2/llm.py
-+++ b/app/voice_v2/llm.py
-@@ -164,76 +164,172 @@ class LLMAdapter:
-         sid_key: str | None = sid if isinstance(sid, str) and sid else None
-         if sid_key:
-             turn_no = self._turn_counter_by_sid.get(sid_key, 0) + 1
-             self._turn_counter_by_sid[sid_key] = turn_no
-             mode = ""
-             if isinstance(plan, Mapping):
-                 candidate_mode = plan.get("mode")
-                 if isinstance(candidate_mode, str):
-                     mode = candidate_mode
-             quote = maybe_pick_quote_for_sid(persona, sid_key, mode, turn_no)
-             if quote:
-                 quote_text = quote.get("text")
-                 quote_id = quote.get("id")
-                 if isinstance(quote_text, str) and quote_text:
-                     reply = f"{reply.rstrip()} (As my granddad would say: \"{quote_text}\")"
-                     if isinstance(quote_id, str) and quote_id:
-                         identifier = quote_id
-                     else:
-                         identifier = f"quote_turn_{turn_no}"
-                     if metadata is None:
-                         metadata = {}
-                     metadata["quote_id"] = identifier
-         self.publish_nlg(req_id, reply, metadata=metadata)
-         return reply
+             "type": "chat.message",
+             "id": str(uuid.uuid4()),
+             "role": "assistant",
+             "text": greeting_text,
+             "origin": "voice",
+             "turn_id": turn_id,
+             "req_id": req_id,
+@@ -701,51 +756,51 @@ class EngineV2:
+             on_connect = False
+             count_candidate = None
  
-+    def generate_greeting(
-+        self,
-+        sid: str,
-+        turn_id: str,
-+        req_id: str,
-+        plan: Mapping[str, Any] | object | None = None,
-+    ) -> str:
-+        """Return a provider-crafted greeting constrained to the greet persona mode."""
-+
-+        if not isinstance(req_id, str) or not req_id:
-+            raise ValueError("req_id must be a non-empty string")
-+
-+        _ = plan  # plan payload included for symmetry with persona generation
-+        _ = turn_id  # turn metadata is unused for greet but kept for parity
-+        _ = sid  # greet generation is session-aware but currently stateless
-+
-+        persona = load_persona()
-+        system_preamble = build_system_preamble(persona)
-+        developer_instruction = self._greet_instruction(persona)
-+        messages = [
-+            {"role": "system", "content": system_preamble},
-+            {"role": "developer", "content": developer_instruction},
-+            {"role": "user", "content": ""},
-+        ]
-+
-+        reply: str | None = None
-+        fallback_reason: str | None = None
-+        provider = self._provider
-+        provider_ready = bool(provider and getattr(provider, "is_configured", False))
-+        if provider_ready:
-+            model_name = getattr(provider, "default_model", None) or "gpt-4o-mini"
-+            try:
-+                reply_candidate = self._invoke_provider(
-+                    provider,
-+                    messages,
-+                    model=model_name,
-+                    temperature=0.4,
-+                    max_tokens=30,
-+                    purpose="greet",
-+                )
-+            except ProviderCircuitOpenError:
-+                fallback_reason = "breaker_open"
-+            except ProviderTimeoutError:
-+                fallback_reason = "timeout"
-+            except Exception:  # pragma: no cover - defensive logging
-+                fallback_reason = "error"
-+                _logger.exception(
-+                    "LLM provider invocation failed during greeting; falling back to static copy"
-+                )
-+            else:
-+                normalized = self._normalize_greet_reply(reply_candidate)
-+                if normalized:
-+                    reply = normalized
-+                else:
-+                    fallback_reason = "empty_response"
-+
-+        if reply is None:
-+            reply = ""
-+
-+        metadata: Dict[str, Any] | None = None
-+        if fallback_reason:
-+            metadata = {
-+                "source": "llm_fallback",
-+                "reason": fallback_reason,
-+                "purpose": "greet",
-+            }
-+
-+        self.publish_nlg(req_id, reply, metadata=metadata)
-+        return reply
-+
-     def _invoke_provider(
-         self,
-         provider: LLMProviderBase,
-         messages: list[dict[str, str]],
-         *,
-         model: str,
-         temperature: float,
-+        **extra_kwargs: Any,
-     ) -> str:
-         async def _execute() -> Any:
-             return await provider.generate(
-                 messages=messages,
-                 model=model,
-                 temperature=temperature,
-+                **extra_kwargs,
-             )
+         actions_block = snapshot.get("actions")
+         surface_actions = True
+         if isinstance(actions_block, Mapping):
+             surface_candidate = actions_block.get("surface_via_suggestions")
+             if isinstance(surface_candidate, bool):
+                 surface_actions = surface_candidate
  
-         try:
-             asyncio.get_running_loop()
-         except RuntimeError:
-             result = asyncio.run(_execute())
-         else:
-             with ThreadPoolExecutor(max_workers=1) as executor:
-                 future = executor.submit(asyncio.run, _execute())
-                 result = future.result()
- 
-         return result if isinstance(result, str) else str(result)
- 
-+    @staticmethod
-+    def _greet_instruction(persona: Mapping[str, Any] | object) -> str:
-+        if isinstance(persona, Mapping):
-+            modes = persona.get("modes")
-+            if isinstance(modes, Mapping):
-+                greet_mode = modes.get("greet")
-+                if isinstance(greet_mode, Mapping):
-+                    instruction = greet_mode.get("instruction")
-+                    if isinstance(instruction, str) and instruction.strip():
-+                        return instruction.strip()
-+        return "Generate a friendly Pure Storage greeting in under eight words."
-+
-+    @staticmethod
-+    def _normalize_greet_reply(candidate: Any) -> str:
-+        if not isinstance(candidate, str):
-+            return ""
-+        normalized = " ".join(candidate.strip().split())
-+        if not normalized:
-+            return ""
-+        words = normalized.split()
-+        if len(words) > 8:
-+            normalized = " ".join(words[:8])
-+        return normalized
-+
-     def publish_nlg(
-         self,
-         req_id: str,
-         text: str,
-         *,
-         metadata: Mapping[str, Any] | None = None,
-     ) -> None:
-         """Publish EVT_NLG and chat bridge messages when enabled."""
- 
-         if not self._auto_publish:
-             # When auto publish is disabled we only emit the bus events when
-             # this helper is invoked directly (the engine handles it).
+         if not on_connect:
              return
  
-         self._publish_nlg(req_id, text, metadata=metadata)
-         self._publish_chat_message(req_id, text)
+         if not surface_actions:
+             return
  
-     def publish_chat_message(self, req_id: str, text: str) -> None:
-         """Manually mirror the assistant message into the chat stream."""
+         max_items = 3
+         if isinstance(count_candidate, (int, float)):
+             normalized = int(count_candidate)
+             if normalized > 0:
+                 max_items = normalized
  
-         self._publish_chat_message(req_id, text)
+         try:
+             persona = load_persona()
+         except Exception:
+-            logging.getLogger(__name__).exception("Failed to load persona for connect suggestions")
++            _logger.exception("Failed to load persona for connect suggestions")
+             persona = {}
  
-     def _publish_nlg(
-         self,
-         req_id: str,
+         chips = default_chips_for_mode(persona if isinstance(persona, dict) else {}, "outline")
+         items = [str(label).strip() for label in chips if isinstance(label, str) and label.strip()]
+         if not items:
+             return
+ 
+         limited_items = items[:max_items]
+         if not limited_items:
+             return
+ 
+         suggestion_items = []
+         for label in limited_items:
+             item: Dict[str, Any] = {"label": label, "kind": "action"}
+             item["id"] = _slugify_action_label(label)
+             suggestion_items.append(item)
+ 
+         suggestions_frame = {
+             "type": "assistant.suggestions",
+             "ts_ms": _now_ms(),
+             "items": suggestion_items,
+             "mode": "outline",
+         }
+         serialized = json.dumps(suggestions_frame, ensure_ascii=False, separators=(",", ":"))
+         payload = {

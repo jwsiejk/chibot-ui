@@ -43,6 +43,9 @@ from app.voice_v2.planner import plan_turn
 from app.voice_v2.persona import default_chips_for_mode, load_persona
 
 
+_logger = logging.getLogger(__name__)
+
+
 def _now_ms() -> int:
     """Return the current epoch timestamp in milliseconds."""
     return int(time.time() * 1000)
@@ -85,6 +88,8 @@ EVT_TURN_STATE = "EVT_TURN_STATE"
 EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
 EVT_TURN_END = "EVT_TURN_END"
 EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
+EVT_LLM_REQUEST = "EVT_LLM_REQUEST"
+EVT_LLM_COMPLETE = "EVT_LLM_COMPLETE"
 
 
 @dataclass
@@ -462,7 +467,7 @@ class EngineV2:
             self._set_state(sid, CONFIRMING_BARGE, reason="auto_barge")
             self._schedule_barge_confirmation(sid)
         else:
-            logging.getLogger(__name__).info(
+            _logger.info(
                 "Auto barge denied", extra={"sid": sid, "source": source, "reason": deny_reason}
             )
 
@@ -621,7 +626,7 @@ class EngineV2:
         try:
             persona_candidate = load_persona()
         except Exception:
-            logging.getLogger(__name__).exception("Failed to load persona for greeting")
+            _logger.exception("Failed to load persona for greeting")
         else:
             if isinstance(persona_candidate, dict):
                 persona = persona_candidate
@@ -632,6 +637,40 @@ class EngineV2:
 
         greeting_text: str
         if greet_mode == "persona":
+            provider = getattr(self._llm, "_provider", None)
+            model_name = getattr(provider, "default_model", None)
+            if not isinstance(model_name, str) or not model_name.strip():
+                model_name = "gpt-4o-mini"
+            temperature = 0.4
+            max_tokens = 30
+            msg_counts = {"system": 1, "developer": 1, "user": 1}
+
+            policy_payload = {"rule": "session_open.greet", "actions": ["assistant.say"]}
+            policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
+            self._publish(policy_event)
+
+            _logger.debug(
+                "evt=greet_llm_request sid=%s purpose=%s model=%s temp=%s max_tokens=%s msg_counts=%s",
+                sid,
+                "greet",
+                model_name,
+                temperature,
+                max_tokens,
+                msg_counts,
+            )
+
+            request_payload = {
+                "purpose": "greet",
+                "model": model_name,
+                "temp": temperature,
+                "max_tokens": max_tokens,
+                "msg_counts": msg_counts,
+            }
+            request_event = self._envelope(sid, EVT_LLM_REQUEST, request_payload)
+            self._publish(request_event)
+
+            greeting_candidate: str | None = None
+            start_time = time.perf_counter()
             try:
                 greeting_candidate = self._llm.generate_greeting(
                     sid,
@@ -640,10 +679,26 @@ class EngineV2:
                     plan_payload,
                 )
             except Exception:
-                logging.getLogger(__name__).exception(
-                    "Persona greeting generation failed; falling back to static copy"
-                )
+                _logger.exception("evt=greet_llm_failed sid=%s", sid)
                 greeting_candidate = None
+            else:
+                latency_ms = max(int((time.perf_counter() - start_time) * 1000), 0)
+                complete_payload = {
+                    "purpose": "greet",
+                    "latency_ms": latency_ms,
+                    "model": model_name,
+                }
+                complete_event = self._envelope(
+                    sid, EVT_LLM_COMPLETE, complete_payload
+                )
+                self._publish(complete_event)
+                _logger.debug(
+                    "evt=greet_llm_complete sid=%s purpose=%s latency_ms=%s model=%s",
+                    sid,
+                    "greet",
+                    latency_ms,
+                    model_name,
+                )
             greeting_text = greeting_candidate if isinstance(greeting_candidate, str) else ""
         else:
             greeting_text = ""
@@ -723,7 +778,7 @@ class EngineV2:
         try:
             persona = load_persona()
         except Exception:
-            logging.getLogger(__name__).exception("Failed to load persona for connect suggestions")
+            _logger.exception("Failed to load persona for connect suggestions")
             persona = {}
 
         chips = default_chips_for_mode(persona if isinstance(persona, dict) else {}, "outline")
