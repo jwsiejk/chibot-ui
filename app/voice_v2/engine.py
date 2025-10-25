@@ -41,6 +41,7 @@ from app.voice_v2.conversation_buffer import ConversationBuffer
 from app.voice_v2.vad import VADAggregator
 from app.voice_v2.planner import _MODE_CHIPS, plan_turn
 from app.voice_v2.persona import default_chips_for_mode, load_persona
+from app.voice_v2.streaming import StreamingController
 
 
 _logger = logging.getLogger(__name__)
@@ -162,6 +163,7 @@ class EngineV2:
         self._sessions: Dict[str, _TurnSession] = {}
         self._barge_handles: Dict[str, object] = {}
         self._aggregators: Dict[str, VADAggregator] = {}
+        self._streaming = StreamingController()
         self._conversation_buffer = ConversationBuffer()
         self._nlu = NLUAdapter()
         self._policy_decider = PolicyDecider()
@@ -194,10 +196,10 @@ class EngineV2:
 
         self._last_sid = sid
         self._policy_snapshot = None
+        self._streaming.reset_session(sid)
         self._ensure_session(sid)
         self.reapply_policy()
         self._emit_info_frame(sid)
-        self._publish_chat_history(sid)
         self._set_state(sid, READY, reason="ws_open")
 
     async def start_greet(self, sid: str) -> None:
@@ -228,8 +230,6 @@ class EngineV2:
             payload["turn_id"] = turn_id
         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
         self._publish(event)
-        if frame_type == "client.resume":
-            self._publish_chat_history(sid)
 
     def _handle_chat_user_event(self, event: Dict[str, Any]) -> None:
         if event.get("type") != EVT_CHAT_USER:
@@ -290,8 +290,15 @@ class EngineV2:
         if self._last_sid == sid:
             self._last_sid = None
             self._policy_snapshot = None
-        self._sessions.pop(sid, None)
+        self.cancel_current_tts(sid, reason="ended")
+        self._streaming.close_session(sid)
+        self._gate.clear_all(sid=sid)
+        self._cancel_barge_confirmation(sid)
         self._aggregators.pop(sid, None)
+        self._sessions.pop(sid, None)
+        buffers = getattr(self._conversation_buffer, "_buffers", None)
+        if isinstance(buffers, dict):
+            buffers.pop(sid, None)
 
     def on_tts_start(
         self, sid: str, utt_id: str, post_hold_ms: int | None = None
@@ -330,6 +337,10 @@ class EngineV2:
         aggregator = self._aggregators.get(sid)
         if aggregator is not None:
             aggregator.on_tts_start()
+
+        self._streaming.set_output_finalizer(
+            sid, lambda _sid=sid: self.cancel_current_tts(_sid, reason="ended")
+        )
 
     def on_tts_end(
         self, sid: str, utt_id: str, post_hold_ms: int | None = None
@@ -553,21 +564,6 @@ class EngineV2:
                 "audio": audio_descriptor,
             },
         }
-        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-        meta = {
-            "ws": {
-                "dir": "out",
-                "size": len(serialized.encode("utf-8")),
-                "preview": serialized,
-            }
-        }
-        payload = {"meta": meta, "frame": frame}
-        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-        self._publish(event)
-
-    def _publish_chat_history(self, sid: str) -> None:
-        messages = self._conversation_buffer.messages(sid)
-        frame = {"type": "chat.history", "messages": messages, "next_cursor": None}
         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
         meta = {
             "ws": {
@@ -1094,6 +1090,7 @@ class EngineV2:
         post_hold_ms: int = 0,
         transition_to_ready: bool,
     ) -> None:
+        self._streaming.set_output_finalizer(sid, None)
         session = self._ensure_session(sid)
         if session.tts_utt_id == utt_id:
             session.tts_utt_id = None

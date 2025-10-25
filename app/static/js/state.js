@@ -31,25 +31,27 @@
 
   function setState(patch) {
     if (!patch || typeof patch !== "object") return;
-    state = { ...state, ...patch };
+    const sanitized = { ...patch };
+    if ("resume" in sanitized) {
+      delete sanitized.resume;
+    }
+    if ("resumeError" in sanitized) {
+      delete sanitized.resumeError;
+    }
+    state = { ...state, ...sanitized, resume: null, resumeError: null };
     notify();
   }
 
-  function setResume(token, ttlMs) {
-    const resumeToken = typeof token === "string" && token.trim() ? token.trim() : null;
-    const ttl = Number(ttlMs);
-    if (!resumeToken || !Number.isFinite(ttl) || ttl <= 0) {
-      clearResume();
-      return null;
-    }
-    const expiresAt = Date.now() + ttl;
-    const resume = { token: resumeToken, ttlMs: ttl, expiresAt };
-    setState({ resume, resumeError: null });
-    return resume;
+  function setResume() {
+    clearResume();
+    return null;
   }
 
   function clearResume() {
-    setState({ resume: null, resumeError: null });
+    if (state.resume !== null || state.resumeError !== null) {
+      state = { ...state, resume: null, resumeError: null };
+      notify();
+    }
   }
 
   function reset() {

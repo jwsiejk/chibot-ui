@@ -103,11 +103,12 @@ class TestASRReadinessGate(unittest.TestCase):
         accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
         self.assertEqual(len(accept_messages), 1)
 
-        error_frames = [
+        outbound_payloads = [
             json.loads(msg["text"])
             for msg in sent
             if msg.get("type") == "websocket.send" and msg.get("text")
         ]
+        error_frames = [payload for payload in outbound_payloads if payload.get("type") == "error"]
         self.assertTrue(error_frames)
         for payload in error_frames:
             self.assertEqual(
@@ -131,7 +132,12 @@ class TestASRReadinessGate(unittest.TestCase):
         accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
         self.assertEqual(len(accept_messages), 1)
 
-        error_frames = [msg for msg in sent if msg.get("type") == "websocket.send"]
+        outbound_payloads = [
+            json.loads(msg["text"])
+            for msg in sent
+            if msg.get("type") == "websocket.send" and msg.get("text")
+        ]
+        error_frames = [payload for payload in outbound_payloads if payload.get("type") == "error"]
         self.assertFalse(error_frames)
 
         close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]

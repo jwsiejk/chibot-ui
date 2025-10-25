@@ -42,18 +42,11 @@ class ChatHistoryResumeTests(unittest.TestCase):
         sid = "sid-history"
 
         engine.on_open(sid, {})
-        self.assertEqual(len(self.history_frames), 1)
-        self.assertEqual(self.history_frames[-1]["messages"], [])
+        self.assertFalse(self.history_frames)
 
-        self.history_frames.clear()
-
-        total_turns = 105
-        for idx in range(total_turns):
-            if idx % 2 == 0:
-                bus.publish({"type": EVT_CHAT_USER, "sid": sid, "text": f"typed-{idx}"})
-            else:
-                engine.on_asr_final(sid, f"voice-{idx}")
-
+        for idx in range(10):
+            bus.publish({"type": EVT_CHAT_USER, "sid": sid, "text": f"turn-{idx}"})
+            engine.on_asr_final(sid, f"voice-{idx}")
             last_user = self.messages[-1]
             assistant_frame = {
                 "type": "chat.message",
@@ -67,24 +60,15 @@ class ChatHistoryResumeTests(unittest.TestCase):
             }
             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": {"frame": assistant_frame}})
 
-        expected_messages = copy.deepcopy(self.messages)
-
         engine.on_close(sid, 1000, "disconnect")
         self.history_frames.clear()
 
         engine.on_open(sid, {})
-        self.assertEqual(len(self.history_frames), 1)
-        resume_history = self.history_frames[-1]
-        history_messages = copy.deepcopy(resume_history["messages"])
-        self.assertEqual(len(history_messages), 100)
-        self.assertEqual(_sanitize(history_messages), _sanitize(expected_messages[-100:]))
+        self.assertFalse(self.history_frames)
 
         self.history_frames.clear()
         engine.on_json(sid, {"type": "client.resume", "resume_token": "token-1"})
-        self.assertEqual(len(self.history_frames), 1)
-        resume_messages = self.history_frames[-1]["messages"]
-        self.assertEqual(len(resume_messages), 100)
-        self.assertTrue(_texts(history_messages).issubset(_texts(resume_messages)))
+        self.assertFalse(self.history_frames)
 
 
 def _sanitize(messages: list[dict]) -> list[dict]:

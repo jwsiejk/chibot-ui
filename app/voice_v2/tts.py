@@ -44,6 +44,11 @@ class TTSAdapter:
             "post_hold_ms": self._post_hold_ms,
         }
 
+    def stop(self) -> None:
+        """Reset sequencing state so the next session starts fresh."""
+
+        self._utt_seq = 0
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

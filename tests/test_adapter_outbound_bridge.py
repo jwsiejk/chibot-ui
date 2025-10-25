@@ -49,6 +49,8 @@ class OutboundHarness:
         await self._inbound.put({"type": "websocket.connect"})
         await self.wait_for(lambda: self.accepted)
         await self.wait_for(lambda: self.engine.open_sid is not None)
+        self.outbound_frames.clear()
+        self.binary_frames.clear()
 
     async def _receive(self) -> dict:
         return await self._inbound.get()
