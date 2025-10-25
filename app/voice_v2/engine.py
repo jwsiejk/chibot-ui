@@ -20,6 +20,7 @@ from app.voice_v2 import (
     EVT_ACWR_RECOMPUTE,
     EVT_CHAT_USER,
     EVT_ASR_FINAL,
+    EVT_ASR_PARTIAL,
     EVT_NLG,
     EVT_NLU,
     EVT_DIALOG_PLAN,
@@ -379,19 +380,27 @@ class EngineV2:
         event = self._envelope(sid, EVT_WS_AUDIO_SEND, payload)
         self._publish(event)
 
-    def on_asr_final(self, sid: str, text: str) -> None:
+    def on_asr_final(self, sid: str, text: str, req_id: str | None = None) -> None:
         """Observe the final ASR transcript for a turn."""
 
         session = self._ensure_session(sid)
+
+        provided_req_id = req_id if isinstance(req_id, str) and req_id else None
+        if provided_req_id is not None:
+            session.req_id = provided_req_id
+
         if session.turn_started_ms is not None:
             elapsed = _now_ms() - session.turn_started_ms
             if elapsed < 0:
                 elapsed = 0
             session.perf_final_ms = elapsed
+        else:
+            session.turn_started_ms = _now_ms()
 
         turn_id = session.turn_id or str(uuid.uuid4())
-        req_id = session.req_id or f"req-{uuid.uuid4().hex}"
         session.turn_id = turn_id
+
+        req_id = session.req_id or provided_req_id or f"req-{uuid.uuid4().hex}"
         session.req_id = req_id
 
         if not session.asr_final_emitted:
@@ -433,6 +442,38 @@ class EngineV2:
         partial_text: Optional[str] = None,
     ) -> None:
         session = self._ensure_session(sid)
+
+        if session.state == READY:
+            self._set_state(sid, LISTENING, reason="asr_partial")
+            session = self._ensure_session(sid)
+
+        if session.turn_started_ms is None:
+            session.turn_started_ms = _now_ms()
+
+        if isinstance(req_id, str) and req_id:
+            session.req_id = req_id
+        else:
+            req_id = session.req_id or f"req-{uuid.uuid4().hex}"
+            session.req_id = req_id
+
+        if session.turn_id is None:
+            session.turn_id = str(uuid.uuid4())
+
+        if isinstance(partial_text, str):
+            partial_value = partial_text
+        elif partial_text:
+            partial_value = str(partial_text)
+        else:
+            partial_value = ""
+
+        payload: Dict[str, Any] = {
+            "req_id": req_id,
+            "text": partial_value,
+            "confidence": float(confidence),
+        }
+        partial_event = self._envelope(sid, EVT_ASR_PARTIAL, payload)
+        self._publish(partial_event)
+
         if (
             session.perf_first_partial_ms is None
             and session.turn_started_ms is not None
@@ -1277,6 +1318,22 @@ class EngineV2:
                 if isinstance(candidate_mode, str) and candidate_mode:
                     plan_mode = candidate_mode
 
+        provider = getattr(self._llm, "_provider", None)
+        model_name = getattr(provider, "default_model", None)
+        request_payload: Dict[str, Any] = {"purpose": "answer"}
+        if intent:
+            request_payload["intent"] = intent
+        if plan_mode:
+            request_payload["mode"] = plan_mode
+        if entity_payload:
+            request_payload["entity_count"] = len(entity_payload)
+
+        request_event = self._envelope(sid, EVT_LLM_REQUEST, request_payload)
+        self._publish(request_event)
+
+        llm_start = time.perf_counter()
+        response_text: str
+
         if plan_mode:
             turn_id = session.turn_id or plan_context.get("turn_id") or nlu_payload.get("turn_id")
             if not isinstance(turn_id, str) or not turn_id:
@@ -1303,6 +1360,13 @@ class EngineV2:
                 response_text = llm_result.get("text")
             else:
                 response_text = llm_result
+
+        latency_ms = max(int((time.perf_counter() - llm_start) * 1000), 0)
+        complete_payload: Dict[str, Any] = {"purpose": "answer", "latency_ms": latency_ms}
+        if isinstance(model_name, str) and model_name:
+            complete_payload["model"] = model_name
+        complete_event = self._envelope(sid, EVT_LLM_COMPLETE, complete_payload)
+        self._publish(complete_event)
 
         if not isinstance(response_text, str):
             response_text = str(response_text)

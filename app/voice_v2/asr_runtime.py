@@ -33,6 +33,7 @@ class _SessionState:
     stream_open: bool = False
     last_audio_ts: float = 0.0
     drop_logged: bool = False
+    idle_handle: asyncio.TimerHandle | None = None
 
 
 class ASRRuntime:
@@ -75,17 +76,20 @@ class ASRRuntime:
         if not state.stream_open:
             state.pending.append(data)
             self._ensure_stream(sid, state)
-            return
+        else:
+            self._client.send_audio(sid, data)
 
-        self._client.send_audio(sid, data)
+        self._reset_idle_timer(sid, state)
 
     def on_ws_close(self, sid: str) -> None:
         state = self._sessions.pop(sid, None)
         if state is None:
             return
+        self._cancel_idle_timer(state)
         task = state.stream_open_task
         if task is not None and not task.done():
             task.cancel()
+        state.stream_open = False
         try:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
@@ -136,6 +140,7 @@ class ASRRuntime:
                 chunk = state.pending.popleft()
                 self._client.send_audio(sid, chunk)
             state.stream_open_task = None
+            self._reset_idle_timer(sid, state)
 
         def _on_done(_task: asyncio.Task[None]) -> None:
             if state.stream_open_task is _task:
@@ -234,10 +239,67 @@ class ASRRuntime:
             return
         state.stream_open = False
         state.req_id = None
+        self._cancel_idle_timer(state)
         try:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
             _logger.exception("evt=asr_error_close_failed sid=%s", sid)
+
+    def _cancel_idle_timer(self, state: _SessionState) -> None:
+        handle = state.idle_handle
+        if handle is not None:
+            handle.cancel()
+            state.idle_handle = None
+
+    def _reset_idle_timer(self, sid: str, state: _SessionState) -> None:
+        threshold_ms = self._idle_close_ms
+        if threshold_ms <= 0:
+            return
+        loop = self._ensure_loop()
+        if loop is None:
+            return
+        self._cancel_idle_timer(state)
+
+        delay = threshold_ms / 1000.0
+
+        def _fire() -> None:
+            state.idle_handle = None
+            self._handle_idle_timeout(sid, state)
+
+        state.idle_handle = loop.call_later(delay, _fire)
+
+    def _handle_idle_timeout(self, sid: str, state: _SessionState) -> None:
+        if not state.stream_open:
+            return
+
+        ensure_session = getattr(self._engine, "_ensure_session", None)
+        engine_state = None
+        if callable(ensure_session):
+            try:
+                engine_session = ensure_session(sid)
+            except Exception:  # pragma: no cover - defensive
+                engine_session = None
+            if engine_session is not None:
+                engine_state = getattr(engine_session, "state", None)
+
+        if engine_state not in {"Ready", "Idle"}:
+            # Re-arm the timer to check again once the engine transitions.
+            self._reset_idle_timer(sid, state)
+            return
+
+        try:
+            self._client.close_stream(sid)
+        except Exception:  # pragma: no cover - defensive
+            _logger.exception("evt=asr_idle_close_failed sid=%s", sid)
+        else:
+            _logger.info(
+                "evt=asr_idle_close sid=%s threshold_ms=%d engine_state=%s",
+                sid,
+                int(self._idle_close_ms),
+                engine_state,
+            )
+        state.stream_open = False
+        state.req_id = None
 
     # Optional idle guard
     def close_idle_streams(self) -> None:
