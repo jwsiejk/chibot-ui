@@ -21,10 +21,12 @@ _DEFAULT_BUFFER_BYTES = 4 * 1024 * 1024
 @dataclass
 class _StreamState:
     sid: str
+    stream_id: str
     websocket: WebSocketClientProtocol
     on_partial: Callable[[str], None]
     on_final: Callable[[str], None]
     on_error: Callable[[str], None]
+    on_close: Callable[[int | None, str | None], None] | None
     loop: asyncio.AbstractEventLoop
     chunks: Deque[bytes] = field(default_factory=deque)
     buffered_bytes: int = 0
@@ -33,6 +35,7 @@ class _StreamState:
     sender_task: asyncio.Task[None] | None = None
     receiver_task: asyncio.Task[None] | None = None
     data_event: asyncio.Event = field(default_factory=asyncio.Event)
+    finalized: bool = False
 
 
 class DeepgramClient:
@@ -63,11 +66,16 @@ class DeepgramClient:
         on_partial: Callable[[str], None],
         on_final: Callable[[str], None],
         on_error: Callable[[str], None],
+        *,
+        stream_id: str,
+        on_close: Callable[[int | None, str | None], None] | None = None,
     ) -> None:
         if not isinstance(sid, str) or not sid:
             raise ValueError("sid must be a non-empty string")
         if sid in self._streams:
             return
+        if not isinstance(stream_id, str) or not stream_id:
+            raise ValueError("stream_id must be a non-empty string")
         loop = asyncio.get_running_loop()
         headers = {"Authorization": f"Token {self._api_key}"}
         try:
@@ -93,13 +101,22 @@ class DeepgramClient:
             on_partial=on_partial,
             on_final=on_final,
             on_error=on_error,
+            on_close=on_close,
             loop=loop,
+            stream_id=stream_id,
         )
         state.sender_task = loop.create_task(self._sender_loop(state), name=f"dg-send-{sid}")
         state.receiver_task = loop.create_task(
             self._receiver_loop(state), name=f"dg-recv-{sid}"
         )
         self._streams[sid] = state
+        loop.call_soon(
+            _logger.info,
+            "evt=dg_stream_open sid=%s stream_id=%s url=%s",
+            sid,
+            stream_id,
+            self._url,
+        )
 
     def send_audio(self, sid: str, chunk: bytes) -> None:
         state = self._streams.get(sid)
@@ -185,10 +202,30 @@ class DeepgramClient:
         await self._finalize_stream(state)
 
     async def _finalize_stream(self, state: _StreamState) -> None:
+        if state.finalized:
+            return
+        state.finalized = True
         try:
             await state.websocket.wait_closed()
         except Exception:  # pragma: no cover - defensive
             pass
+        code = state.websocket.close_code
+        reason = (state.websocket.close_reason or "").replace('"', '\\"')
+        _logger.info(
+            'evt=dg_stream_closed sid=%s stream_id=%s code=%s reason="%s"',
+            state.sid,
+            state.stream_id,
+            code if code is not None else 0,
+            reason,
+        )
+        callback = state.on_close
+        if callback is not None:
+            try:
+                callback(code, state.websocket.close_reason)
+            except Exception:  # pragma: no cover - defensive
+                _logger.exception("evt=deepgram_close_callback_failed sid=%s", state.sid)
+        state.on_close = None
+        self._streams.pop(state.sid, None)
 
     def _handle_message(self, state: _StreamState, payload: dict) -> None:
         message_type = payload.get("type")

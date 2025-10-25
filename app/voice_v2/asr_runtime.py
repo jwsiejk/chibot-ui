@@ -34,6 +34,8 @@ class _SessionState:
     last_audio_ts: float = 0.0
     drop_logged: bool = False
     idle_handle: asyncio.TimerHandle | None = None
+    stream_id: Optional[str] = None
+    close_reason: Optional[str] = None
 
 
 class ASRRuntime:
@@ -85,6 +87,7 @@ class ASRRuntime:
         state = self._sessions.pop(sid, None)
         if state is None:
             return
+        state.close_reason = "client_ws_closed"
         self._cancel_idle_timer(state)
         task = state.stream_open_task
         if task is not None and not task.done():
@@ -94,6 +97,7 @@ class ASRRuntime:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
             _logger.exception("evt=asr_stream_close_failed sid=%s", sid)
+        state.req_id = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -121,6 +125,10 @@ class ASRRuntime:
             return
 
         async def _open() -> None:
+            if state.stream_id is None:
+                state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
+            stream_id = state.stream_id
+            state.close_reason = None
             try:
                 await self._client.open_stream(
                     sid,
@@ -128,14 +136,25 @@ class ASRRuntime:
                     on_partial=self._make_partial_cb(sid),
                     on_final=self._make_final_cb(sid),
                     on_error=self._make_error_cb(sid),
+                    stream_id=stream_id,
+                    on_close=self._make_close_cb(sid, state),
                 )
             except asyncio.CancelledError:
                 raise
             except Exception:  # pragma: no cover - defensive
                 _logger.exception("evt=asr_stream_open_failed sid=%s", sid)
+                state.stream_id = None
                 return
 
             state.stream_open = True
+            if stream_id:
+                _logger.info(
+                    'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
+                    sid,
+                    stream_id,
+                    _CONTENT_TYPE,
+                    int(self._idle_close_ms),
+                )
             while state.pending:
                 chunk = state.pending.popleft()
                 self._client.send_audio(sid, chunk)
@@ -164,6 +183,27 @@ class ASRRuntime:
     def _make_error_cb(self, sid: str) -> Callable[[str], None]:
         def _callback(error: str) -> None:
             self._on_error(sid, error)
+
+        return _callback
+
+    def _make_close_cb(self, sid: str, state: _SessionState) -> Callable[[int | None, str | None], None]:
+        def _callback(_code: int | None, _reason: str | None) -> None:
+            stream_id = state.stream_id
+            if not stream_id:
+                return
+            reason = state.close_reason
+            if reason is None:
+                reason = "server_shutdown" if _code == 1001 else "error"
+            _logger.info(
+                "evt=asr_session_close sid=%s stream_id=%s reason=%s",
+                sid,
+                stream_id,
+                reason,
+            )
+            state.stream_id = None
+            state.close_reason = None
+            state.stream_open = False
+            state.req_id = None
 
         return _callback
 
@@ -237,6 +277,7 @@ class ASRRuntime:
         state = self._sessions.get(sid)
         if state is None:
             return
+        state.close_reason = "error"
         state.stream_open = False
         state.req_id = None
         self._cancel_idle_timer(state)
@@ -272,6 +313,7 @@ class ASRRuntime:
         if not state.stream_open:
             return
 
+        state.close_reason = "idle_timeout"
         ensure_session = getattr(self._engine, "_ensure_session", None)
         engine_state = None
         if callable(ensure_session):
@@ -313,6 +355,7 @@ class ASRRuntime:
             if threshold <= 0:
                 continue
             if state.last_audio_ts and now - state.last_audio_ts >= threshold:
+                state.close_reason = "idle_timeout"
                 try:
                     self._client.close_stream(sid)
                 except Exception:  # pragma: no cover - defensive
