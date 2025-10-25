@@ -286,15 +286,42 @@ class LLMAdapter:
 
     @staticmethod
     def _greet_instruction(persona: Mapping[str, Any] | object) -> str:
+        fallback = "Generate a friendly Pure Storage greeting in under eight words."
         if isinstance(persona, Mapping):
             modes = persona.get("modes")
             if isinstance(modes, Mapping):
                 greet_mode = modes.get("greet")
                 if isinstance(greet_mode, Mapping):
                     instruction = greet_mode.get("instruction")
-                    if isinstance(instruction, str) and instruction.strip():
-                        return instruction.strip()
-        return "Generate a friendly Pure Storage greeting in under eight words."
+                    if isinstance(instruction, str):
+                        sanitized = LLMAdapter._sanitize_greet_instruction(
+                            instruction
+                        )
+                        if sanitized:
+                            return sanitized
+        return fallback
+
+    @staticmethod
+    def _sanitize_greet_instruction(instruction: object) -> str:
+        if not isinstance(instruction, str):
+            return ""
+
+        normalized = instruction.strip()
+        if not normalized:
+            return ""
+
+        lowered = normalized.lower()
+        blocked_keywords = (
+            "summarize",
+            "outline",
+            "solution path",
+            "architecture pillar",
+            "success criteria",
+        )
+        if any(keyword in lowered for keyword in blocked_keywords):
+            return ""
+
+        return normalized
 
     @staticmethod
     def _normalize_greet_reply(candidate: Any) -> str:

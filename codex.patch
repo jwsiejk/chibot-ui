@@ -1,229 +1,94 @@
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 89ef1cd2c3c61708545a4fba828c3f0d23b63b91..b500aadae2b6a3b42adace4ab16289d49697868b 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -17,51 +17,51 @@ from app.policy.watch import compute_diff, should_reapply
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ACWR_RECOMPUTE,
-     EVT_CHAT_USER,
-     EVT_ASR_FINAL,
-     EVT_NLG,
-     EVT_NLU,
-     EVT_DIALOG_PLAN,
-     EVT_POLICY_APPLIED,
-     EVT_TTS_END,
-     EVT_TTS_START,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- from app.voice_v2.nlu import NLUAdapter
- from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
- from app.voice_v2.llm import LLMAdapter
- from app.voice_v2.gate import GateController
- from app.voice_v2.conversation_buffer import ConversationBuffer
- from app.voice_v2.vad import VADAggregator
--from app.voice_v2.planner import plan_turn
-+from app.voice_v2.planner import _MODE_CHIPS, plan_turn
- from app.voice_v2.persona import default_chips_for_mode, load_persona
- 
- 
- _logger = logging.getLogger(__name__)
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
- def _slugify_action_label(label: str) -> str:
-     """Normalize a suggestion label into a stable slug identifier."""
- 
-     normalized = re.sub(r"[^a-z0-9]+", "-", label.strip().lower())
-     slug = normalized.strip("-")
-     return slug or "action"
- 
- 
- READY = "Ready"
- LISTENING = "Listening"
- THINKING = "Thinking"
- RESPONDING = "Responding"
- CONFIRMING_BARGE = "ConfirmingBarge"
- 
-@@ -755,74 +755,103 @@ class EngineV2:
-         else:
-             on_connect = False
-             count_candidate = None
- 
-         actions_block = snapshot.get("actions")
-         surface_actions = True
-         if isinstance(actions_block, Mapping):
-             surface_candidate = actions_block.get("surface_via_suggestions")
-             if isinstance(surface_candidate, bool):
-                 surface_actions = surface_candidate
- 
-         if not on_connect:
-             return
- 
-         if not surface_actions:
-             return
- 
-         max_items = 3
-         if isinstance(count_candidate, (int, float)):
-             normalized = int(count_candidate)
-             if normalized > 0:
-                 max_items = normalized
+diff --git a/app/voice_v2/llm.py b/app/voice_v2/llm.py
+index 9afe3eeecf1303ede9d9c007c6f33461870d3e84..a6ff0115e13e4403ad50c8504ed88cb95286c1b5 100644
+--- a/app/voice_v2/llm.py
++++ b/app/voice_v2/llm.py
+@@ -264,59 +264,86 @@ class LLMAdapter:
+         model: str,
+         temperature: float,
+         **extra_kwargs: Any,
+     ) -> str:
+         async def _execute() -> Any:
+             return await provider.generate(
+                 messages=messages,
+                 model=model,
+                 temperature=temperature,
+                 **extra_kwargs,
+             )
  
          try:
-             persona = load_persona()
-+            persona_dict = persona if isinstance(persona, Mapping) else {}
-         except Exception:
-             _logger.exception("Failed to load persona for connect suggestions")
--            persona = {}
-+            persona_dict = {}
+             asyncio.get_running_loop()
+         except RuntimeError:
+             result = asyncio.run(_execute())
+         else:
+             with ThreadPoolExecutor(max_workers=1) as executor:
+                 future = executor.submit(asyncio.run, _execute())
+                 result = future.result()
+ 
+         return result if isinstance(result, str) else str(result)
+ 
+     @staticmethod
+     def _greet_instruction(persona: Mapping[str, Any] | object) -> str:
++        fallback = "Generate a friendly Pure Storage greeting in under eight words."
+         if isinstance(persona, Mapping):
+             modes = persona.get("modes")
+             if isinstance(modes, Mapping):
+                 greet_mode = modes.get("greet")
+                 if isinstance(greet_mode, Mapping):
+                     instruction = greet_mode.get("instruction")
+-                    if isinstance(instruction, str) and instruction.strip():
+-                        return instruction.strip()
+-        return "Generate a friendly Pure Storage greeting in under eight words."
++                    if isinstance(instruction, str):
++                        sanitized = LLMAdapter._sanitize_greet_instruction(
++                            instruction
++                        )
++                        if sanitized:
++                            return sanitized
++        return fallback
 +
-+        def _normalize_labels(labels: Any) -> list[str]:
-+            seen = set()
-+            results = []
-+            if isinstance(labels, list):
-+                for label in labels:
-+                    if not isinstance(label, str):
-+                        continue
-+                    stripped = label.strip()
-+                    if not stripped or stripped in seen:
-+                        continue
-+                    seen.add(stripped)
-+                    results.append(stripped)
-+            return results
++    @staticmethod
++    def _sanitize_greet_instruction(instruction: object) -> str:
++        if not isinstance(instruction, str):
++            return ""
 +
-+        selected_mode: Optional[str] = None
-+        normalized_items: list[str] = []
++        normalized = instruction.strip()
++        if not normalized:
++            return ""
 +
-+        for mode_key in ("greet", "outline"):
-+            normalized_items = _normalize_labels(
-+                default_chips_for_mode(persona_dict, mode_key)
-+            )
-+            if normalized_items:
-+                selected_mode = mode_key
-+                break
++        lowered = normalized.lower()
++        blocked_keywords = (
++            "summarize",
++            "outline",
++            "solution path",
++            "architecture pillar",
++            "success criteria",
++        )
++        if any(keyword in lowered for keyword in blocked_keywords):
++            return ""
 +
-+        if not normalized_items:
-+            normalized_items = _normalize_labels(_MODE_CHIPS.get("clarify", []))
-+            if normalized_items:
-+                selected_mode = "clarify"
++        return normalized
  
--        chips = default_chips_for_mode(persona if isinstance(persona, dict) else {}, "outline")
--        items = [str(label).strip() for label in chips if isinstance(label, str) and label.strip()]
--        if not items:
-+        if not normalized_items or not selected_mode:
-             return
+     @staticmethod
+     def _normalize_greet_reply(candidate: Any) -> str:
+         if not isinstance(candidate, str):
+             return ""
+         normalized = " ".join(candidate.strip().split())
+         if not normalized:
+             return ""
+         words = normalized.split()
+         if len(words) > 8:
+             normalized = " ".join(words[:8])
+         return normalized
  
--        limited_items = items[:max_items]
-+        limited_items = normalized_items[:max_items]
-         if not limited_items:
-             return
- 
-         suggestion_items = []
-         for label in limited_items:
-             item: Dict[str, Any] = {"label": label, "kind": "action"}
-             item["id"] = _slugify_action_label(label)
-             suggestion_items.append(item)
- 
-         suggestions_frame = {
-             "type": "assistant.suggestions",
-             "ts_ms": _now_ms(),
-             "items": suggestion_items,
--            "mode": "outline",
-+            "mode": selected_mode,
-         }
-         serialized = json.dumps(suggestions_frame, ensure_ascii=False, separators=(",", ":"))
-         payload = {
-             "meta": {
-                 "ws": {
-                     "dir": "out",
-                     "size": len(serialized.encode("utf-8")),
-                     "preview": serialized,
-                 }
-             },
-             "frame": suggestions_frame,
-         }
-         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-         self._publish(event)
- 
-         session.suggestions_emitted = True
- 
-     def _publish_barge(
-         self, sid: str, source: str, granted: bool, reason: str | None = None
+     def publish_nlg(
+         self,
+         req_id: str,
+         text: str,
+         *,
+         metadata: Mapping[str, Any] | None = None,
      ) -> None:
-         """Publish EVT_BARGE_IN envelope with meta.barge.{source,granted,reason}."""
+         """Publish EVT_NLG and chat bridge messages when enabled."""
  
-         if source not in {"auto_vad", "asr_evidence", "text"}:
-             return
- 
-diff --git a/config/personas/chip.json b/config/personas/chip.json
-index 5fc6f1abc0e56e4543f205e9adab9023172573d4..71eaaf7b616612ca1b6d997e1c5a1a667ac08b64 100644
---- a/config/personas/chip.json
-+++ b/config/personas/chip.json
-@@ -1,50 +1,56 @@
- {
-   "id": "chip_vptm",
-   "role_title": "Virtual Partner Technical Manager (vPTM)",
-   "public_title": "Chip, your Pure Storage partner guide",
-   "greet_copy": "Hi, Heya, I'm Chip—What do you want to accomplish today?",
-   "voice": "steady-midwest",
-   "tone_preset": "mentor",
-   "domain_focus": "Pure Storage data platforms, partner enablement, and customer outcomes",
-   "guardrails": {
-     "focus_on_pure": true
-   },
-   "modes": {
-     "clarify": {
-       "instruction": "Ask concise follow-ups to uncover the Pure Storage scenario before recommending a path.",
-       "chips": [
-         "Confirm Pure Storage product",
-         "Clarify customer workload",
-         "Ask for timeline"
-       ]
-     },
-     "greet": {
-       "instruction": "Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.",
-       "constraints": {
-         "max_words": 8
--      }
-+      },
-+      "__note_greet_chips": "TEMPLATE: Replace these labels with final copy later; engine reads them dynamically.",
-+      "chips": [
-+        "Set your objective",
-+        "Explore FlashArray fit",
-+        "Review solution path"
-+      ]
-     },
-     "outline": {
-       "instruction": "Summarize the Pure Storage solution path, spotlighting architecture pillars and success criteria.",
-       "chips": [
-         "State customer objective",
-         "Highlight Pure differentiators",
-         "Note partner resources"
-       ]
-     },
-     "deep_dive": {
-       "instruction": "Walk through the technical layers of the Pure Storage design with data-backed rationale.",
-       "chips": [
-         "Detail FlashArray configuration",
-         "Discuss data reduction plan",
-         "Cover integration dependencies"
-       ]
-     },
-     "compare": {
-       "instruction": "Contrast relevant Pure Storage options and explain why one path best serves the requirement.",
-       "chips": [
-         "FlashArray vs FlashBlade fit",
-         "Differentiate Evergreen benefits",
-         "Match workload to model"
-       ]
-     },
+         if not self._auto_publish:
+             # When auto publish is disabled we only emit the bus events when
+             # this helper is invoked directly (the engine handles it).
