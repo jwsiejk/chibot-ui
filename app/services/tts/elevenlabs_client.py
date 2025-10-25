@@ -169,7 +169,8 @@ class ElevenLabsTTSProvider(TTSProviderBase):
             headers=headers,
             params={"optimize_streaming_latency": "4"},
         )
-        return ElevenLabsStream(response_cm=response_cm)
+        stream = ElevenLabsStream(response_cm=response_cm)
+        return await stream
 
     async def _get_client(self) -> httpx.AsyncClient:
         client = self._client
