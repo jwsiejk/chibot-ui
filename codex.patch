@@ -1,109 +1,257 @@
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index f053151ae5a879c7ee8e961c640effe3517a4ebb..16951645e86cc4b7c37a30d3e3c7d27c0e3035c5 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -1,43 +1,43 @@
- """Deepgram-backed ASR runtime for the voice v2 engine."""
- from __future__ import annotations
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index ff0b50d7d66c854699034752f3135d05cb423d1e..0647724990e9a92b74f92d3269c6848861631e2b 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -780,65 +780,84 @@
+               if (pttEnabled && !pttActive) {
+                 applyPttMask({ force: true });
+               }
+             })
+             .catch((err) => {
+               console.error('AudioRecorder start error', err);
+             });
+         }
+       } else if (becameDisconnected) {
+         Waveform.stop();
+         if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+           try {
+             window.AudioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
+           }
+         }
+         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+           window.AudioPlayer.interrupt();
+         }
+         setPttActive(false);
+       }
+       updateResumeBanner(state);
+     });
  
- import asyncio
- import logging
- import time
- import uuid
- from collections import deque
- from dataclasses import dataclass, field
- from typing import Callable, Deque, Dict, Optional
- 
- from app.config import (
-     ASR_BACKPRESSURE_THRESHOLD_BYTES,
-     ASR_IDLE_CLOSE_MS,
-     ASR_TRACE,
- )
- from app.telemetry import bus
--from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
-+from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL, EVT_ASR_READY, EVT_WS_JSON_SEND
- from app.voice_v2.engine import EngineV2
- from app.services.streaming_asr.deepgram_client import DeepgramClient
- 
- _logger = logging.getLogger(__name__)
- _asr_log = logging.getLogger("app.voice_v2.asr_runtime")
- 
- _CONTENT_TYPE = "audio/webm;codecs=opus"
- _PARTIAL_CONFIDENCE = 0.55
- _FINAL_CONFIDENCE = 0.9
- _DEFAULT_IDLE_CLOSE_MS = 4000
- _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
- _TRACE_ENABLED = bool(ASR_TRACE)
- 
- 
- @dataclass
- class _SessionState:
-     """Track per-session streaming state."""
- 
-     sid: str
-     pending: Deque[bytes] = field(default_factory=deque)
-     buffered_bytes: int = 0
-     req_id: Optional[str] = None
-     stream_open_task: Optional[asyncio.Task[None]] = None
-     stream_open: bool = False
-     last_audio_ts: float = 0.0
-@@ -271,50 +271,59 @@ class ASRRuntime:
-             state.close_reason = None
-             try:
-                 qs = await self._client.open_stream(
-                     sid,
-                     _CONTENT_TYPE,
-                     on_partial=self._make_partial_cb(sid),
-                     on_final=self._make_final_cb(sid),
-                     on_error=self._make_error_cb(sid),
-                     stream_id=stream_id,
-                     on_close=self._make_close_cb(sid, state),
-                 )
-             except asyncio.CancelledError:
-                 raise
-             except Exception:  # pragma: no cover - defensive
-                 _logger.exception("evt=asr_stream_open_failed sid=%s", sid)
-                 state.stream_id = None
-                 return
- 
-             state.stream_open = True
-             _asr_log.info(
-                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
-                 sid,
-                 _CONTENT_TYPE,
-                 qs or "",
-             )
-+            bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
++    const POST_TTS_RELEASE_MS = 150;
 +
-+            input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
-+            asr_ready_frame = {
-+                "type": "asr.ready",
-+                "vendor": "deepgram",
-+                "input": input_desc,
-+            }
-+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
-             if stream_id:
-                 _logger.info(
-                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
-                     sid,
-                     stream_id,
-                     _CONTENT_TYPE,
-                     int(self._idle_close_ms),
-                 )
-             while state.pending:
-                 chunk = state.pending.popleft()
-                 chunk_len = len(chunk)
-                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
-                 state.chunks_sent += 1
-                 state.bytes_sent += chunk_len
-                 self._client.send_audio(sid, chunk)
-             state.stream_open_task = None
-             self._reset_idle_timer(sid, state)
+     window.addEventListener('tts.start', (event) => {
+       const detail = event && event.detail;
+       if (detail) {
+         updateVoiceState(extractVoiceLocale(detail));
+       }
+       if (pttEnabled && !pttActive) {
+         applyPttMask({ force: true });
+       }
+     });
+     window.addEventListener('tts.end', () => {
+-      if (pttEnabled && !pttActive) {
++      const release = () => {
+         applyPttMask({ force: true });
++      };
++      if (POST_TTS_RELEASE_MS > 0) {
++        setTimeout(release, POST_TTS_RELEASE_MS);
++      } else {
++        release();
+       }
+     });
+     window.addEventListener('asr.ready', () => {
++      if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
++        try {
++          const maybePromise = window.AudioRecorder.start();
++          if (maybePromise && typeof maybePromise.catch === 'function') {
++            maybePromise.catch((err) => {
++              console.error('AudioRecorder start on asr.ready failed', err);
++            });
++          }
++        } catch (err) {
++          console.error('AudioRecorder start on asr.ready failed', err);
++        }
++      }
+       if (pttEnabled && !pttActive) {
+         applyPttMask({ force: true });
+       }
+     });
  
-         def _on_done(_task: asyncio.Task[None]) -> None:
-             if state.stream_open_task is _task:
-                 state.stream_open_task = None
+     window.addEventListener('assistant.suggestions', (event) => {
+       const detail = event && event.detail;
+       applySuggestionsFrame(detail);
+     });
  
-         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
-         state.stream_open_task.add_done_callback(_on_done)
+     window.addEventListener('ws.close', () => {
+       resetSuggestions();
+     });
  
+     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
+     if (urlParams.get('wsSmoke') === '1') {
+       const transitions = [];
+       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
+ 
+       class MockSocket extends EventTarget {
+         constructor() {
+           super();
+           this.readyState = WebSocket.CONNECTING;
+           setTimeout(() => {
+             this.readyState = WebSocket.OPEN;
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index 96cd1e9df5619fc171309ec9ce12ffe351e3e540..39c1c8b807cb10e37631fe343448d37848b87c1c 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -1,34 +1,35 @@
+ (() => {
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading AudioRecorder");
+   }
+ 
+   const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+   const BACKPRESSURE_LIMIT_BYTES = 512 * 1024;
+   const WEBM_TIMESLICE_MS = 250;
++  const POST_TTS_RELEASE_DELAY_MS = 150;
+ 
+   class PcmDownsampler {
+     constructor(sourceRate, targetRate) {
+       this.sourceRate = sourceRate;
+       this.targetRate = targetRate;
+       this._ratio = sourceRate / targetRate;
+       this._buffer = [];
+       this._position = 0;
+     }
+ 
+     reset() {
+       this._buffer.length = 0;
+       this._position = 0;
+     }
+ 
+     push(samples) {
+       if (!samples || samples.length === 0) return;
+       for (let i = 0; i < samples.length; i += 1) {
+         this._buffer.push(samples[i]);
+       }
+     }
+ 
+     pullInt16() {
+       const buffer = this._buffer;
+       if (!buffer.length) return null;
+@@ -212,65 +213,71 @@
+       if (!active && this._mask.timerId) {
+         clearTimeout(this._mask.timerId);
+         this._mask.timerId = null;
+       }
+       this._mask.active = active;
+       if (active && this._downsampler) {
+         this._downsampler.reset();
+       }
+     },
+ 
+     _scheduleMaskRelease(delayMs) {
+       if (this._mask.timerId) {
+         clearTimeout(this._mask.timerId);
+         this._mask.timerId = null;
+       }
+       if (delayMs > 0) {
+         this._mask.timerId = setTimeout(() => {
+           this._mask.timerId = null;
+           this._setMask(false);
+         }, delayMs);
+       } else {
+         this._setMask(false);
+       }
+     },
+ 
+-    handleAsrReady(frame) {
++    async handleAsrReady(frame) {
+       const descriptor = frame && frame.input;
+       const vendor = frame && frame.vendor;
+       if (!descriptor || !vendor) {
+         console.warn("Invalid asr.ready frame", frame);
+         return;
+       }
+       const normalized = {
+         container: String(descriptor.container || "").toLowerCase(),
+         codec: String(descriptor.codec || "").toLowerCase(),
+         rate_hz: Number(descriptor.rate_hz) || 0,
+         channels: Number(descriptor.channels) || 1
+       };
+       this._pendingDescriptor = { vendor, descriptor: normalized };
+-      if (this._stream) {
++      try {
++        await this.start();
++      } catch (err) {
++        console.error("AudioRecorder start failed for asr.ready", err);
++        return;
++      }
++      if (this._pendingDescriptor) {
+         this._activateDescriptor(this._pendingDescriptor);
+         this._pendingDescriptor = null;
+       }
+     },
+ 
+     _activateDescriptor(spec) {
+       if (!spec || !this._stream) return;
+       const { vendor, descriptor } = spec;
+       this._teardownEncoder();
+       this._vendor = vendor;
+       this._descriptor = descriptor;
+       if (descriptor.container === "webm" && descriptor.codec === "opus" && descriptor.rate_hz === 48000 && descriptor.channels === 1) {
+         this._setupWebmRecorder();
+       } else if (descriptor.container === "raw" && descriptor.codec === "pcm_s16le" && descriptor.rate_hz === 16000 && descriptor.channels === 1) {
+         this._setupPcmRecorder();
+       } else {
+         console.error("Unsupported ASR descriptor", descriptor);
+       }
+     },
+ 
+     _setupWebmRecorder() {
+       if (typeof MediaRecorder === "undefined") {
+         console.error("MediaRecorder not supported in this browser");
+         return;
+       }
+@@ -372,51 +379,51 @@
+         console.warn("Failed to send audio chunk");
+       }
+       return sent;
+     },
+ 
+     handlePolicy(frame) {
+       const policy = frame && frame.policy;
+       if (policy && typeof policy.barge_in_enabled === "boolean") {
+         this._bargeInEnabled = policy.barge_in_enabled;
+         if (this._bargeInEnabled && this._mask.active) {
+           this._mask.holdMs = 0;
+           this._setMask(false);
+         }
+       }
+     },
+ 
+     handleTtsStart(frame) {
+       if (this._bargeInEnabled) return;
+       const hold = Number(frame && frame.post_hold_ms);
+       this._mask.holdMs = Number.isFinite(hold) && hold > 0 ? hold : 0;
+       this._setMask(true);
+     },
+ 
+     handleTtsEnd() {
+       if (!this._mask.active) return;
+-      const hold = this._mask.holdMs || 0;
++      const hold = Math.max(this._mask.holdMs || 0, POST_TTS_RELEASE_DELAY_MS);
+       this._mask.holdMs = 0;
+       this._scheduleMaskRelease(hold);
+     },
+ 
+     handleWsClose() {
+       this._teardownEncoder();
+       this._asrReady = false;
+       this._descriptor = null;
+       this._pendingDescriptor = null;
+       this._vendor = null;
+       this._setMask(false);
+     }
+   };
+ 
+   window.addEventListener("asr.ready", (event) => {
+     recorder.handleAsrReady(event && event.detail);
+   });
+   window.addEventListener("policy.interaction", (event) => {
+     recorder.handlePolicy(event && event.detail);
+   });
+   window.addEventListener("tts.start", (event) => {
+     recorder.handleTtsStart(event && event.detail);
+   });
+   window.addEventListener("tts.end", () => {
+     recorder.handleTtsEnd();

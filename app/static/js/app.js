@@ -802,6 +802,8 @@
       updateResumeBanner(state);
     });
 
+    const POST_TTS_RELEASE_MS = 150;
+
     window.addEventListener('tts.start', (event) => {
       const detail = event && event.detail;
       if (detail) {
@@ -812,11 +814,28 @@
       }
     });
     window.addEventListener('tts.end', () => {
-      if (pttEnabled && !pttActive) {
+      const release = () => {
         applyPttMask({ force: true });
+      };
+      if (POST_TTS_RELEASE_MS > 0) {
+        setTimeout(release, POST_TTS_RELEASE_MS);
+      } else {
+        release();
       }
     });
     window.addEventListener('asr.ready', () => {
+      if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+        try {
+          const maybePromise = window.AudioRecorder.start();
+          if (maybePromise && typeof maybePromise.catch === 'function') {
+            maybePromise.catch((err) => {
+              console.error('AudioRecorder start on asr.ready failed', err);
+            });
+          }
+        } catch (err) {
+          console.error('AudioRecorder start on asr.ready failed', err);
+        }
+      }
       if (pttEnabled && !pttActive) {
         applyPttMask({ force: true });
       }

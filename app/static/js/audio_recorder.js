@@ -7,6 +7,7 @@
   const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
   const BACKPRESSURE_LIMIT_BYTES = 512 * 1024;
   const WEBM_TIMESLICE_MS = 250;
+  const POST_TTS_RELEASE_DELAY_MS = 150;
 
   class PcmDownsampler {
     constructor(sourceRate, targetRate) {
@@ -234,7 +235,7 @@
       }
     },
 
-    handleAsrReady(frame) {
+    async handleAsrReady(frame) {
       const descriptor = frame && frame.input;
       const vendor = frame && frame.vendor;
       if (!descriptor || !vendor) {
@@ -248,7 +249,13 @@
         channels: Number(descriptor.channels) || 1
       };
       this._pendingDescriptor = { vendor, descriptor: normalized };
-      if (this._stream) {
+      try {
+        await this.start();
+      } catch (err) {
+        console.error("AudioRecorder start failed for asr.ready", err);
+        return;
+      }
+      if (this._pendingDescriptor) {
         this._activateDescriptor(this._pendingDescriptor);
         this._pendingDescriptor = null;
       }
@@ -394,7 +401,7 @@
 
     handleTtsEnd() {
       if (!this._mask.active) return;
-      const hold = this._mask.holdMs || 0;
+      const hold = Math.max(this._mask.holdMs || 0, POST_TTS_RELEASE_DELAY_MS);
       this._mask.holdMs = 0;
       this._scheduleMaskRelease(hold);
     },
