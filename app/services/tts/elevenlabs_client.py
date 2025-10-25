@@ -14,6 +14,7 @@ from app.telemetry import bus
 from app.voice_v2.tts_base import TTSProviderBase
 
 _logger = logging.getLogger("tts.elevenlabs")
+_tts_provider_log = logging.getLogger("app.voice_v2.tts_provider")
 
 _API_BASE_URL = "https://api.elevenlabs.io/v1"
 _OUTPUT_FORMAT = "pcm_16000"
@@ -45,6 +46,11 @@ class ElevenLabsStream:
     async def _start(self) -> "ElevenLabsStream":
         response = await self.response_cm.__aenter__()
         self._response = response
+        _tts_provider_log.info(
+            "evt=tts_provider_stream_opened provider=elevenlabs content_type=%s format=%s",
+            response.headers.get("content-type"),
+            _OUTPUT_FORMAT,
+        )
         response.raise_for_status()
         self._producer = asyncio.create_task(self._drain())
         return self

@@ -1,8 +1,8 @@
 diff --git a/app/services/tts/elevenlabs_client.py b/app/services/tts/elevenlabs_client.py
-index 42f43a25f3276433e39677903799de3c70a6cbed..549f10307ebed65e739fc67120b23169e8075805 100644
+index 549f10307ebed65e739fc67120b23169e8075805..0ea3e32454b82563c91cb72f035cf9e2afc18c8f 100644
 --- a/app/services/tts/elevenlabs_client.py
 +++ b/app/services/tts/elevenlabs_client.py
-@@ -1,41 +1,41 @@
+@@ -1,72 +1,78 @@
  """ElevenLabs TTS provider that streams PCM16 audio for Engine v2."""
  from __future__ import annotations
  
@@ -18,8 +18,8 @@ index 42f43a25f3276433e39677903799de3c70a6cbed..549f10307ebed65e739fc67120b23169
  from app.telemetry import bus
  from app.voice_v2.tts_base import TTSProviderBase
  
--_logger = logging.getLogger(__name__)
-+_logger = logging.getLogger("tts.elevenlabs")
+ _logger = logging.getLogger("tts.elevenlabs")
++_tts_provider_log = logging.getLogger("app.voice_v2.tts_provider")
  
  _API_BASE_URL = "https://api.elevenlabs.io/v1"
  _OUTPUT_FORMAT = "pcm_16000"
@@ -44,4 +44,40 @@ index 42f43a25f3276433e39677903799de3c70a6cbed..549f10307ebed65e739fc67120b23169
          self._sentinel = object()
          self._error: BaseException | None = None
          self._closed = False
+ 
+     def __await__(self):  # type: ignore[override]
+         return self._start().__await__()
+ 
+     async def _start(self) -> "ElevenLabsStream":
+         response = await self.response_cm.__aenter__()
+         self._response = response
++        _tts_provider_log.info(
++            "evt=tts_provider_stream_opened provider=elevenlabs content_type=%s format=%s",
++            response.headers.get("content-type"),
++            _OUTPUT_FORMAT,
++        )
+         response.raise_for_status()
+         self._producer = asyncio.create_task(self._drain())
+         return self
+ 
+     async def _drain(self) -> None:
+         assert self._response is not None
+         buffer = bytearray()
+         try:
+             async for data in self._response.aiter_bytes():
+                 if not data:
+                     continue
+                 buffer.extend(data)
+                 while len(buffer) >= self.chunk_bytes:
+                     await self._queue.put(bytes(buffer[: self.chunk_bytes]))
+                     del buffer[: self.chunk_bytes]
+             if buffer:
+                 await self._queue.put(bytes(buffer))
+         except asyncio.CancelledError:
+             raise
+         except Exception as exc:  # pragma: no cover - defensive
+             self._error = exc
+         finally:
+             await self._queue.put(self._sentinel)
+             await self._close_response()
  
