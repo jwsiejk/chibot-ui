@@ -1,161 +1,8 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 0351484b6dd3b4c4293f0d21a7dd9e671b6ef692..5d7c1c282e39d85eacc75eb2a5d41e596e4448cf 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -1,40 +1,41 @@
- """Deepgram realtime streaming client."""
- from __future__ import annotations
- 
- import asyncio
- import json
- import logging
- import os
- import time
- import uuid
- from collections import deque
- from dataclasses import dataclass, field
- from typing import Callable, Deque, Dict, Tuple
- 
- import websockets
- from websockets.legacy.client import WebSocketClientProtocol
-+from urllib.parse import urlsplit
- 
- _logger = logging.getLogger(__name__)
- 
- _DEFAULT_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
- _DEFAULT_BUFFER_BYTES = 4 * 1024 * 1024
- 
- 
- @dataclass
- class _StreamState:
-     sid: str
-     stream_id: str
-     websocket: WebSocketClientProtocol
-     on_partial: Callable[[str, Dict[str, object]], None]
-     on_final: Callable[[str, Dict[str, object]], None]
-     on_error: Callable[[str], None]
-     on_close: Callable[[int | None, str | None], None] | None
-     loop: asyncio.AbstractEventLoop
-     chunks: Deque[Tuple[int, bytes, float]] = field(default_factory=deque)
-     buffered_bytes: int = 0
-     drop_logged: bool = False
-     closing: bool = False
-     sender_task: asyncio.Task[None] | None = None
-     receiver_task: asyncio.Task[None] | None = None
-     data_event: asyncio.Event = field(default_factory=asyncio.Event)
-     finalized: bool = False
-@@ -53,98 +54,103 @@ class DeepgramClient:
-         api_key: str | None = None,
-         url: str | None = None,
-         max_buffer_bytes: int | None = None,
-     ) -> None:
-         self._api_key = (api_key or os.getenv("DEEPGRAM_API_KEY")) or ""
-         self._url = url or os.getenv("DEEPGRAM_LISTEN_URL", _DEFAULT_LISTEN_URL)
-         self._max_buffer_bytes = max_buffer_bytes or _DEFAULT_BUFFER_BYTES
-         if self._max_buffer_bytes <= 0:
-             self._max_buffer_bytes = _DEFAULT_BUFFER_BYTES
-         self._streams: Dict[str, _StreamState] = {}
-         self.idle_close_ms = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
- 
-     # ------------------------------------------------------------------
-     # Public API
-     # ------------------------------------------------------------------
-     async def open_stream(
-         self,
-         sid: str,
-         content_type: str,
-         on_partial: Callable[[str, Dict[str, object]], None],
-         on_final: Callable[[str, Dict[str, object]], None],
-         on_error: Callable[[str], None],
-         *,
-         stream_id: str,
-         on_close: Callable[[int | None, str | None], None] | None = None,
--    ) -> None:
-+    ) -> str:
-         if not isinstance(sid, str) or not sid:
-             raise ValueError("sid must be a non-empty string")
-         if sid in self._streams:
--            return
-+            return ""
-         if not isinstance(stream_id, str) or not stream_id:
-             raise ValueError("stream_id must be a non-empty string")
-         loop = asyncio.get_running_loop()
--        headers = {"Authorization": f"Token {self._api_key}"}
-+        headers = {
-+            "Authorization": f"Token {self._api_key}",
-+            "Content-Type": content_type,
-+        }
-         try:
-             websocket = await websockets.connect(
-                 self._url,
-                 extra_headers=headers,
-                 max_size=None,
-                 ping_interval=None,
-             )
-         except Exception as exc:
-             _logger.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
-             raise
- 
-         start_payload = {
-             "type": "StartRequest",
-             "metadata": {"content_type": content_type},
-         }
-         await websocket.send(json.dumps(start_payload, separators=(",", ":")))
- 
-         state = _StreamState(
-             sid=sid,
-             websocket=websocket,
-             on_partial=on_partial,
-             on_final=on_final,
-             on_error=on_error,
-             on_close=on_close,
-             loop=loop,
-             stream_id=stream_id,
-         )
-         state.sender_task = loop.create_task(self._sender_loop(state), name=f"dg-send-{sid}")
-         state.receiver_task = loop.create_task(
-             self._receiver_loop(state), name=f"dg-recv-{sid}"
-         )
-         self._streams[sid] = state
-         loop.call_soon(
-             _logger.info,
-             "evt=dg_stream_open sid=%s stream_id=%s url=%s",
-             sid,
-             stream_id,
-             self._url,
-         )
-+        qs = urlsplit(self._url).query
-+        return qs
- 
-     def send_audio(self, sid: str, chunk: bytes) -> None:
-         state = self._streams.get(sid)
-         if state is None or state.closing:
-             return
-         if not isinstance(chunk, (bytes, bytearray, memoryview)):
-             raise TypeError("chunk must be bytes-like")
-         data = bytes(chunk)
-         if not data:
-             return
- 
-         now = time.monotonic()
-         if state.first_audio_ts is None:
-             state.first_audio_ts = now
-         seq_no = state.next_seq_no
-         state.next_seq_no += 1
-         state.chunks.append((seq_no, data, now))
-         state.buffered_bytes += len(data)
-         if state.buffered_bytes > self._max_buffer_bytes:
-             dropped = 0
-             while state.chunks and state.buffered_bytes > self._max_buffer_bytes:
-                 _, removed, _ = state.chunks.popleft()
-                 dropped += len(removed)
-                 state.buffered_bytes -= len(removed)
-             if dropped and not state.drop_logged:
 diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index c672183b9460f47fa9406db31f05b24145c11890..f053151ae5a879c7ee8e961c640effe3517a4ebb 100644
+index f053151ae5a879c7ee8e961c640effe3517a4ebb..16951645e86cc4b7c37a30d3e3c7d27c0e3035c5 100644
 --- a/app/voice_v2/asr_runtime.py
 +++ b/app/voice_v2/asr_runtime.py
-@@ -1,47 +1,48 @@
+@@ -1,43 +1,43 @@
  """Deepgram-backed ASR runtime for the voice v2 engine."""
  from __future__ import annotations
  
@@ -173,12 +20,13 @@ index c672183b9460f47fa9406db31f05b24145c11890..f053151ae5a879c7ee8e961c640effe3
      ASR_TRACE,
  )
  from app.telemetry import bus
- from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
+-from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
++from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL, EVT_ASR_READY, EVT_WS_JSON_SEND
  from app.voice_v2.engine import EngineV2
  from app.services.streaming_asr.deepgram_client import DeepgramClient
  
  _logger = logging.getLogger(__name__)
-+_asr_log = logging.getLogger("app.voice_v2.asr_runtime")
+ _asr_log = logging.getLogger("app.voice_v2.asr_runtime")
  
  _CONTENT_TYPE = "audio/webm;codecs=opus"
  _PARTIAL_CONFIDENCE = 0.55
@@ -199,39 +47,10 @@ index c672183b9460f47fa9406db31f05b24145c11890..f053151ae5a879c7ee8e961c640effe3
      stream_open_task: Optional[asyncio.Task[None]] = None
      stream_open: bool = False
      last_audio_ts: float = 0.0
-     idle_handle: asyncio.TimerHandle | None = None
-     stream_id: Optional[str] = None
-     close_reason: Optional[str] = None
-     opened_at_ms: int = 0
-     opened_at_monotonic: float = 0.0
-@@ -247,67 +248,73 @@ class ASRRuntime:
-         if isinstance(e2e_latency, (int, float)):
-             log_template += " e2e_latency_ms=%d"
-             log_args.append(int(e2e_latency))
-         _logger.info(log_template, *log_args)
- 
-     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
-         loop = self._ensure_loop()
-         if loop is None:
-             _logger.warning("evt=asr_no_loop sid=%s", sid)
-             return
-         if state.stream_open:
-             return
-         if not state.pending:
-             return
-         task = state.stream_open_task
-         if task is not None and not task.done():
-             return
- 
-         async def _open() -> None:
-             if state.stream_id is None:
-                 state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
-             stream_id = state.stream_id
-             state.last_stream_id = stream_id
+@@ -271,50 +271,59 @@ class ASRRuntime:
              state.close_reason = None
              try:
--                await self._client.open_stream(
-+                qs = await self._client.open_stream(
+                 qs = await self._client.open_stream(
                      sid,
                      _CONTENT_TYPE,
                      on_partial=self._make_partial_cb(sid),
@@ -248,12 +67,21 @@ index c672183b9460f47fa9406db31f05b24145c11890..f053151ae5a879c7ee8e961c640effe3
                  return
  
              state.stream_open = True
-+            _asr_log.info(
-+                "evt=asr_session_open sid=%s content_type=%s qs=%s",
-+                sid,
-+                _CONTENT_TYPE,
-+                qs or "",
-+            )
+             _asr_log.info(
+                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
+                 sid,
+                 _CONTENT_TYPE,
+                 qs or "",
+             )
++            bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
++
++            input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
++            asr_ready_frame = {
++                "type": "asr.ready",
++                "vendor": "deepgram",
++                "input": input_desc,
++            }
++            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
              if stream_id:
                  _logger.info(
                      'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',

@@ -15,7 +15,7 @@ from app.config import (
     ASR_TRACE,
 )
 from app.telemetry import bus
-from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
+from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL, EVT_ASR_READY, EVT_WS_JSON_SEND
 from app.voice_v2.engine import EngineV2
 from app.services.streaming_asr.deepgram_client import DeepgramClient
 
@@ -293,6 +293,15 @@ class ASRRuntime:
                 _CONTENT_TYPE,
                 qs or "",
             )
+            bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+
+            input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
+            asr_ready_frame = {
+                "type": "asr.ready",
+                "vendor": "deepgram",
+                "input": input_desc,
+            }
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
             if stream_id:
                 _logger.info(
                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
