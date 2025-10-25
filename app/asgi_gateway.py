@@ -24,9 +24,15 @@ from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_runtime import TTSRuntime
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 from app.services.streaming_asr.deepgram_client import DeepgramClient
- 
+
 
 configure_logging()
+
+for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
+    _category_logger = logging.getLogger(_logger_name)
+    if _category_logger.level == logging.NOTSET:
+        _category_logger.setLevel(logging.INFO)
+
 
 logger = logging.getLogger(__name__)
 
