@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future as ThreadFuture, CancelledError as ThreadCancelledError
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
 from app.telemetry import bus
@@ -26,6 +26,7 @@ _tts_log = logging.getLogger("app.voice_v2.tts_runtime")
 _provider_ready_emitted = False
 _CHUNK_LOG_INTERVAL_S = 0.5
 _FIRST_CHUNK_TIMEOUT_S = 6.0
+_PCM_FRAME_BYTES = 2  # 16-bit mono => 2 bytes per PCM frame
 
 
 @dataclass
@@ -37,6 +38,7 @@ class _SynthesisState:
     emit_end: bool = True
     task: asyncio.Task[Any] | ThreadFuture[Any] | None = None
     stream: ElevenLabsStream | None = None
+    pcm_buffer: bytearray = field(default_factory=bytearray)
 
 
 class TTSRuntime:
@@ -164,11 +166,13 @@ class TTSRuntime:
             return
 
         stream: ElevenLabsStream | None = None
+        chunk_bytes: int | None = None
         start_emitted = False
         total_bytes = 0
         start_time_ms = 0.0
         last_chunk_log = 0.0
         text_chars = len(text)
+        first_chunk_received = False
 
         try:
             stream = await provider.synthesize(text, voice_id=voice_id)
@@ -217,6 +221,13 @@ class TTSRuntime:
             start_emitted = True
 
             iterator = stream.__aiter__()
+            chunk_bytes = getattr(stream, "chunk_bytes", None)
+            if isinstance(chunk_bytes, int) and chunk_bytes > 0:
+                chunk_bytes = chunk_bytes - (chunk_bytes % _PCM_FRAME_BYTES)
+                if chunk_bytes <= 0:
+                    chunk_bytes = None
+            else:
+                chunk_bytes = None
             first_chunk_received = False
             while True:
                 try:
@@ -239,20 +250,48 @@ class TTSRuntime:
                 if not next_chunk:
                     continue
 
-                first_chunk_received = True
-                self._engine.emit_tts_audio_chunk(sid, next_chunk)
-                chunk_len = len(next_chunk)
-                total_bytes += chunk_len
-                now = time.monotonic()
-                if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
-                    last_chunk_log = now
-                    _tts_log.debug(
-                        "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
-                        sid,
-                        state.utt_id,
-                        chunk_len,
-                        total_bytes,
-                    )
+                buffer = state.pcm_buffer
+                buffer.extend(next_chunk)
+
+                if chunk_bytes:
+                    while len(buffer) >= chunk_bytes:
+                        emitted = bytes(buffer[:chunk_bytes])
+                        del buffer[:chunk_bytes]
+                        self._engine.emit_tts_audio_chunk(sid, emitted)
+                        chunk_len = len(emitted)
+                        total_bytes += chunk_len
+                        if not first_chunk_received:
+                            first_chunk_received = True
+                        now = time.monotonic()
+                        if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
+                            last_chunk_log = now
+                            _tts_log.debug(
+                                "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
+                                sid,
+                                state.utt_id,
+                                chunk_len,
+                                total_bytes,
+                            )
+                else:
+                    frame_aligned = len(buffer) - (len(buffer) % _PCM_FRAME_BYTES)
+                    if frame_aligned >= _PCM_FRAME_BYTES:
+                        emitted = bytes(buffer[:frame_aligned])
+                        del buffer[:frame_aligned]
+                        self._engine.emit_tts_audio_chunk(sid, emitted)
+                        chunk_len = len(emitted)
+                        total_bytes += chunk_len
+                        if not first_chunk_received:
+                            first_chunk_received = True
+                        now = time.monotonic()
+                        if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
+                            last_chunk_log = now
+                            _tts_log.debug(
+                                "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
+                                sid,
+                                state.utt_id,
+                                chunk_len,
+                                total_bytes,
+                            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
@@ -271,6 +310,60 @@ class TTSRuntime:
                     await stream.aclose()
                 except Exception:  # pragma: no cover - defensive
                     _tts_log.debug("Error closing ElevenLabs stream", exc_info=True)
+            buffer = state.pcm_buffer
+            if buffer:
+                frame_aligned = len(buffer) - (len(buffer) % _PCM_FRAME_BYTES)
+                if frame_aligned >= _PCM_FRAME_BYTES:
+                    if chunk_bytes:
+                        remaining = frame_aligned
+                        while remaining > 0:
+                            emit_len = min(remaining, chunk_bytes)
+                            emit_len -= emit_len % _PCM_FRAME_BYTES
+                            if emit_len <= 0:
+                                break
+                            emitted = bytes(buffer[:emit_len])
+                            del buffer[:emit_len]
+                            remaining -= emit_len
+                            self._engine.emit_tts_audio_chunk(sid, emitted)
+                            chunk_len = len(emitted)
+                            total_bytes += chunk_len
+                            now = time.monotonic()
+                            if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
+                                last_chunk_log = now
+                                _tts_log.debug(
+                                    "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
+                                    sid,
+                                    state.utt_id,
+                                    chunk_len,
+                                    total_bytes,
+                                )
+                            first_chunk_received = True
+                    else:
+                        emitted = bytes(buffer[:frame_aligned])
+                        del buffer[:frame_aligned]
+                        self._engine.emit_tts_audio_chunk(sid, emitted)
+                        chunk_len = len(emitted)
+                        total_bytes += chunk_len
+                        now = time.monotonic()
+                        if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
+                            last_chunk_log = now
+                            _tts_log.debug(
+                                "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
+                                sid,
+                                state.utt_id,
+                                chunk_len,
+                                total_bytes,
+                            )
+                        first_chunk_received = True
+                remainder = len(buffer)
+                if remainder:
+                    _tts_log.warning(
+                        "evt=tts_pcm_bytes_dropped sid=%s utt_id=%s bytes=%d",
+                        sid,
+                        state.utt_id,
+                        remainder,
+                    )
+                buffer.clear()
             if start_emitted and state.emit_end:
                 self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
                 duration_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0

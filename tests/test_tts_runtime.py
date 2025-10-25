@@ -8,33 +8,35 @@ from app.voice_v2.tts_base import TTSProviderBase
 
 
 class _StubStream:
-    def __init__(self, chunk: bytes) -> None:
-        self._chunk = chunk
-        self._emitted = False
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = list(chunks)
         self.closed = False
 
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> bytes:
-        if self._emitted:
+        if not self._chunks:
             raise StopAsyncIteration
-        self._emitted = True
+        chunk = self._chunks.pop(0)
         await asyncio.sleep(0)
-        return self._chunk
+        return chunk
 
     async def aclose(self) -> None:
         self.closed = True
 
 
 class _StubProvider(TTSProviderBase):
-    def __init__(self) -> None:
+    def __init__(self, chunks: list[bytes] | None = None) -> None:
         super().__init__(vendor="stub", telemetry_bus=bus, retries=0, timeout_s=1)
+        if chunks is None:
+            chunks = [b"\x00" * 320]
+        self._chunks = list(chunks)
 
     async def _synthesize_impl(self, text: str, *, voice_id: str | None = None, **kwargs) -> _StubStream:
         if not voice_id:
             raise RuntimeError("voice_id required")
-        return _StubStream(b"\x00" * 320)
+        return _StubStream(self._chunks)
 
 
 class _StubEngine:
@@ -82,6 +84,32 @@ class TestTTSRuntimeBackgroundLoop(unittest.TestCase):
         self.assertTrue(engine.starts)
         self.assertTrue(engine.chunks)
         self.assertTrue(engine.ends)
+
+        loop = runtime._loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        thread = runtime._loop_thread
+        if thread is not None:
+            thread.join(timeout=1)
+
+    def test_buffers_partial_pcm_frames(self) -> None:
+        engine = _StubEngine()
+        provider = _StubProvider(chunks=[b"\x00" * 3, b"\x01" * 3, b"\x02" * 4])
+        runtime = TTSRuntime(engine=engine, provider=provider, telemetry_bus=bus)
+
+        event = {"sid": "sid-odd", "text": "Hello", "req_id": "req-odd"}
+        runtime._handle_nlg_event(event)
+
+        deadline = time.time() + 2.0
+        while not engine.ends and time.time() < deadline:
+            time.sleep(0.01)
+
+        self.assertTrue(engine.chunks)
+        for _, chunk in engine.chunks:
+            self.assertEqual(len(chunk) % 2, 0)
+
+        total = b"".join(chunk for _, chunk in engine.chunks)
+        self.assertEqual(len(total), 10)
 
         loop = runtime._loop
         if loop is not None and loop.is_running():
