@@ -1,257 +1,638 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index ff0b50d7d66c854699034752f3135d05cb423d1e..0647724990e9a92b74f92d3269c6848861631e2b 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -780,65 +780,84 @@
-               if (pttEnabled && !pttActive) {
-                 applyPttMask({ force: true });
-               }
-             })
-             .catch((err) => {
-               console.error('AudioRecorder start error', err);
-             });
-         }
-       } else if (becameDisconnected) {
-         Waveform.stop();
-         if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
-           try {
-             window.AudioRecorder.stop();
-           } catch (err) {
-             console.warn('AudioRecorder stop error', err);
-           }
-         }
-         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
-           window.AudioPlayer.interrupt();
-         }
-         setPttActive(false);
-       }
-       updateResumeBanner(state);
-     });
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 16951645e86cc4b7c37a30d3e3c7d27c0e3035c5..6eb4f18ff744ac73131b67f05450fc2abf9c30f1 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -6,76 +6,80 @@ import logging
+ import time
+ import uuid
+ from collections import deque
+ from dataclasses import dataclass, field
+ from typing import Callable, Deque, Dict, Optional
  
-+    const POST_TTS_RELEASE_MS = 150;
+ from app.config import (
+     ASR_BACKPRESSURE_THRESHOLD_BYTES,
+     ASR_IDLE_CLOSE_MS,
+     ASR_TRACE,
+ )
+ from app.telemetry import bus
+ from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL, EVT_ASR_READY, EVT_WS_JSON_SEND
+ from app.voice_v2.engine import EngineV2
+ from app.services.streaming_asr.deepgram_client import DeepgramClient
+ 
+ _logger = logging.getLogger(__name__)
+ _asr_log = logging.getLogger("app.voice_v2.asr_runtime")
+ 
+ _CONTENT_TYPE = "audio/webm;codecs=opus"
+ _PARTIAL_CONFIDENCE = 0.55
+ _FINAL_CONFIDENCE = 0.9
+ _DEFAULT_IDLE_CLOSE_MS = 4000
+ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+ _TRACE_ENABLED = bool(ASR_TRACE)
++_STREAM_OPEN_TIMEOUT_S = 5.0
++_NO_AUDIO_TIMEOUT_S = 9.0
+ 
+ 
+ @dataclass
+ class _SessionState:
+     """Track per-session streaming state."""
+ 
+     sid: str
+     pending: Deque[bytes] = field(default_factory=deque)
+     buffered_bytes: int = 0
+     req_id: Optional[str] = None
+     stream_open_task: Optional[asyncio.Task[None]] = None
+     stream_open: bool = False
+     last_audio_ts: float = 0.0
+     idle_handle: asyncio.TimerHandle | None = None
+     stream_id: Optional[str] = None
+     close_reason: Optional[str] = None
+     opened_at_ms: int = 0
+     opened_at_monotonic: float = 0.0
+     last_audio_ts_ms: int = 0
+     chunks_sent: int = 0
+     bytes_sent: int = 0
+     dg_msgs_partial: int = 0
+     dg_msgs_final: int = 0
+     finals_delivered: int = 0
+     dropped_chunks: int = 0
+     last_stream_id: Optional[str] = None
++    ready_watchdog: asyncio.TimerHandle | None = None
++    ready_armed_at: float = 0.0
+ 
+     def __post_init__(self) -> None:
+         now_monotonic = time.monotonic()
+         now_wall = time.time()
+         self.opened_at_monotonic = now_monotonic
+         self.opened_at_ms = int(now_wall * 1000)
+         self.last_audio_ts = now_monotonic
+         self.last_audio_ts_ms = int(now_wall * 1000)
+ 
+ 
+ class ASRRuntime:
+     """Bridge websocket audio to Deepgram realtime transcription."""
+ 
+     def __init__(self, engine: EngineV2, client: DeepgramClient) -> None:
+         if engine is None:
+             raise ValueError("engine must be provided")
+         if client is None:
+             raise ValueError("client must be provided")
+ 
+         self._engine = engine
+         self._client = client
+         self._sessions: Dict[str, _SessionState] = {}
+         self._loop: asyncio.AbstractEventLoop | None = None
+         configured_idle = ASR_IDLE_CLOSE_MS
+         if not isinstance(configured_idle, (int, float)):
+@@ -88,85 +92,88 @@ class ASRRuntime:
+         if self._idle_close_ms < 0:
+             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
+ 
+     # ------------------------------------------------------------------
+     # Websocket hooks
+     # ------------------------------------------------------------------
+     def on_ws_open(self, sid: str) -> None:
+         self._ensure_loop()
+         self._sessions[sid] = _SessionState(sid=sid)
+ 
+     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
+         if not isinstance(chunk, (bytes, bytearray, memoryview)):
+             raise TypeError("chunk must be bytes-like")
+         data = bytes(chunk)
+         if not data:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+ 
+         now_monotonic = time.monotonic()
+         state.last_audio_ts = now_monotonic
+         state.last_audio_ts_ms = int(time.time() * 1000)
++        if state.ready_watchdog is not None and state.ready_armed_at:
++            self._cancel_ready_watchdog(state)
+         chunk_len = len(data)
+ 
+         if state.stream_id is None:
+             state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
+             state.last_stream_id = state.stream_id
+ 
+         if not state.stream_open:
+             state.pending.append(data)
+             state.buffered_bytes += chunk_len
+             self._apply_backpressure(sid, state)
+             if state.pending:
+                 self._ensure_stream(sid, state)
+         else:
+             state.chunks_sent += 1
+             state.bytes_sent += chunk_len
+             self._client.send_audio(sid, data)
+ 
+         if _TRACE_ENABLED:
+             _logger.debug(
+                 "evt=asr_audio_enqueued sid=%s stream_id=%s bytes=%d buffered_bytes=%d pending_chunks=%d",
+                 sid,
+                 state.stream_id or state.last_stream_id or "",
+                 chunk_len,
+                 state.buffered_bytes,
+                 len(state.pending),
+             )
+ 
+         self._reset_idle_timer(sid, state)
+ 
+     def on_ws_close(self, sid: str) -> None:
+         state = self._sessions.pop(sid, None)
+         if state is None:
+             return
+         state.close_reason = "client_ws_closed"
+         self._cancel_idle_timer(state)
++        self._cancel_ready_watchdog(state)
+         task = state.stream_open_task
+         if task is not None and not task.done():
+             task.cancel()
+         state.stream_open = False
+         try:
+             self._client.close_stream(sid)
+         except Exception:  # pragma: no cover - defensive
+             _logger.exception("evt=asr_stream_close_failed sid=%s", sid)
+         finally:
+             self._log_session_rollup(state)
+         state.req_id = None
+ 
+     # ------------------------------------------------------------------
+     # Internal helpers
+     # ------------------------------------------------------------------
+     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
+         loop = self._loop
+         if loop is not None:
+             return loop
+         try:
+             loop = asyncio.get_running_loop()
+         except RuntimeError:
+             loop = None
+         self._loop = loop
+         return loop
+@@ -248,97 +255,114 @@ class ASRRuntime:
+         if isinstance(e2e_latency, (int, float)):
+             log_template += " e2e_latency_ms=%d"
+             log_args.append(int(e2e_latency))
+         _logger.info(log_template, *log_args)
+ 
+     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
+         loop = self._ensure_loop()
+         if loop is None:
+             _logger.warning("evt=asr_no_loop sid=%s", sid)
+             return
+         if state.stream_open:
+             return
+         if not state.pending:
+             return
+         task = state.stream_open_task
+         if task is not None and not task.done():
+             return
+ 
+         async def _open() -> None:
+             if state.stream_id is None:
+                 state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
+             stream_id = state.stream_id
+             state.last_stream_id = stream_id
+             state.close_reason = None
+             try:
+-                qs = await self._client.open_stream(
+-                    sid,
+-                    _CONTENT_TYPE,
+-                    on_partial=self._make_partial_cb(sid),
+-                    on_final=self._make_final_cb(sid),
+-                    on_error=self._make_error_cb(sid),
+-                    stream_id=stream_id,
+-                    on_close=self._make_close_cb(sid, state),
++                qs = await asyncio.wait_for(
++                    self._client.open_stream(
++                        sid,
++                        _CONTENT_TYPE,
++                        on_partial=self._make_partial_cb(sid),
++                        on_final=self._make_final_cb(sid),
++                        on_error=self._make_error_cb(sid),
++                        stream_id=stream_id,
++                        on_close=self._make_close_cb(sid, state),
++                    ),
++                    timeout=_STREAM_OPEN_TIMEOUT_S,
+                 )
+             except asyncio.CancelledError:
+                 raise
++            except asyncio.TimeoutError:
++                _asr_log.error("evt=asr_open_failed sid=%s vendor=deepgram", sid)
++                state.stream_id = None
++                state.stream_open = False
++                state.stream_open_task = None
++                loop = self._ensure_loop()
++                if loop is not None:
++                    loop.call_later(0.1, self._ensure_stream, sid, state)
++                return
+             except Exception:  # pragma: no cover - defensive
+                 _logger.exception("evt=asr_stream_open_failed sid=%s", sid)
+                 state.stream_id = None
+                 return
+ 
+             state.stream_open = True
+             _asr_log.info(
+                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
+                 sid,
+                 _CONTENT_TYPE,
+                 qs or "",
+             )
+             bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+ 
+             input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
+             asr_ready_frame = {
+                 "type": "asr.ready",
+                 "vendor": "deepgram",
+                 "input": input_desc,
+             }
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
+             if stream_id:
+                 _logger.info(
+                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
+                     sid,
+                     stream_id,
+                     _CONTENT_TYPE,
+                     int(self._idle_close_ms),
+                 )
++            pre_chunks_sent = state.chunks_sent
+             while state.pending:
+                 chunk = state.pending.popleft()
+                 chunk_len = len(chunk)
+                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
+                 state.chunks_sent += 1
+                 state.bytes_sent += chunk_len
+                 self._client.send_audio(sid, chunk)
++            if state.chunks_sent == pre_chunks_sent:
++                self._start_ready_watchdog(sid, state)
++            else:
++                self._cancel_ready_watchdog(state)
+             state.stream_open_task = None
+             self._reset_idle_timer(sid, state)
+ 
+         def _on_done(_task: asyncio.Task[None]) -> None:
+             if state.stream_open_task is _task:
+                 state.stream_open_task = None
+ 
+         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
+         state.stream_open_task.add_done_callback(_on_done)
+ 
+     def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_partial(sid, text, metadata or {})
+ 
+         return _callback
+ 
+     def _make_final_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_final(sid, text, metadata or {})
+ 
+         return _callback
+ 
+     def _make_error_cb(self, sid: str) -> Callable[[str], None]:
+         def _callback(error: str) -> None:
+             self._on_error(sid, error)
+@@ -480,61 +504,93 @@ class ASRRuntime:
+         except Exception:  # pragma: no cover - defensive
+             _logger.exception("evt=asr_engine_final_failed sid=%s", sid)
+ 
+         event = {
+             "type": EVT_ASR_FINAL,
+             "sid": sid,
+             "req_id": req_id,
+             "text": text,
+             "confidence": _FINAL_CONFIDENCE,
+             "vendor": "deepgram",
+         }
+         bus.publish(event)
+         state.finals_delivered += 1
+         self._log_utterance(state, stream_id, req_id, metadata, text)
+ 
+     def _on_error(self, sid: str, error: str) -> None:
+         _logger.exception("evt=asr_error sid=%s err=%s", sid, error)
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             return
+         state.close_reason = "error"
+         state.stream_open = False
+         state.req_id = None
+         self._cancel_idle_timer(state)
++        self._cancel_ready_watchdog(state)
+         try:
+             self._client.close_stream(sid)
+         except Exception:  # pragma: no cover - defensive
+             _logger.exception("evt=asr_error_close_failed sid=%s", sid)
+ 
+     def _cancel_idle_timer(self, state: _SessionState) -> None:
+         handle = state.idle_handle
+         if handle is not None:
+             handle.cancel()
+             state.idle_handle = None
+ 
++    def _cancel_ready_watchdog(self, state: _SessionState) -> None:
++        handle = state.ready_watchdog
++        if handle is not None:
++            handle.cancel()
++        state.ready_watchdog = None
++        state.ready_armed_at = 0.0
 +
-     window.addEventListener('tts.start', (event) => {
-       const detail = event && event.detail;
-       if (detail) {
-         updateVoiceState(extractVoiceLocale(detail));
-       }
-       if (pttEnabled && !pttActive) {
-         applyPttMask({ force: true });
-       }
-     });
-     window.addEventListener('tts.end', () => {
--      if (pttEnabled && !pttActive) {
-+      const release = () => {
-         applyPttMask({ force: true });
-+      };
-+      if (POST_TTS_RELEASE_MS > 0) {
-+        setTimeout(release, POST_TTS_RELEASE_MS);
-+      } else {
-+        release();
-       }
-     });
-     window.addEventListener('asr.ready', () => {
-+      if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-+        try {
-+          const maybePromise = window.AudioRecorder.start();
-+          if (maybePromise && typeof maybePromise.catch === 'function') {
-+            maybePromise.catch((err) => {
-+              console.error('AudioRecorder start on asr.ready failed', err);
-+            });
-+          }
-+        } catch (err) {
-+          console.error('AudioRecorder start on asr.ready failed', err);
-+        }
-+      }
-       if (pttEnabled && !pttActive) {
-         applyPttMask({ force: true });
-       }
-     });
++    def _start_ready_watchdog(self, sid: str, state: _SessionState) -> None:
++        loop = self._ensure_loop()
++        if loop is None:
++            return
++        self._cancel_ready_watchdog(state)
++
++        def _fire() -> None:
++            state.ready_watchdog = None
++            armed_at = state.ready_armed_at
++            state.ready_armed_at = 0.0
++            if armed_at and state.last_audio_ts <= armed_at:
++                _asr_log.warning("evt=asr_no_audio_timeout sid=%s", sid)
++                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
++                input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
++                asr_ready_frame = {
++                    "type": "asr.ready",
++                    "vendor": "deepgram",
++                    "input": input_desc,
++                }
++                bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
++
++        state.ready_armed_at = time.monotonic()
++        state.ready_watchdog = loop.call_later(_NO_AUDIO_TIMEOUT_S, _fire)
++
+     def _reset_idle_timer(self, sid: str, state: _SessionState) -> None:
+         threshold_ms = self._idle_close_ms
+         if threshold_ms <= 0:
+             return
+         loop = self._ensure_loop()
+         if loop is None:
+             return
+         self._cancel_idle_timer(state)
  
-     window.addEventListener('assistant.suggestions', (event) => {
-       const detail = event && event.detail;
-       applySuggestionsFrame(detail);
-     });
+         delay = threshold_ms / 1000.0
  
-     window.addEventListener('ws.close', () => {
-       resetSuggestions();
-     });
+         def _fire() -> None:
+             state.idle_handle = None
+             self._handle_idle_timeout(sid, state)
  
-     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
-     if (urlParams.get('wsSmoke') === '1') {
-       const transitions = [];
-       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
+         state.idle_handle = loop.call_later(delay, _fire)
  
-       class MockSocket extends EventTarget {
-         constructor() {
-           super();
-           this.readyState = WebSocket.CONNECTING;
-           setTimeout(() => {
-             this.readyState = WebSocket.OPEN;
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index 96cd1e9df5619fc171309ec9ce12ffe351e3e540..39c1c8b807cb10e37631fe343448d37848b87c1c 100644
---- a/app/static/js/audio_recorder.js
-+++ b/app/static/js/audio_recorder.js
-@@ -1,34 +1,35 @@
- (() => {
-   const AppState = window.AppState;
-   if (!AppState) {
-     throw new Error("AppState store is required before loading AudioRecorder");
-   }
+     def _handle_idle_timeout(self, sid: str, state: _SessionState) -> None:
+         if not state.stream_open:
+             return
  
-   const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-   const BACKPRESSURE_LIMIT_BYTES = 512 * 1024;
-   const WEBM_TIMESLICE_MS = 250;
-+  const POST_TTS_RELEASE_DELAY_MS = 150;
+         state.close_reason = "idle_timeout"
+         ensure_session = getattr(self._engine, "_ensure_session", None)
+         engine_state = None
+         if callable(ensure_session):
+diff --git a/app/voice_v2/tts_runtime.py b/app/voice_v2/tts_runtime.py
+index 66da14201e0db6111a4f9358a2be99e1681ebcb9..a2c518fa953c751b3ce2e1c00050d6dda4d946b5 100644
+--- a/app/voice_v2/tts_runtime.py
++++ b/app/voice_v2/tts_runtime.py
+@@ -149,53 +149,74 @@ class TTSRuntime:
+             task = state.task
+             if task is not None and not task.done():
+                 task.cancel()
  
-   class PcmDownsampler {
-     constructor(sourceRate, targetRate) {
-       this.sourceRate = sourceRate;
-       this.targetRate = targetRate;
-       this._ratio = sourceRate / targetRate;
-       this._buffer = [];
-       this._position = 0;
-     }
+     # ------------------------------------------------------------------
+     # Synthesis lifecycle
+     # ------------------------------------------------------------------
+     async def _run_synthesis(
+         self,
+         sid: str,
+         req_id: str,
+         text: str,
+         voice_id: Optional[str],
+         state: _SynthesisState,
+     ) -> None:
+         provider = self._provider
+         if provider is None:
+             return
  
-     reset() {
-       this._buffer.length = 0;
-       this._position = 0;
-     }
+         stream: ElevenLabsStream | None = None
+         chunk_bytes: int | None = None
+         start_emitted = False
+         total_bytes = 0
+         start_time_ms = 0.0
+         last_chunk_log = 0.0
++        interval_bytes = 0
++        interval_chunks = 0
+         text_chars = len(text)
+         first_chunk_received = False
  
-     push(samples) {
-       if (!samples || samples.length === 0) return;
-       for (let i = 0; i < samples.length; i += 1) {
-         this._buffer.push(samples[i]);
-       }
-     }
++        def _flush_chunk_log(*, force: bool = False) -> None:
++            nonlocal last_chunk_log, interval_bytes, interval_chunks
++            if interval_chunks <= 0:
++                return
++            now = time.monotonic()
++            if not force and now - last_chunk_log < _CHUNK_LOG_INTERVAL_S:
++                return
++            last_chunk_log = now
++            _tts_log.debug(
++                "evt=tts_chunk sid=%s utt_id=%s chunks=%d bytes=%d total_bytes=%d",
++                sid,
++                state.utt_id,
++                interval_chunks,
++                interval_bytes,
++                total_bytes,
++            )
++            interval_bytes = 0
++            interval_chunks = 0
++
+         try:
+             stream = await provider.synthesize(text, voice_id=voice_id)
+             state.stream = stream
+         except ProviderCircuitOpenError:
+             _tts_log.warning(
+                 "evt=tts_provider_circuit_open sid=%s vendor=%s", sid, getattr(provider, "vendor", "unknown")
+             )
+             return
+         except ProviderTimeoutError:
+             _tts_log.warning(
+                 "evt=tts_provider_timeout sid=%s vendor=%s", sid, getattr(provider, "vendor", "unknown")
+             )
+             return
+         except asyncio.CancelledError:
+             raise
+         except Exception as exc:  # pragma: no cover - defensive
+             reason = _safe_reason(exc)
+             _tts_log.error(
+                 "evt=tts_synthesis_failed reason=provider_error sid=%s utt_id=%s detail=%s",
+                 sid,
+                 state.utt_id,
+                 reason,
+                 exc_info=True,
+             )
+             return
+@@ -238,154 +259,127 @@ class TTSRuntime:
+                     )
+                 except StopAsyncIteration:
+                     break
+                 except asyncio.TimeoutError:
+                     _tts_log.error(
+                         "evt=tts_synthesis_failed reason=no_chunks_timeout sid=%s utt_id=%s",
+                         sid,
+                         state.utt_id,
+                     )
+                     state.emit_end = False
+                     break
  
-     pullInt16() {
-       const buffer = this._buffer;
-       if (!buffer.length) return null;
-@@ -212,65 +213,71 @@
-       if (!active && this._mask.timerId) {
-         clearTimeout(this._mask.timerId);
-         this._mask.timerId = null;
-       }
-       this._mask.active = active;
-       if (active && this._downsampler) {
-         this._downsampler.reset();
-       }
-     },
+                 if not next_chunk:
+                     continue
  
-     _scheduleMaskRelease(delayMs) {
-       if (this._mask.timerId) {
-         clearTimeout(this._mask.timerId);
-         this._mask.timerId = null;
-       }
-       if (delayMs > 0) {
-         this._mask.timerId = setTimeout(() => {
-           this._mask.timerId = null;
-           this._setMask(false);
-         }, delayMs);
-       } else {
-         this._setMask(false);
-       }
-     },
+                 buffer = state.pcm_buffer
+                 buffer.extend(next_chunk)
  
--    handleAsrReady(frame) {
-+    async handleAsrReady(frame) {
-       const descriptor = frame && frame.input;
-       const vendor = frame && frame.vendor;
-       if (!descriptor || !vendor) {
-         console.warn("Invalid asr.ready frame", frame);
-         return;
-       }
-       const normalized = {
-         container: String(descriptor.container || "").toLowerCase(),
-         codec: String(descriptor.codec || "").toLowerCase(),
-         rate_hz: Number(descriptor.rate_hz) || 0,
-         channels: Number(descriptor.channels) || 1
-       };
-       this._pendingDescriptor = { vendor, descriptor: normalized };
--      if (this._stream) {
-+      try {
-+        await this.start();
-+      } catch (err) {
-+        console.error("AudioRecorder start failed for asr.ready", err);
-+        return;
-+      }
-+      if (this._pendingDescriptor) {
-         this._activateDescriptor(this._pendingDescriptor);
-         this._pendingDescriptor = null;
-       }
-     },
+                 if chunk_bytes:
+                     while len(buffer) >= chunk_bytes:
+                         emitted = bytes(buffer[:chunk_bytes])
+                         del buffer[:chunk_bytes]
+                         self._engine.emit_tts_audio_chunk(sid, emitted)
+                         chunk_len = len(emitted)
+                         total_bytes += chunk_len
++                        interval_bytes += chunk_len
++                        interval_chunks += 1
+                         if not first_chunk_received:
+                             first_chunk_received = True
+-                        now = time.monotonic()
+-                        if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
+-                            last_chunk_log = now
+-                            _tts_log.debug(
+-                                "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
+-                                sid,
+-                                state.utt_id,
+-                                chunk_len,
+-                                total_bytes,
+-                            )
++                        _flush_chunk_log()
+                 else:
+                     frame_aligned = len(buffer) - (len(buffer) % _PCM_FRAME_BYTES)
+                     if frame_aligned >= _PCM_FRAME_BYTES:
+                         emitted = bytes(buffer[:frame_aligned])
+                         del buffer[:frame_aligned]
+                         self._engine.emit_tts_audio_chunk(sid, emitted)
+                         chunk_len = len(emitted)
+                         total_bytes += chunk_len
++                        interval_bytes += chunk_len
++                        interval_chunks += 1
+                         if not first_chunk_received:
+                             first_chunk_received = True
+-                        now = time.monotonic()
+-                        if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
+-                            last_chunk_log = now
+-                            _tts_log.debug(
+-                                "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
+-                                sid,
+-                                state.utt_id,
+-                                chunk_len,
+-                                total_bytes,
+-                            )
++                        _flush_chunk_log()
+         except asyncio.CancelledError:
+             raise
+         except Exception as exc:  # pragma: no cover - defensive
+             reason = _safe_reason(exc)
+             _tts_log.error(
+                 "evt=tts_synthesis_failed reason=provider_error sid=%s utt_id=%s detail=%s",
+                 sid,
+                 state.utt_id,
+                 reason,
+                 exc_info=True,
+             )
+             state.emit_end = False
+         finally:
+             if stream is not None:
+                 try:
+                     await stream.aclose()
+                 except Exception:  # pragma: no cover - defensive
+                     _tts_log.debug("Error closing ElevenLabs stream", exc_info=True)
+             buffer = state.pcm_buffer
+             if buffer:
+                 frame_aligned = len(buffer) - (len(buffer) % _PCM_FRAME_BYTES)
+                 if frame_aligned >= _PCM_FRAME_BYTES:
+                     if chunk_bytes:
+                         remaining = frame_aligned
+                         while remaining > 0:
+                             emit_len = min(remaining, chunk_bytes)
+                             emit_len -= emit_len % _PCM_FRAME_BYTES
+                             if emit_len <= 0:
+                                 break
+                             emitted = bytes(buffer[:emit_len])
+                             del buffer[:emit_len]
+                             remaining -= emit_len
+                             self._engine.emit_tts_audio_chunk(sid, emitted)
+                             chunk_len = len(emitted)
+                             total_bytes += chunk_len
+-                            now = time.monotonic()
+-                            if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
+-                                last_chunk_log = now
+-                                _tts_log.debug(
+-                                    "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
+-                                    sid,
+-                                    state.utt_id,
+-                                    chunk_len,
+-                                    total_bytes,
+-                                )
++                            interval_bytes += chunk_len
++                            interval_chunks += 1
++                            _flush_chunk_log()
+                             first_chunk_received = True
+                     else:
+                         emitted = bytes(buffer[:frame_aligned])
+                         del buffer[:frame_aligned]
+                         self._engine.emit_tts_audio_chunk(sid, emitted)
+                         chunk_len = len(emitted)
+                         total_bytes += chunk_len
+-                        now = time.monotonic()
+-                        if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
+-                            last_chunk_log = now
+-                            _tts_log.debug(
+-                                "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
+-                                sid,
+-                                state.utt_id,
+-                                chunk_len,
+-                                total_bytes,
+-                            )
++                        interval_bytes += chunk_len
++                        interval_chunks += 1
++                        _flush_chunk_log()
+                         first_chunk_received = True
+                 remainder = len(buffer)
+                 if remainder:
+                     _tts_log.warning(
+                         "evt=tts_pcm_bytes_dropped sid=%s utt_id=%s bytes=%d",
+                         sid,
+                         state.utt_id,
+                         remainder,
+                     )
+                 buffer.clear()
++            _flush_chunk_log(force=True)
+             if start_emitted and state.emit_end:
+                 self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
+                 duration_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0
+                 _tts_log.info(
+                     "evt=tts_end sid=%s utt_id=%s total_bytes=%d duration_ms=%d",
+                     sid,
+                     state.utt_id,
+                     total_bytes,
+                     duration_ms,
+                 )
+             if start_emitted:
+                 note_end = getattr(self._bus, "note_tts_end", None)
+                 if callable(note_end):
+                     note_end(sid, state.utt_id)
  
-     _activateDescriptor(spec) {
-       if (!spec || !this._stream) return;
-       const { vendor, descriptor } = spec;
-       this._teardownEncoder();
-       this._vendor = vendor;
-       this._descriptor = descriptor;
-       if (descriptor.container === "webm" && descriptor.codec === "opus" && descriptor.rate_hz === 48000 && descriptor.channels === 1) {
-         this._setupWebmRecorder();
-       } else if (descriptor.container === "raw" && descriptor.codec === "pcm_s16le" && descriptor.rate_hz === 16000 && descriptor.channels === 1) {
-         this._setupPcmRecorder();
-       } else {
-         console.error("Unsupported ASR descriptor", descriptor);
-       }
-     },
+     def _on_task_done(self, sid: str, state: _SynthesisState, task: asyncio.Task[Any]) -> None:
+         current = self._states.get(sid)
+         if current is state:
+             self._states.pop(sid, None)
  
-     _setupWebmRecorder() {
-       if (typeof MediaRecorder === "undefined") {
-         console.error("MediaRecorder not supported in this browser");
-         return;
-       }
-@@ -372,51 +379,51 @@
-         console.warn("Failed to send audio chunk");
-       }
-       return sent;
-     },
- 
-     handlePolicy(frame) {
-       const policy = frame && frame.policy;
-       if (policy && typeof policy.barge_in_enabled === "boolean") {
-         this._bargeInEnabled = policy.barge_in_enabled;
-         if (this._bargeInEnabled && this._mask.active) {
-           this._mask.holdMs = 0;
-           this._setMask(false);
-         }
-       }
-     },
- 
-     handleTtsStart(frame) {
-       if (this._bargeInEnabled) return;
-       const hold = Number(frame && frame.post_hold_ms);
-       this._mask.holdMs = Number.isFinite(hold) && hold > 0 ? hold : 0;
-       this._setMask(true);
-     },
- 
-     handleTtsEnd() {
-       if (!this._mask.active) return;
--      const hold = this._mask.holdMs || 0;
-+      const hold = Math.max(this._mask.holdMs || 0, POST_TTS_RELEASE_DELAY_MS);
-       this._mask.holdMs = 0;
-       this._scheduleMaskRelease(hold);
-     },
- 
-     handleWsClose() {
-       this._teardownEncoder();
-       this._asrReady = false;
-       this._descriptor = null;
-       this._pendingDescriptor = null;
-       this._vendor = null;
-       this._setMask(false);
-     }
-   };
- 
-   window.addEventListener("asr.ready", (event) => {
-     recorder.handleAsrReady(event && event.detail);
-   });
-   window.addEventListener("policy.interaction", (event) => {
-     recorder.handlePolicy(event && event.detail);
-   });
-   window.addEventListener("tts.start", (event) => {
-     recorder.handleTtsStart(event && event.detail);
-   });
-   window.addEventListener("tts.end", () => {
-     recorder.handleTtsEnd();
+         try:
+             task.result()
+         except (asyncio.CancelledError, ThreadCancelledError):
+             pass
+         except Exception:  # pragma: no cover - defensive

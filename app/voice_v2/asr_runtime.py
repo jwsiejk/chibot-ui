@@ -28,6 +28,8 @@ _FINAL_CONFIDENCE = 0.9
 _DEFAULT_IDLE_CLOSE_MS = 4000
 _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
 _TRACE_ENABLED = bool(ASR_TRACE)
+_STREAM_OPEN_TIMEOUT_S = 5.0
+_NO_AUDIO_TIMEOUT_S = 9.0
 
 
 @dataclass
@@ -54,6 +56,8 @@ class _SessionState:
     finals_delivered: int = 0
     dropped_chunks: int = 0
     last_stream_id: Optional[str] = None
+    ready_watchdog: asyncio.TimerHandle | None = None
+    ready_armed_at: float = 0.0
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -110,6 +114,8 @@ class ASRRuntime:
         now_monotonic = time.monotonic()
         state.last_audio_ts = now_monotonic
         state.last_audio_ts_ms = int(time.time() * 1000)
+        if state.ready_watchdog is not None and state.ready_armed_at:
+            self._cancel_ready_watchdog(state)
         chunk_len = len(data)
 
         if state.stream_id is None:
@@ -145,6 +151,7 @@ class ASRRuntime:
             return
         state.close_reason = "client_ws_closed"
         self._cancel_idle_timer(state)
+        self._cancel_ready_watchdog(state)
         task = state.stream_open_task
         if task is not None and not task.done():
             task.cancel()
@@ -270,17 +277,29 @@ class ASRRuntime:
             state.last_stream_id = stream_id
             state.close_reason = None
             try:
-                qs = await self._client.open_stream(
-                    sid,
-                    _CONTENT_TYPE,
-                    on_partial=self._make_partial_cb(sid),
-                    on_final=self._make_final_cb(sid),
-                    on_error=self._make_error_cb(sid),
-                    stream_id=stream_id,
-                    on_close=self._make_close_cb(sid, state),
+                qs = await asyncio.wait_for(
+                    self._client.open_stream(
+                        sid,
+                        _CONTENT_TYPE,
+                        on_partial=self._make_partial_cb(sid),
+                        on_final=self._make_final_cb(sid),
+                        on_error=self._make_error_cb(sid),
+                        stream_id=stream_id,
+                        on_close=self._make_close_cb(sid, state),
+                    ),
+                    timeout=_STREAM_OPEN_TIMEOUT_S,
                 )
             except asyncio.CancelledError:
                 raise
+            except asyncio.TimeoutError:
+                _asr_log.error("evt=asr_open_failed sid=%s vendor=deepgram", sid)
+                state.stream_id = None
+                state.stream_open = False
+                state.stream_open_task = None
+                loop = self._ensure_loop()
+                if loop is not None:
+                    loop.call_later(0.1, self._ensure_stream, sid, state)
+                return
             except Exception:  # pragma: no cover - defensive
                 _logger.exception("evt=asr_stream_open_failed sid=%s", sid)
                 state.stream_id = None
@@ -310,6 +329,7 @@ class ASRRuntime:
                     _CONTENT_TYPE,
                     int(self._idle_close_ms),
                 )
+            pre_chunks_sent = state.chunks_sent
             while state.pending:
                 chunk = state.pending.popleft()
                 chunk_len = len(chunk)
@@ -317,6 +337,10 @@ class ASRRuntime:
                 state.chunks_sent += 1
                 state.bytes_sent += chunk_len
                 self._client.send_audio(sid, chunk)
+            if state.chunks_sent == pre_chunks_sent:
+                self._start_ready_watchdog(sid, state)
+            else:
+                self._cancel_ready_watchdog(state)
             state.stream_open_task = None
             self._reset_idle_timer(sid, state)
 
@@ -502,6 +526,7 @@ class ASRRuntime:
         state.stream_open = False
         state.req_id = None
         self._cancel_idle_timer(state)
+        self._cancel_ready_watchdog(state)
         try:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
@@ -512,6 +537,37 @@ class ASRRuntime:
         if handle is not None:
             handle.cancel()
             state.idle_handle = None
+
+    def _cancel_ready_watchdog(self, state: _SessionState) -> None:
+        handle = state.ready_watchdog
+        if handle is not None:
+            handle.cancel()
+        state.ready_watchdog = None
+        state.ready_armed_at = 0.0
+
+    def _start_ready_watchdog(self, sid: str, state: _SessionState) -> None:
+        loop = self._ensure_loop()
+        if loop is None:
+            return
+        self._cancel_ready_watchdog(state)
+
+        def _fire() -> None:
+            state.ready_watchdog = None
+            armed_at = state.ready_armed_at
+            state.ready_armed_at = 0.0
+            if armed_at and state.last_audio_ts <= armed_at:
+                _asr_log.warning("evt=asr_no_audio_timeout sid=%s", sid)
+                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+                input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
+                asr_ready_frame = {
+                    "type": "asr.ready",
+                    "vendor": "deepgram",
+                    "input": input_desc,
+                }
+                bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
+
+        state.ready_armed_at = time.monotonic()
+        state.ready_watchdog = loop.call_later(_NO_AUDIO_TIMEOUT_S, _fire)
 
     def _reset_idle_timer(self, sid: str, state: _SessionState) -> None:
         threshold_ms = self._idle_close_ms

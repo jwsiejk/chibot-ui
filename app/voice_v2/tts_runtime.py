@@ -171,8 +171,29 @@ class TTSRuntime:
         total_bytes = 0
         start_time_ms = 0.0
         last_chunk_log = 0.0
+        interval_bytes = 0
+        interval_chunks = 0
         text_chars = len(text)
         first_chunk_received = False
+
+        def _flush_chunk_log(*, force: bool = False) -> None:
+            nonlocal last_chunk_log, interval_bytes, interval_chunks
+            if interval_chunks <= 0:
+                return
+            now = time.monotonic()
+            if not force and now - last_chunk_log < _CHUNK_LOG_INTERVAL_S:
+                return
+            last_chunk_log = now
+            _tts_log.debug(
+                "evt=tts_chunk sid=%s utt_id=%s chunks=%d bytes=%d total_bytes=%d",
+                sid,
+                state.utt_id,
+                interval_chunks,
+                interval_bytes,
+                total_bytes,
+            )
+            interval_bytes = 0
+            interval_chunks = 0
 
         try:
             stream = await provider.synthesize(text, voice_id=voice_id)
@@ -260,18 +281,11 @@ class TTSRuntime:
                         self._engine.emit_tts_audio_chunk(sid, emitted)
                         chunk_len = len(emitted)
                         total_bytes += chunk_len
+                        interval_bytes += chunk_len
+                        interval_chunks += 1
                         if not first_chunk_received:
                             first_chunk_received = True
-                        now = time.monotonic()
-                        if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
-                            last_chunk_log = now
-                            _tts_log.debug(
-                                "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
-                                sid,
-                                state.utt_id,
-                                chunk_len,
-                                total_bytes,
-                            )
+                        _flush_chunk_log()
                 else:
                     frame_aligned = len(buffer) - (len(buffer) % _PCM_FRAME_BYTES)
                     if frame_aligned >= _PCM_FRAME_BYTES:
@@ -280,18 +294,11 @@ class TTSRuntime:
                         self._engine.emit_tts_audio_chunk(sid, emitted)
                         chunk_len = len(emitted)
                         total_bytes += chunk_len
+                        interval_bytes += chunk_len
+                        interval_chunks += 1
                         if not first_chunk_received:
                             first_chunk_received = True
-                        now = time.monotonic()
-                        if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
-                            last_chunk_log = now
-                            _tts_log.debug(
-                                "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
-                                sid,
-                                state.utt_id,
-                                chunk_len,
-                                total_bytes,
-                            )
+                        _flush_chunk_log()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
@@ -327,16 +334,9 @@ class TTSRuntime:
                             self._engine.emit_tts_audio_chunk(sid, emitted)
                             chunk_len = len(emitted)
                             total_bytes += chunk_len
-                            now = time.monotonic()
-                            if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
-                                last_chunk_log = now
-                                _tts_log.debug(
-                                    "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
-                                    sid,
-                                    state.utt_id,
-                                    chunk_len,
-                                    total_bytes,
-                                )
+                            interval_bytes += chunk_len
+                            interval_chunks += 1
+                            _flush_chunk_log()
                             first_chunk_received = True
                     else:
                         emitted = bytes(buffer[:frame_aligned])
@@ -344,16 +344,9 @@ class TTSRuntime:
                         self._engine.emit_tts_audio_chunk(sid, emitted)
                         chunk_len = len(emitted)
                         total_bytes += chunk_len
-                        now = time.monotonic()
-                        if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
-                            last_chunk_log = now
-                            _tts_log.debug(
-                                "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
-                                sid,
-                                state.utt_id,
-                                chunk_len,
-                                total_bytes,
-                            )
+                        interval_bytes += chunk_len
+                        interval_chunks += 1
+                        _flush_chunk_log()
                         first_chunk_received = True
                 remainder = len(buffer)
                 if remainder:
@@ -364,6 +357,7 @@ class TTSRuntime:
                         remainder,
                     )
                 buffer.clear()
+            _flush_chunk_log(force=True)
             if start_emitted and state.emit_end:
                 self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
                 duration_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0
