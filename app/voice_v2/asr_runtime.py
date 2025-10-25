@@ -9,6 +9,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Deque, Dict, Optional
 
+from app.config import (
+    ASR_BACKPRESSURE_THRESHOLD_BYTES,
+    ASR_IDLE_CLOSE_MS,
+    ASR_TRACE,
+)
 from app.telemetry import bus
 from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
 from app.voice_v2.engine import EngineV2
@@ -20,6 +25,8 @@ _CONTENT_TYPE = "audio/webm;codecs=opus"
 _PARTIAL_CONFIDENCE = 0.55
 _FINAL_CONFIDENCE = 0.9
 _DEFAULT_IDLE_CLOSE_MS = 4000
+_BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+_TRACE_ENABLED = bool(ASR_TRACE)
 
 
 @dataclass
@@ -28,14 +35,32 @@ class _SessionState:
 
     sid: str
     pending: Deque[bytes] = field(default_factory=deque)
+    buffered_bytes: int = 0
     req_id: Optional[str] = None
     stream_open_task: Optional[asyncio.Task[None]] = None
     stream_open: bool = False
     last_audio_ts: float = 0.0
-    drop_logged: bool = False
     idle_handle: asyncio.TimerHandle | None = None
     stream_id: Optional[str] = None
     close_reason: Optional[str] = None
+    opened_at_ms: int = 0
+    opened_at_monotonic: float = 0.0
+    last_audio_ts_ms: int = 0
+    chunks_sent: int = 0
+    bytes_sent: int = 0
+    dg_msgs_partial: int = 0
+    dg_msgs_final: int = 0
+    finals_delivered: int = 0
+    dropped_chunks: int = 0
+    last_stream_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        now_monotonic = time.monotonic()
+        now_wall = time.time()
+        self.opened_at_monotonic = now_monotonic
+        self.opened_at_ms = int(now_wall * 1000)
+        self.last_audio_ts = now_monotonic
+        self.last_audio_ts_ms = int(now_wall * 1000)
 
 
 class ASRRuntime:
@@ -51,8 +76,15 @@ class ASRRuntime:
         self._client = client
         self._sessions: Dict[str, _SessionState] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._idle_close_ms = getattr(client, "idle_close_ms", _DEFAULT_IDLE_CLOSE_MS)
-        if not isinstance(self._idle_close_ms, (int, float)) or self._idle_close_ms < 0:
+        configured_idle = ASR_IDLE_CLOSE_MS
+        if not isinstance(configured_idle, (int, float)):
+            configured_idle = _DEFAULT_IDLE_CLOSE_MS
+        client_idle = getattr(client, "idle_close_ms", None)
+        if isinstance(client_idle, (int, float)) and client_idle >= 0:
+            self._idle_close_ms = int(client_idle)
+        else:
+            self._idle_close_ms = int(configured_idle)
+        if self._idle_close_ms < 0:
             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
 
     # ------------------------------------------------------------------
@@ -74,12 +106,35 @@ class ASRRuntime:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
 
-        state.last_audio_ts = time.monotonic()
+        now_monotonic = time.monotonic()
+        state.last_audio_ts = now_monotonic
+        state.last_audio_ts_ms = int(time.time() * 1000)
+        chunk_len = len(data)
+
+        if state.stream_id is None:
+            state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
+            state.last_stream_id = state.stream_id
+
         if not state.stream_open:
             state.pending.append(data)
-            self._ensure_stream(sid, state)
+            state.buffered_bytes += chunk_len
+            self._apply_backpressure(sid, state)
+            if state.pending:
+                self._ensure_stream(sid, state)
         else:
+            state.chunks_sent += 1
+            state.bytes_sent += chunk_len
             self._client.send_audio(sid, data)
+
+        if _TRACE_ENABLED:
+            _logger.debug(
+                "evt=asr_audio_enqueued sid=%s stream_id=%s bytes=%d buffered_bytes=%d pending_chunks=%d",
+                sid,
+                state.stream_id or state.last_stream_id or "",
+                chunk_len,
+                state.buffered_bytes,
+                len(state.pending),
+            )
 
         self._reset_idle_timer(sid, state)
 
@@ -97,6 +152,8 @@ class ASRRuntime:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
             _logger.exception("evt=asr_stream_close_failed sid=%s", sid)
+        finally:
+            self._log_session_rollup(state)
         state.req_id = None
 
     # ------------------------------------------------------------------
@@ -113,12 +170,93 @@ class ASRRuntime:
         self._loop = loop
         return loop
 
+    def _apply_backpressure(self, sid: str, state: _SessionState) -> None:
+        if _BACKPRESSURE_THRESHOLD <= 0:
+            return
+        if state.buffered_bytes <= _BACKPRESSURE_THRESHOLD:
+            return
+
+        dropped_chunks = 0
+        while state.pending and state.buffered_bytes > _BACKPRESSURE_THRESHOLD:
+            removed = state.pending.popleft()
+            state.buffered_bytes = max(0, state.buffered_bytes - len(removed))
+            dropped_chunks += 1
+
+        if dropped_chunks:
+            state.dropped_chunks += dropped_chunks
+            stream_id = state.stream_id or state.last_stream_id or ""
+            _logger.info(
+                "evt=asr_backpressure sid=%s stream_id=%s buffered_bytes=%d threshold=%d action=drop_oldest dropped_chunks=%d",
+                sid,
+                stream_id,
+                state.buffered_bytes,
+                _BACKPRESSURE_THRESHOLD,
+                dropped_chunks,
+            )
+
+    def _log_session_rollup(self, state: _SessionState) -> None:
+        stream_id = state.last_stream_id or state.stream_id or ""
+        duration_ms = int(
+            max(0.0, (time.monotonic() - state.opened_at_monotonic) * 1000)
+        )
+        _logger.info(
+            "evt=asr_rollup sid=%s stream_id=%s opened_at_ms=%d last_audio_ts_ms=%d "
+            "chunks_sent=%d bytes_sent=%d partials=%d finals=%d finals_delivered=%d "
+            "dropped=%d duration_ms=%d",
+            state.sid,
+            stream_id,
+            state.opened_at_ms,
+            state.last_audio_ts_ms,
+            state.chunks_sent,
+            state.bytes_sent,
+            state.dg_msgs_partial,
+            state.dg_msgs_final,
+            state.finals_delivered,
+            state.dropped_chunks,
+            duration_ms,
+        )
+
+    def _log_utterance(
+        self,
+        state: _SessionState,
+        stream_id: str,
+        req_id: str,
+        metadata: Dict[str, object],
+        text: str,
+    ) -> None:
+        chars = int(metadata.get("len_chars") or len(text))
+        words_meta = metadata.get("words")
+        if isinstance(words_meta, (int, float)):
+            words = max(0, int(words_meta))
+        else:
+            words = len([w for w in text.strip().split() if w])
+        asr_latency_ms = int(metadata.get("latency_ms") or 0)
+        log_template = (
+            "evt=asr_utterance sid=%s stream_id=%s req_id=%s chars=%d words=%d "
+            "asr_latency_ms=%d"
+        )
+        log_args = [
+            state.sid,
+            stream_id,
+            req_id,
+            chars,
+            words,
+            asr_latency_ms,
+        ]
+        e2e_latency = metadata.get("e2e_latency_ms")
+        if isinstance(e2e_latency, (int, float)):
+            log_template += " e2e_latency_ms=%d"
+            log_args.append(int(e2e_latency))
+        _logger.info(log_template, *log_args)
+
     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
         loop = self._ensure_loop()
         if loop is None:
             _logger.warning("evt=asr_no_loop sid=%s", sid)
             return
         if state.stream_open:
+            return
+        if not state.pending:
             return
         task = state.stream_open_task
         if task is not None and not task.done():
@@ -128,6 +266,7 @@ class ASRRuntime:
             if state.stream_id is None:
                 state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
             stream_id = state.stream_id
+            state.last_stream_id = stream_id
             state.close_reason = None
             try:
                 await self._client.open_stream(
@@ -157,6 +296,10 @@ class ASRRuntime:
                 )
             while state.pending:
                 chunk = state.pending.popleft()
+                chunk_len = len(chunk)
+                state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
+                state.chunks_sent += 1
+                state.bytes_sent += chunk_len
                 self._client.send_audio(sid, chunk)
             state.stream_open_task = None
             self._reset_idle_timer(sid, state)
@@ -194,6 +337,7 @@ class ASRRuntime:
             reason = state.close_reason
             if reason is None:
                 reason = "server_shutdown" if _code == 1001 else "error"
+            state.last_stream_id = stream_id
             _logger.info(
                 "evt=asr_session_close sid=%s stream_id=%s reason=%s",
                 sid,
@@ -226,6 +370,8 @@ class ASRRuntime:
         if not stream_id:
             stream_id = f"dg-stream-{uuid.uuid4().hex}"
             state.stream_id = stream_id
+        state.last_stream_id = stream_id
+        state.dg_msgs_partial += 1
         len_chars = int(metadata.get("len_chars") or len(text))
         utterance_id = metadata.get("utterance_id")
         if not utterance_id:
@@ -286,6 +432,8 @@ class ASRRuntime:
         if not stream_id:
             stream_id = f"dg-stream-{uuid.uuid4().hex}"
             state.stream_id = stream_id
+        state.last_stream_id = stream_id
+        state.dg_msgs_final += 1
         len_chars = int(metadata.get("len_chars") or len(text))
         utterance_id = metadata.get("utterance_id")
         if not utterance_id:
@@ -325,6 +473,8 @@ class ASRRuntime:
             "vendor": "deepgram",
         }
         bus.publish(event)
+        state.finals_delivered += 1
+        self._log_utterance(state, stream_id, req_id, metadata, text)
 
     def _on_error(self, sid: str, error: str) -> None:
         _logger.exception("evt=asr_error sid=%s err=%s", sid, error)
@@ -384,18 +534,25 @@ class ASRRuntime:
             self._reset_idle_timer(sid, state)
             return
 
+        idle_ms = int(
+            max(0.0, (time.monotonic() - state.last_audio_ts) * 1000)
+            if state.last_audio_ts
+            else self._idle_close_ms
+        )
+        stream_id = state.stream_id or state.last_stream_id or ""
+        _logger.info(
+            "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
+            sid,
+            stream_id,
+            idle_ms,
+        )
         try:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
             _logger.exception("evt=asr_idle_close_failed sid=%s", sid)
-        else:
-            _logger.info(
-                "evt=asr_idle_close sid=%s threshold_ms=%d engine_state=%s",
-                sid,
-                int(self._idle_close_ms),
-                engine_state,
-            )
         state.stream_open = False
+        state.last_stream_id = stream_id or state.last_stream_id
+        state.stream_id = None
         state.req_id = None
 
     # Optional idle guard
@@ -412,8 +569,18 @@ class ASRRuntime:
             if state.last_audio_ts and now - state.last_audio_ts >= threshold:
                 state.close_reason = "idle_timeout"
                 try:
+                    stream_id = state.stream_id or state.last_stream_id or ""
+                    idle_ms = int(max(0.0, (now - state.last_audio_ts) * 1000))
+                    _logger.info(
+                        "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
+                        sid,
+                        stream_id,
+                        idle_ms,
+                    )
                     self._client.close_stream(sid)
                 except Exception:  # pragma: no cover - defensive
                     _logger.exception("evt=asr_idle_close_failed sid=%s", sid)
                 state.stream_open = False
+                state.last_stream_id = state.stream_id or state.last_stream_id
+                state.stream_id = None
                 state.req_id = None
