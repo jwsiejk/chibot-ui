@@ -1,163 +1,56 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 8405b26d3cbccadd3eb51478b991c76dc22021ba..2ba8ca8fb9b299edb893aeaba4e0391a5c7171c5 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -301,74 +301,83 @@ class ChatV2Adapter:
-             "ts_ms": now_ms,
-             "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
-         }
-         info_frame["meta"] = {"sid": sid}
-         policy_snapshot = self._policy_snapshot()
-         if policy_snapshot:
-             info_frame["policy"] = policy_snapshot
-         await self._send_json(send, sid, info_frame)
-         _logger.info("evt=ws_info_sent sid=%s", sid)
- 
-         if resume_error is not None:
-             await self._send_json(
-                 send,
-                 sid,
-                 {
-                     "type": "error",
-                     "code": "resume_invalid",
-                     "detail": "Resume token expired or invalid",
-                     "retryable": False,
-                 },
-             )
-             await send({"type": "websocket.close", "code": 1008, "reason": "resume_invalid"})
-             return
- 
-         ctx = AdapterContext(sid=sid, headers=dict(headers), principal=principal)
-+
-+        if not (
-+            inspect.iscoroutinefunction(self._on_open_and_greet)
-+            and inspect.iscoroutinefunction(self._invoke_engine)
-+        ):
-+            _logger.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
-+            raise RuntimeError("WebSocket async contract violation")
-+
-         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-         client = scope.get("client")
-         ctx.ip = client[0] if isinstance(client, tuple) and client else None
-         if ctx.ip:
-             ctx.ip_bucket = self._ip_buckets.setdefault(
-                 ctx.ip,
-                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-             )
- 
-         self._contexts[ctx.sid] = ctx
-         self._start_asr_ready_tracker(ctx)
-         self._start_outbound_bridge(ctx, send)
-         self._start_server_keepalive(ctx, send)
- 
-         if resume_replay:
-             ctx.recent_markers = [self._clone_frame(marker) for marker in resume_replay]
- 
-         if self.exporter:
-             self.exporter.begin(ctx.sid)
--        asyncio.create_task(self._on_open_and_greet(ctx, resume_state))
- 
-         for marker in resume_replay:
-             await self._send_json(send, ctx.sid, marker)
- 
-+        await self._on_open_and_greet(ctx, resume_state)
-+
-         close_code = 1000
-         close_reason: Optional[str] = None
- 
-         try:
-             while True:
-                 message = await receive()
-                 msg_type = message.get("type")
- 
-                 if msg_type == "websocket.receive":
-                     if message.get("text") is not None:
-                         result = await self._handle_text(message["text"], ctx, send)
-                         if not result.should_continue:
-                             close_code = result.close_code or 1000
-                             close_reason = result.close_reason
-                             await send(
-                                 {
-                                     "type": "websocket.close",
-                                     "code": close_code,
-                                     "reason": close_reason,
-                                 }
-                             )
-                             break
-                     elif message.get("bytes") is not None:
-                         result = await self._handle_binary(message["bytes"], ctx, send)
-                         if not result.should_continue:
-@@ -1179,60 +1188,70 @@ class ChatV2Adapter:
-         if not isinstance(queued, int):
-             try:
-                 queued = int(queued)
-             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
-                 raise TypeError("queued must be an integer") from exc
- 
-         await self._update_backpressure(ctx, max(0, queued))
- 
-     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
-         event = {
-             "schema_version": "1",
-             "type": event_type,
-             "sid": sid,
-             "who": "server",
-             "source": "ws_server",
-             "meta": dict(meta),
-         }
-         bus.publish(event)
- 
-     async def _invoke_engine(self, hook: str, *args: Any) -> None:
-         if not self.engine:
-             return
-         handler = getattr(self.engine, hook, None)
-         if handler is None:
-             return
--        result = handler(*args)
--        if inspect.isawaitable(result):
--            await result
-+        try:
-+            result = handler(*args)
-+            if inspect.isawaitable(result):
-+                await result
-+        except Exception:
-+            sid = args[0] if args else None
-+            _logger.exception("evt=ws_engine_hook_failed hook=%s sid=%s", hook, sid)
-+            raise
- 
-     async def _on_open_and_greet(
-         self,
-         ctx: AdapterContext,
-         resume_state: Optional[_ResumeState],
-     ) -> None:
-         try:
-+            _logger.info(
-+                "evt=ws_open_and_greet_start sid=%s resume=%s",
-+                ctx.sid,
-+                resume_state is not None,
-+            )
-             await self._invoke_engine("on_open", ctx.sid, ctx.headers)
-             if resume_state is None:
-                 await self._invoke_engine("start_greet", ctx.sid)
-         except Exception:  # pragma: no cover - defensive logging
-             _logger.exception("evt=ws_open_task_failed sid=%s", ctx.sid)
- 
-     def _policy_snapshot(self) -> Dict[str, Any]:
-         engine = self.engine
-         if not engine:
-             return {}
-         try:
-             snapshot = getattr(engine, "policy_snapshot", None)
-             if callable(snapshot) and not isinstance(snapshot, dict):
-                 snapshot = snapshot()
-         except Exception:  # pragma: no cover - defensive logging
-             _logger.exception("evt=ws_policy_snapshot_error")
-             return {}
-         if not isinstance(snapshot, dict):
-             return {}
-         stable: Dict[str, Any] = {}
-         for key in _POLICY_STABLE_KEYS:
-             if key in snapshot:
-                 stable[key] = snapshot[key]
-         return stable
- 
+diff --git a/config/personas/chip.json b/config/personas/chip.json
+index 9045ce59195e0f652351bb02388556bac1174d5d..5fc6f1abc0e56e4543f205e9adab9023172573d4 100644
+--- a/config/personas/chip.json
++++ b/config/personas/chip.json
+@@ -1,45 +1,51 @@
+ {
+   "id": "chip_vptm",
+   "role_title": "Virtual Partner Technical Manager (vPTM)",
+   "public_title": "Chip, your Pure Storage partner guide",
+   "greet_copy": "Hi, Heya, I'm Chip—What do you want to accomplish today?",
+   "voice": "steady-midwest",
+   "tone_preset": "mentor",
+   "domain_focus": "Pure Storage data platforms, partner enablement, and customer outcomes",
+   "guardrails": {
+     "focus_on_pure": true
+   },
+   "modes": {
+     "clarify": {
+       "instruction": "Ask concise follow-ups to uncover the Pure Storage scenario before recommending a path.",
+       "chips": [
+         "Confirm Pure Storage product",
+         "Clarify customer workload",
+         "Ask for timeline"
+       ]
+     },
++    "greet": {
++      "instruction": "Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.",
++      "constraints": {
++        "max_words": 8
++      }
++    },
+     "outline": {
+       "instruction": "Summarize the Pure Storage solution path, spotlighting architecture pillars and success criteria.",
+       "chips": [
+         "State customer objective",
+         "Highlight Pure differentiators",
+         "Note partner resources"
+       ]
+     },
+     "deep_dive": {
+       "instruction": "Walk through the technical layers of the Pure Storage design with data-backed rationale.",
+       "chips": [
+         "Detail FlashArray configuration",
+         "Discuss data reduction plan",
+         "Cover integration dependencies"
+       ]
+     },
+     "compare": {
+       "instruction": "Contrast relevant Pure Storage options and explain why one path best serves the requirement.",
+       "chips": [
+         "FlashArray vs FlashBlade fit",
+         "Differentiate Evergreen benefits",
+         "Match workload to model"
+       ]
+     },
+     "steps": {
