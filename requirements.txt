@@ -7,6 +7,7 @@ starlette>=0.37.2           # WS helpers + ASGI mounting around Flask
 
 # --- Database (Neon / Postgres) ---
 psycopg[binary]>=3.1.18     # pgcrypto/uuid-friendly; good on Render
+asyncpg>=0.29.0
 
 # --- HTTP clients (vendors & web calls) ---
 httpx>=0.27.0               # async+sync; use for OpenAI/ElevenLabs calls

@@ -1,8 +1,9 @@
 diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index b97f1211bb5e714bfdde4c3a6247ebe6ef1b9a49..ccee4549d173fe1c880fde5dd94316a103203996 100644
+index ccee4549d173fe1c880fde5dd94316a103203996..60a4f8af65967908a4a052bc87d206058777e088 100644
 --- a/app/asgi_gateway.py
 +++ b/app/asgi_gateway.py
-@@ -2,88 +2,90 @@
+@@ -1,52 +1,53 @@
+ """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
  from __future__ import annotations
  
  import hashlib
@@ -19,6 +20,8 @@ index b97f1211bb5e714bfdde4c3a6247ebe6ef1b9a49..ccee4549d173fe1c880fde5dd94316a1
  from typing import Any, Awaitable, Callable, Dict, Optional
  
  from app import config
++from app.auth.http_handlers import post_ws_token
++from app.db.neon import init_schema
  from app.logging_config import configure_logging
  from app.telemetry import bus as telemetry_bus
  from app.telemetry.exporter import FileExporter
@@ -28,7 +31,7 @@ index b97f1211bb5e714bfdde4c3a6247ebe6ef1b9a49..ccee4549d173fe1c880fde5dd94316a1
  from app.voice_v2.tts_runtime import TTSRuntime
  from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
  from app.services.streaming_asr.deepgram_client import DeepgramClient
-+from app.auth.http_handlers import post_ws_token
+-from app.auth.http_handlers import post_ws_token
  
  
  configure_logging()
@@ -54,12 +57,7 @@ index b97f1211bb5e714bfdde4c3a6247ebe6ef1b9a49..ccee4549d173fe1c880fde5dd94316a1
  def json_response(*, status: int = 200, **payload: Any) -> Response:
      """Serialize a payload to JSON using a compact representation."""
  
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
+@@ -59,86 +60,91 @@ def json_response(*, status: int = 200, **payload: Any) -> Response:
  
  
  WS_ROUTE = "/ws/v2/chat"
@@ -67,7 +65,7 @@ index b97f1211bb5e714bfdde4c3a6247ebe6ef1b9a49..ccee4549d173fe1c880fde5dd94316a1
  LIVE_ROUTE = "/api/v1/live"
  READY_ROUTE = "/api/v1/ready"
  INFO_ROUTE = "/api/v1/info"
-+WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
+ WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
  ROOT_ROUTE = "/"
  FAVICON_ROUTE = "/favicon.ico"
  STATIC_ROUTE_PREFIX = "/static/"
@@ -85,6 +83,7 @@ index b97f1211bb5e714bfdde4c3a6247ebe6ef1b9a49..ccee4549d173fe1c880fde5dd94316a1
  HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
  
  _adapter: Optional[ChatV2Adapter] = None
++_lifespan_started = False
  
  
  def _ws_route_matches(scope: dict, expected: str) -> bool:
@@ -93,33 +92,66 @@ index b97f1211bb5e714bfdde4c3a6247ebe6ef1b9a49..ccee4549d173fe1c880fde5dd94316a1
      robust to deployments mounted under a non-empty ASGI root_path.
      """
  
-@@ -391,48 +393,49 @@ def _method_is_get(scope: dict) -> bool:
-     return scope.get("method", "GET").upper() == "GET"
+     raw_path = scope.get("path", "") or ""
+     root_path = scope.get("root_path") or ""
+     # Direct match (no prefix)
+     if raw_path == expected:
+         return True
+     # Combined path match (some servers expect root_path + path)
+     combined = f"{root_path}{raw_path}" if root_path else raw_path
+     if combined == expected:
+         return True
+     # Prefix-mount: accept if the combined path ends with expected
+     return combined.endswith(expected)
  
  
- def _get_adapter() -> ChatV2Adapter:
-     """Return a lazily instantiated ChatV2Adapter singleton."""
-     global _adapter
-     if _adapter is None:
-         exporter = FileExporter(EXPORT_ROOT)
-         engine = EngineV2(exporter=exporter)
-         tts_runtime = TTSRuntime(engine=engine)
-         asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
-         asr_runtime = ASRRuntime(engine=engine, client=asr_client)
-         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
-         _adapter.tts_runtime = tts_runtime
-         _adapter.asr_runtime = asr_runtime
-     return _adapter
+ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+     # Log raw scope for the chat WS route before any routing/validation
+     p = (scope.get("path") or "")
+     if p.endswith("/ws/v2/chat"):
+         # Keep formatting consistent with this module's logging style
+         logger.info(
+             "evt=ws_entry path=%s type=%s subs=%s query=%s root_path=%s",
+             scope.get("path"), scope.get("type"),
+             scope.get("subprotocols"), scope.get("query_string"),
+             scope.get("root_path"),
+         )
+     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
+     scope_type = scope.get("type")
+     path = (scope.get("root_path") or "") + scope.get("path", "")
+ 
++    if scope_type == "lifespan":
++        await _handle_lifespan(receive, send)
++        return
++
+     if scope_type == "websocket":
+         if _ws_route_matches(scope, WS_ROUTE):
+             # Origin checks removed — accept and hand off to adapter
+             await _get_adapter()(scope, receive, send)
+         else:
+             await _reject_websocket(receive, send)
+         return
+ 
+     if scope_type == "http":
+         handler = _HTTP_ROUTES.get(path)
+         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
+             handler = partial(_handle_static, raw_path=path)
+         if handler is None:
+             await _drain_request_body(receive)
+             await _send_response(send, json_response(status=404, error="not_found"))
+         else:
+             response = await handler(scope, receive)
+             await _send_response(send, response)
+         return
+ 
+     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
  
  
- _HTTP_ROUTES: Dict[str, HttpHandler] = {
-     ROOT_ROUTE: _handle_index,
-     FAVICON_ROUTE: _handle_favicon,
-     HEALTH_ROUTE: _handle_health,
-     LIVE_ROUTE: _handle_live,
-     READY_ROUTE: _handle_ready,
+ async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Return a static JSON document for health checks."""
+@@ -417,25 +423,50 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
      INFO_ROUTE: _handle_info,
-+    WS_TOKEN_ROUTE: post_ws_token,
+     WS_TOKEN_ROUTE: post_ws_token,
  }
  
  
@@ -143,241 +175,246 @@ index b97f1211bb5e714bfdde4c3a6247ebe6ef1b9a49..ccee4549d173fe1c880fde5dd94316a1
              except UnicodeDecodeError:
                  return value.decode("latin1", errors="ignore")
      return None
-diff --git a/app/auth/http_handlers.py b/app/auth/http_handlers.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..210a6557434e45bedccd15f1c72b87ab24010d29
---- /dev/null
-+++ b/app/auth/http_handlers.py
-@@ -0,0 +1,232 @@
-+"""HTTP authentication handlers for minting WebSocket tokens."""
-+from __future__ import annotations
-+
-+import logging
-+import os
-+import types
-+import uuid
-+from typing import Any, Mapping, MutableMapping, Optional
-+
-+try:  # pragma: no cover - optional dependency wiring
-+    from app.security.jwt_utils import mint_ws_token as _mint_ws_token_impl
-+except ModuleNotFoundError:  # pragma: no cover - fallback when jwt is unavailable
-+    _mint_ws_token_impl = None
-+
-+_log = logging.getLogger("app.auth.http")
-+
-+_CSRF_HEADER_NAME = b"x-csrf-token"
-+_CSRF_COOKIE_CANDIDATES = ("csrf_token", "csrftoken", "askchip_csrf")
 +
 +
-+async def post_ws_token(scope: Mapping[str, Any], receive) -> "Response":
-+    """Mint a short-lived WebSocket token for the authenticated session."""
++async def _handle_lifespan(
++    receive: Callable[[], Awaitable[dict]],
++    send: Callable[[dict], Awaitable[None]],
++) -> None:
++    global _lifespan_started
 +
-+    from app.asgi_gateway import Response, json_response
-+
-+    method = _method(scope)
-+    if method != "POST":
-+        await _drain_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    if not _has_cookie_session(scope):
-+        await _drain_body(receive)
-+        return json_response(status=401, error="unauthorized")
-+
-+    if not _validate_csrf(scope):
-+        await _drain_body(receive)
-+        return json_response(status=403, error="forbidden")
-+
-+    user = _get_authenticated_user(scope)
-+    if user is None:
-+        await _drain_body(receive)
-+        return json_response(status=401, error="unauthorized")
-+
-+    if not _profile_gate(user, scope):
-+        await _drain_body(receive)
-+        return json_response(status=409, error="profile_incomplete")
-+
-+    user_identifier = _user_identifier(user)
-+    if user_identifier is None:
-+        await _drain_body(receive)
-+        _log.warning("evt=ws_token_missing_identifier")
-+        return json_response(status=500, error="server_error")
-+
-+    await _drain_body(receive)
-+
-+    sid = uuid.uuid4().hex
-+    is_admin = _is_admin(user)
-+    token = _mint_ws_token(user_identifier, sid, is_admin, ttl_s=60)
-+
-+    _log.info("evt=ws_token_mint sid=%s ttl=60", sid)
-+
-+    ttl_ms = 60 * 1000
-+    return json_response(access_token=token, sid=sid, ttl_ms=ttl_ms)
-+
-+
-+def _method(scope: Mapping[str, Any]) -> str:
-+    value = scope.get("method")
-+    if isinstance(value, bytes):
-+        value = value.decode("latin1", "ignore")
-+    if not isinstance(value, str):
-+        return "GET"
-+    return value.upper()
-+
-+
-+async def _drain_body(receive) -> None:
 +    while True:
 +        message = await receive()
-+        if message.get("type") != "http.request":
-+            break
-+        if not message.get("more_body", False):
-+            break
++        message_type = message.get("type")
++
++        if message_type == "lifespan.startup":
++            if not _lifespan_started:
++                try:
++                    await init_schema()
++                except Exception:
++                    logger.exception("evt=lifespan_startup_failed")
++                    await send({"type": "lifespan.startup.failed", "message": "init_schema"})
++                    raise
++                _lifespan_started = True
++            await send({"type": "lifespan.startup.complete"})
++        elif message_type == "lifespan.shutdown":
++            await send({"type": "lifespan.shutdown.complete"})
++            return
+diff --git a/app/db/neon.py b/app/db/neon.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..96534258622813d29436124d5f1a666dec9ca533
+--- /dev/null
++++ b/app/db/neon.py
+@@ -0,0 +1,172 @@
++"""Neon database pool and helpers."""
++from __future__ import annotations
++
++import asyncio
++import logging
++import os
++from typing import Any, Dict, Optional
++from urllib.parse import quote, urlsplit, urlunsplit
++
++import asyncpg
++
++_dblog = logging.getLogger("app.db.neon")
++
++_pool: Optional[asyncpg.Pool] = None
++_pool_lock = asyncio.Lock()
 +
 +
-+def _headers(scope: Mapping[str, Any]) -> MutableMapping[bytes, bytes]:
-+    headers = scope.get("headers") or []
-+    collected: dict[bytes, bytes] = {}
-+    for name, value in headers:
-+        if isinstance(name, str):
-+            name = name.encode("latin1")
-+        if isinstance(value, str):
-+            value = value.encode("latin1")
-+        collected[name.lower()] = value
-+    return collected
-+
-+
-+def _has_cookie_session(scope: Mapping[str, Any]) -> bool:
-+    header_map = _headers(scope)
-+    cookie_header = header_map.get(b"cookie")
-+    if not cookie_header:
-+        return False
-+    return bool(cookie_header.strip())
-+
-+
-+def _validate_csrf(scope: Mapping[str, Any]) -> bool:
-+    header_map = _headers(scope)
-+    provided = header_map.get(_CSRF_HEADER_NAME)
-+    if not provided:
-+        return False
-+
-+    provided_str = provided.decode("utf-8", "ignore")
-+    cookies = _parse_cookies(header_map.get(b"cookie"))
-+
-+    for name in _CSRF_COOKIE_CANDIDATES:
-+        expected = cookies.get(name)
-+        if expected is None:
-+            continue
-+        return expected == provided_str
-+
-+    state = _state(scope)
-+    expected = None
-+    if isinstance(state, dict):
-+        expected = state.get("csrf_token") or state.get("csrf")
-+    else:
-+        expected = getattr(state, "csrf_token", None) or getattr(state, "csrf", None)
-+    if expected is None:
-+        return False
-+    if isinstance(expected, bytes):
-+        expected = expected.decode("utf-8", "ignore")
-+    return str(expected) == provided_str
-+
-+
-+def _parse_cookies(raw: Optional[bytes]) -> dict[str, str]:
-+    if not raw:
-+        return {}
-+    try:
-+        text = raw.decode("latin1")
-+    except UnicodeDecodeError:
-+        text = raw.decode("latin1", "ignore")
-+    cookies: dict[str, str] = {}
-+    for part in text.split(";"):
-+        if not part.strip():
-+            continue
-+        if "=" not in part:
-+            continue
-+        name, value = part.split("=", 1)
-+        cookies[name.strip()] = value.strip()
-+    return cookies
-+
-+
-+def _get_authenticated_user(scope: Mapping[str, Any]) -> Any | None:
-+    state = _state(scope)
-+    if state is not None:
-+        if isinstance(state, dict) and "user" in state:
-+            return state.get("user")
-+        if hasattr(state, "user"):
-+            return getattr(state, "user")
-+    if "user" in scope:
-+        return scope.get("user")
-+    return None
-+
-+
-+def _profile_gate(user: Any, scope: Mapping[str, Any]) -> bool:
-+    candidate_keys = ("profile_complete", "profile_completed", "has_profile", "profile_ready")
-+
-+    for key in candidate_keys:
-+        value = None
-+        if isinstance(user, dict):
-+            value = user.get(key)
-+        else:
-+            value = getattr(user, key, None)
-+        if value is not None:
-+            return bool(value)
-+
-+    state = _state(scope)
-+    for key in candidate_keys:
-+        if isinstance(state, dict) and key in state:
-+            return bool(state[key])
-+        if not isinstance(state, dict) and hasattr(state, key):
-+            return bool(getattr(state, key))
-+
-+    return True
-+
-+
-+def _user_identifier(user: Any) -> Optional[str]:
-+    for attr in ("id_or_email", "id", "user_id", "email", "sub"):
-+        value = None
-+        if isinstance(user, dict):
-+            value = user.get(attr)
-+        else:
-+            value = getattr(user, attr, None)
++def _environment_dsn() -> str:
++    for key in ("DATABASE_URL", "NEON_DATABASE_URL"):
++        value = os.getenv(key)
 +        if value:
-+            return str(value)
-+    return None
++            return value
++
++    host = os.getenv("PGHOST")
++    database = os.getenv("PGDATABASE")
++    user = os.getenv("PGUSER")
++    password = os.getenv("PGPASSWORD")
++    port = os.getenv("PGPORT") or "5432"
++
++    missing = [
++        name
++        for name, val in (
++            ("PGHOST", host),
++            ("PGDATABASE", database),
++            ("PGUSER", user),
++            ("PGPASSWORD", password),
++        )
++        if not val
++    ]
++    if missing:
++        raise RuntimeError(f"Missing Postgres configuration: {', '.join(missing)}")
++
++    user_enc = quote(user, safe="")
++    password_enc = quote(password, safe="")
++    host_enc = host.strip()
++    return (
++        f"postgresql://{user_enc}:{password_enc}@{host_enc}:{port}/{database}?sslmode=require"
++    )
 +
 +
-+def _user_email(user: Any) -> Optional[str]:
-+    if isinstance(user, dict):
-+        value = user.get("email") or user.get("user_email")
++def _redact_dsn(dsn: str) -> str:
++    try:
++        parsed = urlsplit(dsn)
++    except ValueError:
++        return dsn
++
++    username = parsed.username
++    password = parsed.password
++    hostname = parsed.hostname or ""
++    port_part = f":{parsed.port}" if parsed.port else ""
++    host_display = hostname
++    if host_display and ":" in host_display and not host_display.startswith("["):
++        host_display = f"[{host_display}]"
++
++    if username is None:
++        netloc = parsed.netloc
 +    else:
-+        value = getattr(user, "email", None) or getattr(user, "user_email", None)
-+    if value is None:
++        if password is None:
++            userinfo = username
++        else:
++            userinfo = f"{username}:***"
++        netloc = f"{userinfo}@{host_display}{port_part}"
++
++    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
++
++
++async def get_pool() -> asyncpg.Pool:
++    """Return a lazily created asyncpg pool."""
++
++    global _pool
++    if _pool is None:
++        async with _pool_lock:
++            if _pool is None:
++                dsn = _environment_dsn()
++                _pool = await asyncpg.create_pool(
++                    dsn,
++                    statement_cache_size=0,
++                    max_size=10,
++                )
++                _dblog.info("evt=db_pool_ready dsn=%s", _redact_dsn(dsn))
++    assert _pool is not None
++    return _pool
++
++
++async def init_schema() -> None:
++    pool = await get_pool()
++    async with pool.acquire() as conn:
++        await conn.execute(
++            """
++            CREATE TABLE IF NOT EXISTS users (
++              email TEXT PRIMARY KEY,
++              name  TEXT,
++              title TEXT,
++              region TEXT,
++              created_at TIMESTAMPTZ DEFAULT NOW()
++            );
++            """
++        )
++
++
++async def get_user(email: str) -> Optional[Dict[str, Any]]:
++    pool = await get_pool()
++    async with pool.acquire() as conn:
++        row = await conn.fetchrow(
++            "SELECT email, name, title, region FROM users WHERE email=$1",
++            email,
++        )
++    if row is None:
 +        return None
-+    return str(value).strip().lower()
++    return {
++        "email": row["email"],
++        "name": row["name"],
++        "title": row["title"],
++        "region": row["region"],
++    }
 +
 +
-+def _is_admin(user: Any) -> bool:
-+    admin_raw = os.getenv("ADMIN_EMAILS", "")
-+    if not admin_raw:
++async def upsert_user(
++    email: str,
++    name: Optional[str],
++    title: Optional[str],
++    region: Optional[str],
++) -> Dict[str, Any]:
++    pool = await get_pool()
++    async with pool.acquire() as conn:
++        row = await conn.fetchrow(
++            """
++            INSERT INTO users (email, name, title, region)
++            VALUES ($1, $2, $3, $4)
++            ON CONFLICT (email)
++            DO UPDATE SET
++              name = EXCLUDED.name,
++              title = EXCLUDED.title,
++              region = EXCLUDED.region
++            RETURNING email, name, title, region;
++            """,
++            email,
++            name,
++            title,
++            region,
++        )
++    return {
++        "email": row["email"],
++        "name": row["name"],
++        "title": row["title"],
++        "region": row["region"],
++    }
++
++
++def profile_complete(user: Dict[str, Any]) -> bool:
++    if not user:
 +        return False
-+    user_email = _user_email(user)
-+    if not user_email:
-+        return False
-+    admin_candidates = [item.strip().lower() for item in admin_raw.split(",") if item.strip()]
-+    return user_email in admin_candidates
++    return bool(user.get("name") and user.get("title") and user.get("region"))
 +
 +
-+def _state(scope: Mapping[str, Any]) -> Any:
-+    state = scope.get("state")
-+    if state is None:
-+        return None
-+    if isinstance(state, types.SimpleNamespace):
-+        return state
-+    return state
-+
-+
-+__all__ = ["post_ws_token"]
-+
-+
-+def _mint_ws_token(user_id: str, sid: str, is_admin: bool, *, ttl_s: int) -> str:
-+    if _mint_ws_token_impl is None:  # pragma: no cover - dependency guard
-+        raise RuntimeError("JWT support is not configured")
-+    return _mint_ws_token_impl(user_id, sid, is_admin, ttl_s=ttl_s)
++__all__ = [
++    "get_pool",
++    "init_schema",
++    "get_user",
++    "upsert_user",
++    "profile_complete",
++]
+diff --git a/requirements.txt b/requirements.txt
+index 2963cc0fb653e1ee3abbe850377f98cf878d24a7..036bb2361bc11d0ad91dd03c4d866cbf0d291e59 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,34 +1,35 @@
+ # --- Web server / ASGI ---
+ flask>=3.0.2
+ gunicorn>=21.2.0
+ uvicorn[standard]>=0.29.0   # brings websockets, httptools, uvloop, watchfiles
+ asgiref>=3.8.1
+ starlette>=0.37.2           # WS helpers + ASGI mounting around Flask
+ 
+ # --- Database (Neon / Postgres) ---
+ psycopg[binary]>=3.1.18     # pgcrypto/uuid-friendly; good on Render
++asyncpg>=0.29.0
+ 
+ # --- HTTP clients (vendors & web calls) ---
+ httpx>=0.27.0               # async+sync; use for OpenAI/ElevenLabs calls
+ 
+ # --- Vendors ---
+ openai>=1.30.0              # Chat Completions + Whisper
+ elevenlabs>=1.6.1           # TTS + visemes client
+ 
+ # --- CORS (off by default; enable via env/flag if UI/API split) ---
+ Flask-Cors>=4.0.0
+ 
+ # --- JSON / config utils ---
+ orjson>=3.9.10              # fast JSON for logs/admin diagnostics payloads
+ pydantic>=2.6.0             # request/response schemas (lightweight use)
+ python-dotenv>=1.0.1        # local dev convenience; harmless on Render
+ 
+ # --- Flask deps (pinned explicitly for stability) ---
+ Jinja2>=3.1.3
+ Werkzeug>=3.0.1
+ itsdangerous>=2.1.2
+ blinker>=1.7.0
+ 
+ # --- Optional (safe to keep; remove if unused) ---
+ python-multipart>=0.0.9     # if you accept uploads on ASGI routes (not needed for Flask uploads)
+ 

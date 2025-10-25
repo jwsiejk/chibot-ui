@@ -15,6 +15,8 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from app import config
+from app.auth.http_handlers import post_ws_token
+from app.db.neon import init_schema
 from app.logging_config import configure_logging
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
@@ -24,7 +26,6 @@ from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_runtime import TTSRuntime
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 from app.services.streaming_asr.deepgram_client import DeepgramClient
-from app.auth.http_handlers import post_ws_token
 
 
 configure_logging()
@@ -81,6 +82,7 @@ _DEFAULT_INDEX_HTML = (
 HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
 
 _adapter: Optional[ChatV2Adapter] = None
+_lifespan_started = False
 
 
 def _ws_route_matches(scope: dict, expected: str) -> bool:
@@ -116,6 +118,10 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
     scope_type = scope.get("type")
     path = (scope.get("root_path") or "") + scope.get("path", "")
+
+    if scope_type == "lifespan":
+        await _handle_lifespan(receive, send)
+        return
 
     if scope_type == "websocket":
         if _ws_route_matches(scope, WS_ROUTE):
@@ -439,3 +445,28 @@ def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
             except UnicodeDecodeError:
                 return value.decode("latin1", errors="ignore")
     return None
+
+
+async def _handle_lifespan(
+    receive: Callable[[], Awaitable[dict]],
+    send: Callable[[dict], Awaitable[None]],
+) -> None:
+    global _lifespan_started
+
+    while True:
+        message = await receive()
+        message_type = message.get("type")
+
+        if message_type == "lifespan.startup":
+            if not _lifespan_started:
+                try:
+                    await init_schema()
+                except Exception:
+                    logger.exception("evt=lifespan_startup_failed")
+                    await send({"type": "lifespan.startup.failed", "message": "init_schema"})
+                    raise
+                _lifespan_started = True
+            await send({"type": "lifespan.startup.complete"})
+        elif message_type == "lifespan.shutdown":
+            await send({"type": "lifespan.shutdown.complete"})
+            return

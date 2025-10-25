@@ -7,12 +7,13 @@ import inspect
 import logging
 import os
 import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
 
 import json
+from urllib.parse import parse_qs
 
+from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
 from app.voice_v2 import (
@@ -74,6 +75,7 @@ _OUTBOX_MAXSIZE = 256
 _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
 
 _logger = logging.getLogger(__name__)
+_wslog = logging.getLogger("app.ws.adapter")
 
 _ALLOWED_TEXT_FRAME_TYPES = {
     "client.ready",
@@ -190,6 +192,8 @@ class AdapterContext:
 
     sid: str
     headers: Dict[str, str]
+    user_id: Optional[str] = None
+    is_admin: bool = False
     principal: Dict[str, Any] = field(default_factory=dict)
     audio_seq: int = 0
     audio_expected_seq: int = 0
@@ -258,10 +262,42 @@ class ChatV2Adapter:
             await self._reject_subprotocol(send)
             return
 
-        sid = uuid.uuid4().hex
-
         headers = self._decode_headers(scope.get("headers", ()))
-        principal: Dict[str, Any] = {"sub": "anon"}
+
+        query_bytes = scope.get("query_string") or b""
+        try:
+            query_string = query_bytes.decode("utf-8")
+        except UnicodeDecodeError:  # pragma: no cover - defensive fallback
+            query_string = query_bytes.decode("latin-1", errors="ignore")
+        query_params = parse_qs(query_string, keep_blank_values=True)
+        access_token = query_params.get("access_token", [None])[0]
+        if not access_token:
+            reason = "missing_token"
+            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
+            await send({"type": "websocket.close", "code": 4401, "reason": reason})
+            return
+
+        try:
+            claims = verify_ws_token(access_token)
+        except Exception:
+            reason = "invalid_token"
+            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
+            await send({"type": "websocket.close", "code": 4401, "reason": reason})
+            return
+
+        sid = claims.get("sid")
+        sub = claims.get("sub")
+        aud = claims.get("aud")
+        if not sid or not sub or aud != CHAT_V2_SUBPROTOCOL:
+            reason = "bad_claims"
+            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
+            await send({"type": "websocket.close", "code": 4401, "reason": reason})
+            return
+
+        principal: Dict[str, Any] = dict(claims)
+        is_admin = bool(principal.get("is_admin"))
+
+        _wslog.info("evt=ws_accept_token_ok sid=%s", sid)
 
         _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
@@ -281,7 +317,13 @@ class ChatV2Adapter:
         await self._send_json(send, sid, info_frame)
         _logger.info("evt=ws_info_sent sid=%s", sid)
 
-        ctx = AdapterContext(sid=sid, headers=dict(headers), principal=principal)
+        ctx = AdapterContext(
+            sid=sid,
+            headers=dict(headers),
+            principal=principal,
+            user_id=sub,
+            is_admin=is_admin,
+        )
 
         if not (
             inspect.iscoroutinefunction(self._on_open_and_greet)
