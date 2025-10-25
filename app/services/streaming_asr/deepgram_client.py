@@ -5,9 +5,11 @@ import asyncio
 import json
 import logging
 import os
+import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Deque, Dict
+from typing import Callable, Deque, Dict, Tuple
 
 import websockets
 from websockets.legacy.client import WebSocketClientProtocol
@@ -23,12 +25,12 @@ class _StreamState:
     sid: str
     stream_id: str
     websocket: WebSocketClientProtocol
-    on_partial: Callable[[str], None]
-    on_final: Callable[[str], None]
+    on_partial: Callable[[str, Dict[str, object]], None]
+    on_final: Callable[[str, Dict[str, object]], None]
     on_error: Callable[[str], None]
     on_close: Callable[[int | None, str | None], None] | None
     loop: asyncio.AbstractEventLoop
-    chunks: Deque[bytes] = field(default_factory=deque)
+    chunks: Deque[Tuple[int, bytes, float]] = field(default_factory=deque)
     buffered_bytes: int = 0
     drop_logged: bool = False
     closing: bool = False
@@ -36,6 +38,10 @@ class _StreamState:
     receiver_task: asyncio.Task[None] | None = None
     data_event: asyncio.Event = field(default_factory=asyncio.Event)
     finalized: bool = False
+    next_seq_no: int = 1
+    last_send_ts: float = 0.0
+    first_audio_ts: float | None = None
+    current_utterance_id: str | None = None
 
 
 class DeepgramClient:
@@ -63,8 +69,8 @@ class DeepgramClient:
         self,
         sid: str,
         content_type: str,
-        on_partial: Callable[[str], None],
-        on_final: Callable[[str], None],
+        on_partial: Callable[[str, Dict[str, object]], None],
+        on_final: Callable[[str, Dict[str, object]], None],
         on_error: Callable[[str], None],
         *,
         stream_id: str,
@@ -128,12 +134,17 @@ class DeepgramClient:
         if not data:
             return
 
-        state.chunks.append(data)
+        now = time.monotonic()
+        if state.first_audio_ts is None:
+            state.first_audio_ts = now
+        seq_no = state.next_seq_no
+        state.next_seq_no += 1
+        state.chunks.append((seq_no, data, now))
         state.buffered_bytes += len(data)
         if state.buffered_bytes > self._max_buffer_bytes:
             dropped = 0
             while state.chunks and state.buffered_bytes > self._max_buffer_bytes:
-                removed = state.chunks.popleft()
+                _, removed, _ = state.chunks.popleft()
                 dropped += len(removed)
                 state.buffered_bytes -= len(removed)
             if dropped and not state.drop_logged:
@@ -164,33 +175,77 @@ class DeepgramClient:
                 await state.data_event.wait()
                 state.data_event.clear()
                 while state.chunks:
-                    chunk = state.chunks.popleft()
-                    state.buffered_bytes -= len(chunk)
-                    await state.websocket.send(chunk)
+                    seq_no, chunk, _ = state.chunks.popleft()
+                    chunk_len = len(chunk)
+                    state.buffered_bytes -= chunk_len
+                    try:
+                        await state.websocket.send(chunk)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        _logger.exception(
+                            "evt=dg_send_failed sid=%s stream_id=%s seq_no=%d err=%s",
+                            state.sid,
+                            state.stream_id,
+                            seq_no,
+                            exc,
+                        )
+                        state.on_error(str(exc))
+                        continue
+                    now = time.monotonic()
+                    if state.last_send_ts:
+                        since_last_ms = int(
+                            max(0.0, (now - state.last_send_ts) * 1000)
+                        )
+                    else:
+                        since_last_ms = 0
+                    state.last_send_ts = now
+                    _logger.debug(
+                        "evt=asr_chunk_sent sid=%s stream_id=%s seq_no=%d bytes=%d "
+                        "buffered_bytes=%d since_last_ms=%d",
+                        state.sid,
+                        state.stream_id,
+                        seq_no,
+                        chunk_len,
+                        max(0, state.buffered_bytes),
+                        since_last_ms,
+                    )
                 if state.closing:
                     break
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
             _logger.exception("evt=deepgram_send_failed sid=%s err=%s", state.sid, exc)
-            state.on_error(state.sid, str(exc))
+            state.on_error(str(exc))
 
     async def _receiver_loop(self, state: _StreamState) -> None:
         websocket = state.websocket
         try:
             async for message in websocket:
                 if isinstance(message, bytes):
+                    _logger.error(
+                        "evt=dg_msg_parse_error sid=%s stream_id=%s raw_type=%s err=%s",
+                        state.sid,
+                        state.stream_id,
+                        type(message).__name__,
+                        "non_text_payload",
+                    )
                     continue
                 try:
                     payload = json.loads(message)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    _logger.error(
+                        "evt=dg_msg_parse_error sid=%s stream_id=%s raw_type=%s err=%s",
+                        state.sid,
+                        state.stream_id,
+                        type(message).__name__,
+                        exc,
+                    )
                     continue
                 self._handle_message(state, payload)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
             _logger.exception("evt=deepgram_recv_failed sid=%s err=%s", state.sid, exc)
-            state.on_error(state.sid, str(exc))
+            state.on_error(str(exc))
         finally:
             await self._finalize_stream(state)
 
@@ -237,18 +292,43 @@ class DeepgramClient:
             transcript = alternatives[0].get("transcript", "").strip()
             if not transcript:
                 return
+            len_chars = len(transcript)
             is_final = bool(channel.get("is_final") or payload.get("speech_final"))
+            raw_utterance_id = (
+                alternatives[0].get("utterance_id")
+                or payload.get("utterance_id")
+                or payload.get("metadata", {}).get("utterance_id")
+            )
+            if raw_utterance_id:
+                state.current_utterance_id = str(raw_utterance_id)
+            if state.current_utterance_id is None:
+                state.current_utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+            utterance_id = state.current_utterance_id
+            latency_ms = 0
+            if state.first_audio_ts is not None:
+                latency_ms = int(
+                    max(0.0, (time.monotonic() - state.first_audio_ts) * 1000)
+                )
+            metadata = {
+                "len_chars": len_chars,
+                "latency_ms": latency_ms,
+                "utterance_id": utterance_id,
+                "stream_id": state.stream_id,
+                "is_final": is_final,
+            }
             if is_final:
-                state.on_final(state.sid, transcript)
+                state.current_utterance_id = None
+                state.first_audio_ts = None
+                state.on_final(transcript, metadata)
             else:
-                state.on_partial(state.sid, transcript)
+                state.on_partial(transcript, metadata)
             return
         if message_type == "error" or message_type == "Error":
             error = payload.get("error") or payload.get("message") or str(payload)
-            state.on_error(state.sid, error)
+            state.on_error(str(error))
             return
         if "error" in payload:
-            state.on_error(state.sid, str(payload.get("error")))
+            state.on_error(str(payload.get("error")))
 
 
 __all__ = ["DeepgramClient"]

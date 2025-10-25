@@ -168,15 +168,15 @@ class ASRRuntime:
         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
         state.stream_open_task.add_done_callback(_on_done)
 
-    def _make_partial_cb(self, sid: str) -> Callable[[str], None]:
-        def _callback(text: str) -> None:
-            self._on_partial(sid, text)
+    def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+        def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+            self._on_partial(sid, text, metadata or {})
 
         return _callback
 
-    def _make_final_cb(self, sid: str) -> Callable[[str], None]:
-        def _callback(text: str) -> None:
-            self._on_final(sid, text)
+    def _make_final_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+        def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+            self._on_final(sid, text, metadata or {})
 
         return _callback
 
@@ -207,13 +207,40 @@ class ASRRuntime:
 
         return _callback
 
-    def _on_partial(self, sid: str, text: str) -> None:
+    def _on_partial(
+        self, sid: str, text: str, metadata: Dict[str, object] | None = None
+    ) -> None:
         if not isinstance(text, str) or not text.strip():
             return
         state = self._sessions.get(sid)
         if state is None:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
+
+        metadata = metadata or {}
+        if state.stream_id is None:
+            meta_stream = metadata.get("stream_id")
+            if isinstance(meta_stream, str) and meta_stream:
+                state.stream_id = meta_stream
+        stream_id = state.stream_id or ""
+        if not stream_id:
+            stream_id = f"dg-stream-{uuid.uuid4().hex}"
+            state.stream_id = stream_id
+        len_chars = int(metadata.get("len_chars") or len(text))
+        utterance_id = metadata.get("utterance_id")
+        if not utterance_id:
+            utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+        latency_ms = int(metadata.get("latency_ms") or 0)
+
+        _logger.debug(
+            "evt=dg_partial sid=%s stream_id=%s len_chars=%d is_final=false "
+            "utterance_id=%s latency_ms=%d",
+            sid,
+            stream_id,
+            len_chars,
+            utterance_id,
+            latency_ms,
+        )
 
         req_id = state.req_id
         if req_id is None:
@@ -240,7 +267,9 @@ class ASRRuntime:
         }
         bus.publish(event)
 
-    def _on_final(self, sid: str, text: str) -> None:
+    def _on_final(
+        self, sid: str, text: str, metadata: Dict[str, object] | None = None
+    ) -> None:
         if not isinstance(text, str) or not text.strip():
             return
         state = self._sessions.get(sid)
@@ -248,7 +277,22 @@ class ASRRuntime:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
 
-        req_id = f"dg-{uuid.uuid4().hex}"
+        metadata = metadata or {}
+        if state.stream_id is None:
+            meta_stream = metadata.get("stream_id")
+            if isinstance(meta_stream, str) and meta_stream:
+                state.stream_id = meta_stream
+        stream_id = state.stream_id or ""
+        if not stream_id:
+            stream_id = f"dg-stream-{uuid.uuid4().hex}"
+            state.stream_id = stream_id
+        len_chars = int(metadata.get("len_chars") or len(text))
+        utterance_id = metadata.get("utterance_id")
+        if not utterance_id:
+            utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+        latency_ms = int(metadata.get("latency_ms") or 0)
+
+        req_id = str(uuid.uuid4())
         state.req_id = None
 
         ensure_session = getattr(self._engine, "_ensure_session", None)
@@ -256,8 +300,19 @@ class ASRRuntime:
             engine_session = ensure_session(sid)
             engine_session.req_id = req_id
 
+        _logger.debug(
+            "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
+            "utterance_id=%s latency_ms=%d req_id=%s",
+            sid,
+            stream_id,
+            len_chars,
+            utterance_id,
+            latency_ms,
+            req_id,
+        )
+
         try:
-            self._engine.on_asr_final(sid, text)
+            self._engine.on_asr_final(sid, text, req_id)
         except Exception:  # pragma: no cover - defensive
             _logger.exception("evt=asr_engine_final_failed sid=%s", sid)
 
