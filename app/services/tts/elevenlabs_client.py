@@ -46,10 +46,20 @@ class ElevenLabsStream:
     async def _start(self) -> "ElevenLabsStream":
         response = await self.response_cm.__aenter__()
         self._response = response
+        request = getattr(response, "request", None)
+        query_string: str | None = None
+        if request is not None:
+            raw_query = request.url.query
+            if isinstance(raw_query, bytes):
+                query_string = raw_query.decode()
+            elif raw_query:
+                query_string = str(raw_query)
+        if query_string is None:
+            query_string = f"optimize_streaming_latency=4&output_format={_OUTPUT_FORMAT}"
         _tts_provider_log.info(
-            "evt=tts_provider_stream_opened provider=elevenlabs content_type=%s format=%s",
+            "evt=tts_provider_stream_opened provider=elevenlabs content_type=%s url_qs=%s",
             response.headers.get("content-type"),
-            _OUTPUT_FORMAT,
+            query_string,
         )
         response.raise_for_status()
         self._producer = asyncio.create_task(self._drain())
@@ -173,7 +183,10 @@ class ElevenLabsTTSProvider(TTSProviderBase):
             f"/text-to-speech/{target_voice}/stream",
             json=payload,
             headers=headers,
-            params={"optimize_streaming_latency": "4"},
+            params={
+                "optimize_streaming_latency": "4",
+                "output_format": _OUTPUT_FORMAT,
+            },
         )
         stream = ElevenLabsStream(response_cm=response_cm)
         return await stream
