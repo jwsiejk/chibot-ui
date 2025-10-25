@@ -33,6 +33,10 @@ blinker>=1.7.0
 python-multipart>=0.0.9     # if you accept uploads on ASGI routes (not needed for Flask uploads)
 
 
+# --- Security ---
+PyJWT>=2.8.0
+
+
 
 pytest
 

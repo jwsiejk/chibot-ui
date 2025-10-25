@@ -1,0 +1,57 @@
+[2025-10-25 21:05:08 +0000] [59] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat" [accepted]
+[2025-10-25 21:05:08 +0000] [59] [INFO] connection open
+INFO:app.ws.adapter:evt=ws_info_sent sid=028fa9a853f2484b986a23a8d1d92c4e
+INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=028fa9a853f2484b986a23a8d1d92c4e
+DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=028fa9a853f2484b986a23a8d1d92c4e purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
+DEBUG:asyncio:Using selector: EpollSelector
+DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-65abe26b-6d1f-41af-b0df-4d7d7dfa3556', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
+DEBUG:openai._base_client:Sending HTTP Request: POST https://api.openai.com/v1/chat/completions
+DEBUG:httpcore.connection:connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=5.0 socket_options=None
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x77e1b3a1be00>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x77e1b4943260> server_hostname='api.openai.com' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x77e1b396d6d0>
+DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:send_request_headers.complete
+DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:send_request_body.complete
+DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Sat, 25 Oct 2025 21:05:11 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'621'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'788'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199892'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'32ms'), (b'x-request-id', b'req_a40178c0bf48461a889aa48fe41c122f'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=v0OOWXomfEWSjeXTPbc_niOChp2EHyKj7AYzVg8jWyU-1761426311-1.0.1.1-fSiTruPuHMfs7JKju0dtQLV0ZndDGqBp5k8Gz3kO9YbjXvsroFkPQX1.5D9_EjvXZ4K9unfHPx.1dtxJUqqhvHyGYa9aOJBdWh.gWaBEt5A; path=/; expires=Sat, 25-Oct-25 21:35:11 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=E4SJwr5_XBWZYEB6k1omna6WzfeOP4y58yviMWmS5qw-1761426311878-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'9944aba9dbaba3be-IAD'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
+INFO:httpx:HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:receive_response_body.complete
+DEBUG:httpcore.http11:response_closed.started
+DEBUG:httpcore.http11:response_closed.complete
+DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Sat, 25 Oct 2025 21:05:11 GMT'), ('content-type', 'application/json'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-e0uazp84dxwznca9mgbvta53'), ('openai-processing-ms', '621'), ('openai-project', 'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '788'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '200000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '199892'), ('x-ratelimit-reset-requests', '8.64s'), ('x-ratelimit-reset-tokens', '32ms'), ('x-request-id', 'req_a40178c0bf48461a889aa48fe41c122f'), ('x-openai-proxy-wasm', 'v0.1'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=v0OOWXomfEWSjeXTPbc_niOChp2EHyKj7AYzVg8jWyU-1761426311-1.0.1.1-fSiTruPuHMfs7JKju0dtQLV0ZndDGqBp5k8Gz3kO9YbjXvsroFkPQX1.5D9_EjvXZ4K9unfHPx.1dtxJUqqhvHyGYa9aOJBdWh.gWaBEt5A; path=/; expires=Sat, 25-Oct-25 21:35:11 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=E4SJwr5_XBWZYEB6k1omna6WzfeOP4y58yviMWmS5qw-1761426311878-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '9944aba9dbaba3be-IAD'), ('content-encoding', 'gzip'), ('alt-svc', 'h3=":443"; ma=86400')])
+DEBUG:openai._base_client:request_id: req_a40178c0bf48461a889aa48fe41c122f
+DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=028fa9a853f2484b986a23a8d1d92c4e purpose=greet latency_ms=2901 model=gpt-4o-mini
+DEBUG:httpcore.connection:connect_tcp.started host='api.elevenlabs.io' port=443 local_address=None timeout=5.0 socket_options=None
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x77e1b2eb8e10>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x77e1b4941520> server_hostname='api.elevenlabs.io' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x77e1b38409d0>
+DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:send_request_headers.complete
+DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:send_request_body.complete
+DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
+10.225.26.85:36584 - "GET /api/v1/health HTTP/1.1" 200
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Sat, 25 Oct 2025 21:05:12 GMT'), (b'server', b'uvicorn'), (b'request-id', b'HzD1cgE49KZvmk1KVn80'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'RiXuUOGLA8EeJOJhfoef'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'40'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'a6b1d5be61c9a83a68bb49281c7c49b5'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
+INFO:httpx:HTTP Request: POST https://api.elevenlabs.io/v1/text-to-speech/MIAWBMadvHL0ek6oJEXD/stream?optimize_streaming_latency=4&output_format=pcm_16000 "HTTP/1.1 200 OK"
+INFO:app.voice_v2.tts_provider:evt=tts_provider_stream_opened provider=elevenlabs content_type=audio/pcm url_qs=optimize_streaming_latency=4&output_format=pcm_16000
+INFO:app.voice_v2.tts_runtime:evt=tts_start sid=028fa9a853f2484b986a23a8d1d92c4e utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=40
+DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:receive_response_body.complete
+DEBUG:httpcore.http11:response_closed.started
+DEBUG:httpcore.http11:response_closed.complete
+INFO:app.voice_v2.tts_runtime:evt=tts_end sid=028fa9a853f2484b986a23a8d1d92c4e utt_id=utt-00001 total_bytes=87678 duration_ms=118
+170.85.75.32:0 - "GET /static/favicon.ico?v=be97f0ca984b04ad61e28f886cb1bb885620a54c HTTP/1.1" 404
+10.225.26.85:45216 - "GET /api/v1/health HTTP/1.1" 200
+10.225.26.85:45220 - "GET /api/v1/health HTTP/1.1" 200
+10.225.26.85:45218 - "GET /api/v1/health HTTP/1.1" 200
+10.225.26.85:33870 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-25 21:05:28 +0000] [59] [DEBUG] % sending keepalive ping
+[2025-10-25 21:05:28 +0000] [59] [DEBUG] % received keepalive pong
+10.225.26.85:33886 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-25 21:05:32 +0000] [59] [DEBUG] = connection is CLOSED
+[2025-10-25 21:05:32 +0000] [59] [INFO] connection closed
+INFO:app.voice_v2.asr_runtime:evt=asr_rollup sid=028fa9a853f2484b986a23a8d1d92c4e stream_id= opened_at_ms=1761426308905 last_audio_ts_ms=1761426308905 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=23965
+10.225.26.85:33034 - "GET /api/v1/health HTTP/1.1" 200
