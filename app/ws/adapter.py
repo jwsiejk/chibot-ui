@@ -301,6 +301,7 @@ class ChatV2Adapter:
             "ts_ms": now_ms,
             "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
         }
+        info_frame["meta"] = {"sid": sid}
         policy_snapshot = self._policy_snapshot()
         if policy_snapshot:
             info_frame["policy"] = policy_snapshot
