@@ -937,6 +937,7 @@ class ChatV2Adapter:
             except RuntimeError:
                 pass
 
+        _handle_audio_event._telemetry_accepts_binary = True  # type: ignore[attr-defined]
         ctx.audio_subscription_token = bus.subscribe(EVT_WS_AUDIO_SEND, _handle_audio_event)
         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
 

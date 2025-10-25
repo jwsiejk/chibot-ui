@@ -1,45 +1,453 @@
-diff --git a/app/services/tts/elevenlabs_client.py b/app/services/tts/elevenlabs_client.py
-index 2c2f78264379a0edc6fa2d2d27efe243f14bd811..42f43a25f3276433e39677903799de3c70a6cbed 100644
---- a/app/services/tts/elevenlabs_client.py
-+++ b/app/services/tts/elevenlabs_client.py
-@@ -147,38 +147,39 @@ class ElevenLabsTTSProvider(TTSProviderBase):
-             await client.aclose()
+diff --git a/app/telemetry/bus.py b/app/telemetry/bus.py
+index 9541ffa8425c0331fe13022d28f36b5f9824fc41..c5effbfaf05a2c54bc25093b852dc2d949030ecb 100644
+--- a/app/telemetry/bus.py
++++ b/app/telemetry/bus.py
+@@ -1,41 +1,48 @@
+ """In-process telemetry bus with publish/subscribe support."""
+ from __future__ import annotations
  
-     async def _synthesize_impl(self, text: str, *, voice_id: Optional[str] = None, **kwargs) -> ElevenLabsStream:
-         if not isinstance(text, str):
-             raise TypeError("text must be a string")
-         if not text:
-             raise ValueError("text must not be empty")
-         target_voice = voice_id or self._default_voice_id
-         if not target_voice:
-             raise RuntimeError("voice_id must be provided for ElevenLabs synthesis")
++import logging
+ import re
+ import time
+ import uuid
+ from typing import Any, Callable, Dict, Tuple
+ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
  
-         client = await self._get_client()
-         payload: Dict[str, object] = {"text": text, "output_format": _OUTPUT_FORMAT}
-         model_id = kwargs.get("model_id") or os.getenv("ELEVENLABS_MODEL_ID")
-         if isinstance(model_id, str) and model_id:
-             payload["model_id"] = model_id
+ Subscription = Tuple[str, Callable[[dict], None]]
  
-         headers = {"xi-api-key": self._api_key, "accept": "application/octet-stream"}
-         response_cm = client.stream(
-             "POST",
-             f"/text-to-speech/{target_voice}/stream",
-             json=payload,
-             headers=headers,
-             params={"optimize_streaming_latency": "4"},
++_bus_log = logging.getLogger("app.telemetry.bus")
++
+ # Internal registries keyed by subscription token.
+ _subscriptions: Dict[str, Subscription] = {}
+ # Index mapping event type to tokens for quick lookup.
+ _event_index: Dict[str, set[str]] = {}
+ 
++# Track per-session TTS metadata for sanitised audio telemetry.
++_tts_current_utt: Dict[str, str] = {}
++_tts_audio_totals: Dict[str, int] = {}
++
+ 
+ def _now_ms() -> int:
+     """Return the current time in milliseconds."""
+     return int(time.time() * 1000)
+ 
+ 
+ _TOKEN_KEYWORDS = {"token", "key", "sig", "secret", "auth"}
+ _AUTH_KEYWORDS = {"authorization", "auth"}
+ _BEARER_RE = re.compile(r"(Bearer\s+)([A-Za-z0-9._\-+/=]+)")
+ _EMAIL_RE = re.compile(r"([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+ _OPAQUE_RE = re.compile(r"^[A-Za-z0-9+/=_-]{32,64}$")
+ 
+ 
+ def _mask_tail(value: str, keep: int = 4) -> str:
+     """Return a masked token preserving only the last characters."""
+     if keep <= 0:
+         return "****"
+     if len(value) <= keep:
+         return "****"
+     return "****" + value[-keep:]
+ 
+ 
+ def _shorten_opaque(value: str) -> str:
+     """Collapse long opaque secrets to a short representation."""
+     if len(value) < 6:
+@@ -114,98 +121,225 @@ def _redact_string(raw: str, key_hint: str | None = None) -> str:
+     if len(value) > 128:
+         value = _shorten_generic(value)
+ 
+     return value
+ 
+ 
+ def _redact_meta(meta: Any, key_hint: str | None = None) -> Any:
+     """Return a deep-redacted copy of the provided meta payload."""
+     if isinstance(meta, dict):
+         return {key: _redact_meta(value, key) for key, value in meta.items()}
+     if isinstance(meta, list):
+         return [_redact_meta(item) for item in meta]
+     if isinstance(meta, tuple):
+         return tuple(_redact_meta(item) for item in meta)
+     if isinstance(meta, str):
+         return _redact_string(meta, key_hint)
+     return meta
+ 
+ 
+ def redact_payload(payload: Any) -> Any:
+     """Return a deep-redacted copy of an arbitrary telemetry payload."""
+ 
+     return _redact_meta(payload)
+ 
+ 
++def _clone_payload(payload: Any) -> Any:
++    """Return a deep copy suitable for dispatch to subscribers."""
++
++    if isinstance(payload, dict):
++        return {key: _clone_payload(value) for key, value in payload.items()}
++    if isinstance(payload, list):
++        return [_clone_payload(item) for item in payload]
++    if isinstance(payload, tuple):
++        return tuple(_clone_payload(item) for item in payload)
++    return payload
++
++
++def _json_safe(obj: Any) -> Any:
++    """Return a JSON-safe representation of the provided object."""
++
++    if isinstance(obj, (bytes, bytearray, memoryview)):
++        return {"__type": "bytes", "len": len(obj)}
++    if isinstance(obj, dict):
++        return {key: _json_safe(value) for key, value in obj.items()}
++    if isinstance(obj, (list, tuple, set)):
++        return [_json_safe(item) for item in obj]
++    return obj
++
++
++def _extract_audio_chunk_len(event: Dict[str, Any]) -> int | None:
++    """Best-effort extraction of the chunk length from an audio event."""
++
++    meta = event.get("meta")
++    if isinstance(meta, dict):
++        byte_count = meta.get("byte_count")
++        if isinstance(byte_count, (int, float)):
++            size = int(byte_count)
++            return max(0, size)
++
++    chunk = event.get("chunk")
++    if isinstance(chunk, (bytes, bytearray, memoryview)):
++        return len(chunk)
++    return None
++
++
++def _increment_audio_total(sid: str, byte_count: int) -> int:
++    """Update and return the running audio total for the session."""
++
++    if byte_count < 0:
++        byte_count = 0
++    total = _tts_audio_totals.get(sid, 0) + byte_count
++    _tts_audio_totals[sid] = total
++    return total
++
++
++def note_tts_start(sid: str, utt_id: str) -> None:
++    """Register the active TTS utterance for a session."""
++
++    if not isinstance(sid, str) or not sid:
++        return
++    if not isinstance(utt_id, str) or not utt_id:
++        return
++    _tts_current_utt[sid] = utt_id
++    _tts_audio_totals[sid] = 0
++
++
++def note_tts_end(sid: str, utt_id: str | None = None) -> None:
++    """Clear any tracked TTS metadata for the session."""
++
++    if not isinstance(sid, str) or not sid:
++        return
++    _tts_audio_totals.pop(sid, None)
++    if utt_id is None:
++        _tts_current_utt.pop(sid, None)
++        return
++    current = _tts_current_utt.get(sid)
++    if current == utt_id:
++        _tts_current_utt.pop(sid, None)
++
++
+ def subscribe(event_type: str, handler: Callable[[dict], None]) -> str:
+     """Register a handler for a specific event type or wildcard."""
+     if not isinstance(event_type, str) or not event_type:
+         raise ValueError("event_type must be a non-empty string")
+     if not callable(handler):
+         raise ValueError("handler must be callable")
+ 
+     token = f"sub_{uuid.uuid4().hex}"
+     _subscriptions[token] = (event_type, handler)
+     _event_index.setdefault(event_type, set()).add(token)
+     return token
+ 
+ 
+ def unsubscribe(token: str) -> bool:
+     """Remove a previously registered subscription."""
+     subscription = _subscriptions.pop(token, None)
+     if not subscription:
+         return False
+ 
+     event_type, _ = subscription
+     tokens = _event_index.get(event_type)
+     if tokens is not None:
+         tokens.discard(token)
+         if not tokens:
+             _event_index.pop(event_type, None)
+     return True
+ 
+ 
+ def publish(event: dict) -> None:
+     """Normalize and dispatch an event to registered handlers."""
+     if not isinstance(event, dict):
+         raise ValueError("event must be a dict")
+ 
+     normalized = dict(event)
+     event_type = normalized.get("type")
+     if not isinstance(event_type, str) or not event_type:
+         raise ValueError("event['type'] must be a non-empty string")
+ 
+     if "schema_version" not in normalized:
+         normalized["schema_version"] = "1"
+ 
+     if "ts_ms" not in normalized or not isinstance(normalized["ts_ms"], int):
+         normalized["ts_ms"] = _now_ms()
+     if "level" not in normalized or not isinstance(normalized["level"], str):
+         normalized["level"] = "debug"
+ 
+     if "meta" in normalized:
+         original_meta = normalized["meta"]
+         try:
+             normalized["meta"] = _redact_meta(original_meta)
+-        except Exception as exc:  # pylint: disable=broad-except
+-            print(f"WARN telemetry redaction failed: {exc}")
++        except Exception:  # pylint: disable=broad-except
++            _bus_log.warning("evt=telemetry_redact_failed", exc_info=True)
+             normalized["meta"] = original_meta
+ 
++    sid = normalized.get("sid")
++    sid_str = sid if isinstance(sid, str) else None
++
++    if event_type == "EVT_TTS_START" and sid_str:
++        utt_meta = normalized.get("meta") or {}
++        if isinstance(utt_meta, dict):
++            tts_meta = utt_meta.get("tts")
++            if isinstance(tts_meta, dict):
++                utt_id = tts_meta.get("utt_id")
++                if isinstance(utt_id, str) and utt_id:
++                    note_tts_start(sid_str, utt_id)
++
++    safe_event = _json_safe(normalized)
++    if isinstance(safe_event, dict):
++        if event_type == "EVT_WS_AUDIO_SEND":
++            chunk_len = _extract_audio_chunk_len(normalized)
++            total_bytes = None
++            if sid_str and chunk_len is not None:
++                total_bytes = _increment_audio_total(sid_str, chunk_len)
++                utt_id = _tts_current_utt.get(sid_str)
++                if utt_id:
++                    safe_event.setdefault("utt_id", utt_id)
++            safe_event.pop("chunk", None)
++            if chunk_len is not None:
++                safe_event["bytes"] = chunk_len
++            if total_bytes is not None:
++                safe_event["total_bytes"] = total_bytes
++        elif event_type == "EVT_TTS_END" and sid_str:
++            total = _tts_audio_totals.get(sid_str)
++            if total is None and sid_str in _tts_current_utt:
++                total = 0
++            if total is not None:
++                safe_event["total_bytes"] = total
++            utt_id = _tts_current_utt.get(sid_str)
++            if utt_id:
++                safe_event.setdefault("utt_id", utt_id)
++
+     tokens = set()
+     tokens.update(_event_index.get(event_type, set()))
+     tokens.update(_event_index.get("*", set()))
+ 
+     for token in list(tokens):
+         subscription = _subscriptions.get(token)
+         if not subscription:
+             continue
+         _, handler = subscription
+         try:
+-            handler(dict(normalized))
+-        except Exception as exc:  # pylint: disable=broad-except
+-            print(f"Telemetry handler error for token {token}: {exc}")
++            if getattr(handler, "_telemetry_accepts_binary", False):
++                payload = _clone_payload(normalized)
++            else:
++                payload = _clone_payload(safe_event)
++            handler(payload)
++        except Exception:  # pylint: disable=broad-except
++            handler_name = getattr(handler, "__qualname__", repr(handler))
++            _bus_log.error(
++                "evt=telemetry_sink_failed token=%s handler=%s",
++                token,
++                handler_name,
++                exc_info=True,
++            )
++
++    if event_type == "EVT_TTS_END" and sid_str:
++        note_tts_end(sid_str, _tts_current_utt.get(sid_str))
+ 
+ 
+ def reset() -> None:
+     """Clear all subscriptions (primarily for testing)."""
+     _subscriptions.clear()
+     _event_index.clear()
++    _tts_current_utt.clear()
++    _tts_audio_totals.clear()
+diff --git a/app/voice_v2/tts_runtime.py b/app/voice_v2/tts_runtime.py
+index 92d1d7315ccfa3ab529e98061d1db299be631a9e..a42f9ea6f0cd420a24eadaaf5d8bc2d26b59c2ba 100644
+--- a/app/voice_v2/tts_runtime.py
++++ b/app/voice_v2/tts_runtime.py
+@@ -181,50 +181,53 @@ class TTSRuntime:
+         except ProviderTimeoutError:
+             _tts_log.warning(
+                 "evt=tts_provider_timeout sid=%s vendor=%s", sid, getattr(provider, "vendor", "unknown")
+             )
+             return
+         except asyncio.CancelledError:
+             raise
+         except Exception as exc:  # pragma: no cover - defensive
+             reason = _safe_reason(exc)
+             _tts_log.error(
+                 "evt=tts_synthesis_failed reason=provider_error sid=%s utt_id=%s detail=%s",
+                 sid,
+                 state.utt_id,
+                 reason,
+                 exc_info=True,
+             )
+             return
+ 
+         if self._states.get(sid) is not state:
+             if stream is not None:
+                 await stream.aclose()
+             return
+ 
+         try:
+             self._engine.on_tts_start(sid, state.utt_id, state.post_hold_ms)
++            note_start = getattr(self._bus, "note_tts_start", None)
++            if callable(note_start):
++                note_start(sid, state.utt_id)
+             start_time_ms = time.monotonic()
+             _tts_log.info(
+                 "evt=tts_start sid=%s utt_id=%s voice_id=%s text_chars=%d",
+                 sid,
+                 state.utt_id,
+                 voice_id,
+                 text_chars,
+             )
+             start_emitted = True
+ 
+             iterator = stream.__aiter__()
+             first_chunk_received = False
+             while True:
+                 try:
+                     next_chunk = await (
+                         asyncio.wait_for(anext(iterator), timeout=_FIRST_CHUNK_TIMEOUT_S)
+                         if not first_chunk_received
+                         else anext(iterator)
+                     )
+                 except StopAsyncIteration:
+                     break
+                 except asyncio.TimeoutError:
+                     _tts_log.error(
+                         "evt=tts_synthesis_failed reason=no_chunks_timeout sid=%s utt_id=%s",
+                         sid,
+@@ -256,50 +259,54 @@ class TTSRuntime:
+             reason = _safe_reason(exc)
+             _tts_log.error(
+                 "evt=tts_synthesis_failed reason=provider_error sid=%s utt_id=%s detail=%s",
+                 sid,
+                 state.utt_id,
+                 reason,
+                 exc_info=True,
+             )
+             state.emit_end = False
+         finally:
+             if stream is not None:
+                 try:
+                     await stream.aclose()
+                 except Exception:  # pragma: no cover - defensive
+                     _tts_log.debug("Error closing ElevenLabs stream", exc_info=True)
+             if start_emitted and state.emit_end:
+                 self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
+                 duration_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0
+                 _tts_log.info(
+                     "evt=tts_end sid=%s utt_id=%s total_bytes=%d duration_ms=%d",
+                     sid,
+                     state.utt_id,
+                     total_bytes,
+                     duration_ms,
+                 )
++            if start_emitted:
++                note_end = getattr(self._bus, "note_tts_end", None)
++                if callable(note_end):
++                    note_end(sid, state.utt_id)
+ 
+     def _on_task_done(self, sid: str, state: _SynthesisState, task: asyncio.Task[Any]) -> None:
+         current = self._states.get(sid)
+         if current is state:
+             self._states.pop(sid, None)
+ 
+         try:
+             task.result()
+         except (asyncio.CancelledError, ThreadCancelledError):
+             pass
+         except Exception:  # pragma: no cover - defensive
+             _tts_log.exception("TTS synthesis task failed", extra={"sid": sid})
+ 
+     # ------------------------------------------------------------------
+     # Helpers
+     # ------------------------------------------------------------------
+     def _build_provider(self) -> TTSProviderBase | None:
+         api_key = os.getenv("ELEVENLABS_API_KEY")
+         if not api_key:
+             return None
+         try:
+             return ElevenLabsTTSProvider(telemetry_bus=self._bus)
+         except Exception:  # pragma: no cover - defensive
+             _tts_log.exception("Failed to initialize ElevenLabsTTSProvider")
+             return None
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index f460732b03e7fed41573ce2301ef4bd73cd7aae6..7b89c538c626668c9dcb5b492bcb832c816b6bd5 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -915,50 +915,51 @@ class ChatV2Adapter:
+             if isinstance(chunk, (bytes, bytearray, memoryview)):
+                 chunk_bytes = bytes(chunk)
+             else:
+                 return
+ 
+             def _deliver() -> None:
+                 task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
+                 ctx.audio_tasks.add(task)
+ 
+                 def _on_done(done: asyncio.Task[None]) -> None:
+                     ctx.audio_tasks.discard(done)
+                     try:
+                         done.result()
+                     except asyncio.CancelledError:
+                         pass
+                     except Exception:  # pragma: no cover - defensive logging
+                         _logger.exception("Failed to deliver audio chunk for sid %s", ctx.sid)
+ 
+                 task.add_done_callback(_on_done)
+ 
+             try:
+                 loop.call_soon_threadsafe(_deliver)
+             except RuntimeError:
+                 pass
+ 
++        _handle_audio_event._telemetry_accepts_binary = True  # type: ignore[attr-defined]
+         ctx.audio_subscription_token = bus.subscribe(EVT_WS_AUDIO_SEND, _handle_audio_event)
+         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
+ 
+     def _offer_partial_frame(
+         self,
+         ctx: AdapterContext,
+         loop: asyncio.AbstractEventLoop,
+         payload: Dict[str, Any],
+         enqueue: Callable[[Dict[str, Any]], None],
+     ) -> None:
+         def _emit(frame: Dict[str, Any]) -> None:
+             prepared = self._prepare_partial_frame(ctx, frame)
+             enqueue(prepared)
+ 
+         ctx.partial_coalescer.offer(
+             payload,
+             now_ms=self._now_ms(),
+             loop=loop,
+             emit=_emit,
          )
--        return ElevenLabsStream(response_cm=response_cm)
-+        stream = ElevenLabsStream(response_cm=response_cm)
-+        return await stream
  
-     async def _get_client(self) -> httpx.AsyncClient:
-         client = self._client
-         if client is not None:
-             return client
-         async with self._client_lock:
-             if self._client is None:
-                 self._client = httpx.AsyncClient(base_url=_API_BASE_URL, timeout=self._timeout)
-             return self._client
- 
- 
- __all__ = ["ElevenLabsTTSProvider", "ElevenLabsStream"]
+     def _prepare_partial_frame(self, ctx: AdapterContext, payload: Dict[str, Any]) -> Dict[str, Any]:
+         prepared = dict(payload)
+         seq_value = prepared.get("partial_seq")
+         if isinstance(seq_value, int) and seq_value > ctx.partial_seq:

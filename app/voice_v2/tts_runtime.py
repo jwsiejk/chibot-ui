@@ -203,6 +203,9 @@ class TTSRuntime:
 
         try:
             self._engine.on_tts_start(sid, state.utt_id, state.post_hold_ms)
+            note_start = getattr(self._bus, "note_tts_start", None)
+            if callable(note_start):
+                note_start(sid, state.utt_id)
             start_time_ms = time.monotonic()
             _tts_log.info(
                 "evt=tts_start sid=%s utt_id=%s voice_id=%s text_chars=%d",
@@ -278,6 +281,10 @@ class TTSRuntime:
                     total_bytes,
                     duration_ms,
                 )
+            if start_emitted:
+                note_end = getattr(self._bus, "note_tts_end", None)
+                if callable(note_end):
+                    note_end(sid, state.utt_id)
 
     def _on_task_done(self, sid: str, state: _SynthesisState, task: asyncio.Task[Any]) -> None:
         current = self._states.get(sid)

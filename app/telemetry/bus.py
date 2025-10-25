@@ -1,6 +1,7 @@
 """In-process telemetry bus with publish/subscribe support."""
 from __future__ import annotations
 
+import logging
 import re
 import time
 import uuid
@@ -9,10 +10,16 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 Subscription = Tuple[str, Callable[[dict], None]]
 
+_bus_log = logging.getLogger("app.telemetry.bus")
+
 # Internal registries keyed by subscription token.
 _subscriptions: Dict[str, Subscription] = {}
 # Index mapping event type to tokens for quick lookup.
 _event_index: Dict[str, set[str]] = {}
+
+# Track per-session TTS metadata for sanitised audio telemetry.
+_tts_current_utt: Dict[str, str] = {}
+_tts_audio_totals: Dict[str, int] = {}
 
 
 def _now_ms() -> int:
@@ -136,6 +143,81 @@ def redact_payload(payload: Any) -> Any:
     return _redact_meta(payload)
 
 
+def _clone_payload(payload: Any) -> Any:
+    """Return a deep copy suitable for dispatch to subscribers."""
+
+    if isinstance(payload, dict):
+        return {key: _clone_payload(value) for key, value in payload.items()}
+    if isinstance(payload, list):
+        return [_clone_payload(item) for item in payload]
+    if isinstance(payload, tuple):
+        return tuple(_clone_payload(item) for item in payload)
+    return payload
+
+
+def _json_safe(obj: Any) -> Any:
+    """Return a JSON-safe representation of the provided object."""
+
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        return {"__type": "bytes", "len": len(obj)}
+    if isinstance(obj, dict):
+        return {key: _json_safe(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_json_safe(item) for item in obj]
+    return obj
+
+
+def _extract_audio_chunk_len(event: Dict[str, Any]) -> int | None:
+    """Best-effort extraction of the chunk length from an audio event."""
+
+    meta = event.get("meta")
+    if isinstance(meta, dict):
+        byte_count = meta.get("byte_count")
+        if isinstance(byte_count, (int, float)):
+            size = int(byte_count)
+            return max(0, size)
+
+    chunk = event.get("chunk")
+    if isinstance(chunk, (bytes, bytearray, memoryview)):
+        return len(chunk)
+    return None
+
+
+def _increment_audio_total(sid: str, byte_count: int) -> int:
+    """Update and return the running audio total for the session."""
+
+    if byte_count < 0:
+        byte_count = 0
+    total = _tts_audio_totals.get(sid, 0) + byte_count
+    _tts_audio_totals[sid] = total
+    return total
+
+
+def note_tts_start(sid: str, utt_id: str) -> None:
+    """Register the active TTS utterance for a session."""
+
+    if not isinstance(sid, str) or not sid:
+        return
+    if not isinstance(utt_id, str) or not utt_id:
+        return
+    _tts_current_utt[sid] = utt_id
+    _tts_audio_totals[sid] = 0
+
+
+def note_tts_end(sid: str, utt_id: str | None = None) -> None:
+    """Clear any tracked TTS metadata for the session."""
+
+    if not isinstance(sid, str) or not sid:
+        return
+    _tts_audio_totals.pop(sid, None)
+    if utt_id is None:
+        _tts_current_utt.pop(sid, None)
+        return
+    current = _tts_current_utt.get(sid)
+    if current == utt_id:
+        _tts_current_utt.pop(sid, None)
+
+
 def subscribe(event_type: str, handler: Callable[[dict], None]) -> str:
     """Register a handler for a specific event type or wildcard."""
     if not isinstance(event_type, str) or not event_type:
@@ -186,9 +268,46 @@ def publish(event: dict) -> None:
         original_meta = normalized["meta"]
         try:
             normalized["meta"] = _redact_meta(original_meta)
-        except Exception as exc:  # pylint: disable=broad-except
-            print(f"WARN telemetry redaction failed: {exc}")
+        except Exception:  # pylint: disable=broad-except
+            _bus_log.warning("evt=telemetry_redact_failed", exc_info=True)
             normalized["meta"] = original_meta
+
+    sid = normalized.get("sid")
+    sid_str = sid if isinstance(sid, str) else None
+
+    if event_type == "EVT_TTS_START" and sid_str:
+        utt_meta = normalized.get("meta") or {}
+        if isinstance(utt_meta, dict):
+            tts_meta = utt_meta.get("tts")
+            if isinstance(tts_meta, dict):
+                utt_id = tts_meta.get("utt_id")
+                if isinstance(utt_id, str) and utt_id:
+                    note_tts_start(sid_str, utt_id)
+
+    safe_event = _json_safe(normalized)
+    if isinstance(safe_event, dict):
+        if event_type == "EVT_WS_AUDIO_SEND":
+            chunk_len = _extract_audio_chunk_len(normalized)
+            total_bytes = None
+            if sid_str and chunk_len is not None:
+                total_bytes = _increment_audio_total(sid_str, chunk_len)
+                utt_id = _tts_current_utt.get(sid_str)
+                if utt_id:
+                    safe_event.setdefault("utt_id", utt_id)
+            safe_event.pop("chunk", None)
+            if chunk_len is not None:
+                safe_event["bytes"] = chunk_len
+            if total_bytes is not None:
+                safe_event["total_bytes"] = total_bytes
+        elif event_type == "EVT_TTS_END" and sid_str:
+            total = _tts_audio_totals.get(sid_str)
+            if total is None and sid_str in _tts_current_utt:
+                total = 0
+            if total is not None:
+                safe_event["total_bytes"] = total
+            utt_id = _tts_current_utt.get(sid_str)
+            if utt_id:
+                safe_event.setdefault("utt_id", utt_id)
 
     tokens = set()
     tokens.update(_event_index.get(event_type, set()))
@@ -200,12 +319,27 @@ def publish(event: dict) -> None:
             continue
         _, handler = subscription
         try:
-            handler(dict(normalized))
-        except Exception as exc:  # pylint: disable=broad-except
-            print(f"Telemetry handler error for token {token}: {exc}")
+            if getattr(handler, "_telemetry_accepts_binary", False):
+                payload = _clone_payload(normalized)
+            else:
+                payload = _clone_payload(safe_event)
+            handler(payload)
+        except Exception:  # pylint: disable=broad-except
+            handler_name = getattr(handler, "__qualname__", repr(handler))
+            _bus_log.error(
+                "evt=telemetry_sink_failed token=%s handler=%s",
+                token,
+                handler_name,
+                exc_info=True,
+            )
+
+    if event_type == "EVT_TTS_END" and sid_str:
+        note_tts_end(sid_str, _tts_current_utt.get(sid_str))
 
 
 def reset() -> None:
     """Clear all subscriptions (primarily for testing)."""
     _subscriptions.clear()
     _event_index.clear()
+    _tts_current_utt.clear()
+    _tts_audio_totals.clear()
