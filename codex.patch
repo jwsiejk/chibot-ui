@@ -1,1440 +1,609 @@
-diff --git a/app/static/js/state.js b/app/static/js/state.js
-index e960552f3d5241599ebb87cb1973f39e80420d2f..f4b9590f73d24bc1222a53097c6545441825b8ea 100644
---- a/app/static/js/state.js
-+++ b/app/static/js/state.js
-@@ -9,69 +9,71 @@
-     heartbeatTimerId: null,
-     websocket: null,
-     infoFrame: null
-   };
+diff --git a/app/config.py b/app/config.py
+index cc801356a85503fd77e929ed2e4c0f47522d17aa..95b63122207f7e9961449969c7cc77756fe9bd88 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -1,16 +1,19 @@
+ """Application configuration helpers."""
  
-   let state = { ...initialState };
-   const listeners = new Set();
++import os
++
+ try:
+     from dotenv import load_dotenv  # type: ignore
+ except ImportError:  # pragma: no cover - optional dependency
+     load_dotenv = None
+ else:  # pragma: no branch
+     load_dotenv(dotenv_path=".env", override=False)
  
-   function snapshot() {
-     return { ...state };
-   }
++DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
++ASR_IDLE_CLOSE_MS = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
++
  
-   function notify() {
-     const current = snapshot();
-     listeners.forEach((listener) => {
-       try {
-         listener(current);
-       } catch (err) {
-         console.error("AppState subscriber error", err);
-       }
-     });
-   }
+ def get_env(name: str, default=None):
+     """Retrieve an environment variable with an optional default."""
+-    import os
+-
+     value = os.getenv(name)
+     return value if value is not None else default
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index e0ff583ae39a2b9b47127dde297e37ae70ecd9cb..f132294053d875dafc5552f78950192dc71f854e 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -1,124 +1,217 @@
+-"""Minimal Deepgram streaming client with provider keepalive support.
+-
+-This module was introduced in Build 04-G and is shared by higher-level
+-adapters (for example :mod:`app.voice_v2.asr`) so that keepalive behaviour
+-is implemented exactly once.
+-"""
++"""Deepgram realtime streaming client."""
+ from __future__ import annotations
  
-   function setState(patch) {
-     if (!patch || typeof patch !== "object") return;
--    state = { ...state, ...patch };
-+    const sanitized = { ...patch };
-+    if ("resume" in sanitized) {
-+      delete sanitized.resume;
-+    }
-+    if ("resumeError" in sanitized) {
-+      delete sanitized.resumeError;
-+    }
-+    state = { ...state, ...sanitized, resume: null, resumeError: null };
-     notify();
-   }
- 
--  function setResume(token, ttlMs) {
--    const resumeToken = typeof token === "string" && token.trim() ? token.trim() : null;
--    const ttl = Number(ttlMs);
--    if (!resumeToken || !Number.isFinite(ttl) || ttl <= 0) {
--      clearResume();
--      return null;
--    }
--    const expiresAt = Date.now() + ttl;
--    const resume = { token: resumeToken, ttlMs: ttl, expiresAt };
--    setState({ resume, resumeError: null });
--    return resume;
-+  function setResume() {
-+    clearResume();
-+    return null;
-   }
- 
-   function clearResume() {
--    setState({ resume: null, resumeError: null });
-+    if (state.resume !== null || state.resumeError !== null) {
-+      state = { ...state, resume: null, resumeError: null };
-+      notify();
-+    }
-   }
- 
-   function reset() {
-     state = { ...initialState };
-     notify();
-   }
- 
-   function subscribe(listener) {
-     if (typeof listener !== "function") {
-       throw new TypeError("listener must be a function");
-     }
-     listeners.add(listener);
-     listener(snapshot());
-     return () => {
-       listeners.delete(listener);
-     };
-   }
- 
-   window.AppState = {
-     getState: snapshot,
-     setState,
-     reset,
-     subscribe,
-     setResume,
-     clearResume,
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index b500aadae2b6a3b42adace4ab16289d49697868b..70f3b1ef2d83bf92a8a13e86ebc59dd3b7e2483e 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -19,50 +19,51 @@ from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ACWR_RECOMPUTE,
-     EVT_CHAT_USER,
-     EVT_ASR_FINAL,
-     EVT_NLG,
-     EVT_NLU,
-     EVT_DIALOG_PLAN,
-     EVT_POLICY_APPLIED,
-     EVT_TTS_END,
-     EVT_TTS_START,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- from app.voice_v2.nlu import NLUAdapter
- from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
- from app.voice_v2.llm import LLMAdapter
- from app.voice_v2.gate import GateController
- from app.voice_v2.conversation_buffer import ConversationBuffer
- from app.voice_v2.vad import VADAggregator
- from app.voice_v2.planner import _MODE_CHIPS, plan_turn
- from app.voice_v2.persona import default_chips_for_mode, load_persona
-+from app.voice_v2.streaming import StreamingController
- 
+ import asyncio
+-import contextlib
+ import json
+ import logging
+ import os
+-from typing import Any, Callable
++from collections import deque
++from dataclasses import dataclass, field
++from typing import Callable, Deque, Dict
++
++import websockets
++from websockets.legacy.client import WebSocketClientProtocol
  
  _logger = logging.getLogger(__name__)
  
++_DEFAULT_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
++_DEFAULT_BUFFER_BYTES = 4 * 1024 * 1024
  
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
- def _slugify_action_label(label: str) -> str:
-     """Normalize a suggestion label into a stable slug identifier."""
- 
-     normalized = re.sub(r"[^a-z0-9]+", "-", label.strip().lower())
-     slug = normalized.strip("-")
-     return slug or "action"
- 
- 
- READY = "Ready"
- LISTENING = "Listening"
- THINKING = "Thinking"
- RESPONDING = "Responding"
- CONFIRMING_BARGE = "ConfirmingBarge"
- 
- _PCM_CODEC = "pcm_s16le"
-@@ -140,118 +141,117 @@ class _NullExporter:
-         return
- 
- 
- class EngineV2:
-     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
- 
-     def __init__(
-         self,
-         exporter: FileExporter | None = None,
-         *,
-         telemetry_bus=bus,
-         fake_exporter: FileExporter | None = None,
-     ) -> None:
-         if exporter is None:
-             exporter = fake_exporter
-         if exporter is None:
-             exporter = _NullExporter()
-         self._exporter = exporter
-         self._bus = telemetry_bus
-         self._policy_snapshot: Dict[str, Any] | None = None
-         self._last_sid: Optional[str] = None
-         self._gate = GateController(publish=self._publish_gate_event)
-         self._sessions: Dict[str, _TurnSession] = {}
-         self._barge_handles: Dict[str, object] = {}
-         self._aggregators: Dict[str, VADAggregator] = {}
-+        self._streaming = StreamingController()
-         self._conversation_buffer = ConversationBuffer()
-         self._nlu = NLUAdapter()
-         self._policy_decider = PolicyDecider()
-         self._llm = LLMAdapter(telemetry_bus=self._bus, auto_publish=False)
-         subscribe = getattr(self._bus, "subscribe", None)
-         if callable(subscribe):
-             self._chat_subscription = subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
-             self._ws_send_subscription = subscribe(
-                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
-             )
-         else:
-             self._chat_subscription = None
-             self._ws_send_subscription = bus.subscribe(
-                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
-             )
- 
-     @property
-     def policy_snapshot(self) -> Dict[str, Any] | None:
-         return self._policy_snapshot
- 
-     @policy_snapshot.setter
-     def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
-         self._policy_snapshot = dict(snapshot) if snapshot is not None else None
- 
-     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
-         """Capture a successful WebSocket upgrade."""
-         meta = {"headers": dict(headers), "dir": "in"}
-         event = self._envelope(sid, EVT_WS_OPEN, {"meta": meta})
-         self._publish(event)
- 
-         self._last_sid = sid
-         self._policy_snapshot = None
-+        self._streaming.reset_session(sid)
-         self._ensure_session(sid)
-         self.reapply_policy()
-         self._emit_info_frame(sid)
--        self._publish_chat_history(sid)
-         self._set_state(sid, READY, reason="ws_open")
- 
-     async def start_greet(self, sid: str) -> None:
-         """Begin the greeting flow asynchronously."""
-         await asyncio.sleep(0)
-         self._maybe_emit_greeting(sid)
-         self._maybe_emit_connect_suggestions(sid)
- 
-     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
-         """Capture a validated JSON frame from the adapter."""
-         turn_id: Optional[Any] = None
-         meta: Dict[str, Any] = {"dir": "in"}
-         frame_type: Optional[str] = None
-         if isinstance(frame, Mapping):
-             frame_type = frame.get("type")
-             if isinstance(frame_type, str):
-                 meta["frame_type"] = frame_type
-             turn_id = frame.get("turn_id")
-         else:
-             frame = {}
-         try:
-             serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         except (TypeError, ValueError):
-             serialized = "{}"
-         meta["byte_count"] = len(serialized.encode("utf-8"))
-         payload: Dict[str, Any] = {"meta": meta}
-         if turn_id is not None:
-             payload["turn_id"] = turn_id
-         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
-         self._publish(event)
--        if frame_type == "client.resume":
--            self._publish_chat_history(sid)
- 
-     def _handle_chat_user_event(self, event: Dict[str, Any]) -> None:
-         if event.get("type") != EVT_CHAT_USER:
-             return
-         sid = event.get("sid")
-         if not isinstance(sid, str) or not sid:
-             return
-         text = event.get("text")
-         if not isinstance(text, str):
-             return
-         client_msg_id = event.get("client_msg_id")
-         if client_msg_id is not None and not isinstance(client_msg_id, str):
-             client_msg_id = None
- 
-         session = self._ensure_session(sid)
-         previous_state = session.state
-         policy = self.policy_snapshot or {}
-         barge_enabled = bool(policy.get("barge_in_enabled"))
- 
-         if previous_state == RESPONDING:
-             granted = barge_enabled
-             reason = None if granted else "policy_disabled"
-             self._publish_barge(sid, "text", granted, reason)
-             if granted:
-                 self.cancel_current_tts(sid, reason="canceled")
-@@ -268,91 +268,102 @@ class EngineV2:
-         req_id = session.req_id or f"req-{uuid.uuid4().hex}"
-         session.turn_id = turn_id
-         session.req_id = req_id
- 
-         self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
-         self._set_state(sid, THINKING, reason="text_input")
- 
-     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
-         """Capture an incoming audio chunk."""
-         session = self._ensure_session(sid)
-         if session.state != LISTENING:
-             self._set_state(sid, LISTENING, reason="audio_rx")
-         byte_count = len(chunk)
-         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
-         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
-         self._publish(event)
- 
-     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
-         """Capture the WebSocket closing handshake."""
-         meta = {"code": code, "reason": reason}
-         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
-         self._publish(event)
-         if self._last_sid == sid:
-             self._last_sid = None
-             self._policy_snapshot = None
--        self._sessions.pop(sid, None)
-+        self.cancel_current_tts(sid, reason="ended")
-+        self._streaming.close_session(sid)
-+        self._gate.clear_all(sid=sid)
-+        self._cancel_barge_confirmation(sid)
-         self._aggregators.pop(sid, None)
-+        self._sessions.pop(sid, None)
-+        buffers = getattr(self._conversation_buffer, "_buffers", None)
-+        if isinstance(buffers, dict):
-+            buffers.pop(sid, None)
- 
-     def on_tts_start(
-         self, sid: str, utt_id: str, post_hold_ms: int | None = None
-     ) -> None:
-         """Engage the TTS mask and emit a telemetry breadcrumb."""
- 
-         session = self._ensure_session(sid)
-         session.tts_utt_id = utt_id
-         if session.turn_started_ms is not None and session.perf_tts_start_ms is None:
-             elapsed = _now_ms() - session.turn_started_ms
-             if elapsed < 0:
-                 elapsed = 0
-             session.perf_tts_start_ms = elapsed
- 
-         hold_ms = post_hold_ms or 0
-         voice_id, locale = self._voice_profile()
-         tts_meta = {
-             "tts": {"utt_id": utt_id, "post_hold_ms": hold_ms},
-             "voice_id": voice_id,
-             "locale": locale,
-         }
-         self._gate.set_reason(
-             "tts_active",
-             True,
-             sid=sid,
-             meta=tts_meta,
-         )
- 
-         self._publish_tts_mask(sid, "engaged")
- 
-         payload = {"meta": tts_meta}
-         event = self._envelope(sid, EVT_TTS_START, payload)
-         self._publish(event)
-         self._set_state(sid, RESPONDING, reason="tts_start")
- 
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_tts_start()
- 
-+        self._streaming.set_output_finalizer(
-+            sid, lambda _sid=sid: self.cancel_current_tts(_sid, reason="ended")
-+        )
-+
-     def on_tts_end(
-         self, sid: str, utt_id: str, post_hold_ms: int | None = None
-     ) -> None:
-         """Release the TTS mask and optionally engage a post-hold."""
- 
-         hold_ms = post_hold_ms or 0
-         self._teardown_tts(sid, utt_id, post_hold_ms=hold_ms, transition_to_ready=True)
- 
-     def emit_tts_audio_chunk(self, sid: str, chunk: bytes | bytearray | memoryview) -> None:
-         """Emit a PCM chunk for server-to-client playback."""
- 
-         if not isinstance(sid, str) or not sid:
-             raise ValueError("sid must be a non-empty string")
- 
-         self._ensure_session(sid)
- 
-         if isinstance(chunk, (bytes, bytearray, memoryview)):
-             pcm_chunk = bytes(chunk)
-         else:  # pragma: no cover - defensive guard
-             raise TypeError("chunk must be bytes-like")
- 
-         if not pcm_chunk:
-             return
- 
-         byte_count = len(pcm_chunk)
-@@ -543,65 +554,50 @@ class EngineV2:
-         voice_id, locale = self._voice_profile()
-         audio_descriptor = dict(_PCM_DESCRIPTOR)
-         frame = {
-             "type": "info",
-             "audio": audio_descriptor,
-             "slo": json.loads(json.dumps(_INFO_SLO)),
-             "voice_id": voice_id,
-             "locale": locale,
-             "meta": {
-                 "sid": sid,
-                 "audio": audio_descriptor,
-             },
-         }
-         serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         meta = {
-             "ws": {
-                 "dir": "out",
-                 "size": len(serialized.encode("utf-8")),
-                 "preview": serialized,
-             }
-         }
-         payload = {"meta": meta, "frame": frame}
-         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-         self._publish(event)
- 
--    def _publish_chat_history(self, sid: str) -> None:
--        messages = self._conversation_buffer.messages(sid)
--        frame = {"type": "chat.history", "messages": messages, "next_cursor": None}
--        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
--        meta = {
--            "ws": {
--                "dir": "out",
--                "size": len(serialized.encode("utf-8")),
--                "preview": serialized,
--            }
--        }
--        payload = {"meta": meta, "frame": frame}
--        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
--        self._publish(event)
+-class DeepgramClient:
+-    """Client wrapper responsible for maintaining the Deepgram websocket."""
 -
-     def _publish_gate_event(self, event: Dict[str, Any]) -> None:
-         """Publish gate controller events through the standard telemetry path."""
+-    def __init__(self) -> None:
+-        self._ws: Any | None = None
+-        self._send_lock = asyncio.Lock()
+-        self._keepalive_interval = max(
+-            0.0, float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
+-        )
+-        self._keepalive_task: asyncio.Task[None] | None = None
  
-         envelope = dict(event)
-         sid = envelope.get("sid") or self._last_sid
-         if not isinstance(sid, str) or not sid:
+-    async def connect(self, websocket: Any) -> None:
+-        """Attach to an already negotiated websocket transport."""
++@dataclass
++class _StreamState:
++    sid: str
++    websocket: WebSocketClientProtocol
++    on_partial: Callable[[str], None]
++    on_final: Callable[[str], None]
++    on_error: Callable[[str], None]
++    loop: asyncio.AbstractEventLoop
++    chunks: Deque[bytes] = field(default_factory=deque)
++    buffered_bytes: int = 0
++    drop_logged: bool = False
++    closing: bool = False
++    sender_task: asyncio.Task[None] | None = None
++    receiver_task: asyncio.Task[None] | None = None
++    data_event: asyncio.Event = field(default_factory=asyncio.Event)
+ 
+-        if websocket is None:
+-            raise ValueError("websocket must not be None")
+ 
+-        await self._stop_keepalive()
+-        self._ws = websocket
+-
+-        if self._keepalive_interval > 0:
+-            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
++class DeepgramClient:
++    """Client wrapper responsible for maintaining Deepgram realtime streams."""
++
++    def __init__(
++        self,
++        *,
++        api_key: str | None = None,
++        url: str | None = None,
++        max_buffer_bytes: int | None = None,
++    ) -> None:
++        self._api_key = (api_key or os.getenv("DEEPGRAM_API_KEY")) or ""
++        self._url = url or os.getenv("DEEPGRAM_LISTEN_URL", _DEFAULT_LISTEN_URL)
++        self._max_buffer_bytes = max_buffer_bytes or _DEFAULT_BUFFER_BYTES
++        if self._max_buffer_bytes <= 0:
++            self._max_buffer_bytes = _DEFAULT_BUFFER_BYTES
++        self._streams: Dict[str, _StreamState] = {}
++        self.idle_close_ms = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
++
++    # ------------------------------------------------------------------
++    # Public API
++    # ------------------------------------------------------------------
++    async def open_stream(
++        self,
++        sid: str,
++        content_type: str,
++        on_partial: Callable[[str], None],
++        on_final: Callable[[str], None],
++        on_error: Callable[[str], None],
++    ) -> None:
++        if not isinstance(sid, str) or not sid:
++            raise ValueError("sid must be a non-empty string")
++        if sid in self._streams:
++            return
++        loop = asyncio.get_running_loop()
++        headers = {"Authorization": f"Token {self._api_key}"}
++        try:
++            websocket = await websockets.connect(
++                self._url,
++                extra_headers=headers,
++                max_size=None,
++                ping_interval=None,
++            )
++        except Exception as exc:
++            _logger.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
++            raise
+ 
+-    async def close(self) -> None:
+-        """Terminate the websocket connection and stop background tasks."""
++        start_payload = {
++            "type": "StartRequest",
++            "metadata": {"content_type": content_type},
++        }
++        await websocket.send(json.dumps(start_payload, separators=(",", ":")))
++
++        state = _StreamState(
++            sid=sid,
++            websocket=websocket,
++            on_partial=on_partial,
++            on_final=on_final,
++            on_error=on_error,
++            loop=loop,
++        )
++        state.sender_task = loop.create_task(self._sender_loop(state), name=f"dg-send-{sid}")
++        state.receiver_task = loop.create_task(
++            self._receiver_loop(state), name=f"dg-recv-{sid}"
++        )
++        self._streams[sid] = state
+ 
+-        await self._stop_keepalive()
+-        ws = self._ws
+-        self._ws = None
+-        if ws is None:
++    def send_audio(self, sid: str, chunk: bytes) -> None:
++        state = self._streams.get(sid)
++        if state is None or state.closing:
              return
-         envelope.setdefault("sid", sid)
-         envelope.setdefault("who", "server")
-         envelope.setdefault("source", "voice_engine")
-         self._publish(envelope)
- 
-     def _maybe_emit_greeting(self, sid: str) -> None:
-         session = self._ensure_session(sid)
-         if session.greet_emitted:
+-        close: Callable[[], Any] | None = getattr(ws, "close", None)
+-        if close is None:
++        if not isinstance(chunk, (bytes, bytearray, memoryview)):
++            raise TypeError("chunk must be bytes-like")
++        data = bytes(chunk)
++        if not data:
              return
+-        result = close()
+-        if asyncio.iscoroutine(result) or asyncio.isfuture(result):
+-            await result
+-
+-    async def send_json(self, payload: dict[str, Any]) -> None:
+-        """Send a JSON payload to the provider using the serialized transport."""
+-
+-        if not isinstance(payload, dict):
+-            raise TypeError("payload must be a dict")
+-        message = json.dumps(payload, separators=(",", ":"))
+-        await self._send_text(message)
+-
+-    async def _send_text(self, message: str) -> None:
+-        ws = self._ws
+-        if ws is None:
+-            raise RuntimeError("Deepgram websocket not connected")
+-
+-        sender = getattr(ws, "send", None)
+-        if sender is None:
+-            sender = getattr(ws, "send_str", None)
+-        if sender is None or not callable(sender):
+-            raise AttributeError("websocket transport missing send method")
+-
+-        async with self._send_lock:
+-            result = sender(message)
+-            if asyncio.iscoroutine(result) or asyncio.isfuture(result):
+-                await result
+-
+-    async def _keepalive_loop(self) -> None:
+-        """Send periodic provider keepalive frames until cancelled."""
  
-         snapshot = self.policy_snapshot or {}
-         greet_block = snapshot.get("greet")
-         if isinstance(greet_block, Mapping):
-             enabled = bool(greet_block.get("enabled", True))
-             mode = greet_block.get("mode")
-             post_hold = greet_block.get("post_hold_ms")
-         else:
-             enabled = True
-@@ -1072,50 +1068,51 @@ class EngineV2:
++        state.chunks.append(data)
++        state.buffered_bytes += len(data)
++        if state.buffered_bytes > self._max_buffer_bytes:
++            dropped = 0
++            while state.chunks and state.buffered_bytes > self._max_buffer_bytes:
++                removed = state.chunks.popleft()
++                dropped += len(removed)
++                state.buffered_bytes -= len(removed)
++            if dropped and not state.drop_logged:
++                state.drop_logged = True
++                _logger.warning(
++                    "evt=deepgram_backpressure sid=%s dropped_bytes=%d", sid, dropped
++                )
++        state.data_event.set()
++
++    def close_stream(self, sid: str) -> None:
++        state = self._streams.pop(sid, None)
++        if state is None:
++            return
++        state.closing = True
++        state.data_event.set()
++        if state.receiver_task is not None:
++            state.receiver_task.cancel()
++        if state.sender_task is not None:
++            state.sender_task.cancel()
++        state.loop.create_task(self._shutdown(state))
++
++    # ------------------------------------------------------------------
++    # Internal helpers
++    # ------------------------------------------------------------------
++    async def _sender_loop(self, state: _StreamState) -> None:
+         try:
+-            if not self._socket_is_open():
+-                return
+-            await self._send_keepalive()
+             while True:
+-                await asyncio.sleep(self._keepalive_interval)
+-                if not self._socket_is_open():
++                await state.data_event.wait()
++                state.data_event.clear()
++                while state.chunks:
++                    chunk = state.chunks.popleft()
++                    state.buffered_bytes -= len(chunk)
++                    await state.websocket.send(chunk)
++                if state.closing:
+                     break
+-                await self._send_keepalive()
+         except asyncio.CancelledError:
+             raise
+-        except Exception:  # pragma: no cover - defensive
+-            _logger.exception("Deepgram keepalive loop failed")
++        except Exception as exc:  # pragma: no cover - defensive
++            _logger.exception("evt=deepgram_send_failed sid=%s err=%s", state.sid, exc)
++            state.on_error(state.sid, str(exc))
++
++    async def _receiver_loop(self, state: _StreamState) -> None:
++        websocket = state.websocket
++        try:
++            async for message in websocket:
++                if isinstance(message, bytes):
++                    continue
++                try:
++                    payload = json.loads(message)
++                except json.JSONDecodeError:
++                    continue
++                self._handle_message(state, payload)
++        except asyncio.CancelledError:
++            raise
++        except Exception as exc:  # pragma: no cover - defensive
++            _logger.exception("evt=deepgram_recv_failed sid=%s err=%s", state.sid, exc)
++            state.on_error(state.sid, str(exc))
+         finally:
+-            self._keepalive_task = None
+-
+-    async def _send_keepalive(self) -> None:
+-        await self._send_text(json.dumps({"type": "KeepAlive"}, separators=(",", ":")))
+-
+-    def _socket_is_open(self) -> bool:
+-        ws = self._ws
+-        if ws is None:
+-            return False
+-        if getattr(ws, "closed", False):
+-            return False
+-        close_code = getattr(ws, "close_code", None)
+-        if close_code not in (None, 0):
+-            return False
+-        return True
+-
+-    async def _stop_keepalive(self) -> None:
+-        task = self._keepalive_task
+-        self._keepalive_task = None
+-        if task is None:
++            await self._finalize_stream(state)
++
++    async def _shutdown(self, state: _StreamState) -> None:
++        try:
++            await state.websocket.close()
++        except Exception:  # pragma: no cover - defensive
++            _logger.debug("evt=deepgram_ws_close_error sid=%s", state.sid, exc_info=True)
++        await self._finalize_stream(state)
++
++    async def _finalize_stream(self, state: _StreamState) -> None:
++        try:
++            await state.websocket.wait_closed()
++        except Exception:  # pragma: no cover - defensive
++            pass
++
++    def _handle_message(self, state: _StreamState, payload: dict) -> None:
++        message_type = payload.get("type")
++        if message_type == "Results":
++            channel = payload.get("channel") or {}
++            alternatives = channel.get("alternatives") or []
++            if not alternatives:
++                return
++            transcript = alternatives[0].get("transcript", "").strip()
++            if not transcript:
++                return
++            is_final = bool(channel.get("is_final") or payload.get("speech_final"))
++            if is_final:
++                state.on_final(state.sid, transcript)
++            else:
++                state.on_partial(state.sid, transcript)
++            return
++        if message_type == "error" or message_type == "Error":
++            error = payload.get("error") or payload.get("message") or str(payload)
++            state.on_error(state.sid, error)
+             return
+-        task.cancel()
+-        with contextlib.suppress(asyncio.CancelledError):
+-            await task
++        if "error" in payload:
++            state.on_error(state.sid, str(payload.get("error")))
  
-         top_level_locale = snapshot.get("locale")
-         if isinstance(top_level_locale, str) and top_level_locale:
-             locale = locale or top_level_locale
  
-         if not voice_id:
-             voice_id = _DEFAULT_VOICE_ID
-         if not locale:
-             locale = _DEFAULT_LOCALE
- 
-         return voice_id, locale
- 
-     def _publish_tts_mask(self, sid: str, phase: str) -> None:
-         mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})
-         self._publish(mask_event)
- 
-     def _teardown_tts(
-         self,
-         sid: str,
-         utt_id: str,
-         *,
-         reason: str | None = None,
-         post_hold_ms: int = 0,
-         transition_to_ready: bool,
-     ) -> None:
-+        self._streaming.set_output_finalizer(sid, None)
-         session = self._ensure_session(sid)
-         if session.tts_utt_id == utt_id:
-             session.tts_utt_id = None
- 
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_tts_end()
- 
-         payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
-         if reason:
-             payload["reason"] = reason
- 
-         event = self._envelope(sid, EVT_TTS_END, payload)
-         self._publish(event)
- 
-         self._publish_tts_mask(sid, "cleared")
-         self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
- 
-         if transition_to_ready:
-             if post_hold_ms > 0:
-                 self._gate.set_reason(
-                     "system_hold",
-                     True,
-                     sid=sid,
-                     meta={"tts": {"utt_id": utt_id, "post_hold_ms": post_hold_ms}},
-diff --git a/app/voice_v2/streaming.py b/app/voice_v2/streaming.py
+ __all__ = ["DeepgramClient"]
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..70569bae16cba5b20a92a49fad16a338bd651bcd
+index 0000000000000000000000000000000000000000..ff340ba12362b21fa2a740b3dc27846758e1db79
 --- /dev/null
-+++ b/app/voice_v2/streaming.py
-@@ -0,0 +1,120 @@
-+"""Utilities for managing session-scoped streaming resources."""
++++ b/app/voice_v2/asr_runtime.py
+@@ -0,0 +1,259 @@
++"""Deepgram-backed ASR runtime for the voice v2 engine."""
 +from __future__ import annotations
 +
 +import asyncio
 +import logging
-+from collections.abc import Awaitable, Callable
-+from typing import Dict, Optional
++import time
++import uuid
++from collections import deque
++from dataclasses import dataclass, field
++from typing import Callable, Deque, Dict, Optional
++
++from app.telemetry import bus
++from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
++from app.voice_v2.engine import EngineV2
++from app.services.streaming_asr.deepgram_client import DeepgramClient
 +
 +_logger = logging.getLogger(__name__)
 +
-+Cleanup = Callable[[], Optional[Awaitable[None]]]
++_CONTENT_TYPE = "audio/webm;codecs=opus"
++_PARTIAL_CONFIDENCE = 0.55
++_FINAL_CONFIDENCE = 0.9
++_DEFAULT_IDLE_CLOSE_MS = 4000
 +
 +
-+class _SessionStreams:
-+    """Track cleanup callbacks for a single session."""
++@dataclass
++class _SessionState:
++    """Track per-session streaming state."""
 +
-+    def __init__(self) -> None:
-+        self._input_finalizers: list[Cleanup] = []
-+        self._output_finalizer: Cleanup | None = None
++    sid: str
++    pending: Deque[bytes] = field(default_factory=deque)
++    req_id: Optional[str] = None
++    stream_open_task: Optional[asyncio.Task[None]] = None
++    stream_open: bool = False
++    last_audio_ts: float = 0.0
++    drop_logged: bool = False
 +
-+    def add_input_finalizer(self, closer: Cleanup) -> None:
-+        if closer is not None:
-+            self._input_finalizers.append(closer)
 +
-+    def set_output_finalizer(self, closer: Cleanup | None) -> None:
-+        self._output_finalizer = closer
++class ASRRuntime:
++    """Bridge websocket audio to Deepgram realtime transcription."""
 +
-+    def is_empty(self) -> bool:
-+        return not self._input_finalizers and self._output_finalizer is None
++    def __init__(self, engine: EngineV2, client: DeepgramClient) -> None:
++        if engine is None:
++            raise ValueError("engine must be provided")
++        if client is None:
++            raise ValueError("client must be provided")
 +
-+    async def aclose(self) -> None:
-+        await self._run_closer(self._output_finalizer)
-+        self._output_finalizer = None
-+        while self._input_finalizers:
-+            closer = self._input_finalizers.pop()
-+            await self._run_closer(closer)
++        self._engine = engine
++        self._client = client
++        self._sessions: Dict[str, _SessionState] = {}
++        self._loop: asyncio.AbstractEventLoop | None = None
++        self._idle_close_ms = getattr(client, "idle_close_ms", _DEFAULT_IDLE_CLOSE_MS)
++        if not isinstance(self._idle_close_ms, (int, float)) or self._idle_close_ms < 0:
++            self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
 +
-+    @staticmethod
-+    async def _run_closer(closer: Cleanup | None) -> None:
-+        if closer is None:
++    # ------------------------------------------------------------------
++    # Websocket hooks
++    # ------------------------------------------------------------------
++    def on_ws_open(self, sid: str) -> None:
++        self._ensure_loop()
++        self._sessions[sid] = _SessionState(sid=sid)
++
++    def on_ws_audio(self, sid: str, chunk: bytes) -> None:
++        if not isinstance(chunk, (bytes, bytearray, memoryview)):
++            raise TypeError("chunk must be bytes-like")
++        data = bytes(chunk)
++        if not data:
 +            return
++
++        state = self._sessions.get(sid)
++        if state is None:
++            state = _SessionState(sid=sid)
++            self._sessions[sid] = state
++
++        state.last_audio_ts = time.monotonic()
++        if not state.stream_open:
++            state.pending.append(data)
++            self._ensure_stream(sid, state)
++            return
++
++        self._client.send_audio(sid, data)
++
++    def on_ws_close(self, sid: str) -> None:
++        state = self._sessions.pop(sid, None)
++        if state is None:
++            return
++        task = state.stream_open_task
++        if task is not None and not task.done():
++            task.cancel()
 +        try:
-+            result = closer()
-+        except Exception:  # pragma: no cover - defensive logging
-+            _logger.exception("Streaming finalizer raised during invocation")
-+            return
-+        if asyncio.iscoroutine(result) or isinstance(result, Awaitable):
-+            try:
-+                await result
-+            except Exception:  # pragma: no cover - defensive logging
-+                _logger.exception("Streaming finalizer coroutine failed")
++            self._client.close_stream(sid)
++        except Exception:  # pragma: no cover - defensive
++            _logger.exception("evt=asr_stream_close_failed sid=%s", sid)
 +
-+
-+class StreamingController:
-+    """Register and execute streaming cleanup hooks per session."""
-+
-+    def __init__(self) -> None:
-+        self._sessions: Dict[str, _SessionStreams] = {}
-+
-+    def register_input_finalizer(self, sid: str, closer: Cleanup) -> None:
-+        """Register a cleanup callback for inbound (ASR) streaming state."""
-+
-+        if not sid or closer is None:
-+            return
-+        session = self._sessions.setdefault(sid, _SessionStreams())
-+        session.add_input_finalizer(closer)
-+
-+    def set_output_finalizer(self, sid: str, closer: Cleanup | None) -> None:
-+        """Replace the cleanup callback for outbound (TTS) streaming state."""
-+
-+        if not sid:
-+            return
-+        if closer is None:
-+            session = self._sessions.get(sid)
-+            if session is None:
-+                return
-+            session.set_output_finalizer(None)
-+            if session.is_empty():
-+                self._sessions.pop(sid, None)
-+            return
-+
-+        session = self._sessions.setdefault(sid, _SessionStreams())
-+        session.set_output_finalizer(closer)
-+
-+    def close_session(self, sid: str) -> None:
-+        """Run any registered cleanup callbacks for the session."""
-+
-+        if not sid:
-+            return
-+        session = self._sessions.pop(sid, None)
-+        if session is None:
-+            return
-+        self._schedule(session.aclose())
-+
-+    def reset_session(self, sid: str) -> None:
-+        """Clear state for the session, running cleanups if present."""
-+
-+        self.close_session(sid)
-+
-+    def _schedule(self, coro: Awaitable[None]) -> None:
++    # ------------------------------------------------------------------
++    # Internal helpers
++    # ------------------------------------------------------------------
++    def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
++        loop = self._loop
++        if loop is not None:
++            return loop
 +        try:
 +            loop = asyncio.get_running_loop()
 +        except RuntimeError:
-+            asyncio.run(coro)
++            loop = None
++        self._loop = loop
++        return loop
++
++    def _ensure_stream(self, sid: str, state: _SessionState) -> None:
++        loop = self._ensure_loop()
++        if loop is None:
++            _logger.warning("evt=asr_no_loop sid=%s", sid)
++            return
++        if state.stream_open:
++            return
++        task = state.stream_open_task
++        if task is not None and not task.done():
 +            return
 +
-+        task = loop.create_task(coro)
-+        task.add_done_callback(self._log_task_error)
++        async def _open() -> None:
++            try:
++                await self._client.open_stream(
++                    sid,
++                    _CONTENT_TYPE,
++                    on_partial=self._make_partial_cb(sid),
++                    on_final=self._make_final_cb(sid),
++                    on_error=self._make_error_cb(sid),
++                )
++            except asyncio.CancelledError:
++                raise
++            except Exception:  # pragma: no cover - defensive
++                _logger.exception("evt=asr_stream_open_failed sid=%s", sid)
++                return
 +
-+    @staticmethod
-+    def _log_task_error(task: asyncio.Task[None]) -> None:
++            state.stream_open = True
++            while state.pending:
++                chunk = state.pending.popleft()
++                self._client.send_audio(sid, chunk)
++            state.stream_open_task = None
++
++        def _on_done(_task: asyncio.Task[None]) -> None:
++            if state.stream_open_task is _task:
++                state.stream_open_task = None
++
++        state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
++        state.stream_open_task.add_done_callback(_on_done)
++
++    def _make_partial_cb(self, sid: str) -> Callable[[str], None]:
++        def _callback(text: str) -> None:
++            self._on_partial(sid, text)
++
++        return _callback
++
++    def _make_final_cb(self, sid: str) -> Callable[[str], None]:
++        def _callback(text: str) -> None:
++            self._on_final(sid, text)
++
++        return _callback
++
++    def _make_error_cb(self, sid: str) -> Callable[[str], None]:
++        def _callback(error: str) -> None:
++            self._on_error(sid, error)
++
++        return _callback
++
++    def _on_partial(self, sid: str, text: str) -> None:
++        if not isinstance(text, str) or not text.strip():
++            return
++        state = self._sessions.get(sid)
++        if state is None:
++            state = _SessionState(sid=sid)
++            self._sessions[sid] = state
++
++        req_id = state.req_id
++        if req_id is None:
++            req_id = f"dg-{uuid.uuid4().hex}"
++            state.req_id = req_id
++        session = getattr(self._engine, "_ensure_session", None)
++        if callable(session):
++            engine_session = session(sid)
++            if getattr(engine_session, "req_id", None) != req_id:
++                engine_session.req_id = req_id
++
 +        try:
-+            task.result()
-+        except asyncio.CancelledError:  # pragma: no cover - expected when shutting down
-+            pass
-+        except Exception:  # pragma: no cover - defensive logging
-+            _logger.exception("Streaming cleanup task failed")
++            self._engine.on_asr_partial(sid, req_id, _PARTIAL_CONFIDENCE, text)
++        except Exception:  # pragma: no cover - defensive
++            _logger.exception("evt=asr_engine_partial_failed sid=%s", sid)
 +
++        event = {
++            "type": EVT_ASR_PARTIAL,
++            "sid": sid,
++            "req_id": req_id,
++            "text": text,
++            "confidence": _PARTIAL_CONFIDENCE,
++            "vendor": "deepgram",
++        }
++        bus.publish(event)
 +
-+__all__ = ["StreamingController"]
-diff --git a/app/voice_v2/tts.py b/app/voice_v2/tts.py
-index d6d0d0b6df9d08ecddddb1bbf1c934105efbae6f..76ecb604d7cf1cc8cda8d1100e880d6eedba9acb 100644
---- a/app/voice_v2/tts.py
-+++ b/app/voice_v2/tts.py
-@@ -22,50 +22,55 @@ class TTSAdapter:
- 
-     @property
-     def post_hold_ms(self) -> int:
-         """Return the configured post-hold duration."""
- 
-         return self._post_hold_ms
- 
-     def speak(self, req_id: str, text: str, **_: Any) -> Dict[str, Any]:
-         """Emit start/end telemetry and return a synthetic response envelope."""
- 
-         if not isinstance(req_id, str) or not req_id:
-             raise ValueError("req_id must be a non-empty string")
-         if not isinstance(text, str):
-             raise TypeError("text must be a string")
- 
-         utt_id = self._next_utt_id()
-         self._publish_start(req_id, utt_id, text)
-         self._publish_end(req_id, utt_id)
- 
-         return {
-             "utt_id": utt_id,
-             "text": text,
-             "post_hold_ms": self._post_hold_ms,
-         }
- 
-+    def stop(self) -> None:
-+        """Reset sequencing state so the next session starts fresh."""
++    def _on_final(self, sid: str, text: str) -> None:
++        if not isinstance(text, str) or not text.strip():
++            return
++        state = self._sessions.get(sid)
++        if state is None:
++            state = _SessionState(sid=sid)
++            self._sessions[sid] = state
 +
-+        self._utt_seq = 0
++        req_id = f"dg-{uuid.uuid4().hex}"
++        state.req_id = None
 +
-     # ------------------------------------------------------------------
-     # Internal helpers
-     # ------------------------------------------------------------------
-     def _next_utt_id(self) -> str:
-         self._utt_seq += 1
-         return f"utt-{self._utt_seq:05d}"
- 
-     def _publish_start(self, req_id: str, utt_id: str, text: str) -> None:
-         event = {
-             "type": EVT_TTS_START,
-             "req_id": req_id,
-             "utt_id": utt_id,
-             "text": text,
-             "post_hold_ms": self._post_hold_ms,
-             "source": "tts_adapter",
-         }
-         self._publish(event)
- 
-     def _publish_end(self, req_id: str, utt_id: str) -> None:
-         event = {
-             "type": EVT_TTS_END,
-             "req_id": req_id,
-             "utt_id": utt_id,
-             "source": "tts_adapter",
-         }
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 2ba8ca8fb9b299edb893aeaba4e0391a5c7171c5..15eb6e1a56a81168eb6b3cf65a8d6c795afba590 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1,38 +1,37 @@
- """chat.v2 WebSocket adapter for AskChip."""
- from __future__ import annotations
- 
- import asyncio
- import contextlib
- import inspect
- import logging
- import os
- import time
- import uuid
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
--from urllib.parse import parse_qs
- 
- import json
- 
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_frame
- 
- try:  # pragma: no cover - uvicorn is an optional dependency in tests
-     from uvicorn.protocols.utils import ClientDisconnected
- except Exception:  # pragma: no cover - fallback when uvicorn missing
-     class ClientDisconnected(Exception):  # type: ignore[no-redef]
-         """Fallback placeholder when uvicorn is unavailable."""
- 
- 
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
-@@ -50,54 +49,50 @@ QUEUE_OFF_THRESHOLD = 6
- _DEFAULT_WS_PING_INTERVAL_MS = 25_000
- 
- EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
- 
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
- 
- EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
- 
- _OUTBOUND_ALLOWED_TYPES = {
-     "policy.interaction",
-     "info",
-     "tts.start",
-     "tts.end",
-     "asr.ready",
-     "asr.partial",
-     "asr.final",
-     "error",
-     "chat.message",
-     "chat.history",
-     "dialog.plan",
- }
- 
- _OUTBOX_MAXSIZE = 256
- 
--_RESUME_TTL_MS = 10_000
--_RESUME_MARKER_TYPES = {"tts.start", "tts.end", "asr.final"}
--_RESUME_MARKER_LIMIT = 10
--
- _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
- 
- _logger = logging.getLogger(__name__)
- 
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
-     "chat.user",
- }
- 
- 
- class TokenBucket:
-     """Simple in-memory token bucket."""
- 
-     def __init__(self, capacity: int, refill_seconds: float) -> None:
-         self.capacity = capacity
-         self.tokens = float(capacity)
-         self.refill_seconds = refill_seconds
-         self.last_refill = time.monotonic()
- 
-     def consume(self, count: int, now: Optional[float] = None) -> bool:
-         if now is None:
-             now = time.monotonic()
-         elapsed = max(0.0, now - self.last_refill)
-@@ -197,186 +192,142 @@ class AdapterContext:
-     headers: Dict[str, str]
-     principal: Dict[str, Any] = field(default_factory=dict)
-     audio_seq: int = 0
-     audio_expected_seq: int = 0
-     audio_highest_seq: int = -1
-     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
-     audio_window: int = AUDIO_SEQ_WINDOW
-     last_pong_sent_ms: int = 0
-     ip: Optional[str] = None
-     sid_bucket: Optional[TokenBucket] = None
-     ip_bucket: Optional[TokenBucket] = None
-     audio_profile: Optional[Dict[str, Any]] = None
-     accepting_audio: bool = True
-     audio_violation_count: int = 0
-     outbound_queue_depth: int = 0
-     backpressure_state: Literal["off", "on"] = "off"
-     outbox: asyncio.Queue[Dict[str, Any]] | None = None
-     outbound_task: asyncio.Task[None] | None = None
-     subscription_token: Optional[str] = None
-     audio_subscription_token: Optional[str] = None
-     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
-     asr_ready: bool = False
-     asr_subscription_token: Optional[str] = None
-     server_keepalive_task: asyncio.Task[None] | None = None
-     last_policy_interaction: Optional[Dict[str, Any]] = None
--    resume_token: Optional[str] = None
--    resume_expiry_ms: int = 0
--    recent_markers: list[Dict[str, Any]] = field(default_factory=list)
-     partial_seq: int = 0
-     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
-     send_lock: asyncio.Lock | None = None
- 
- 
--@dataclass
--class _ResumeState:
--    sid: str
--    expiry_ms: int
--    markers: list[Dict[str, Any]]
--
--
- class ChatV2Adapter:
-     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
- 
-     def __init__(
-         self,
-         engine: EngineHooks | None = None,
-         exporter: FileExporter | None = None,
-         *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
-     ) -> None:
-         self.engine = engine
-         self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
-         self._ip_buckets: Dict[str, TokenBucket] = {}
-         self._contexts: Dict[str, AdapterContext] = {}
--        self._resume_tokens: Dict[str, _ResumeState] = {}
-         self._ping_interval_ms = max(
-             0,
-             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
-         )
- 
-     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-         if scope.get("type") != "websocket":
-             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
- 
-         connect_event = await receive()
-         if connect_event.get("type") != "websocket.connect":
-             return
- 
-         subprotocols = scope.get("subprotocols") or []
-         _logger.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
-         if CHAT_V2_SUBPROTOCOL not in subprotocols:
-             _logger.warning("evt=ws_reject_subprotocol reason=missing_or_mismatch need='chat.v2'")
-             await self._reject_subprotocol(send)
-             return
- 
--        self._purge_expired_resume_tokens()
--
--        resume_token_param, resume_error = self._extract_resume_token(scope)
--        resume_state: Optional[_ResumeState] = None
--        resume_replay: list[Dict[str, Any]] = []
--
-         sid = uuid.uuid4().hex
--        if resume_error is None and resume_token_param:
--            resume_state = self._consume_resume_token(resume_token_param)
--            if resume_state is None:
--                resume_error = "resume_invalid"
--            else:
--                sid = resume_state.sid
--                resume_replay = [self._clone_frame(marker) for marker in resume_state.markers]
- 
-         headers = self._decode_headers(scope.get("headers", ()))
-         principal: Dict[str, Any] = {"sub": "anon"}
- 
-         _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
-         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
- 
-         now_ms = int(time.time() * 1000)
-         info_frame: Dict[str, Any] = {
-             "type": "info",
-             "protocol": CHAT_V2_SUBPROTOCOL,
-             "sid": sid,
-             "ts_ms": now_ms,
-             "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
-         }
-         info_frame["meta"] = {"sid": sid}
-         policy_snapshot = self._policy_snapshot()
-         if policy_snapshot:
-             info_frame["policy"] = policy_snapshot
-         await self._send_json(send, sid, info_frame)
-         _logger.info("evt=ws_info_sent sid=%s", sid)
- 
--        if resume_error is not None:
--            await self._send_json(
--                send,
--                sid,
--                {
--                    "type": "error",
--                    "code": "resume_invalid",
--                    "detail": "Resume token expired or invalid",
--                    "retryable": False,
--                },
--            )
--            await send({"type": "websocket.close", "code": 1008, "reason": "resume_invalid"})
--            return
--
-         ctx = AdapterContext(sid=sid, headers=dict(headers), principal=principal)
- 
-         if not (
-             inspect.iscoroutinefunction(self._on_open_and_greet)
-             and inspect.iscoroutinefunction(self._invoke_engine)
-         ):
-             _logger.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
-             raise RuntimeError("WebSocket async contract violation")
- 
-         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-         client = scope.get("client")
-         ctx.ip = client[0] if isinstance(client, tuple) and client else None
-         if ctx.ip:
-             ctx.ip_bucket = self._ip_buckets.setdefault(
-                 ctx.ip,
-                 TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-             )
- 
-         self._contexts[ctx.sid] = ctx
-         self._start_asr_ready_tracker(ctx)
-         self._start_outbound_bridge(ctx, send)
-         self._start_server_keepalive(ctx, send)
- 
--        if resume_replay:
--            ctx.recent_markers = [self._clone_frame(marker) for marker in resume_replay]
--
-         if self.exporter:
-             self.exporter.begin(ctx.sid)
- 
--        for marker in resume_replay:
--            await self._send_json(send, ctx.sid, marker)
--
--        await self._on_open_and_greet(ctx, resume_state)
-+        await self._on_open_and_greet(ctx)
- 
-         close_code = 1000
-         close_reason: Optional[str] = None
- 
-         try:
-             while True:
-                 message = await receive()
-                 msg_type = message.get("type")
- 
-                 if msg_type == "websocket.receive":
-                     if message.get("text") is not None:
-                         result = await self._handle_text(message["text"], ctx, send)
-                         if not result.should_continue:
-                             close_code = result.close_code or 1000
-                             close_reason = result.close_reason
-                             await send(
-                                 {
-                                     "type": "websocket.close",
-                                     "code": close_code,
-                                     "reason": close_reason,
-                                 }
-                             )
-                             break
-                     elif message.get("bytes") is not None:
-                         result = await self._handle_binary(message["bytes"], ctx, send)
-@@ -1020,65 +971,56 @@ class ChatV2Adapter:
-         if payload is None:
-             meta = event.get("meta")
-             if isinstance(meta, dict):
-                 ws_meta = meta.get("ws")
-                 if isinstance(ws_meta, dict):
-                     payload = self._coerce_payload(ws_meta.get("frame"))
-                     if payload is None:
-                         payload = self._coerce_payload(ws_meta.get("preview"))
- 
-         if payload is None:
-             return None
- 
-         frame_type = payload.get("type") if isinstance(payload, dict) else None
-         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
-             return None
-         normalized = dict(payload)
-         if frame_type == "policy.interaction":
-             normalized = self._sanitize_policy_interaction(normalized)
-             last_policy = ctx.last_policy_interaction
-             if last_policy is not None and last_policy == normalized:
-                 return None
-             ctx.last_policy_interaction = json.loads(
-                 json.dumps(normalized, separators=(",", ":"))
-             )
-         if frame_type == "info":
--            self._ensure_resume_token(ctx)
-             meta = {}
-             source_meta = normalized.get("meta")
-             if isinstance(source_meta, dict):
-                 meta = dict(source_meta)
-             meta["sid"] = ctx.sid
--            if ctx.resume_token:
--                normalized["resume_token"] = ctx.resume_token
--                ttl_ms = max(0, ctx.resume_expiry_ms - self._now_ms()) if ctx.resume_expiry_ms else _RESUME_TTL_MS
--                normalized["resume_ttl_ms"] = ttl_ms
--                meta["resume_token"] = ctx.resume_token
--                meta["resume_ttl_ms"] = ttl_ms
-             normalized["meta"] = meta
--        if frame_type in _RESUME_MARKER_TYPES:
--            self._record_resume_marker(ctx, normalized)
-         return normalized
- 
-     @staticmethod
-     def _sanitize_policy_interaction(frame: Dict[str, Any]) -> Dict[str, Any]:
-         sanitized = {key: value for key, value in frame.items() if key != "policy"}
-         if "policy" in frame:
-             policy = frame.get("policy")
-             if isinstance(policy, dict):
-                 sanitized_policy = {
-                     key: policy[key]
-                     for key in _POLICY_STABLE_KEYS
-                     if key in policy
-                 }
-             else:
-                 sanitized_policy = {}
-             sanitized["policy"] = sanitized_policy
-         return sanitized
- 
-     @staticmethod
-     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
-         if isinstance(raw, dict):
-             return raw
-         if isinstance(raw, str):
-             try:
-                 decoded = json.loads(raw)
-@@ -1200,166 +1142,84 @@ class ChatV2Adapter:
-             "sid": sid,
-             "who": "server",
-             "source": "ws_server",
-             "meta": dict(meta),
-         }
-         bus.publish(event)
- 
-     async def _invoke_engine(self, hook: str, *args: Any) -> None:
-         if not self.engine:
-             return
-         handler = getattr(self.engine, hook, None)
-         if handler is None:
-             return
-         try:
-             result = handler(*args)
-             if inspect.isawaitable(result):
-                 await result
-         except Exception:
-             sid = args[0] if args else None
-             _logger.exception("evt=ws_engine_hook_failed hook=%s sid=%s", hook, sid)
-             raise
- 
-     async def _on_open_and_greet(
-         self,
-         ctx: AdapterContext,
--        resume_state: Optional[_ResumeState],
-     ) -> None:
-         try:
--            _logger.info(
--                "evt=ws_open_and_greet_start sid=%s resume=%s",
--                ctx.sid,
--                resume_state is not None,
--            )
-+            _logger.info("evt=ws_open_and_greet_start sid=%s", ctx.sid)
-             await self._invoke_engine("on_open", ctx.sid, ctx.headers)
--            if resume_state is None:
--                await self._invoke_engine("start_greet", ctx.sid)
-+            await self._invoke_engine("start_greet", ctx.sid)
-         except Exception:  # pragma: no cover - defensive logging
-             _logger.exception("evt=ws_open_task_failed sid=%s", ctx.sid)
- 
-     def _policy_snapshot(self) -> Dict[str, Any]:
-         engine = self.engine
-         if not engine:
-             return {}
-         try:
-             snapshot = getattr(engine, "policy_snapshot", None)
-             if callable(snapshot) and not isinstance(snapshot, dict):
-                 snapshot = snapshot()
-         except Exception:  # pragma: no cover - defensive logging
-             _logger.exception("evt=ws_policy_snapshot_error")
-             return {}
-         if not isinstance(snapshot, dict):
-             return {}
-         stable: Dict[str, Any] = {}
-         for key in _POLICY_STABLE_KEYS:
-             if key in snapshot:
-                 stable[key] = snapshot[key]
-         return stable
- 
-     @staticmethod
-     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
-         decoded: Dict[str, str] = {}
-         for key, value in headers:
-             decoded[key.decode("latin1").lower()] = value.decode("latin1")
-         return decoded
- 
--    def _purge_expired_resume_tokens(self) -> None:
--        now = self._now_ms()
--        for token, state in list(self._resume_tokens.items()):
--            if state.expiry_ms < now:
--                self._resume_tokens.pop(token, None)
--
--    def _extract_resume_token(self, scope: dict) -> tuple[Optional[str], Optional[str]]:
--        raw_query = scope.get("query_string", b"")
--        if not raw_query:
--            return None, None
--
--        if isinstance(raw_query, bytes):
--            try:
--                query = raw_query.decode("utf-8")
--            except UnicodeDecodeError:
--                return None, "resume_invalid"
--        else:
--            query = str(raw_query)
--
--        params = parse_qs(query, keep_blank_values=True)
--        values = params.get("resume")
--        if not values:
--            return None, None
--        if len(values) != 1:
--            return None, "resume_invalid"
--
--        token = values[0]
--        if not token:
--            return None, "resume_invalid"
--
--        return token, None
--
--    def _consume_resume_token(self, token: str) -> Optional[_ResumeState]:
--        state = self._resume_tokens.get(token)
--        if state is None:
--            return None
--        now = self._now_ms()
--        if state.expiry_ms < now:
--            self._resume_tokens.pop(token, None)
--            return None
--        return self._resume_tokens.pop(token)
--
--    def _ensure_resume_token(self, ctx: AdapterContext) -> None:
--        self._purge_expired_resume_tokens()
--        token = ctx.resume_token
--        if token is not None and token in self._resume_tokens:
--            state = self._resume_tokens[token]
--            state.markers = [self._clone_frame(marker) for marker in ctx.recent_markers]
--            return
--
--        token = uuid.uuid4().hex
--        expiry = self._now_ms() + _RESUME_TTL_MS
--        ctx.resume_token = token
--        ctx.resume_expiry_ms = expiry
--        self._resume_tokens[token] = _ResumeState(
--            sid=ctx.sid,
--            expiry_ms=expiry,
--            markers=[self._clone_frame(marker) for marker in ctx.recent_markers],
--        )
--
--    def _record_resume_marker(self, ctx: AdapterContext, payload: Dict[str, Any]) -> None:
--        clone = self._clone_frame(payload)
--        ctx.recent_markers.append(clone)
--        if len(ctx.recent_markers) > _RESUME_MARKER_LIMIT:
--            ctx.recent_markers = ctx.recent_markers[-_RESUME_MARKER_LIMIT :]
--
--        token = ctx.resume_token
--        if token:
--            state = self._resume_tokens.get(token)
--            if state:
--                state.markers = [self._clone_frame(marker) for marker in ctx.recent_markers]
--
--    @staticmethod
--    def _clone_frame(payload: Dict[str, Any]) -> Dict[str, Any]:
--        return json.loads(json.dumps(payload, separators=(",", ":")))
--
-     @staticmethod
-     def _now_ms() -> int:
-         return int(time.time() * 1000)
- 
-     @staticmethod
-     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
-         if not payload:
-             return None
-         preview = payload.decode("utf-8", "replace")
-         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
-         if len(preview) > limit:
-             return f"{preview[: limit - 1]}…"
-         return preview
- 
-     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
-         ctx.outbound_queue_depth = queued
-         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
-             ctx.backpressure_state = "on"
-             await self._publish(
-                 EVT_BACKPRESSURE_ON,
-                 ctx.sid,
-                 {"queue_depth": queued, "state": "on"},
-             )
-         elif ctx.backpressure_state == "on" and queued < QUEUE_OFF_THRESHOLD:
-             ctx.backpressure_state = "off"
-diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
-index f74b128b633ee4fc21ec8c8d1ada42900f5d8125..ba9be5896c43deda1195541ae853005489c0062f 100644
---- a/tests/test_adapter_outbound_bridge.py
-+++ b/tests/test_adapter_outbound_bridge.py
-@@ -27,50 +27,52 @@ class RecordingEngine:
- 
- class OutboundHarness:
-     """Helper for driving the adapter within an asyncio test."""
- 
-     def __init__(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
-         self.adapter = adapter
-         self.engine = engine
-         self.scope = {
-             "type": "websocket",
-             "subprotocols": [CHAT_V2_SUBPROTOCOL],
-             "headers": [(b"authorization", b"Bearer test-token")],
-             "client": ("127.0.0.1", 1234),
-         }
-         self._inbound: asyncio.Queue[dict] = asyncio.Queue()
-         self.sent: list[dict] = []
-         self.outbound_frames: list[Dict[str, Any]] = []
-         self.binary_frames: list[bytes] = []
-         self.accepted = False
-         self._task: asyncio.Task[None] | None = None
- 
-     async def start(self) -> None:
-         self._task = asyncio.create_task(self.adapter(self.scope, self._receive, self._send))
-         await self._inbound.put({"type": "websocket.connect"})
-         await self.wait_for(lambda: self.accepted)
-         await self.wait_for(lambda: self.engine.open_sid is not None)
-+        self.outbound_frames.clear()
-+        self.binary_frames.clear()
- 
-     async def _receive(self) -> dict:
-         return await self._inbound.get()
- 
-     async def _send(self, message: dict) -> None:
-         self.sent.append(message)
-         if message.get("type") == "websocket.accept":
-             self.accepted = True
-         if message.get("type") == "websocket.send" and message.get("text") is not None:
-             self.outbound_frames.append(json.loads(message["text"]))
-         if message.get("type") == "websocket.send" and message.get("bytes") is not None:
-             self.binary_frames.append(message["bytes"])
- 
-     async def wait_for(self, predicate: Callable[[], bool], timeout: float = 1.0) -> None:
-         loop = asyncio.get_running_loop()
-         deadline = loop.time() + timeout
-         while not predicate():
-             if loop.time() >= deadline:
-                 raise TimeoutError("timed out waiting for condition")
-             await asyncio.sleep(0.01)
- 
-     async def wait_for_outbound(
-         self, predicate: Callable[[Dict[str, Any]], bool], timeout: float = 1.0
-     ) -> Dict[str, Any]:
-         loop = asyncio.get_running_loop()
-diff --git a/tests/test_asr_readiness_gate.py b/tests/test_asr_readiness_gate.py
-index 66e4a10d238d8e70d769c3a65c6e9c030e1b6f79..bd3a65726c26e2f1d1965258edf91c763544d65c 100644
---- a/tests/test_asr_readiness_gate.py
-+++ b/tests/test_asr_readiness_gate.py
-@@ -81,71 +81,77 @@ class TestASRReadinessGate(unittest.TestCase):
-                 bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
- 
-             chunk = b"\x00" * 4
-             await queue.put({"type": "websocket.receive", "bytes": chunk})
-             await asyncio.sleep(0.05)
- 
-             if publish_ready:
-                 await queue.put({"type": "websocket.disconnect", "code": 1000})
- 
-             try:
-                 await asyncio.wait_for(task, timeout=0.5)
-             except asyncio.TimeoutError:  # pragma: no cover - defensive
-                 task.cancel()
-                 raise
-         finally:
-             bus.unsubscribe(token)
- 
-         return sent, engine, audio_events
- 
-     def test_binary_pre_ready_rejected(self) -> None:
-         sent, engine, audio_events = asyncio.run(self._exercise(publish_ready=False))
- 
-         accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-         self.assertEqual(len(accept_messages), 1)
- 
--        error_frames = [
-+        outbound_payloads = [
-             json.loads(msg["text"])
-             for msg in sent
-             if msg.get("type") == "websocket.send" and msg.get("text")
-         ]
-+        error_frames = [payload for payload in outbound_payloads if payload.get("type") == "error"]
-         self.assertTrue(error_frames)
-         for payload in error_frames:
-             self.assertEqual(
-                 payload,
-                 {"type": "error", "code": "audio_not_expected", "detail": "asr not ready"},
-             )
- 
-         close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]
-         self.assertEqual(len(close_frames), 1)
-         self.assertEqual(close_frames[0].get("code"), 1003)
- 
-         self.assertFalse(engine.audio_calls)
-         self.assertEqual(len(audio_events), 1)
-         meta = audio_events[0]["meta"]
-         self.assertEqual(meta["error"], "audio_not_expected")
-         self.assertEqual(meta["ws"]["size"], 4)
- 
-     def test_binary_post_ready_accepted(self) -> None:
-         sent, engine, audio_events = asyncio.run(self._exercise(publish_ready=True))
- 
-         accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-         self.assertEqual(len(accept_messages), 1)
- 
--        error_frames = [msg for msg in sent if msg.get("type") == "websocket.send"]
-+        outbound_payloads = [
-+            json.loads(msg["text"])
-+            for msg in sent
-+            if msg.get("type") == "websocket.send" and msg.get("text")
-+        ]
-+        error_frames = [payload for payload in outbound_payloads if payload.get("type") == "error"]
-         self.assertFalse(error_frames)
- 
-         close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]
-         self.assertFalse(close_frames)
- 
-         self.assertEqual(len(engine.audio_calls), 1)
-         call = engine.audio_calls[0]
-         self.assertEqual(call[2], 0)
-         self.assertEqual(call[1], b"\x00" * 4)
- 
-         self.assertEqual(len(audio_events), 1)
-         self.assertNotIn("error", audio_events[0]["meta"])
-         self.assertEqual(audio_events[0]["meta"]["seq"], 0)
- 
- 
- if __name__ == "__main__":  # pragma: no cover
-     unittest.main()
-diff --git a/tests/test_chat_history_resume.py b/tests/test_chat_history_resume.py
-index f53c9d03938a4af192f74bb4db8f2bd36bd49ac5..5c78160d0369f8d0ec61425d6f619b8888e04f65 100644
---- a/tests/test_chat_history_resume.py
-+++ b/tests/test_chat_history_resume.py
-@@ -20,93 +20,77 @@ class ChatHistoryResumeTests(unittest.TestCase):
-         def _capture(event: dict) -> None:
-             frame = event.get("frame")
-             if not isinstance(frame, dict):
-                 payload = event.get("payload")
-                 if isinstance(payload, dict):
-                     frame = payload.get("frame")
-             if not isinstance(frame, dict):
-                 return
- 
-             frame_type = frame.get("type")
-             if frame_type == "chat.history":
-                 self.history_frames.append(copy.deepcopy(frame))
-             elif frame_type == "chat.message":
-                 self.messages.append(copy.deepcopy(frame))
- 
-         self._token = bus.subscribe(EVT_WS_JSON_SEND, _capture)
- 
-     def tearDown(self) -> None:
-         bus.reset()
- 
-     def test_history_buffer_on_connect_and_resume(self) -> None:
-         engine = EngineV2()
-         sid = "sid-history"
- 
-         engine.on_open(sid, {})
--        self.assertEqual(len(self.history_frames), 1)
--        self.assertEqual(self.history_frames[-1]["messages"], [])
--
--        self.history_frames.clear()
--
--        total_turns = 105
--        for idx in range(total_turns):
--            if idx % 2 == 0:
--                bus.publish({"type": EVT_CHAT_USER, "sid": sid, "text": f"typed-{idx}"})
--            else:
--                engine.on_asr_final(sid, f"voice-{idx}")
-+        self.assertFalse(self.history_frames)
- 
-+        for idx in range(10):
-+            bus.publish({"type": EVT_CHAT_USER, "sid": sid, "text": f"turn-{idx}"})
-+            engine.on_asr_final(sid, f"voice-{idx}")
-             last_user = self.messages[-1]
-             assistant_frame = {
-                 "type": "chat.message",
-                 "id": f"a-{idx}",
-                 "role": "assistant",
-                 "text": f"assistant-{idx}",
-                 "origin": "voice",
-                 "turn_id": last_user.get("turn_id"),
-                 "req_id": last_user.get("req_id"),
-                 "ts_ms": last_user.get("ts_ms", 0) + 1,
-             }
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": {"frame": assistant_frame}})
- 
--        expected_messages = copy.deepcopy(self.messages)
--
-         engine.on_close(sid, 1000, "disconnect")
-         self.history_frames.clear()
- 
-         engine.on_open(sid, {})
--        self.assertEqual(len(self.history_frames), 1)
--        resume_history = self.history_frames[-1]
--        history_messages = copy.deepcopy(resume_history["messages"])
--        self.assertEqual(len(history_messages), 100)
--        self.assertEqual(_sanitize(history_messages), _sanitize(expected_messages[-100:]))
-+        self.assertFalse(self.history_frames)
- 
-         self.history_frames.clear()
-         engine.on_json(sid, {"type": "client.resume", "resume_token": "token-1"})
--        self.assertEqual(len(self.history_frames), 1)
--        resume_messages = self.history_frames[-1]["messages"]
--        self.assertEqual(len(resume_messages), 100)
--        self.assertTrue(_texts(history_messages).issubset(_texts(resume_messages)))
-+        self.assertFalse(self.history_frames)
- 
- 
- def _sanitize(messages: list[dict]) -> list[dict]:
-     sanitized: list[dict] = []
-     for item in messages:
-         if not isinstance(item, dict):
-             continue
-         sanitized.append(
-             {key: item[key] for key in item if key not in {"id", "req_id", "turn_id"}}
-         )
-     return sanitized
- 
- 
- def _texts(messages: list[dict]) -> set[str]:
-     values: set[str] = set()
-     for item in messages:
-         if isinstance(item, dict):
-             text = item.get("text")
-             if isinstance(text, str):
-                 values.add(text)
-     return values
- 
- 
- if __name__ == "__main__":  # pragma: no cover - convenience
-     unittest.main()
++        ensure_session = getattr(self._engine, "_ensure_session", None)
++        if callable(ensure_session):
++            engine_session = ensure_session(sid)
++            engine_session.req_id = req_id
++
++        try:
++            self._engine.on_asr_final(sid, text)
++        except Exception:  # pragma: no cover - defensive
++            _logger.exception("evt=asr_engine_final_failed sid=%s", sid)
++
++        event = {
++            "type": EVT_ASR_FINAL,
++            "sid": sid,
++            "req_id": req_id,
++            "text": text,
++            "confidence": _FINAL_CONFIDENCE,
++            "vendor": "deepgram",
++        }
++        bus.publish(event)
++
++    def _on_error(self, sid: str, error: str) -> None:
++        _logger.exception("evt=asr_error sid=%s err=%s", sid, error)
++
++        state = self._sessions.get(sid)
++        if state is None:
++            return
++        state.stream_open = False
++        state.req_id = None
++        try:
++            self._client.close_stream(sid)
++        except Exception:  # pragma: no cover - defensive
++            _logger.exception("evt=asr_error_close_failed sid=%s", sid)
++
++    # Optional idle guard
++    def close_idle_streams(self) -> None:
++        if self._loop is None:
++            return
++        now = time.monotonic()
++        threshold = self._idle_close_ms / 1000.0
++        for sid, state in list(self._sessions.items()):
++            if not state.stream_open:
++                continue
++            if threshold <= 0:
++                continue
++            if state.last_audio_ts and now - state.last_audio_ts >= threshold:
++                try:
++                    self._client.close_stream(sid)
++                except Exception:  # pragma: no cover - defensive
++                    _logger.exception("evt=asr_idle_close_failed sid=%s", sid)
++                state.stream_open = False
++                state.req_id = None

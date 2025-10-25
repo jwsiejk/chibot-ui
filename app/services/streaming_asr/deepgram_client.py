@@ -1,124 +1,217 @@
-"""Minimal Deepgram streaming client with provider keepalive support.
-
-This module was introduced in Build 04-G and is shared by higher-level
-adapters (for example :mod:`app.voice_v2.asr`) so that keepalive behaviour
-is implemented exactly once.
-"""
+"""Deepgram realtime streaming client."""
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
-from typing import Any, Callable
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Callable, Deque, Dict
+
+import websockets
+from websockets.legacy.client import WebSocketClientProtocol
 
 _logger = logging.getLogger(__name__)
 
+_DEFAULT_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
+_DEFAULT_BUFFER_BYTES = 4 * 1024 * 1024
+
+
+@dataclass
+class _StreamState:
+    sid: str
+    websocket: WebSocketClientProtocol
+    on_partial: Callable[[str], None]
+    on_final: Callable[[str], None]
+    on_error: Callable[[str], None]
+    loop: asyncio.AbstractEventLoop
+    chunks: Deque[bytes] = field(default_factory=deque)
+    buffered_bytes: int = 0
+    drop_logged: bool = False
+    closing: bool = False
+    sender_task: asyncio.Task[None] | None = None
+    receiver_task: asyncio.Task[None] | None = None
+    data_event: asyncio.Event = field(default_factory=asyncio.Event)
+
 
 class DeepgramClient:
-    """Client wrapper responsible for maintaining the Deepgram websocket."""
+    """Client wrapper responsible for maintaining Deepgram realtime streams."""
 
-    def __init__(self) -> None:
-        self._ws: Any | None = None
-        self._send_lock = asyncio.Lock()
-        self._keepalive_interval = max(
-            0.0, float(os.getenv("DG_KEEPALIVE_INTERVAL_S", "5.0"))
-        )
-        self._keepalive_task: asyncio.Task[None] | None = None
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        url: str | None = None,
+        max_buffer_bytes: int | None = None,
+    ) -> None:
+        self._api_key = (api_key or os.getenv("DEEPGRAM_API_KEY")) or ""
+        self._url = url or os.getenv("DEEPGRAM_LISTEN_URL", _DEFAULT_LISTEN_URL)
+        self._max_buffer_bytes = max_buffer_bytes or _DEFAULT_BUFFER_BYTES
+        if self._max_buffer_bytes <= 0:
+            self._max_buffer_bytes = _DEFAULT_BUFFER_BYTES
+        self._streams: Dict[str, _StreamState] = {}
+        self.idle_close_ms = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
 
-    async def connect(self, websocket: Any) -> None:
-        """Attach to an already negotiated websocket transport."""
-
-        if websocket is None:
-            raise ValueError("websocket must not be None")
-
-        await self._stop_keepalive()
-        self._ws = websocket
-
-        if self._keepalive_interval > 0:
-            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-
-    async def close(self) -> None:
-        """Terminate the websocket connection and stop background tasks."""
-
-        await self._stop_keepalive()
-        ws = self._ws
-        self._ws = None
-        if ws is None:
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    async def open_stream(
+        self,
+        sid: str,
+        content_type: str,
+        on_partial: Callable[[str], None],
+        on_final: Callable[[str], None],
+        on_error: Callable[[str], None],
+    ) -> None:
+        if not isinstance(sid, str) or not sid:
+            raise ValueError("sid must be a non-empty string")
+        if sid in self._streams:
             return
-        close: Callable[[], Any] | None = getattr(ws, "close", None)
-        if close is None:
-            return
-        result = close()
-        if asyncio.iscoroutine(result) or asyncio.isfuture(result):
-            await result
-
-    async def send_json(self, payload: dict[str, Any]) -> None:
-        """Send a JSON payload to the provider using the serialized transport."""
-
-        if not isinstance(payload, dict):
-            raise TypeError("payload must be a dict")
-        message = json.dumps(payload, separators=(",", ":"))
-        await self._send_text(message)
-
-    async def _send_text(self, message: str) -> None:
-        ws = self._ws
-        if ws is None:
-            raise RuntimeError("Deepgram websocket not connected")
-
-        sender = getattr(ws, "send", None)
-        if sender is None:
-            sender = getattr(ws, "send_str", None)
-        if sender is None or not callable(sender):
-            raise AttributeError("websocket transport missing send method")
-
-        async with self._send_lock:
-            result = sender(message)
-            if asyncio.iscoroutine(result) or asyncio.isfuture(result):
-                await result
-
-    async def _keepalive_loop(self) -> None:
-        """Send periodic provider keepalive frames until cancelled."""
-
+        loop = asyncio.get_running_loop()
+        headers = {"Authorization": f"Token {self._api_key}"}
         try:
-            if not self._socket_is_open():
-                return
-            await self._send_keepalive()
+            websocket = await websockets.connect(
+                self._url,
+                extra_headers=headers,
+                max_size=None,
+                ping_interval=None,
+            )
+        except Exception as exc:
+            _logger.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
+            raise
+
+        start_payload = {
+            "type": "StartRequest",
+            "metadata": {"content_type": content_type},
+        }
+        await websocket.send(json.dumps(start_payload, separators=(",", ":")))
+
+        state = _StreamState(
+            sid=sid,
+            websocket=websocket,
+            on_partial=on_partial,
+            on_final=on_final,
+            on_error=on_error,
+            loop=loop,
+        )
+        state.sender_task = loop.create_task(self._sender_loop(state), name=f"dg-send-{sid}")
+        state.receiver_task = loop.create_task(
+            self._receiver_loop(state), name=f"dg-recv-{sid}"
+        )
+        self._streams[sid] = state
+
+    def send_audio(self, sid: str, chunk: bytes) -> None:
+        state = self._streams.get(sid)
+        if state is None or state.closing:
+            return
+        if not isinstance(chunk, (bytes, bytearray, memoryview)):
+            raise TypeError("chunk must be bytes-like")
+        data = bytes(chunk)
+        if not data:
+            return
+
+        state.chunks.append(data)
+        state.buffered_bytes += len(data)
+        if state.buffered_bytes > self._max_buffer_bytes:
+            dropped = 0
+            while state.chunks and state.buffered_bytes > self._max_buffer_bytes:
+                removed = state.chunks.popleft()
+                dropped += len(removed)
+                state.buffered_bytes -= len(removed)
+            if dropped and not state.drop_logged:
+                state.drop_logged = True
+                _logger.warning(
+                    "evt=deepgram_backpressure sid=%s dropped_bytes=%d", sid, dropped
+                )
+        state.data_event.set()
+
+    def close_stream(self, sid: str) -> None:
+        state = self._streams.pop(sid, None)
+        if state is None:
+            return
+        state.closing = True
+        state.data_event.set()
+        if state.receiver_task is not None:
+            state.receiver_task.cancel()
+        if state.sender_task is not None:
+            state.sender_task.cancel()
+        state.loop.create_task(self._shutdown(state))
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    async def _sender_loop(self, state: _StreamState) -> None:
+        try:
             while True:
-                await asyncio.sleep(self._keepalive_interval)
-                if not self._socket_is_open():
+                await state.data_event.wait()
+                state.data_event.clear()
+                while state.chunks:
+                    chunk = state.chunks.popleft()
+                    state.buffered_bytes -= len(chunk)
+                    await state.websocket.send(chunk)
+                if state.closing:
                     break
-                await self._send_keepalive()
         except asyncio.CancelledError:
             raise
-        except Exception:  # pragma: no cover - defensive
-            _logger.exception("Deepgram keepalive loop failed")
+        except Exception as exc:  # pragma: no cover - defensive
+            _logger.exception("evt=deepgram_send_failed sid=%s err=%s", state.sid, exc)
+            state.on_error(state.sid, str(exc))
+
+    async def _receiver_loop(self, state: _StreamState) -> None:
+        websocket = state.websocket
+        try:
+            async for message in websocket:
+                if isinstance(message, bytes):
+                    continue
+                try:
+                    payload = json.loads(message)
+                except json.JSONDecodeError:
+                    continue
+                self._handle_message(state, payload)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive
+            _logger.exception("evt=deepgram_recv_failed sid=%s err=%s", state.sid, exc)
+            state.on_error(state.sid, str(exc))
         finally:
-            self._keepalive_task = None
+            await self._finalize_stream(state)
 
-    async def _send_keepalive(self) -> None:
-        await self._send_text(json.dumps({"type": "KeepAlive"}, separators=(",", ":")))
+    async def _shutdown(self, state: _StreamState) -> None:
+        try:
+            await state.websocket.close()
+        except Exception:  # pragma: no cover - defensive
+            _logger.debug("evt=deepgram_ws_close_error sid=%s", state.sid, exc_info=True)
+        await self._finalize_stream(state)
 
-    def _socket_is_open(self) -> bool:
-        ws = self._ws
-        if ws is None:
-            return False
-        if getattr(ws, "closed", False):
-            return False
-        close_code = getattr(ws, "close_code", None)
-        if close_code not in (None, 0):
-            return False
-        return True
+    async def _finalize_stream(self, state: _StreamState) -> None:
+        try:
+            await state.websocket.wait_closed()
+        except Exception:  # pragma: no cover - defensive
+            pass
 
-    async def _stop_keepalive(self) -> None:
-        task = self._keepalive_task
-        self._keepalive_task = None
-        if task is None:
+    def _handle_message(self, state: _StreamState, payload: dict) -> None:
+        message_type = payload.get("type")
+        if message_type == "Results":
+            channel = payload.get("channel") or {}
+            alternatives = channel.get("alternatives") or []
+            if not alternatives:
+                return
+            transcript = alternatives[0].get("transcript", "").strip()
+            if not transcript:
+                return
+            is_final = bool(channel.get("is_final") or payload.get("speech_final"))
+            if is_final:
+                state.on_final(state.sid, transcript)
+            else:
+                state.on_partial(state.sid, transcript)
             return
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        if message_type == "error" or message_type == "Error":
+            error = payload.get("error") or payload.get("message") or str(payload)
+            state.on_error(state.sid, error)
+            return
+        if "error" in payload:
+            state.on_error(state.sid, str(payload.get("error")))
 
 
 __all__ = ["DeepgramClient"]
