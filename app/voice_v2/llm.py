@@ -186,6 +186,76 @@ class LLMAdapter:
         self.publish_nlg(req_id, reply, metadata=metadata)
         return reply
 
+    def generate_greeting(
+        self,
+        sid: str,
+        turn_id: str,
+        req_id: str,
+        plan: Mapping[str, Any] | object | None = None,
+    ) -> str:
+        """Return a provider-crafted greeting constrained to the greet persona mode."""
+
+        if not isinstance(req_id, str) or not req_id:
+            raise ValueError("req_id must be a non-empty string")
+
+        _ = plan  # plan payload included for symmetry with persona generation
+        _ = turn_id  # turn metadata is unused for greet but kept for parity
+        _ = sid  # greet generation is session-aware but currently stateless
+
+        persona = load_persona()
+        system_preamble = build_system_preamble(persona)
+        developer_instruction = self._greet_instruction(persona)
+        messages = [
+            {"role": "system", "content": system_preamble},
+            {"role": "developer", "content": developer_instruction},
+            {"role": "user", "content": ""},
+        ]
+
+        reply: str | None = None
+        fallback_reason: str | None = None
+        provider = self._provider
+        provider_ready = bool(provider and getattr(provider, "is_configured", False))
+        if provider_ready:
+            model_name = getattr(provider, "default_model", None) or "gpt-4o-mini"
+            try:
+                reply_candidate = self._invoke_provider(
+                    provider,
+                    messages,
+                    model=model_name,
+                    temperature=0.4,
+                    max_tokens=30,
+                    purpose="greet",
+                )
+            except ProviderCircuitOpenError:
+                fallback_reason = "breaker_open"
+            except ProviderTimeoutError:
+                fallback_reason = "timeout"
+            except Exception:  # pragma: no cover - defensive logging
+                fallback_reason = "error"
+                _logger.exception(
+                    "LLM provider invocation failed during greeting; falling back to static copy"
+                )
+            else:
+                normalized = self._normalize_greet_reply(reply_candidate)
+                if normalized:
+                    reply = normalized
+                else:
+                    fallback_reason = "empty_response"
+
+        if reply is None:
+            reply = ""
+
+        metadata: Dict[str, Any] | None = None
+        if fallback_reason:
+            metadata = {
+                "source": "llm_fallback",
+                "reason": fallback_reason,
+                "purpose": "greet",
+            }
+
+        self.publish_nlg(req_id, reply, metadata=metadata)
+        return reply
+
     def _invoke_provider(
         self,
         provider: LLMProviderBase,
@@ -193,12 +263,14 @@ class LLMAdapter:
         *,
         model: str,
         temperature: float,
+        **extra_kwargs: Any,
     ) -> str:
         async def _execute() -> Any:
             return await provider.generate(
                 messages=messages,
                 model=model,
                 temperature=temperature,
+                **extra_kwargs,
             )
 
         try:
@@ -211,6 +283,30 @@ class LLMAdapter:
                 result = future.result()
 
         return result if isinstance(result, str) else str(result)
+
+    @staticmethod
+    def _greet_instruction(persona: Mapping[str, Any] | object) -> str:
+        if isinstance(persona, Mapping):
+            modes = persona.get("modes")
+            if isinstance(modes, Mapping):
+                greet_mode = modes.get("greet")
+                if isinstance(greet_mode, Mapping):
+                    instruction = greet_mode.get("instruction")
+                    if isinstance(instruction, str) and instruction.strip():
+                        return instruction.strip()
+        return "Generate a friendly Pure Storage greeting in under eight words."
+
+    @staticmethod
+    def _normalize_greet_reply(candidate: Any) -> str:
+        if not isinstance(candidate, str):
+            return ""
+        normalized = " ".join(candidate.strip().split())
+        if not normalized:
+            return ""
+        words = normalized.split()
+        if len(words) > 8:
+            normalized = " ".join(words[:8])
+        return normalized
 
     def publish_nlg(
         self,

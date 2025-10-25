@@ -93,11 +93,14 @@ class OpenAILLMProvider(LLMProviderBase):
 
         model = kwargs.get("model") or self._default_model
         temperature = kwargs.get("temperature")
+        max_tokens = kwargs.get("max_tokens")
+        kwargs.pop("purpose", None)
 
         response = await client.chat.completions.create(
             model=model,
             messages=prepared,
             temperature=temperature,
+            max_tokens=max_tokens,
         )
 
         try:

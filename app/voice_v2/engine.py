@@ -615,12 +615,7 @@ class EngineV2:
 
         turn_id = str(uuid.uuid4())
         req_id = f"req-{uuid.uuid4().hex}"
-        plan_payload: Dict[str, Any] = {
-            "mode": "outline",
-            "chips": [],
-            "missing_info": [],
-            "reason": "greet",
-        }
+        plan_payload: Dict[str, Any] = {"mode": "greet", "reason": "session_open"}
 
         persona: Dict[str, Any] = {}
         try:
@@ -638,11 +633,10 @@ class EngineV2:
         greeting_text: str
         if greet_mode == "persona":
             try:
-                greeting_candidate = self._llm.generate_persona(
+                greeting_candidate = self._llm.generate_greeting(
                     sid,
                     turn_id,
                     req_id,
-                    "",
                     plan_payload,
                 )
             except Exception:
