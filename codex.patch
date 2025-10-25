@@ -1,74 +1,8 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 1aa51db6e2e4f2fef59e06f50ec1ddad8bf34b3b..b97f1211bb5e714bfdde4c3a6247ebe6ef1b9a49 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -2,54 +2,60 @@
- from __future__ import annotations
- 
- import hashlib
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Optional
- 
- from app import config
- from app.logging_config import configure_logging
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import FileExporter
- from app.versioning import get_build_id, inject_static_version
- from app.voice_v2.asr_runtime import ASRRuntime
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- from app.services.streaming_asr.deepgram_client import DeepgramClient
-- 
-+
- 
- configure_logging()
- 
-+for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
-+    _category_logger = logging.getLogger(_logger_name)
-+    if _category_logger.level == logging.NOTSET:
-+        _category_logger.setLevel(logging.INFO)
-+
-+
- logger = logging.getLogger(__name__)
- 
- 
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
- 
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
- 
- 
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
- 
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
- 
- 
- WS_ROUTE = "/ws/v2/chat"
- HEALTH_ROUTE = "/api/v1/health"
 diff --git a/app/voice_v2/tts_runtime.py b/app/voice_v2/tts_runtime.py
-index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa0d121c3b 100644
+index 658d2ded1582d0c16d9ce6f23f51adfa0d121c3b..92d1d7315ccfa3ab529e98061d1db299be631a9e 100644
 --- a/app/voice_v2/tts_runtime.py
 +++ b/app/voice_v2/tts_runtime.py
-@@ -1,124 +1,130 @@
+@@ -1,130 +1,131 @@
  """Runtime that bridges EVT_NLG events to ElevenLabs streaming synthesis."""
  from __future__ import annotations
  
@@ -76,7 +10,7 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
  import logging
  import os
  import threading
-+import time
+ import time
  import uuid
  from concurrent.futures import Future as ThreadFuture, CancelledError as ThreadCancelledError
  from dataclasses import dataclass
@@ -92,11 +26,13 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
  )
  from app.services.tts.elevenlabs_client import ElevenLabsStream, ElevenLabsTTSProvider
  
- _logger = logging.getLogger(__name__)
+-_logger = logging.getLogger(__name__)
++_tts_log = logging.getLogger("app.voice_v2.tts_runtime")
  
-+_provider_ready_emitted = False
-+_CHUNK_LOG_INTERVAL_S = 0.5
-+
+ _provider_ready_emitted = False
+ _CHUNK_LOG_INTERVAL_S = 0.5
++_FIRST_CHUNK_TIMEOUT_S = 6.0
+ 
  
  @dataclass
  class _SynthesisState:
@@ -136,11 +72,12 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
          self._provider = provider
  
          if self._provider is None:
-             _logger.info("TTS runtime disabled: ELEVENLABS_API_KEY not configured")
+-            _logger.info("TTS runtime disabled: ELEVENLABS_API_KEY not configured")
++            _tts_log.info("TTS runtime disabled: ELEVENLABS_API_KEY not configured")
              return
  
-+        self._emit_provider_ready(self._provider)
-+
+         self._emit_provider_ready(self._provider)
+ 
          self._subscriptions.append(self._bus.subscribe(EVT_NLG, self._handle_nlg_event))
          self._subscriptions.append(self._bus.subscribe(EVT_TTS_END, self._handle_tts_end_event))
  
@@ -165,7 +102,8 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
  
          loop = self._ensure_loop()
          if loop is None:
-             _logger.warning("No running event loop for TTS synthesis", extra={"sid": sid})
+-            _logger.warning("No running event loop for TTS synthesis", extra={"sid": sid})
++            _tts_log.warning("No running event loop for TTS synthesis", extra={"sid": sid})
              return
  
          utt_id = self._next_utt_id(sid)
@@ -173,8 +111,8 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
          voice_id = self._resolve_voice_id(provider)
  
          if voice_id is None:
--            _logger.warning("Skipping TTS synthesis; no voice_id available", extra={"sid": sid})
-+            _logger.warning("evt=tts_voice_unresolved sid=%s req_id=%s", sid, req_id)
+-            _logger.warning("evt=tts_voice_unresolved sid=%s req_id=%s", sid, req_id)
++            _tts_log.warning("evt=tts_voice_unresolved sid=%s utt_id=%s", sid, utt_id)
              return
  
          self._cancel_state(sid, reason="superseded")
@@ -200,16 +138,7 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
          state.task = task
          task.add_done_callback(lambda task, sid=sid, state=state: self._on_task_done(sid, state, task))
  
-@@ -136,93 +142,141 @@ class TTSRuntime:
-             return
- 
-         if event.get("reason") == "canceled":
-             state.emit_end = False
-             task = state.task
-             if task is not None and not task.done():
-                 task.cancel()
- 
-     # ------------------------------------------------------------------
+@@ -151,156 +152,178 @@ class TTSRuntime:
      # Synthesis lifecycle
      # ------------------------------------------------------------------
      async def _run_synthesis(
@@ -226,38 +155,39 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
  
          stream: ElevenLabsStream | None = None
          start_emitted = False
-+        total_bytes = 0
-+        start_time_ms = 0.0
-+        last_chunk_log = 0.0
-+        text_chars = len(text)
+         total_bytes = 0
+         start_time_ms = 0.0
+         last_chunk_log = 0.0
+         text_chars = len(text)
  
          try:
              stream = await provider.synthesize(text, voice_id=voice_id)
              state.stream = stream
          except ProviderCircuitOpenError:
--            _logger.warning("ElevenLabs circuit open; skipping synthesis", extra={"sid": sid})
-+            _logger.warning(
-+                "evt=tts_provider_circuit_open sid=%s vendor=%s", sid, getattr(provider, "vendor", "unknown")
-+            )
+-            _logger.warning(
++            _tts_log.warning(
+                 "evt=tts_provider_circuit_open sid=%s vendor=%s", sid, getattr(provider, "vendor", "unknown")
+             )
              return
          except ProviderTimeoutError:
--            _logger.warning("ElevenLabs synthesis timed out", extra={"sid": sid})
-+            _logger.warning(
-+                "evt=tts_provider_timeout sid=%s vendor=%s", sid, getattr(provider, "vendor", "unknown")
-+            )
+-            _logger.warning(
++            _tts_log.warning(
+                 "evt=tts_provider_timeout sid=%s vendor=%s", sid, getattr(provider, "vendor", "unknown")
+             )
              return
          except asyncio.CancelledError:
              raise
          except Exception as exc:  # pragma: no cover - defensive
--            _logger.exception("ElevenLabs synthesis failed", extra={"sid": sid, "error": str(exc)})
-+            reason = _safe_reason(exc)
-+            _logger.error(
-+                'evt=tts_synthesis_failed sid=%s utt_id=%s reason="%s"',
-+                sid,
-+                state.utt_id,
-+                reason,
-+                exc_info=True,
-+            )
+             reason = _safe_reason(exc)
+-            _logger.error(
+-                'evt=tts_synthesis_failed sid=%s utt_id=%s reason="%s"',
++            _tts_log.error(
++                "evt=tts_synthesis_failed reason=provider_error sid=%s utt_id=%s detail=%s",
+                 sid,
+                 state.utt_id,
+                 reason,
+                 exc_info=True,
+             )
              return
  
          if self._states.get(sid) is not state:
@@ -267,61 +197,91 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
  
          try:
              self._engine.on_tts_start(sid, state.utt_id, state.post_hold_ms)
-+            start_time_ms = time.monotonic()
-+            _logger.info(
-+                "evt=tts_start sid=%s utt_id=%s voice_id=%s text_chars=%d",
-+                sid,
-+                state.utt_id,
-+                voice_id,
-+                text_chars,
-+            )
+             start_time_ms = time.monotonic()
+-            _logger.info(
++            _tts_log.info(
+                 "evt=tts_start sid=%s utt_id=%s voice_id=%s text_chars=%d",
+                 sid,
+                 state.utt_id,
+                 voice_id,
+                 text_chars,
+             )
              start_emitted = True
  
-             async for chunk in stream:
-                 if not chunk:
-                     continue
-                 self._engine.emit_tts_audio_chunk(sid, chunk)
-+                chunk_len = len(chunk)
-+                total_bytes += chunk_len
-+                now = time.monotonic()
-+                if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
-+                    last_chunk_log = now
-+                    _logger.debug(
-+                        "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
+-            async for chunk in stream:
+-                if not chunk:
++            iterator = stream.__aiter__()
++            first_chunk_received = False
++            while True:
++                try:
++                    next_chunk = await (
++                        asyncio.wait_for(anext(iterator), timeout=_FIRST_CHUNK_TIMEOUT_S)
++                        if not first_chunk_received
++                        else anext(iterator)
++                    )
++                except StopAsyncIteration:
++                    break
++                except asyncio.TimeoutError:
++                    _tts_log.error(
++                        "evt=tts_synthesis_failed reason=no_chunks_timeout sid=%s utt_id=%s",
 +                        sid,
 +                        state.utt_id,
-+                        chunk_len,
-+                        total_bytes,
 +                    )
++                    state.emit_end = False
++                    break
++
++                if not next_chunk:
+                     continue
+-                self._engine.emit_tts_audio_chunk(sid, chunk)
+-                chunk_len = len(chunk)
++
++                first_chunk_received = True
++                self._engine.emit_tts_audio_chunk(sid, next_chunk)
++                chunk_len = len(next_chunk)
+                 total_bytes += chunk_len
+                 now = time.monotonic()
+                 if now - last_chunk_log >= _CHUNK_LOG_INTERVAL_S:
+                     last_chunk_log = now
+-                    _logger.debug(
++                    _tts_log.debug(
+                         "evt=tts_chunk sid=%s utt_id=%s bytes=%d total_bytes=%d",
+                         sid,
+                         state.utt_id,
+                         chunk_len,
+                         total_bytes,
+                     )
          except asyncio.CancelledError:
              raise
          except Exception as exc:  # pragma: no cover - defensive
--            _logger.exception(
--                "Error streaming ElevenLabs audio", extra={"sid": sid, "utt_id": state.utt_id, "error": str(exc)}
-+            reason = _safe_reason(exc)
-+            _logger.error(
-+                'evt=tts_synthesis_failed sid=%s utt_id=%s reason="%s"',
-+                sid,
-+                state.utt_id,
-+                reason,
-+                exc_info=True,
+             reason = _safe_reason(exc)
+-            _logger.error(
+-                'evt=tts_synthesis_failed sid=%s utt_id=%s reason="%s"',
++            _tts_log.error(
++                "evt=tts_synthesis_failed reason=provider_error sid=%s utt_id=%s detail=%s",
+                 sid,
+                 state.utt_id,
+                 reason,
+                 exc_info=True,
              )
++            state.emit_end = False
          finally:
              if stream is not None:
                  try:
                      await stream.aclose()
                  except Exception:  # pragma: no cover - defensive
-                     _logger.debug("Error closing ElevenLabs stream", exc_info=True)
+-                    _logger.debug("Error closing ElevenLabs stream", exc_info=True)
++                    _tts_log.debug("Error closing ElevenLabs stream", exc_info=True)
              if start_emitted and state.emit_end:
                  self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
-+                duration_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0
-+                _logger.info(
-+                    "evt=tts_end sid=%s utt_id=%s total_bytes=%d duration_ms=%d",
-+                    sid,
-+                    state.utt_id,
-+                    total_bytes,
-+                    duration_ms,
-+                )
+                 duration_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0
+-                _logger.info(
++                _tts_log.info(
+                     "evt=tts_end sid=%s utt_id=%s total_bytes=%d duration_ms=%d",
+                     sid,
+                     state.utt_id,
+                     total_bytes,
+                     duration_ms,
+                 )
  
      def _on_task_done(self, sid: str, state: _SynthesisState, task: asyncio.Task[Any]) -> None:
          current = self._states.get(sid)
@@ -333,7 +293,8 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
          except (asyncio.CancelledError, ThreadCancelledError):
              pass
          except Exception:  # pragma: no cover - defensive
-             _logger.exception("TTS synthesis task failed", extra={"sid": sid})
+-            _logger.exception("TTS synthesis task failed", extra={"sid": sid})
++            _tts_log.exception("TTS synthesis task failed", extra={"sid": sid})
  
      # ------------------------------------------------------------------
      # Helpers
@@ -345,19 +306,34 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
          try:
              return ElevenLabsTTSProvider(telemetry_bus=self._bus)
          except Exception:  # pragma: no cover - defensive
-             _logger.exception("Failed to initialize ElevenLabsTTSProvider")
+-            _logger.exception("Failed to initialize ElevenLabsTTSProvider")
++            _tts_log.exception("Failed to initialize ElevenLabsTTSProvider")
              return None
-@@ -253,81 +307,94 @@ class TTSRuntime:
-             self._loop_thread = thread
-         return loop
  
-     def _next_utt_id(self, sid: str) -> str:
-         current = self._utt_seq.get(sid, 0) + 1
-         self._utt_seq[sid] = current
-         return f"utt-{current:05d}"
+     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
+         loop = self._loop
+         if loop is not None and loop.is_running():
+             return loop
+         try:
+             loop = asyncio.get_running_loop()
+         except RuntimeError:
+             loop = None
+         else:
+             self._loop = loop
+             return loop
  
-     def _resolve_post_hold_ms(self) -> int:
-         snapshot = self._engine.policy_snapshot or {}
+         loop = self._loop
+         if loop is None or loop.is_closed():
+             loop = asyncio.new_event_loop()
+             thread = threading.Thread(
+                 target=self._run_background_loop,
+                 args=(loop,),
+                 name="tts-runtime-loop",
+                 daemon=True,
+             )
+             thread.start()
+             self._loop = loop
+@@ -317,84 +340,84 @@ class TTSRuntime:
          hold: Optional[int] = None
          voice_block = snapshot.get("voice")
          if isinstance(voice_block, Mapping):
@@ -373,9 +349,9 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
          return hold
  
      def _resolve_voice_id(self, provider: TTSProviderBase) -> Optional[str]:
-+        default_voice = getattr(provider, "default_voice_id", None)
-+        if isinstance(default_voice, str) and default_voice:
-+            return default_voice
+         default_voice = getattr(provider, "default_voice_id", None)
+         if isinstance(default_voice, str) and default_voice:
+             return default_voice
          resolver = getattr(self._engine, "_voice_profile", None)
          if callable(resolver):
              try:
@@ -383,20 +359,19 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
                  if isinstance(voice_id, str) and voice_id:
                      return voice_id
              except Exception:  # pragma: no cover - defensive
-                 _logger.debug("Unable to resolve voice profile from engine", exc_info=True)
--        default_voice = getattr(provider, "default_voice_id", None)
--        if isinstance(default_voice, str) and default_voice:
--            return default_voice
+-                _logger.debug("Unable to resolve voice profile from engine", exc_info=True)
++                _tts_log.debug("Unable to resolve voice profile from engine", exc_info=True)
          return None
  
-+    def _emit_provider_ready(self, provider: TTSProviderBase) -> None:
-+        global _provider_ready_emitted
-+        if _provider_ready_emitted:
-+            return
-+        vendor = getattr(provider, "vendor", None) or provider.__class__.__name__.lower()
-+        _logger.info("evt=tts_provider_ready provider=%s", vendor)
-+        _provider_ready_emitted = True
-+
+     def _emit_provider_ready(self, provider: TTSProviderBase) -> None:
+         global _provider_ready_emitted
+         if _provider_ready_emitted:
+             return
+         vendor = getattr(provider, "vendor", None) or provider.__class__.__name__.lower()
+-        _logger.info("evt=tts_provider_ready provider=%s", vendor)
++        _tts_log.info("evt=tts_provider_ready provider=%s", vendor)
+         _provider_ready_emitted = True
+ 
      def _cancel_state(self, sid: str, *, reason: str) -> None:
          state = self._states.pop(sid, None)
          if state is None:
@@ -408,7 +383,8 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
          try:
              self._engine.cancel_current_tts(sid, reason=reason)
          except Exception:  # pragma: no cover - defensive
-             _logger.debug("Engine cancel_current_tts failed", exc_info=True)
+-            _logger.debug("Engine cancel_current_tts failed", exc_info=True)
++            _tts_log.debug("Engine cancel_current_tts failed", exc_info=True)
  
      @staticmethod
      def _extract_utt_id(meta: Any) -> Optional[str]:
@@ -429,7 +405,8 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
          try:
              value = int(float(raw))
          except (TypeError, ValueError):
-             _logger.warning("Invalid TTS_POST_HOLD_MS=%r; defaulting to 200", raw)
+-            _logger.warning("Invalid TTS_POST_HOLD_MS=%r; defaulting to 200", raw)
++            _tts_log.warning("Invalid TTS_POST_HOLD_MS=%r; defaulting to 200", raw)
              return 200
          return max(0, value)
  
@@ -439,9 +416,9 @@ index 495dfbae1e7fd6a900318d0f5b34e931678eae55..658d2ded1582d0c16d9ce6f23f51adfa
          loop.run_forever()
  
  
-+def _safe_reason(exc: BaseException) -> str:
-+    message = str(exc) or exc.__class__.__name__
-+    return message.replace('"', "'")
-+
-+
+ def _safe_reason(exc: BaseException) -> str:
+     message = str(exc) or exc.__class__.__name__
+     return message.replace('"', "'")
+ 
+ 
  __all__ = ["TTSRuntime"]
