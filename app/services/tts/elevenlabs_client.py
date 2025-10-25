@@ -13,7 +13,7 @@ import httpx
 from app.telemetry import bus
 from app.voice_v2.tts_base import TTSProviderBase
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("tts.elevenlabs")
 
 _API_BASE_URL = "https://api.elevenlabs.io/v1"
 _OUTPUT_FORMAT = "pcm_16000"
