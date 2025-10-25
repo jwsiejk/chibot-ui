@@ -1,91 +1,383 @@
-diff --git a/app/security/jwt_utils.py b/app/security/jwt_utils.py
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index b97f1211bb5e714bfdde4c3a6247ebe6ef1b9a49..ccee4549d173fe1c880fde5dd94316a103203996 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -2,88 +2,90 @@
+ from __future__ import annotations
+ 
+ import hashlib
+ import json
+ import logging
+ import mimetypes
+ import os
+ import time
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from functools import partial
+ from pathlib import Path
+ from tempfile import NamedTemporaryFile
+ from typing import Any, Awaitable, Callable, Dict, Optional
+ 
+ from app import config
+ from app.logging_config import configure_logging
+ from app.telemetry import bus as telemetry_bus
+ from app.telemetry.exporter import FileExporter
+ from app.versioning import get_build_id, inject_static_version
+ from app.voice_v2.asr_runtime import ASRRuntime
+ from app.voice_v2.engine import EngineV2
+ from app.voice_v2.tts_runtime import TTSRuntime
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+ from app.services.streaming_asr.deepgram_client import DeepgramClient
++from app.auth.http_handlers import post_ws_token
+ 
+ 
+ configure_logging()
+ 
+ for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
+     _category_logger = logging.getLogger(_logger_name)
+     if _category_logger.level == logging.NOTSET:
+         _category_logger.setLevel(logging.INFO)
+ 
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ @dataclass(frozen=True)
+ class Response:
+     """Immutable container describing a serialized HTTP response."""
+ 
+     status: int
+     body: bytes
+     headers: tuple[tuple[bytes, bytes], ...]
+ 
+ 
+ def json_response(*, status: int = 200, **payload: Any) -> Response:
+     """Serialize a payload to JSON using a compact representation."""
+ 
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
+     )
+     return Response(status=status, body=body, headers=headers)
+ 
+ 
+ WS_ROUTE = "/ws/v2/chat"
+ HEALTH_ROUTE = "/api/v1/health"
+ LIVE_ROUTE = "/api/v1/live"
+ READY_ROUTE = "/api/v1/ready"
+ INFO_ROUTE = "/api/v1/info"
++WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
+ ROOT_ROUTE = "/"
+ FAVICON_ROUTE = "/favicon.ico"
+ STATIC_ROUTE_PREFIX = "/static/"
+ EXPORT_ROOT = Path("exports")
+ BASE_DIR = Path(__file__).resolve().parent
+ STATIC_ROOT = BASE_DIR / "static"
+ TEMPLATES_ROOT = BASE_DIR / "templates"
+ INDEX_PATH = TEMPLATES_ROOT / "index.html"
+ FAVICON_PATH = STATIC_ROOT / "favicon.ico"
+ _DEFAULT_INDEX_HTML = (
+     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
+ )
+ 
+ 
+ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
+ 
+ _adapter: Optional[ChatV2Adapter] = None
+ 
+ 
+ def _ws_route_matches(scope: dict, expected: str) -> bool:
+     """
+     Return True when the incoming websocket request targets the expected route,
+     robust to deployments mounted under a non-empty ASGI root_path.
+     """
+ 
+@@ -391,48 +393,49 @@ def _method_is_get(scope: dict) -> bool:
+     return scope.get("method", "GET").upper() == "GET"
+ 
+ 
+ def _get_adapter() -> ChatV2Adapter:
+     """Return a lazily instantiated ChatV2Adapter singleton."""
+     global _adapter
+     if _adapter is None:
+         exporter = FileExporter(EXPORT_ROOT)
+         engine = EngineV2(exporter=exporter)
+         tts_runtime = TTSRuntime(engine=engine)
+         asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
+         asr_runtime = ASRRuntime(engine=engine, client=asr_client)
+         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
+         _adapter.tts_runtime = tts_runtime
+         _adapter.asr_runtime = asr_runtime
+     return _adapter
+ 
+ 
+ _HTTP_ROUTES: Dict[str, HttpHandler] = {
+     ROOT_ROUTE: _handle_index,
+     FAVICON_ROUTE: _handle_favicon,
+     HEALTH_ROUTE: _handle_health,
+     LIVE_ROUTE: _handle_live,
+     READY_ROUTE: _handle_ready,
+     INFO_ROUTE: _handle_info,
++    WS_TOKEN_ROUTE: post_ws_token,
+ }
+ 
+ 
+ async def _enforce_admin_auth(
+     handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
+ ) -> Response:
+     return await handler(scope, receive)
+ 
+ 
+ asgi = app
+ 
+ __all__ = ["app", "asgi"]
+ 
+ 
+ def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
+     headers = scope.get("headers") or []
+     for name, value in headers:
+         if name == header_name:
+             try:
+                 return value.decode("latin1")
+             except UnicodeDecodeError:
+                 return value.decode("latin1", errors="ignore")
+     return None
+diff --git a/app/auth/http_handlers.py b/app/auth/http_handlers.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..5dfca41bef74f0f97d9cefbc2c808d9c98beff32
+index 0000000000000000000000000000000000000000..210a6557434e45bedccd15f1c72b87ab24010d29
 --- /dev/null
-+++ b/app/security/jwt_utils.py
-@@ -0,0 +1,39 @@
-+"""JWT helper utilities for WebSocket authentication."""
++++ b/app/auth/http_handlers.py
+@@ -0,0 +1,232 @@
++"""HTTP authentication handlers for minting WebSocket tokens."""
++from __future__ import annotations
 +
 +import logging
 +import os
-+import time
++import types
 +import uuid
++from typing import Any, Mapping, MutableMapping, Optional
 +
-+import jwt
++try:  # pragma: no cover - optional dependency wiring
++    from app.security.jwt_utils import mint_ws_token as _mint_ws_token_impl
++except ModuleNotFoundError:  # pragma: no cover - fallback when jwt is unavailable
++    _mint_ws_token_impl = None
 +
-+_log = logging.getLogger("app.security.jwt")
-+_SECRET = os.environ["SECRET_KEY"]
-+_ALG = "HS256"
-+_AUD = "chat.v2"
-+_DEFAULT_TTL = 60
++_log = logging.getLogger("app.auth.http")
 +
-+
-+def mint_ws_token(user_id: str, sid: str, is_admin: bool, ttl_s: int = _DEFAULT_TTL) -> str:
-+    """Mint a short-lived WebSocket JWT for the given session."""
-+    issued_at = int(time.time())
-+    claims = {
-+        "sub": user_id,
-+        "sid": sid,
-+        "aud": _AUD,
-+        "iat": issued_at,
-+        "exp": issued_at + ttl_s,
-+        "jti": str(uuid.uuid4()),
-+        "is_admin": is_admin,
-+    }
-+    _log.info("evt=ws_jwt_mint sid=%s ttl=%s", sid, ttl_s)
-+    return jwt.encode(claims, _SECRET, algorithm=_ALG)
++_CSRF_HEADER_NAME = b"x-csrf-token"
++_CSRF_COOKIE_CANDIDATES = ("csrf_token", "csrftoken", "askchip_csrf")
 +
 +
-+def verify_ws_token(token: str) -> dict:
-+    """Verify a WebSocket JWT and return its claims."""
++async def post_ws_token(scope: Mapping[str, Any], receive) -> "Response":
++    """Mint a short-lived WebSocket token for the authenticated session."""
++
++    from app.asgi_gateway import Response, json_response
++
++    method = _method(scope)
++    if method != "POST":
++        await _drain_body(receive)
++        return json_response(status=405, error="method_not_allowed")
++
++    if not _has_cookie_session(scope):
++        await _drain_body(receive)
++        return json_response(status=401, error="unauthorized")
++
++    if not _validate_csrf(scope):
++        await _drain_body(receive)
++        return json_response(status=403, error="forbidden")
++
++    user = _get_authenticated_user(scope)
++    if user is None:
++        await _drain_body(receive)
++        return json_response(status=401, error="unauthorized")
++
++    if not _profile_gate(user, scope):
++        await _drain_body(receive)
++        return json_response(status=409, error="profile_incomplete")
++
++    user_identifier = _user_identifier(user)
++    if user_identifier is None:
++        await _drain_body(receive)
++        _log.warning("evt=ws_token_missing_identifier")
++        return json_response(status=500, error="server_error")
++
++    await _drain_body(receive)
++
++    sid = uuid.uuid4().hex
++    is_admin = _is_admin(user)
++    token = _mint_ws_token(user_identifier, sid, is_admin, ttl_s=60)
++
++    _log.info("evt=ws_token_mint sid=%s ttl=60", sid)
++
++    ttl_ms = 60 * 1000
++    return json_response(access_token=token, sid=sid, ttl_ms=ttl_ms)
++
++
++def _method(scope: Mapping[str, Any]) -> str:
++    value = scope.get("method")
++    if isinstance(value, bytes):
++        value = value.decode("latin1", "ignore")
++    if not isinstance(value, str):
++        return "GET"
++    return value.upper()
++
++
++async def _drain_body(receive) -> None:
++    while True:
++        message = await receive()
++        if message.get("type") != "http.request":
++            break
++        if not message.get("more_body", False):
++            break
++
++
++def _headers(scope: Mapping[str, Any]) -> MutableMapping[bytes, bytes]:
++    headers = scope.get("headers") or []
++    collected: dict[bytes, bytes] = {}
++    for name, value in headers:
++        if isinstance(name, str):
++            name = name.encode("latin1")
++        if isinstance(value, str):
++            value = value.encode("latin1")
++        collected[name.lower()] = value
++    return collected
++
++
++def _has_cookie_session(scope: Mapping[str, Any]) -> bool:
++    header_map = _headers(scope)
++    cookie_header = header_map.get(b"cookie")
++    if not cookie_header:
++        return False
++    return bool(cookie_header.strip())
++
++
++def _validate_csrf(scope: Mapping[str, Any]) -> bool:
++    header_map = _headers(scope)
++    provided = header_map.get(_CSRF_HEADER_NAME)
++    if not provided:
++        return False
++
++    provided_str = provided.decode("utf-8", "ignore")
++    cookies = _parse_cookies(header_map.get(b"cookie"))
++
++    for name in _CSRF_COOKIE_CANDIDATES:
++        expected = cookies.get(name)
++        if expected is None:
++            continue
++        return expected == provided_str
++
++    state = _state(scope)
++    expected = None
++    if isinstance(state, dict):
++        expected = state.get("csrf_token") or state.get("csrf")
++    else:
++        expected = getattr(state, "csrf_token", None) or getattr(state, "csrf", None)
++    if expected is None:
++        return False
++    if isinstance(expected, bytes):
++        expected = expected.decode("utf-8", "ignore")
++    return str(expected) == provided_str
++
++
++def _parse_cookies(raw: Optional[bytes]) -> dict[str, str]:
++    if not raw:
++        return {}
 +    try:
-+        return jwt.decode(token, _SECRET, algorithms=[_ALG], audience=_AUD)
-+    except jwt.PyJWTError as err:  # pragma: no cover - passthrough logging
-+        _log.warning("evt=ws_jwt_verify_failed reason=%s", err.__class__.__name__)
-+        raise
-diff --git a/requirements.txt b/requirements.txt
-index fd584bd97af0e1857e8fe5c7774d2ae61d4c054c..2963cc0fb653e1ee3abbe850377f98cf878d24a7 100644
---- a/requirements.txt
-+++ b/requirements.txt
-@@ -11,37 +11,41 @@ psycopg[binary]>=3.1.18     # pgcrypto/uuid-friendly; good on Render
- # --- HTTP clients (vendors & web calls) ---
- httpx>=0.27.0               # async+sync; use for OpenAI/ElevenLabs calls
- 
- # --- Vendors ---
- openai>=1.30.0              # Chat Completions + Whisper
- elevenlabs>=1.6.1           # TTS + visemes client
- 
- # --- CORS (off by default; enable via env/flag if UI/API split) ---
- Flask-Cors>=4.0.0
- 
- # --- JSON / config utils ---
- orjson>=3.9.10              # fast JSON for logs/admin diagnostics payloads
- pydantic>=2.6.0             # request/response schemas (lightweight use)
- python-dotenv>=1.0.1        # local dev convenience; harmless on Render
- 
- # --- Flask deps (pinned explicitly for stability) ---
- Jinja2>=3.1.3
- Werkzeug>=3.0.1
- itsdangerous>=2.1.2
- blinker>=1.7.0
- 
- # --- Optional (safe to keep; remove if unused) ---
- python-multipart>=0.0.9     # if you accept uploads on ASGI routes (not needed for Flask uploads)
- 
- 
-+# --- Security ---
-+PyJWT>=2.8.0
++        text = raw.decode("latin1")
++    except UnicodeDecodeError:
++        text = raw.decode("latin1", "ignore")
++    cookies: dict[str, str] = {}
++    for part in text.split(";"):
++        if not part.strip():
++            continue
++        if "=" not in part:
++            continue
++        name, value = part.split("=", 1)
++        cookies[name.strip()] = value.strip()
++    return cookies
 +
 +
- 
- pytest
- 
- requests
- 
- alembic
- 
- SQLAlchemy
- 
- beautifulsoup4
- 
- 
++def _get_authenticated_user(scope: Mapping[str, Any]) -> Any | None:
++    state = _state(scope)
++    if state is not None:
++        if isinstance(state, dict) and "user" in state:
++            return state.get("user")
++        if hasattr(state, "user"):
++            return getattr(state, "user")
++    if "user" in scope:
++        return scope.get("user")
++    return None
++
++
++def _profile_gate(user: Any, scope: Mapping[str, Any]) -> bool:
++    candidate_keys = ("profile_complete", "profile_completed", "has_profile", "profile_ready")
++
++    for key in candidate_keys:
++        value = None
++        if isinstance(user, dict):
++            value = user.get(key)
++        else:
++            value = getattr(user, key, None)
++        if value is not None:
++            return bool(value)
++
++    state = _state(scope)
++    for key in candidate_keys:
++        if isinstance(state, dict) and key in state:
++            return bool(state[key])
++        if not isinstance(state, dict) and hasattr(state, key):
++            return bool(getattr(state, key))
++
++    return True
++
++
++def _user_identifier(user: Any) -> Optional[str]:
++    for attr in ("id_or_email", "id", "user_id", "email", "sub"):
++        value = None
++        if isinstance(user, dict):
++            value = user.get(attr)
++        else:
++            value = getattr(user, attr, None)
++        if value:
++            return str(value)
++    return None
++
++
++def _user_email(user: Any) -> Optional[str]:
++    if isinstance(user, dict):
++        value = user.get("email") or user.get("user_email")
++    else:
++        value = getattr(user, "email", None) or getattr(user, "user_email", None)
++    if value is None:
++        return None
++    return str(value).strip().lower()
++
++
++def _is_admin(user: Any) -> bool:
++    admin_raw = os.getenv("ADMIN_EMAILS", "")
++    if not admin_raw:
++        return False
++    user_email = _user_email(user)
++    if not user_email:
++        return False
++    admin_candidates = [item.strip().lower() for item in admin_raw.split(",") if item.strip()]
++    return user_email in admin_candidates
++
++
++def _state(scope: Mapping[str, Any]) -> Any:
++    state = scope.get("state")
++    if state is None:
++        return None
++    if isinstance(state, types.SimpleNamespace):
++        return state
++    return state
++
++
++__all__ = ["post_ws_token"]
++
++
++def _mint_ws_token(user_id: str, sid: str, is_admin: bool, *, ttl_s: int) -> str:
++    if _mint_ws_token_impl is None:  # pragma: no cover - dependency guard
++        raise RuntimeError("JWT support is not configured")
++    return _mint_ws_token_impl(user_id, sid, is_admin, ttl_s=ttl_s)

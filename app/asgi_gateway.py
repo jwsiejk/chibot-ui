@@ -24,6 +24,7 @@ from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_runtime import TTSRuntime
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 from app.services.streaming_asr.deepgram_client import DeepgramClient
+from app.auth.http_handlers import post_ws_token
 
 
 configure_logging()
@@ -62,6 +63,7 @@ HEALTH_ROUTE = "/api/v1/health"
 LIVE_ROUTE = "/api/v1/live"
 READY_ROUTE = "/api/v1/ready"
 INFO_ROUTE = "/api/v1/info"
+WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
 ROOT_ROUTE = "/"
 FAVICON_ROUTE = "/favicon.ico"
 STATIC_ROUTE_PREFIX = "/static/"
@@ -413,6 +415,7 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     LIVE_ROUTE: _handle_live,
     READY_ROUTE: _handle_ready,
     INFO_ROUTE: _handle_info,
+    WS_TOKEN_ROUTE: post_ws_token,
 }
 
 
