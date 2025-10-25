@@ -323,6 +323,14 @@ class ChatV2Adapter:
             return
 
         ctx = AdapterContext(sid=sid, headers=dict(headers), principal=principal)
+
+        if not (
+            inspect.iscoroutinefunction(self._on_open_and_greet)
+            and inspect.iscoroutinefunction(self._invoke_engine)
+        ):
+            _logger.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
+            raise RuntimeError("WebSocket async contract violation")
+
         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
         client = scope.get("client")
         ctx.ip = client[0] if isinstance(client, tuple) and client else None
@@ -342,10 +350,11 @@ class ChatV2Adapter:
 
         if self.exporter:
             self.exporter.begin(ctx.sid)
-        asyncio.create_task(self._on_open_and_greet(ctx, resume_state))
 
         for marker in resume_replay:
             await self._send_json(send, ctx.sid, marker)
+
+        await self._on_open_and_greet(ctx, resume_state)
 
         close_code = 1000
         close_reason: Optional[str] = None
@@ -1201,9 +1210,14 @@ class ChatV2Adapter:
         handler = getattr(self.engine, hook, None)
         if handler is None:
             return
-        result = handler(*args)
-        if inspect.isawaitable(result):
-            await result
+        try:
+            result = handler(*args)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            sid = args[0] if args else None
+            _logger.exception("evt=ws_engine_hook_failed hook=%s sid=%s", hook, sid)
+            raise
 
     async def _on_open_and_greet(
         self,
@@ -1211,6 +1225,11 @@ class ChatV2Adapter:
         resume_state: Optional[_ResumeState],
     ) -> None:
         try:
+            _logger.info(
+                "evt=ws_open_and_greet_start sid=%s resume=%s",
+                ctx.sid,
+                resume_state is not None,
+            )
             await self._invoke_engine("on_open", ctx.sid, ctx.headers)
             if resume_state is None:
                 await self._invoke_engine("start_greet", ctx.sid)
