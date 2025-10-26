@@ -545,7 +545,9 @@
       let summaryValue = event.summary || '';
 
       if (!summaryValue) {
-        if (event.meta && typeof event.meta === 'object') {
+        if (typeof event.msg === 'string' && event.msg) {
+          summaryValue = event.msg;
+        } else if (event.meta && typeof event.meta === 'object') {
           summaryValue = JSON.stringify(event.meta);
         } else if (event.text) {
           summaryValue = String(event.text).slice(0, 160);
