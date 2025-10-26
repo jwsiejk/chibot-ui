@@ -14,27 +14,44 @@ _log = logging.getLogger(__name__)
 _pool: Optional[asyncpg.Pool] = None
 _pool_lock = asyncio.Lock()
 
+def _normalize_env_var(name: str) -> Optional[str]:
+    """Return a trimmed environment variable and update the process env."""
+
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+
+    normalized = raw.strip()
+    if not normalized:
+        # Remove empty values so asyncpg/libpq does not see blank strings.
+        os.environ.pop(name, None)
+        return None
+
+    if normalized != raw:
+        os.environ[name] = normalized
+
+    return normalized
 
 def _environment_dsn() -> str:
-    for key in ("DATABASE_URL", "NEON_DATABASE_URL"):
-        value = os.getenv(key)
+    # Ensure ssl configuration is normalized even if we return an existing DSN.
+    _normalize_env_var("PGSSLMODE")
+
+        for key in ("DATABASE_URL", "NEON_DATABASE_URL"):
+    
+        value = _normalize_env_var(key)
         if value is not None:
-            value_stripped = value.strip()
-            if value_stripped:
-                return value_stripped
+            return value
 
     def _get_env(name: str) -> Optional[str]:
-        raw = os.getenv(name)
-        if raw is None:
-            return None
-        value = raw.strip()
-        return value or None
+        return _normalize_env_var(name)
 
     host = _get_env("PGHOST")
     database = _get_env("PGDATABASE")
     user = _get_env("PGUSER")
     password = _get_env("PGPASSWORD")
     port = _get_env("PGPORT") or "5432"
+    sslmode_raw = _normalize_env_var("PGSSLMODE") or "require"
+    sslmode_enc = quote(sslmode_raw, safe="")
 
     missing = [
         name
@@ -53,7 +70,7 @@ def _environment_dsn() -> str:
     password_enc = quote(password, safe="")
     host_enc = host.strip()
     return (
-        f"postgresql://{user_enc}:{password_enc}@{host_enc}:{port}/{database}?sslmode=require"
+        f"postgresql://{user_enc}:{password_enc}@{host_enc}:{port}/{database}?sslmode={sslmode_enc}"
     )
 
 
