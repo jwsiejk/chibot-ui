@@ -1,42 +1,319 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index b78eb06282e2e1bd35617e0f0f5f12021ed33202..276b014138c5f7ae5abdae7b49b55064ec17dd35 100644
+index 276b014138c5f7ae5abdae7b49b55064ec17dd35..c3194a19441fe3c7dafa494f9b728ec30e7b92da 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -650,50 +650,51 @@
-           const refreshedToken = refreshPayload && typeof refreshPayload.access_token === 'string'
-             ? refreshPayload.access_token
-             : null;
-           if (!refreshedToken) {
-             return fail('Couldn’t start session. Try again.');
+@@ -510,199 +510,209 @@
+         setTimeout(() => {
+           toast.classList.add('toast-exit');
+           setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 220);
+         }, 3600);
+       };
+     })();
+ 
+     function csrf() {
+       const cookies = document.cookie ? document.cookie.split(';') : [];
+       for (const name of ['askchip_csrf', 'csrftoken', 'csrf_token']) {
+         const prefix = `${name}=`;
+         for (const part of cookies) {
+           const trimmed = part.trim();
+           if (!trimmed.startsWith(prefix)) continue;
+           const raw = trimmed.slice(prefix.length);
+           if (!raw) continue;
+           try { return decodeURIComponent(raw); } catch (err) {
+             console.warn('Failed to decode CSRF cookie', err);
+             return raw;
            }
-           const refreshedSid = typeof refreshPayload.sid === 'string' ? refreshPayload.sid : null;
-           const refreshedTtlMs = Number(refreshPayload.ttl_ms);
-           const refreshedTtlFinite = Number.isFinite(refreshedTtlMs) ? refreshedTtlMs : null;
-           const refreshedIssuedAt = Date.now();
-           tokenForOpen = refreshedToken;
-           const refreshPatch = {
-             wsTokenAccessToken: refreshedToken,
-             wsTokenTTL: refreshedTtlFinite,
-             wsTokenIssuedAt: refreshedIssuedAt
-           };
-           if (refreshedSid) refreshPatch.sid = refreshedSid;
-           AppState.setState(refreshPatch);
-           console.log('evt=ws_token_obtained', { sid: refreshedSid, ttl_ms: refreshedTtlFinite });
          }
        }
+       return '';
+     }
  
-       const params = new URLSearchParams({ access_token: tokenForOpen });
-       if (resumeToken) params.set('resume', resumeToken);
+-    startBtn.addEventListener('click', async () => {
+-      startBtn.disabled = true;
++    async function getMe() {
++      try {
++        const r = await fetch('/api/v1/auth/me', { method: 'GET', credentials: 'include' });
++        if (!r.ok) return { authenticated: false };
++        return await r.json();
++      } catch {
++        return { authenticated: false };
++      }
++    }
++
++    async function mintWsToken() {
++      const headers = {};
++      if (typeof csrf === 'function') headers['X-CSRF-Token'] = csrf();
+       try {
+-        const authResponse = await fetch('/api/v1/auth/me', {
+-          method: 'GET',
++        const r = await fetch('/api/v1/auth/ws-token', {
++          method: 'POST',
++          headers,
+           credentials: 'include',
+         });
+-        if (authResponse.status === 401) {
+-          if (window.AuthUI && typeof window.AuthUI.showLoginModal === 'function') {
+-            window.AuthUI.showLoginModal();
+-          }
+-          showToastMessage('Please login first.');
+-          startBtn.disabled = false;
+-          return;
+-        }
+-        if (!authResponse.ok) {
+-          console.error('Failed to verify auth', authResponse.status);
+-          showToastMessage('Couldn’t verify login. Try again.');
+-          startBtn.disabled = false;
+-          return;
++        if (!r.ok) {
++          return { ok: false, status: r.status };
+         }
+-        let authPayload = null;
+         try {
+-          authPayload = await authResponse.json();
++          const body = await r.json();
++          return { ok: true, body };
+         } catch (err) {
+-          console.error('Failed to parse auth response', err);
+-          showToastMessage('Couldn’t verify login. Try again.');
+-          startBtn.disabled = false;
++          console.error('Failed to parse ws-token response', err);
++          return { ok: false, status: r.status };
++        }
++      } catch (err) {
++        console.error('Failed to mint ws-token', err);
++        return { ok: false, status: 0 };
++      }
++    }
++
++    function rememberToken(sid, ttl_ms) {
++      if (!window.AppState || typeof window.AppState.setState !== 'function') return;
++      window.AppState.setState({
++        sid,
++        wsTokenIssuedAt: Date.now(),
++        wsTokenTTL: ttl_ms
++      });
++    }
++
++    function tokenFreshEnough() {
++      const s = window.AppState && window.AppState.getState ? window.AppState.getState() : null;
++      if (!s || !s.wsTokenIssuedAt || !s.wsTokenTTL) return false;
++      const age = Date.now() - s.wsTokenIssuedAt;
++      return age <= (s.wsTokenTTL - 1500);
++    }
++
++    function showStartToast(msg) {
++      if (!msg) return;
++      if (typeof showToast === 'function') {
++        showToast(msg);
++      } else if (typeof showToastMessage === 'function') {
++        showToastMessage(msg);
++      } else if (typeof alert === 'function') {
++        alert(msg);
++      } else {
++        console.warn('Toast:', msg);
++      }
++    }
++
++    function showLoginModal() {
++      if (window.AuthUI && typeof window.AuthUI.showLoginModal === 'function') {
++        window.AuthUI.showLoginModal();
++      }
++    }
++
++    function showProfileModal() {
++      if (window.AuthUI && typeof window.AuthUI.showProfileModal === 'function') {
++        window.AuthUI.showProfileModal();
++      }
++    }
++
++    async function handleStartSessionClick() {
++      try {
++        const me = await getMe();
++        if (!me.authenticated) {
++          if (typeof showLoginModal === 'function') showLoginModal();
++          showStartToast('Please login first.');
+           return;
+         }
+-        if (authPayload && authPayload.profile_complete === false) {
+-          if (window.AuthUI && typeof window.AuthUI.showProfileModal === 'function') {
+-            window.AuthUI.showProfileModal();
+-          }
+-          showToastMessage('Complete your profile to continue.');
+-          startBtn.disabled = false;
++        if (me.profile_complete === false) {
++          if (typeof showProfileModal === 'function') showProfileModal();
++          showStartToast('Complete your profile to continue.');
+           return;
+         }
+-      } catch (err) {
+-        console.error('Failed to verify auth', err);
+-        showToastMessage('Couldn’t verify login. Try again.');
+-        startBtn.disabled = false;
++      } catch {
++      }
++
++      // 1) If a previously minted token is still fresh, you MAY skip re-minting.
++      // For reliability we mint a fresh token every Start click. If you prefer
++      // to skip re-minting when fresh, wrap mint with `if (!tokenFreshEnough()) {...}`
++      const minted = await mintWsToken();
++      if (!minted.ok) {
++        if (minted.status === 401 || minted.status === 403) {
++          showStartToast('Please login and complete your profile.');
++        } else if (minted.status === 409) {
++          showStartToast('Profile required. Please complete your profile.');
++        } else {
++          showStartToast('Could not start session. Try again.');
++        }
+         return;
+       }
+-      const state = AppState.getState();
+-      const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
+-      let resumeToken = null;
+-      if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
+-        resumeToken = resumeState.token;
++
++      const { access_token, sid, ttl_ms } = minted.body || {};
++      if (!access_token || !sid || !ttl_ms) {
++        console.error('ws-token response missing fields', minted.body);
++        showStartToast('Could not start session. Try again.');
++        return;
+       }
+ 
+-      const fail = (message) => { if (message) showToastMessage(message); startBtn.disabled = false; };
+-      const csrfToken = csrf();
+-      const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
+-      let payload = null;
+-      try {
+-        const response = await fetch('/api/v1/auth/ws-token', {
+-          method: 'POST',
+-          credentials: 'include',
+-          headers,
+-        });
+-        if (response.status === 401 || response.status === 403) return fail(response.status === 401 ? 'Please login first.' : 'Complete your profile first.');
+-        if (response.status === 409) return fail('Profile required. Please complete profile.');
+-        if (!response.ok) return fail('Couldn’t start session. Try again.');
+-        payload = await response.json();
+-      } catch (err) {
+-        console.error('Failed to fetch WS token', err);
+-        return fail('Couldn’t start session. Try again.');
+-      }
+-
+-      if (!payload || typeof payload.access_token !== 'string') return fail('Couldn’t start session. Try again.');
+-      const accessToken = payload.access_token;
+-      const sid = typeof payload.sid === 'string' ? payload.sid : null;
+-      const ttlMs = Number(payload.ttl_ms);
+-      const ttlFinite = Number.isFinite(ttlMs) ? ttlMs : null;
+-      const tokenIssuedAt = Date.now();
+-      const initialPatch = {
+-        wsTokenAccessToken: accessToken,
+-        wsTokenTTL: ttlFinite,
+-        wsTokenIssuedAt: tokenIssuedAt
+-      };
+-      if (sid) initialPatch.sid = sid;
+-      AppState.setState(initialPatch);
+-      console.log('evt=ws_token_obtained', { sid, ttl_ms: ttlFinite });
+-
+-      let tokenForOpen = accessToken;
+-      const guardState = AppState.getState();
+-      const guardTTL = guardState && Number.isFinite(guardState.wsTokenTTL) ? guardState.wsTokenTTL : null;
+-      const guardIssuedAt = guardState && Number.isFinite(guardState.wsTokenIssuedAt) ? guardState.wsTokenIssuedAt : null;
+-      if (guardTTL && guardIssuedAt) {
+-        const ageMs = Date.now() - guardIssuedAt;
+-        if (ageMs > (guardTTL - 1500)) {
+-          let refreshResponse;
+-          try {
+-            refreshResponse = await fetch('/api/v1/auth/ws-token', {
+-              method: 'POST',
+-              credentials: 'include',
+-              headers,
+-            });
+-          } catch (err) {
+-            console.error('Failed to refresh WS token', err);
+-            return fail('Couldn’t start session. Try again.');
+-          }
+-          if (!refreshResponse.ok) {
+-            showToastMessage('Login or profile required to start.');
+-            startBtn.disabled = false;
+-            return;
+-          }
+-          let refreshPayload = null;
+-          try {
+-            refreshPayload = await refreshResponse.json();
+-          } catch (err) {
+-            console.error('Failed to parse refreshed WS token', err);
+-            return fail('Couldn’t start session. Try again.');
+-          }
+-          const refreshedToken = refreshPayload && typeof refreshPayload.access_token === 'string'
+-            ? refreshPayload.access_token
+-            : null;
+-          if (!refreshedToken) {
+-            return fail('Couldn’t start session. Try again.');
+-          }
+-          const refreshedSid = typeof refreshPayload.sid === 'string' ? refreshPayload.sid : null;
+-          const refreshedTtlMs = Number(refreshPayload.ttl_ms);
+-          const refreshedTtlFinite = Number.isFinite(refreshedTtlMs) ? refreshedTtlMs : null;
+-          const refreshedIssuedAt = Date.now();
+-          tokenForOpen = refreshedToken;
+-          const refreshPatch = {
+-            wsTokenAccessToken: refreshedToken,
+-            wsTokenTTL: refreshedTtlFinite,
+-            wsTokenIssuedAt: refreshedIssuedAt
+-          };
+-          if (refreshedSid) refreshPatch.sid = refreshedSid;
+-          AppState.setState(refreshPatch);
+-          console.log('evt=ws_token_obtained', { sid: refreshedSid, ttl_ms: refreshedTtlFinite });
+-        }
++      const ttlValue = Number(ttl_ms);
++      if (!Number.isFinite(ttlValue) || ttlValue <= 0) {
++        console.error('ws-token ttl invalid', ttl_ms);
++        showStartToast('Could not start session. Try again.');
++        return;
+       }
+ 
+-      const params = new URLSearchParams({ access_token: tokenForOpen });
+-      if (resumeToken) params.set('resume', resumeToken);
++      rememberToken(sid, ttlValue);
++
++      if (!tokenFreshEnough()) {
++        console.error('ws-token considered stale', { sid, ttl_ms: ttlValue });
++        showStartToast('Could not start session. Try again.');
++        return;
++      }
++
++      const params = new URLSearchParams({ access_token });
++      const state = AppState && typeof AppState.getState === 'function' ? AppState.getState() : null;
++      if (state && state.resume && typeof state.resume.token === 'string') {
++        const resume = state.resume;
++        if (Number.isFinite(resume.expiresAt) && Date.now() < resume.expiresAt) {
++          params.set('resume', resume.token);
++        }
++      }
        const wsUrl = `/ws/v2/chat?${params.toString()}`;
-+      console.log('evt=ws_open_attempt', { url: wsUrl, proto: 'chat.v2', sid });
++
+       console.log('evt=ws_open_attempt', { url: wsUrl, proto: 'chat.v2', sid });
++
        try {
          WSClient.open(wsUrl, ['chat.v2']);
        } catch (err) {
-         console.error('Failed to open WS client', err);
-         AppState.setState({ connectionState: 'disconnected' });
-         fail('Couldn’t start session. Try again.');
-         endBtn.disabled = true;
+-        console.error('Failed to open WS client', err);
+-        AppState.setState({ connectionState: 'disconnected' });
+-        fail('Couldn’t start session. Try again.');
+-        endBtn.disabled = true;
++        console.error('WSClient.open failed', err);
++        if (AppState && typeof AppState.setState === 'function') {
++          AppState.setState({ connectionState: 'disconnected' });
++        }
++        showStartToast('Could not open a session. Please try again.');
        }
++    }
++
++    startBtn.addEventListener('click', (event) => {
++      event.preventDefault();
++      if (startBtn.disabled) return;
++      startBtn.disabled = true;
++      Promise.resolve(handleStartSessionClick()).finally(() => {
++        startBtn.disabled = false;
++      });
      });
  
      endBtn.addEventListener('click', () => {
@@ -54,157 +331,73 @@ index b78eb06282e2e1bd35617e0f0f5f12021ed33202..276b014138c5f7ae5abdae7b49b55064
        if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
          window.AudioPlayer.interrupt();
        }
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index e74a7409d5827aa6cddfe29760b9ab8eba493532..f61ee7403b41d3d6a11b8c6250f6f569779a50b6 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -4,50 +4,71 @@
-   const SUBPROTOCOL = "chat.v2";
-   const INFO_DEADLINE_MS = 20000;
-   const TOKEN_EXPIRY_MS = 60 * 1000;
-   const TOAST_STYLE_ID = "wsclient-toast-styles";
-   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
- 
-   const AppState = window.AppState;
-   if (!AppState) {
-     throw new Error("AppState store is required before loading WSClient");
-   }
-   const getAudioPlayer = () => window.AudioPlayer;
- 
-   let socket = null;
-   let heartbeatTimerId = null;
-   let expectInfoFrame = true;
-   let infoWatchdogTimerId = null;
-   let lastPingAt = null;
-   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-   let rateLimitRetryTimerId = null;
-   let rateLimitRetryCount = 0;
-   let autoResumeAttemptToken = null;
-   let toastRoot = null;
-   let lastTokenValue = null;
-   let lastTokenMintedAt = null;
- 
-+  function makeWsUrl(pathWithQuery) {
-+    if (typeof pathWithQuery !== "string" || !pathWithQuery) {
-+      return pathWithQuery;
-+    }
-+    const trimmed = pathWithQuery.trim();
-+    if (/^wss?:/i.test(trimmed)) {
-+      return trimmed;
-+    }
-+    try {
-+      const loc = (typeof window !== "undefined" && window.location)
-+        ? window.location
-+        : (typeof location !== "undefined" ? location : null);
-+      const scheme = loc && loc.protocol === "https:" ? "wss://" : "ws://";
-+      const parsed = new URL(trimmed, loc ? loc.origin : undefined);
-+      return `${scheme}${parsed.host}${parsed.pathname}${parsed.search}`;
-+    } catch (err) {
-+      console.warn("Failed to construct WS URL", err);
-+      return trimmed;
-+    }
-+  }
-+
-   function getResumeState() {
-     const state = AppState.getState();
-     const resume = state && typeof state.resume === "object" ? state.resume : null;
-     if (!resume) return null;
-     const token = typeof resume.token === "string" ? resume.token : null;
-     const ttlMs = Number.isFinite(resume.ttlMs) ? resume.ttlMs : null;
-     const expiresAt = Number.isFinite(resume.expiresAt) ? resume.expiresAt : null;
-     if (!token || !ttlMs || !expiresAt) return null;
-     return { token, ttlMs, expiresAt };
-   }
- 
-   function assignResume(token, ttlMs) {
-     if (typeof AppState.setResume === "function") {
-       AppState.setResume(token, ttlMs);
-     }
-     autoResumeAttemptToken = null;
-   }
- 
-   function clearResumeState() {
-     if (typeof AppState.clearResume === "function") {
-       AppState.clearResume();
-     }
-     autoResumeAttemptToken = null;
-   }
- 
-@@ -600,62 +621,72 @@
-       if (!urlOverride && typeof options.url === "string" && options.url.trim()) {
-         urlOverride = options.url.trim();
-       }
-       if (protocols === undefined && options.protocols !== undefined) {
-         protocols = options.protocols;
-       }
-     }
- 
-     if (socket) {
-       cleanupSocket(socket, "superseded");
-     }
-     expectInfoFrame = true;
-     startInfoWatchdog();
-     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
-       try {
-         window.WSErrorUI.cancelRateLimitCountdown("manual");
-       } catch (err) {
-         console.warn("Failed to cancel rate limit countdown", err);
-       }
-     }
-     if (!skipRateLimitCancel) {
-       clearRateLimitRetryTimer();
-       rateLimitRetryCount = 0;
-     }
-     const url = urlOverride || computeUrl(resumeTokenValue);
-+    const finalUrl = typeof url === "string" ? makeWsUrl(url) : url;
-+    const wsUrl = typeof finalUrl === "string" ? finalUrl : url;
-+    const expectsAccessToken = typeof url === "string" && url.includes("access_token=");
-+    if (expectsAccessToken && (typeof wsUrl !== "string" || !/[?&]access_token=/.test(wsUrl))) {
-+      console.error("ws_open_missing_token_query", { originalUrl: url, finalUrl: wsUrl });
-+      showConnectionToast("Session token missing. Please click Start again.");
-+      updateState({ connectionState: "disconnected" });
-+      return;
-+    }
-     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
-+    console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
-     const logPayload = Array.isArray(wsProtocols)
--      ? { url, protocols: wsProtocols }
--      : { url, subprotocol: wsProtocols };
-+      ? { url: wsUrl, protocols: wsProtocols }
-+      : { url: wsUrl, subprotocol: wsProtocols };
-     console.log("WS opening", logPayload);
--    const tokenInfo = trackTokenFromUrl(url);
--    const ws = transportFactory(url, wsProtocols);
-+    const tokenInfo = trackTokenFromUrl(wsUrl);
-+    const ws = transportFactory(wsUrl, wsProtocols);
-     ws.__accessTokenInfo = tokenInfo;
-     ws.__handshakeToastShown = false;
-     ws.onopen = () => {
-       // Lightweight breadcrumb; keep as console.log
--      console.log("WebSocket open", { url, protocol: ws.protocol || wsProtocols });
-+      console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
-     };
- 
-     ws.onerror = (e) => {
-       console.error("WebSocket error", e, { readyState: ws.readyState });
-       maybeShowHandshakeToast(ws, null);
-     };
- 
-     ws.onclose = (e) => {
-       console.error("WebSocket closed", {
-         code: e.code,
-         reason: e.reason,
-         wasClean: e.wasClean,
-         readyState: ws.readyState,
-       });
-       maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
-     };
-     socket = ws;
-     updateState({
-       connectionState: resumeTokenValue ? "resuming" : "connecting",
-       websocket: ws,
-       latencyMs: null,
-       lastPingAt: null,
-       resumeError: null
      });
-     attachSocket(ws);
+ 
+     // --- Resume banner ---
+     const resumeBanner = document.createElement('div');
+     resumeBanner.setAttribute('role', 'status');
+     resumeBanner.setAttribute('aria-live', 'polite');
+     resumeBanner.style.position = 'fixed';
+     resumeBanner.style.top = '16px';
+@@ -795,58 +805,56 @@
+ 
+     function updateResumeBanner(state) {
+       const hasCountdown = state.connectionState === 'resuming' && state.resume && Number.isFinite(state.resume.expiresAt);
+       if (hasCountdown) {
+         showResumeCountdown();
+         return;
+       }
+       if (state.resumeError === 'invalid') {
+         showResumeError();
+         return;
+       }
+       hideResumeBanner();
+     }
+ 
+     resumeAction.addEventListener('click', () => {
+       resumeAction.disabled = true;
+       try {
+         WSClient.close('user_restart');
+       } catch (err) {
+         console.warn('Resume banner close failed', err);
+       }
+       if (typeof AppState.clearResume === 'function') {
+         AppState.clearResume();
+       }
+       AppState.setState({ resumeError: null });
+-      try {
+-        WSClient.open();
+-      } catch (err) {
++      Promise.resolve(handleStartSessionClick()).catch((err) => {
+         console.error('Failed to start new session', err);
+         AppState.setState({ connectionState: 'disconnected' });
+-      } finally {
++      }).finally(() => {
+         resumeAction.disabled = false;
+-      }
++      });
+     });
+ 
+     // --- Waveform visual inside the Chip window ---
+     const Waveform = (() => {
+       const canvas = document.getElementById('waveCanvas');
+       const ctx = canvas.getContext('2d', {alpha:false});
+       let raf = 0, analyser = null, source = null, audioCtx = null, dataArray = null;
+       let synthMode = true, t = 0;
+ 
+       function resizeCanvas(){
+         const dpr = Math.max(1, window.devicePixelRatio || 1);
+         canvas.width = canvas.clientWidth * dpr;
+         canvas.height = canvas.clientHeight * dpr;
+         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+       }
+       window.addEventListener('resize', resizeCanvas, {passive:true});
+       resizeCanvas();
+ 
+       function drawBackground(){
+         const w = canvas.clientWidth, h = canvas.clientHeight;
+         const g = ctx.createLinearGradient(0,0,w,h);
+         g.addColorStop(0,'#0b1222'); g.addColorStop(1,'#0a0f1b');
+         ctx.fillStyle = g; ctx.fillRect(0,0,w,h);
+         ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+         ctx.lineWidth = 1;

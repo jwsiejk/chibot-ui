@@ -532,155 +532,165 @@
       return '';
     }
 
-    startBtn.addEventListener('click', async () => {
-      startBtn.disabled = true;
+    async function getMe() {
       try {
-        const authResponse = await fetch('/api/v1/auth/me', {
-          method: 'GET',
+        const r = await fetch('/api/v1/auth/me', { method: 'GET', credentials: 'include' });
+        if (!r.ok) return { authenticated: false };
+        return await r.json();
+      } catch {
+        return { authenticated: false };
+      }
+    }
+
+    async function mintWsToken() {
+      const headers = {};
+      if (typeof csrf === 'function') headers['X-CSRF-Token'] = csrf();
+      try {
+        const r = await fetch('/api/v1/auth/ws-token', {
+          method: 'POST',
+          headers,
           credentials: 'include',
         });
-        if (authResponse.status === 401) {
-          if (window.AuthUI && typeof window.AuthUI.showLoginModal === 'function') {
-            window.AuthUI.showLoginModal();
-          }
-          showToastMessage('Please login first.');
-          startBtn.disabled = false;
-          return;
+        if (!r.ok) {
+          return { ok: false, status: r.status };
         }
-        if (!authResponse.ok) {
-          console.error('Failed to verify auth', authResponse.status);
-          showToastMessage('Couldn’t verify login. Try again.');
-          startBtn.disabled = false;
-          return;
-        }
-        let authPayload = null;
         try {
-          authPayload = await authResponse.json();
+          const body = await r.json();
+          return { ok: true, body };
         } catch (err) {
-          console.error('Failed to parse auth response', err);
-          showToastMessage('Couldn’t verify login. Try again.');
-          startBtn.disabled = false;
-          return;
-        }
-        if (authPayload && authPayload.profile_complete === false) {
-          if (window.AuthUI && typeof window.AuthUI.showProfileModal === 'function') {
-            window.AuthUI.showProfileModal();
-          }
-          showToastMessage('Complete your profile to continue.');
-          startBtn.disabled = false;
-          return;
+          console.error('Failed to parse ws-token response', err);
+          return { ok: false, status: r.status };
         }
       } catch (err) {
-        console.error('Failed to verify auth', err);
-        showToastMessage('Couldn’t verify login. Try again.');
-        startBtn.disabled = false;
+        console.error('Failed to mint ws-token', err);
+        return { ok: false, status: 0 };
+      }
+    }
+
+    function rememberToken(sid, ttl_ms) {
+      if (!window.AppState || typeof window.AppState.setState !== 'function') return;
+      window.AppState.setState({
+        sid,
+        wsTokenIssuedAt: Date.now(),
+        wsTokenTTL: ttl_ms
+      });
+    }
+
+    function tokenFreshEnough() {
+      const s = window.AppState && window.AppState.getState ? window.AppState.getState() : null;
+      if (!s || !s.wsTokenIssuedAt || !s.wsTokenTTL) return false;
+      const age = Date.now() - s.wsTokenIssuedAt;
+      return age <= (s.wsTokenTTL - 1500);
+    }
+
+    function showStartToast(msg) {
+      if (!msg) return;
+      if (typeof showToast === 'function') {
+        showToast(msg);
+      } else if (typeof showToastMessage === 'function') {
+        showToastMessage(msg);
+      } else if (typeof alert === 'function') {
+        alert(msg);
+      } else {
+        console.warn('Toast:', msg);
+      }
+    }
+
+    function showLoginModal() {
+      if (window.AuthUI && typeof window.AuthUI.showLoginModal === 'function') {
+        window.AuthUI.showLoginModal();
+      }
+    }
+
+    function showProfileModal() {
+      if (window.AuthUI && typeof window.AuthUI.showProfileModal === 'function') {
+        window.AuthUI.showProfileModal();
+      }
+    }
+
+    async function handleStartSessionClick() {
+      try {
+        const me = await getMe();
+        if (!me.authenticated) {
+          if (typeof showLoginModal === 'function') showLoginModal();
+          showStartToast('Please login first.');
+          return;
+        }
+        if (me.profile_complete === false) {
+          if (typeof showProfileModal === 'function') showProfileModal();
+          showStartToast('Complete your profile to continue.');
+          return;
+        }
+      } catch {
+      }
+
+      // 1) If a previously minted token is still fresh, you MAY skip re-minting.
+      // For reliability we mint a fresh token every Start click. If you prefer
+      // to skip re-minting when fresh, wrap mint with `if (!tokenFreshEnough()) {...}`
+      const minted = await mintWsToken();
+      if (!minted.ok) {
+        if (minted.status === 401 || minted.status === 403) {
+          showStartToast('Please login and complete your profile.');
+        } else if (minted.status === 409) {
+          showStartToast('Profile required. Please complete your profile.');
+        } else {
+          showStartToast('Could not start session. Try again.');
+        }
         return;
       }
-      const state = AppState.getState();
-      const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
-      let resumeToken = null;
-      if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
-        resumeToken = resumeState.token;
+
+      const { access_token, sid, ttl_ms } = minted.body || {};
+      if (!access_token || !sid || !ttl_ms) {
+        console.error('ws-token response missing fields', minted.body);
+        showStartToast('Could not start session. Try again.');
+        return;
       }
 
-      const fail = (message) => { if (message) showToastMessage(message); startBtn.disabled = false; };
-      const csrfToken = csrf();
-      const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
-      let payload = null;
-      try {
-        const response = await fetch('/api/v1/auth/ws-token', {
-          method: 'POST',
-          credentials: 'include',
-          headers,
-        });
-        if (response.status === 401 || response.status === 403) return fail(response.status === 401 ? 'Please login first.' : 'Complete your profile first.');
-        if (response.status === 409) return fail('Profile required. Please complete profile.');
-        if (!response.ok) return fail('Couldn’t start session. Try again.');
-        payload = await response.json();
-      } catch (err) {
-        console.error('Failed to fetch WS token', err);
-        return fail('Couldn’t start session. Try again.');
+      const ttlValue = Number(ttl_ms);
+      if (!Number.isFinite(ttlValue) || ttlValue <= 0) {
+        console.error('ws-token ttl invalid', ttl_ms);
+        showStartToast('Could not start session. Try again.');
+        return;
       }
 
-      if (!payload || typeof payload.access_token !== 'string') return fail('Couldn’t start session. Try again.');
-      const accessToken = payload.access_token;
-      const sid = typeof payload.sid === 'string' ? payload.sid : null;
-      const ttlMs = Number(payload.ttl_ms);
-      const ttlFinite = Number.isFinite(ttlMs) ? ttlMs : null;
-      const tokenIssuedAt = Date.now();
-      const initialPatch = {
-        wsTokenAccessToken: accessToken,
-        wsTokenTTL: ttlFinite,
-        wsTokenIssuedAt: tokenIssuedAt
-      };
-      if (sid) initialPatch.sid = sid;
-      AppState.setState(initialPatch);
-      console.log('evt=ws_token_obtained', { sid, ttl_ms: ttlFinite });
+      rememberToken(sid, ttlValue);
 
-      let tokenForOpen = accessToken;
-      const guardState = AppState.getState();
-      const guardTTL = guardState && Number.isFinite(guardState.wsTokenTTL) ? guardState.wsTokenTTL : null;
-      const guardIssuedAt = guardState && Number.isFinite(guardState.wsTokenIssuedAt) ? guardState.wsTokenIssuedAt : null;
-      if (guardTTL && guardIssuedAt) {
-        const ageMs = Date.now() - guardIssuedAt;
-        if (ageMs > (guardTTL - 1500)) {
-          let refreshResponse;
-          try {
-            refreshResponse = await fetch('/api/v1/auth/ws-token', {
-              method: 'POST',
-              credentials: 'include',
-              headers,
-            });
-          } catch (err) {
-            console.error('Failed to refresh WS token', err);
-            return fail('Couldn’t start session. Try again.');
-          }
-          if (!refreshResponse.ok) {
-            showToastMessage('Login or profile required to start.');
-            startBtn.disabled = false;
-            return;
-          }
-          let refreshPayload = null;
-          try {
-            refreshPayload = await refreshResponse.json();
-          } catch (err) {
-            console.error('Failed to parse refreshed WS token', err);
-            return fail('Couldn’t start session. Try again.');
-          }
-          const refreshedToken = refreshPayload && typeof refreshPayload.access_token === 'string'
-            ? refreshPayload.access_token
-            : null;
-          if (!refreshedToken) {
-            return fail('Couldn’t start session. Try again.');
-          }
-          const refreshedSid = typeof refreshPayload.sid === 'string' ? refreshPayload.sid : null;
-          const refreshedTtlMs = Number(refreshPayload.ttl_ms);
-          const refreshedTtlFinite = Number.isFinite(refreshedTtlMs) ? refreshedTtlMs : null;
-          const refreshedIssuedAt = Date.now();
-          tokenForOpen = refreshedToken;
-          const refreshPatch = {
-            wsTokenAccessToken: refreshedToken,
-            wsTokenTTL: refreshedTtlFinite,
-            wsTokenIssuedAt: refreshedIssuedAt
-          };
-          if (refreshedSid) refreshPatch.sid = refreshedSid;
-          AppState.setState(refreshPatch);
-          console.log('evt=ws_token_obtained', { sid: refreshedSid, ttl_ms: refreshedTtlFinite });
+      if (!tokenFreshEnough()) {
+        console.error('ws-token considered stale', { sid, ttl_ms: ttlValue });
+        showStartToast('Could not start session. Try again.');
+        return;
+      }
+
+      const params = new URLSearchParams({ access_token });
+      const state = AppState && typeof AppState.getState === 'function' ? AppState.getState() : null;
+      if (state && state.resume && typeof state.resume.token === 'string') {
+        const resume = state.resume;
+        if (Number.isFinite(resume.expiresAt) && Date.now() < resume.expiresAt) {
+          params.set('resume', resume.token);
         }
       }
-
-      const params = new URLSearchParams({ access_token: tokenForOpen });
-      if (resumeToken) params.set('resume', resumeToken);
       const wsUrl = `/ws/v2/chat?${params.toString()}`;
+
       console.log('evt=ws_open_attempt', { url: wsUrl, proto: 'chat.v2', sid });
+
       try {
         WSClient.open(wsUrl, ['chat.v2']);
       } catch (err) {
-        console.error('Failed to open WS client', err);
-        AppState.setState({ connectionState: 'disconnected' });
-        fail('Couldn’t start session. Try again.');
-        endBtn.disabled = true;
+        console.error('WSClient.open failed', err);
+        if (AppState && typeof AppState.setState === 'function') {
+          AppState.setState({ connectionState: 'disconnected' });
+        }
+        showStartToast('Could not open a session. Please try again.');
       }
+    }
+
+    startBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (startBtn.disabled) return;
+      startBtn.disabled = true;
+      Promise.resolve(handleStartSessionClick()).finally(() => {
+        startBtn.disabled = false;
+      });
     });
 
     endBtn.addEventListener('click', () => {
@@ -817,14 +827,12 @@
         AppState.clearResume();
       }
       AppState.setState({ resumeError: null });
-      try {
-        WSClient.open();
-      } catch (err) {
+      Promise.resolve(handleStartSessionClick()).catch((err) => {
         console.error('Failed to start new session', err);
         AppState.setState({ connectionState: 'disconnected' });
-      } finally {
+      }).finally(() => {
         resumeAction.disabled = false;
-      }
+      });
     });
 
     // --- Waveform visual inside the Chip window ---
