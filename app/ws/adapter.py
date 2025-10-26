@@ -85,6 +85,7 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "audio.header",
     "admin.toggle",
     "chat.user",
+    "client.diag",
 }
 
 

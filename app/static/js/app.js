@@ -157,6 +157,84 @@
     return false;
   }
 
+  function toDiagString(value) {
+    try {
+      return String(value);
+    } catch (err) {
+      try {
+        return Object.prototype.toString.call(value);
+      } catch (innerErr) {
+        return "";
+      }
+    }
+  }
+
+  function cloneDiagDetail(detail) {
+    if (detail === undefined) {
+      return undefined;
+    }
+    if (detail === null) {
+      return null;
+    }
+    const valueType = typeof detail;
+    if (valueType === "string" || valueType === "number" || valueType === "boolean") {
+      return detail;
+    }
+    if (valueType === "object") {
+      try {
+        return JSON.parse(JSON.stringify(detail));
+      } catch (err) {
+        return { summary: toDiagString(detail) };
+      }
+    }
+    return toDiagString(detail);
+  }
+
+  function sendDiagHudEvent(eventName, detail, options = {}) {
+    if (!diagHudEnabled()) {
+      return;
+    }
+    const wsClient = typeof window !== "undefined" ? window.WSClient : null;
+    if (!wsClient || typeof wsClient.send !== "function") {
+      return;
+    }
+    const isConnected = typeof wsClient.isConnected === "function"
+      ? wsClient.isConnected()
+      : wsClient.socket && wsClient.socket.readyState === WebSocket.OPEN;
+    if (!isConnected) {
+      return;
+    }
+    const frame = {
+      type: "client.diag",
+      event: typeof eventName === "string" && eventName ? eventName.slice(0, 64) : "event",
+      ts: Date.now()
+    };
+    const level = options && typeof options.level === "string" ? options.level.trim() : "";
+    if (level) {
+      frame.level = level.slice(0, 16);
+    }
+    const badge = options && typeof options.badge === "string" ? options.badge.trim() : "";
+    if (badge) {
+      frame.badge = badge.slice(0, 64);
+    }
+    if (options && typeof options.sample === "boolean") {
+      frame.sample = options.sample;
+    }
+    const message = options && typeof options.message === "string" ? options.message.trim() : "";
+    if (message) {
+      frame.message = message.slice(0, 256);
+    }
+    const normalizedDetail = cloneDiagDetail(detail);
+    if (normalizedDetail !== undefined) {
+      frame.data = normalizedDetail;
+    }
+    try {
+      wsClient.send(frame);
+    } catch (err) {
+      console.warn("Failed to send diag HUD event", err);
+    }
+  }
+
   function diagChunkSampleN() {
     if (typeof window === "undefined") {
       return 10;
@@ -253,6 +331,7 @@
         : [];
       console.info("DIAG_MEDIA_OK", tracks);
       setBadge("mic:ok");
+      sendDiagHudEvent("media_ok", { tracks }, { level: "info", badge: "mic:ok", message: "Media stream ready" });
     }
     return stream;
   }
@@ -270,8 +349,15 @@
     const sampleEvery = Math.max(1, diagChunkSampleN());
     recorder.addEventListener("start", () => {
       if (diagHudEnabled()) {
-        console.info("DIAG_RECORDER_STARTED", Date.now());
-        setBadge("rec:start");
+        const ts = Date.now();
+        console.info("DIAG_RECORDER_STARTED", ts);
+        const badge = "rec:start";
+        setBadge(badge);
+        sendDiagHudEvent(
+          "recorder_started",
+          { timestamp: ts },
+          { level: "info", badge, message: "Recorder started" }
+        );
       }
     });
     recorder.addEventListener("dataavailable", async (event) => {
@@ -282,7 +368,13 @@
       const shouldSample = chunkCount % sampleEvery === 0;
       if (diagHudEnabled() && shouldSample) {
         console.debug("DIAG_CHUNK", { size: event.data.size, chunkCount });
-        setBadge(`chunks:${chunkCount}`);
+        const badge = `chunks:${chunkCount}`;
+        setBadge(badge);
+        sendDiagHudEvent(
+          "chunk_sample",
+          { size: event.data.size, chunkCount },
+          { level: "debug", badge, sample: true, message: "Sampled recorder chunk" }
+        );
       }
       try {
         const buffer = await event.data.arrayBuffer();
@@ -292,10 +384,19 @@
         sentBytes += buffer.byteLength;
         if (diagHudEnabled() && shouldSample) {
           console.debug("DIAG_WS_BIN_SENT", { chunkCount, sentBytes });
+          sendDiagHudEvent(
+            "ws_binary_sent",
+            { chunkCount, sentBytes },
+            { level: "debug", sample: true, message: "Sampled binary chunk sent" }
+          );
         }
       } catch (err) {
         if (diagHudEnabled()) {
           console.warn("DIAG_CHUNK_ERROR", err);
+          sendDiagHudEvent("chunk_error", { message: err && err.message }, {
+            level: "warn",
+            message: "Failed to process chunk"
+          });
         }
       }
     });
@@ -319,6 +420,10 @@
           } catch (err) {
             if (diagHudEnabled()) {
               console.warn("DIAG_TRACK_STOP_ERROR", err);
+              sendDiagHudEvent("track_stop_error", { message: err && err.message }, {
+                level: "warn",
+                message: "Failed to stop track"
+              });
             }
           }
         });
@@ -336,6 +441,10 @@
         } catch (err) {
           if (diagHudEnabled()) {
             console.warn("DIAG_RECORDER_STOP_ERROR", err);
+            sendDiagHudEvent("recorder_stop_error", { message: err && err.message }, {
+              level: "warn",
+              message: "Recorder stop error"
+            });
           }
         }
         recorder = null;
@@ -344,8 +453,18 @@
       if (diagHudEnabled()) {
         if (reason) {
           setBadge(`stop:${reason}`);
+          sendDiagHudEvent("recorder_stop", { reason }, {
+            level: "info",
+            badge: `stop:${reason}`,
+            message: "Recorder stopped"
+          });
         } else {
           setBadge("stop");
+          sendDiagHudEvent("recorder_stop", null, {
+            level: "info",
+            badge: "stop",
+            message: "Recorder stopped"
+          });
         }
       }
     }
@@ -368,6 +487,11 @@
         if (diagHudEnabled()) {
           console.warn("DIAG_MEDIA_ERROR", err);
           setBadge("mic:fail");
+          sendDiagHudEvent("media_error", { message: err && err.message }, {
+            level: "warn",
+            badge: "mic:fail",
+            message: "Failed to access microphone"
+          });
         }
         stream = null;
         return null;
@@ -382,6 +506,10 @@
           } catch (err) {
             if (diagHudEnabled()) {
               console.warn("DIAG_WS_SEND_ERROR", err);
+              sendDiagHudEvent("ws_send_error", { message: err && err.message }, {
+                level: "warn",
+                message: "Binary send failed"
+              });
             }
           }
         });
@@ -389,6 +517,11 @@
         if (diagHudEnabled()) {
           console.warn("DIAG_RECORDER_ERROR", err);
           setBadge("rec:fail");
+          sendDiagHudEvent("recorder_error", { message: err && err.message }, {
+            level: "warn",
+            badge: "rec:fail",
+            message: "Recorder initialization failed"
+          });
         }
         cleanupStream();
         recorder = null;
@@ -397,6 +530,11 @@
       recorder.addEventListener("stop", () => {
         if (diagHudEnabled()) {
           setBadge("rec:stop");
+          sendDiagHudEvent("recorder_stop", null, {
+            level: "info",
+            badge: "rec:stop",
+            message: "Recorder stopped"
+          });
         }
       });
       try {
@@ -405,12 +543,22 @@
         if (diagHudEnabled()) {
           console.warn("DIAG_RECORDER_START_ERROR", err);
           setBadge("rec:fail");
+          sendDiagHudEvent("recorder_start_error", { message: err && err.message }, {
+            level: "warn",
+            badge: "rec:fail",
+            message: "Recorder start error"
+          });
         }
         stop("start_err");
         return null;
       }
       if (diagHudEnabled()) {
         setBadge(trigger ? `rec:${trigger}` : "rec");
+        sendDiagHudEvent("recorder_active", { trigger }, {
+          level: "info",
+          badge: trigger ? `rec:${trigger}` : "rec",
+          message: "Recorder active"
+        });
       }
       return recorder;
     }
@@ -442,6 +590,10 @@
       }).catch(() => {
         if (diagHudEnabled()) {
           console.warn("DIAG_START_REJECTED");
+          sendDiagHudEvent("recorder_start_rejected", null, {
+            level: "warn",
+            message: "Recorder start promise rejected"
+          });
         }
       });
     }

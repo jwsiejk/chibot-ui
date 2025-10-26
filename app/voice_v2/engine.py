@@ -11,6 +11,7 @@ import time
 import uuid
 from typing import Any, Dict, Mapping, Optional
 
+from app import config
 from app.logging_config import apply_logging_policy
 from app.policy.loader import load_interaction_policy
 from app.policy.watch import compute_diff, should_reapply
@@ -231,6 +232,57 @@ class EngineV2:
             payload["turn_id"] = turn_id
         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
         self._publish(event)
+        if frame_type == "client.diag":
+            self._emit_client_diag(sid, frame)
+
+    def _emit_client_diag(self, sid: str, frame: Mapping[str, Any]) -> None:
+        if not config.DIAG_CLIENT_HUD:
+            return
+        if not isinstance(frame, Mapping):
+            return
+
+        meta: Dict[str, Any] = {"dir": "in"}
+
+        event_name = frame.get("event")
+        if isinstance(event_name, str) and event_name:
+            meta["event"] = event_name[:64]
+
+        message = frame.get("message")
+        if isinstance(message, str) and message:
+            meta["message"] = message[:256]
+
+        sample_flag = frame.get("sample")
+        if isinstance(sample_flag, bool):
+            meta["sample"] = sample_flag
+
+        badge = frame.get("badge")
+        if isinstance(badge, str) and badge:
+            meta["badge"] = badge[:64]
+
+        client_ts = frame.get("ts")
+        if isinstance(client_ts, int):
+            meta["client_ts"] = client_ts
+
+        data = frame.get("data")
+        if data is not None:
+            try:
+                meta["data"] = bus.redact_payload(data)
+            except Exception:
+                try:
+                    meta["data"] = bus.redact_payload(str(data))
+                except Exception:
+                    meta["data"] = str(data)
+
+        diag_event = self._envelope(sid, "EVT_DIAG_HUD", {"meta": meta})
+
+        level = frame.get("level")
+        if isinstance(level, str) and level:
+            diag_event["level"] = level[:16]
+
+        diag_event["who"] = "client"
+        diag_event["source"] = "client_hud"
+
+        self._publish(diag_event)
 
     def _handle_chat_user_event(self, event: Dict[str, Any]) -> None:
         if event.get("type") != EVT_CHAT_USER:

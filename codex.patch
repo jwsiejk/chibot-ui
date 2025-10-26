@@ -1,580 +1,726 @@
-diff --git a/app/static/js/admin_logs.js b/app/static/js/admin_logs.js
-index f3476501e18435da0ef84f80e96f4a8cfa4b9ffe..e1519549d5eca92422860241aa106c4bc368e642 100644
---- a/app/static/js/admin_logs.js
-+++ b/app/static/js/admin_logs.js
-@@ -33,145 +33,381 @@
-   const historyPrev = document.getElementById('historyPrev');
-   const historyNext = document.getElementById('historyNext');
-   const historyCount = document.getElementById('historyCount');
-   const liveTab = document.getElementById('liveTab');
-   const historyTab = document.getElementById('historyTab');
-   const livePanel = document.getElementById('livePanel');
-   const historyPanel = document.getElementById('historyPanel');
-   const userLabel = document.getElementById('adminUserLabel');
-   const debugStatus = document.getElementById('adminDebugStatus');
-   const configPanelRoot = document.getElementById('adminConfigPanel');
-   const drawer = document.getElementById('jsonDrawer');
-   const drawerContent = document.getElementById('jsonDrawerContent');
-   const drawerClose = document.getElementById('jsonDrawerClose');
-   const drawerBackdrop = document.getElementById('jsonDrawerBackdrop');
- 
-   if (userLabel) {
-     if (userEmail) {
-       userLabel.textContent = `Signed in as ${userEmail}`;
-     } else {
-       userLabel.textContent = '';
-       userLabel.setAttribute('aria-hidden', 'true');
-       userLabel.style.display = 'none';
-     }
-   }
- 
--  const typeCheckboxes = Array.from(document.querySelectorAll('input[name="logType"]'));
-+  const TYPE_CHECKBOX_SELECTOR = 'input[name="logType"]';
-+  const typeCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
-+  const chipWrapHud = Array.from(
-+    document.querySelectorAll('.admin-logs__type[data-diabinds="hud"]')
-+  );
-+  const chipWrapAudio = Array.from(
-+    document.querySelectorAll('.admin-logs__type[data-diabinds="audio"]')
-+  );
-+  const chipsHud = chipWrapHud
-+    .map((wrapper) => wrapper.querySelector(TYPE_CHECKBOX_SELECTOR))
-+    .filter((input) => input instanceof HTMLInputElement);
-+  const chipsAudio = chipWrapAudio
-+    .map((wrapper) => wrapper.querySelector(TYPE_CHECKBOX_SELECTOR))
-+    .filter((input) => input instanceof HTMLInputElement);
-+
-+  let chkHud = null;
-+  let chkGuard = null;
-+  let hudObserver = null;
-+  let guardObserver = null;
-+  let configPanelObserver = null;
- 
-   if (configPanelRoot && window.AdminConfigPanel && typeof window.AdminConfigPanel.init === 'function') {
-     try {
-       window.AdminConfigPanel.init(configPanelRoot, { statusElement: debugStatus });
-+      if (!configPanelObserver) {
-+        configPanelObserver = new MutationObserver(() => {
-+          ensureToggleBindings();
-+        });
-+        configPanelObserver.observe(configPanelRoot, { childList: true, subtree: true });
-+      }
-+      window.requestAnimationFrame(() => {
-+        ensureToggleBindings();
-+        syncChipsWithDebug({ silent: true });
-+      });
-     } catch (err) {
-       console.warn('Failed to initialize admin config panel', err);
-       if (debugStatus) {
-         debugStatus.textContent = 'Failed to load debug controls.';
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 5a8244ad467ab2e8cfec86d66f4e7ec9517c8ac4..94caeabad1de6a02f35cb31c5aab7e158e397db2 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -135,50 +135,128 @@
+           }
+         } catch (err) {
+           console.warn("Failed to parse admin config", err);
+         }
        }
+     } catch (err) {
+       // Swallow network/config bootstrap failures silently; defaults will apply.
      }
-   } else if (debugStatus) {
-     debugStatus.textContent = '';
+     if (!window.__CFG__ || typeof window.__CFG__ !== "object") {
+       window.__CFG__ = {};
+     }
+     return window.__CFG__;
    }
  
-+  window.requestAnimationFrame(() => {
-+    ensureToggleBindings();
-+    syncChipsWithDebug({ silent: true });
-+  });
-+
-+  function getGlobalConfigFlag(key) {
-+    if (typeof window === 'undefined') {
-+      return false;
+   function diagHudEnabled() {
+     if (typeof window === "undefined") {
+       return false;
+     }
+     const cfg = window.__CFG__;
+     if (cfg && typeof cfg.DIAG_CLIENT_HUD === "boolean") {
+       return cfg.DIAG_CLIENT_HUD;
+     }
+     return false;
+   }
+ 
++  function toDiagString(value) {
++    try {
++      return String(value);
++    } catch (err) {
++      try {
++        return Object.prototype.toString.call(value);
++      } catch (innerErr) {
++        return "";
++      }
 +    }
-+    const cfg = window.__CFG__;
-+    if (!cfg || typeof cfg !== 'object') {
-+      return false;
-+    }
-+    if (!Object.prototype.hasOwnProperty.call(cfg, key)) {
-+      return false;
-+    }
-+    return Boolean(cfg[key]);
 +  }
 +
-+  function isHudDebugEnabled() {
-+    if (chkHud instanceof HTMLInputElement) {
-+      return Boolean(chkHud.checked);
++  function cloneDiagDetail(detail) {
++    if (detail === undefined) {
++      return undefined;
 +    }
-+    return getGlobalConfigFlag('DIAG_CLIENT_HUD');
-+  }
-+
-+  function isAudioDebugEnabled() {
-+    if (chkGuard instanceof HTMLInputElement) {
-+      return Boolean(chkGuard.checked);
-+    }
-+    return getGlobalConfigFlag('DIAG_AUDIO_GUARD');
-+  }
-+
-+  function setChipGroupEnabled(wrappers, inputs, enabled) {
-+    let updated = false;
-+    const shouldDisable = !enabled;
-+    wrappers.forEach((wrapper) => {
-+      if (!(wrapper instanceof HTMLElement)) {
-+        return;
-+      }
-+      const before = wrapper.classList.contains('disabled');
-+      if (before !== shouldDisable) {
-+        updated = true;
-+      }
-+      wrapper.classList.toggle('disabled', shouldDisable);
-+    });
-+    inputs.forEach((input) => {
-+      if (!(input instanceof HTMLInputElement)) {
-+        return;
-+      }
-+      if (input.disabled !== shouldDisable) {
-+        input.disabled = shouldDisable;
-+        updated = true;
-+      }
-+      if (shouldDisable && input.checked) {
-+        input.checked = false;
-+        updated = true;
-+      }
-+    });
-+    return updated;
-+  }
-+
-+  function observeToggle(input) {
-+    if (!(input instanceof HTMLInputElement)) {
++    if (detail === null) {
 +      return null;
 +    }
-+    const observer = new MutationObserver((mutations) => {
-+      for (const mutation of mutations) {
-+        if (mutation.type === 'attributes' && mutation.attributeName === 'checked') {
-+          syncChipsWithDebug({ silent: true });
-+        }
-+      }
-+    });
-+    observer.observe(input, { attributes: true, attributeFilter: ['checked'] });
-+    return observer;
-+  }
-+
-+  function handleDebugToggleChange() {
-+    syncChipsWithDebug();
-+  }
-+
-+  function ensureToggleBindings() {
-+    let changed = false;
-+
-+    const hudElement = document.getElementById('admin-debug-diag_client_hud');
-+    const guardElement = document.getElementById('admin-debug-diag_audio_guard');
-+
-+    const hudInput = hudElement instanceof HTMLInputElement ? hudElement : null;
-+    const guardInput = guardElement instanceof HTMLInputElement ? guardElement : null;
-+
-+    if (chkHud !== hudInput) {
-+      if (hudObserver) {
-+        hudObserver.disconnect();
-+        hudObserver = null;
-+      }
-+      chkHud = hudInput;
-+      changed = true;
-+      if (chkHud) {
-+        if (!chkHud.dataset.diagSyncBound) {
-+          chkHud.addEventListener('change', handleDebugToggleChange);
-+          chkHud.dataset.diagSyncBound = '1';
-+        }
-+        hudObserver = observeToggle(chkHud);
++    const valueType = typeof detail;
++    if (valueType === "string" || valueType === "number" || valueType === "boolean") {
++      return detail;
++    }
++    if (valueType === "object") {
++      try {
++        return JSON.parse(JSON.stringify(detail));
++      } catch (err) {
++        return { summary: toDiagString(detail) };
 +      }
 +    }
-+
-+    if (chkGuard !== guardInput) {
-+      if (guardObserver) {
-+        guardObserver.disconnect();
-+        guardObserver = null;
-+      }
-+      chkGuard = guardInput;
-+      changed = true;
-+      if (chkGuard) {
-+        if (!chkGuard.dataset.diagSyncBound) {
-+          chkGuard.addEventListener('change', handleDebugToggleChange);
-+          chkGuard.dataset.diagSyncBound = '1';
-+        }
-+        guardObserver = observeToggle(chkGuard);
-+      }
-+    }
-+
-+    if (changed) {
-+      syncChipsWithDebug({ silent: true });
-+    }
++    return toDiagString(detail);
 +  }
 +
-+  function ensureDebugToggleOn(input) {
-+    if (!(input instanceof HTMLInputElement)) {
++  function sendDiagHudEvent(eventName, detail, options = {}) {
++    if (!diagHudEnabled()) {
 +      return;
 +    }
-+    if (input.checked) {
++    const wsClient = typeof window !== "undefined" ? window.WSClient : null;
++    if (!wsClient || typeof wsClient.send !== "function") {
 +      return;
 +    }
-+    input.checked = true;
-+    const event = new Event('change', { bubbles: true });
-+    input.dispatchEvent(event);
-+  }
-+
-+  function syncChipsWithDebug(options = {}) {
-+    const silent = Boolean(options && options.silent);
-+    const hudOn = isHudDebugEnabled();
-+    const audioOn = isAudioDebugEnabled();
-+    let updated = false;
-+
-+    if (setChipGroupEnabled(chipWrapHud, chipsHud, hudOn)) {
-+      updated = true;
-+    }
-+    if (setChipGroupEnabled(chipWrapAudio, chipsAudio, audioOn)) {
-+      updated = true;
-+    }
-+
-+    if (hudOn) {
-+      chipsHud.forEach((input) => {
-+        if (!(input instanceof HTMLInputElement)) {
-+          return;
-+        }
-+        if (!input.dataset._userTouched && !input.checked) {
-+          input.checked = true;
-+          updated = true;
-+        }
-+        if (!input.dataset._everEnabled) {
-+          input.dataset._everEnabled = '1';
-+        }
-+      });
-+    }
-+
-+    if (audioOn) {
-+      chipsAudio.forEach((input) => {
-+        if (!(input instanceof HTMLInputElement)) {
-+          return;
-+        }
-+        if (!input.dataset._userTouched && !input.checked) {
-+          input.checked = true;
-+          updated = true;
-+        }
-+        if (!input.dataset._everEnabled) {
-+          input.dataset._everEnabled = '1';
-+        }
-+      });
-+    }
-+
-+    syncTypesAllButton();
-+
-+    if (!silent && updated) {
-+      notifyFiltersUpdated();
-+    }
-+
-+    return updated;
-+  }
-+
-   function isLiveActive() {
-     return Boolean(liveState.source || liveState.pollTimer);
-   }
- 
-+  function notifyFiltersUpdated() {
-+    if (isLiveActive()) {
-+      setLiveStatus('Filters updated — restart live tail to apply.');
-+    }
-+  }
-+
-   function setSessionStatus(message) {
-     if (sessionStatus) {
-       sessionStatus.textContent = message;
-     }
-   }
- 
-   function formatTimestamp(value) {
-     if (typeof value !== 'number' || !Number.isFinite(value)) {
-       return '—';
-     }
-     try {
-       return new Date(value).toISOString();
-     } catch (err) {
-       return String(value);
-     }
-   }
- 
-   const liveState = {
-     source: null,
-     lines: [],
-     limit: 500,
-     pollTimer: null,
-     sinceMs: null,
-     sid: null,
-   };
- 
-   const LIVE_POLL_INTERVAL_MS = 3000;
-   const LIVE_POLL_ERROR_INTERVAL_MS = 8000;
- 
-   const sessionState = {
-     loading: false,
-     prefix: '',
-     openOnly: false,
-     sessions: [],
-     debounceId: null,
-   };
- 
-   const historyState = {
-     offset: 0,
-     limit: 50,
-     sid: null,
-     events: [],
-     hasMore: false,
-     loading: false,
-   };
- 
-   function selectedTypes() {
--    return typeCheckboxes
--      .filter((checkbox) => checkbox.checked)
-+    return Array.from(
-+      document.querySelectorAll(`${TYPE_CHECKBOX_SELECTOR}:checked`)
-+    )
-       .map((checkbox) => checkbox.value)
-       .filter(Boolean);
-   }
- 
-   function syncTypesAllButton() {
--    const allSelected = typeCheckboxes.every((checkbox) => checkbox.checked);
-+    if (!typesAllBtn) {
++    const isConnected = typeof wsClient.isConnected === "function"
++      ? wsClient.isConnected()
++      : wsClient.socket && wsClient.socket.readyState === WebSocket.OPEN;
++    if (!isConnected) {
 +      return;
 +    }
-+    const allCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
-+    const allSelected =
-+      allCheckboxes.length > 0 && allCheckboxes.every((checkbox) => checkbox.checked);
-     typesAllBtn.classList.toggle('is-active', allSelected);
-     typesAllBtn.setAttribute('aria-pressed', String(allSelected));
++    const frame = {
++      type: "client.diag",
++      event: typeof eventName === "string" && eventName ? eventName.slice(0, 64) : "event",
++      ts: Date.now()
++    };
++    const level = options && typeof options.level === "string" ? options.level.trim() : "";
++    if (level) {
++      frame.level = level.slice(0, 16);
++    }
++    const badge = options && typeof options.badge === "string" ? options.badge.trim() : "";
++    if (badge) {
++      frame.badge = badge.slice(0, 64);
++    }
++    if (options && typeof options.sample === "boolean") {
++      frame.sample = options.sample;
++    }
++    const message = options && typeof options.message === "string" ? options.message.trim() : "";
++    if (message) {
++      frame.message = message.slice(0, 256);
++    }
++    const normalizedDetail = cloneDiagDetail(detail);
++    if (normalizedDetail !== undefined) {
++      frame.data = normalizedDetail;
++    }
++    try {
++      wsClient.send(frame);
++    } catch (err) {
++      console.warn("Failed to send diag HUD event", err);
++    }
++  }
++
+   function diagChunkSampleN() {
+     if (typeof window === "undefined") {
+       return 10;
+     }
+     const cfg = window.__CFG__;
+     const candidate = cfg ? Number(cfg.DIAG_CHUNK_SAMPLE_N) : NaN;
+     if (Number.isFinite(candidate) && candidate > 0) {
+       return Math.floor(candidate);
+     }
+     return 10;
    }
  
-   function ensureSid(context) {
-     const value = (sidInput.value || '').trim();
-     if (!value) {
-       sidInput.focus({ preventScroll: false });
-       if (context === 'live') {
-         setLiveStatus('Enter a session id to start live tailing.');
-       } else if (context === 'history') {
-         setHistoryStatus('Enter a session id to load history.');
-       }
+   let diagBadgeEl = null;
+   let diagBadgePendingText = null;
+   let diagBadgeAwaitingDom = false;
+ 
+   function ensureDiagBadge() {
+     if (!diagHudEnabled()) {
        return null;
      }
-     return value;
-   }
- 
-   function buildTypesQuery(params) {
-+    const allCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
-+    const total = allCheckboxes.length;
-     const types = selectedTypes();
--    if (types.length) {
-+    if (!total || !types.length || types.length === total) {
-+      params.delete('type');
-+    } else {
-       params.set('type', types.join(','));
+     if (typeof document === "undefined") {
+       return null;
      }
-   }
- 
-   function renderSessions(sessions) {
-     if (!sessionTableBody) {
+     if (diagBadgeEl && diagBadgeEl.isConnected) {
+       return diagBadgeEl;
+@@ -231,239 +309,313 @@
+   function setBadge(text) {
+     if (!diagHudEnabled()) {
        return;
      }
- 
-     sessionTableBody.innerHTML = '';
-     sessionState.sessions = sessions;
- 
-     if (!sessions.length) {
-       const emptyRow = document.createElement('tr');
-       const cell = document.createElement('td');
-       cell.colSpan = 6;
-       cell.className = 'admin-logs__empty';
-       cell.textContent = 'No sessions found.';
-       emptyRow.appendChild(cell);
-       sessionTableBody.appendChild(emptyRow);
-       return;
+     const value = text == null ? "" : String(text);
+     const badge = ensureDiagBadge();
+     if (badge) {
+       badge.textContent = value;
+       diagBadgePendingText = null;
+     } else {
+       diagBadgePendingText = value;
      }
- 
-     const fragment = document.createDocumentFragment();
-     sessions.forEach((session) => {
-@@ -763,52 +999,73 @@
-   historyTableBody.addEventListener('click', (event) => {
-     const target = event.target;
-     if (!(target instanceof HTMLElement)) return;
-     const row = target.closest('tr');
-     if (!row) return;
-     const index = Number(row.dataset.index);
-     if (Number.isFinite(index)) {
-       openDrawerForRow(index);
-     }
-   });
- 
-   if (drawerClose) {
-     drawerClose.addEventListener('click', () => toggleDrawer(false));
    }
  
-   if (drawerBackdrop) {
-     drawerBackdrop.addEventListener('click', () => toggleDrawer(false));
+   async function getMicStream() {
+     if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+       throw new Error("mediaDevices.getUserMedia unavailable");
+     }
+     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+     if (diagHudEnabled()) {
+       const tracks = typeof stream.getAudioTracks === "function"
+         ? stream.getAudioTracks().map((track) => ({ label: track.label, enabled: track.enabled }))
+         : [];
+       console.info("DIAG_MEDIA_OK", tracks);
+       setBadge("mic:ok");
++      sendDiagHudEvent("media_ok", { tracks }, { level: "info", badge: "mic:ok", message: "Media stream ready" });
+     }
+     return stream;
    }
  
-   document.addEventListener('keydown', (event) => {
-     if (event.key === 'Escape' && drawer && !drawer.hidden) {
-       toggleDrawer(false);
+   function attachRecorder(stream, onChunk) {
+     if (!stream) {
+       throw new Error("MediaStream required");
      }
-   });
- 
--  typesAllBtn.addEventListener('click', () => {
--    const shouldSelectAll = !typeCheckboxes.every((checkbox) => checkbox.checked);
--    typeCheckboxes.forEach((checkbox) => {
--      checkbox.checked = shouldSelectAll;
-+  if (typesAllBtn) {
-+    typesAllBtn.addEventListener('click', () => {
-+      ensureToggleBindings();
-+      ensureDebugToggleOn(chkHud);
-+      ensureDebugToggleOn(chkGuard);
-+
-+      const checkboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
-+      let changed = false;
-+      checkboxes.forEach((checkbox) => {
-+        if (checkbox.disabled) {
-+          return;
-+        }
-+        if (!checkbox.checked) {
-+          checkbox.checked = true;
-+          changed = true;
-+        }
-+      });
-+
-+      syncTypesAllButton();
-+      if (changed) {
-+        notifyFiltersUpdated();
-+      }
-     });
--    syncTypesAllButton();
--  });
-+  }
- 
-   typeCheckboxes.forEach((checkbox) => {
--    checkbox.addEventListener('change', () => {
--      syncTypesAllButton();
--      if (isLiveActive()) {
--        setLiveStatus('Filters updated — restart live tail to apply.');
-+    checkbox.addEventListener('change', (event) => {
-+      if (event && event.isTrusted) {
-+        const diagWrapper = checkbox.closest('.admin-logs__type[data-diabinds]');
-+        if (diagWrapper) {
-+          checkbox.dataset._userTouched = '1';
-+        }
+     if (typeof MediaRecorder === "undefined") {
+       throw new Error("MediaRecorder unsupported");
+     }
+     const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+     let sentBytes = 0;
+     let chunkCount = 0;
+     const sampleEvery = Math.max(1, diagChunkSampleN());
+     recorder.addEventListener("start", () => {
+       if (diagHudEnabled()) {
+-        console.info("DIAG_RECORDER_STARTED", Date.now());
+-        setBadge("rec:start");
++        const ts = Date.now();
++        console.info("DIAG_RECORDER_STARTED", ts);
++        const badge = "rec:start";
++        setBadge(badge);
++        sendDiagHudEvent(
++          "recorder_started",
++          { timestamp: ts },
++          { level: "info", badge, message: "Recorder started" }
++        );
        }
-+      syncTypesAllButton();
-+      notifyFiltersUpdated();
      });
-   });
- 
-   window.addEventListener('beforeunload', () => {
-     stopLive();
-   });
- 
-   if (sessionTableBody) {
-     loadSessions();
+     recorder.addEventListener("dataavailable", async (event) => {
+       if (!event.data || !event.data.size) {
+         return;
+       }
+       chunkCount += 1;
+       const shouldSample = chunkCount % sampleEvery === 0;
+       if (diagHudEnabled() && shouldSample) {
+         console.debug("DIAG_CHUNK", { size: event.data.size, chunkCount });
+-        setBadge(`chunks:${chunkCount}`);
++        const badge = `chunks:${chunkCount}`;
++        setBadge(badge);
++        sendDiagHudEvent(
++          "chunk_sample",
++          { size: event.data.size, chunkCount },
++          { level: "debug", badge, sample: true, message: "Sampled recorder chunk" }
++        );
+       }
+       try {
+         const buffer = await event.data.arrayBuffer();
+         if (typeof onChunk === "function") {
+           onChunk(buffer);
+         }
+         sentBytes += buffer.byteLength;
+         if (diagHudEnabled() && shouldSample) {
+           console.debug("DIAG_WS_BIN_SENT", { chunkCount, sentBytes });
++          sendDiagHudEvent(
++            "ws_binary_sent",
++            { chunkCount, sentBytes },
++            { level: "debug", sample: true, message: "Sampled binary chunk sent" }
++          );
+         }
+       } catch (err) {
+         if (diagHudEnabled()) {
+           console.warn("DIAG_CHUNK_ERROR", err);
++          sendDiagHudEvent("chunk_error", { message: err && err.message }, {
++            level: "warn",
++            message: "Failed to process chunk"
++          });
+         }
+       }
+     });
+     return recorder;
    }
  
-   syncTypesAllButton();
- })();
-diff --git a/app/templates/admin_logs.html b/app/templates/admin_logs.html
-index cbbc70a28b4551f4fb6d12aa3afbcc9f95c1b6ce..35f678db61af9eed5ab4fe404266b521ae96ba65 100644
---- a/app/templates/admin_logs.html
-+++ b/app/templates/admin_logs.html
-@@ -1,33 +1,37 @@
- <!doctype html>
- <html lang="en">
-   <head>
-     <meta charset="utf-8" />
-     <meta name="viewport" content="width=device-width, initial-scale=1" />
-     <title>AskChip · Admin Logs</title>
-     <link rel="icon" href="/static/favicon.ico" />
-     <link rel="stylesheet" href="/static/css/styles.css" />
-+    <style>
-+      .admin-logs__type.disabled { opacity: 0.5; pointer-events: none; }
-+      .admin-logs__type.disabled input { pointer-events: none; }
-+    </style>
-   </head>
-   <body>
-     <div id="app">
-       <header class="topbar" role="banner">
-         <div class="topbar-left">
-           <span class="sid">Admin ▸ Logs</span>
-         </div>
-         <div class="topbar-right">
-           <span id="adminUserLabel" class="admin-logs__user" aria-live="polite">&nbsp;</span>
-           <a class="topbar-link" href="/">← Main UI</a>
-         </div>
-       </header>
+   const DiagRecorder = (() => {
+     let stream = null;
+     let recorder = null;
+     let startPromise = null;
  
-       <main class="admin-logs" role="main">
-         <section class="admin-logs__debug" aria-label="Debug settings">
-           <header class="admin-logs__debug-header">
-             <h2>Debug</h2>
-             <p id="adminDebugStatus" class="admin-logs__status" role="status" aria-live="polite"></p>
-           </header>
-           <div id="adminConfigPanel" class="admin-debug-card" data-role="config-panel"></div>
-         </section>
+     function cleanupStream() {
+       if (!stream) {
+         return;
+       }
+       try {
+         const tracks = typeof stream.getTracks === "function" ? stream.getTracks() : [];
+         tracks.forEach((track) => {
+           try {
+             track.stop();
+           } catch (err) {
+             if (diagHudEnabled()) {
+               console.warn("DIAG_TRACK_STOP_ERROR", err);
++              sendDiagHudEvent("track_stop_error", { message: err && err.message }, {
++                level: "warn",
++                message: "Failed to stop track"
++              });
+             }
+           }
+         });
+       } finally {
+         stream = null;
+       }
+     }
  
-         <section class="admin-logs__session-picker" aria-label="Session picker">
-           <header class="admin-logs__filter-header">
-             <h2>Sessions</h2>
-@@ -113,50 +117,62 @@
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_JSON_RECV" />
-               <span>JSON recv</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_TTS_START" />
-               <span>TTS start</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_TTS_END" />
-               <span>TTS end</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_AUDIO_RECV" />
-               <span>Audio recv</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_AUDIO_SEND" />
-               <span>Audio send</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_LOG" checked />
-               <span>Logs</span>
-             </label>
-+            <label class="admin-logs__type" data-diabinds="audio">
-+              <input type="checkbox" name="logType" value="EVT_DIAG_FIRST_AUDIO_FRAME" />
-+              <span>Diag: first audio</span>
-+            </label>
-+            <label class="admin-logs__type" data-diabinds="audio">
-+              <input type="checkbox" name="logType" value="EVT_DIAG_NO_AUDIO_FROM_CLIENT" />
-+              <span>Diag: no audio</span>
-+            </label>
-+            <label class="admin-logs__type" data-diabinds="hud">
-+              <input type="checkbox" name="logType" value="EVT_DIAG_HUD" />
-+              <span>Diag: HUD</span>
-+            </label>
-           </div>
-         </section>
+     function stop(reason) {
+       if (recorder) {
+         try {
+           if (recorder.state !== "inactive") {
+             recorder.stop();
+           }
+         } catch (err) {
+           if (diagHudEnabled()) {
+             console.warn("DIAG_RECORDER_STOP_ERROR", err);
++            sendDiagHudEvent("recorder_stop_error", { message: err && err.message }, {
++              level: "warn",
++              message: "Recorder stop error"
++            });
+           }
+         }
+         recorder = null;
+       }
+       cleanupStream();
+       if (diagHudEnabled()) {
+         if (reason) {
+           setBadge(`stop:${reason}`);
++          sendDiagHudEvent("recorder_stop", { reason }, {
++            level: "info",
++            badge: `stop:${reason}`,
++            message: "Recorder stopped"
++          });
+         } else {
+           setBadge("stop");
++          sendDiagHudEvent("recorder_stop", null, {
++            level: "info",
++            badge: "stop",
++            message: "Recorder stopped"
++          });
+         }
+       }
+     }
  
-         <div class="admin-logs__main">
-           <div class="admin-logs__tabs" role="tablist" aria-label="Log views">
-             <button
-               id="liveTab"
-               class="admin-logs__tab"
-               role="tab"
-               type="button"
-               aria-selected="true"
-               aria-controls="livePanel"
-             >
-               Live
-             </button>
-             <button
-               id="historyTab"
-               class="admin-logs__tab"
-               role="tab"
-               type="button"
-               aria-selected="false"
-               aria-controls="historyPanel"
-             >
-               History
-             </button>
+     async function startInternal(trigger) {
+       if (!diagHudEnabled()) {
+         return null;
+       }
+       if (recorder && recorder.state !== "inactive") {
+         return recorder;
+       }
+       const wsClient = window.WSClient;
+       const ws = wsClient && wsClient.socket;
+       if (!ws || ws.readyState !== WebSocket.OPEN) {
+         return null;
+       }
+       try {
+         stream = await getMicStream();
+       } catch (err) {
+         if (diagHudEnabled()) {
+           console.warn("DIAG_MEDIA_ERROR", err);
+           setBadge("mic:fail");
++          sendDiagHudEvent("media_error", { message: err && err.message }, {
++            level: "warn",
++            badge: "mic:fail",
++            message: "Failed to access microphone"
++          });
+         }
+         stream = null;
+         return null;
+       }
+       try {
+         recorder = attachRecorder(stream, (buffer) => {
+           if (!ws || ws.readyState !== WebSocket.OPEN) {
+             return;
+           }
+           try {
+             ws.send(buffer);
+           } catch (err) {
+             if (diagHudEnabled()) {
+               console.warn("DIAG_WS_SEND_ERROR", err);
++              sendDiagHudEvent("ws_send_error", { message: err && err.message }, {
++                level: "warn",
++                message: "Binary send failed"
++              });
+             }
+           }
+         });
+       } catch (err) {
+         if (diagHudEnabled()) {
+           console.warn("DIAG_RECORDER_ERROR", err);
+           setBadge("rec:fail");
++          sendDiagHudEvent("recorder_error", { message: err && err.message }, {
++            level: "warn",
++            badge: "rec:fail",
++            message: "Recorder initialization failed"
++          });
+         }
+         cleanupStream();
+         recorder = null;
+         return null;
+       }
+       recorder.addEventListener("stop", () => {
+         if (diagHudEnabled()) {
+           setBadge("rec:stop");
++          sendDiagHudEvent("recorder_stop", null, {
++            level: "info",
++            badge: "rec:stop",
++            message: "Recorder stopped"
++          });
+         }
+       });
+       try {
+         recorder.start(250);
+       } catch (err) {
+         if (diagHudEnabled()) {
+           console.warn("DIAG_RECORDER_START_ERROR", err);
+           setBadge("rec:fail");
++          sendDiagHudEvent("recorder_start_error", { message: err && err.message }, {
++            level: "warn",
++            badge: "rec:fail",
++            message: "Recorder start error"
++          });
+         }
+         stop("start_err");
+         return null;
+       }
+       if (diagHudEnabled()) {
+         setBadge(trigger ? `rec:${trigger}` : "rec");
++        sendDiagHudEvent("recorder_active", { trigger }, {
++          level: "info",
++          badge: trigger ? `rec:${trigger}` : "rec",
++          message: "Recorder active"
++        });
+       }
+       return recorder;
+     }
+ 
+     function maybeStart(trigger) {
+       if (!diagHudEnabled()) {
+         return;
+       }
+       if (recorder && recorder.state !== "inactive") {
+         return;
+       }
+       if (startPromise) {
+         return;
+       }
+       const wsClient = window.WSClient;
+       const ws = wsClient && wsClient.socket;
+       if (!ws || ws.readyState !== WebSocket.OPEN) {
+         return;
+       }
+       const promise = startInternal(trigger);
+       if (!promise) {
+         return;
+       }
+       startPromise = promise;
+       promise.finally(() => {
+         if (startPromise === promise) {
+           startPromise = null;
+         }
+       }).catch(() => {
+         if (diagHudEnabled()) {
+           console.warn("DIAG_START_REJECTED");
++          sendDiagHudEvent("recorder_start_rejected", null, {
++            level: "warn",
++            message: "Recorder start promise rejected"
++          });
+         }
+       });
+     }
+ 
+     return {
+       maybeStart,
+       stop,
+       hudEnabled: diagHudEnabled
+     };
+   })();
+ 
+   async function ensureRuntimeModules() {
+     if (!window.AppState) {
+       await loadScript("state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("audio_player.js");
+     }
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.AudioRecorder) {
+       await loadScript("audio_recorder.js");
+     }
+     if (!window.PolicyBadges) {
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index 33b65ac3b71988315f6ece46fe349fc038fe2dee..26b0c2527d2a43c5680f1b252bae7ddb0ed3af39 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -1,38 +1,39 @@
+ """Minimal Engine v2 shell with telemetry hooks and session exporting."""
+ from __future__ import annotations
+ 
+ import asyncio
+ from dataclasses import dataclass
+ import json
+ import logging
+ import re
+ import threading
+ import time
+ import uuid
+ from typing import Any, Dict, Mapping, Optional
+ 
++from app import config
+ from app.logging_config import apply_logging_policy
+ from app.policy.loader import load_interaction_policy
+ from app.policy.watch import compute_diff, should_reapply
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ACWR_RECOMPUTE,
+     EVT_CHAT_USER,
+     EVT_ASR_FINAL,
+     EVT_ASR_PARTIAL,
+     EVT_NLG,
+     EVT_NLU,
+     EVT_DIALOG_PLAN,
+     EVT_POLICY_APPLIED,
+     EVT_TTS_END,
+     EVT_TTS_START,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_CLOSE,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+     EVT_WS_OPEN,
+ )
+ from app.voice_v2.nlu import NLUAdapter
+ from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
+@@ -209,50 +210,101 @@ class EngineV2:
+         self._maybe_emit_greeting(sid)
+         self._maybe_emit_connect_suggestions(sid)
+ 
+     def on_json(self, sid: str, frame: Mapping[str, Any]) -> None:
+         """Capture a validated JSON frame from the adapter."""
+         turn_id: Optional[Any] = None
+         meta: Dict[str, Any] = {"dir": "in"}
+         frame_type: Optional[str] = None
+         if isinstance(frame, Mapping):
+             frame_type = frame.get("type")
+             if isinstance(frame_type, str):
+                 meta["frame_type"] = frame_type
+             turn_id = frame.get("turn_id")
+         else:
+             frame = {}
+         try:
+             serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         except (TypeError, ValueError):
+             serialized = "{}"
+         meta["byte_count"] = len(serialized.encode("utf-8"))
+         payload: Dict[str, Any] = {"meta": meta}
+         if turn_id is not None:
+             payload["turn_id"] = turn_id
+         event = self._envelope(sid, EVT_WS_JSON_RECV, payload)
+         self._publish(event)
++        if frame_type == "client.diag":
++            self._emit_client_diag(sid, frame)
++
++    def _emit_client_diag(self, sid: str, frame: Mapping[str, Any]) -> None:
++        if not config.DIAG_CLIENT_HUD:
++            return
++        if not isinstance(frame, Mapping):
++            return
++
++        meta: Dict[str, Any] = {"dir": "in"}
++
++        event_name = frame.get("event")
++        if isinstance(event_name, str) and event_name:
++            meta["event"] = event_name[:64]
++
++        message = frame.get("message")
++        if isinstance(message, str) and message:
++            meta["message"] = message[:256]
++
++        sample_flag = frame.get("sample")
++        if isinstance(sample_flag, bool):
++            meta["sample"] = sample_flag
++
++        badge = frame.get("badge")
++        if isinstance(badge, str) and badge:
++            meta["badge"] = badge[:64]
++
++        client_ts = frame.get("ts")
++        if isinstance(client_ts, int):
++            meta["client_ts"] = client_ts
++
++        data = frame.get("data")
++        if data is not None:
++            try:
++                meta["data"] = bus.redact_payload(data)
++            except Exception:
++                try:
++                    meta["data"] = bus.redact_payload(str(data))
++                except Exception:
++                    meta["data"] = str(data)
++
++        diag_event = self._envelope(sid, "EVT_DIAG_HUD", {"meta": meta})
++
++        level = frame.get("level")
++        if isinstance(level, str) and level:
++            diag_event["level"] = level[:16]
++
++        diag_event["who"] = "client"
++        diag_event["source"] = "client_hud"
++
++        self._publish(diag_event)
+ 
+     def _handle_chat_user_event(self, event: Dict[str, Any]) -> None:
+         if event.get("type") != EVT_CHAT_USER:
+             return
+         sid = event.get("sid")
+         if not isinstance(sid, str) or not sid:
+             return
+         text = event.get("text")
+         if not isinstance(text, str):
+             return
+         client_msg_id = event.get("client_msg_id")
+         if client_msg_id is not None and not isinstance(client_msg_id, str):
+             client_msg_id = None
+ 
+         session = self._ensure_session(sid)
+         previous_state = session.state
+         policy = self.policy_snapshot or {}
+         barge_enabled = bool(policy.get("barge_in_enabled"))
+ 
+         if previous_state == RESPONDING:
+             granted = barge_enabled
+             reason = None if granted else "policy_disabled"
+             self._publish_barge(sid, "text", granted, reason)
+             if granted:
+                 self.cancel_current_tts(sid, reason="canceled")
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index bd2dd217f20a2bc341aa3772969f63d8d34c6533..5c81e696323113e502408a12181bbe96ed5cbe55 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -63,50 +63,51 @@ _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
+ _OUTBOUND_ALLOWED_TYPES = {
+     "policy.interaction",
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
+     "asr.partial",
+     "asr.final",
+     "error",
+     "chat.message",
+     "chat.history",
+     "dialog.plan",
+ }
+ 
+ _OUTBOX_MAXSIZE = 256
+ 
+ _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
+ 
+ _log = logging.getLogger(__name__)
+ 
+ _ALLOWED_TEXT_FRAME_TYPES = {
+     "client.ready",
+     "audio.header",
+     "admin.toggle",
+     "chat.user",
++    "client.diag",
+ }
+ 
+ 
+ class TokenBucket:
+     """Simple in-memory token bucket."""
+ 
+     def __init__(self, capacity: int, refill_seconds: float) -> None:
+         self.capacity = capacity
+         self.tokens = float(capacity)
+         self.refill_seconds = refill_seconds
+         self.last_refill = time.monotonic()
+ 
+     def consume(self, count: int, now: Optional[float] = None) -> bool:
+         if now is None:
+             now = time.monotonic()
+         elapsed = max(0.0, now - self.last_refill)
+         if elapsed > 0:
+             refill = (self.capacity / self.refill_seconds) * elapsed
+             if refill > 0:
+                 self.tokens = min(self.capacity, self.tokens + refill)
+                 self.last_refill = now
+         if self.tokens < count:
+             return False
+         self.tokens -= count
+         return True
+diff --git a/tests/test_client_diag_events.py b/tests/test_client_diag_events.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..3cdb58aae79267222f5daa02d34b6cf16030a01c
+--- /dev/null
++++ b/tests/test_client_diag_events.py
+@@ -0,0 +1,68 @@
++from __future__ import annotations
++
++import unittest
++
++from app import config
++from app.telemetry import bus
++from app.voice_v2.engine import EngineV2
++
++
++class ClientDiagEventsTest(unittest.TestCase):
++    def setUp(self) -> None:
++        self._original_flag = config.DIAG_CLIENT_HUD
++        config.DIAG_CLIENT_HUD = True
++        bus.reset()
++        self._events = []
++        self._token = bus.subscribe("*", self._events.append)
++        self.engine = EngineV2()
++
++    def tearDown(self) -> None:
++        bus.reset()
++        config.DIAG_CLIENT_HUD = self._original_flag
++
++    def test_emits_diag_event_when_enabled(self) -> None:
++        frame = {
++            "type": "client.diag",
++            "event": "recorder_started",
++            "data": {"foo": "bar"},
++            "level": "info",
++            "badge": "rec:start",
++            "ts": 1_234_567,
++            "sample": True,
++            "message": "Recorder started",
++        }
++
++        self.engine.on_json("sid-diag", frame)
++
++        diag_events = [evt for evt in self._events if evt.get("type") == "EVT_DIAG_HUD"]
++        self.assertEqual(len(diag_events), 1)
++        diag = diag_events[0]
++
++        self.assertEqual(diag.get("sid"), "sid-diag")
++        self.assertEqual(diag.get("who"), "client")
++        self.assertEqual(diag.get("source"), "client_hud")
++        self.assertEqual(diag.get("level"), "info")
++
++        meta = diag.get("meta") or {}
++        self.assertEqual(meta.get("event"), "recorder_started")
++        self.assertEqual(meta.get("badge"), "rec:start")
++        self.assertTrue(meta.get("sample"))
++        self.assertEqual(meta.get("client_ts"), 1_234_567)
++        self.assertEqual(meta.get("dir"), "in")
++        self.assertIn("data", meta)
++
++    def test_does_not_emit_when_disabled(self) -> None:
++        config.DIAG_CLIENT_HUD = False
++        frame = {
++            "type": "client.diag",
++            "event": "recorder_started",
++        }
++
++        self.engine.on_json("sid-diag", frame)
++
++        diag_events = [evt for evt in self._events if evt.get("type") == "EVT_DIAG_HUD"]
++        self.assertEqual(diag_events, [])
++
++
++if __name__ == "__main__":
++    unittest.main()
