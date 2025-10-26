@@ -26,6 +26,7 @@
   let lastTokenValue = null;
   let lastTokenMintedAt = null;
 
+  // Build a full WS URL and PRESERVE the query string as-is.
   function makeWsUrl(pathWithQuery) {
     if (typeof pathWithQuery !== "string" || !pathWithQuery) {
       return pathWithQuery;
@@ -40,6 +41,7 @@
         : (typeof location !== "undefined" ? location : null);
       const scheme = loc && loc.protocol === "https:" ? "wss://" : "ws://";
       const parsed = new URL(trimmed, loc ? loc.origin : undefined);
+      // IMPORTANT: keep the search/query intact
       return `${scheme}${parsed.host}${parsed.pathname}${parsed.search}`;
     } catch (err) {
       console.warn("Failed to construct WS URL", err);
@@ -118,6 +120,7 @@
       }, 220);
     }, 3600);
   }
+
   function trackTokenFromUrl(url) {
     if (typeof url !== "string" || !url) {
       return { token: null, mintedAt: null };
@@ -603,6 +606,7 @@
     }
   }
 
+  // OPEN: Use the EXACT URL provided (must include ?access_token=... unless resuming)
   function open(options = {}, protocolsOverride) {
     let resumeTokenValue = null;
     let skipRateLimitCancel = false;
@@ -642,26 +646,33 @@
       clearRateLimitRetryTimer();
       rateLimitRetryCount = 0;
     }
+
     const url = urlOverride || computeUrl(resumeTokenValue);
     const finalUrl = typeof url === "string" ? makeWsUrl(url) : url;
     const wsUrl = typeof finalUrl === "string" ? finalUrl : url;
-    const expectsAccessToken = typeof url === "string" && url.includes("access_token=");
-    if (expectsAccessToken && (typeof wsUrl !== "string" || !/[?&]access_token=/.test(wsUrl))) {
+
+    // NEW: Require access_token when NOT resuming; block early if missing
+    const isResuming = Boolean(resumeTokenValue);
+    const hasAccessToken = (typeof wsUrl === "string") && /[?&]access_token=/.test(wsUrl);
+    if (!isResuming && !hasAccessToken) {
       console.error("ws_open_missing_token_query", { originalUrl: url, finalUrl: wsUrl });
       showConnectionToast("Session token missing. Please click Start again.");
       updateState({ connectionState: "disconnected" });
       return;
     }
+
     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
     console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
     const logPayload = Array.isArray(wsProtocols)
       ? { url: wsUrl, protocols: wsProtocols }
       : { url: wsUrl, subprotocol: wsProtocols };
     console.log("WS opening", logPayload);
+
     const tokenInfo = trackTokenFromUrl(wsUrl);
     const ws = transportFactory(wsUrl, wsProtocols);
     ws.__accessTokenInfo = tokenInfo;
     ws.__handshakeToastShown = false;
+
     ws.onopen = () => {
       // Lightweight breadcrumb; keep as console.log
       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
@@ -681,6 +692,7 @@
       });
       maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
     };
+
     socket = ws;
     updateState({
       connectionState: resumeTokenValue ? "resuming" : "connecting",
