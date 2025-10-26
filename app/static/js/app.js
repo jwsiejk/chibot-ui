@@ -80,6 +80,7 @@
   async function init() {
     await ensureRuntimeModules();
 
+    const urlParams = new URLSearchParams(window.location ? window.location.search : '');
     const AppState = window.AppState;
     const WSClient = window.WSClient;
     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {

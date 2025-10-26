@@ -1,346 +1,56 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 3534ac4459d63b3bac4719cac4998e3c305d2859..72c8d95e63524be7d62e80472d6a543fdb2e526b 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -1,51 +1,51 @@
- """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
- from __future__ import annotations
- 
- import hashlib
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Optional
- 
- from app import config
- from app.auth.http_handlers import (
-     get_me,
-     post_login,
-     post_profile,
-     post_ws_token,
-     _session_email as _auth_session_email,
-     _is_admin as _auth_is_admin,
- )
--from app.db.neon import get_user, init_schema
-+from app.db import neon
- from app.logging_config import configure_logging
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import FileExporter
- from app.versioning import get_build_id, inject_static_version
- from app.voice_v2.asr_runtime import ASRRuntime
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- from app.services.streaming_asr.deepgram_client import DeepgramClient
- 
- 
- configure_logging()
- 
- for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
-     _category_logger = logging.getLogger(_logger_name)
-     if _category_logger.level == logging.NOTSET:
-         _category_logger.setLevel(logging.INFO)
- 
- 
- logger = logging.getLogger(__name__)
- 
- 
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
-@@ -256,51 +256,51 @@ async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) ->
- async def _handle_admin_logs(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Render the admin logs dashboard for authorized administrators."""
- 
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     authenticated, is_admin, email = await _resolve_request_identity(scope)
- 
-     if not authenticated:
-         await _drain_request_body(receive)
-         return _redirect_response(ROOT_ROUTE)
- 
-     if not is_admin:
-         await _drain_request_body(receive)
-         return _forbidden_response()
- 
-     await _drain_request_body(receive)
-     raw_html = _load_admin_logs_html()
-     try:
-         html_text = raw_html.decode("utf-8")
-     except UnicodeDecodeError:
-         html_text = raw_html.decode("utf-8", errors="replace")
- 
-     rewritten = inject_static_version(html_text)
--    context_payload = {"isAdmin": True, "userEmail": email}
-+    context_payload = {"isAdmin": is_admin, "userEmail": email}
-     context_json = _serialize_context(context_payload)
-     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
-     body = rewritten.encode("utf-8")
-     build_id = get_build_id()
-     return _html_response(body, build_id=build_id)
- 
- 
- async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Serve the site favicon when available."""
- 
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
-     if_none_match = _get_request_header(scope, b"if-none-match")
-     response = _build_static_response(FAVICON_PATH, if_none_match=if_none_match)
-     if response is None:
-         headers = ((b"content-length", b"0"),)
-         return Response(status=204, body=b"", headers=headers)
-     return response
- 
- 
- async def _handle_static(
-     scope: dict,
-@@ -480,51 +480,51 @@ async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: R
-             "type": "websocket.http.response.body",
-             "body": response.body,
-             "more_body": False,
-         }
-     )
- 
- 
- def _method_is_get(scope: dict) -> bool:
-     """Return True when the incoming HTTP scope uses the GET method."""
- 
-     return scope.get("method", "GET").upper() == "GET"
- 
- 
- async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[str]]:
-     email: Optional[str] = None
-     try:
-         email = _auth_session_email(scope)
-     except Exception:  # pragma: no cover - defensive against misconfigured secrets
-         logger.debug("evt=admin_session_decode_failed")
-         return False, False, None
- 
-     if not email:
-         return False, False, None
- 
-     try:
--        user = await get_user(email)
-+        user = await neon.get_user(email)
-     except Exception:  # pragma: no cover - defensive logging
-         logger.exception("evt=admin_context_lookup_failed email=%s", email)
-         return True, False, email
- 
-     if user is None:
-         return True, False, email
- 
-     try:
-         is_admin = bool(_auth_is_admin(user))
-     except Exception:  # pragma: no cover - defensive logging
-         logger.exception("evt=admin_context_flag_failed email=%s", email)
-         return True, False, email
- 
-     return True, is_admin, email
- 
- 
- def _get_adapter() -> ChatV2Adapter:
-     """Return a lazily instantiated ChatV2Adapter singleton."""
-     global _adapter
-     if _adapter is None:
-         exporter = FileExporter(EXPORT_ROOT)
-         engine = EngineV2(exporter=exporter)
-         tts_runtime = TTSRuntime(engine=engine)
-         asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
-         asr_runtime = ASRRuntime(engine=engine, client=asr_client)
-@@ -556,35 +556,35 @@ __all__ = ["app", "asgi"]
- 
- def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
-     headers = scope.get("headers") or []
-     for name, value in headers:
-         if name == header_name:
-             try:
-                 return value.decode("latin1")
-             except UnicodeDecodeError:
-                 return value.decode("latin1", errors="ignore")
-     return None
- 
- 
- async def _handle_lifespan(
-     receive: Callable[[], Awaitable[dict]],
-     send: Callable[[dict], Awaitable[None]],
- ) -> None:
-     global _lifespan_started
- 
-     while True:
-         message = await receive()
-         message_type = message.get("type")
- 
-         if message_type == "lifespan.startup":
-             if not _lifespan_started:
-                 try:
--                    await init_schema()
-+                    await neon.init_schema()
-                 except Exception:
-                     logger.exception("evt=lifespan_startup_failed")
-                     await send({"type": "lifespan.startup.failed", "message": "init_schema"})
-                     raise
-                 _lifespan_started = True
-             await send({"type": "lifespan.startup.complete"})
-         elif message_type == "lifespan.shutdown":
-             await send({"type": "lifespan.shutdown.complete"})
-             return
-diff --git a/app/logging_config.py b/app/logging_config.py
-index c028af770838a364b53d0c8d341646f73b2cd4b3..cc3c58bbb4e92180bffaad340b5438a6350da603 100644
---- a/app/logging_config.py
-+++ b/app/logging_config.py
-@@ -1,122 +1,141 @@
- """Logging configuration helpers for the AskChip runtime."""
- 
- from __future__ import annotations
- 
- import logging
- from typing import Iterable, Mapping, MutableSet
- 
- from app.policy.loader import InteractionPolicySnapshot, load_interaction_policy
- 
- _LEVEL_ALIASES = {
-     "CRITICAL": logging.CRITICAL,
-     "ERROR": logging.ERROR,
-     "WARNING": logging.WARNING,
-     "WARN": logging.WARNING,
-     "INFO": logging.INFO,
-     "DEBUG": logging.DEBUG,
-     "NOTSET": logging.NOTSET,
- }
- 
- _LOG_CONFIGURED = False
- _MANAGED_LOGGERS: MutableSet[logging.Logger] = set()
- 
-+_RUNTIME_CATEGORY_LOGGERS: tuple[str, ...] = (
-+    "app.db.neon",
-+    "app.auth.http",
-+    "app.ws.adapter",
-+    "app.voice_v2.tts_runtime",
-+    "app.voice_v2.asr_runtime",
-+    "app.voice_v2.tts_provider",
-+    "app.telemetry.bus",
-+    "app.admin.flow",
-+)
-+
- 
- def _coerce_level(value: object, fallback: int) -> int:
-     """Translate a level name or number to a logging level constant."""
- 
-     if value is None:
-         return fallback
- 
-     if isinstance(value, (int, float)):
-         try:
-             return int(value)
-         except (TypeError, ValueError):
-             return fallback
- 
-     candidate = str(value).strip()
-     if not candidate:
-         return fallback
- 
-     upper = candidate.upper()
-     if upper in _LEVEL_ALIASES:
-         return _LEVEL_ALIASES[upper]
- 
-     try:
-         numeric = int(candidate)
-     except ValueError:
-         return fallback
- 
-     return numeric
- 
- 
- def _set_level(logger: logging.Logger, level: int) -> None:
-     """Apply the resolved level to a logger and its handlers."""
- 
-     logger.setLevel(level)
-     for handler in logger.handlers:
-         handler.setLevel(level)
- 
- 
- def _apply_level(level: int) -> None:
-     if not _MANAGED_LOGGERS:
-         _MANAGED_LOGGERS.add(logging.getLogger())
- 
-     for logger in _MANAGED_LOGGERS:
-         _set_level(logger, level)
- 
- 
-+def _enforce_runtime_category_levels(level: int = logging.INFO) -> None:
-+    for name in _RUNTIME_CATEGORY_LOGGERS:
-+        logger = logging.getLogger(name)
-+        _MANAGED_LOGGERS.add(logger)
-+        _set_level(logger, level)
-+
-+
- def _extract_telemetry(policy: Mapping[str, object] | None) -> Mapping[str, object]:
-     if not isinstance(policy, Mapping):
-         return {}
- 
-     telemetry = policy.get("telemetry") if "telemetry" in policy else None
-     if isinstance(telemetry, Mapping):
-         return telemetry
- 
-     if any(key in policy for key in ("enabled", "level", "categories", "sampling", "redaction")):
-         return policy
- 
-     return {}
- 
- 
- def apply_logging_policy(policy: InteractionPolicySnapshot | Mapping[str, object] | None) -> None:
-     """Adjust managed loggers according to the telemetry policy block."""
- 
-     telemetry = _extract_telemetry(policy)
- 
-     if not telemetry:
-         return
- 
-     enabled = bool(telemetry.get("enabled", True))
-     fallback_level = logging.WARNING if not enabled else logging.INFO
-     desired_level = _coerce_level(telemetry.get("level") if enabled else telemetry.get("fallback_level"), fallback_level)
-     _apply_level(desired_level)
- 
- 
- def configure_logging(*, extra_loggers: Iterable[str] | None = None) -> None:
-     """Ensure Python logging follows the interaction policy telemetry settings."""
- 
-     global _LOG_CONFIGURED
-     if _LOG_CONFIGURED:
-         return
- 
-     root = logging.getLogger()
-     if not root.handlers:
-         logging.basicConfig(level=logging.INFO)
-     _MANAGED_LOGGERS.add(root)
- 
-     if extra_loggers is None:
-         extra_loggers = ("uvicorn", "uvicorn.error", "uvicorn.access")
- 
-     for name in extra_loggers:
-         logger = logging.getLogger(name)
-         _MANAGED_LOGGERS.add(logger)
- 
-     policy = load_interaction_policy()
-     apply_logging_policy(policy)
-+    _enforce_runtime_category_levels(logging.INFO)
- 
-     _LOG_CONFIGURED = True
- 
- 
- __all__ = ["apply_logging_policy", "configure_logging"]
- 
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index b4068b9ca46017fb045525b6f18be37e55606543..769de5d3df3efd1aeb4fe9a518ceb700dff35e01 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -58,50 +58,51 @@
+ 
+   async function ensureRuntimeModules() {
+     if (!window.AppState) {
+       await loadScript("state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("audio_player.js");
+     }
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.AudioRecorder) {
+       await loadScript("audio_recorder.js");
+     }
+     if (!window.PolicyBadges) {
+       await loadScript("policy_badges.js");
+     }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+   }
+ 
+   async function init() {
+     await ensureRuntimeModules();
+ 
++    const urlParams = new URLSearchParams(window.location ? window.location.search : '');
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
+     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
+       try {
+         window.PolicyBadges.init();
+       } catch (err) {
+         console.warn("Failed to initialize PolicyBadges", err);
+       }
+     }
+ 
+     // --- App context (server-injected) ---
+     function readAppContext() {
+       const node = document.getElementById('appContext');
+       if (!node) return {};
+       try {
+         const raw = node.textContent || node.innerText || '{}';
+         return JSON.parse(raw);
+       } catch (err) {
+         console.warn('Failed to parse app context', err);
+         return {};
+       }
+     }
+ 
+     const serverContext = readAppContext();
+     const currentUserEmail = typeof serverContext.userEmail === 'string' && serverContext.userEmail
