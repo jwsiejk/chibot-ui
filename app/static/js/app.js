@@ -75,6 +75,9 @@
     if (!window.TranscriptView) {
       await loadScript("transcript_view.js");
     }
+    if (!window.WSErrorUI) {
+      await loadScript("errors.js");
+    }
   }
 
   async function init() {
@@ -479,6 +482,56 @@
       }
     });
 
+    const showToastMessage = (() => {
+      let root = null;
+      const styleId = 'inline-toast-styles';
+      const styleText = '#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}';
+      function ensureRoot() {
+        root = root && root.isConnected ? root : document.getElementById('toast-root');
+        if (!root) {
+          root = document.createElement('div');
+          root.id = 'toast-root';
+          root.className = 'toast-container';
+          document.body.appendChild(root);
+        }
+        if (!document.getElementById(styleId)) {
+          document.head.appendChild(Object.assign(document.createElement('style'), { id: styleId, textContent: styleText }));
+        }
+        return root;
+      }
+      return (message) => {
+        if (!message) return;
+        const host = ensureRoot();
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.setAttribute('role', 'alert'); toast.innerHTML = '<div class="toast-body"></div>';
+        toast.firstChild.textContent = message;
+        host.appendChild(toast);
+        setTimeout(() => {
+          toast.classList.add('toast-exit');
+          setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 220);
+        }, 3600);
+      };
+    })();
+
+    function csrf() {
+      const cookies = document.cookie ? document.cookie.split(';') : [];
+      for (const name of ['askchip_csrf', 'csrftoken', 'csrf_token']) {
+        const prefix = `${name}=`;
+        for (const part of cookies) {
+          const trimmed = part.trim();
+          if (!trimmed.startsWith(prefix)) continue;
+          const raw = trimmed.slice(prefix.length);
+          if (!raw) continue;
+          try { return decodeURIComponent(raw); } catch (err) {
+            console.warn('Failed to decode CSRF cookie', err);
+            return raw;
+          }
+        }
+      }
+      return '';
+    }
+
     startBtn.addEventListener('click', async () => {
       startBtn.disabled = true;
       const state = AppState.getState();
@@ -487,18 +540,41 @@
       if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
         resumeToken = resumeState.token;
       }
+
+      const fail = (message) => { if (message) showToastMessage(message); startBtn.disabled = false; };
+      const csrfToken = csrf();
+      const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
+      let payload = null;
       try {
-        const options = resumeToken ? { resumeToken } : undefined;
-        AppState.setState({ resumeError: null });
-        if (options) {
-          WSClient.open(options);
-        } else {
-          WSClient.open();
-        }
+        const response = await fetch('/api/v1/auth/ws-token', {
+          method: 'POST',
+          credentials: 'include',
+          headers,
+        });
+        if (response.status === 401 || response.status === 403) return fail(response.status === 401 ? 'Please login first.' : 'Complete your profile first.');
+        if (response.status === 409) return fail('Profile required. Please complete profile.');
+        if (!response.ok) return fail('Couldn’t start session. Try again.');
+        payload = await response.json();
+      } catch (err) {
+        console.error('Failed to fetch WS token', err);
+        return fail('Couldn’t start session. Try again.');
+      }
+
+      if (!payload || typeof payload.access_token !== 'string') return fail('Couldn’t start session. Try again.');
+      const accessToken = payload.access_token;
+      const sid = typeof payload.sid === 'string' ? payload.sid : null;
+      const ttlMs = Number(payload.ttl_ms);
+      if (sid) AppState.setState({ sid });
+      console.log('evt=ws_token_obtained', { sid, ttl_ms: Number.isFinite(ttlMs) ? ttlMs : null });
+      const params = new URLSearchParams({ access_token: accessToken });
+      if (resumeToken) params.set('resume', resumeToken);
+      const wsUrl = `/ws/v2/chat?${params.toString()}`;
+      try {
+        WSClient.open(wsUrl, ['chat.v2']);
       } catch (err) {
         console.error('Failed to open WS client', err);
         AppState.setState({ connectionState: 'disconnected' });
-        startBtn.disabled = false;
+        fail('Couldn’t start session. Try again.');
         endBtn.disabled = true;
       }
     });

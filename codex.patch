@@ -1,8 +1,13 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index b4068b9ca46017fb045525b6f18be37e55606543..769de5d3df3efd1aeb4fe9a518ceb700dff35e01 100644
+index 769de5d3df3efd1aeb4fe9a518ceb700dff35e01..caf0a6bfc97eeac0b9f0ba9a8384e42c851a2a54 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -58,50 +58,51 @@
+@@ -53,50 +53,53 @@
+       }, { once: true });
+       el.addEventListener("error", reject, { once: true });
+       document.head.appendChild(el);
+     });
+   }
  
    async function ensureRuntimeModules() {
      if (!window.AppState) {
@@ -23,12 +28,15 @@ index b4068b9ca46017fb045525b6f18be37e55606543..769de5d3df3efd1aeb4fe9a518ceb700
      if (!window.TranscriptView) {
        await loadScript("transcript_view.js");
      }
++    if (!window.WSErrorUI) {
++      await loadScript("errors.js");
++    }
    }
  
    async function init() {
      await ensureRuntimeModules();
  
-+    const urlParams = new URLSearchParams(window.location ? window.location.search : '');
+     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
      const AppState = window.AppState;
      const WSClient = window.WSClient;
      if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
@@ -48,9 +56,358 @@ index b4068b9ca46017fb045525b6f18be37e55606543..769de5d3df3efd1aeb4fe9a518ceb700
          return JSON.parse(raw);
        } catch (err) {
          console.warn('Failed to parse app context', err);
-         return {};
+@@ -457,70 +460,143 @@
+           audioPlayer.interrupt();
+         }
+         return;
        }
      }
  
-     const serverContext = readAppContext();
-     const currentUserEmail = typeof serverContext.userEmail === 'string' && serverContext.userEmail
+     function handleGlobalKeyUp(event) {
+       const { key, code, ctrlKey, metaKey, altKey } = event;
+       if ((key === ' ' || key === 'Spacebar' || code === 'Space') && !(ctrlKey || metaKey || altKey)) {
+         if (!pttActive) {
+           return;
+         }
+         event.preventDefault();
+         setPttActive(false);
+       }
+     }
+ 
+     window.addEventListener('keydown', handleGlobalKeyDown, true);
+     window.addEventListener('keyup', handleGlobalKeyUp, true);
+     window.addEventListener('blur', () => {
+       if (pttActive) {
+         setPttActive(false);
+       }
+     });
+ 
++    const showToastMessage = (() => {
++      let root = null;
++      const styleId = 'inline-toast-styles';
++      const styleText = '#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}';
++      function ensureRoot() {
++        root = root && root.isConnected ? root : document.getElementById('toast-root');
++        if (!root) {
++          root = document.createElement('div');
++          root.id = 'toast-root';
++          root.className = 'toast-container';
++          document.body.appendChild(root);
++        }
++        if (!document.getElementById(styleId)) {
++          document.head.appendChild(Object.assign(document.createElement('style'), { id: styleId, textContent: styleText }));
++        }
++        return root;
++      }
++      return (message) => {
++        if (!message) return;
++        const host = ensureRoot();
++        const toast = document.createElement('div');
++        toast.className = 'toast';
++        toast.setAttribute('role', 'alert'); toast.innerHTML = '<div class="toast-body"></div>';
++        toast.firstChild.textContent = message;
++        host.appendChild(toast);
++        setTimeout(() => {
++          toast.classList.add('toast-exit');
++          setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 220);
++        }, 3600);
++      };
++    })();
++
++    function csrf() {
++      const cookies = document.cookie ? document.cookie.split(';') : [];
++      for (const name of ['askchip_csrf', 'csrftoken', 'csrf_token']) {
++        const prefix = `${name}=`;
++        for (const part of cookies) {
++          const trimmed = part.trim();
++          if (!trimmed.startsWith(prefix)) continue;
++          const raw = trimmed.slice(prefix.length);
++          if (!raw) continue;
++          try { return decodeURIComponent(raw); } catch (err) {
++            console.warn('Failed to decode CSRF cookie', err);
++            return raw;
++          }
++        }
++      }
++      return '';
++    }
++
+     startBtn.addEventListener('click', async () => {
+       startBtn.disabled = true;
+       const state = AppState.getState();
+       const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
+       let resumeToken = null;
+       if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
+         resumeToken = resumeState.token;
+       }
++
++      const fail = (message) => { if (message) showToastMessage(message); startBtn.disabled = false; };
++      const csrfToken = csrf();
++      const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
++      let payload = null;
+       try {
+-        const options = resumeToken ? { resumeToken } : undefined;
+-        AppState.setState({ resumeError: null });
+-        if (options) {
+-          WSClient.open(options);
+-        } else {
+-          WSClient.open();
+-        }
++        const response = await fetch('/api/v1/auth/ws-token', {
++          method: 'POST',
++          credentials: 'include',
++          headers,
++        });
++        if (response.status === 401 || response.status === 403) return fail(response.status === 401 ? 'Please login first.' : 'Complete your profile first.');
++        if (response.status === 409) return fail('Profile required. Please complete profile.');
++        if (!response.ok) return fail('Couldn’t start session. Try again.');
++        payload = await response.json();
++      } catch (err) {
++        console.error('Failed to fetch WS token', err);
++        return fail('Couldn’t start session. Try again.');
++      }
++
++      if (!payload || typeof payload.access_token !== 'string') return fail('Couldn’t start session. Try again.');
++      const accessToken = payload.access_token;
++      const sid = typeof payload.sid === 'string' ? payload.sid : null;
++      const ttlMs = Number(payload.ttl_ms);
++      if (sid) AppState.setState({ sid });
++      console.log('evt=ws_token_obtained', { sid, ttl_ms: Number.isFinite(ttlMs) ? ttlMs : null });
++      const params = new URLSearchParams({ access_token: accessToken });
++      if (resumeToken) params.set('resume', resumeToken);
++      const wsUrl = `/ws/v2/chat?${params.toString()}`;
++      try {
++        WSClient.open(wsUrl, ['chat.v2']);
+       } catch (err) {
+         console.error('Failed to open WS client', err);
+         AppState.setState({ connectionState: 'disconnected' });
+-        startBtn.disabled = false;
++        fail('Couldn’t start session. Try again.');
+         endBtn.disabled = true;
+       }
+     });
+ 
+     endBtn.addEventListener('click', () => {
+       WSClient.close('user_requested');
+       if (typeof AppState.clearResume === 'function') {
+         AppState.clearResume();
+       }
+       if (window.AudioRecorder) {
+         try {
+           window.AudioRecorder.stop();
+         } catch (err) {
+           console.warn('Failed to stop audio recorder', err);
+         }
+       }
+       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+         window.AudioPlayer.interrupt();
+       }
+     });
+ 
+     // --- Resume banner ---
+     const resumeBanner = document.createElement('div');
+     resumeBanner.setAttribute('role', 'status');
+     resumeBanner.setAttribute('aria-live', 'polite');
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index ecaf376e36d2e8f3b45219be6c652143fd3ef14e..8f2d5e883d794f4470ae023af8cf59804f12b320 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,43 +1,43 @@
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 15000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+ 
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading WSClient");
+   }
+   const getAudioPlayer = () => window.AudioPlayer;
+ 
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
+   let infoWatchdogTimerId = null;
+   let lastPingAt = null;
+-  let transportFactory = (url, protocol = SUBPROTOCOL) => new WebSocket(url, protocol);
++  let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
+   let autoResumeAttemptToken = null;
+ 
+   function getResumeState() {
+     const state = AppState.getState();
+     const resume = state && typeof state.resume === "object" ? state.resume : null;
+     if (!resume) return null;
+     const token = typeof resume.token === "string" ? resume.token : null;
+     const ttlMs = Number.isFinite(resume.ttlMs) ? resume.ttlMs : null;
+     const expiresAt = Number.isFinite(resume.expiresAt) ? resume.expiresAt : null;
+     if (!token || !ttlMs || !expiresAt) return null;
+     return { token, ttlMs, expiresAt };
+   }
+ 
+   function assignResume(token, ttlMs) {
+     if (typeof AppState.setResume === "function") {
+       AppState.setResume(token, ttlMs);
+     }
+     autoResumeAttemptToken = null;
+   }
+ 
+   function clearResumeState() {
+     if (typeof AppState.clearResume === "function") {
+       AppState.clearResume();
+@@ -468,76 +468,99 @@
+     ws.removeEventListener("message", handlers.message);
+     ws.removeEventListener("error", handlers.error);
+     ws.removeEventListener("close", handlers.close);
+     delete ws.__handlers;
+     delete ws.__intentionalClose;
+   }
+ 
+   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
+     if (!ws) return;
+     detachSocket(ws);
+     ws.__intentionalClose = true;
+     try {
+       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+         ws.close(1000, reason);
+       }
+     } catch (err) {
+       console.warn("WSClient cleanup close error", err);
+     }
+     if (socket === ws) {
+       socket = null;
+       expectInfoFrame = true;
+       clearInfoWatchdog();
+     }
+   }
+ 
+-  function open(options = {}) {
+-    const { resumeToken = null, skipRateLimitCancel = false } = options;
+-    const state = AppState.getState();
+-    const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
++  function open(options = {}, protocolsOverride) {
++    let resumeTokenValue = null;
++    let skipRateLimitCancel = false;
++    let urlOverride = null;
++    let protocols = protocolsOverride;
++
++    if (typeof options === "string") {
++      urlOverride = options;
++    } else if (options && typeof options === "object") {
++      const { resumeToken = null, skipRateLimitCancel: skip = false } = options;
++      const candidate = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
++      if (candidate) {
++        resumeTokenValue = candidate;
++      }
++      skipRateLimitCancel = Boolean(skip);
++      if (!urlOverride && typeof options.url === "string" && options.url.trim()) {
++        urlOverride = options.url.trim();
++      }
++      if (protocols === undefined && options.protocols !== undefined) {
++        protocols = options.protocols;
++      }
++    }
++
+     if (socket) {
+       cleanupSocket(socket, "superseded");
+     }
+     expectInfoFrame = true;
+     startInfoWatchdog();
+     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+         window.WSErrorUI.cancelRateLimitCountdown("manual");
+       } catch (err) {
+         console.warn("Failed to cancel rate limit countdown", err);
+       }
+     }
+     if (!skipRateLimitCancel) {
+       clearRateLimitRetryTimer();
+       rateLimitRetryCount = 0;
+     }
+-    const url = computeUrl(resumeTokenValue);
+-    console.log("WS opening", { url, subprotocol: SUBPROTOCOL });
+-    const ws = transportFactory(url, SUBPROTOCOL);
++    const url = urlOverride || computeUrl(resumeTokenValue);
++    const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
++    const logPayload = Array.isArray(wsProtocols)
++      ? { url, protocols: wsProtocols }
++      : { url, subprotocol: wsProtocols };
++    console.log("WS opening", logPayload);
++    const ws = transportFactory(url, wsProtocols);
+     ws.onopen = () => {
+       // Lightweight breadcrumb; keep as console.log
+-      console.log("WebSocket open", { url, protocol: SUBPROTOCOL });
++      console.log("WebSocket open", { url, protocol: ws.protocol || wsProtocols });
+     };
+ 
+     ws.onerror = (e) => {
+       console.error("WebSocket error", e, { readyState: ws.readyState });
+     };
+ 
+     ws.onclose = (e) => {
+       console.error("WebSocket closed", {
+         code: e.code,
+         reason: e.reason,
+         wasClean: e.wasClean,
+         readyState: ws.readyState,
+       });
+     };
+     socket = ws;
+     updateState({
+       connectionState: resumeTokenValue ? "resuming" : "connecting",
+       websocket: ws,
+       latencyMs: null,
+       lastPingAt: null,
+       resumeError: null
+     });
+     attachSocket(ws);
+     return ws;
+   }
+@@ -567,44 +590,44 @@
+     if (!socket || socket.readyState !== WebSocket.OPEN) {
+       console.warn("WSClient.send called without an open socket");
+       return;
+     }
+     const payload = typeof frame === "string" ? frame : JSON.stringify(frame);
+     sendRaw(payload);
+   }
+ 
+   function getBufferedAmount() {
+     if (!socket) return 0;
+     return socket.bufferedAmount || 0;
+   }
+ 
+   const debug = {
+     simulateIncomingFrame(frame) {
+       handleMessageFrame(frame);
+     },
+     recordPing(ts) {
+       lastPingAt = ts;
+       updateState({ lastPingAt: ts });
+     },
+     setTransportFactory(factory) {
+       transportFactory = typeof factory === "function" ? factory : transportFactory;
+     },
+     resetTransportFactory() {
+-      transportFactory = (url, protocol) => new WebSocket(url, protocol);
++      transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+     }
+   };
+ 
+   window.WSClient = {
+     open,
+     close,
+     send,
+     sendBinary,
+     getBufferedAmount,
+     get socket() {
+       return socket;
+     },
+     isConnected() {
+       return !!socket && socket.readyState === WebSocket.OPEN && AppState.getState().connectionState === "connected";
+     },
+     __debug: debug
+   };
+ })();

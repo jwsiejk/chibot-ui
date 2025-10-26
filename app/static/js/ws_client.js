@@ -15,7 +15,7 @@
   let expectInfoFrame = true;
   let infoWatchdogTimerId = null;
   let lastPingAt = null;
-  let transportFactory = (url, protocol = SUBPROTOCOL) => new WebSocket(url, protocol);
+  let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
   let rateLimitRetryTimerId = null;
   let rateLimitRetryCount = 0;
   let autoResumeAttemptToken = null;
@@ -490,10 +490,29 @@
     }
   }
 
-  function open(options = {}) {
-    const { resumeToken = null, skipRateLimitCancel = false } = options;
-    const state = AppState.getState();
-    const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
+  function open(options = {}, protocolsOverride) {
+    let resumeTokenValue = null;
+    let skipRateLimitCancel = false;
+    let urlOverride = null;
+    let protocols = protocolsOverride;
+
+    if (typeof options === "string") {
+      urlOverride = options;
+    } else if (options && typeof options === "object") {
+      const { resumeToken = null, skipRateLimitCancel: skip = false } = options;
+      const candidate = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
+      if (candidate) {
+        resumeTokenValue = candidate;
+      }
+      skipRateLimitCancel = Boolean(skip);
+      if (!urlOverride && typeof options.url === "string" && options.url.trim()) {
+        urlOverride = options.url.trim();
+      }
+      if (protocols === undefined && options.protocols !== undefined) {
+        protocols = options.protocols;
+      }
+    }
+
     if (socket) {
       cleanupSocket(socket, "superseded");
     }
@@ -510,12 +529,16 @@
       clearRateLimitRetryTimer();
       rateLimitRetryCount = 0;
     }
-    const url = computeUrl(resumeTokenValue);
-    console.log("WS opening", { url, subprotocol: SUBPROTOCOL });
-    const ws = transportFactory(url, SUBPROTOCOL);
+    const url = urlOverride || computeUrl(resumeTokenValue);
+    const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
+    const logPayload = Array.isArray(wsProtocols)
+      ? { url, protocols: wsProtocols }
+      : { url, subprotocol: wsProtocols };
+    console.log("WS opening", logPayload);
+    const ws = transportFactory(url, wsProtocols);
     ws.onopen = () => {
       // Lightweight breadcrumb; keep as console.log
-      console.log("WebSocket open", { url, protocol: SUBPROTOCOL });
+      console.log("WebSocket open", { url, protocol: ws.protocol || wsProtocols });
     };
 
     ws.onerror = (e) => {
@@ -589,7 +612,7 @@
       transportFactory = typeof factory === "function" ? factory : transportFactory;
     },
     resetTransportFactory() {
-      transportFactory = (url, protocol) => new WebSocket(url, protocol);
+      transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
     }
   };
 
