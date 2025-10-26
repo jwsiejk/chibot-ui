@@ -283,18 +283,30 @@ class ChatV2Adapter:
         headers = self._decode_headers(scope.get("headers", ()))
 
         query_params = parse_qs(query_string, keep_blank_values=True)
-        access_token = query_params.get("access_token", [None])[0]
-        if not access_token:
+        query_token = query_params.get("access_token", [None])[0]
+        token = query_token
+
+        if not token:
+            for p in subprotocols or []:
+                if isinstance(p, str) and p.startswith("jwt.") and len(p) > 4:
+                    token = p[4:]
+                    break
+
+        if not token:
             reason = "missing_token"
-            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs)
+            _wslog.warning(
+                "evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs
+            )
             await send({"type": "websocket.close", "code": 4401, "reason": reason})
             return
 
         try:
-            claims = verify_ws_token(access_token)
+            claims = verify_ws_token(token)
         except Exception:
             reason = "jwt_invalid_or_expired"
-            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs)
+            _wslog.warning(
+                "evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs
+            )
             await send({"type": "websocket.close", "code": 4401, "reason": reason})
             return
 
@@ -302,8 +314,10 @@ class ChatV2Adapter:
         sub = claims.get("sub")
         aud = claims.get("aud")
         if not sid or not sub or aud != CHAT_V2_SUBPROTOCOL:
-            reason = "bad_claims"
-            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
+            reason = "jwt_claims_invalid"
+            _wslog.warning(
+                "evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs
+            )
             await send({"type": "websocket.close", "code": 4401, "reason": reason})
             return
 

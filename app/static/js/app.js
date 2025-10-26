@@ -671,10 +671,14 @@
       }
       const wsUrl = `/ws/v2/chat?${params.toString()}`;
 
-      console.log('evt=ws_open_attempt', { url: wsUrl, proto: 'chat.v2', sid });
+      // Add token as SECOND subprotocol so the server can read it if a proxy
+      // or any client path drops the query string.
+      const subprotocols = ['chat.v2', `jwt.${access_token}`];
+
+      console.log('evt=ws_open_attempt', { url: wsUrl, protocols: subprotocols, sid });
 
       try {
-        WSClient.open(wsUrl, ['chat.v2']);
+        WSClient.open(wsUrl, subprotocols);
       } catch (err) {
         console.error('WSClient.open failed', err);
         if (AppState && typeof AppState.setState === 'function') {
