@@ -1,350 +1,122 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 8f2d5e883d794f4470ae023af8cf59804f12b320..e74a7409d5827aa6cddfe29760b9ab8eba493532 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1,76 +1,168 @@
- (() => {
-   const HEARTBEAT_INTERVAL_MS = 15000;
-   const DEFAULT_CLOSE_REASON = "client_shutdown";
-   const SUBPROTOCOL = "chat.v2";
-   const INFO_DEADLINE_MS = 20000;
-+  const TOKEN_EXPIRY_MS = 60 * 1000;
-+  const TOAST_STYLE_ID = "wsclient-toast-styles";
-+  const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
- 
-   const AppState = window.AppState;
-   if (!AppState) {
-     throw new Error("AppState store is required before loading WSClient");
-   }
-   const getAudioPlayer = () => window.AudioPlayer;
- 
-   let socket = null;
-   let heartbeatTimerId = null;
-   let expectInfoFrame = true;
-   let infoWatchdogTimerId = null;
-   let lastPingAt = null;
-   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-   let rateLimitRetryTimerId = null;
-   let rateLimitRetryCount = 0;
-   let autoResumeAttemptToken = null;
-+  let toastRoot = null;
-+  let lastTokenValue = null;
-+  let lastTokenMintedAt = null;
- 
-   function getResumeState() {
-     const state = AppState.getState();
-     const resume = state && typeof state.resume === "object" ? state.resume : null;
-     if (!resume) return null;
-     const token = typeof resume.token === "string" ? resume.token : null;
-     const ttlMs = Number.isFinite(resume.ttlMs) ? resume.ttlMs : null;
-     const expiresAt = Number.isFinite(resume.expiresAt) ? resume.expiresAt : null;
-     if (!token || !ttlMs || !expiresAt) return null;
-     return { token, ttlMs, expiresAt };
-   }
- 
-   function assignResume(token, ttlMs) {
-     if (typeof AppState.setResume === "function") {
-       AppState.setResume(token, ttlMs);
-     }
-     autoResumeAttemptToken = null;
-   }
- 
-   function clearResumeState() {
-     if (typeof AppState.clearResume === "function") {
-       AppState.clearResume();
-     }
-     autoResumeAttemptToken = null;
-   }
- 
-   function updateState(patch) {
-     AppState.setState(patch);
-   }
- 
-+  function ensureToastRoot() {
-+    toastRoot = toastRoot && toastRoot.isConnected ? toastRoot : document.getElementById("toast-root");
-+    if (!toastRoot) {
-+      toastRoot = document.createElement("div");
-+      toastRoot.id = "toast-root";
-+      toastRoot.className = "toast-container";
-+      document.body.appendChild(toastRoot);
-+    }
-+    if (
-+      !document.getElementById("inline-toast-styles") &&
-+      !document.getElementById("ws-error-styles") &&
-+      !document.getElementById(TOAST_STYLE_ID)
-+    ) {
-+      const styleTag = document.createElement("style");
-+      styleTag.id = TOAST_STYLE_ID;
-+      styleTag.textContent = TOAST_STYLE_TEXT;
-+      document.head.appendChild(styleTag);
-+    }
-+    return toastRoot;
-+  }
-+
-+  function showConnectionToast(message) {
-+    if (!message) return;
-+    const host = ensureToastRoot();
-+    if (!host) return;
-+    const toast = document.createElement("div");
-+    toast.className = "toast";
-+    toast.setAttribute("role", "alert");
-+    const body = document.createElement("div");
-+    body.className = "toast-body";
-+    body.textContent = message;
-+    toast.appendChild(body);
-+    host.appendChild(toast);
-+    setTimeout(() => {
-+      toast.classList.add("toast-exit");
-+      setTimeout(() => {
-+        if (toast.parentNode) {
-+          toast.parentNode.removeChild(toast);
-+        }
-+      }, 220);
-+    }, 3600);
-+  }
-+  function trackTokenFromUrl(url) {
-+    if (typeof url !== "string" || !url) {
-+      return { token: null, mintedAt: null };
-+    }
-+    let token = null;
-+    try {
-+      const parsed = new URL(url, window.location.origin);
-+      token = parsed.searchParams.get("access_token");
-+    } catch (err) {
-+      return { token: null, mintedAt: null };
-+    }
-+    if (typeof token === "string" && token) {
-+      if (token !== lastTokenValue) {
-+        lastTokenValue = token;
-+        lastTokenMintedAt = Date.now();
-+      }
-+      return { token: lastTokenValue, mintedAt: lastTokenMintedAt };
-+    }
-+    return { token: null, mintedAt: null };
-+  }
-+
-+  function maybeShowHandshakeToast(ws, closeCode) {
-+    if (!ws || ws.__intentionalClose === true || ws.__handshakeToastShown) {
-+      return;
-+    }
-+    if (ws.readyState !== WebSocket.CLOSED || closeCode !== 1006) {
-+      return;
-+    }
-+    const info = ws.__accessTokenInfo || { token: null, mintedAt: null };
-+    const mintedAt = info && typeof info.mintedAt === "number" && Number.isFinite(info.mintedAt)
-+      ? info.mintedAt
-+      : null;
-+    let message = null;
-+    if (!mintedAt) {
-+      message = "Couldn’t connect. Please login or complete your profile.";
-+    } else if (Date.now() - mintedAt > TOKEN_EXPIRY_MS) {
-+      message = "Session token expired. Click Start again.";
-+    } else {
-+      message = "Connection failed. Please try again.";
-+    }
-+    showConnectionToast(message);
-+    ws.__handshakeToastShown = true;
-+  }
-+
-   function computeUrl(resumeToken) {
-     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-     const base = `${protocol}//${window.location.host}/ws/v2/chat`;
-     const params = new URLSearchParams();
-     if (typeof resumeToken === "string" && resumeToken.trim()) {
-       params.set("resume", resumeToken.trim());
-     }
-     const query = params.toString();
-     return query ? `${base}?${query}` : base;
-   }
- 
-   function clearInfoWatchdog() {
-     if (infoWatchdogTimerId) {
-       clearTimeout(infoWatchdogTimerId);
-       infoWatchdogTimerId = null;
-     }
-   }
- 
-   function startInfoWatchdog() {
-     clearInfoWatchdog();
-     infoWatchdogTimerId = setTimeout(() => {
-       infoWatchdogTimerId = null;
-       console.warn("WS info frame not received within deadline");
-     }, INFO_DEADLINE_MS);
-   }
-@@ -513,67 +605,72 @@
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index caf0a6bfc97eeac0b9f0ba9a8384e42c851a2a54..41884a6f9bfc1b3fe7be599ff19c3020194d951c 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -542,53 +542,114 @@
        }
-     }
  
-     if (socket) {
-       cleanupSocket(socket, "superseded");
-     }
-     expectInfoFrame = true;
-     startInfoWatchdog();
-     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       const fail = (message) => { if (message) showToastMessage(message); startBtn.disabled = false; };
+       const csrfToken = csrf();
+       const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
+       let payload = null;
        try {
-         window.WSErrorUI.cancelRateLimitCountdown("manual");
+         const response = await fetch('/api/v1/auth/ws-token', {
+           method: 'POST',
+           credentials: 'include',
+           headers,
+         });
+         if (response.status === 401 || response.status === 403) return fail(response.status === 401 ? 'Please login first.' : 'Complete your profile first.');
+         if (response.status === 409) return fail('Profile required. Please complete profile.');
+         if (!response.ok) return fail('Couldn’t start session. Try again.');
+         payload = await response.json();
        } catch (err) {
-         console.warn("Failed to cancel rate limit countdown", err);
+         console.error('Failed to fetch WS token', err);
+         return fail('Couldn’t start session. Try again.');
        }
-     }
-     if (!skipRateLimitCancel) {
-       clearRateLimitRetryTimer();
-       rateLimitRetryCount = 0;
-     }
-     const url = urlOverride || computeUrl(resumeTokenValue);
-     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
-     const logPayload = Array.isArray(wsProtocols)
-       ? { url, protocols: wsProtocols }
-       : { url, subprotocol: wsProtocols };
-     console.log("WS opening", logPayload);
-+    const tokenInfo = trackTokenFromUrl(url);
-     const ws = transportFactory(url, wsProtocols);
-+    ws.__accessTokenInfo = tokenInfo;
-+    ws.__handshakeToastShown = false;
-     ws.onopen = () => {
-       // Lightweight breadcrumb; keep as console.log
-       console.log("WebSocket open", { url, protocol: ws.protocol || wsProtocols });
-     };
  
-     ws.onerror = (e) => {
-       console.error("WebSocket error", e, { readyState: ws.readyState });
-+      maybeShowHandshakeToast(ws, null);
-     };
- 
-     ws.onclose = (e) => {
-       console.error("WebSocket closed", {
-         code: e.code,
-         reason: e.reason,
-         wasClean: e.wasClean,
-         readyState: ws.readyState,
-       });
-+      maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
-     };
-     socket = ws;
-     updateState({
-       connectionState: resumeTokenValue ? "resuming" : "connecting",
-       websocket: ws,
-       latencyMs: null,
-       lastPingAt: null,
-       resumeError: null
-     });
-     attachSocket(ws);
-     return ws;
-   }
- 
-   function close(reason = DEFAULT_CLOSE_REASON) {
-     if (!socket) {
-       updateState({ connectionState: "disconnected" });
-       return;
-     }
-     const ws = socket;
-     cleanupSocket(ws, reason);
-     clearHeartbeat();
-     clearRateLimitRetryTimer();
-     rateLimitRetryCount = 0;
-     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       if (!payload || typeof payload.access_token !== 'string') return fail('Couldn’t start session. Try again.');
+       const accessToken = payload.access_token;
+       const sid = typeof payload.sid === 'string' ? payload.sid : null;
+       const ttlMs = Number(payload.ttl_ms);
+-      if (sid) AppState.setState({ sid });
+-      console.log('evt=ws_token_obtained', { sid, ttl_ms: Number.isFinite(ttlMs) ? ttlMs : null });
+-      const params = new URLSearchParams({ access_token: accessToken });
++      const ttlFinite = Number.isFinite(ttlMs) ? ttlMs : null;
++      const tokenIssuedAt = Date.now();
++      const initialPatch = {
++        wsTokenAccessToken: accessToken,
++        wsTokenTTL: ttlFinite,
++        wsTokenIssuedAt: tokenIssuedAt
++      };
++      if (sid) initialPatch.sid = sid;
++      AppState.setState(initialPatch);
++      console.log('evt=ws_token_obtained', { sid, ttl_ms: ttlFinite });
++
++      let tokenForOpen = accessToken;
++      const guardState = AppState.getState();
++      const guardTTL = guardState && Number.isFinite(guardState.wsTokenTTL) ? guardState.wsTokenTTL : null;
++      const guardIssuedAt = guardState && Number.isFinite(guardState.wsTokenIssuedAt) ? guardState.wsTokenIssuedAt : null;
++      if (guardTTL && guardIssuedAt) {
++        const ageMs = Date.now() - guardIssuedAt;
++        if (ageMs > (guardTTL - 1500)) {
++          let refreshResponse;
++          try {
++            refreshResponse = await fetch('/api/v1/auth/ws-token', {
++              method: 'POST',
++              credentials: 'include',
++              headers,
++            });
++          } catch (err) {
++            console.error('Failed to refresh WS token', err);
++            return fail('Couldn’t start session. Try again.');
++          }
++          if (!refreshResponse.ok) {
++            showToastMessage('Login or profile required to start.');
++            startBtn.disabled = false;
++            return;
++          }
++          let refreshPayload = null;
++          try {
++            refreshPayload = await refreshResponse.json();
++          } catch (err) {
++            console.error('Failed to parse refreshed WS token', err);
++            return fail('Couldn’t start session. Try again.');
++          }
++          const refreshedToken = refreshPayload && typeof refreshPayload.access_token === 'string'
++            ? refreshPayload.access_token
++            : null;
++          if (!refreshedToken) {
++            return fail('Couldn’t start session. Try again.');
++          }
++          const refreshedSid = typeof refreshPayload.sid === 'string' ? refreshPayload.sid : null;
++          const refreshedTtlMs = Number(refreshPayload.ttl_ms);
++          const refreshedTtlFinite = Number.isFinite(refreshedTtlMs) ? refreshedTtlMs : null;
++          const refreshedIssuedAt = Date.now();
++          tokenForOpen = refreshedToken;
++          const refreshPatch = {
++            wsTokenAccessToken: refreshedToken,
++            wsTokenTTL: refreshedTtlFinite,
++            wsTokenIssuedAt: refreshedIssuedAt
++          };
++          if (refreshedSid) refreshPatch.sid = refreshedSid;
++          AppState.setState(refreshPatch);
++          console.log('evt=ws_token_obtained', { sid: refreshedSid, ttl_ms: refreshedTtlFinite });
++        }
++      }
++
++      const params = new URLSearchParams({ access_token: tokenForOpen });
+       if (resumeToken) params.set('resume', resumeToken);
+       const wsUrl = `/ws/v2/chat?${params.toString()}`;
        try {
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 874db470f09c0bc8746e92e0403135d9ae4416b4..d5d1d82ae65a9ab62a0c5e5cdb59756879344606 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -233,77 +233,90 @@ class ChatV2Adapter:
-         *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
-     ) -> None:
-         self.engine = engine
-         self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
-         self._ip_buckets: Dict[str, TokenBucket] = {}
-         self._contexts: Dict[str, AdapterContext] = {}
-         self._ping_interval_ms = max(
-             0,
-             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
-         )
-         self.tts_runtime = None
-         self.asr_runtime = None
+         WSClient.open(wsUrl, ['chat.v2']);
+       } catch (err) {
+         console.error('Failed to open WS client', err);
+         AppState.setState({ connectionState: 'disconnected' });
+         fail('Couldn’t start session. Try again.');
+         endBtn.disabled = true;
+       }
+     });
  
-     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-         if scope.get("type") != "websocket":
-             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
- 
-         connect_event = await receive()
-         if connect_event.get("type") != "websocket.connect":
-             return
- 
-+        raw_path = scope.get("raw_path")
-+        if isinstance(raw_path, bytes):
-+            try:
-+                path = raw_path.decode("utf-8")
-+            except UnicodeDecodeError:  # pragma: no cover - defensive fallback
-+                path = raw_path.decode("latin-1", errors="ignore")
-+        else:
-+            path = scope.get("path", "")
-+
-+        query_bytes = scope.get("query_string") or b""
-+        try:
-+            query_string = query_bytes.decode("utf-8")
-+        except UnicodeDecodeError:  # pragma: no cover - defensive fallback
-+            query_string = query_bytes.decode("latin-1", errors="ignore")
-+        path_qs = path
-+        if query_string:
-+            path_qs = f"{path}?{query_string}"
-+
-         subprotocols = scope.get("subprotocols") or []
-         _logger.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
-         if CHAT_V2_SUBPROTOCOL not in subprotocols:
--            _logger.warning("evt=ws_reject_subprotocol reason=missing_or_mismatch need='chat.v2'")
-+            _wslog.warning("evt=ws_accept_reject code=4401 reason=bad_subprotocol path=%s", path_qs)
-             await self._reject_subprotocol(send)
-             return
- 
-         headers = self._decode_headers(scope.get("headers", ()))
- 
--        query_bytes = scope.get("query_string") or b""
--        try:
--            query_string = query_bytes.decode("utf-8")
--        except UnicodeDecodeError:  # pragma: no cover - defensive fallback
--            query_string = query_bytes.decode("latin-1", errors="ignore")
-         query_params = parse_qs(query_string, keep_blank_values=True)
-         access_token = query_params.get("access_token", [None])[0]
-         if not access_token:
-             reason = "missing_token"
--            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
-+            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs)
-             await send({"type": "websocket.close", "code": 4401, "reason": reason})
-             return
- 
-         try:
-             claims = verify_ws_token(access_token)
-         except Exception:
--            reason = "invalid_token"
--            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
-+            reason = "jwt_invalid_or_expired"
-+            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs)
-             await send({"type": "websocket.close", "code": 4401, "reason": reason})
-             return
- 
-         sid = claims.get("sid")
-         sub = claims.get("sub")
-         aud = claims.get("aud")
-         if not sid or not sub or aud != CHAT_V2_SUBPROTOCOL:
-             reason = "bad_claims"
-             _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
-             await send({"type": "websocket.close", "code": 4401, "reason": reason})
-             return
- 
-         principal: Dict[str, Any] = dict(claims)
-         is_admin = bool(principal.get("is_admin"))
- 
-         _wslog.info("evt=ws_accept_token_ok sid=%s", sid)
- 
-         _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
-         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
- 
-         now_ms = int(time.time() * 1000)
-         info_frame: Dict[str, Any] = {
-             "type": "info",
-             "protocol": CHAT_V2_SUBPROTOCOL,
-             "sid": sid,
+     endBtn.addEventListener('click', () => {
+       WSClient.close('user_requested');
+       if (typeof AppState.clearResume === 'function') {
+         AppState.clearResume();
+       }
+       if (window.AudioRecorder) {
+         try {
+           window.AudioRecorder.stop();
+         } catch (err) {
+           console.warn('Failed to stop audio recorder', err);
+         }
+       }
+       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {

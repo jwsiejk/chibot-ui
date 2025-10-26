@@ -564,9 +564,70 @@
       const accessToken = payload.access_token;
       const sid = typeof payload.sid === 'string' ? payload.sid : null;
       const ttlMs = Number(payload.ttl_ms);
-      if (sid) AppState.setState({ sid });
-      console.log('evt=ws_token_obtained', { sid, ttl_ms: Number.isFinite(ttlMs) ? ttlMs : null });
-      const params = new URLSearchParams({ access_token: accessToken });
+      const ttlFinite = Number.isFinite(ttlMs) ? ttlMs : null;
+      const tokenIssuedAt = Date.now();
+      const initialPatch = {
+        wsTokenAccessToken: accessToken,
+        wsTokenTTL: ttlFinite,
+        wsTokenIssuedAt: tokenIssuedAt
+      };
+      if (sid) initialPatch.sid = sid;
+      AppState.setState(initialPatch);
+      console.log('evt=ws_token_obtained', { sid, ttl_ms: ttlFinite });
+
+      let tokenForOpen = accessToken;
+      const guardState = AppState.getState();
+      const guardTTL = guardState && Number.isFinite(guardState.wsTokenTTL) ? guardState.wsTokenTTL : null;
+      const guardIssuedAt = guardState && Number.isFinite(guardState.wsTokenIssuedAt) ? guardState.wsTokenIssuedAt : null;
+      if (guardTTL && guardIssuedAt) {
+        const ageMs = Date.now() - guardIssuedAt;
+        if (ageMs > (guardTTL - 1500)) {
+          let refreshResponse;
+          try {
+            refreshResponse = await fetch('/api/v1/auth/ws-token', {
+              method: 'POST',
+              credentials: 'include',
+              headers,
+            });
+          } catch (err) {
+            console.error('Failed to refresh WS token', err);
+            return fail('Couldn’t start session. Try again.');
+          }
+          if (!refreshResponse.ok) {
+            showToastMessage('Login or profile required to start.');
+            startBtn.disabled = false;
+            return;
+          }
+          let refreshPayload = null;
+          try {
+            refreshPayload = await refreshResponse.json();
+          } catch (err) {
+            console.error('Failed to parse refreshed WS token', err);
+            return fail('Couldn’t start session. Try again.');
+          }
+          const refreshedToken = refreshPayload && typeof refreshPayload.access_token === 'string'
+            ? refreshPayload.access_token
+            : null;
+          if (!refreshedToken) {
+            return fail('Couldn’t start session. Try again.');
+          }
+          const refreshedSid = typeof refreshPayload.sid === 'string' ? refreshPayload.sid : null;
+          const refreshedTtlMs = Number(refreshPayload.ttl_ms);
+          const refreshedTtlFinite = Number.isFinite(refreshedTtlMs) ? refreshedTtlMs : null;
+          const refreshedIssuedAt = Date.now();
+          tokenForOpen = refreshedToken;
+          const refreshPatch = {
+            wsTokenAccessToken: refreshedToken,
+            wsTokenTTL: refreshedTtlFinite,
+            wsTokenIssuedAt: refreshedIssuedAt
+          };
+          if (refreshedSid) refreshPatch.sid = refreshedSid;
+          AppState.setState(refreshPatch);
+          console.log('evt=ws_token_obtained', { sid: refreshedSid, ttl_ms: refreshedTtlFinite });
+        }
+      }
+
+      const params = new URLSearchParams({ access_token: tokenForOpen });
       if (resumeToken) params.set('resume', resumeToken);
       const wsUrl = `/ws/v2/chat?${params.toString()}`;
       try {
