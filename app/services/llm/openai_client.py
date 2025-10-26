@@ -12,7 +12,7 @@ from app.config import get_env
 from app.telemetry import bus
 from app.voice_v2.llm_base import LLMProviderBase
 
-_logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 
 def _coerce_float(value: Any, default: float) -> float:
@@ -131,7 +131,7 @@ class OpenAILLMProvider(LLMProviderBase):
             if combined:
                 return combined
 
-        _logger.warning("OpenAI response missing text payload; falling back to empty string")
+        _log.warning("evt=openai_response_missing_text")
         return ""
 
 

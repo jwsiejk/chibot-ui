@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 Subscription = Tuple[str, Callable[[dict], None]]
 
-_bus_log = logging.getLogger("app.telemetry.bus")
+_log = logging.getLogger(__name__)
 
 # Internal registries keyed by subscription token.
 _subscriptions: Dict[str, Subscription] = {}
@@ -269,7 +269,7 @@ def publish(event: dict) -> None:
         try:
             normalized["meta"] = _redact_meta(original_meta)
         except Exception:  # pylint: disable=broad-except
-            _bus_log.warning("evt=telemetry_redact_failed", exc_info=True)
+            _log.warning("evt=telemetry_redact_failed", exc_info=True)
             normalized["meta"] = original_meta
 
     sid = normalized.get("sid")
@@ -326,7 +326,7 @@ def publish(event: dict) -> None:
             handler(payload)
         except Exception:  # pylint: disable=broad-except
             handler_name = getattr(handler, "__qualname__", repr(handler))
-            _bus_log.error(
+            _log.error(
                 "evt=telemetry_sink_failed token=%s handler=%s",
                 token,
                 handler_name,

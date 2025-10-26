@@ -28,7 +28,7 @@ EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
 EVT_TURN_END = "EVT_TURN_END"
 
 
-_logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 
 class LLMAdapter:
@@ -147,7 +147,9 @@ class LLMAdapter:
                 fallback_reason = "timeout"
             except Exception:  # pragma: no cover - defensive logging
                 fallback_reason = "error"
-                _logger.exception("LLM provider invocation failed; falling back to generator")
+                _log.exception(
+                    "evt=llm_provider_failed sid=%s", sid, extra={"req_id": req_id}
+                )
             else:
                 if isinstance(reply_candidate, str) and reply_candidate.strip():
                     reply = reply_candidate
@@ -200,7 +202,6 @@ class LLMAdapter:
 
         _ = plan  # plan payload included for symmetry with persona generation
         _ = turn_id  # turn metadata is unused for greet but kept for parity
-        _ = sid  # greet generation is session-aware but currently stateless
 
         persona = load_persona()
         system_preamble = build_system_preamble(persona)
@@ -232,8 +233,8 @@ class LLMAdapter:
                 fallback_reason = "timeout"
             except Exception:  # pragma: no cover - defensive logging
                 fallback_reason = "error"
-                _logger.exception(
-                    "LLM provider invocation failed during greeting; falling back to static copy"
+                _log.exception(
+                    "evt=llm_greet_failed sid=%s", sid, extra={"req_id": req_id}
                 )
             else:
                 normalized = self._normalize_greet_reply(reply_candidate)

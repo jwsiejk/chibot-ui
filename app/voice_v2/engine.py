@@ -45,7 +45,7 @@ from app.voice_v2.persona import default_chips_for_mode, load_persona
 from app.voice_v2.streaming import StreamingController
 
 
-_logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 
 def _now_ms() -> int:
@@ -519,8 +519,11 @@ class EngineV2:
             self._set_state(sid, CONFIRMING_BARGE, reason="auto_barge")
             self._schedule_barge_confirmation(sid)
         else:
-            _logger.info(
-                "Auto barge denied", extra={"sid": sid, "source": source, "reason": deny_reason}
+            _log.info(
+                "evt=barge_auto_denied reason=%s source=%s",
+                deny_reason,
+                source,
+                extra={"sid": sid},
             )
 
     def cancel_current_tts(self, sid: str, *, reason: str = "canceled") -> bool:
@@ -663,7 +666,7 @@ class EngineV2:
         try:
             persona_candidate = load_persona()
         except Exception:
-            _logger.exception("Failed to load persona for greeting")
+            _log.exception("evt=greet_persona_load_failed sid=%s", sid)
         else:
             if isinstance(persona_candidate, dict):
                 persona = persona_candidate
@@ -686,7 +689,7 @@ class EngineV2:
             policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
             self._publish(policy_event)
 
-            _logger.debug(
+            _log.debug(
                 "evt=greet_llm_request sid=%s purpose=%s model=%s temp=%s max_tokens=%s msg_counts=%s",
                 sid,
                 "greet",
@@ -716,7 +719,7 @@ class EngineV2:
                     plan_payload,
                 )
             except Exception:
-                _logger.exception("evt=greet_llm_failed sid=%s", sid)
+                _log.exception("evt=greet_llm_failed sid=%s", sid)
                 greeting_candidate = None
             else:
                 latency_ms = max(int((time.perf_counter() - start_time) * 1000), 0)
@@ -729,7 +732,7 @@ class EngineV2:
                     sid, EVT_LLM_COMPLETE, complete_payload
                 )
                 self._publish(complete_event)
-                _logger.debug(
+                _log.debug(
                     "evt=greet_llm_complete sid=%s purpose=%s latency_ms=%s model=%s",
                     sid,
                     "greet",
@@ -816,7 +819,7 @@ class EngineV2:
             persona = load_persona()
             persona_dict = persona if isinstance(persona, Mapping) else {}
         except Exception:
-            _logger.exception("Failed to load persona for connect suggestions")
+            _log.exception("evt=connect_persona_load_failed sid=%s", sid)
             persona_dict = {}
 
         def _normalize_labels(labels: Any) -> list[str]:

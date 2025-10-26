@@ -13,8 +13,7 @@ import httpx
 from app.telemetry import bus
 from app.voice_v2.tts_base import TTSProviderBase
 
-_logger = logging.getLogger("tts.elevenlabs")
-_tts_provider_log = logging.getLogger("app.voice_v2.tts_provider")
+_log = logging.getLogger(__name__)
 
 _API_BASE_URL = "https://api.elevenlabs.io/v1"
 _OUTPUT_FORMAT = "pcm_16000"
@@ -56,7 +55,7 @@ class ElevenLabsStream:
                 query_string = str(raw_query)
         if query_string is None:
             query_string = f"optimize_streaming_latency=4&output_format={_OUTPUT_FORMAT}"
-        _tts_provider_log.info(
+        _log.info(
             "evt=tts_provider_stream_opened provider=elevenlabs content_type=%s url_qs=%s",
             response.headers.get("content-type"),
             query_string,

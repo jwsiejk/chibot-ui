@@ -20,7 +20,7 @@ try:  # pragma: no cover - optional dependency wiring
 except ModuleNotFoundError:  # pragma: no cover - fallback when jwt is unavailable
     _mint_ws_token_impl = None
 
-_authlog = logging.getLogger("app.auth.http")
+_log = logging.getLogger(__name__)
 
 _CSRF_HEADER_NAME = b"x-csrf-token"
 _CSRF_COOKIE_CANDIDATES = ("csrf_token", "csrftoken", "askchip_csrf")
@@ -64,7 +64,7 @@ async def post_login(scope: Mapping[str, Any], receive) -> "Response":
                 existing.get("region"),
             )
     except Exception:
-        _authlog.exception("evt=login_failed email=%s", _safe(email))
+        _log.exception("evt=login_failed email=%s", _safe(email))
         return json_response(status=500, error="server_error")
 
     complete = profile_complete(user)
@@ -74,7 +74,7 @@ async def post_login(scope: Mapping[str, Any], receive) -> "Response":
     try:
         session_token = _mint_session_token(email)
     except Exception:
-        _authlog.exception("evt=login_session_error email=%s", _safe(email))
+        _log.exception("evt=login_session_error email=%s", _safe(email))
         return json_response(status=500, error="server_error")
     csrf_token = secrets.token_urlsafe(32)
 
@@ -90,7 +90,7 @@ async def post_login(scope: Mapping[str, Any], receive) -> "Response":
     headers.append(_build_cookie_header(_CSRF_COOKIE_NAME, csrf_token, http_only=False))
     response = Response(status=response.status, body=response.body, headers=tuple(headers))
 
-    _authlog.info("evt=login email=%s next=%s", _safe(email), next_step)
+    _log.info("evt=login email=%s next=%s", _safe(email), next_step)
 
     return response
 
@@ -115,7 +115,7 @@ async def get_me(scope: Mapping[str, Any], receive) -> "Response":
         if user is None:
             user = await upsert_user(email, None, None, None)
     except Exception:
-        _authlog.exception("evt=me_failed email=%s", _safe(email))
+        _log.exception("evt=me_failed email=%s", _safe(email))
         await _drain_body(receive)
         return json_response(status=500, error="server_error")
 
@@ -165,12 +165,12 @@ async def post_profile(scope: Mapping[str, Any], receive) -> "Response":
     try:
         user = await upsert_user(email, name, title, region)
     except Exception:
-        _authlog.exception("evt=profile_update_failed email=%s", _safe(email))
+        _log.exception("evt=profile_update_failed email=%s", _safe(email))
         return json_response(status=500, error="server_error")
 
     complete = profile_complete(user)
 
-    _authlog.info("evt=profile_update email=%s", _safe(email))
+    _log.info("evt=profile_update email=%s", _safe(email))
 
     return json_response(
         user=_serialize_user(user),
@@ -208,7 +208,7 @@ async def post_ws_token(scope: Mapping[str, Any], receive) -> "Response":
             if fetched is None:
                 fetched = await upsert_user(session_email, None, None, None)
         except Exception:
-            _authlog.exception("evt=ws_token_user_lookup_failed email=%s", _safe(session_email))
+            _log.exception("evt=ws_token_user_lookup_failed email=%s", _safe(session_email))
             await _drain_body(receive)
             return json_response(status=500, error="server_error")
         fetched = dict(fetched)
@@ -232,7 +232,7 @@ async def post_ws_token(scope: Mapping[str, Any], receive) -> "Response":
     user_identifier = _user_identifier(user)
     if user_identifier is None:
         await _drain_body(receive)
-        _authlog.warning("evt=ws_token_missing_identifier")
+        _log.warning("evt=ws_token_missing_identifier")
         return json_response(status=500, error="server_error")
 
     await _drain_body(receive)
@@ -241,7 +241,7 @@ async def post_ws_token(scope: Mapping[str, Any], receive) -> "Response":
     is_admin = _is_admin(user)
     token = _mint_ws_token(user_identifier, sid, is_admin, ttl_s=60)
 
-    _authlog.info("evt=ws_token_mint sid=%s ttl=60", sid)
+    _log.info("evt=ws_token_mint sid=%s ttl=60", sid)
 
     ttl_ms = 60 * 1000
     return json_response(access_token=token, sid=sid, ttl_ms=ttl_ms)
@@ -370,7 +370,7 @@ def _session_email(scope: Mapping[str, Any]) -> Optional[str]:
     try:
         email = _decode_session_token(token)
     except RuntimeError:
-        _authlog.exception("evt=session_secret_missing")
+        _log.exception("evt=session_secret_missing")
         return None
     if not email:
         return None

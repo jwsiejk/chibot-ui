@@ -15,7 +15,7 @@ import websockets
 from websockets.legacy.client import WebSocketClientProtocol
 from urllib.parse import urlsplit
 
-_logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 _DEFAULT_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
 _DEFAULT_BUFFER_BYTES = 4 * 1024 * 1024
@@ -96,7 +96,7 @@ class DeepgramClient:
                 ping_interval=None,
             )
         except Exception as exc:
-            _logger.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
+            _log.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
             raise
 
         start_payload = {
@@ -121,7 +121,7 @@ class DeepgramClient:
         )
         self._streams[sid] = state
         loop.call_soon(
-            _logger.info,
+            _log.info,
             "evt=dg_stream_open sid=%s stream_id=%s url=%s",
             sid,
             stream_id,
@@ -155,7 +155,7 @@ class DeepgramClient:
                 state.buffered_bytes -= len(removed)
             if dropped and not state.drop_logged:
                 state.drop_logged = True
-                _logger.warning(
+                _log.warning(
                     "evt=deepgram_backpressure sid=%s dropped_bytes=%d", sid, dropped
                 )
         state.data_event.set()
@@ -187,7 +187,7 @@ class DeepgramClient:
                     try:
                         await state.websocket.send(chunk)
                     except Exception as exc:  # pragma: no cover - defensive
-                        _logger.exception(
+                        _log.exception(
                             "evt=dg_send_failed sid=%s stream_id=%s seq_no=%d err=%s",
                             state.sid,
                             state.stream_id,
@@ -204,7 +204,7 @@ class DeepgramClient:
                     else:
                         since_last_ms = 0
                     state.last_send_ts = now
-                    _logger.debug(
+                    _log.debug(
                         "evt=asr_chunk_sent sid=%s stream_id=%s seq_no=%d bytes=%d "
                         "buffered_bytes=%d since_last_ms=%d",
                         state.sid,
@@ -219,7 +219,7 @@ class DeepgramClient:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
-            _logger.exception("evt=deepgram_send_failed sid=%s err=%s", state.sid, exc)
+            _log.exception("evt=deepgram_send_failed sid=%s err=%s", state.sid, exc)
             state.on_error(str(exc))
 
     async def _receiver_loop(self, state: _StreamState) -> None:
@@ -227,7 +227,7 @@ class DeepgramClient:
         try:
             async for message in websocket:
                 if isinstance(message, bytes):
-                    _logger.error(
+                    _log.error(
                         "evt=dg_msg_parse_error sid=%s stream_id=%s raw_type=%s err=%s",
                         state.sid,
                         state.stream_id,
@@ -238,7 +238,7 @@ class DeepgramClient:
                 try:
                     payload = json.loads(message)
                 except json.JSONDecodeError as exc:
-                    _logger.error(
+                    _log.error(
                         "evt=dg_msg_parse_error sid=%s stream_id=%s raw_type=%s err=%s",
                         state.sid,
                         state.stream_id,
@@ -250,7 +250,7 @@ class DeepgramClient:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
-            _logger.exception("evt=deepgram_recv_failed sid=%s err=%s", state.sid, exc)
+            _log.exception("evt=deepgram_recv_failed sid=%s err=%s", state.sid, exc)
             state.on_error(str(exc))
         finally:
             await self._finalize_stream(state)
@@ -259,7 +259,7 @@ class DeepgramClient:
         try:
             await state.websocket.close()
         except Exception:  # pragma: no cover - defensive
-            _logger.debug("evt=deepgram_ws_close_error sid=%s", state.sid, exc_info=True)
+            _log.debug("evt=deepgram_ws_close_error sid=%s", state.sid, exc_info=True)
         await self._finalize_stream(state)
 
     async def _finalize_stream(self, state: _StreamState) -> None:
@@ -272,7 +272,7 @@ class DeepgramClient:
             pass
         code = state.websocket.close_code
         reason = (state.websocket.close_reason or "").replace('"', '\\"')
-        _logger.info(
+        _log.info(
             'evt=dg_stream_closed sid=%s stream_id=%s code=%s reason="%s"',
             state.sid,
             state.stream_id,
@@ -284,7 +284,7 @@ class DeepgramClient:
             try:
                 callback(code, state.websocket.close_reason)
             except Exception:  # pragma: no cover - defensive
-                _logger.exception("evt=deepgram_close_callback_failed sid=%s", state.sid)
+                _log.exception("evt=deepgram_close_callback_failed sid=%s", state.sid)
         state.on_close = None
         self._streams.pop(state.sid, None)
 

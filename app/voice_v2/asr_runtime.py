@@ -19,8 +19,7 @@ from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL, EVT_ASR_READY, EVT_WS_J
 from app.voice_v2.engine import EngineV2
 from app.services.streaming_asr.deepgram_client import DeepgramClient
 
-_logger = logging.getLogger(__name__)
-_asr_log = logging.getLogger("app.voice_v2.asr_runtime")
+_log = logging.getLogger(__name__)
 
 _CONTENT_TYPE = "audio/webm;codecs=opus"
 _PARTIAL_CONFIDENCE = 0.55
@@ -134,7 +133,7 @@ class ASRRuntime:
             self._client.send_audio(sid, data)
 
         if _TRACE_ENABLED:
-            _logger.debug(
+            _log.debug(
                 "evt=asr_audio_enqueued sid=%s stream_id=%s bytes=%d buffered_bytes=%d pending_chunks=%d",
                 sid,
                 state.stream_id or state.last_stream_id or "",
@@ -159,7 +158,7 @@ class ASRRuntime:
         try:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
-            _logger.exception("evt=asr_stream_close_failed sid=%s", sid)
+            _log.exception("evt=asr_stream_close_failed sid=%s", sid)
         finally:
             self._log_session_rollup(state)
         state.req_id = None
@@ -193,7 +192,7 @@ class ASRRuntime:
         if dropped_chunks:
             state.dropped_chunks += dropped_chunks
             stream_id = state.stream_id or state.last_stream_id or ""
-            _logger.info(
+            _log.info(
                 "evt=asr_backpressure sid=%s stream_id=%s buffered_bytes=%d threshold=%d action=drop_oldest dropped_chunks=%d",
                 sid,
                 stream_id,
@@ -207,7 +206,7 @@ class ASRRuntime:
         duration_ms = int(
             max(0.0, (time.monotonic() - state.opened_at_monotonic) * 1000)
         )
-        _logger.info(
+        _log.info(
             "evt=asr_rollup sid=%s stream_id=%s opened_at_ms=%d last_audio_ts_ms=%d "
             "chunks_sent=%d bytes_sent=%d partials=%d finals=%d finals_delivered=%d "
             "dropped=%d duration_ms=%d",
@@ -255,12 +254,12 @@ class ASRRuntime:
         if isinstance(e2e_latency, (int, float)):
             log_template += " e2e_latency_ms=%d"
             log_args.append(int(e2e_latency))
-        _logger.info(log_template, *log_args)
+        _log.info(log_template, *log_args)
 
     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
         loop = self._ensure_loop()
         if loop is None:
-            _logger.warning("evt=asr_no_loop sid=%s", sid)
+            _log.warning("evt=asr_no_loop sid=%s", sid)
             return
         if state.stream_open:
             return
@@ -292,7 +291,7 @@ class ASRRuntime:
             except asyncio.CancelledError:
                 raise
             except asyncio.TimeoutError:
-                _asr_log.error("evt=asr_open_failed sid=%s vendor=deepgram", sid)
+                _log.error("evt=asr_open_failed sid=%s vendor=deepgram", sid)
                 state.stream_id = None
                 state.stream_open = False
                 state.stream_open_task = None
@@ -301,12 +300,12 @@ class ASRRuntime:
                     loop.call_later(0.1, self._ensure_stream, sid, state)
                 return
             except Exception:  # pragma: no cover - defensive
-                _logger.exception("evt=asr_stream_open_failed sid=%s", sid)
+                _log.exception("evt=asr_stream_open_failed sid=%s", sid)
                 state.stream_id = None
                 return
 
             state.stream_open = True
-            _asr_log.info(
+            _log.info(
                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
                 sid,
                 _CONTENT_TYPE,
@@ -322,7 +321,7 @@ class ASRRuntime:
             }
             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
             if stream_id:
-                _logger.info(
+                _log.info(
                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
                     sid,
                     stream_id,
@@ -378,7 +377,7 @@ class ASRRuntime:
             if reason is None:
                 reason = "server_shutdown" if _code == 1001 else "error"
             state.last_stream_id = stream_id
-            _logger.info(
+            _log.info(
                 "evt=asr_session_close sid=%s stream_id=%s reason=%s",
                 sid,
                 stream_id,
@@ -418,7 +417,7 @@ class ASRRuntime:
             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
         latency_ms = int(metadata.get("latency_ms") or 0)
 
-        _logger.debug(
+        _log.debug(
             "evt=dg_partial sid=%s stream_id=%s len_chars=%d is_final=false "
             "utterance_id=%s latency_ms=%d",
             sid,
@@ -441,7 +440,7 @@ class ASRRuntime:
         try:
             self._engine.on_asr_partial(sid, req_id, _PARTIAL_CONFIDENCE, text)
         except Exception:  # pragma: no cover - defensive
-            _logger.exception("evt=asr_engine_partial_failed sid=%s", sid)
+            _log.exception("evt=asr_engine_partial_failed sid=%s", sid)
 
         event = {
             "type": EVT_ASR_PARTIAL,
@@ -488,7 +487,7 @@ class ASRRuntime:
             engine_session = ensure_session(sid)
             engine_session.req_id = req_id
 
-        _logger.debug(
+        _log.debug(
             "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
             "utterance_id=%s latency_ms=%d req_id=%s",
             sid,
@@ -502,7 +501,7 @@ class ASRRuntime:
         try:
             self._engine.on_asr_final(sid, text, req_id)
         except Exception:  # pragma: no cover - defensive
-            _logger.exception("evt=asr_engine_final_failed sid=%s", sid)
+            _log.exception("evt=asr_engine_final_failed sid=%s", sid)
 
         event = {
             "type": EVT_ASR_FINAL,
@@ -517,7 +516,7 @@ class ASRRuntime:
         self._log_utterance(state, stream_id, req_id, metadata, text)
 
     def _on_error(self, sid: str, error: str) -> None:
-        _logger.exception("evt=asr_error sid=%s err=%s", sid, error)
+        _log.exception("evt=asr_error sid=%s err=%s", sid, error)
 
         state = self._sessions.get(sid)
         if state is None:
@@ -530,7 +529,7 @@ class ASRRuntime:
         try:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
-            _logger.exception("evt=asr_error_close_failed sid=%s", sid)
+            _log.exception("evt=asr_error_close_failed sid=%s", sid)
 
     def _cancel_idle_timer(self, state: _SessionState) -> None:
         handle = state.idle_handle
@@ -556,7 +555,7 @@ class ASRRuntime:
             armed_at = state.ready_armed_at
             state.ready_armed_at = 0.0
             if armed_at and state.last_audio_ts <= armed_at:
-                _asr_log.warning("evt=asr_no_audio_timeout sid=%s", sid)
+                _log.warning("evt=asr_no_audio_timeout sid=%s", sid)
                 bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
                 input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
                 asr_ready_frame = {
@@ -612,7 +611,7 @@ class ASRRuntime:
             else self._idle_close_ms
         )
         stream_id = state.stream_id or state.last_stream_id or ""
-        _logger.info(
+        _log.info(
             "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
             sid,
             stream_id,
@@ -621,7 +620,7 @@ class ASRRuntime:
         try:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
-            _logger.exception("evt=asr_idle_close_failed sid=%s", sid)
+            _log.exception("evt=asr_idle_close_failed sid=%s", sid)
         state.stream_open = False
         state.last_stream_id = stream_id or state.last_stream_id
         state.stream_id = None
@@ -643,7 +642,7 @@ class ASRRuntime:
                 try:
                     stream_id = state.stream_id or state.last_stream_id or ""
                     idle_ms = int(max(0.0, (now - state.last_audio_ts) * 1000))
-                    _logger.info(
+                    _log.info(
                         "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
                         sid,
                         stream_id,
@@ -651,7 +650,7 @@ class ASRRuntime:
                     )
                     self._client.close_stream(sid)
                 except Exception:  # pragma: no cover - defensive
-                    _logger.exception("evt=asr_idle_close_failed sid=%s", sid)
+                    _log.exception("evt=asr_idle_close_failed sid=%s", sid)
                 state.stream_open = False
                 state.last_stream_id = state.stream_id or state.last_stream_id
                 state.stream_id = None

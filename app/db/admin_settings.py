@@ -15,7 +15,7 @@ except Exception:  # pragma: no cover - defensive fallback when psycopg missing
     psy_errors = None  # type: ignore
 
 
-_LOGGER = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 _SettingsValue = Optional[str]
 _ConnectionFactory = Callable[[], "psycopg.Connection"]  # type: ignore[name-defined]
@@ -104,7 +104,9 @@ class AdminSettingsStore:
         try:
             conn = self._conn_factory()
         except Exception as exc:  # pragma: no cover - connection failures
-            _LOGGER.warning("AdminSettingsStore failed to connect: %s", exc)
+            _log.warning(
+                "evt=admin_settings_conn_failed err=%s", exc, extra={"component": "admin.settings"}
+            )
             return None
         try:
             if hasattr(conn, "autocommit"):

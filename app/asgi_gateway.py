@@ -49,7 +49,7 @@ for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
         _category_logger.setLevel(logging.INFO)
 
 
-logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -134,7 +134,7 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
     p = (scope.get("path") or "")
     if p.endswith("/ws/v2/chat"):
         # Keep formatting consistent with this module's logging style
-        logger.info(
+        _log.info(
             "evt=ws_entry path=%s type=%s subs=%s query=%s root_path=%s",
             scope.get("path"), scope.get("type"),
             scope.get("subprotocols"), scope.get("query_string"),
@@ -206,10 +206,10 @@ async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) -> 
         with NamedTemporaryFile(dir=EXPORT_ROOT, prefix=".ready-", delete=True) as tmp:
             tmp.write(b"ok")
             tmp.flush()
-        logger.debug("Readiness probe succeeded for %s", EXPORT_ROOT)
+        _log.debug("evt=ready_probe_success path=%s", EXPORT_ROOT)
         return json_response(ok=True, export_path=str(EXPORT_ROOT))
     except OSError as exc:
-        logger.warning("Readiness probe failed: %s", exc)
+        _log.warning("evt=ready_probe_failed err=%s path=%s", exc, EXPORT_ROOT)
         return json_response(
             status=503,
             ok=False,
@@ -602,7 +602,7 @@ async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[s
     try:
         email = _auth_session_email(scope)
     except Exception:  # pragma: no cover - defensive against misconfigured secrets
-        logger.debug("evt=admin_session_decode_failed")
+        _log.debug("evt=admin_session_decode_failed")
         return False, False, None
 
     if not email:
@@ -611,7 +611,7 @@ async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[s
     try:
         user = await neon.get_user(email)
     except Exception:  # pragma: no cover - defensive logging
-        logger.exception("evt=admin_context_lookup_failed email=%s", email)
+        _log.exception("evt=admin_context_lookup_failed email=%s", email)
         return True, False, email
 
     if user is None:
@@ -620,7 +620,7 @@ async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[s
     try:
         is_admin = bool(_auth_is_admin(user))
     except Exception:  # pragma: no cover - defensive logging
-        logger.exception("evt=admin_context_flag_failed email=%s", email)
+        _log.exception("evt=admin_context_flag_failed email=%s", email)
         return True, False, email
 
     return True, is_admin, email
@@ -690,7 +690,7 @@ async def _handle_lifespan(
                 try:
                     await neon.init_schema()
                 except Exception:
-                    logger.exception("evt=lifespan_startup_failed")
+                    _log.exception("evt=lifespan_startup_failed")
                     await send({"type": "lifespan.startup.failed", "message": "init_schema"})
                     raise
                 _lifespan_started = True

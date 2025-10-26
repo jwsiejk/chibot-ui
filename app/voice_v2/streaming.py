@@ -6,7 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Dict, Optional
 
-_logger = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 Cleanup = Callable[[], Optional[Awaitable[None]]]
 
@@ -42,13 +42,13 @@ class _SessionStreams:
         try:
             result = closer()
         except Exception:  # pragma: no cover - defensive logging
-            _logger.exception("Streaming finalizer raised during invocation")
+            _log.exception("evt=streaming_finalizer_invoke_failed")
             return
         if asyncio.iscoroutine(result) or isinstance(result, Awaitable):
             try:
                 await result
             except Exception:  # pragma: no cover - defensive logging
-                _logger.exception("Streaming finalizer coroutine failed")
+                _log.exception("evt=streaming_finalizer_coro_failed")
 
 
 class StreamingController:
@@ -114,7 +114,7 @@ class StreamingController:
         except asyncio.CancelledError:  # pragma: no cover - expected when shutting down
             pass
         except Exception:  # pragma: no cover - defensive logging
-            _logger.exception("Streaming cleanup task failed")
+            _log.exception("evt=streaming_cleanup_task_failed")
 
 
 __all__ = ["StreamingController"]

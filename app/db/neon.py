@@ -9,7 +9,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import asyncpg
 
-_dblog = logging.getLogger("app.db.neon")
+_log = logging.getLogger(__name__)
 
 _pool: Optional[asyncpg.Pool] = None
 _pool_lock = asyncio.Lock()
@@ -87,7 +87,7 @@ async def get_pool() -> asyncpg.Pool:
                     statement_cache_size=0,
                     max_size=10,
                 )
-                _dblog.info("evt=db_pool_ready dsn=%s", _redact_dsn(dsn))
+                _log.info("evt=db_pool_ready dsn=%s", _redact_dsn(dsn))
     assert _pool is not None
     return _pool
 

@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any, Dict, Mapping
 
-_LOGGER = logging.getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 _DEFAULT_SETTINGS: Dict[str, str] = {"authentication": "none"}
 
@@ -32,7 +32,11 @@ async def handle_admin_settings(scope: dict, receive) -> "Response":
         except (UnicodeDecodeError, json.JSONDecodeError):
             return _json_response(status=400, error="invalid_json")
         except Exception as exc:  # pragma: no cover - defensive logging
-            _LOGGER.exception("Failed to parse admin settings payload", exc_info=exc)
+            _log.exception(
+                "evt=admin_settings_parse_failed err=%s",
+                exc.__class__.__name__,
+                extra={"component": "admin.settings"},
+            )
             return _json_response(status=400, error="invalid_json")
 
     return _respond_settings(method)

@@ -74,8 +74,7 @@ _OUTBOX_MAXSIZE = 256
 
 _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
 
-_logger = logging.getLogger(__name__)
-_wslog = logging.getLogger("app.ws.adapter")
+_log = logging.getLogger(__name__)
 
 _ALLOWED_TEXT_FRAME_TYPES = {
     "client.ready",
@@ -274,9 +273,11 @@ class ChatV2Adapter:
             path_qs = f"{path}?{query_string}"
 
         subprotocols = scope.get("subprotocols") or []
-        _logger.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
+        _log.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
         if CHAT_V2_SUBPROTOCOL not in subprotocols:
-            _wslog.warning("evt=ws_accept_reject code=4401 reason=bad_subprotocol path=%s", path_qs)
+            _log.warning(
+                "evt=ws_accept_reject code=4401 reason=bad_subprotocol path=%s", path_qs
+            )
             await self._reject_subprotocol(send)
             return
 
@@ -294,7 +295,7 @@ class ChatV2Adapter:
 
         if not token:
             reason = "missing_token"
-            _wslog.warning(
+            _log.warning(
                 "evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs
             )
             await send({"type": "websocket.close", "code": 4401, "reason": reason})
@@ -304,7 +305,7 @@ class ChatV2Adapter:
             claims = verify_ws_token(token)
         except Exception:
             reason = "jwt_invalid_or_expired"
-            _wslog.warning(
+            _log.warning(
                 "evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs
             )
             await send({"type": "websocket.close", "code": 4401, "reason": reason})
@@ -315,7 +316,7 @@ class ChatV2Adapter:
         aud = claims.get("aud")
         if not sid or not sub or aud != CHAT_V2_SUBPROTOCOL:
             reason = "jwt_claims_invalid"
-            _wslog.warning(
+            _log.warning(
                 "evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs
             )
             await send({"type": "websocket.close", "code": 4401, "reason": reason})
@@ -324,9 +325,9 @@ class ChatV2Adapter:
         principal: Dict[str, Any] = dict(claims)
         is_admin = bool(principal.get("is_admin"))
 
-        _wslog.info("evt=ws_accept_token_ok sid=%s", sid)
+        _log.info("evt=ws_accept_token_ok sid=%s", sid)
 
-        _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
+        _log.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
 
         now_ms = int(time.time() * 1000)
@@ -342,7 +343,7 @@ class ChatV2Adapter:
         if policy_snapshot:
             info_frame["policy"] = policy_snapshot
         await self._send_json(send, sid, info_frame)
-        _logger.info("evt=ws_info_sent sid=%s", sid)
+        _log.info("evt=ws_info_sent sid=%s", sid)
 
         ctx = AdapterContext(
             sid=sid,
@@ -356,7 +357,7 @@ class ChatV2Adapter:
             inspect.iscoroutinefunction(self._on_open_and_greet)
             and inspect.iscoroutinefunction(self._invoke_engine)
         ):
-            _logger.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
+            _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
             raise RuntimeError("WebSocket async contract violation")
 
         ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
@@ -374,7 +375,7 @@ class ChatV2Adapter:
             try:
                 asr_runtime.on_ws_open(ctx.sid)
             except Exception:  # pragma: no cover - defensive logging
-                _logger.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
+                _log.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
         self._start_asr_ready_tracker(ctx)
         self._start_outbound_bridge(ctx, send)
         self._start_server_keepalive(ctx, send)
@@ -437,7 +438,7 @@ class ChatV2Adapter:
                 try:
                     asr_runtime.on_ws_close(ctx.sid)
                 except Exception:  # pragma: no cover - defensive logging
-                    _logger.exception("evt=ws_asr_close_failed sid=%s", ctx.sid)
+                    _log.exception("evt=ws_asr_close_failed sid=%s", ctx.sid)
             await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
             if self.exporter:
                 self.exporter.end(ctx.sid, {"close_code": close_code})
@@ -849,7 +850,7 @@ class ChatV2Adapter:
             try:
                 asr_runtime.on_ws_audio(ctx.sid, chunk)
             except Exception:  # pragma: no cover - defensive logging
-                _logger.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
+                _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
 
     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
@@ -909,7 +910,7 @@ class ChatV2Adapter:
             except asyncio.CancelledError:
                 raise
             except Exception:  # pragma: no cover - defensive
-                _logger.exception("Failed to send keepalive for sid %s", ctx.sid)
+                _log.exception("evt=ws_keepalive_failed sid=%s", ctx.sid)
             finally:
                 ctx.server_keepalive_task = None
 
@@ -997,7 +998,7 @@ class ChatV2Adapter:
                     except asyncio.CancelledError:
                         pass
                     except Exception:  # pragma: no cover - defensive logging
-                        _logger.exception("Failed to deliver audio chunk for sid %s", ctx.sid)
+                        _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
 
                 task.add_done_callback(_on_done)
 
@@ -1134,13 +1135,13 @@ class ChatV2Adapter:
                 except asyncio.CancelledError:
                     raise
                 except ClientDisconnected:
-                    _logger.info(
-                        "Client disconnected while delivering outbound frame for sid %s",
+                    _log.info(
+                        "evt=ws_outbound_client_disconnect sid=%s phase=frame",
                         ctx.sid,
                     )
                     break
                 except Exception:  # pragma: no cover - defensive
-                    _logger.exception("Failed to deliver outbound frame for sid %s", ctx.sid)
+                    _log.exception("evt=ws_outbound_frame_failed sid=%s", ctx.sid)
                 finally:
                     queue.task_done()
         except asyncio.CancelledError:
@@ -1170,8 +1171,8 @@ class ChatV2Adapter:
             try:
                 await send({"type": "websocket.send", "bytes": chunk})
             except ClientDisconnected:
-                _logger.info(
-                    "Client disconnected while delivering audio chunk for sid %s",
+                _log.info(
+                    "evt=ws_outbound_client_disconnect sid=%s phase=audio",
                     ctx.sid,
                 )
 
@@ -1248,7 +1249,7 @@ class ChatV2Adapter:
                 await result
         except Exception:
             sid = args[0] if args else None
-            _logger.exception("evt=ws_engine_hook_failed hook=%s sid=%s", hook, sid)
+            _log.exception("evt=ws_engine_hook_failed hook=%s sid=%s", hook, sid)
             raise
 
     async def _on_open_and_greet(
@@ -1256,11 +1257,11 @@ class ChatV2Adapter:
         ctx: AdapterContext,
     ) -> None:
         try:
-            _logger.info("evt=ws_open_and_greet_start sid=%s", ctx.sid)
+            _log.info("evt=ws_open_and_greet_start sid=%s", ctx.sid)
             await self._invoke_engine("on_open", ctx.sid, ctx.headers)
             await self._invoke_engine("start_greet", ctx.sid)
         except Exception:  # pragma: no cover - defensive logging
-            _logger.exception("evt=ws_open_task_failed sid=%s", ctx.sid)
+            _log.exception("evt=ws_open_task_failed sid=%s", ctx.sid)
 
     def _policy_snapshot(self) -> Dict[str, Any]:
         engine = self.engine
@@ -1271,7 +1272,7 @@ class ChatV2Adapter:
             if callable(snapshot) and not isinstance(snapshot, dict):
                 snapshot = snapshot()
         except Exception:  # pragma: no cover - defensive logging
-            _logger.exception("evt=ws_policy_snapshot_error")
+            _log.exception("evt=ws_policy_snapshot_error")
             return {}
         if not isinstance(snapshot, dict):
             return {}

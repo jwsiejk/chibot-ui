@@ -7,7 +7,7 @@ import uuid
 
 import jwt
 
-_log = logging.getLogger("app.security.jwt")
+_log = logging.getLogger(__name__)
 _SECRET = os.environ["SECRET_KEY"]
 _ALG = "HS256"
 _AUD = "chat.v2"
