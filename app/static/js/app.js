@@ -672,6 +672,7 @@
       const params = new URLSearchParams({ access_token: tokenForOpen });
       if (resumeToken) params.set('resume', resumeToken);
       const wsUrl = `/ws/v2/chat?${params.toString()}`;
+      console.log('evt=ws_open_attempt', { url: wsUrl, proto: 'chat.v2', sid });
       try {
         WSClient.open(wsUrl, ['chat.v2']);
       } catch (err) {

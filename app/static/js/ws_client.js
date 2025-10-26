@@ -26,6 +26,27 @@
   let lastTokenValue = null;
   let lastTokenMintedAt = null;
 
+  function makeWsUrl(pathWithQuery) {
+    if (typeof pathWithQuery !== "string" || !pathWithQuery) {
+      return pathWithQuery;
+    }
+    const trimmed = pathWithQuery.trim();
+    if (/^wss?:/i.test(trimmed)) {
+      return trimmed;
+    }
+    try {
+      const loc = (typeof window !== "undefined" && window.location)
+        ? window.location
+        : (typeof location !== "undefined" ? location : null);
+      const scheme = loc && loc.protocol === "https:" ? "wss://" : "ws://";
+      const parsed = new URL(trimmed, loc ? loc.origin : undefined);
+      return `${scheme}${parsed.host}${parsed.pathname}${parsed.search}`;
+    } catch (err) {
+      console.warn("Failed to construct WS URL", err);
+      return trimmed;
+    }
+  }
+
   function getResumeState() {
     const state = AppState.getState();
     const resume = state && typeof state.resume === "object" ? state.resume : null;
@@ -622,18 +643,28 @@
       rateLimitRetryCount = 0;
     }
     const url = urlOverride || computeUrl(resumeTokenValue);
+    const finalUrl = typeof url === "string" ? makeWsUrl(url) : url;
+    const wsUrl = typeof finalUrl === "string" ? finalUrl : url;
+    const expectsAccessToken = typeof url === "string" && url.includes("access_token=");
+    if (expectsAccessToken && (typeof wsUrl !== "string" || !/[?&]access_token=/.test(wsUrl))) {
+      console.error("ws_open_missing_token_query", { originalUrl: url, finalUrl: wsUrl });
+      showConnectionToast("Session token missing. Please click Start again.");
+      updateState({ connectionState: "disconnected" });
+      return;
+    }
     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
+    console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
     const logPayload = Array.isArray(wsProtocols)
-      ? { url, protocols: wsProtocols }
-      : { url, subprotocol: wsProtocols };
+      ? { url: wsUrl, protocols: wsProtocols }
+      : { url: wsUrl, subprotocol: wsProtocols };
     console.log("WS opening", logPayload);
-    const tokenInfo = trackTokenFromUrl(url);
-    const ws = transportFactory(url, wsProtocols);
+    const tokenInfo = trackTokenFromUrl(wsUrl);
+    const ws = transportFactory(wsUrl, wsProtocols);
     ws.__accessTokenInfo = tokenInfo;
     ws.__handshakeToastShown = false;
     ws.onopen = () => {
       // Lightweight breadcrumb; keep as console.log
-      console.log("WebSocket open", { url, protocol: ws.protocol || wsProtocols });
+      console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
     };
 
     ws.onerror = (e) => {
