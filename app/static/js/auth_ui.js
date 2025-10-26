@@ -261,6 +261,11 @@
     profileForm.addEventListener("submit", handleProfileSubmit);
   }
 
+  window.AuthUI = Object.assign(window.AuthUI || {}, {
+    showLoginModal,
+    showProfileModal,
+  });
+
   document.addEventListener("DOMContentLoaded", () => {
     fetchCurrentUser();
   });

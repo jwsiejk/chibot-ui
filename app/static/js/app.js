@@ -534,6 +534,48 @@
 
     startBtn.addEventListener('click', async () => {
       startBtn.disabled = true;
+      try {
+        const authResponse = await fetch('/api/v1/auth/me', {
+          method: 'GET',
+          credentials: 'include',
+        });
+        if (authResponse.status === 401) {
+          if (window.AuthUI && typeof window.AuthUI.showLoginModal === 'function') {
+            window.AuthUI.showLoginModal();
+          }
+          showToastMessage('Please login first.');
+          startBtn.disabled = false;
+          return;
+        }
+        if (!authResponse.ok) {
+          console.error('Failed to verify auth', authResponse.status);
+          showToastMessage('Couldn’t verify login. Try again.');
+          startBtn.disabled = false;
+          return;
+        }
+        let authPayload = null;
+        try {
+          authPayload = await authResponse.json();
+        } catch (err) {
+          console.error('Failed to parse auth response', err);
+          showToastMessage('Couldn’t verify login. Try again.');
+          startBtn.disabled = false;
+          return;
+        }
+        if (authPayload && authPayload.profile_complete === false) {
+          if (window.AuthUI && typeof window.AuthUI.showProfileModal === 'function') {
+            window.AuthUI.showProfileModal();
+          }
+          showToastMessage('Complete your profile to continue.');
+          startBtn.disabled = false;
+          return;
+        }
+      } catch (err) {
+        console.error('Failed to verify auth', err);
+        showToastMessage('Couldn’t verify login. Try again.');
+        startBtn.disabled = false;
+        return;
+      }
       const state = AppState.getState();
       const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
       let resumeToken = null;

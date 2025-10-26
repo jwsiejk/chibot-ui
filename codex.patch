@@ -1,8 +1,80 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index caf0a6bfc97eeac0b9f0ba9a8384e42c851a2a54..41884a6f9bfc1b3fe7be599ff19c3020194d951c 100644
+index 41884a6f9bfc1b3fe7be599ff19c3020194d951c..b78eb06282e2e1bd35617e0f0f5f12021ed33202 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -542,53 +542,114 @@
+@@ -512,50 +512,92 @@
+           setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 220);
+         }, 3600);
+       };
+     })();
+ 
+     function csrf() {
+       const cookies = document.cookie ? document.cookie.split(';') : [];
+       for (const name of ['askchip_csrf', 'csrftoken', 'csrf_token']) {
+         const prefix = `${name}=`;
+         for (const part of cookies) {
+           const trimmed = part.trim();
+           if (!trimmed.startsWith(prefix)) continue;
+           const raw = trimmed.slice(prefix.length);
+           if (!raw) continue;
+           try { return decodeURIComponent(raw); } catch (err) {
+             console.warn('Failed to decode CSRF cookie', err);
+             return raw;
+           }
+         }
+       }
+       return '';
+     }
+ 
+     startBtn.addEventListener('click', async () => {
+       startBtn.disabled = true;
++      try {
++        const authResponse = await fetch('/api/v1/auth/me', {
++          method: 'GET',
++          credentials: 'include',
++        });
++        if (authResponse.status === 401) {
++          if (window.AuthUI && typeof window.AuthUI.showLoginModal === 'function') {
++            window.AuthUI.showLoginModal();
++          }
++          showToastMessage('Please login first.');
++          startBtn.disabled = false;
++          return;
++        }
++        if (!authResponse.ok) {
++          console.error('Failed to verify auth', authResponse.status);
++          showToastMessage('Couldn’t verify login. Try again.');
++          startBtn.disabled = false;
++          return;
++        }
++        let authPayload = null;
++        try {
++          authPayload = await authResponse.json();
++        } catch (err) {
++          console.error('Failed to parse auth response', err);
++          showToastMessage('Couldn’t verify login. Try again.');
++          startBtn.disabled = false;
++          return;
++        }
++        if (authPayload && authPayload.profile_complete === false) {
++          if (window.AuthUI && typeof window.AuthUI.showProfileModal === 'function') {
++            window.AuthUI.showProfileModal();
++          }
++          showToastMessage('Complete your profile to continue.');
++          startBtn.disabled = false;
++          return;
++        }
++      } catch (err) {
++        console.error('Failed to verify auth', err);
++        showToastMessage('Couldn’t verify login. Try again.');
++        startBtn.disabled = false;
++        return;
++      }
+       const state = AppState.getState();
+       const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
+       let resumeToken = null;
+       if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
+         resumeToken = resumeState.token;
        }
  
        const fail = (message) => { if (message) showToastMessage(message); startBtn.disabled = false; };
@@ -23,100 +95,42 @@ index caf0a6bfc97eeac0b9f0ba9a8384e42c851a2a54..41884a6f9bfc1b3fe7be599ff19c3020
          console.error('Failed to fetch WS token', err);
          return fail('Couldn’t start session. Try again.');
        }
+diff --git a/app/static/js/auth_ui.js b/app/static/js/auth_ui.js
+index 130186eeaf63c03e96304be56809e56987df211c..bb1385c4c1cfc5d3d6c55b54793b8717cc595698 100644
+--- a/app/static/js/auth_ui.js
++++ b/app/static/js/auth_ui.js
+@@ -239,29 +239,34 @@
+       const response = await fetch("/api/v1/auth/profile", {
+         method: "POST",
+         credentials: "include",
+         headers: {
+           "Content-Type": "application/json",
+           ...(csrfToken ? { "x-csrf-token": csrfToken } : {}),
+         },
+         body: JSON.stringify(payload),
+       });
+       if (!response.ok) {
+         return;
+       }
+       hideProfileModal();
+     } catch (err) {
+       console.warn("Failed to save profile", err);
+     }
+   }
  
-       if (!payload || typeof payload.access_token !== 'string') return fail('Couldn’t start session. Try again.');
-       const accessToken = payload.access_token;
-       const sid = typeof payload.sid === 'string' ? payload.sid : null;
-       const ttlMs = Number(payload.ttl_ms);
--      if (sid) AppState.setState({ sid });
--      console.log('evt=ws_token_obtained', { sid, ttl_ms: Number.isFinite(ttlMs) ? ttlMs : null });
--      const params = new URLSearchParams({ access_token: accessToken });
-+      const ttlFinite = Number.isFinite(ttlMs) ? ttlMs : null;
-+      const tokenIssuedAt = Date.now();
-+      const initialPatch = {
-+        wsTokenAccessToken: accessToken,
-+        wsTokenTTL: ttlFinite,
-+        wsTokenIssuedAt: tokenIssuedAt
-+      };
-+      if (sid) initialPatch.sid = sid;
-+      AppState.setState(initialPatch);
-+      console.log('evt=ws_token_obtained', { sid, ttl_ms: ttlFinite });
-+
-+      let tokenForOpen = accessToken;
-+      const guardState = AppState.getState();
-+      const guardTTL = guardState && Number.isFinite(guardState.wsTokenTTL) ? guardState.wsTokenTTL : null;
-+      const guardIssuedAt = guardState && Number.isFinite(guardState.wsTokenIssuedAt) ? guardState.wsTokenIssuedAt : null;
-+      if (guardTTL && guardIssuedAt) {
-+        const ageMs = Date.now() - guardIssuedAt;
-+        if (ageMs > (guardTTL - 1500)) {
-+          let refreshResponse;
-+          try {
-+            refreshResponse = await fetch('/api/v1/auth/ws-token', {
-+              method: 'POST',
-+              credentials: 'include',
-+              headers,
-+            });
-+          } catch (err) {
-+            console.error('Failed to refresh WS token', err);
-+            return fail('Couldn’t start session. Try again.');
-+          }
-+          if (!refreshResponse.ok) {
-+            showToastMessage('Login or profile required to start.');
-+            startBtn.disabled = false;
-+            return;
-+          }
-+          let refreshPayload = null;
-+          try {
-+            refreshPayload = await refreshResponse.json();
-+          } catch (err) {
-+            console.error('Failed to parse refreshed WS token', err);
-+            return fail('Couldn’t start session. Try again.');
-+          }
-+          const refreshedToken = refreshPayload && typeof refreshPayload.access_token === 'string'
-+            ? refreshPayload.access_token
-+            : null;
-+          if (!refreshedToken) {
-+            return fail('Couldn’t start session. Try again.');
-+          }
-+          const refreshedSid = typeof refreshPayload.sid === 'string' ? refreshPayload.sid : null;
-+          const refreshedTtlMs = Number(refreshPayload.ttl_ms);
-+          const refreshedTtlFinite = Number.isFinite(refreshedTtlMs) ? refreshedTtlMs : null;
-+          const refreshedIssuedAt = Date.now();
-+          tokenForOpen = refreshedToken;
-+          const refreshPatch = {
-+            wsTokenAccessToken: refreshedToken,
-+            wsTokenTTL: refreshedTtlFinite,
-+            wsTokenIssuedAt: refreshedIssuedAt
-+          };
-+          if (refreshedSid) refreshPatch.sid = refreshedSid;
-+          AppState.setState(refreshPatch);
-+          console.log('evt=ws_token_obtained', { sid: refreshedSid, ttl_ms: refreshedTtlFinite });
-+        }
-+      }
-+
-+      const params = new URLSearchParams({ access_token: tokenForOpen });
-       if (resumeToken) params.set('resume', resumeToken);
-       const wsUrl = `/ws/v2/chat?${params.toString()}`;
-       try {
-         WSClient.open(wsUrl, ['chat.v2']);
-       } catch (err) {
-         console.error('Failed to open WS client', err);
-         AppState.setState({ connectionState: 'disconnected' });
-         fail('Couldn’t start session. Try again.');
-         endBtn.disabled = true;
-       }
-     });
+   if (loginForm) {
+     loginForm.addEventListener("submit", handleLoginSubmit);
+   }
+   if (profileForm) {
+     profileForm.addEventListener("submit", handleProfileSubmit);
+   }
  
-     endBtn.addEventListener('click', () => {
-       WSClient.close('user_requested');
-       if (typeof AppState.clearResume === 'function') {
-         AppState.clearResume();
-       }
-       if (window.AudioRecorder) {
-         try {
-           window.AudioRecorder.stop();
-         } catch (err) {
-           console.warn('Failed to stop audio recorder', err);
-         }
-       }
-       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
++  window.AuthUI = Object.assign(window.AuthUI || {}, {
++    showLoginModal,
++    showProfileModal,
++  });
++
+   document.addEventListener("DOMContentLoaded", () => {
+     fetchCurrentUser();
+   });
+ })();
