@@ -16,6 +16,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from urllib.parse import parse_qs
 
 from app import config
+from app.admin.api.settings import handle_admin_settings
 from app.admin.flow_api import handle_flow_sessions, handle_flow_trace, handle_flow_zip
 from app.auth.http_handlers import (
     get_me,
@@ -85,8 +86,10 @@ ME_ROUTE = "/api/v1/auth/me"
 PROFILE_ROUTE = "/api/v1/auth/profile"
 ROOT_ROUTE = "/"
 ADMIN_LOGS_ROUTE = "/admin/logs"
+ADMIN_SETTINGS_ROUTE = "/api/v1/admin/settings"
 FAVICON_ROUTE = "/favicon.ico"
 STATIC_ROUTE_PREFIX = "/static/"
+ADMIN_UI_ROUTE_PREFIX = "/admin/ui/"
 ADMIN_FLOW_ROUTE_PREFIX = "/api/v1/admin/flow"
 ADMIN_FLOW_TRACE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/trace"
 ADMIN_FLOW_ZIP_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/zip"
@@ -98,6 +101,7 @@ TEMPLATES_ROOT = BASE_DIR / "templates"
 INDEX_PATH = TEMPLATES_ROOT / "index.html"
 ADMIN_LOGS_PATH = TEMPLATES_ROOT / "admin_logs.html"
 FAVICON_PATH = STATIC_ROOT / "favicon.ico"
+ADMIN_UI_ROOT = BASE_DIR / "admin" / "ui"
 _DEFAULT_INDEX_HTML = (
     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
 )
@@ -162,6 +166,8 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
         handler = _HTTP_ROUTES.get(path)
         if handler is None:
             handler = _match_admin_flow_route(path)
+        if handler is None and path.startswith(ADMIN_UI_ROUTE_PREFIX):
+            handler = partial(_handle_admin_ui_asset, raw_path=path)
         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
             handler = partial(_handle_static, raw_path=path)
         if handler is None:
@@ -260,8 +266,10 @@ async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> 
         "userEmail": email if authenticated else None,
     }
     context_json = _serialize_context(context_payload)
+    client_config_json = _serialize_context(config.get_client_config_snapshot())
     rewritten = rewritten.replace("{{ADMIN_LINK}}", admin_link)
     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
+    rewritten = rewritten.replace("{{CLIENT_CONFIG}}", client_config_json)
     body = rewritten.encode("utf-8")
     build_id = get_build_id()
     return _html_response(body, build_id=build_id)
@@ -294,7 +302,9 @@ async def _handle_admin_logs(scope: dict, receive: Callable[[], Awaitable[dict]]
     rewritten = inject_static_version(html_text)
     context_payload = {"isAdmin": is_admin, "userEmail": email}
     context_json = _serialize_context(context_payload)
+    client_config_json = _serialize_context(config.get_client_config_snapshot())
     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
+    rewritten = rewritten.replace("{{CLIENT_CONFIG}}", client_config_json)
     body = rewritten.encode("utf-8")
     build_id = get_build_id()
     return _html_response(body, build_id=build_id)
@@ -548,6 +558,61 @@ def _resolve_static_path(raw_path: str) -> Optional[Path]:
     return resolved
 
 
+async def _handle_admin_ui_asset(
+    scope: dict,
+    receive: Callable[[], Awaitable[dict]],
+    *,
+    raw_path: str,
+) -> Response:
+    """Serve lightweight admin UI helper assets."""
+
+    if not _method_is_get(scope):
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+    resolved = _resolve_admin_ui_path(raw_path)
+    if resolved is None:
+        return json_response(status=404, error="not_found")
+
+    try:
+        data = resolved.read_bytes()
+    except OSError:
+        return json_response(status=404, error="not_found")
+
+    headers = (
+        (b"content-type", b"application/javascript; charset=utf-8"),
+        (b"cache-control", b"no-store"),
+        (b"content-length", str(len(data)).encode("ascii")),
+    )
+    return Response(status=200, body=data, headers=headers)
+
+
+def _resolve_admin_ui_path(raw_path: str) -> Optional[Path]:
+    if not raw_path.startswith(ADMIN_UI_ROUTE_PREFIX):
+        return None
+
+    relative = raw_path[len(ADMIN_UI_ROUTE_PREFIX) :]
+    if not relative:
+        return None
+
+    target = ADMIN_UI_ROOT / relative
+    try:
+        resolved = target.resolve(strict=False)
+    except OSError:
+        return None
+
+    try:
+        resolved.relative_to(ADMIN_UI_ROOT)
+    except ValueError:
+        return None
+
+    if not resolved.is_file():
+        return None
+
+    return resolved
+
+
 async def _drain_request_body(receive: Callable[[], Awaitable[dict]]) -> None:
     """Consume and discard the HTTP request body if present."""
     while True:
@@ -643,9 +708,19 @@ def _get_adapter() -> ChatV2Adapter:
     return _adapter
 
 
+async def _handle_admin_settings_route(
+    scope: dict, receive: Callable[[], Awaitable[dict]]
+) -> Response:
+    rejection = await _require_admin_api(scope, receive)
+    if rejection is not None:
+        return rejection
+    return await handle_admin_settings(scope, receive)
+
+
 _HTTP_ROUTES: Dict[str, HttpHandler] = {
     ROOT_ROUTE: _handle_index,
     ADMIN_LOGS_ROUTE: _handle_admin_logs,
+    ADMIN_SETTINGS_ROUTE: _handle_admin_settings_route,
     FAVICON_ROUTE: _handle_favicon,
     HEALTH_ROUTE: _handle_health,
     LIVE_ROUTE: _handle_live,

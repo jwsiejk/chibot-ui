@@ -38,6 +38,8 @@
   const livePanel = document.getElementById('livePanel');
   const historyPanel = document.getElementById('historyPanel');
   const userLabel = document.getElementById('adminUserLabel');
+  const debugStatus = document.getElementById('adminDebugStatus');
+  const configPanelRoot = document.getElementById('adminConfigPanel');
   const drawer = document.getElementById('jsonDrawer');
   const drawerContent = document.getElementById('jsonDrawerContent');
   const drawerClose = document.getElementById('jsonDrawerClose');
@@ -54,6 +56,19 @@
   }
 
   const typeCheckboxes = Array.from(document.querySelectorAll('input[name="logType"]'));
+
+  if (configPanelRoot && window.AdminConfigPanel && typeof window.AdminConfigPanel.init === 'function') {
+    try {
+      window.AdminConfigPanel.init(configPanelRoot, { statusElement: debugStatus });
+    } catch (err) {
+      console.warn('Failed to initialize admin config panel', err);
+      if (debugStatus) {
+        debugStatus.textContent = 'Failed to load debug controls.';
+      }
+    }
+  } else if (debugStatus) {
+    debugStatus.textContent = '';
+  }
 
   function isLiveActive() {
     return Boolean(liveState.source || liveState.pollTimer);

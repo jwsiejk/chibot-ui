@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, 
 import json
 from urllib.parse import parse_qs
 
+from app import config
 from app.logging_setup import current_sid
 from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
@@ -755,7 +756,7 @@ class ChatV2Adapter:
         seq = ctx.audio_seq
         ctx.audio_seq += 1
 
-        if not ctx.diag_audio_seen:
+        if config.DIAG_AUDIO_GUARD and not ctx.diag_audio_seen:
             ctx.diag_audio_seen = True
             self._cancel_diag_timer(ctx)
             bus.publish("EVT_DIAG_FIRST_AUDIO_FRAME", {"sid": ctx.sid})
@@ -1227,6 +1228,8 @@ class ChatV2Adapter:
     def _handle_tts_end_diag(
         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
     ) -> None:
+        if not config.DIAG_AUDIO_GUARD:
+            return
         ctx.tts_end_ts = time.monotonic()
         ctx.diag_audio_seen = False
         self._cancel_diag_timer(ctx)
@@ -1243,6 +1246,8 @@ class ChatV2Adapter:
     def _emit_no_audio_diag(
         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
     ) -> None:
+        if not config.DIAG_AUDIO_GUARD:
+            return
         ctx.diag_timer = None
         tts_end_ts = ctx.tts_end_ts
         if tts_end_ts is None or ctx.diag_audio_seen:

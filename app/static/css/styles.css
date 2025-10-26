@@ -441,6 +441,90 @@ body.ptt-hold .chip-status{
   max-width:1200px;
   margin:0 auto;
 }
+.admin-logs__debug{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  padding:18px 20px;
+  border-radius:18px;
+  border:1px solid var(--border);
+  background:linear-gradient(180deg,#111b2d,#0b101a);
+  box-shadow:var(--shadow);
+}
+.admin-logs__debug-header{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:12px;
+}
+.admin-logs__debug-header h2{
+  margin:0;
+  font-size:13px;
+  letter-spacing:.35px;
+  text-transform:uppercase;
+  color:var(--muted);
+}
+.admin-logs__status[data-tone="info"]{color:var(--muted);}
+.admin-logs__status[data-tone="success"]{color:#34d399;}
+.admin-logs__status[data-tone="error"]{color:#f87171;}
+.admin-debug-card{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  transition:opacity .2s ease;
+}
+.admin-debug-card.is-loading{opacity:.75;}
+.admin-debug-card.is-saving{opacity:.85;}
+.admin-debug-card__field{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  padding:6px 0 12px;
+  border-bottom:1px solid rgba(255,255,255,.06);
+}
+.admin-debug-card__field:last-child{border-bottom:none;padding-bottom:0;}
+.admin-debug-card__toggle{
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  cursor:pointer;
+  user-select:none;
+}
+.admin-debug-card__toggle input{
+  width:18px;
+  height:18px;
+  accent-color:var(--accent);
+}
+.admin-debug-card__label{
+  font-size:13px;
+  font-weight:600;
+  letter-spacing:.2px;
+  color:var(--text);
+}
+.admin-debug-card__description{
+  margin:0;
+  font-size:12px;
+  color:var(--muted);
+  letter-spacing:.2px;
+}
+.admin-debug-card__control{
+  display:flex;
+  align-items:center;
+}
+.admin-debug-card__control input[type="number"]{
+  width:120px;
+  padding:6px 10px;
+  border-radius:8px;
+  border:1px solid var(--border);
+  background:rgba(9,14,24,.75);
+  color:var(--text);
+}
+.admin-debug-card__control input[type="number"]:focus-visible{
+  outline:2px solid rgba(91,157,255,.7);
+  outline-offset:2px;
+  border-color:rgba(91,157,255,.6);
+  box-shadow:0 0 0 2px rgba(91,157,255,.25);
+}
 .admin-logs__controls,
 .admin-logs__filters{
   display:flex;

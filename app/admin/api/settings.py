@@ -1,16 +1,22 @@
+"""Admin settings API handlers."""
+
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
+
+from app import config
 
 _log = logging.getLogger(__name__)
 
-_DEFAULT_SETTINGS: Dict[str, str] = {"authentication": "none"}
+_DEFAULT_SETTINGS: Dict[str, Any] = {"authentication": "none"}
+_CHUNK_SAMPLE_MIN = 1
+_CHUNK_SAMPLE_MAX = 100
 
 
 async def handle_admin_settings(scope: dict, receive) -> "Response":
-    """Serve a static admin settings payload with optional validation."""
+    """Serve and persist admin runtime settings."""
 
     method = _method(scope)
     if method == "OPTIONS":
@@ -25,28 +31,130 @@ async def handle_admin_settings(scope: dict, receive) -> "Response":
         await _drain_body(receive)
         return _respond_settings(method)
 
-    body_bytes = await _read_body(receive)
-    if body_bytes:
+    body = await _read_body(receive)
+    if not body:
+        return _json_response(status=400, error="missing_body")
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_response(status=400, error="invalid_json")
+    except Exception as exc:  # pragma: no cover - defensive logging
+        _log.exception(
+            "evt=admin_settings_parse_failed err=%s",
+            exc.__class__.__name__,
+            extra={"component": "admin.settings"},
+        )
+        return _json_response(status=400, error="invalid_json")
+
+    updates = _extract_updates(payload)
+    if updates is None:
+        return _json_response(status=400, error="invalid_payload")
+    if not updates:
+        return _respond_settings(method)
+
+    errors: Dict[str, str] = {}
+    normalized: Dict[str, Optional[str]] = {}
+    for key, value in updates.items():
         try:
-            json.loads(body_bytes.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return _json_response(status=400, error="invalid_json")
-        except Exception as exc:  # pragma: no cover - defensive logging
-            _log.exception(
-                "evt=admin_settings_parse_failed err=%s",
-                exc.__class__.__name__,
-                extra={"component": "admin.settings"},
-            )
-            return _json_response(status=400, error="invalid_json")
+            normalized[key] = _normalize_setting(key, value)
+        except ValueError as exc:
+            errors[key] = str(exc)
+
+    if errors:
+        return _json_response(status=400, error="invalid_settings", details=errors)
+
+    try:
+        config.set_admin_settings(normalized)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        _log.exception(
+            "evt=admin_settings_update_failed err=%s",
+            exc.__class__.__name__,
+            extra={"component": "admin.settings"},
+        )
+        return _json_response(status=500, error="update_failed")
 
     return _respond_settings(method)
 
 
+def _extract_updates(payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(payload, Mapping):
+        return None
+    settings = payload.get("settings")
+    if settings is None:
+        return None
+    if not isinstance(settings, Mapping):
+        return None
+    updates: Dict[str, Any] = {}
+    for key in ("diag_client_hud", "diag_audio_guard", "diag_chunk_sample_n"):
+        if key in settings:
+            updates[key] = settings[key]
+    return updates
+
+
+def _normalize_setting(key: str, value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if key == "diag_client_hud" or key == "diag_audio_guard":
+        coerced = _coerce_bool(value)
+        return "true" if coerced else "false"
+    if key == "diag_chunk_sample_n":
+        coerced = _coerce_int(value, minimum=_CHUNK_SAMPLE_MIN, maximum=_CHUNK_SAMPLE_MAX)
+        return str(coerced)
+    raise ValueError("unsupported_setting")
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if candidate in {"0", "false", "f", "no", "n", "off"}:
+            return False
+    raise ValueError("expected_boolean")
+
+
+def _coerce_int(value: Any, *, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        raise ValueError("expected_integer")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        candidate = int(value)
+    elif isinstance(value, str):
+        try:
+            candidate = int(float(value.strip()))
+        except (ValueError, TypeError):
+            raise ValueError("expected_integer")
+    else:
+        raise ValueError("expected_integer")
+
+    if candidate < minimum:
+        return minimum
+    if candidate > maximum:
+        return maximum
+    return candidate
+
+
 def _respond_settings(method: str) -> "Response":
-    payload = {"settings": dict(_DEFAULT_SETTINGS)}
+    payload = {"settings": _current_settings()}
     if method == "HEAD":
         return _json_response(status=200, **payload, body_only=True)
     return _json_response(status=200, **payload)
+
+
+def _current_settings() -> Dict[str, Any]:
+    settings = dict(_DEFAULT_SETTINGS)
+    settings.update(
+        {
+            "diag_client_hud": bool(config.DIAG_CLIENT_HUD),
+            "diag_audio_guard": bool(config.DIAG_AUDIO_GUARD),
+            "diag_chunk_sample_n": int(config.DIAG_CHUNK_SAMPLE_N),
+        }
+    )
+    return settings
 
 
 async def _read_body(receive) -> bytes:

@@ -148,13 +148,13 @@
 
   function diagHudEnabled() {
     if (typeof window === "undefined") {
-      return true;
+      return false;
     }
     const cfg = window.__CFG__;
     if (cfg && typeof cfg.DIAG_CLIENT_HUD === "boolean") {
       return cfg.DIAG_CLIENT_HUD;
     }
-    return true;
+    return false;
   }
 
   function diagChunkSampleN() {
