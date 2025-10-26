@@ -1,119 +1,69 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 6cce2ea2d9be97f6533ccc7c4a54d65f90894d32..597d156d8725ef2c908ed020ea52903da42e6b0e 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1,55 +1,112 @@
- (() => {
-   const STATIC_JS_BASE = (() => {
-     if (typeof document === "undefined") {
-       return "/static/js/";
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index b88c8368be22a14c5a5fff5c1beb1eeb6696b200..2ad03da31f6f56fc865793e1f2e65a4444346c25 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -625,61 +625,57 @@
+       if (!urlOverride && typeof options.url === "string" && options.url.trim()) {
+         urlOverride = options.url.trim();
+       }
+       if (protocols === undefined && options.protocols !== undefined) {
+         protocols = options.protocols;
+       }
      }
  
-     const script = document.currentScript || document.querySelector('script[src$="/static/js/app.js"]');
-     if (script && script.src) {
+     if (socket) {
+       cleanupSocket(socket, "superseded");
+     }
+     expectInfoFrame = true;
+     startInfoWatchdog();
+     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
        try {
-         const url = new URL(script.src, window.location.href);
-         return url.pathname.replace(/[^/]+$/, "");
+         window.WSErrorUI.cancelRateLimitCountdown("manual");
        } catch (err) {
-         console.warn("Failed to parse static script URL", err);
+         console.warn("Failed to cancel rate limit countdown", err);
        }
      }
- 
-     return "/static/js/";
-   })();
- 
-+  const VERSION_QUERY = (() => {
-+    if (typeof document === "undefined") {
-+      return "";
-+    }
-+    try {
-+      const current =
-+        document.currentScript ||
-+        document.querySelector('script[src*="/static/js/app.js"]') ||
-+        null;
-+      if (!current || !current.src) {
-+        return "";
-+      }
-+      const url = new URL(current.src, window.location.href);
-+      return url.search || "";
-+    } catch (err) {
-+      console.warn("Failed to derive version query", err);
-+      return "";
-+    }
-+  })();
-+
-+  function isSameOrigin(url) {
-+    try {
-+      if (!/^(?:[a-z]+:)?\/\//i.test(url)) {
-+        return true;
-+      }
-+      const parsed = new URL(url, window.location.href);
-+      return parsed.origin === window.location.origin;
-+    } catch (err) {
-+      return false;
-+    }
-+  }
-+
-+  function isSpecialScheme(url) {
-+    return /^(data:|blob:)/i.test(url);
-+  }
-+
-+  function appendVersionQuery(url) {
-+    if (!VERSION_QUERY || typeof url !== "string" || url.includes("?")) {
-+      return url;
-+    }
-+    const hashIndex = url.indexOf("#");
-+    if (hashIndex === -1) {
-+      return `${url}${VERSION_QUERY}`;
-+    }
-+    return `${url.slice(0, hashIndex)}${VERSION_QUERY}${url.slice(hashIndex)}`;
-+  }
-+
-   function resolveScriptSrc(src) {
-     if (!src || typeof src !== "string") {
-       return src;
+     if (!skipRateLimitCancel) {
+       clearRateLimitRetryTimer();
+       rateLimitRetryCount = 0;
      }
  
--    if (/^(?:[a-z]+:)?\/\//i.test(src) || src.startsWith("/")) {
-+    if (isSpecialScheme(src)) {
-       return src;
+-    const url = urlOverride || computeUrl(resumeTokenValue);
+-    const finalUrl = typeof url === "string" ? makeWsUrl(url) : url;
+-    const wsUrl = typeof finalUrl === "string" ? finalUrl : url;
+-
+-    const url = urlOverride || computeUrl(resumeTokenValue);
+-    const wsUrl = typeof url === "string" ? makeWsUrl(url) : url;  
++    const originalUrl = urlOverride || computeUrl(resumeTokenValue);
++    const wsUrl = typeof originalUrl === "string" ? makeWsUrl(originalUrl) : originalUrl;
+     // Require a token unless we are resuming with a server-issued resume token
+     const isResuming = Boolean(resumeTokenValue);
+     const hasAccessToken = (typeof wsUrl === "string") && /[?&]access_token=/.test(wsUrl);
+     if (!isResuming && !hasAccessToken) {
+-      console.error("ws_open_missing_token_query", { originalUrl: url, finalUrl: wsUrl });
++      console.error("ws_open_missing_token_query", { originalUrl, finalUrl: wsUrl });
+       showConnectionToast("Session token missing. Please click Start again.");
+       updateState({ connectionState: "disconnected" });
+       return;
      }
  
-+    if (/^(?:[a-z]+:)?\/\//i.test(src) || src.startsWith("/")) {
-+      if (!isSameOrigin(src)) {
-+        return src;
-+      }
-+      return appendVersionQuery(src);
-+    }
-+
-     const normalized = src.replace(/^\.\//, "");
--    return `${STATIC_JS_BASE.replace(/\/?$/, '/')}${normalized}`;
-+    const base = STATIC_JS_BASE.replace(/\/?$/, "/");
-+    const joined = `${base}${normalized}`;
-+
-+    return appendVersionQuery(joined);
-   }
+     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
+     console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
+     const logPayload = Array.isArray(wsProtocols)
+       ? { url: wsUrl, protocols: wsProtocols }
+       : { url: wsUrl, subprotocol: wsProtocols };
+     console.log("WS opening", logPayload);
  
-   function loadScript(src) {
-     const resolvedSrc = resolveScriptSrc(src);
-     return new Promise((resolve, reject) => {
-       const existing = document.querySelector(`script[data-dynamic="${resolvedSrc}"]`);
-       if (existing) {
-         if (existing.dataset.loaded === "true") {
-           resolve();
-         } else {
-           existing.addEventListener("load", resolve, { once: true });
-           existing.addEventListener("error", reject, { once: true });
-         }
-         return;
-       }
-       const el = document.createElement("script");
-       el.src = resolvedSrc;
-       el.async = false;
-       el.dataset.dynamic = resolvedSrc;
-       el.addEventListener("load", () => {
-         el.dataset.loaded = "true";
-         resolve();
-       }, { once: true });
-       el.addEventListener("error", reject, { once: true });
-       document.head.appendChild(el);
+     const tokenInfo = trackTokenFromUrl(wsUrl);
+     const ws = transportFactory(wsUrl, wsProtocols);
+     ws.__accessTokenInfo = tokenInfo;
+     ws.__handshakeToastShown = false;
+ 
+     ws.onopen = () => {
+       // Lightweight breadcrumb; keep as console.log
+       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
+     };
+ 
+     ws.onerror = (e) => {
+       console.error("WebSocket error", e, { readyState: ws.readyState });
+       maybeShowHandshakeToast(ws, null);

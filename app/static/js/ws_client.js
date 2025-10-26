@@ -647,17 +647,13 @@
       rateLimitRetryCount = 0;
     }
 
-    const url = urlOverride || computeUrl(resumeTokenValue);
-    const finalUrl = typeof url === "string" ? makeWsUrl(url) : url;
-    const wsUrl = typeof finalUrl === "string" ? finalUrl : url;
-
-    const url = urlOverride || computeUrl(resumeTokenValue);
-    const wsUrl = typeof url === "string" ? makeWsUrl(url) : url;  
+    const originalUrl = urlOverride || computeUrl(resumeTokenValue);
+    const wsUrl = typeof originalUrl === "string" ? makeWsUrl(originalUrl) : originalUrl;
     // Require a token unless we are resuming with a server-issued resume token
     const isResuming = Boolean(resumeTokenValue);
     const hasAccessToken = (typeof wsUrl === "string") && /[?&]access_token=/.test(wsUrl);
     if (!isResuming && !hasAccessToken) {
-      console.error("ws_open_missing_token_query", { originalUrl: url, finalUrl: wsUrl });
+      console.error("ws_open_missing_token_query", { originalUrl, finalUrl: wsUrl });
       showConnectionToast("Session token missing. Please click Start again.");
       updateState({ connectionState: "disconnected" });
       return;
