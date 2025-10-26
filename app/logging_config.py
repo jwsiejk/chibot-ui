@@ -20,6 +20,17 @@ _LEVEL_ALIASES = {
 _LOG_CONFIGURED = False
 _MANAGED_LOGGERS: MutableSet[logging.Logger] = set()
 
+_RUNTIME_CATEGORY_LOGGERS: tuple[str, ...] = (
+    "app.db.neon",
+    "app.auth.http",
+    "app.ws.adapter",
+    "app.voice_v2.tts_runtime",
+    "app.voice_v2.asr_runtime",
+    "app.voice_v2.tts_provider",
+    "app.telemetry.bus",
+    "app.admin.flow",
+)
+
 
 def _coerce_level(value: object, fallback: int) -> int:
     """Translate a level name or number to a logging level constant."""
@@ -62,6 +73,13 @@ def _apply_level(level: int) -> None:
         _MANAGED_LOGGERS.add(logging.getLogger())
 
     for logger in _MANAGED_LOGGERS:
+        _set_level(logger, level)
+
+
+def _enforce_runtime_category_levels(level: int = logging.INFO) -> None:
+    for name in _RUNTIME_CATEGORY_LOGGERS:
+        logger = logging.getLogger(name)
+        _MANAGED_LOGGERS.add(logger)
         _set_level(logger, level)
 
 
@@ -114,6 +132,7 @@ def configure_logging(*, extra_loggers: Iterable[str] | None = None) -> None:
 
     policy = load_interaction_policy()
     apply_logging_policy(policy)
+    _enforce_runtime_category_levels(logging.INFO)
 
     _LOG_CONFIGURED = True
 

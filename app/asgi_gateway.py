@@ -23,7 +23,7 @@ from app.auth.http_handlers import (
     _session_email as _auth_session_email,
     _is_admin as _auth_is_admin,
 )
-from app.db.neon import get_user, init_schema
+from app.db import neon
 from app.logging_config import configure_logging
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
@@ -278,7 +278,7 @@ async def _handle_admin_logs(scope: dict, receive: Callable[[], Awaitable[dict]]
         html_text = raw_html.decode("utf-8", errors="replace")
 
     rewritten = inject_static_version(html_text)
-    context_payload = {"isAdmin": True, "userEmail": email}
+    context_payload = {"isAdmin": is_admin, "userEmail": email}
     context_json = _serialize_context(context_payload)
     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
     body = rewritten.encode("utf-8")
@@ -502,7 +502,7 @@ async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[s
         return False, False, None
 
     try:
-        user = await get_user(email)
+        user = await neon.get_user(email)
     except Exception:  # pragma: no cover - defensive logging
         logger.exception("evt=admin_context_lookup_failed email=%s", email)
         return True, False, email
@@ -578,7 +578,7 @@ async def _handle_lifespan(
         if message_type == "lifespan.startup":
             if not _lifespan_started:
                 try:
-                    await init_schema()
+                    await neon.init_schema()
                 except Exception:
                     logger.exception("evt=lifespan_startup_failed")
                     await send({"type": "lifespan.startup.failed", "message": "init_schema"})
