@@ -10,9 +10,11 @@ from app.db.postgres_config import get_postgres_config
 try:  # pragma: no cover - optional dependency guard
     import psycopg  # type: ignore
     from psycopg import errors as psy_errors  # type: ignore
+    from psycopg import sql  # type: ignore
 except Exception:  # pragma: no cover - defensive fallback when psycopg missing
     psycopg = None  # type: ignore
     psy_errors = None  # type: ignore
+    sql = None  # type: ignore
 
 
 _log = logging.getLogger(__name__)
@@ -72,22 +74,6 @@ def _build_default_factory() -> _ConnectionFactory | None:
 class AdminSettingsStore:
     """Lightweight helper for reading and writing admin settings."""
 
-    _QUERY_PRIMARY = "SELECT value FROM admin_settings WHERE key = %s LIMIT 1"
-    _UPSERT_PRIMARY = (
-        "INSERT INTO admin_settings (key, value) VALUES (%s, %s) "
-        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
-    )
-    _DELETE_PRIMARY = "DELETE FROM admin_settings WHERE key = %s"
-
-    _QUERY_FALLBACK = (
-        "SELECT settings_value FROM admin_settings WHERE settings_key = %s LIMIT 1"
-    )
-    _UPSERT_FALLBACK = (
-        "INSERT INTO admin_settings (settings_key, settings_value) VALUES (%s, %s) "
-        "ON CONFLICT (settings_key) DO UPDATE SET settings_value = EXCLUDED.settings_value"
-    )
-    _DELETE_FALLBACK = "DELETE FROM admin_settings WHERE settings_key = %s"
-
     def __init__(
         self,
         conn_factory: _ConnectionFactory | None = None,
@@ -98,6 +84,8 @@ class AdminSettingsStore:
         self._allow_memory_fallback = allow_memory_fallback
         self._memory: dict[str, str] = {}
         self._lock = threading.RLock()
+        self._key_column: str | None = None
+        self._value_column: str | None = None
 
     def _get_connection(self):
         if self._conn_factory is None:
@@ -116,33 +104,112 @@ class AdminSettingsStore:
             pass
         return conn
 
-    def _select(self, cursor, key: str):
+    def _resolve_columns(self, cursor) -> tuple[str, str]:
+        """Determine the key/value column names for the admin settings table."""
+
+        if self._key_column and self._value_column:
+            return self._key_column, self._value_column
+
+        if sql is None:  # pragma: no cover - dependency missing
+            raise RuntimeError("psycopg is required to resolve admin_settings columns")
+
+        candidate_keys = ("key", "settings_key", "name", "setting_key")
+        candidate_values = ("value", "settings_value", "setting_value")
+
+        available: set[str] = set()
+
         try:
-            cursor.execute(self._QUERY_PRIMARY, (key,))
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = %s
+                  AND table_schema = current_schema()
+                """,
+                ("admin_settings",),
+            )
         except Exception as exc:
-            if _detect_column_error(exc):
-                cursor.execute(self._QUERY_FALLBACK, (key,))
-            else:
+            if not _detect_column_error(exc):  # pragma: no cover - defensive
                 raise
+        else:
+            available = {row[0] for row in cursor.fetchall()}
+
+        key_column = next((name for name in candidate_keys if name in available), None)
+        value_column = next((name for name in candidate_values if name in available), None)
+
+        if key_column is None or value_column is None:
+            # As a last resort, attempt to probe using trial queries so legacy
+            # deployments without information_schema privileges continue to work.
+            if key_column is None:
+                for probe_key in candidate_keys:
+                    query = sql.SQL(
+                        "SELECT {key} FROM admin_settings LIMIT 0"
+                    ).format(key=sql.Identifier(probe_key))
+                    try:
+                        cursor.execute(query)
+                    except Exception as exc:
+                        if _detect_column_error(exc):
+                            continue
+                        raise
+                    else:
+                        key_column = probe_key
+                        break
+
+            if value_column is None:
+                for probe_value in candidate_values:
+                    query = sql.SQL(
+                        "SELECT {value} FROM admin_settings LIMIT 0"
+                    ).format(value=sql.Identifier(probe_value))
+                    try:
+                        cursor.execute(query)
+                    except Exception as exc:
+                        if _detect_column_error(exc):
+                            continue
+                        raise
+                    else:
+                        value_column = probe_value
+                        break
+
+        if key_column is None or value_column is None:
+            raise RuntimeError(
+                "Unable to determine admin_settings key/value column names"
+            )
+
+        self._key_column = key_column
+        self._value_column = value_column
+        return key_column, value_column
+
+    def _select(self, cursor, key: str):
+        key_column, value_column = self._resolve_columns(cursor)
+        if sql is None:  # pragma: no cover - dependency missing
+            raise RuntimeError("psycopg is required to query admin_settings")
+
+        query = sql.SQL(
+            "SELECT {value} FROM admin_settings WHERE {key} = %s LIMIT 1"
+        ).format(value=sql.Identifier(value_column), key=sql.Identifier(key_column))
+
+        cursor.execute(query, (key,))
         return cursor.fetchone()
 
     def _upsert(self, cursor, key: str, value: str | None) -> None:
+        key_column, value_column = self._resolve_columns(cursor)
+        if sql is None:  # pragma: no cover - dependency missing
+            raise RuntimeError("psycopg is required to modify admin_settings")
+
         if value is None:
-            try:
-                cursor.execute(self._DELETE_PRIMARY, (key,))
-            except Exception as exc:
-                if _detect_column_error(exc):
-                    cursor.execute(self._DELETE_FALLBACK, (key,))
-                else:
-                    raise
+            query = sql.SQL(
+                "DELETE FROM admin_settings WHERE {key} = %s"
+            ).format(key=sql.Identifier(key_column))
+            cursor.execute(query, (key,))
             return
-        try:
-            cursor.execute(self._UPSERT_PRIMARY, (key, value))
-        except Exception as exc:
-            if _detect_column_error(exc):
-                cursor.execute(self._UPSERT_FALLBACK, (key, value))
-            else:
-                raise
+        query = sql.SQL(
+            "INSERT INTO admin_settings ({key}, {value}) VALUES (%s, %s) "
+            "ON CONFLICT ({key}) DO UPDATE SET {value} = EXCLUDED.{value}"
+        ).format(
+            key=sql.Identifier(key_column),
+            value=sql.Identifier(value_column),
+        )
+        cursor.execute(query, (key, value))
 
     def get(self, key: str) -> _SettingsValue:
         """Return the string value for ``key`` or ``None`` when unset."""
