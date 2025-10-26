@@ -57,6 +57,8 @@ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
 
 EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
 
+_DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
+
 _OUTBOUND_ALLOWED_TYPES = {
     "policy.interaction",
     "info",
@@ -221,6 +223,9 @@ class AdapterContext:
     partial_seq: int = 0
     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
     send_lock: asyncio.Lock | None = None
+    tts_end_ts: Optional[float] = None
+    diag_audio_seen: bool = False
+    diag_timer: asyncio.TimerHandle | None = None
 
 
 class ChatV2Adapter:
@@ -749,6 +754,12 @@ class ChatV2Adapter:
             ctx.audio_expected_seq = ctx.audio_seq
         seq = ctx.audio_seq
         ctx.audio_seq += 1
+
+        if not ctx.diag_audio_seen:
+            ctx.diag_audio_seen = True
+            self._cancel_diag_timer(ctx)
+            bus.publish("EVT_DIAG_FIRST_AUDIO_FRAME", {"sid": ctx.sid})
+
         await self._ingest_audio_chunk(ctx, bytes(data), seq)
         return self._HandleResult(True)
 
@@ -974,6 +985,9 @@ class ChatV2Adapter:
                 return
 
             def _on_loop() -> None:
+                frame_type = payload.get("type")
+                if frame_type == "tts.end":
+                    self._handle_tts_end_diag(ctx, loop)
                 _enqueue(payload)
 
             try:
@@ -1182,6 +1196,7 @@ class ChatV2Adapter:
                 )
 
     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
+        self._cancel_diag_timer(ctx)
         token = ctx.subscription_token
         ctx.subscription_token = None
         if token:
@@ -1208,6 +1223,66 @@ class ChatV2Adapter:
         ctx.audio_tasks.clear()
 
         ctx.outbox = None
+
+    def _handle_tts_end_diag(
+        self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        ctx.tts_end_ts = time.monotonic()
+        ctx.diag_audio_seen = False
+        self._cancel_diag_timer(ctx)
+        try:
+            ctx.diag_timer = loop.call_later(
+                _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS,
+                self._emit_no_audio_diag,
+                ctx,
+                loop,
+            )
+        except RuntimeError:
+            ctx.diag_timer = None
+
+    def _emit_no_audio_diag(
+        self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        ctx.diag_timer = None
+        tts_end_ts = ctx.tts_end_ts
+        if tts_end_ts is None or ctx.diag_audio_seen:
+            return
+
+        elapsed = time.monotonic() - tts_end_ts
+        if elapsed <= 8.0:
+            delay = max(0.5, 8.0 - elapsed)
+            try:
+                ctx.diag_timer = loop.call_later(
+                    delay,
+                    self._emit_no_audio_diag,
+                    ctx,
+                    loop,
+                )
+            except RuntimeError:
+                ctx.diag_timer = None
+            return
+
+        bus.publish(
+            "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
+            {
+                "sid": ctx.sid,
+                "since_ms": int(elapsed * 1000),
+                "suggestions": [
+                    "permission",
+                    "device",
+                    "recorder",
+                    "transport",
+                ],
+            },
+        )
+        ctx.diag_audio_seen = True
+
+    @staticmethod
+    def _cancel_diag_timer(ctx: AdapterContext) -> None:
+        timer = ctx.diag_timer
+        ctx.diag_timer = None
+        if timer is not None:
+            timer.cancel()
 
     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
         token = ctx.asr_subscription_token

@@ -1,527 +1,361 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 597d156d8725ef2c908ed020ea52903da42e6b0e..69efc7fa4894ead160753bc1ed8c693c57c04bb0 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -91,75 +91,416 @@
-     const resolvedSrc = resolveScriptSrc(src);
-     return new Promise((resolve, reject) => {
-       const existing = document.querySelector(`script[data-dynamic="${resolvedSrc}"]`);
-       if (existing) {
-         if (existing.dataset.loaded === "true") {
-           resolve();
-         } else {
-           existing.addEventListener("load", resolve, { once: true });
-           existing.addEventListener("error", reject, { once: true });
-         }
-         return;
-       }
-       const el = document.createElement("script");
-       el.src = resolvedSrc;
-       el.async = false;
-       el.dataset.dynamic = resolvedSrc;
-       el.addEventListener("load", () => {
-         el.dataset.loaded = "true";
-         resolve();
-       }, { once: true });
-       el.addEventListener("error", reject, { once: true });
-       document.head.appendChild(el);
-     });
-   }
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index f21f2be10069ac39c51e0c654c35fa985fe572d7..c703e914ae82d83fb791f2f1dec4b5af1fc7bd37 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -35,50 +35,52 @@ except Exception:  # pragma: no cover - fallback when uvicorn missing
  
-+  async function bootstrapClientConfig() {
-+    if (typeof window === "undefined") {
-+      return {};
-+    }
-+    const existing = window.__CFG__;
-+    if (existing && typeof existing === "object") {
-+      return existing;
-+    }
-+    try {
-+      const response = await fetch("/api/v1/admin/config", {
-+        method: "GET",
-+        credentials: "include"
-+      });
-+      if (response && response.ok) {
-+        try {
-+          const data = await response.json();
-+          if (data && typeof data === "object") {
-+            window.__CFG__ = data;
-+            return data;
-+          }
-+        } catch (err) {
-+          console.warn("Failed to parse admin config", err);
-+        }
-+      }
-+    } catch (err) {
-+      // Swallow network/config bootstrap failures silently; defaults will apply.
-+    }
-+    if (!window.__CFG__ || typeof window.__CFG__ !== "object") {
-+      window.__CFG__ = {};
-+    }
-+    return window.__CFG__;
-+  }
-+
-+  function diagHudEnabled() {
-+    if (typeof window === "undefined") {
-+      return true;
-+    }
-+    const cfg = window.__CFG__;
-+    if (cfg && typeof cfg.DIAG_CLIENT_HUD === "boolean") {
-+      return cfg.DIAG_CLIENT_HUD;
-+    }
-+    return true;
-+  }
-+
-+  function diagChunkSampleN() {
-+    if (typeof window === "undefined") {
-+      return 10;
-+    }
-+    const cfg = window.__CFG__;
-+    const candidate = cfg ? Number(cfg.DIAG_CHUNK_SAMPLE_N) : NaN;
-+    if (Number.isFinite(candidate) && candidate > 0) {
-+      return Math.floor(candidate);
-+    }
-+    return 10;
-+  }
-+
-+  let diagBadgeEl = null;
-+  let diagBadgePendingText = null;
-+  let diagBadgeAwaitingDom = false;
-+
-+  function ensureDiagBadge() {
-+    if (!diagHudEnabled()) {
-+      return null;
-+    }
-+    if (typeof document === "undefined") {
-+      return null;
-+    }
-+    if (diagBadgeEl && diagBadgeEl.isConnected) {
-+      return diagBadgeEl;
-+    }
-+    const existing = document.getElementById("diagBadge");
-+    if (existing) {
-+      diagBadgeEl = existing;
-+      if (diagBadgePendingText != null) {
-+        existing.textContent = diagBadgePendingText;
-+        diagBadgePendingText = null;
-+      }
-+      return existing;
-+    }
-+    if (!document.body) {
-+      if (!diagBadgeAwaitingDom) {
-+        diagBadgeAwaitingDom = true;
-+        document.addEventListener("DOMContentLoaded", () => {
-+          diagBadgeAwaitingDom = false;
-+          const badge = ensureDiagBadge();
-+          if (badge && diagBadgePendingText != null) {
-+            badge.textContent = diagBadgePendingText;
-+            diagBadgePendingText = null;
-+          }
-+        }, { once: true });
-+      }
-+      return null;
-+    }
-+    const badge = document.createElement("div");
-+    badge.id = "diagBadge";
-+    badge.setAttribute("role", "status");
-+    const style = badge.style;
-+    style.position = "fixed";
-+    style.right = "12px";
-+    style.bottom = "12px";
-+    style.padding = "6px 10px";
-+    style.borderRadius = "10px";
-+    style.background = "rgba(17,24,39,0.78)";
-+    style.color = "#f8fafc";
-+    style.font = "12px/1.4 system-ui, -apple-system, \"Segoe UI\", sans-serif";
-+    style.zIndex = "5000";
-+    style.pointerEvents = "none";
-+    style.boxShadow = "0 6px 24px rgba(15, 23, 42, 0.25)";
-+    badge.textContent = diagBadgePendingText != null ? diagBadgePendingText : "diag";
-+    diagBadgePendingText = null;
-+    document.body.appendChild(badge);
-+    diagBadgeEl = badge;
-+    return badge;
-+  }
-+
-+  function setBadge(text) {
-+    if (!diagHudEnabled()) {
-+      return;
-+    }
-+    const value = text == null ? "" : String(text);
-+    const badge = ensureDiagBadge();
-+    if (badge) {
-+      badge.textContent = value;
-+      diagBadgePendingText = null;
-+    } else {
-+      diagBadgePendingText = value;
-+    }
-+  }
-+
-+  async function getMicStream() {
-+    if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
-+      throw new Error("mediaDevices.getUserMedia unavailable");
-+    }
-+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-+    if (diagHudEnabled()) {
-+      const tracks = typeof stream.getAudioTracks === "function"
-+        ? stream.getAudioTracks().map((track) => ({ label: track.label, enabled: track.enabled }))
-+        : [];
-+      console.info("DIAG_MEDIA_OK", tracks);
-+      setBadge("mic:ok");
-+    }
-+    return stream;
-+  }
-+
-+  function attachRecorder(stream, onChunk) {
-+    if (!stream) {
-+      throw new Error("MediaStream required");
-+    }
-+    if (typeof MediaRecorder === "undefined") {
-+      throw new Error("MediaRecorder unsupported");
-+    }
-+    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-+    let sentBytes = 0;
-+    let chunkCount = 0;
-+    const sampleEvery = Math.max(1, diagChunkSampleN());
-+    recorder.addEventListener("start", () => {
-+      if (diagHudEnabled()) {
-+        console.info("DIAG_RECORDER_STARTED", Date.now());
-+        setBadge("rec:start");
-+      }
-+    });
-+    recorder.addEventListener("dataavailable", async (event) => {
-+      if (!event.data || !event.data.size) {
-+        return;
-+      }
-+      chunkCount += 1;
-+      const shouldSample = chunkCount % sampleEvery === 0;
-+      if (diagHudEnabled() && shouldSample) {
-+        console.debug("DIAG_CHUNK", { size: event.data.size, chunkCount });
-+        setBadge(`chunks:${chunkCount}`);
-+      }
-+      try {
-+        const buffer = await event.data.arrayBuffer();
-+        if (typeof onChunk === "function") {
-+          onChunk(buffer);
-+        }
-+        sentBytes += buffer.byteLength;
-+        if (diagHudEnabled() && shouldSample) {
-+          console.debug("DIAG_WS_BIN_SENT", { chunkCount, sentBytes });
-+        }
-+      } catch (err) {
-+        if (diagHudEnabled()) {
-+          console.warn("DIAG_CHUNK_ERROR", err);
-+        }
-+      }
-+    });
-+    return recorder;
-+  }
-+
-+  const DiagRecorder = (() => {
-+    let stream = null;
-+    let recorder = null;
-+    let startPromise = null;
-+
-+    function cleanupStream() {
-+      if (!stream) {
-+        return;
-+      }
-+      try {
-+        const tracks = typeof stream.getTracks === "function" ? stream.getTracks() : [];
-+        tracks.forEach((track) => {
-+          try {
-+            track.stop();
-+          } catch (err) {
-+            if (diagHudEnabled()) {
-+              console.warn("DIAG_TRACK_STOP_ERROR", err);
-+            }
-+          }
-+        });
-+      } finally {
-+        stream = null;
-+      }
-+    }
-+
-+    function stop(reason) {
-+      if (recorder) {
-+        try {
-+          if (recorder.state !== "inactive") {
-+            recorder.stop();
-+          }
-+        } catch (err) {
-+          if (diagHudEnabled()) {
-+            console.warn("DIAG_RECORDER_STOP_ERROR", err);
-+          }
-+        }
-+        recorder = null;
-+      }
-+      cleanupStream();
-+      if (diagHudEnabled()) {
-+        if (reason) {
-+          setBadge(`stop:${reason}`);
-+        } else {
-+          setBadge("stop");
-+        }
-+      }
-+    }
-+
-+    async function startInternal(trigger) {
-+      if (!diagHudEnabled()) {
-+        return null;
-+      }
-+      if (recorder && recorder.state !== "inactive") {
-+        return recorder;
-+      }
-+      const wsClient = window.WSClient;
-+      const ws = wsClient && wsClient.socket;
-+      if (!ws || ws.readyState !== WebSocket.OPEN) {
-+        return null;
-+      }
-+      try {
-+        stream = await getMicStream();
-+      } catch (err) {
-+        if (diagHudEnabled()) {
-+          console.warn("DIAG_MEDIA_ERROR", err);
-+          setBadge("mic:fail");
-+        }
-+        stream = null;
-+        return null;
-+      }
-+      try {
-+        recorder = attachRecorder(stream, (buffer) => {
-+          if (!ws || ws.readyState !== WebSocket.OPEN) {
-+            return;
-+          }
-+          try {
-+            ws.send(buffer);
-+          } catch (err) {
-+            if (diagHudEnabled()) {
-+              console.warn("DIAG_WS_SEND_ERROR", err);
-+            }
-+          }
-+        });
-+      } catch (err) {
-+        if (diagHudEnabled()) {
-+          console.warn("DIAG_RECORDER_ERROR", err);
-+          setBadge("rec:fail");
-+        }
-+        cleanupStream();
-+        recorder = null;
-+        return null;
-+      }
-+      recorder.addEventListener("stop", () => {
-+        if (diagHudEnabled()) {
-+          setBadge("rec:stop");
-+        }
-+      });
-+      try {
-+        recorder.start(250);
-+      } catch (err) {
-+        if (diagHudEnabled()) {
-+          console.warn("DIAG_RECORDER_START_ERROR", err);
-+          setBadge("rec:fail");
-+        }
-+        stop("start_err");
-+        return null;
-+      }
-+      if (diagHudEnabled()) {
-+        setBadge(trigger ? `rec:${trigger}` : "rec");
-+      }
-+      return recorder;
-+    }
-+
-+    function maybeStart(trigger) {
-+      if (!diagHudEnabled()) {
-+        return;
-+      }
-+      if (recorder && recorder.state !== "inactive") {
-+        return;
-+      }
-+      if (startPromise) {
-+        return;
-+      }
-+      const wsClient = window.WSClient;
-+      const ws = wsClient && wsClient.socket;
-+      if (!ws || ws.readyState !== WebSocket.OPEN) {
-+        return;
-+      }
-+      const promise = startInternal(trigger);
-+      if (!promise) {
-+        return;
-+      }
-+      startPromise = promise;
-+      promise.finally(() => {
-+        if (startPromise === promise) {
-+          startPromise = null;
-+        }
-+      }).catch(() => {
-+        if (diagHudEnabled()) {
-+          console.warn("DIAG_START_REJECTED");
-+        }
-+      });
-+    }
-+
-+    return {
-+      maybeStart,
-+      stop,
-+      hudEnabled: diagHudEnabled
-+    };
-+  })();
-+
-   async function ensureRuntimeModules() {
-     if (!window.AppState) {
-       await loadScript("state.js");
-     }
-     if (!window.AudioPlayer) {
-       await loadScript("audio_player.js");
-     }
-     if (!window.WSClient) {
-       await loadScript("ws_client.js");
-     }
-     if (!window.AudioRecorder) {
-       await loadScript("audio_recorder.js");
-     }
-     if (!window.PolicyBadges) {
-       await loadScript("policy_badges.js");
-     }
-     if (!window.TranscriptView) {
-       await loadScript("transcript_view.js");
-     }
-     if (!window.WSErrorUI) {
-       await loadScript("errors.js");
-     }
-   }
  
-   async function init() {
-+    await bootstrapClientConfig();
-     await ensureRuntimeModules();
+ CHAT_V2_SUBPROTOCOL = "chat.v2"
+ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
+ BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ PING_MIN_INTERVAL_MS = 500
+ RATE_LIMIT_CAPACITY = 25
+ RATE_LIMIT_WINDOW_SECONDS = 2.0
+ RATE_LIMIT_CLOSE_CODE = 1013
+ _AUDIO_VIOLATION_LIMIT = 3
  
-     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
-     const AppState = window.AppState;
-     const WSClient = window.WSClient;
-     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
-       try {
-         window.PolicyBadges.init();
-       } catch (err) {
-         console.warn("Failed to initialize PolicyBadges", err);
-       }
-     }
+ AUDIO_SEQ_WINDOW = 8
  
-     // --- App context (server-injected) ---
-     function readAppContext() {
-       const node = document.getElementById('appContext');
-       if (!node) return {};
-       try {
-         const raw = node.textContent || node.innerText || '{}';
-         return JSON.parse(raw);
-       } catch (err) {
-         console.warn('Failed to parse app context', err);
-         return {};
-       }
-     }
-@@ -1058,85 +1399,105 @@
-           try {
-             window.AudioRecorder.stop();
-           } catch (err) {
-             console.warn('AudioRecorder stop error', err);
-           }
-         }
-         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
-           window.AudioPlayer.interrupt();
-         }
-         setPttActive(false);
-       }
-       updateResumeBanner(state);
-     });
+ QUEUE_ON_THRESHOLD = 12
+ QUEUE_OFF_THRESHOLD = 6
  
-     const POST_TTS_RELEASE_MS = 150;
+ _DEFAULT_WS_PING_INTERVAL_MS = 25_000
  
-     window.addEventListener('tts.start', (event) => {
-       const detail = event && event.detail;
-       if (detail) {
-         updateVoiceState(extractVoiceLocale(detail));
-       }
-       if (pttEnabled && !pttActive) {
-         applyPttMask({ force: true });
-       }
-     });
-+    window.addEventListener('turn.state', (event) => {
-+      const detail = event && event.detail;
-+      if (!detail) {
-+        return;
-+      }
-+      const state = typeof detail.state === 'string'
-+        ? detail.state
-+        : (detail.meta && typeof detail.meta.state === 'string' ? detail.meta.state : null);
-+      if (!state || state.toLowerCase() !== 'ready') {
-+        return;
-+      }
-+      const reason = typeof detail.reason === 'string'
-+        ? detail.reason
-+        : (detail.meta && typeof detail.meta.reason === 'string' ? detail.meta.reason : null);
-+      if (!reason || reason.toLowerCase().includes('tts')) {
-+        DiagRecorder.maybeStart('turn');
-+      }
-+    });
-     window.addEventListener('tts.end', () => {
-       const release = () => {
-         applyPttMask({ force: true });
-+        DiagRecorder.maybeStart('ready');
-       };
-       if (POST_TTS_RELEASE_MS > 0) {
-         setTimeout(release, POST_TTS_RELEASE_MS);
-       } else {
-         release();
-       }
-     });
-     window.addEventListener('asr.ready', () => {
-       if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-         try {
-           const maybePromise = window.AudioRecorder.start();
-           if (maybePromise && typeof maybePromise.catch === 'function') {
-             maybePromise.catch((err) => {
-               console.error('AudioRecorder start on asr.ready failed', err);
-             });
-           }
-         } catch (err) {
-           console.error('AudioRecorder start on asr.ready failed', err);
-         }
-       }
-       if (pttEnabled && !pttActive) {
-         applyPttMask({ force: true });
-       }
-     });
+ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
  
-     window.addEventListener('assistant.suggestions', (event) => {
-       const detail = event && event.detail;
-       applySuggestionsFrame(detail);
-     });
+ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
  
-     window.addEventListener('ws.close', () => {
-       resetSuggestions();
-+      DiagRecorder.stop('ws');
-     });
+ EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
  
-     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
-     if (urlParams.get('wsSmoke') === '1') {
-       const transitions = [];
-       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
++_DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
++
+ _OUTBOUND_ALLOWED_TYPES = {
+     "policy.interaction",
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
+     "asr.partial",
+     "asr.final",
+     "error",
+     "chat.message",
+     "chat.history",
+     "dialog.plan",
+ }
  
-       class MockSocket extends EventTarget {
-         constructor() {
-           super();
-           this.readyState = WebSocket.CONNECTING;
-           setTimeout(() => {
-             this.readyState = WebSocket.OPEN;
-             this.dispatchEvent(new Event('open'));
-           }, 0);
-         }
-         send(payload) {
-           this.lastSent = payload;
-         }
-         close(code = 1000, reason = '') {
-           this.readyState = WebSocket.CLOSED;
-           const ev = new Event('close');
-           ev.code = code;
-           ev.reason = reason;
-           ev.wasClean = true;
+ _OUTBOX_MAXSIZE = 256
+ 
+ _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
+ 
+ _log = logging.getLogger(__name__)
+ 
+ _ALLOWED_TEXT_FRAME_TYPES = {
+     "client.ready",
+     "audio.header",
+     "admin.toggle",
+     "chat.user",
+@@ -199,50 +201,53 @@ class AdapterContext:
+     audio_expected_seq: int = 0
+     audio_highest_seq: int = -1
+     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
+     audio_window: int = AUDIO_SEQ_WINDOW
+     last_pong_sent_ms: int = 0
+     ip: Optional[str] = None
+     sid_bucket: Optional[TokenBucket] = None
+     ip_bucket: Optional[TokenBucket] = None
+     audio_profile: Optional[Dict[str, Any]] = None
+     accepting_audio: bool = True
+     audio_violation_count: int = 0
+     outbound_queue_depth: int = 0
+     backpressure_state: Literal["off", "on"] = "off"
+     outbox: asyncio.Queue[Dict[str, Any]] | None = None
+     outbound_task: asyncio.Task[None] | None = None
+     subscription_token: Optional[str] = None
+     audio_subscription_token: Optional[str] = None
+     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+     asr_ready: bool = False
+     asr_subscription_token: Optional[str] = None
+     server_keepalive_task: asyncio.Task[None] | None = None
+     last_policy_interaction: Optional[Dict[str, Any]] = None
+     partial_seq: int = 0
+     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+     send_lock: asyncio.Lock | None = None
++    tts_end_ts: Optional[float] = None
++    diag_audio_seen: bool = False
++    diag_timer: asyncio.TimerHandle | None = None
+ 
+ 
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
+ 
+     def __init__(
+         self,
+         engine: EngineHooks | None = None,
+         exporter: FileExporter | None = None,
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+         )
+         self.tts_runtime = None
+         self.asr_runtime = None
+@@ -727,50 +732,56 @@ class ChatV2Adapter:
+                 "asr not ready",
+             )
+             return self._HandleResult(False, 1003, "audio_not_expected")
+ 
+         if not ctx.accepting_audio:
+             ctx.audio_violation_count += 1
+             violation_meta = {
+                 "byte_count": byte_count,
+                 "error": "audio_not_expected_close"
+                 if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT
+                 else "audio_not_expected",
+                 "ws": {"dir": "in", "size": byte_count},
+                 "violations": ctx.audio_violation_count,
+             }
+             await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, violation_meta)
+             await self._send_error(send, ctx.sid, "audio_not_expected", "engine not accepting audio")
+             if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT:
+                 return self._HandleResult(False, 1003, "audio_not_expected")
+             return self._HandleResult(True)
+ 
+         ctx.audio_violation_count = 0
+         if ctx.audio_highest_seq < 0:
+             ctx.audio_expected_seq = ctx.audio_seq
+         seq = ctx.audio_seq
+         ctx.audio_seq += 1
++
++        if not ctx.diag_audio_seen:
++            ctx.diag_audio_seen = True
++            self._cancel_diag_timer(ctx)
++            bus.publish("EVT_DIAG_FIRST_AUDIO_FRAME", {"sid": ctx.sid})
++
+         await self._ingest_audio_chunk(ctx, bytes(data), seq)
+         return self._HandleResult(True)
+ 
+     async def _check_rate_limit(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> Optional[_HandleResult]:
+         if ctx.sid_bucket is None:
+             return None
+ 
+         now = time.monotonic()
+         if not ctx.sid_bucket.consume(1, now):
+             return await self._handle_rate_limit(ctx, send, "sid")
+ 
+         if ctx.ip_bucket is not None and not ctx.ip_bucket.consume(1, now):
+             return await self._handle_rate_limit(ctx, send, "ip")
+ 
+         return None
+ 
+     async def _handle_rate_limit(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]], scope: str
+     ) -> "ChatV2Adapter._HandleResult":
+         await self._publish(
+             EVT_RATE_LIMIT,
+             ctx.sid,
+             {"scope": scope, "ip": ctx.ip},
+@@ -952,50 +963,53 @@ class ChatV2Adapter:
+                             {"sid": ctx.sid, "dropped": 1, "now": now},
+                         )
+                     )
+                 except RuntimeError:
+                     pass
+ 
+         def _enqueue(payload: Dict[str, Any]) -> None:
+             if payload.get("type") == "asr.partial":
+                 self._offer_partial_frame(
+                     ctx,
+                     loop,
+                     payload,
+                     lambda frame: _queue_payload(frame, clone=False),
+                 )
+                 return
+             _queue_payload(payload)
+ 
+         def _handle_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+             payload = self._extract_outbound_payload(ctx, event)
+             if payload is None:
+                 return
+ 
+             def _on_loop() -> None:
++                frame_type = payload.get("type")
++                if frame_type == "tts.end":
++                    self._handle_tts_end_diag(ctx, loop)
+                 _enqueue(payload)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
+ 
+         def _handle_audio_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+             chunk = event.get("chunk")
+             if isinstance(chunk, (bytes, bytearray, memoryview)):
+                 chunk_bytes = bytes(chunk)
+             else:
+                 return
+ 
+             def _deliver() -> None:
+                 task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
+                 ctx.audio_tasks.add(task)
+ 
+                 def _on_done(done: asyncio.Task[None]) -> None:
+                     ctx.audio_tasks.discard(done)
+                     try:
+@@ -1160,77 +1174,138 @@ class ChatV2Adapter:
+         send: Callable[[dict], Awaitable[None]],
+         payload: Dict[str, Any],
+     ) -> None:
+         lock = self._ensure_send_lock(ctx)
+         async with lock:
+             text = json.dumps(payload, separators=(",", ":"))
+             await send({"type": "websocket.send", "text": text})
+ 
+     async def _send_audio_frame(
+         self,
+         ctx: AdapterContext,
+         send: Callable[[dict], Awaitable[None]],
+         chunk: bytes,
+     ) -> None:
+         lock = self._ensure_send_lock(ctx)
+         async with lock:
+             try:
+                 await send({"type": "websocket.send", "bytes": chunk})
+             except ClientDisconnected:
+                 _log.info(
+                     "evt=ws_outbound_client_disconnect sid=%s phase=audio",
+                     ctx.sid,
+                 )
+ 
+     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
++        self._cancel_diag_timer(ctx)
+         token = ctx.subscription_token
+         ctx.subscription_token = None
+         if token:
+             bus.unsubscribe(token)
+ 
+         audio_token = ctx.audio_subscription_token
+         ctx.audio_subscription_token = None
+         if audio_token:
+             bus.unsubscribe(audio_token)
+ 
+         task = ctx.outbound_task
+         ctx.outbound_task = None
+         if task:
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task
+ 
+         ctx.partial_coalescer.cancel()
+ 
+         for task in list(ctx.audio_tasks):
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task
+         ctx.audio_tasks.clear()
+ 
+         ctx.outbox = None
+ 
++    def _handle_tts_end_diag(
++        self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
++    ) -> None:
++        ctx.tts_end_ts = time.monotonic()
++        ctx.diag_audio_seen = False
++        self._cancel_diag_timer(ctx)
++        try:
++            ctx.diag_timer = loop.call_later(
++                _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS,
++                self._emit_no_audio_diag,
++                ctx,
++                loop,
++            )
++        except RuntimeError:
++            ctx.diag_timer = None
++
++    def _emit_no_audio_diag(
++        self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
++    ) -> None:
++        ctx.diag_timer = None
++        tts_end_ts = ctx.tts_end_ts
++        if tts_end_ts is None or ctx.diag_audio_seen:
++            return
++
++        elapsed = time.monotonic() - tts_end_ts
++        if elapsed <= 8.0:
++            delay = max(0.5, 8.0 - elapsed)
++            try:
++                ctx.diag_timer = loop.call_later(
++                    delay,
++                    self._emit_no_audio_diag,
++                    ctx,
++                    loop,
++                )
++            except RuntimeError:
++                ctx.diag_timer = None
++            return
++
++        bus.publish(
++            "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
++            {
++                "sid": ctx.sid,
++                "since_ms": int(elapsed * 1000),
++                "suggestions": [
++                    "permission",
++                    "device",
++                    "recorder",
++                    "transport",
++                ],
++            },
++        )
++        ctx.diag_audio_seen = True
++
++    @staticmethod
++    def _cancel_diag_timer(ctx: AdapterContext) -> None:
++        timer = ctx.diag_timer
++        ctx.diag_timer = None
++        if timer is not None:
++            timer.cancel()
++
+     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
+         token = ctx.asr_subscription_token
+         ctx.asr_subscription_token = None
+         if token:
+             bus.unsubscribe(token)
+         ctx.asr_ready = False
+ 
+     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
+         """Record the estimated outbound queue depth and emit diagnostics if needed."""
+ 
+         ctx = self._contexts.get(sid)
+         if ctx is None:
+             return
+ 
+         if not isinstance(queued, int):
+             try:
+                 queued = int(queued)
+             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+                 raise TypeError("queued must be an integer") from exc
+ 
+         await self._update_backpressure(ctx, max(0, queued))
+ 
+     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
+         event = {
+             "schema_version": "1",
