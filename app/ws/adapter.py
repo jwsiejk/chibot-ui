@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, 
 import json
 from urllib.parse import parse_qs
 
+from app.logging_setup import current_sid
 from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
@@ -353,96 +354,100 @@ class ChatV2Adapter:
             is_admin=is_admin,
         )
 
-        if not (
-            inspect.iscoroutinefunction(self._on_open_and_greet)
-            and inspect.iscoroutinefunction(self._invoke_engine)
-        ):
-            _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
-            raise RuntimeError("WebSocket async contract violation")
-
-        ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-        client = scope.get("client")
-        ctx.ip = client[0] if isinstance(client, tuple) and client else None
-        if ctx.ip:
-            ctx.ip_bucket = self._ip_buckets.setdefault(
-                ctx.ip,
-                TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-            )
-
-        self._contexts[ctx.sid] = ctx
-        asr_runtime = getattr(self, "asr_runtime", None)
-        if asr_runtime is not None:
-            try:
-                asr_runtime.on_ws_open(ctx.sid)
-            except Exception:  # pragma: no cover - defensive logging
-                _log.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
-        self._start_asr_ready_tracker(ctx)
-        self._start_outbound_bridge(ctx, send)
-        self._start_server_keepalive(ctx, send)
-
-        if self.exporter:
-            self.exporter.begin(ctx.sid)
-
-        await self._on_open_and_greet(ctx)
-
-        close_code = 1000
-        close_reason: Optional[str] = None
-
+        token = current_sid.set(ctx.sid)
         try:
-            while True:
-                message = await receive()
-                msg_type = message.get("type")
+            if not (
+                inspect.iscoroutinefunction(self._on_open_and_greet)
+                and inspect.iscoroutinefunction(self._invoke_engine)
+            ):
+                _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
+                raise RuntimeError("WebSocket async contract violation")
 
-                if msg_type == "websocket.receive":
-                    if message.get("text") is not None:
-                        result = await self._handle_text(message["text"], ctx, send)
-                        if not result.should_continue:
-                            close_code = result.close_code or 1000
-                            close_reason = result.close_reason
-                            await send(
-                                {
-                                    "type": "websocket.close",
-                                    "code": close_code,
-                                    "reason": close_reason,
-                                }
-                            )
-                            break
-                    elif message.get("bytes") is not None:
-                        result = await self._handle_binary(message["bytes"], ctx, send)
-                        if not result.should_continue:
-                            close_code = result.close_code or 1000
-                            close_reason = result.close_reason
-                            await send(
-                                {
-                                    "type": "websocket.close",
-                                    "code": close_code,
-                                    "reason": close_reason,
-                                }
-                            )
-                            break
-                elif msg_type == "websocket.disconnect":
-                    close_code = message.get("code", 1000)
-                    close_reason = message.get("reason")
-                    break
-        except Exception:  # pragma: no cover - defensive guard
-            close_code = 1011
-            close_reason = "internal_error"
-            await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
-            raise
-        finally:
-            await self._stop_server_keepalive(ctx)
-            await self._cleanup_outbound(ctx)
-            self._stop_asr_ready_tracker(ctx)
+            ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+            client = scope.get("client")
+            ctx.ip = client[0] if isinstance(client, tuple) and client else None
+            if ctx.ip:
+                ctx.ip_bucket = self._ip_buckets.setdefault(
+                    ctx.ip,
+                    TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+                )
+
+            self._contexts[ctx.sid] = ctx
             asr_runtime = getattr(self, "asr_runtime", None)
             if asr_runtime is not None:
                 try:
-                    asr_runtime.on_ws_close(ctx.sid)
+                    asr_runtime.on_ws_open(ctx.sid)
                 except Exception:  # pragma: no cover - defensive logging
-                    _log.exception("evt=ws_asr_close_failed sid=%s", ctx.sid)
-            await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
+                    _log.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
+            self._start_asr_ready_tracker(ctx)
+            self._start_outbound_bridge(ctx, send)
+            self._start_server_keepalive(ctx, send)
+
             if self.exporter:
-                self.exporter.end(ctx.sid, {"close_code": close_code})
-            self._contexts.pop(ctx.sid, None)
+                self.exporter.begin(ctx.sid)
+
+            await self._on_open_and_greet(ctx)
+
+            close_code = 1000
+            close_reason: Optional[str] = None
+
+            try:
+                while True:
+                    message = await receive()
+                    msg_type = message.get("type")
+
+                    if msg_type == "websocket.receive":
+                        if message.get("text") is not None:
+                            result = await self._handle_text(message["text"], ctx, send)
+                            if not result.should_continue:
+                                close_code = result.close_code or 1000
+                                close_reason = result.close_reason
+                                await send(
+                                    {
+                                        "type": "websocket.close",
+                                        "code": close_code,
+                                        "reason": close_reason,
+                                    }
+                                )
+                                break
+                        elif message.get("bytes") is not None:
+                            result = await self._handle_binary(message["bytes"], ctx, send)
+                            if not result.should_continue:
+                                close_code = result.close_code or 1000
+                                close_reason = result.close_reason
+                                await send(
+                                    {
+                                        "type": "websocket.close",
+                                        "code": close_code,
+                                        "reason": close_reason,
+                                    }
+                                )
+                                break
+                    elif msg_type == "websocket.disconnect":
+                        close_code = message.get("code", 1000)
+                        close_reason = message.get("reason")
+                        break
+            except Exception:  # pragma: no cover - defensive guard
+                close_code = 1011
+                close_reason = "internal_error"
+                await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
+                raise
+            finally:
+                await self._stop_server_keepalive(ctx)
+                await self._cleanup_outbound(ctx)
+                self._stop_asr_ready_tracker(ctx)
+                asr_runtime = getattr(self, "asr_runtime", None)
+                if asr_runtime is not None:
+                    try:
+                        asr_runtime.on_ws_close(ctx.sid)
+                    except Exception:  # pragma: no cover - defensive logging
+                        _log.exception("evt=ws_asr_close_failed sid=%s", ctx.sid)
+                await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
+                if self.exporter:
+                    self.exporter.end(ctx.sid, {"close_code": close_code})
+                self._contexts.pop(ctx.sid, None)
+        finally:
+            current_sid.reset(token)
 
     def set_accepting_audio(self, sid: str, accepting: bool) -> None:
         """Toggle whether the given connection should accept audio frames."""

@@ -27,6 +27,7 @@ from app.auth.http_handlers import (
 )
 from app.db import neon
 from app.logging_config import configure_logging
+from app.logging_setup import install_bus_handler
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
 from app.versioning import get_build_id, inject_static_version
@@ -38,6 +39,7 @@ from app.services.streaming_asr.deepgram_client import DeepgramClient
 
 
 configure_logging()
+install_bus_handler(telemetry_bus, level=logging.INFO)
 
 logging.getLogger("app.ws.adapter").setLevel(logging.INFO)
 logging.getLogger("app.security.jwt").setLevel(logging.INFO)
