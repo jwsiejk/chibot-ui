@@ -12,6 +12,7 @@
       <header class="topbar" role="banner">
         <div class="topbar-left">
           <span class="sid" id="sid-text">SID: —</span>
+          {{ADMIN_LINK}}
         </div>
         <div class="topbar-right">
           <div class="brand-menu">
@@ -133,6 +134,7 @@
     <div id="toast-root" class="toast-container" aria-live="polite"></div>
     <div id="wserror-banner-root" aria-live="assertive"></div>
 
+    <script id="appContext" type="application/json">{{APP_CONTEXT}}</script>
     <div id="loginModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
       <div class="modal-backdrop"></div>
       <div class="modal-card">

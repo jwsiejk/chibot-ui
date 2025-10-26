@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AskChip · Admin Logs</title>
+    <link rel="icon" href="/static/favicon.ico" />
+    <link rel="stylesheet" href="/static/css/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar" role="banner">
+        <div class="topbar-left">
+          <span class="sid">Admin ▸ Logs</span>
+        </div>
+        <div class="topbar-right">
+          <span id="adminUserLabel" class="admin-logs__user" aria-live="polite">&nbsp;</span>
+          <a class="topbar-link" href="/">← Main UI</a>
+        </div>
+      </header>
+
+      <main class="admin-logs" role="main">
+        <section class="admin-logs__controls" aria-label="Log controls">
+          <div class="admin-logs__field">
+            <label for="sidInput">Session ID</label>
+            <input
+              id="sidInput"
+              class="text-input"
+              name="sid"
+              type="text"
+              placeholder="sid-xxxxxxxx"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
+          <div class="admin-logs__actions">
+            <button id="liveBtn" class="pill start" type="button">Live Tail</button>
+            <button id="historyBtn" class="pill secondary" type="button">Load History</button>
+            <button id="downloadBtn" class="pill secondary" type="button">Download Zip</button>
+          </div>
+        </section>
+
+        <section class="admin-logs__filters" aria-label="Event filters">
+          <div class="admin-logs__filter-header">
+            <h2>Event types</h2>
+            <button id="typesAllBtn" class="pill secondary" type="button" aria-pressed="true">All</button>
+          </div>
+          <div class="admin-logs__types" role="group" aria-label="Event types">
+            <label class="admin-logs__type">
+              <input type="checkbox" name="logType" value="EVT_TURN_BEGIN" checked />
+              <span>Turn begin</span>
+            </label>
+            <label class="admin-logs__type">
+              <input type="checkbox" name="logType" value="EVT_TURN_END" checked />
+              <span>Turn end</span>
+            </label>
+            <label class="admin-logs__type">
+              <input type="checkbox" name="logType" value="EVT_CHAT_USER" checked />
+              <span>User chat</span>
+            </label>
+            <label class="admin-logs__type">
+              <input type="checkbox" name="logType" value="EVT_WS_JSON_SEND" checked />
+              <span>JSON send</span>
+            </label>
+            <label class="admin-logs__type">
+              <input type="checkbox" name="logType" value="EVT_WS_JSON_RECV" />
+              <span>JSON recv</span>
+            </label>
+            <label class="admin-logs__type">
+              <input type="checkbox" name="logType" value="EVT_TTS_START" />
+              <span>TTS start</span>
+            </label>
+            <label class="admin-logs__type">
+              <input type="checkbox" name="logType" value="EVT_TTS_END" />
+              <span>TTS end</span>
+            </label>
+            <label class="admin-logs__type">
+              <input type="checkbox" name="logType" value="EVT_WS_AUDIO_RECV" />
+              <span>Audio recv</span>
+            </label>
+            <label class="admin-logs__type">
+              <input type="checkbox" name="logType" value="EVT_WS_AUDIO_SEND" />
+              <span>Audio send</span>
+            </label>
+          </div>
+        </section>
+
+        <div class="admin-logs__main">
+          <div class="admin-logs__tabs" role="tablist" aria-label="Log views">
+            <button
+              id="liveTab"
+              class="admin-logs__tab"
+              role="tab"
+              type="button"
+              aria-selected="true"
+              aria-controls="livePanel"
+            >
+              Live
+            </button>
+            <button
+              id="historyTab"
+              class="admin-logs__tab"
+              role="tab"
+              type="button"
+              aria-selected="false"
+              aria-controls="historyPanel"
+            >
+              History
+            </button>
+          </div>
+
+          <section
+            id="livePanel"
+            class="admin-logs__panel"
+            role="tabpanel"
+            aria-labelledby="liveTab"
+          >
+            <header class="admin-logs__panel-header">
+              <h3>Live stream</h3>
+              <div id="liveStatus" class="admin-logs__status" role="status">Awaiting session…</div>
+            </header>
+            <pre id="liveOutput" class="admin-logs__live" aria-live="polite"></pre>
+          </section>
+
+          <section
+            id="historyPanel"
+            class="admin-logs__panel"
+            role="tabpanel"
+            aria-labelledby="historyTab"
+            hidden
+          >
+            <header class="admin-logs__panel-header">
+              <h3>History</h3>
+              <div id="historyStatus" class="admin-logs__status" role="status">Load events to review history.</div>
+            </header>
+            <div class="admin-logs__table-wrapper">
+              <table class="admin-logs__table" aria-describedby="historyStatus">
+                <thead>
+                  <tr>
+                    <th scope="col">ts_ms</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Summary</th>
+                  </tr>
+                </thead>
+                <tbody id="historyTableBody"></tbody>
+              </table>
+            </div>
+            <footer class="admin-logs__pagination">
+              <button id="historyPrev" class="pill secondary" type="button" disabled>Previous</button>
+              <span id="historyCount" class="admin-logs__status">0 events</span>
+              <button id="historyNext" class="pill secondary" type="button" disabled>Next</button>
+            </footer>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div
+      id="jsonDrawerBackdrop"
+      class="admin-logs__drawer-backdrop"
+      role="presentation"
+      hidden
+    ></div>
+    <aside
+      id="jsonDrawer"
+      class="admin-logs__drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-hidden="true"
+      aria-labelledby="jsonDrawerTitle"
+      tabindex="-1"
+      hidden
+    >
+      <header class="admin-logs__drawer-header">
+        <h3 id="jsonDrawerTitle">Event payload</h3>
+        <button id="jsonDrawerClose" class="pill secondary" type="button">Close</button>
+      </header>
+      <pre id="jsonDrawerContent" class="admin-logs__drawer-content"></pre>
+    </aside>
+
+    <div id="toast-root" class="toast-container" aria-live="polite"></div>
+    <div id="wserror-banner-root" aria-live="assertive"></div>
+
+    <script id="appContext" type="application/json">{{APP_CONTEXT}}</script>
+    <script src="/static/js/admin_logs.js" defer></script>
+  </body>
+</html>

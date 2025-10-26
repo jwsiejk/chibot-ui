@@ -15,8 +15,15 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from app import config
-from app.auth.http_handlers import get_me, post_login, post_profile, post_ws_token
-from app.db.neon import init_schema
+from app.auth.http_handlers import (
+    get_me,
+    post_login,
+    post_profile,
+    post_ws_token,
+    _session_email as _auth_session_email,
+    _is_admin as _auth_is_admin,
+)
+from app.db.neon import get_user, init_schema
 from app.logging_config import configure_logging
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
@@ -69,6 +76,7 @@ LOGIN_ROUTE = "/api/v1/auth/login"
 ME_ROUTE = "/api/v1/auth/me"
 PROFILE_ROUTE = "/api/v1/auth/profile"
 ROOT_ROUTE = "/"
+ADMIN_LOGS_ROUTE = "/admin/logs"
 FAVICON_ROUTE = "/favicon.ico"
 STATIC_ROUTE_PREFIX = "/static/"
 EXPORT_ROOT = Path("exports")
@@ -76,9 +84,13 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_ROOT = BASE_DIR / "static"
 TEMPLATES_ROOT = BASE_DIR / "templates"
 INDEX_PATH = TEMPLATES_ROOT / "index.html"
+ADMIN_LOGS_PATH = TEMPLATES_ROOT / "admin_logs.html"
 FAVICON_PATH = STATIC_ROOT / "favicon.ico"
 _DEFAULT_INDEX_HTML = (
     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
+)
+_DEFAULT_ADMIN_HTML = (
+    "<!doctype html><title>Admin Logs</title><div id='admin-logs'></div>".encode("utf-8")
 )
 
 
@@ -218,6 +230,7 @@ async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> 
         await _drain_request_body(receive)
         return json_response(status=405, error="method_not_allowed")
 
+    authenticated, is_admin, email = await _resolve_request_identity(scope)
     await _drain_request_body(receive)
     raw_html = _load_index_html()
     try:
@@ -225,6 +238,49 @@ async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> 
     except UnicodeDecodeError:
         html_text = raw_html.decode("utf-8", errors="replace")
     rewritten = inject_static_version(html_text)
+    admin_link = ""
+    if is_admin:
+        admin_link = '<a class="topbar-link" href="/admin/logs">Admin ▸ Logs</a>'
+    context_payload = {
+        "isAdmin": is_admin,
+        "userEmail": email if authenticated else None,
+    }
+    context_json = _serialize_context(context_payload)
+    rewritten = rewritten.replace("{{ADMIN_LINK}}", admin_link)
+    rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
+    body = rewritten.encode("utf-8")
+    build_id = get_build_id()
+    return _html_response(body, build_id=build_id)
+
+
+async def _handle_admin_logs(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+    """Render the admin logs dashboard for authorized administrators."""
+
+    if not _method_is_get(scope):
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    authenticated, is_admin, email = await _resolve_request_identity(scope)
+
+    if not authenticated:
+        await _drain_request_body(receive)
+        return _redirect_response(ROOT_ROUTE)
+
+    if not is_admin:
+        await _drain_request_body(receive)
+        return _forbidden_response()
+
+    await _drain_request_body(receive)
+    raw_html = _load_admin_logs_html()
+    try:
+        html_text = raw_html.decode("utf-8")
+    except UnicodeDecodeError:
+        html_text = raw_html.decode("utf-8", errors="replace")
+
+    rewritten = inject_static_version(html_text)
+    context_payload = {"isAdmin": True, "userEmail": email}
+    context_json = _serialize_context(context_payload)
+    rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
     body = rewritten.encode("utf-8")
     build_id = get_build_id()
     return _html_response(body, build_id=build_id)
@@ -276,6 +332,18 @@ def _load_index_html() -> bytes:
         return _DEFAULT_INDEX_HTML
 
 
+def _load_admin_logs_html() -> bytes:
+    try:
+        return ADMIN_LOGS_PATH.read_bytes()
+    except OSError:
+        return _DEFAULT_ADMIN_HTML
+
+
+def _serialize_context(payload: dict[str, Any]) -> str:
+    text = json.dumps(payload, separators=(",", ":"))
+    return text.replace("</", "<\\/")
+
+
 def _html_response(body: bytes, *, build_id: Optional[str] = None) -> Response:
     headers: list[tuple[bytes, bytes]] = [
         (b"content-type", b"text/html; charset=utf-8"),
@@ -287,6 +355,26 @@ def _html_response(body: bytes, *, build_id: Optional[str] = None) -> Response:
     if build_id is not None:
         headers.append((b"x-build-id", build_id.encode("utf-8")))
     return Response(status=200, body=body, headers=tuple(headers))
+
+
+def _redirect_response(location: str) -> Response:
+    target = location.encode("utf-8", "ignore")
+    headers = (
+        (b"location", target),
+        (b"cache-control", b"no-store"),
+        (b"content-length", b"0"),
+    )
+    return Response(status=302, body=b"", headers=headers)
+
+
+def _forbidden_response(message: str = "forbidden") -> Response:
+    body = message.encode("utf-8", "ignore")
+    headers = (
+        (b"content-type", b"text/plain; charset=utf-8"),
+        (b"cache-control", b"no-store"),
+        (b"content-length", str(len(body)).encode("ascii")),
+    )
+    return Response(status=403, body=body, headers=headers)
 
 
 def _build_static_response(path: Path, *, if_none_match: Optional[str] = None) -> Optional[Response]:
@@ -402,6 +490,35 @@ def _method_is_get(scope: dict) -> bool:
     return scope.get("method", "GET").upper() == "GET"
 
 
+async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[str]]:
+    email: Optional[str] = None
+    try:
+        email = _auth_session_email(scope)
+    except Exception:  # pragma: no cover - defensive against misconfigured secrets
+        logger.debug("evt=admin_session_decode_failed")
+        return False, False, None
+
+    if not email:
+        return False, False, None
+
+    try:
+        user = await get_user(email)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.exception("evt=admin_context_lookup_failed email=%s", email)
+        return True, False, email
+
+    if user is None:
+        return True, False, email
+
+    try:
+        is_admin = bool(_auth_is_admin(user))
+    except Exception:  # pragma: no cover - defensive logging
+        logger.exception("evt=admin_context_flag_failed email=%s", email)
+        return True, False, email
+
+    return True, is_admin, email
+
+
 def _get_adapter() -> ChatV2Adapter:
     """Return a lazily instantiated ChatV2Adapter singleton."""
     global _adapter
@@ -419,6 +536,7 @@ def _get_adapter() -> ChatV2Adapter:
 
 _HTTP_ROUTES: Dict[str, HttpHandler] = {
     ROOT_ROUTE: _handle_index,
+    ADMIN_LOGS_ROUTE: _handle_admin_logs,
     FAVICON_ROUTE: _handle_favicon,
     HEALTH_ROUTE: _handle_health,
     LIVE_ROUTE: _handle_live,
@@ -429,12 +547,6 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     ME_ROUTE: get_me,
     PROFILE_ROUTE: post_profile,
 }
-
-
-async def _enforce_admin_auth(
-    handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
-) -> Response:
-    return await handler(scope, receive)
 
 
 asgi = app

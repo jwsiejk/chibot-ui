@@ -90,11 +90,28 @@
       }
     }
 
-    // --- Config & mock current user for gating ---
-    window.ADMIN_EMAILS = (window.ADMIN_EMAILS || ["admin@askchip.ai"]).map(e => e.toLowerCase());
-    const urlParams = new URLSearchParams(window.location.search);
-    const currentUserEmail = (urlParams.get("email") || "user@example.com").toLowerCase();
-    const isAdmin = window.ADMIN_EMAILS.includes(currentUserEmail);
+    // --- App context (server-injected) ---
+    function readAppContext() {
+      const node = document.getElementById('appContext');
+      if (!node) return {};
+      try {
+        const raw = node.textContent || node.innerText || '{}';
+        return JSON.parse(raw);
+      } catch (err) {
+        console.warn('Failed to parse app context', err);
+        return {};
+      }
+    }
+
+    const serverContext = readAppContext();
+    const currentUserEmail = typeof serverContext.userEmail === 'string' && serverContext.userEmail
+      ? serverContext.userEmail
+      : 'user@example.com';
+    const isAdmin = Boolean(serverContext.isAdmin);
+    window.__ASKCHIP_CTX__ = Object.freeze({
+      isAdmin,
+      userEmail: currentUserEmail,
+    });
 
     // --- Top-right brand dropdown ---
     const brandBtn = document.getElementById('brandBtn');
@@ -143,7 +160,7 @@
         event.preventDefault();
         return;
       }
-      alert("Open Admin UI (placeholder).");
+      window.location.href = '/admin/logs';
       closeMenu();
     });
     document.getElementById('profileItem').addEventListener('click', () => {
