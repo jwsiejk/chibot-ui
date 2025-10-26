@@ -17,6 +17,7 @@ _TIMELINE = "flow_timeline.ndjson"
 _MANIFEST = "manifest.json"
 _NLG = "nlg.ndjson"
 _NLU = "nlu.ndjson"
+_LOGS = "logs.ndjson"
 
 class BuildFlowZipPackagingTest(unittest.TestCase):
     def test_redaction_and_sha_integrity(self) -> None:
@@ -50,6 +51,24 @@ class BuildFlowZipPackagingTest(unittest.TestCase):
             ]
             self._write_events(session_dir, events)
 
+            logs = [
+                {
+                    "sid": sid,
+                    "ts": 111.1,
+                    "level": "INFO",
+                    "logger": "test",
+                    "msg": "first",
+                },
+                {
+                    "sid": sid,
+                    "ts": 222.2,
+                    "level": "ERROR",
+                    "logger": "test",
+                    "msg": "second",
+                },
+            ]
+            self._write_logs(session_dir, logs)
+
             archive_path = build_flow_zip(sid, root=root)
             self.assertTrue(archive_path.exists())
 
@@ -57,7 +76,7 @@ class BuildFlowZipPackagingTest(unittest.TestCase):
                 names = zf.namelist()
                 self.assertEqual(
                     names,
-                    [_README, _EVENTS_REDACTED, _TIMELINE, _MANIFEST, _NLG, _NLU],
+                    [_README, _EVENTS_REDACTED, _TIMELINE, _LOGS, _MANIFEST, _NLG, _NLU],
                 )
 
                 events_data = zf.read(_EVENTS_REDACTED).decode("utf-8").strip().splitlines()
@@ -69,11 +88,20 @@ class BuildFlowZipPackagingTest(unittest.TestCase):
                 self.assertTrue(auth_value.startswith("Bearer "))
                 self.assertIn("****", auth_value)
 
+                logs_data = [json.loads(line) for line in zf.read(_LOGS).decode("utf-8").strip().splitlines() if line]
+                self.assertEqual(len(logs_data), len(logs))
+                self.assertEqual(logs_data[0]["msg"], "first")
+
                 manifest = json.loads(zf.read(_MANIFEST).decode("utf-8"))
                 sha_map = manifest.get("sha256", {})
-                for name in [_README, _EVENTS_REDACTED, _TIMELINE, _NLG, _NLU]:
+                for name in [_README, _EVENTS_REDACTED, _TIMELINE, _LOGS, _NLG, _NLU]:
                     digest = self._sha256_bytes(zf.read(name))
                     self.assertEqual(sha_map[name], digest)
+
+                manifest_files = manifest.get("files", [])
+                self.assertTrue(
+                    any(entry.get("name") == _LOGS and entry.get("size") == len(zf.read(_LOGS)) for entry in manifest_files)
+                )
 
                 self.assertNotIn("events.ndjson", names)
                 self.assertFalse(manifest.get("truncated"))
@@ -84,10 +112,10 @@ class BuildFlowZipPackagingTest(unittest.TestCase):
             sid = "sid-truncation"
             session_dir = self._prepare_session(root, sid)
 
-            cap_override = 200_000
-            vendor_events = [self._make_event("EVT_VENDOR_DEBUG", sid, self._blob(50_000)) for _ in range(3)]
-            partial_events = [self._make_event("EVT_ASR_PARTIAL", sid, self._blob(60_000)) for _ in range(3)]
-            main_events = [self._make_event("EVT_WS_JSON_SEND", sid, self._blob(70_000)) for _ in range(6)]
+            cap_override = 1_500
+            vendor_events = [self._make_event("EVT_VENDOR_DEBUG", sid, self._blob(8_000)) for _ in range(2)]
+            partial_events = [self._make_event("EVT_ASR_PARTIAL", sid, self._blob(9_000)) for _ in range(2)]
+            main_events = [self._make_event("EVT_WS_JSON_SEND", sid, self._blob(10_000)) for _ in range(3)]
             events = vendor_events + partial_events + main_events
             self._write_events(session_dir, events)
 
@@ -137,6 +165,13 @@ class BuildFlowZipPackagingTest(unittest.TestCase):
         with events_path.open("w", encoding="utf-8") as handle:
             for event in events:
                 json.dump(event, handle, separators=(",", ":"), ensure_ascii=False)
+                handle.write("\n")
+
+    def _write_logs(self, session_dir: Path, logs: list[dict]) -> None:
+        logs_path = session_dir / "logs.ndjson"
+        with logs_path.open("w", encoding="utf-8") as handle:
+            for entry in logs:
+                json.dump(entry, handle, separators=(",", ":"), ensure_ascii=False)
                 handle.write("\n")
 
     def _sha256_bytes(self, payload: bytes) -> str:

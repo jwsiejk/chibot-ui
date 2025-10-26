@@ -1,388 +1,608 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index de0c80ef1c7dcf01e3fbab30a0b7d58cc9f9b09c..bab7c050110b4dee2358e17b5b0941eb21aa879c 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -5,61 +5,63 @@ import hashlib
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Optional
- from urllib.parse import parse_qs
+diff --git a/app/admin/flow_zip.py b/app/admin/flow_zip.py
+index 68aeb684663dea58a49c2a78e67425539572b7fc..6435573e807f38588743022098fa93292fc1f288 100644
+--- a/app/admin/flow_zip.py
++++ b/app/admin/flow_zip.py
+@@ -2,113 +2,119 @@
  
- from app import config
- from app.admin.flow_api import handle_flow_sessions, handle_flow_trace, handle_flow_zip
- from app.auth.http_handlers import (
-     get_me,
-     post_login,
-     post_profile,
-     post_ws_token,
-     _session_email as _auth_session_email,
-     _is_admin as _auth_is_admin,
- )
- from app.db import neon
- from app.logging_config import configure_logging
-+from app.logging_setup import install_bus_handler
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import FileExporter
- from app.versioning import get_build_id, inject_static_version
- from app.voice_v2.asr_runtime import ASRRuntime
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- from app.services.streaming_asr.deepgram_client import DeepgramClient
- 
- 
- configure_logging()
-+install_bus_handler(telemetry_bus, level=logging.INFO)
- 
- logging.getLogger("app.ws.adapter").setLevel(logging.INFO)
- logging.getLogger("app.security.jwt").setLevel(logging.INFO)
- logging.getLogger("app.auth.http").setLevel(logging.INFO)
- 
- for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
-     _category_logger = logging.getLogger(_logger_name)
-     if _category_logger.level == logging.NOTSET:
-         _category_logger.setLevel(logging.INFO)
- 
- 
- _log = logging.getLogger(__name__)
- 
- 
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
- 
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
- 
- 
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
-diff --git a/app/logging_setup.py b/app/logging_setup.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..f99d4bd70af01fdd98505606204ad29e156e1e45
---- /dev/null
-+++ b/app/logging_setup.py
-@@ -0,0 +1,39 @@
-+import logging
-+import time
-+from contextvars import ContextVar
-+from typing import Optional
-+
-+current_sid: ContextVar[Optional[str]] = ContextVar("current_sid", default=None)
-+
-+
-+class TelemetryBusHandler(logging.Handler):
-+    def __init__(self, bus, level: int = logging.INFO) -> None:
-+        super().__init__(level)
-+        self.bus = bus
-+
-+    def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - defensive
-+        try:
-+            payload = {
-+                "sid": current_sid.get() or "unspecified",
-+                "ts": time.time(),
-+                "logger": record.name,
-+                "level": record.levelname,
-+                "msg": record.getMessage(),
-+            }
-+            for key in ("req_id", "turn_id", "event", "sub"):
-+                if hasattr(record, key):
-+                    payload[key] = getattr(record, key)
-+            event = {"type": "EVT_LOG", **payload}
-+            self.bus.publish(event)
-+        except Exception:
-+            # Never allow telemetry logging to break the main logging flow.
-+            pass
-+
-+
-+def install_bus_handler(bus, level: int = logging.INFO) -> None:
-+    root = logging.getLogger()
-+    if any(isinstance(handler, TelemetryBusHandler) for handler in root.handlers):
-+        return
-+    handler = TelemetryBusHandler(bus, level)
-+    handler.setLevel(level)
-+    root.addHandler(handler)
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index a60ee295b8b69f2aeb41f0460dd082ef5edbc941..f21f2be10069ac39c51e0c654c35fa985fe572d7 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1,40 +1,41 @@
- """chat.v2 WebSocket adapter for AskChip."""
  from __future__ import annotations
  
- import asyncio
- import contextlib
- import inspect
- import logging
+ import io
+ import json
+ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import Dict, Iterable, List, Tuple
+ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+ 
+ from app.telemetry import bus as telemetry_bus
+ from app.telemetry.exporter import compute_sha256
+ 
+ 
+ __all__ = ["build_flow_zip"]
+ 
+ 
+ _ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+ _README_NAME = "README.txt"
+ _MANIFEST_NAME = "manifest.json"
+ _EVENTS_NAME = "events.ndjson"
+ _EVENTS_REDACTED_NAME = "events.redacted.ndjson"
+ _TIMELINE_NAME = "flow_timeline.ndjson"
+ _NLU_NAME = "nlu.ndjson"
+ _NLG_NAME = "nlg.ndjson"
++_LOGS_NAME = "logs.ndjson"
+ 
+ _TIMELINE_TYPES = {
+     "EVT_TURN_BEGIN",
+     "EVT_TURN_END",
+     "EVT_TTS_START",
+     "EVT_TTS_END",
+     "EVT_TTS_MASK",
+     "EVT_MIC_GATE",
+     "EVT_POLICY_APPLIED",
+     "EVT_POLICY_SNAPSHOT",
+     "EVT_BARGE_IN",
+     "EVT_AUTH_DISABLED",
+ }
+ _WS_PREFIX = "EVT_WS_"
+ _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SEND"}
+ _PARTIAL_TYPES = {"EVT_ASR_PARTIAL"}
+ 
+ _DEFAULT_CAP_BYTES = 25 * 1024 * 1024
+ 
+ 
+ class _EventWrapper(dict):
+     """Container storing a redacted event and its truncation category."""
+ 
+     __slots__ = ()
+ 
+     @property
+     def event(self) -> Dict[str, object]:
+         return self["event"]
+ 
+     @property
+     def category(self) -> str:
+         return self["category"]
+ 
+ 
+ def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _DEFAULT_CAP_BYTES) -> Path:
+     """Package the flow artifacts for ``sid`` into a deterministic ZIP archive."""
+ 
+     session_dir = Path(root) / sid
+     manifest_path = session_dir / _MANIFEST_NAME
+     events_path = session_dir / _EVENTS_NAME
++    logs_path = session_dir / _LOGS_NAME
+ 
+     _assert_exists(manifest_path)
+     _assert_exists(events_path)
+ 
+     manifest_data = _load_manifest(manifest_path.read_bytes())
+     created_label = _determine_created_label(manifest_data)
+     readme_bytes = _build_readme(sid, created_label)
+ 
+     raw_events = _load_events(events_path)
+     wrapped_events = _wrap_events(raw_events)
+ 
+     drop_counts = {"vendor_debug": 0, "partials": 0, "events_tail": 0}
+     archive_bytes: bytes = b""
+     payloads: Dict[str, bytes] = {}
+     manifest_bytes: bytes = b""
++    logs_bytes: bytes | None = None
++    if logs_path.is_file():
++        logs_bytes = logs_path.read_bytes()
+ 
+     while True:
+         payloads, manifest_bytes = _render_payloads(
+             wrapped_events,
+             manifest_data,
+             readme_bytes,
+             drop_counts,
+             cap_bytes,
++            logs_bytes=logs_bytes,
+         )
+         entries = dict(payloads)
+         entries[_MANIFEST_NAME] = manifest_bytes
+         archive_bytes = _render_archive(entries)
+ 
+         if len(archive_bytes) <= cap_bytes:
+             break
+ 
+         if not _drop_next_event(wrapped_events, drop_counts):
+             break
+ 
+     archive_path = session_dir / "flow.zip"
+     archive_path.write_bytes(archive_bytes)
+     return archive_path
+ 
+ 
+ def _assert_exists(path: Path) -> None:
+     if not path.is_file():
+         raise FileNotFoundError(path)
+ 
+ 
+ def _load_manifest(raw: bytes) -> Dict[str, object]:
+     try:
+         return json.loads(raw.decode("utf-8"))
+     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+@@ -165,112 +171,124 @@ def _build_readme(sid: str, created_label: str) -> bytes:
+ def _wrap_events(events: List[Dict[str, object]]) -> List[_EventWrapper]:
+     wrapped: List[_EventWrapper] = []
+     for event in events:
+         redacted = _redact_event(event)
+         event_type = redacted.get("type")
+         category = _categorize_event(event_type)
+         wrapped.append(_EventWrapper(event=redacted, category=category))
+     return wrapped
+ 
+ 
+ def _categorize_event(event_type: object) -> str:
+     if isinstance(event_type, str):
+         if event_type in _VENDOR_DEBUG_TYPES:
+             return "vendor_debug"
+         if event_type in _PARTIAL_TYPES:
+             return "partials"
+     return "main"
+ 
+ 
+ def _render_payloads(
+     events: List[_EventWrapper],
+     manifest_data: Dict[str, object],
+     readme_bytes: bytes,
+     drop_counts: Dict[str, int],
+     cap_bytes: int,
++    *,
++    logs_bytes: bytes | None = None,
+ ) -> Tuple[Dict[str, bytes], bytes]:
+     redacted_events = [wrapper.event for wrapper in events]
+ 
+     events_bytes = _dump_ndjson(redacted_events)
+     timeline_events = [evt for evt in redacted_events if _is_timeline_event(evt)]
+     timeline_bytes = _dump_ndjson(timeline_events)
+     nlu_events = [evt for evt in redacted_events if evt.get("type") == "EVT_NLU"]
+     nlg_events = [evt for evt in redacted_events if evt.get("type") == "EVT_NLG"]
+ 
+     payloads = {
+         _README_NAME: readme_bytes,
+         _EVENTS_REDACTED_NAME: events_bytes,
+         _TIMELINE_NAME: timeline_bytes,
+         _NLU_NAME: _dump_ndjson(nlu_events),
+         _NLG_NAME: _dump_ndjson(nlg_events),
+     }
+ 
++    if logs_bytes is not None:
++        payloads[_LOGS_NAME] = logs_bytes
++
+     manifest_bytes = _build_manifest_payload(
+         manifest_data,
+         payloads,
+         drop_counts,
+         cap_bytes,
+     )
+ 
+     return payloads, manifest_bytes
+ 
+ 
+ def _is_timeline_event(event: Dict[str, object]) -> bool:
+     event_type = event.get("type")
+     if not isinstance(event_type, str):
+         return False
+     if event_type in _TIMELINE_TYPES:
+         return True
+     return event_type.startswith(_WS_PREFIX)
+ 
+ 
+ def _dump_ndjson(events: Iterable[Dict[str, object]]) -> bytes:
+     lines = [json.dumps(event, separators=(",", ":"), ensure_ascii=False) for event in events]
+     if not lines:
+         return b""
+     return ("\n".join(lines) + "\n").encode("utf-8")
+ 
+ 
+ def _build_manifest_payload(
+     manifest_data: Dict[str, object],
+     payloads: Dict[str, bytes],
+     drop_counts: Dict[str, int],
+     cap_bytes: int,
+ ) -> bytes:
+     manifest_copy = dict(manifest_data)
+ 
+     existing_sha = {}
+     if isinstance(manifest_copy.get("sha256"), dict):
+         existing_sha = dict(manifest_copy["sha256"])
+ 
+     sha_entries = {
+         name: compute_sha256(content)
+         for name, content in payloads.items()
+     }
+     existing_sha.update(sha_entries)
+     manifest_copy["sha256"] = existing_sha
+ 
++    file_entries = [
++        {"name": name, "size": len(content)}
++        for name, content in sorted(payloads.items())
++    ]
++    if file_entries:
++        manifest_copy["files"] = file_entries
++
+     if any(drop_counts.values()):
+         manifest_copy["truncated"] = True
+         manifest_copy["cap_bytes"] = cap_bytes
+         manifest_copy["dropped"] = {
+             "vendor_debug": drop_counts.get("vendor_debug", 0),
+             "partials": drop_counts.get("partials", 0),
+             "events_tail": drop_counts.get("events_tail", 0),
+         }
+     else:
+         manifest_copy.pop("truncated", None)
+         manifest_copy.pop("cap_bytes", None)
+         manifest_copy.pop("dropped", None)
+ 
+     return json.dumps(manifest_copy, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+ 
+ 
+ def _render_archive(entries: Dict[str, bytes]) -> bytes:
+     buffer = io.BytesIO()
+     with ZipFile(buffer, mode="w") as zf:
+         for name in sorted(entries):
+             info = ZipInfo(filename=name)
+             info.date_time = _ARCHIVE_TIMESTAMP
+             info.compress_type = ZIP_DEFLATED
+             zf.writestr(info, entries[name])
+     return buffer.getvalue()
+diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
+index 066e8e195ea3018576b2f977e30edec79c25c948..2ac78597a8e65d1bb3329336ccb3422a8b9ff64e 100644
+--- a/app/telemetry/exporter.py
++++ b/app/telemetry/exporter.py
+@@ -3,83 +3,86 @@ from __future__ import annotations
+ 
+ import hashlib
+ import json
  import os
  import time
  from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
+ from pathlib import Path
+ from typing import Any, Dict, Optional
  
- import json
- from urllib.parse import parse_qs
- 
-+from app.logging_setup import current_sid
- from app.security.jwt_utils import verify_ws_token
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_frame
- 
- try:  # pragma: no cover - uvicorn is an optional dependency in tests
-     from uvicorn.protocols.utils import ClientDisconnected
- except Exception:  # pragma: no cover - fallback when uvicorn missing
-     class ClientDisconnected(Exception):  # type: ignore[no-redef]
-         """Fallback placeholder when uvicorn is unavailable."""
+ from app.telemetry import bus as telemetry_bus
  
  
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
-@@ -331,140 +332,144 @@ class ChatV2Adapter:
-         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+ def _now_ms() -> int:
+     """Return the current epoch timestamp in milliseconds."""
  
-         now_ms = int(time.time() * 1000)
-         info_frame: Dict[str, Any] = {
-             "type": "info",
-             "protocol": CHAT_V2_SUBPROTOCOL,
-             "sid": sid,
-             "ts_ms": now_ms,
-             "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
-         }
-         info_frame["meta"] = {"sid": sid}
-         policy_snapshot = self._policy_snapshot()
-         if policy_snapshot:
-             info_frame["policy"] = policy_snapshot
-         await self._send_json(send, sid, info_frame)
-         _log.info("evt=ws_info_sent sid=%s", sid)
+     return int(time.time() * 1000)
  
-         ctx = AdapterContext(
-             sid=sid,
-             headers=dict(headers),
-             principal=principal,
-             user_id=sub,
-             is_admin=is_admin,
+ 
+ @dataclass
+ class _SessionStats:
+     """In-memory counters tracked for each active session."""
+ 
+     directory: Path
+     events_path: Path
+     manifest_path: Path
++    logs_path: Path
+     events_written: int = 0
+     by_type: Dict[str, int] = field(default_factory=dict)
+     started_ms: Optional[int] = None
+     ended_ms: Optional[int] = None
+     subscription_token: Optional[str] = None
+ 
+ 
+ class FileExporter:
+     """Write session telemetry to disk in a restart-friendly manner."""
+ 
+     def __init__(self, root: Path | str = "exports", *, bus=telemetry_bus) -> None:
+         self._root = Path(root)
+         self._bus = bus
+         self._sessions: Dict[str, _SessionStats] = {}
+ 
+     def begin(self, sid: str) -> None:
+         """Prepare an export directory and subscribe to telemetry for the session."""
+ 
+         if sid in self._sessions:
+             # Duplicate begin calls should not create additional subscriptions.
+             return
+ 
+         session_dir = self._root / sid
+         session_dir.mkdir(parents=True, exist_ok=True)
+         stats = _SessionStats(
+             directory=session_dir,
+             events_path=session_dir / "events.ndjson",
+             manifest_path=session_dir / "manifest.json",
++            logs_path=session_dir / "logs.ndjson",
+             started_ms=_now_ms(),
          )
  
--        if not (
--            inspect.iscoroutinefunction(self._on_open_and_greet)
--            and inspect.iscoroutinefunction(self._invoke_engine)
--        ):
--            _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
--            raise RuntimeError("WebSocket async contract violation")
--
--        ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
--        client = scope.get("client")
--        ctx.ip = client[0] if isinstance(client, tuple) and client else None
--        if ctx.ip:
--            ctx.ip_bucket = self._ip_buckets.setdefault(
--                ctx.ip,
--                TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
--            )
--
--        self._contexts[ctx.sid] = ctx
--        asr_runtime = getattr(self, "asr_runtime", None)
--        if asr_runtime is not None:
--            try:
--                asr_runtime.on_ws_open(ctx.sid)
--            except Exception:  # pragma: no cover - defensive logging
--                _log.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
--        self._start_asr_ready_tracker(ctx)
--        self._start_outbound_bridge(ctx, send)
--        self._start_server_keepalive(ctx, send)
--
--        if self.exporter:
--            self.exporter.begin(ctx.sid)
--
--        await self._on_open_and_greet(ctx)
--
--        close_code = 1000
--        close_reason: Optional[str] = None
--
-+        token = current_sid.set(ctx.sid)
-         try:
--            while True:
--                message = await receive()
--                msg_type = message.get("type")
--
--                if msg_type == "websocket.receive":
--                    if message.get("text") is not None:
--                        result = await self._handle_text(message["text"], ctx, send)
--                        if not result.should_continue:
--                            close_code = result.close_code or 1000
--                            close_reason = result.close_reason
--                            await send(
--                                {
--                                    "type": "websocket.close",
--                                    "code": close_code,
--                                    "reason": close_reason,
--                                }
--                            )
--                            break
--                    elif message.get("bytes") is not None:
--                        result = await self._handle_binary(message["bytes"], ctx, send)
--                        if not result.should_continue:
--                            close_code = result.close_code or 1000
--                            close_reason = result.close_reason
--                            await send(
--                                {
--                                    "type": "websocket.close",
--                                    "code": close_code,
--                                    "reason": close_reason,
--                                }
--                            )
--                            break
--                elif msg_type == "websocket.disconnect":
--                    close_code = message.get("code", 1000)
--                    close_reason = message.get("reason")
--                    break
--        except Exception:  # pragma: no cover - defensive guard
--            close_code = 1011
--            close_reason = "internal_error"
--            await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
--            raise
--        finally:
--            await self._stop_server_keepalive(ctx)
--            await self._cleanup_outbound(ctx)
--            self._stop_asr_ready_tracker(ctx)
-+            if not (
-+                inspect.iscoroutinefunction(self._on_open_and_greet)
-+                and inspect.iscoroutinefunction(self._invoke_engine)
-+            ):
-+                _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
-+                raise RuntimeError("WebSocket async contract violation")
+         # Reset the NDJSON log for the session.
+         stats.events_path.write_text("", encoding="utf-8")
++        stats.logs_path.write_text("", encoding="utf-8")
+ 
+         def _callback(event: Dict[str, Any]) -> None:
+             if event.get("sid") != sid:
+                 return
+             self._handle_event(sid, event)
+ 
+         token = self._bus.subscribe("*", _callback)
+         stats.subscription_token = token
+         self._sessions[sid] = stats
+ 
+         manifest = {
+             "sid": sid,
+             "schema_version": "1",
+             "started_ms": stats.started_ms,
+             "open": True,
+             "events_written": 0,
+             "by_type": {},
+         }
+         self._write_manifest(stats, manifest)
+ 
+     def end(self, sid: str, summary: Optional[Dict[str, Any]] = None) -> None:
+         """Finalize a session by writing manifest metadata and unsubscribing."""
+ 
+         stats = self._sessions.pop(sid, None)
+         if not stats:
+@@ -102,50 +105,60 @@ class FileExporter:
+             "events_written": stats.events_written,
+             "by_type": dict(stats.by_type),
+             "ended_ms": ended_ms,
+         }
+ 
+         if summary is not None:
+             manifest["summary"] = dict(summary)
+ 
+         self._write_manifest(stats, manifest)
+ 
+     def _handle_event(self, sid: str, event: Dict[str, Any]) -> None:
+         stats = self._sessions.get(sid)
+         if not stats:
+             return
+ 
+         with stats.events_path.open("a", encoding="utf-8") as handle:
+             json.dump(event, handle, separators=(",", ":"), ensure_ascii=False)
+             handle.write("\n")
+ 
+         stats.events_written += 1
+ 
+         event_type = event.get("type")
+         if isinstance(event_type, str) and event_type:
+             stats.by_type[event_type] = stats.by_type.get(event_type, 0) + 1
+ 
++            if event_type == "EVT_LOG":
++                log_entry: Dict[str, Any]
++                if isinstance(event, dict):
++                    log_entry = dict(event)
++                else:
++                    log_entry = {"type": event_type}
++                with stats.logs_path.open("a", encoding="utf-8") as log_handle:
++                    json.dump(log_entry, log_handle, separators=(",", ":"), ensure_ascii=False)
++                    log_handle.write("\n")
 +
-+            ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-+            client = scope.get("client")
-+            ctx.ip = client[0] if isinstance(client, tuple) and client else None
-+            if ctx.ip:
-+                ctx.ip_bucket = self._ip_buckets.setdefault(
-+                    ctx.ip,
-+                    TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+         ts_ms = event.get("ts_ms")
+         if isinstance(ts_ms, int):
+             candidate = ts_ms
+             if stats.started_ms is not None and candidate < stats.started_ms:
+                 candidate = stats.started_ms
+             stats.ended_ms = candidate
+ 
+         manifest = {
+             "sid": sid,
+             "schema_version": "1",
+             "started_ms": stats.started_ms,
+             "open": True,
+             "events_written": stats.events_written,
+             "by_type": dict(stats.by_type),
+         }
+         self._write_manifest(stats, manifest)
+ 
+     def _write_manifest(self, stats: _SessionStats, manifest: Dict[str, Any]) -> None:
+         tmp_path = stats.manifest_path.with_name(stats.manifest_path.name + ".tmp")
+         tmp_path.write_text(
+             json.dumps(manifest, separators=(",", ":"), ensure_ascii=False),
+             encoding="utf-8",
+         )
+         os.replace(tmp_path, stats.manifest_path)
+ 
+diff --git a/tests/test_flow_zip_packaging.py b/tests/test_flow_zip_packaging.py
+index 4655acafc5e26f0ec05f00666c6a8388f4f3473e..93493087e874d49235a4321edd5bf3c3ff3a29c5 100644
+--- a/tests/test_flow_zip_packaging.py
++++ b/tests/test_flow_zip_packaging.py
+@@ -1,115 +1,143 @@
+ from __future__ import annotations
+ 
+ import base64
+ import json
+ import os
+ import tempfile
+ import unittest
+ from pathlib import Path
+ from zipfile import ZipFile
+ 
+ from app.admin.flow_zip import build_flow_zip
+ 
+ 
+ _README = "README.txt"
+ _EVENTS_REDACTED = "events.redacted.ndjson"
+ _TIMELINE = "flow_timeline.ndjson"
+ _MANIFEST = "manifest.json"
+ _NLG = "nlg.ndjson"
+ _NLU = "nlu.ndjson"
++_LOGS = "logs.ndjson"
+ 
+ class BuildFlowZipPackagingTest(unittest.TestCase):
+     def test_redaction_and_sha_integrity(self) -> None:
+         with tempfile.TemporaryDirectory() as tmp:
+             root = Path(tmp) / "exports"
+             sid = "sid-redaction"
+             session_dir = self._prepare_session(root, sid)
+ 
+             events = [
+                 {
+                     "type": "EVT_WS_JSON_RECV",
+                     "sid": sid,
+                     "ts_ms": 111,
+                     "meta": {
+                         "authorization": "Bearer supersecretvalue",
+                         "email": "agent@example.com",
+                     },
+                 },
+                 {
+                     "type": "EVT_NLU",
+                     "sid": sid,
+                     "ts_ms": 222,
+                     "meta": {"intent": "help_install"},
+                 },
+                 {
+                     "type": "EVT_NLG",
+                     "sid": sid,
+                     "ts_ms": 333,
+                     "meta": {"utterance": "Masked"},
+                 },
+             ]
+             self._write_events(session_dir, events)
+ 
++            logs = [
++                {
++                    "sid": sid,
++                    "ts": 111.1,
++                    "level": "INFO",
++                    "logger": "test",
++                    "msg": "first",
++                },
++                {
++                    "sid": sid,
++                    "ts": 222.2,
++                    "level": "ERROR",
++                    "logger": "test",
++                    "msg": "second",
++                },
++            ]
++            self._write_logs(session_dir, logs)
++
+             archive_path = build_flow_zip(sid, root=root)
+             self.assertTrue(archive_path.exists())
+ 
+             with ZipFile(archive_path) as zf:
+                 names = zf.namelist()
+                 self.assertEqual(
+                     names,
+-                    [_README, _EVENTS_REDACTED, _TIMELINE, _MANIFEST, _NLG, _NLU],
++                    [_README, _EVENTS_REDACTED, _TIMELINE, _LOGS, _MANIFEST, _NLG, _NLU],
+                 )
+ 
+                 events_data = zf.read(_EVENTS_REDACTED).decode("utf-8").strip().splitlines()
+                 self.assertEqual(len(events_data), 3)
+                 first_event = json.loads(events_data[0])
+                 self.assertNotIn("supersecretvalue", json.dumps(first_event))
+                 self.assertIn("***@example.com", json.dumps(first_event))
+                 auth_value = first_event["meta"]["authorization"]
+                 self.assertTrue(auth_value.startswith("Bearer "))
+                 self.assertIn("****", auth_value)
+ 
++                logs_data = [json.loads(line) for line in zf.read(_LOGS).decode("utf-8").strip().splitlines() if line]
++                self.assertEqual(len(logs_data), len(logs))
++                self.assertEqual(logs_data[0]["msg"], "first")
++
+                 manifest = json.loads(zf.read(_MANIFEST).decode("utf-8"))
+                 sha_map = manifest.get("sha256", {})
+-                for name in [_README, _EVENTS_REDACTED, _TIMELINE, _NLG, _NLU]:
++                for name in [_README, _EVENTS_REDACTED, _TIMELINE, _LOGS, _NLG, _NLU]:
+                     digest = self._sha256_bytes(zf.read(name))
+                     self.assertEqual(sha_map[name], digest)
+ 
++                manifest_files = manifest.get("files", [])
++                self.assertTrue(
++                    any(entry.get("name") == _LOGS and entry.get("size") == len(zf.read(_LOGS)) for entry in manifest_files)
 +                )
 +
-+            self._contexts[ctx.sid] = ctx
-             asr_runtime = getattr(self, "asr_runtime", None)
-             if asr_runtime is not None:
-                 try:
--                    asr_runtime.on_ws_close(ctx.sid)
-+                    asr_runtime.on_ws_open(ctx.sid)
-                 except Exception:  # pragma: no cover - defensive logging
--                    _log.exception("evt=ws_asr_close_failed sid=%s", ctx.sid)
--            await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
-+                    _log.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
-+            self._start_asr_ready_tracker(ctx)
-+            self._start_outbound_bridge(ctx, send)
-+            self._start_server_keepalive(ctx, send)
-+
-             if self.exporter:
--                self.exporter.end(ctx.sid, {"close_code": close_code})
--            self._contexts.pop(ctx.sid, None)
-+                self.exporter.begin(ctx.sid)
-+
-+            await self._on_open_and_greet(ctx)
-+
-+            close_code = 1000
-+            close_reason: Optional[str] = None
-+
-+            try:
-+                while True:
-+                    message = await receive()
-+                    msg_type = message.get("type")
-+
-+                    if msg_type == "websocket.receive":
-+                        if message.get("text") is not None:
-+                            result = await self._handle_text(message["text"], ctx, send)
-+                            if not result.should_continue:
-+                                close_code = result.close_code or 1000
-+                                close_reason = result.close_reason
-+                                await send(
-+                                    {
-+                                        "type": "websocket.close",
-+                                        "code": close_code,
-+                                        "reason": close_reason,
-+                                    }
-+                                )
-+                                break
-+                        elif message.get("bytes") is not None:
-+                            result = await self._handle_binary(message["bytes"], ctx, send)
-+                            if not result.should_continue:
-+                                close_code = result.close_code or 1000
-+                                close_reason = result.close_reason
-+                                await send(
-+                                    {
-+                                        "type": "websocket.close",
-+                                        "code": close_code,
-+                                        "reason": close_reason,
-+                                    }
-+                                )
-+                                break
-+                    elif msg_type == "websocket.disconnect":
-+                        close_code = message.get("code", 1000)
-+                        close_reason = message.get("reason")
-+                        break
-+            except Exception:  # pragma: no cover - defensive guard
-+                close_code = 1011
-+                close_reason = "internal_error"
-+                await send({"type": "websocket.close", "code": close_code, "reason": close_reason})
-+                raise
-+            finally:
-+                await self._stop_server_keepalive(ctx)
-+                await self._cleanup_outbound(ctx)
-+                self._stop_asr_ready_tracker(ctx)
-+                asr_runtime = getattr(self, "asr_runtime", None)
-+                if asr_runtime is not None:
-+                    try:
-+                        asr_runtime.on_ws_close(ctx.sid)
-+                    except Exception:  # pragma: no cover - defensive logging
-+                        _log.exception("evt=ws_asr_close_failed sid=%s", ctx.sid)
-+                await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
-+                if self.exporter:
-+                    self.exporter.end(ctx.sid, {"close_code": close_code})
-+                self._contexts.pop(ctx.sid, None)
-+        finally:
-+            current_sid.reset(token)
+                 self.assertNotIn("events.ndjson", names)
+                 self.assertFalse(manifest.get("truncated"))
  
-     def set_accepting_audio(self, sid: str, accepting: bool) -> None:
-         """Toggle whether the given connection should accept audio frames."""
+     def test_truncation_applies_cap_and_records_drops(self) -> None:
+         with tempfile.TemporaryDirectory() as tmp:
+             root = Path(tmp) / "exports"
+             sid = "sid-truncation"
+             session_dir = self._prepare_session(root, sid)
  
-         ctx = self._contexts.get(sid)
-         if ctx is not None:
-             ctx.accepting_audio = accepting
-             if accepting:
-                 ctx.audio_violation_count = 0
+-            cap_override = 200_000
+-            vendor_events = [self._make_event("EVT_VENDOR_DEBUG", sid, self._blob(50_000)) for _ in range(3)]
+-            partial_events = [self._make_event("EVT_ASR_PARTIAL", sid, self._blob(60_000)) for _ in range(3)]
+-            main_events = [self._make_event("EVT_WS_JSON_SEND", sid, self._blob(70_000)) for _ in range(6)]
++            cap_override = 1_500
++            vendor_events = [self._make_event("EVT_VENDOR_DEBUG", sid, self._blob(8_000)) for _ in range(2)]
++            partial_events = [self._make_event("EVT_ASR_PARTIAL", sid, self._blob(9_000)) for _ in range(2)]
++            main_events = [self._make_event("EVT_WS_JSON_SEND", sid, self._blob(10_000)) for _ in range(3)]
+             events = vendor_events + partial_events + main_events
+             self._write_events(session_dir, events)
  
-     def get_context(self, sid: str) -> Optional[AdapterContext]:
-         """Return the adapter context for testing hooks."""
+             archive_path = build_flow_zip(sid, root=root, cap_bytes=cap_override)
+             self.assertLessEqual(archive_path.stat().st_size, cap_override)
  
-         return self._contexts.get(sid)
+             with ZipFile(archive_path) as zf:
+                 manifest = json.loads(zf.read(_MANIFEST).decode("utf-8"))
+                 self.assertTrue(manifest.get("truncated"))
+                 self.assertEqual(manifest.get("cap_bytes"), cap_override)
+                 dropped = manifest.get("dropped", {})
+                 self.assertGreaterEqual(dropped.get("vendor_debug", 0), 1)
+                 self.assertGreaterEqual(dropped.get("partials", 0), 1)
+                 self.assertGreater(dropped.get("events_tail", 0), 0)
  
-     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
-         detail = f"missing required subprotocol '{CHAT_V2_SUBPROTOCOL}'"
-         body = json.dumps(
-             {
-                 "type": "error",
-                 "code": "bad_subprotocol",
-                 "detail": detail,
-             }
-         ).encode("utf-8")
-         headers = [
+                 redacted_lines = [json.loads(line) for line in zf.read(_EVENTS_REDACTED).decode("utf-8").strip().splitlines() if line]
+                 vendor_remaining = sum(1 for evt in redacted_lines if evt.get("type") == "EVT_VENDOR_DEBUG")
+                 partial_remaining = sum(1 for evt in redacted_lines if evt.get("type") == "EVT_ASR_PARTIAL")
+                 self.assertEqual(
+                     vendor_remaining,
+                     len(vendor_events) - dropped.get("vendor_debug", 0),
+                 )
+                 self.assertEqual(
+                     partial_remaining,
+                     len(partial_events) - dropped.get("partials", 0),
+@@ -117,45 +145,52 @@ class BuildFlowZipPackagingTest(unittest.TestCase):
+ 
+     def _prepare_session(self, root: Path, sid: str) -> Path:
+         session_dir = root / sid
+         session_dir.mkdir(parents=True, exist_ok=True)
+         manifest = {
+             "sid": sid,
+             "schema_version": "1",
+             "started_ms": 1_732_200_000_000,
+             "open": False,
+             "events_written": 0,
+             "by_type": {},
+         }
+         (session_dir / "manifest.json").write_text(
+             json.dumps(manifest, separators=(",", ":"), ensure_ascii=False),
+             encoding="utf-8",
+         )
+         return session_dir
+ 
+     def _write_events(self, session_dir: Path, events: list[dict]) -> None:
+         events_path = session_dir / "events.ndjson"
+         with events_path.open("w", encoding="utf-8") as handle:
+             for event in events:
+                 json.dump(event, handle, separators=(",", ":"), ensure_ascii=False)
+                 handle.write("\n")
+ 
++    def _write_logs(self, session_dir: Path, logs: list[dict]) -> None:
++        logs_path = session_dir / "logs.ndjson"
++        with logs_path.open("w", encoding="utf-8") as handle:
++            for entry in logs:
++                json.dump(entry, handle, separators=(",", ":"), ensure_ascii=False)
++                handle.write("\n")
++
+     def _sha256_bytes(self, payload: bytes) -> str:
+         import hashlib
+ 
+         return hashlib.sha256(payload).hexdigest()
+ 
+     def _blob(self, size: int) -> str:
+         return base64.b64encode(os.urandom(size)).decode("ascii")
+ 
+     def _make_event(self, event_type: str, sid: str, blob: str) -> dict:
+         return {
+             "type": event_type,
+             "sid": sid,
+             "ts_ms": 1000,
+             "meta": {"hint": "ok"},
+             "payload": {"blob": blob},
+         }
+ 
+ 
+ if __name__ == "__main__":
+     unittest.main()

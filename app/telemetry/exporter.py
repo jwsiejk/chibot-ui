@@ -25,6 +25,7 @@ class _SessionStats:
     directory: Path
     events_path: Path
     manifest_path: Path
+    logs_path: Path
     events_written: int = 0
     by_type: Dict[str, int] = field(default_factory=dict)
     started_ms: Optional[int] = None
@@ -53,11 +54,13 @@ class FileExporter:
             directory=session_dir,
             events_path=session_dir / "events.ndjson",
             manifest_path=session_dir / "manifest.json",
+            logs_path=session_dir / "logs.ndjson",
             started_ms=_now_ms(),
         )
 
         # Reset the NDJSON log for the session.
         stats.events_path.write_text("", encoding="utf-8")
+        stats.logs_path.write_text("", encoding="utf-8")
 
         def _callback(event: Dict[str, Any]) -> None:
             if event.get("sid") != sid:
@@ -123,6 +126,16 @@ class FileExporter:
         event_type = event.get("type")
         if isinstance(event_type, str) and event_type:
             stats.by_type[event_type] = stats.by_type.get(event_type, 0) + 1
+
+            if event_type == "EVT_LOG":
+                log_entry: Dict[str, Any]
+                if isinstance(event, dict):
+                    log_entry = dict(event)
+                else:
+                    log_entry = {"type": event_type}
+                with stats.logs_path.open("a", encoding="utf-8") as log_handle:
+                    json.dump(log_entry, log_handle, separators=(",", ":"), ensure_ascii=False)
+                    log_handle.write("\n")
 
         ts_ms = event.get("ts_ms")
         if isinstance(ts_ms, int):
