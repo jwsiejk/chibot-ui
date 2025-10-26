@@ -1,69 +1,1368 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index b88c8368be22a14c5a5fff5c1beb1eeb6696b200..2ad03da31f6f56fc865793e1f2e65a4444346c25 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -625,61 +625,57 @@
-       if (!urlOverride && typeof options.url === "string" && options.url.trim()) {
-         urlOverride = options.url.trim();
-       }
-       if (protocols === undefined && options.protocols !== undefined) {
-         protocols = options.protocols;
-       }
-     }
+diff --git a/app/admin/flow_api.py b/app/admin/flow_api.py
+index f321b88676f1c6e2c671ccec80f63016cadc19f4..eb27bfd37bd9c51822dc77dbbc3cdf35a8d51682 100644
+--- a/app/admin/flow_api.py
++++ b/app/admin/flow_api.py
+@@ -1,111 +1,211 @@
+ """Admin HTTP endpoints exposing flow trace streams and ZIP archives."""
  
-     if (socket) {
-       cleanupSocket(socket, "superseded");
-     }
-     expectInfoFrame = true;
-     startInfoWatchdog();
-     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
-       try {
-         window.WSErrorUI.cancelRateLimitCountdown("manual");
-       } catch (err) {
-         console.warn("Failed to cancel rate limit countdown", err);
-       }
-     }
-     if (!skipRateLimitCancel) {
-       clearRateLimitRetryTimer();
-       rateLimitRetryCount = 0;
-     }
+ from __future__ import annotations
  
--    const url = urlOverride || computeUrl(resumeTokenValue);
--    const finalUrl = typeof url === "string" ? makeWsUrl(url) : url;
--    const wsUrl = typeof finalUrl === "string" ? finalUrl : url;
+ import json
++from dataclasses import dataclass
+ from io import BytesIO
+ from pathlib import Path
+-from typing import Awaitable, Callable, Dict, Optional
++from typing import Awaitable, Callable, Dict, List, Optional
+ from urllib.parse import parse_qs
+ 
+ from app.admin.flow_zip import build_flow_zip
+ 
+ 
+ EXPORT_ROOT = Path("exports")
+ _EVENTS_FILENAME = "events.ndjson"
+ _ARCHIVE_FILENAME = "flow.zip"
+ _CONTENT_TYPE_NDJSON = b"application/x-ndjson"
+ _CONTENT_TYPE_ZIP = b"application/zip"
+ 
+ 
++@dataclass(frozen=True)
++class Response:
++    status: int
++    body: bytes
++    headers: tuple[tuple[bytes, bytes], ...]
++
++
++def json_response(*, status: int = 200, **payload: object) -> Response:
++    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
++    headers = (
++        (b"content-type", b"application/json; charset=utf-8"),
++        (b"content-length", str(len(body)).encode("ascii")),
++    )
++    return Response(status=status, body=body, headers=headers)
++
++
+ async def handle_flow_trace(
+     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
+ ):
+     """Stream filtered redacted events for the given session identifier."""
+ 
+-    from app.asgi_gateway import Response, json_response  # local import to avoid cycles
 -
--    const url = urlOverride || computeUrl(resumeTokenValue);
--    const wsUrl = typeof url === "string" ? makeWsUrl(url) : url;  
-+    const originalUrl = urlOverride || computeUrl(resumeTokenValue);
-+    const wsUrl = typeof originalUrl === "string" ? makeWsUrl(originalUrl) : originalUrl;
-     // Require a token unless we are resuming with a server-issued resume token
-     const isResuming = Boolean(resumeTokenValue);
-     const hasAccessToken = (typeof wsUrl === "string") && /[?&]access_token=/.test(wsUrl);
-     if (!isResuming && !hasAccessToken) {
--      console.error("ws_open_missing_token_query", { originalUrl: url, finalUrl: wsUrl });
-+      console.error("ws_open_missing_token_query", { originalUrl, finalUrl: wsUrl });
-       showConnectionToast("Session token missing. Please click Start again.");
-       updateState({ connectionState: "disconnected" });
+     if _method(scope) != "GET":
+         await _drain_body(receive)
+         return json_response(status=405, error="method_not_allowed")
+ 
+     await _drain_body(receive)
+ 
+     try:
+         requested_types, since_ms, limit = _parse_trace_filters(scope.get("query_string", b""))
+     except ValueError as exc:
+         return json_response(status=400, error="invalid_query", detail=str(exc))
+ 
+     events_path = EXPORT_ROOT / sid / _EVENTS_FILENAME
+     if not events_path.is_file():
+         return json_response(status=404, error="not_found")
+ 
+     try:
+         body_bytes = _filter_events(events_path, requested_types, since_ms, limit)
+     except ValueError as exc:
+         return json_response(status=400, error="invalid_event", detail=str(exc))
+ 
+     headers = (
+         (b"content-type", _CONTENT_TYPE_NDJSON),
+         (b"content-length", str(len(body_bytes)).encode("ascii")),
+     )
+     return Response(status=200, body=body_bytes, headers=headers)
+ 
+ 
+ async def handle_flow_zip(
+     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
+ ):
+     """Return the packaged flow.zip archive for the requested session."""
+ 
+-    from app.asgi_gateway import Response, json_response  # local import to avoid cycles
+-
+     if _method(scope) != "GET":
+         await _drain_body(receive)
+         return json_response(status=405, error="method_not_allowed")
+ 
+     await _drain_body(receive)
+ 
+     session_dir = EXPORT_ROOT / sid
+     if not session_dir.exists():
+         return json_response(status=404, error="not_found")
+ 
+     archive_path = session_dir / _ARCHIVE_FILENAME
+     if not archive_path.is_file():
+         try:
+             archive_path = build_flow_zip(sid, root=EXPORT_ROOT)
+         except FileNotFoundError:
+             return json_response(status=404, error="not_found")
+ 
+     archive_bytes = archive_path.read_bytes()
+     headers = (
+         (b"content-type", _CONTENT_TYPE_ZIP),
+         (b"content-length", str(len(archive_bytes)).encode("ascii")),
+     )
+     return Response(status=200, body=archive_bytes, headers=headers)
+ 
+ 
++async def handle_flow_sessions(
++    scope: dict, receive: Callable[[], Awaitable[dict]]
++):
++    """Enumerate flow sessions by inspecting export manifests."""
++
++    if _method(scope) != "GET":
++        await _drain_body(receive)
++        return json_response(status=405, error="method_not_allowed")
++
++    await _drain_body(receive)
++
++    qs = scope.get("query_string") or b""
++    try:
++        parsed = parse_qs(qs.decode("latin1", "ignore"))
++    except Exception:
++        parsed = {}
++
++    def _truthy(value: Optional[str]) -> bool:
++        if not value:
++            return False
++        lowered = value.strip().lower()
++        return lowered in {"1", "true", "yes", "y", "on"}
++
++    open_only = _truthy((parsed.get("open") or [None])[0])
++    prefix = (parsed.get("prefix") or [None])[0]
++    if prefix:
++        prefix = prefix.strip() or None
++
++    limit = 50
++    raw_limit = (parsed.get("limit") or [None])[0]
++    if raw_limit:
++        try:
++            limit = max(1, min(500, int(raw_limit)))
++        except Exception:
++            limit = 50
++
++    sessions: List[Dict] = []
++    try:
++        if EXPORT_ROOT.exists():
++            for entry in EXPORT_ROOT.iterdir():
++                if not entry.is_dir():
++                    continue
++                sid = entry.name
++                if prefix and not sid.startswith(prefix):
++                    continue
++
++                manifest_path = entry / "manifest.json"
++                if not manifest_path.exists():
++                    continue
++
++                try:
++                    manifest = json.loads(manifest_path.read_text("utf-8"))
++                except Exception:
++                    continue
++
++                is_open = bool(manifest.get("open", False))
++                if open_only and not is_open:
++                    continue
++
++                sessions.append(
++                    {
++                        "sid": manifest.get("sid", sid),
++                        "open": is_open,
++                        "started_ms": manifest.get("started_ms"),
++                        "ended_ms": manifest.get("ended_ms"),
++                        "events_written": manifest.get("events_written", 0),
++                        "by_type": manifest.get("by_type") or {},
++                    }
++                )
++    except Exception:
++        sessions = []
++
++    def _sort_key(item: Dict):
++        ts_value = item.get("ended_ms") or item.get("started_ms") or 0
++        try:
++            ts_int = int(ts_value)
++        except Exception:
++            ts_int = 0
++        return (not item.get("open", False), -ts_int)
++
++    sessions.sort(key=_sort_key)
++    if limit:
++        sessions = sessions[:limit]
++
++    return json_response(ok=True, count=len(sessions), sessions=sessions)
++
++
+ def _method(scope: dict) -> str:
+     return scope.get("method", "GET").upper()
+ 
+ 
+ async def _drain_body(receive: Callable[[], Awaitable[dict]]) -> None:
+     while True:
+         message = await receive()
+         if message.get("type") != "http.request":
+             break
+         if not message.get("more_body", False):
+             break
+ 
+ 
+ def _parse_trace_filters(query: bytes) -> tuple[Optional[set[str]], Optional[int], Optional[int]]:
+     qs = query.decode("utf-8", errors="ignore")
+     parsed = parse_qs(qs, keep_blank_values=False)
+ 
+     requested_types: Optional[set[str]] = None
+     if "type" in parsed and parsed["type"]:
+         types_raw = parsed["type"][0].split(",")
+         requested_types = {value for value in (t.strip() for t in types_raw) if value}
+         if not requested_types:
+             requested_types = None
+ 
+     since_ms: Optional[int] = None
+@@ -150,26 +250,26 @@ def _filter_events(
+                 continue
+ 
+             try:
+                 event = json.loads(stripped)
+             except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+                 raise ValueError("event payload must be valid JSON") from exc
+ 
+             if requested_types and event.get("type") not in requested_types:
+                 continue
+ 
+             if since_ms is not None:
+                 ts_value = event.get("ts_ms")
+                 if not isinstance(ts_value, int):
+                     continue
+                 if ts_value < since_ms:
+                     continue
+ 
+             matched.write(stripped.encode("utf-8"))
+             matched.write(b"\n")
+             if remaining is not None:
+                 remaining -= 1
+ 
+     return matched.getvalue()
+ 
+ 
+-__all__ = ["handle_flow_trace", "handle_flow_zip"]
++__all__ = ["handle_flow_trace", "handle_flow_zip", "handle_flow_sessions"]
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index 75a4ad5685426f125300c4d4d0cf8d4359c0a101..77c70d5f8c8d2ef84228c88ec8a75fa9de279d75 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -1,42 +1,44 @@
+ """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
+ from __future__ import annotations
+ 
+ import hashlib
+ import json
+ import logging
+ import mimetypes
+ import os
+ import time
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from functools import partial
+ from pathlib import Path
+ from tempfile import NamedTemporaryFile
+ from typing import Any, Awaitable, Callable, Dict, Optional
++from urllib.parse import parse_qs
+ 
+ from app import config
++from app.admin.flow_api import handle_flow_sessions, handle_flow_trace, handle_flow_zip
+ from app.auth.http_handlers import (
+     get_me,
+     post_login,
+     post_profile,
+     post_ws_token,
+     _session_email as _auth_session_email,
+     _is_admin as _auth_is_admin,
+ )
+ from app.db import neon
+ from app.logging_config import configure_logging
+ from app.telemetry import bus as telemetry_bus
+ from app.telemetry.exporter import FileExporter
+ from app.versioning import get_build_id, inject_static_version
+ from app.voice_v2.asr_runtime import ASRRuntime
+ from app.voice_v2.engine import EngineV2
+ from app.voice_v2.tts_runtime import TTSRuntime
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+ from app.services.streaming_asr.deepgram_client import DeepgramClient
+ 
+ 
+ configure_logging()
+ 
+ logging.getLogger("app.ws.adapter").setLevel(logging.INFO)
+ logging.getLogger("app.security.jwt").setLevel(logging.INFO)
+ logging.getLogger("app.auth.http").setLevel(logging.INFO)
+@@ -61,50 +63,54 @@ class Response:
+ 
+ def json_response(*, status: int = 200, **payload: Any) -> Response:
+     """Serialize a payload to JSON using a compact representation."""
+ 
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
+     )
+     return Response(status=status, body=body, headers=headers)
+ 
+ 
+ WS_ROUTE = "/ws/v2/chat"
+ HEALTH_ROUTE = "/api/v1/health"
+ LIVE_ROUTE = "/api/v1/live"
+ READY_ROUTE = "/api/v1/ready"
+ INFO_ROUTE = "/api/v1/info"
+ WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
+ LOGIN_ROUTE = "/api/v1/auth/login"
+ ME_ROUTE = "/api/v1/auth/me"
+ PROFILE_ROUTE = "/api/v1/auth/profile"
+ ROOT_ROUTE = "/"
+ ADMIN_LOGS_ROUTE = "/admin/logs"
+ FAVICON_ROUTE = "/favicon.ico"
+ STATIC_ROUTE_PREFIX = "/static/"
++ADMIN_FLOW_ROUTE_PREFIX = "/api/v1/admin/flow"
++ADMIN_FLOW_TRACE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/trace"
++ADMIN_FLOW_ZIP_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/zip"
++ADMIN_FLOW_SESSIONS_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/sessions"
+ EXPORT_ROOT = Path("exports")
+ BASE_DIR = Path(__file__).resolve().parent
+ STATIC_ROOT = BASE_DIR / "static"
+ TEMPLATES_ROOT = BASE_DIR / "templates"
+ INDEX_PATH = TEMPLATES_ROOT / "index.html"
+ ADMIN_LOGS_PATH = TEMPLATES_ROOT / "admin_logs.html"
+ FAVICON_PATH = STATIC_ROOT / "favicon.ico"
+ _DEFAULT_INDEX_HTML = (
+     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
+ )
+ _DEFAULT_ADMIN_HTML = (
+     "<!doctype html><title>Admin Logs</title><div id='admin-logs'></div>".encode("utf-8")
+ )
+ 
+ 
+ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
+ 
+ _adapter: Optional[ChatV2Adapter] = None
+ _lifespan_started = False
+ 
+ 
+ def _ws_route_matches(scope: dict, expected: str) -> bool:
+     """
+     Return True when the incoming websocket request targets the expected route,
+     robust to deployments mounted under a non-empty ASGI root_path.
+@@ -130,50 +136,52 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
+         # Keep formatting consistent with this module's logging style
+         logger.info(
+             "evt=ws_entry path=%s type=%s subs=%s query=%s root_path=%s",
+             scope.get("path"), scope.get("type"),
+             scope.get("subprotocols"), scope.get("query_string"),
+             scope.get("root_path"),
+         )
+     """Dispatch incoming ASGI scopes to HTTP handlers or the chat adapter."""
+     scope_type = scope.get("type")
+     path = (scope.get("root_path") or "") + scope.get("path", "")
+ 
+     if scope_type == "lifespan":
+         await _handle_lifespan(receive, send)
+         return
+ 
+     if scope_type == "websocket":
+         if _ws_route_matches(scope, WS_ROUTE):
+             # Origin checks removed — accept and hand off to adapter
+             await _get_adapter()(scope, receive, send)
+         else:
+             await _reject_websocket(receive, send)
+         return
+ 
+     if scope_type == "http":
+         handler = _HTTP_ROUTES.get(path)
++        if handler is None:
++            handler = _match_admin_flow_route(path)
+         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
+             handler = partial(_handle_static, raw_path=path)
+         if handler is None:
+             await _drain_request_body(receive)
+             await _send_response(send, json_response(status=404, error="not_found"))
+         else:
+             response = await handler(scope, receive)
+             await _send_response(send, response)
+         return
+ 
+     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
+ 
+ 
+ async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Return a static JSON document for health checks."""
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+         return json_response(status=405, error="method_not_allowed")
+ 
+     await _drain_request_body(receive)
+     return json_response(ok=True, engine="v2", ws_subprotocol=CHAT_V2_SUBPROTOCOL)
+ 
+ 
+ async def _handle_live(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Expose a lightweight pulse indicating the event loop is responsive."""
+@@ -268,50 +276,145 @@ async def _handle_admin_logs(scope: dict, receive: Callable[[], Awaitable[dict]]
+ 
+     if not authenticated:
+         await _drain_request_body(receive)
+         return _redirect_response(ROOT_ROUTE)
+ 
+     if not is_admin:
+         await _drain_request_body(receive)
+         return _forbidden_response()
+ 
+     await _drain_request_body(receive)
+     raw_html = _load_admin_logs_html()
+     try:
+         html_text = raw_html.decode("utf-8")
+     except UnicodeDecodeError:
+         html_text = raw_html.decode("utf-8", errors="replace")
+ 
+     rewritten = inject_static_version(html_text)
+     context_payload = {"isAdmin": is_admin, "userEmail": email}
+     context_json = _serialize_context(context_payload)
+     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
+     body = rewritten.encode("utf-8")
+     build_id = get_build_id()
+     return _html_response(body, build_id=build_id)
+ 
+ 
++async def _handle_admin_flow_sessions(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
++    rejection = await _require_admin_api(scope, receive)
++    if rejection is not None:
++        return rejection
++    return await handle_flow_sessions(scope, receive)
++
++
++async def _handle_admin_flow_trace_query(
++    scope: dict, receive: Callable[[], Awaitable[dict]]
++) -> Response:
++    sid = _get_query_argument(scope, "sid")
++    if not sid:
++        await _drain_request_body(receive)
++        return json_response(status=400, error="missing_sid")
++    return await _handle_admin_flow_trace(scope, receive, sid=sid)
++
++
++async def _handle_admin_flow_zip_query(
++    scope: dict, receive: Callable[[], Awaitable[dict]]
++) -> Response:
++    sid = _get_query_argument(scope, "sid")
++    if not sid:
++        await _drain_request_body(receive)
++        return json_response(status=400, error="missing_sid")
++    return await _handle_admin_flow_zip(scope, receive, sid=sid)
++
++
++async def _handle_admin_flow_trace(
++    scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
++) -> Response:
++    rejection = await _require_admin_api(scope, receive)
++    if rejection is not None:
++        return rejection
++    return await handle_flow_trace(scope, receive, sid=sid)
++
++
++async def _handle_admin_flow_zip(
++    scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
++) -> Response:
++    rejection = await _require_admin_api(scope, receive)
++    if rejection is not None:
++        return rejection
++    return await handle_flow_zip(scope, receive, sid=sid)
++
++
++def _get_query_argument(scope: dict, key: str) -> Optional[str]:
++    query = scope.get("query_string") or b""
++    try:
++        parsed = parse_qs(query.decode("latin1", "ignore"))
++    except Exception:
++        return None
++    values = parsed.get(key)
++    if not values:
++        return None
++    value = values[0].strip()
++    return value or None
++
++
++async def _require_admin_api(
++    scope: dict, receive: Callable[[], Awaitable[dict]]
++) -> Optional[Response]:
++    authenticated, is_admin, _ = await _resolve_request_identity(scope)
++    if not authenticated:
++        await _drain_request_body(receive)
++        return json_response(status=401, error="unauthorized")
++    if not is_admin:
++        await _drain_request_body(receive)
++        return json_response(status=403, error="forbidden")
++    return None
++
++
++def _match_admin_flow_route(path: str) -> Optional[HttpHandler]:
++    if not path.startswith(ADMIN_FLOW_ROUTE_PREFIX + "/"):
++        return None
++
++    remainder = path[len(ADMIN_FLOW_ROUTE_PREFIX) + 1 :]
++    if not remainder:
++        return None
++
++    parts = remainder.split("/")
++    if len(parts) != 2:
++        return None
++
++    sid, action = parts
++    if not sid or not action:
++        return None
++
++    if action == "trace":
++        return partial(_handle_admin_flow_trace, sid=sid)
++    if action == "zip":
++        return partial(_handle_admin_flow_zip, sid=sid)
++
++    return None
++
++
+ async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Serve the site favicon when available."""
+ 
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+         return json_response(status=405, error="method_not_allowed")
+ 
+     await _drain_request_body(receive)
+     if_none_match = _get_request_header(scope, b"if-none-match")
+     response = _build_static_response(FAVICON_PATH, if_none_match=if_none_match)
+     if response is None:
+         headers = ((b"content-length", b"0"),)
+         return Response(status=204, body=b"", headers=headers)
+     return response
+ 
+ 
+ async def _handle_static(
+     scope: dict,
+     receive: Callable[[], Awaitable[dict]],
+     *,
+     raw_path: str,
+ ) -> Response:
+     """Serve files from the bundled static asset directory."""
+ 
+     if not _method_is_get(scope):
+@@ -528,50 +631,53 @@ def _get_adapter() -> ChatV2Adapter:
+     global _adapter
+     if _adapter is None:
+         exporter = FileExporter(EXPORT_ROOT)
+         engine = EngineV2(exporter=exporter)
+         tts_runtime = TTSRuntime(engine=engine)
+         asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
+         asr_runtime = ASRRuntime(engine=engine, client=asr_client)
+         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
+         _adapter.tts_runtime = tts_runtime
+         _adapter.asr_runtime = asr_runtime
+     return _adapter
+ 
+ 
+ _HTTP_ROUTES: Dict[str, HttpHandler] = {
+     ROOT_ROUTE: _handle_index,
+     ADMIN_LOGS_ROUTE: _handle_admin_logs,
+     FAVICON_ROUTE: _handle_favicon,
+     HEALTH_ROUTE: _handle_health,
+     LIVE_ROUTE: _handle_live,
+     READY_ROUTE: _handle_ready,
+     INFO_ROUTE: _handle_info,
+     WS_TOKEN_ROUTE: post_ws_token,
+     LOGIN_ROUTE: post_login,
+     ME_ROUTE: get_me,
+     PROFILE_ROUTE: post_profile,
++    ADMIN_FLOW_TRACE_ROUTE: _handle_admin_flow_trace_query,
++    ADMIN_FLOW_ZIP_ROUTE: _handle_admin_flow_zip_query,
++    ADMIN_FLOW_SESSIONS_ROUTE: _handle_admin_flow_sessions,
+ }
+ 
+ 
+ asgi = app
+ 
+ __all__ = ["app", "asgi"]
+ 
+ 
+ def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
+     headers = scope.get("headers") or []
+     for name, value in headers:
+         if name == header_name:
+             try:
+                 return value.decode("latin1")
+             except UnicodeDecodeError:
+                 return value.decode("latin1", errors="ignore")
+     return None
+ 
+ 
+ async def _handle_lifespan(
+     receive: Callable[[], Awaitable[dict]],
+     send: Callable[[dict], Awaitable[None]],
+ ) -> None:
+     global _lifespan_started
+ 
+diff --git a/app/static/js/admin_logs.js b/app/static/js/admin_logs.js
+index 72fa28264b213fa9c05451f7bd4833ac8b776d56..f73d0d9abeb427e4447a344cc26ce009618ac39c 100644
+--- a/app/static/js/admin_logs.js
++++ b/app/static/js/admin_logs.js
+@@ -1,205 +1,510 @@
+ (function () {
+   'use strict';
+ 
+   function readAppContext() {
+     const el = document.getElementById('appContext');
+     if (!el) return {};
+     try {
+       const raw = el.textContent || el.innerText || '{}';
+       return JSON.parse(raw);
+     } catch (err) {
+       console.warn('Failed to parse app context', err);
+       return {};
+     }
+   }
+ 
+   const appContext = readAppContext();
+   const userEmail = typeof appContext.userEmail === 'string' ? appContext.userEmail : null;
+ 
++  const sessionSearchInput = document.getElementById('sessionSearchInput');
++  const sessionOpenOnly = document.getElementById('sessionOpenOnly');
++  const sessionRefreshBtn = document.getElementById('sessionRefreshBtn');
++  const sessionTableBody = document.getElementById('sessionTableBody');
++  const sessionStatus = document.getElementById('sessionStatus');
+   const sidInput = document.getElementById('sidInput');
+   const liveBtn = document.getElementById('liveBtn');
+   const historyBtn = document.getElementById('historyBtn');
+   const downloadBtn = document.getElementById('downloadBtn');
+   const typesAllBtn = document.getElementById('typesAllBtn');
+   const liveStatus = document.getElementById('liveStatus');
+   const liveOutput = document.getElementById('liveOutput');
+   const historyStatus = document.getElementById('historyStatus');
+   const historyTableBody = document.getElementById('historyTableBody');
+   const historyPrev = document.getElementById('historyPrev');
+   const historyNext = document.getElementById('historyNext');
+   const historyCount = document.getElementById('historyCount');
+   const liveTab = document.getElementById('liveTab');
+   const historyTab = document.getElementById('historyTab');
+   const livePanel = document.getElementById('livePanel');
+   const historyPanel = document.getElementById('historyPanel');
+   const userLabel = document.getElementById('adminUserLabel');
+   const drawer = document.getElementById('jsonDrawer');
+   const drawerContent = document.getElementById('jsonDrawerContent');
+   const drawerClose = document.getElementById('jsonDrawerClose');
+   const drawerBackdrop = document.getElementById('jsonDrawerBackdrop');
+ 
+   if (userLabel) {
+     if (userEmail) {
+       userLabel.textContent = `Signed in as ${userEmail}`;
+     } else {
+       userLabel.textContent = '';
+       userLabel.setAttribute('aria-hidden', 'true');
+       userLabel.style.display = 'none';
+     }
+   }
+ 
+   const typeCheckboxes = Array.from(document.querySelectorAll('input[name="logType"]'));
+ 
++  function isLiveActive() {
++    return Boolean(liveState.source || liveState.pollTimer);
++  }
++
++  function setSessionStatus(message) {
++    if (sessionStatus) {
++      sessionStatus.textContent = message;
++    }
++  }
++
++  function formatTimestamp(value) {
++    if (typeof value !== 'number' || !Number.isFinite(value)) {
++      return '—';
++    }
++    try {
++      return new Date(value).toISOString();
++    } catch (err) {
++      return String(value);
++    }
++  }
++
+   const liveState = {
+     source: null,
+     lines: [],
+     limit: 500,
++    pollTimer: null,
++    sinceMs: null,
++    sid: null,
++  };
++
++  const LIVE_POLL_INTERVAL_MS = 3000;
++  const LIVE_POLL_ERROR_INTERVAL_MS = 8000;
++
++  const sessionState = {
++    loading: false,
++    prefix: '',
++    openOnly: false,
++    sessions: [],
++    debounceId: null,
+   };
+ 
+   const historyState = {
+     offset: 0,
+     limit: 50,
+     sid: null,
+     events: [],
+     hasMore: false,
+     loading: false,
+   };
+ 
+   function selectedTypes() {
+     return typeCheckboxes
+       .filter((checkbox) => checkbox.checked)
+       .map((checkbox) => checkbox.value)
+       .filter(Boolean);
+   }
+ 
+   function syncTypesAllButton() {
+     const allSelected = typeCheckboxes.every((checkbox) => checkbox.checked);
+     typesAllBtn.classList.toggle('is-active', allSelected);
+     typesAllBtn.setAttribute('aria-pressed', String(allSelected));
+   }
+ 
+   function ensureSid(context) {
+     const value = (sidInput.value || '').trim();
+     if (!value) {
+       sidInput.focus({ preventScroll: false });
+       if (context === 'live') {
+         setLiveStatus('Enter a session id to start live tailing.');
+       } else if (context === 'history') {
+         setHistoryStatus('Enter a session id to load history.');
+       }
+       return null;
+     }
+     return value;
+   }
+ 
+   function buildTypesQuery(params) {
+     const types = selectedTypes();
+     if (types.length) {
+       params.set('type', types.join(','));
+     }
+   }
+ 
++  function renderSessions(sessions) {
++    if (!sessionTableBody) {
++      return;
++    }
++
++    sessionTableBody.innerHTML = '';
++    sessionState.sessions = sessions;
++
++    if (!sessions.length) {
++      const emptyRow = document.createElement('tr');
++      const cell = document.createElement('td');
++      cell.colSpan = 6;
++      cell.className = 'admin-logs__empty';
++      cell.textContent = 'No sessions found.';
++      emptyRow.appendChild(cell);
++      sessionTableBody.appendChild(emptyRow);
++      return;
++    }
++
++    const fragment = document.createDocumentFragment();
++    sessions.forEach((session) => {
++      const row = document.createElement('tr');
++      const sidValue = typeof session.sid === 'string' ? session.sid : '';
++      row.dataset.sid = sidValue;
++      row.tabIndex = 0;
++
++      const sidCell = document.createElement('td');
++      sidCell.textContent = sidValue || '—';
++
++      const statusCell = document.createElement('td');
++      statusCell.textContent = session.open ? 'Open' : 'Closed';
++
++      const startedCell = document.createElement('td');
++      startedCell.textContent = formatTimestamp(session.started_ms);
++
++      const updatedValue =
++        typeof session.ended_ms === 'number' && Number.isFinite(session.ended_ms)
++          ? session.ended_ms
++          : session.started_ms;
++      const updatedCell = document.createElement('td');
++      updatedCell.textContent = formatTimestamp(updatedValue);
++
++      const eventsCell = document.createElement('td');
++      const eventsWritten =
++        typeof session.events_written === 'number' && Number.isFinite(session.events_written)
++          ? session.events_written
++          : 0;
++      eventsCell.textContent = String(eventsWritten);
++
++      const actionCell = document.createElement('td');
++      const pickButton = document.createElement('button');
++      pickButton.type = 'button';
++      pickButton.className = 'pill secondary';
++      pickButton.dataset.action = 'pick';
++      pickButton.textContent = 'Pick';
++      actionCell.appendChild(pickButton);
++
++      const byType = session.by_type && typeof session.by_type === 'object' ? session.by_type : null;
++      if (byType) {
++        try {
++          const summary = Object.entries(byType)
++            .filter((entry) => entry && entry.length === 2)
++            .map(([key, value]) => `${key}:${value}`)
++            .join(' ');
++          if (summary) {
++            row.title = summary;
++          }
++        } catch (err) {
++          // ignore summary rendering errors
++        }
++      }
++
++      row.appendChild(sidCell);
++      row.appendChild(statusCell);
++      row.appendChild(startedCell);
++      row.appendChild(updatedCell);
++      row.appendChild(eventsCell);
++      row.appendChild(actionCell);
++      fragment.appendChild(row);
++    });
++
++    sessionTableBody.appendChild(fragment);
++  }
++
++  function scheduleSessionLoad(delay) {
++    if (sessionState.debounceId !== null) {
++      clearTimeout(sessionState.debounceId);
++    }
++    const wait = typeof delay === 'number' && delay >= 0 ? delay : 200;
++    sessionState.debounceId = window.setTimeout(() => {
++      sessionState.debounceId = null;
++      loadSessions();
++    }, wait);
++  }
++
++  async function loadSessions() {
++    if (!sessionTableBody || sessionState.loading) {
++      return;
++    }
++
++    sessionState.loading = true;
++    setSessionStatus('Loading sessions…');
++
++    const url = new URL('/api/v1/admin/flow/sessions', window.location.origin);
++    const trimmedPrefix = sessionState.prefix.trim();
++    if (trimmedPrefix) {
++      url.searchParams.set('prefix', trimmedPrefix);
++    }
++    if (sessionState.openOnly) {
++      url.searchParams.set('open', '1');
++    }
++
++    try {
++      const response = await fetch(url.toString(), {
++        headers: {
++          accept: 'application/json',
++        },
++      });
++
++      if (!response.ok) {
++        renderSessions([]);
++        setSessionStatus(`Failed to load sessions (${response.status}).`);
++        return;
++      }
++
++      const data = await response.json();
++      const sessions = Array.isArray(data.sessions) ? data.sessions : [];
++      renderSessions(sessions);
++
++      if (!sessions.length) {
++        setSessionStatus('No sessions found.');
++      } else {
++        const reportedCount = typeof data.count === 'number' ? data.count : sessions.length;
++        const sameCount = reportedCount === sessions.length;
++        const countLabel = sameCount
++          ? `${sessions.length}`
++          : `${sessions.length} of ${reportedCount}`;
++        const plural = sessions.length === 1 ? '' : 's';
++        setSessionStatus(`Showing ${countLabel} session${plural}.`);
++      }
++    } catch (err) {
++      console.error('Failed to load sessions', err);
++      renderSessions([]);
++      setSessionStatus('Unable to load sessions.');
++    } finally {
++      sessionState.loading = false;
++    }
++  }
++
++  function selectSessionId(sid) {
++    if (!sid || !sidInput) {
++      return;
++    }
++    sidInput.value = sid;
++    sidInput.focus({ preventScroll: false });
++  }
++
+   function setLiveStatus(message) {
+     if (liveStatus) {
+       liveStatus.textContent = message;
+     }
+   }
+ 
+   function setHistoryStatus(message) {
+     if (historyStatus) {
+       historyStatus.textContent = message;
+     }
+   }
+ 
+-  function stopLive() {
++  function closeLiveSource() {
+     if (liveState.source) {
+-      liveState.source.close();
++      try {
++        liveState.source.close();
++      } catch (err) {
++        // ignore close errors
++      }
+       liveState.source = null;
+     }
++  }
++
++  function stopLive() {
++    closeLiveSource();
++    if (liveState.pollTimer !== null) {
++      clearTimeout(liveState.pollTimer);
++      liveState.pollTimer = null;
++    }
++    liveState.sid = null;
++    liveState.sinceMs = null;
+     liveBtn.textContent = 'Live Tail';
+     liveBtn.classList.remove('end');
+     liveBtn.classList.add('start');
+   }
+ 
+   function appendLiveLine(rawLine) {
+     if (typeof rawLine !== 'string' || !rawLine.trim()) {
+       return;
+     }
+     let display = rawLine.trim();
++    let parsed = null;
+     try {
+-      const parsed = JSON.parse(display);
++      parsed = JSON.parse(display);
+       display = JSON.stringify(parsed, null, 2);
+     } catch (err) {
+       // leave as-is
++      parsed = null;
++    }
++
++    if (parsed && typeof parsed.ts_ms === 'number' && Number.isFinite(parsed.ts_ms)) {
++      const nextSince = parsed.ts_ms + 1;
++      if (liveState.sinceMs === null || nextSince > liveState.sinceMs) {
++        liveState.sinceMs = nextSince;
++      }
+     }
+     liveState.lines.push(display);
+     if (liveState.lines.length > liveState.limit) {
+       liveState.lines.splice(0, liveState.lines.length - liveState.limit);
+     }
+     liveOutput.textContent = liveState.lines.join('\n\n');
+     liveOutput.scrollTop = liveOutput.scrollHeight;
+   }
+ 
++  function scheduleLivePoll(delay) {
++    if (liveState.pollTimer !== null) {
++      clearTimeout(liveState.pollTimer);
++    }
++    const wait = typeof delay === 'number' && delay >= 0 ? delay : LIVE_POLL_INTERVAL_MS;
++    liveState.pollTimer = window.setTimeout(runLivePoll, wait);
++  }
++
++  function startLivePolling(initialDelay, announce = true) {
++    if (!liveState.sid) {
++      return;
++    }
++    if (announce) {
++      setLiveStatus('Live stream unavailable — polling for new events…');
++    }
++    scheduleLivePoll(typeof initialDelay === 'number' ? initialDelay : 0);
++  }
++
++  async function runLivePoll() {
++    liveState.pollTimer = null;
++    if (!liveState.sid) {
++      return;
++    }
++
++    const url = new URL('/api/v1/admin/flow/trace', window.location.origin);
++    url.searchParams.set('sid', liveState.sid);
++    if (liveState.sinceMs !== null) {
++      url.searchParams.set('since_ms', String(liveState.sinceMs));
++    }
++    url.searchParams.set('limit', '200');
++    buildTypesQuery(url.searchParams);
++
++    let nextDelay = LIVE_POLL_INTERVAL_MS;
++
++    try {
++      const response = await fetch(url.toString(), {
++        headers: {
++          accept: 'application/x-ndjson, application/json',
++        },
++      });
++
++      if (!response.ok) {
++        if (response.status === 404) {
++          setLiveStatus('Session not found.');
++          stopLive();
++          return;
++        }
++        setLiveStatus(`Polling failed (${response.status}).`);
++        nextDelay = LIVE_POLL_ERROR_INTERVAL_MS;
++      } else {
++        const body = await response.text();
++        const events = parseNdjson(body);
++        if (events.length) {
++          events.forEach((event) => {
++            try {
++              appendLiveLine(JSON.stringify(event));
++            } catch (err) {
++              appendLiveLine(String(event));
++            }
++          });
++          setLiveStatus('Polling for events…');
++        } else {
++          setLiveStatus('Polling for new events…');
++        }
++      }
++    } catch (err) {
++      console.error('Failed to poll live events', err);
++      setLiveStatus('Polling failed. Retrying…');
++      nextDelay = LIVE_POLL_ERROR_INTERVAL_MS;
++    } finally {
++      if (liveState.sid) {
++        scheduleLivePoll(nextDelay);
++      }
++    }
++  }
++
+   function startLive() {
+     const sid = ensureSid('live');
+     if (!sid) {
        return;
      }
  
-     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
-     console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
-     const logPayload = Array.isArray(wsProtocols)
-       ? { url: wsUrl, protocols: wsProtocols }
-       : { url: wsUrl, subprotocol: wsProtocols };
-     console.log("WS opening", logPayload);
+     stopLive();
+     liveState.lines = [];
+     liveOutput.textContent = '';
+     setLiveStatus('Connecting…');
  
-     const tokenInfo = trackTokenFromUrl(wsUrl);
-     const ws = transportFactory(wsUrl, wsProtocols);
-     ws.__accessTokenInfo = tokenInfo;
-     ws.__handshakeToastShown = false;
+     const url = new URL('/api/v1/admin/flow/live', window.location.origin);
+     url.searchParams.set('sid', sid);
+     buildTypesQuery(url.searchParams);
  
-     ws.onopen = () => {
-       // Lightweight breadcrumb; keep as console.log
-       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
-     };
++    liveState.sid = sid;
++    liveState.sinceMs = null;
++
++    liveBtn.textContent = 'Stop Live';
++    liveBtn.classList.remove('start');
++    liveBtn.classList.add('end');
++
++    if (typeof window.EventSource !== 'function') {
++      startLivePolling(0);
++      return;
++    }
++
+     try {
+       const source = new EventSource(url.toString());
+       liveState.source = source;
+-      liveBtn.textContent = 'Stop Live';
+-      liveBtn.classList.remove('start');
+-      liveBtn.classList.add('end');
  
-     ws.onerror = (e) => {
-       console.error("WebSocket error", e, { readyState: ws.readyState });
-       maybeShowHandshakeToast(ws, null);
+       source.onopen = function () {
+         setLiveStatus('Streaming events…');
+       };
+ 
+       source.onmessage = function (event) {
+         appendLiveLine(event.data);
+       };
+ 
+       source.onerror = function () {
+-        setLiveStatus('Connection lost.');
+-        stopLive();
++        closeLiveSource();
++        startLivePolling(0);
+       };
+     } catch (err) {
+       console.error('Failed to open live stream', err);
+-      setLiveStatus('Unable to open live stream.');
+-      stopLive();
++      closeLiveSource();
++      startLivePolling(0);
+     }
+   }
+ 
+   function parseNdjson(text) {
+     const events = [];
+     for (const line of text.split('\n')) {
+       const trimmed = line.trim();
+       if (!trimmed) continue;
+       try {
+         events.push(JSON.parse(trimmed));
+       } catch (err) {
+         console.warn('Skipping invalid JSON line', err);
+       }
+     }
+     return events;
+   }
+ 
+   function renderHistory(events) {
+     historyTableBody.innerHTML = '';
+     historyState.events = events;
+ 
+     if (!events.length) {
+       const emptyRow = document.createElement('tr');
+       const cell = document.createElement('td');
+       cell.colSpan = 3;
+@@ -339,52 +644,99 @@
+     historyState.offset = Math.max(0, historyState.offset - historyState.limit);
+     loadHistory(false);
+   }
+ 
+   function goToNextPage() {
+     if (!historyState.hasMore) return;
+     historyState.offset += historyState.limit;
+     loadHistory(false);
+   }
+ 
+   function activateTab(target) {
+     if (target === 'history') {
+       historyTab.setAttribute('aria-selected', 'true');
+       liveTab.setAttribute('aria-selected', 'false');
+       historyPanel.hidden = false;
+       livePanel.hidden = true;
+       stopLive();
+     } else {
+       liveTab.setAttribute('aria-selected', 'true');
+       historyTab.setAttribute('aria-selected', 'false');
+       livePanel.hidden = false;
+       historyPanel.hidden = true;
+     }
+   }
+ 
++  if (sessionSearchInput) {
++    sessionState.prefix = sessionSearchInput.value.trim();
++    sessionSearchInput.addEventListener('input', () => {
++      sessionState.prefix = sessionSearchInput.value.trim();
++      scheduleSessionLoad();
++    });
++  }
++
++  if (sessionOpenOnly) {
++    sessionState.openOnly = sessionOpenOnly.checked;
++    sessionOpenOnly.addEventListener('change', () => {
++      sessionState.openOnly = sessionOpenOnly.checked;
++      loadSessions();
++    });
++  }
++
++  if (sessionRefreshBtn) {
++    sessionRefreshBtn.addEventListener('click', () => {
++      loadSessions();
++    });
++  }
++
++  if (sessionTableBody) {
++    sessionTableBody.addEventListener('click', (event) => {
++      const target = event.target;
++      if (!(target instanceof HTMLElement)) return;
++      const row = target.closest('tr');
++      if (!row) return;
++      const sid = row.dataset.sid;
++      if (!sid) return;
++      selectSessionId(sid);
++    });
++
++    sessionTableBody.addEventListener('keydown', (event) => {
++      const target = event.target;
++      if (!(target instanceof HTMLElement)) return;
++      if (event.key === 'Enter' || event.key === ' ') {
++        const row = target.closest('tr');
++        if (!row) return;
++        const sid = row.dataset.sid;
++        if (!sid) return;
++        event.preventDefault();
++        selectSessionId(sid);
++      }
++    });
++  }
++
+   liveBtn.addEventListener('click', () => {
+-    if (liveState.source) {
++    if (isLiveActive()) {
+       stopLive();
+       setLiveStatus('Live stream stopped.');
+     } else {
+       activateTab('live');
+       startLive();
+     }
+   });
+ 
+   historyBtn.addEventListener('click', () => {
+     activateTab('history');
+     loadHistory(true);
+   });
+ 
+   downloadBtn.addEventListener('click', () => {
+     const sid = ensureSid('history');
+     if (!sid) return;
+     const url = new URL('/api/v1/admin/flow/zip', window.location.origin);
+     url.searchParams.set('sid', sid);
+     buildTypesQuery(url.searchParams);
+     window.open(url.toString(), '_blank', 'noopener');
+   });
+ 
+   liveTab.addEventListener('click', () => activateTab('live'));
+   historyTab.addEventListener('click', () => activateTab('history'));
+ 
+@@ -405,37 +757,41 @@
+   if (drawerClose) {
+     drawerClose.addEventListener('click', () => toggleDrawer(false));
+   }
+ 
+   if (drawerBackdrop) {
+     drawerBackdrop.addEventListener('click', () => toggleDrawer(false));
+   }
+ 
+   document.addEventListener('keydown', (event) => {
+     if (event.key === 'Escape' && drawer && !drawer.hidden) {
+       toggleDrawer(false);
+     }
+   });
+ 
+   typesAllBtn.addEventListener('click', () => {
+     const shouldSelectAll = !typeCheckboxes.every((checkbox) => checkbox.checked);
+     typeCheckboxes.forEach((checkbox) => {
+       checkbox.checked = shouldSelectAll;
+     });
+     syncTypesAllButton();
+   });
+ 
+   typeCheckboxes.forEach((checkbox) => {
+     checkbox.addEventListener('change', () => {
+       syncTypesAllButton();
+-      if (liveState.source) {
++      if (isLiveActive()) {
+         setLiveStatus('Filters updated — restart live tail to apply.');
+       }
+     });
+   });
+ 
+   window.addEventListener('beforeunload', () => {
+     stopLive();
+   });
+ 
++  if (sessionTableBody) {
++    loadSessions();
++  }
++
+   syncTypesAllButton();
+ })();
+diff --git a/app/templates/admin_logs.html b/app/templates/admin_logs.html
+index 1f790f766ca4173b0b305b0b92e04a81caaf6f01..0e752cf073a063cbfffcf47d0d886e2d9fd350ab 100644
+--- a/app/templates/admin_logs.html
++++ b/app/templates/admin_logs.html
+@@ -1,47 +1,88 @@
+ <!doctype html>
+ <html lang="en">
+   <head>
+     <meta charset="utf-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1" />
+     <title>AskChip · Admin Logs</title>
+     <link rel="icon" href="/static/favicon.ico" />
+     <link rel="stylesheet" href="/static/css/styles.css" />
+   </head>
+   <body>
+     <div id="app">
+       <header class="topbar" role="banner">
+         <div class="topbar-left">
+           <span class="sid">Admin ▸ Logs</span>
+         </div>
+         <div class="topbar-right">
+           <span id="adminUserLabel" class="admin-logs__user" aria-live="polite">&nbsp;</span>
+           <a class="topbar-link" href="/">← Main UI</a>
+         </div>
+       </header>
+ 
+       <main class="admin-logs" role="main">
++        <section class="admin-logs__session-picker" aria-label="Session picker">
++          <header class="admin-logs__filter-header">
++            <h2>Sessions</h2>
++            <div class="admin-logs__session-controls">
++              <div class="admin-logs__field">
++                <label for="sessionSearchInput">Search</label>
++                <input
++                  id="sessionSearchInput"
++                  class="text-input"
++                  type="text"
++                  name="sessionSearch"
++                  placeholder="sid prefix"
++                  autocomplete="off"
++                  spellcheck="false"
++                />
++              </div>
++              <label class="admin-logs__session-toggle">
++                <input id="sessionOpenOnly" type="checkbox" name="sessionOpenOnly" />
++                <span>Only open</span>
++              </label>
++              <button id="sessionRefreshBtn" class="pill secondary" type="button">Refresh</button>
++            </div>
++          </header>
++          <div id="sessionStatus" class="admin-logs__status" role="status">Loading sessions…</div>
++          <div class="admin-logs__table-wrapper">
++            <table class="admin-logs__table" aria-describedby="sessionStatus">
++              <thead>
++                <tr>
++                  <th scope="col">Session</th>
++                  <th scope="col">Status</th>
++                  <th scope="col">Started</th>
++                  <th scope="col">Updated</th>
++                  <th scope="col">Events</th>
++                  <th scope="col">&nbsp;</th>
++                </tr>
++              </thead>
++              <tbody id="sessionTableBody"></tbody>
++            </table>
++          </div>
++        </section>
++
+         <section class="admin-logs__controls" aria-label="Log controls">
+           <div class="admin-logs__field">
+             <label for="sidInput">Session ID</label>
+             <input
+               id="sidInput"
+               class="text-input"
+               name="sid"
+               type="text"
+               placeholder="sid-xxxxxxxx"
+               autocomplete="off"
+               spellcheck="false"
+             />
+           </div>
+           <div class="admin-logs__actions">
+             <button id="liveBtn" class="pill start" type="button">Live Tail</button>
+             <button id="historyBtn" class="pill secondary" type="button">Load History</button>
+             <button id="downloadBtn" class="pill secondary" type="button">Download Zip</button>
+           </div>
+         </section>
+ 
+         <section class="admin-logs__filters" aria-label="Event filters">
+           <div class="admin-logs__filter-header">
+             <h2>Event types</h2>
+             <button id="typesAllBtn" class="pill secondary" type="button" aria-pressed="true">All</button>
+           </div>

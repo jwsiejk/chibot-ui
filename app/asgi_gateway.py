@@ -13,8 +13,10 @@ from functools import partial
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Awaitable, Callable, Dict, Optional
+from urllib.parse import parse_qs
 
 from app import config
+from app.admin.flow_api import handle_flow_sessions, handle_flow_trace, handle_flow_zip
 from app.auth.http_handlers import (
     get_me,
     post_login,
@@ -83,6 +85,10 @@ ROOT_ROUTE = "/"
 ADMIN_LOGS_ROUTE = "/admin/logs"
 FAVICON_ROUTE = "/favicon.ico"
 STATIC_ROUTE_PREFIX = "/static/"
+ADMIN_FLOW_ROUTE_PREFIX = "/api/v1/admin/flow"
+ADMIN_FLOW_TRACE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/trace"
+ADMIN_FLOW_ZIP_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/zip"
+ADMIN_FLOW_SESSIONS_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/sessions"
 EXPORT_ROOT = Path("exports")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_ROOT = BASE_DIR / "static"
@@ -152,6 +158,8 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
 
     if scope_type == "http":
         handler = _HTTP_ROUTES.get(path)
+        if handler is None:
+            handler = _match_admin_flow_route(path)
         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
             handler = partial(_handle_static, raw_path=path)
         if handler is None:
@@ -288,6 +296,101 @@ async def _handle_admin_logs(scope: dict, receive: Callable[[], Awaitable[dict]]
     body = rewritten.encode("utf-8")
     build_id = get_build_id()
     return _html_response(body, build_id=build_id)
+
+
+async def _handle_admin_flow_sessions(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+    rejection = await _require_admin_api(scope, receive)
+    if rejection is not None:
+        return rejection
+    return await handle_flow_sessions(scope, receive)
+
+
+async def _handle_admin_flow_trace_query(
+    scope: dict, receive: Callable[[], Awaitable[dict]]
+) -> Response:
+    sid = _get_query_argument(scope, "sid")
+    if not sid:
+        await _drain_request_body(receive)
+        return json_response(status=400, error="missing_sid")
+    return await _handle_admin_flow_trace(scope, receive, sid=sid)
+
+
+async def _handle_admin_flow_zip_query(
+    scope: dict, receive: Callable[[], Awaitable[dict]]
+) -> Response:
+    sid = _get_query_argument(scope, "sid")
+    if not sid:
+        await _drain_request_body(receive)
+        return json_response(status=400, error="missing_sid")
+    return await _handle_admin_flow_zip(scope, receive, sid=sid)
+
+
+async def _handle_admin_flow_trace(
+    scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
+) -> Response:
+    rejection = await _require_admin_api(scope, receive)
+    if rejection is not None:
+        return rejection
+    return await handle_flow_trace(scope, receive, sid=sid)
+
+
+async def _handle_admin_flow_zip(
+    scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
+) -> Response:
+    rejection = await _require_admin_api(scope, receive)
+    if rejection is not None:
+        return rejection
+    return await handle_flow_zip(scope, receive, sid=sid)
+
+
+def _get_query_argument(scope: dict, key: str) -> Optional[str]:
+    query = scope.get("query_string") or b""
+    try:
+        parsed = parse_qs(query.decode("latin1", "ignore"))
+    except Exception:
+        return None
+    values = parsed.get(key)
+    if not values:
+        return None
+    value = values[0].strip()
+    return value or None
+
+
+async def _require_admin_api(
+    scope: dict, receive: Callable[[], Awaitable[dict]]
+) -> Optional[Response]:
+    authenticated, is_admin, _ = await _resolve_request_identity(scope)
+    if not authenticated:
+        await _drain_request_body(receive)
+        return json_response(status=401, error="unauthorized")
+    if not is_admin:
+        await _drain_request_body(receive)
+        return json_response(status=403, error="forbidden")
+    return None
+
+
+def _match_admin_flow_route(path: str) -> Optional[HttpHandler]:
+    if not path.startswith(ADMIN_FLOW_ROUTE_PREFIX + "/"):
+        return None
+
+    remainder = path[len(ADMIN_FLOW_ROUTE_PREFIX) + 1 :]
+    if not remainder:
+        return None
+
+    parts = remainder.split("/")
+    if len(parts) != 2:
+        return None
+
+    sid, action = parts
+    if not sid or not action:
+        return None
+
+    if action == "trace":
+        return partial(_handle_admin_flow_trace, sid=sid)
+    if action == "zip":
+        return partial(_handle_admin_flow_zip, sid=sid)
+
+    return None
 
 
 async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
@@ -550,6 +653,9 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     LOGIN_ROUTE: post_login,
     ME_ROUTE: get_me,
     PROFILE_ROUTE: post_profile,
+    ADMIN_FLOW_TRACE_ROUTE: _handle_admin_flow_trace_query,
+    ADMIN_FLOW_ZIP_ROUTE: _handle_admin_flow_zip_query,
+    ADMIN_FLOW_SESSIONS_ROUTE: _handle_admin_flow_sessions,
 }
 
 

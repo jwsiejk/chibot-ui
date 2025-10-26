@@ -16,6 +16,11 @@
   const appContext = readAppContext();
   const userEmail = typeof appContext.userEmail === 'string' ? appContext.userEmail : null;
 
+  const sessionSearchInput = document.getElementById('sessionSearchInput');
+  const sessionOpenOnly = document.getElementById('sessionOpenOnly');
+  const sessionRefreshBtn = document.getElementById('sessionRefreshBtn');
+  const sessionTableBody = document.getElementById('sessionTableBody');
+  const sessionStatus = document.getElementById('sessionStatus');
   const sidInput = document.getElementById('sidInput');
   const liveBtn = document.getElementById('liveBtn');
   const historyBtn = document.getElementById('historyBtn');
@@ -50,10 +55,45 @@
 
   const typeCheckboxes = Array.from(document.querySelectorAll('input[name="logType"]'));
 
+  function isLiveActive() {
+    return Boolean(liveState.source || liveState.pollTimer);
+  }
+
+  function setSessionStatus(message) {
+    if (sessionStatus) {
+      sessionStatus.textContent = message;
+    }
+  }
+
+  function formatTimestamp(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return '—';
+    }
+    try {
+      return new Date(value).toISOString();
+    } catch (err) {
+      return String(value);
+    }
+  }
+
   const liveState = {
     source: null,
     lines: [],
     limit: 500,
+    pollTimer: null,
+    sinceMs: null,
+    sid: null,
+  };
+
+  const LIVE_POLL_INTERVAL_MS = 3000;
+  const LIVE_POLL_ERROR_INTERVAL_MS = 8000;
+
+  const sessionState = {
+    loading: false,
+    prefix: '',
+    openOnly: false,
+    sessions: [],
+    debounceId: null,
   };
 
   const historyState = {
@@ -99,6 +139,163 @@
     }
   }
 
+  function renderSessions(sessions) {
+    if (!sessionTableBody) {
+      return;
+    }
+
+    sessionTableBody.innerHTML = '';
+    sessionState.sessions = sessions;
+
+    if (!sessions.length) {
+      const emptyRow = document.createElement('tr');
+      const cell = document.createElement('td');
+      cell.colSpan = 6;
+      cell.className = 'admin-logs__empty';
+      cell.textContent = 'No sessions found.';
+      emptyRow.appendChild(cell);
+      sessionTableBody.appendChild(emptyRow);
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    sessions.forEach((session) => {
+      const row = document.createElement('tr');
+      const sidValue = typeof session.sid === 'string' ? session.sid : '';
+      row.dataset.sid = sidValue;
+      row.tabIndex = 0;
+
+      const sidCell = document.createElement('td');
+      sidCell.textContent = sidValue || '—';
+
+      const statusCell = document.createElement('td');
+      statusCell.textContent = session.open ? 'Open' : 'Closed';
+
+      const startedCell = document.createElement('td');
+      startedCell.textContent = formatTimestamp(session.started_ms);
+
+      const updatedValue =
+        typeof session.ended_ms === 'number' && Number.isFinite(session.ended_ms)
+          ? session.ended_ms
+          : session.started_ms;
+      const updatedCell = document.createElement('td');
+      updatedCell.textContent = formatTimestamp(updatedValue);
+
+      const eventsCell = document.createElement('td');
+      const eventsWritten =
+        typeof session.events_written === 'number' && Number.isFinite(session.events_written)
+          ? session.events_written
+          : 0;
+      eventsCell.textContent = String(eventsWritten);
+
+      const actionCell = document.createElement('td');
+      const pickButton = document.createElement('button');
+      pickButton.type = 'button';
+      pickButton.className = 'pill secondary';
+      pickButton.dataset.action = 'pick';
+      pickButton.textContent = 'Pick';
+      actionCell.appendChild(pickButton);
+
+      const byType = session.by_type && typeof session.by_type === 'object' ? session.by_type : null;
+      if (byType) {
+        try {
+          const summary = Object.entries(byType)
+            .filter((entry) => entry && entry.length === 2)
+            .map(([key, value]) => `${key}:${value}`)
+            .join(' ');
+          if (summary) {
+            row.title = summary;
+          }
+        } catch (err) {
+          // ignore summary rendering errors
+        }
+      }
+
+      row.appendChild(sidCell);
+      row.appendChild(statusCell);
+      row.appendChild(startedCell);
+      row.appendChild(updatedCell);
+      row.appendChild(eventsCell);
+      row.appendChild(actionCell);
+      fragment.appendChild(row);
+    });
+
+    sessionTableBody.appendChild(fragment);
+  }
+
+  function scheduleSessionLoad(delay) {
+    if (sessionState.debounceId !== null) {
+      clearTimeout(sessionState.debounceId);
+    }
+    const wait = typeof delay === 'number' && delay >= 0 ? delay : 200;
+    sessionState.debounceId = window.setTimeout(() => {
+      sessionState.debounceId = null;
+      loadSessions();
+    }, wait);
+  }
+
+  async function loadSessions() {
+    if (!sessionTableBody || sessionState.loading) {
+      return;
+    }
+
+    sessionState.loading = true;
+    setSessionStatus('Loading sessions…');
+
+    const url = new URL('/api/v1/admin/flow/sessions', window.location.origin);
+    const trimmedPrefix = sessionState.prefix.trim();
+    if (trimmedPrefix) {
+      url.searchParams.set('prefix', trimmedPrefix);
+    }
+    if (sessionState.openOnly) {
+      url.searchParams.set('open', '1');
+    }
+
+    try {
+      const response = await fetch(url.toString(), {
+        headers: {
+          accept: 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        renderSessions([]);
+        setSessionStatus(`Failed to load sessions (${response.status}).`);
+        return;
+      }
+
+      const data = await response.json();
+      const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+      renderSessions(sessions);
+
+      if (!sessions.length) {
+        setSessionStatus('No sessions found.');
+      } else {
+        const reportedCount = typeof data.count === 'number' ? data.count : sessions.length;
+        const sameCount = reportedCount === sessions.length;
+        const countLabel = sameCount
+          ? `${sessions.length}`
+          : `${sessions.length} of ${reportedCount}`;
+        const plural = sessions.length === 1 ? '' : 's';
+        setSessionStatus(`Showing ${countLabel} session${plural}.`);
+      }
+    } catch (err) {
+      console.error('Failed to load sessions', err);
+      renderSessions([]);
+      setSessionStatus('Unable to load sessions.');
+    } finally {
+      sessionState.loading = false;
+    }
+  }
+
+  function selectSessionId(sid) {
+    if (!sid || !sidInput) {
+      return;
+    }
+    sidInput.value = sid;
+    sidInput.focus({ preventScroll: false });
+  }
+
   function setLiveStatus(message) {
     if (liveStatus) {
       liveStatus.textContent = message;
@@ -111,11 +308,25 @@
     }
   }
 
-  function stopLive() {
+  function closeLiveSource() {
     if (liveState.source) {
-      liveState.source.close();
+      try {
+        liveState.source.close();
+      } catch (err) {
+        // ignore close errors
+      }
       liveState.source = null;
     }
+  }
+
+  function stopLive() {
+    closeLiveSource();
+    if (liveState.pollTimer !== null) {
+      clearTimeout(liveState.pollTimer);
+      liveState.pollTimer = null;
+    }
+    liveState.sid = null;
+    liveState.sinceMs = null;
     liveBtn.textContent = 'Live Tail';
     liveBtn.classList.remove('end');
     liveBtn.classList.add('start');
@@ -126,11 +337,20 @@
       return;
     }
     let display = rawLine.trim();
+    let parsed = null;
     try {
-      const parsed = JSON.parse(display);
+      parsed = JSON.parse(display);
       display = JSON.stringify(parsed, null, 2);
     } catch (err) {
       // leave as-is
+      parsed = null;
+    }
+
+    if (parsed && typeof parsed.ts_ms === 'number' && Number.isFinite(parsed.ts_ms)) {
+      const nextSince = parsed.ts_ms + 1;
+      if (liveState.sinceMs === null || nextSince > liveState.sinceMs) {
+        liveState.sinceMs = nextSince;
+      }
     }
     liveState.lines.push(display);
     if (liveState.lines.length > liveState.limit) {
@@ -138,6 +358,82 @@
     }
     liveOutput.textContent = liveState.lines.join('\n\n');
     liveOutput.scrollTop = liveOutput.scrollHeight;
+  }
+
+  function scheduleLivePoll(delay) {
+    if (liveState.pollTimer !== null) {
+      clearTimeout(liveState.pollTimer);
+    }
+    const wait = typeof delay === 'number' && delay >= 0 ? delay : LIVE_POLL_INTERVAL_MS;
+    liveState.pollTimer = window.setTimeout(runLivePoll, wait);
+  }
+
+  function startLivePolling(initialDelay, announce = true) {
+    if (!liveState.sid) {
+      return;
+    }
+    if (announce) {
+      setLiveStatus('Live stream unavailable — polling for new events…');
+    }
+    scheduleLivePoll(typeof initialDelay === 'number' ? initialDelay : 0);
+  }
+
+  async function runLivePoll() {
+    liveState.pollTimer = null;
+    if (!liveState.sid) {
+      return;
+    }
+
+    const url = new URL('/api/v1/admin/flow/trace', window.location.origin);
+    url.searchParams.set('sid', liveState.sid);
+    if (liveState.sinceMs !== null) {
+      url.searchParams.set('since_ms', String(liveState.sinceMs));
+    }
+    url.searchParams.set('limit', '200');
+    buildTypesQuery(url.searchParams);
+
+    let nextDelay = LIVE_POLL_INTERVAL_MS;
+
+    try {
+      const response = await fetch(url.toString(), {
+        headers: {
+          accept: 'application/x-ndjson, application/json',
+        },
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          setLiveStatus('Session not found.');
+          stopLive();
+          return;
+        }
+        setLiveStatus(`Polling failed (${response.status}).`);
+        nextDelay = LIVE_POLL_ERROR_INTERVAL_MS;
+      } else {
+        const body = await response.text();
+        const events = parseNdjson(body);
+        if (events.length) {
+          events.forEach((event) => {
+            try {
+              appendLiveLine(JSON.stringify(event));
+            } catch (err) {
+              appendLiveLine(String(event));
+            }
+          });
+          setLiveStatus('Polling for events…');
+        } else {
+          setLiveStatus('Polling for new events…');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to poll live events', err);
+      setLiveStatus('Polling failed. Retrying…');
+      nextDelay = LIVE_POLL_ERROR_INTERVAL_MS;
+    } finally {
+      if (liveState.sid) {
+        scheduleLivePoll(nextDelay);
+      }
+    }
   }
 
   function startLive() {
@@ -155,12 +451,21 @@
     url.searchParams.set('sid', sid);
     buildTypesQuery(url.searchParams);
 
+    liveState.sid = sid;
+    liveState.sinceMs = null;
+
+    liveBtn.textContent = 'Stop Live';
+    liveBtn.classList.remove('start');
+    liveBtn.classList.add('end');
+
+    if (typeof window.EventSource !== 'function') {
+      startLivePolling(0);
+      return;
+    }
+
     try {
       const source = new EventSource(url.toString());
       liveState.source = source;
-      liveBtn.textContent = 'Stop Live';
-      liveBtn.classList.remove('start');
-      liveBtn.classList.add('end');
 
       source.onopen = function () {
         setLiveStatus('Streaming events…');
@@ -171,13 +476,13 @@
       };
 
       source.onerror = function () {
-        setLiveStatus('Connection lost.');
-        stopLive();
+        closeLiveSource();
+        startLivePolling(0);
       };
     } catch (err) {
       console.error('Failed to open live stream', err);
-      setLiveStatus('Unable to open live stream.');
-      stopLive();
+      closeLiveSource();
+      startLivePolling(0);
     }
   }
 
@@ -361,8 +666,55 @@
     }
   }
 
+  if (sessionSearchInput) {
+    sessionState.prefix = sessionSearchInput.value.trim();
+    sessionSearchInput.addEventListener('input', () => {
+      sessionState.prefix = sessionSearchInput.value.trim();
+      scheduleSessionLoad();
+    });
+  }
+
+  if (sessionOpenOnly) {
+    sessionState.openOnly = sessionOpenOnly.checked;
+    sessionOpenOnly.addEventListener('change', () => {
+      sessionState.openOnly = sessionOpenOnly.checked;
+      loadSessions();
+    });
+  }
+
+  if (sessionRefreshBtn) {
+    sessionRefreshBtn.addEventListener('click', () => {
+      loadSessions();
+    });
+  }
+
+  if (sessionTableBody) {
+    sessionTableBody.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const row = target.closest('tr');
+      if (!row) return;
+      const sid = row.dataset.sid;
+      if (!sid) return;
+      selectSessionId(sid);
+    });
+
+    sessionTableBody.addEventListener('keydown', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        const row = target.closest('tr');
+        if (!row) return;
+        const sid = row.dataset.sid;
+        if (!sid) return;
+        event.preventDefault();
+        selectSessionId(sid);
+      }
+    });
+  }
+
   liveBtn.addEventListener('click', () => {
-    if (liveState.source) {
+    if (isLiveActive()) {
       stopLive();
       setLiveStatus('Live stream stopped.');
     } else {
@@ -427,7 +779,7 @@
   typeCheckboxes.forEach((checkbox) => {
     checkbox.addEventListener('change', () => {
       syncTypesAllButton();
-      if (liveState.source) {
+      if (isLiveActive()) {
         setLiveStatus('Filters updated — restart live tail to apply.');
       }
     });
@@ -436,6 +788,10 @@
   window.addEventListener('beforeunload', () => {
     stopLive();
   });
+
+  if (sessionTableBody) {
+    loadSessions();
+  }
 
   syncTypesAllButton();
 })();

@@ -20,6 +20,47 @@
       </header>
 
       <main class="admin-logs" role="main">
+        <section class="admin-logs__session-picker" aria-label="Session picker">
+          <header class="admin-logs__filter-header">
+            <h2>Sessions</h2>
+            <div class="admin-logs__session-controls">
+              <div class="admin-logs__field">
+                <label for="sessionSearchInput">Search</label>
+                <input
+                  id="sessionSearchInput"
+                  class="text-input"
+                  type="text"
+                  name="sessionSearch"
+                  placeholder="sid prefix"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+              </div>
+              <label class="admin-logs__session-toggle">
+                <input id="sessionOpenOnly" type="checkbox" name="sessionOpenOnly" />
+                <span>Only open</span>
+              </label>
+              <button id="sessionRefreshBtn" class="pill secondary" type="button">Refresh</button>
+            </div>
+          </header>
+          <div id="sessionStatus" class="admin-logs__status" role="status">Loading sessions…</div>
+          <div class="admin-logs__table-wrapper">
+            <table class="admin-logs__table" aria-describedby="sessionStatus">
+              <thead>
+                <tr>
+                  <th scope="col">Session</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Started</th>
+                  <th scope="col">Updated</th>
+                  <th scope="col">Events</th>
+                  <th scope="col">&nbsp;</th>
+                </tr>
+              </thead>
+              <tbody id="sessionTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
         <section class="admin-logs__controls" aria-label="Log controls">
           <div class="admin-logs__field">
             <label for="sidInput">Session ID</label>

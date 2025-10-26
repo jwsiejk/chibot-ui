@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 from urllib.parse import parse_qs
 
 from app.admin.flow_zip import build_flow_zip
@@ -18,12 +19,26 @@ _CONTENT_TYPE_NDJSON = b"application/x-ndjson"
 _CONTENT_TYPE_ZIP = b"application/zip"
 
 
+@dataclass(frozen=True)
+class Response:
+    status: int
+    body: bytes
+    headers: tuple[tuple[bytes, bytes], ...]
+
+
+def json_response(*, status: int = 200, **payload: object) -> Response:
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    headers = (
+        (b"content-type", b"application/json; charset=utf-8"),
+        (b"content-length", str(len(body)).encode("ascii")),
+    )
+    return Response(status=status, body=body, headers=headers)
+
+
 async def handle_flow_trace(
     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
 ):
     """Stream filtered redacted events for the given session identifier."""
-
-    from app.asgi_gateway import Response, json_response  # local import to avoid cycles
 
     if _method(scope) != "GET":
         await _drain_body(receive)
@@ -57,8 +72,6 @@ async def handle_flow_zip(
 ):
     """Return the packaged flow.zip archive for the requested session."""
 
-    from app.asgi_gateway import Response, json_response  # local import to avoid cycles
-
     if _method(scope) != "GET":
         await _drain_body(receive)
         return json_response(status=405, error="method_not_allowed")
@@ -82,6 +95,93 @@ async def handle_flow_zip(
         (b"content-length", str(len(archive_bytes)).encode("ascii")),
     )
     return Response(status=200, body=archive_bytes, headers=headers)
+
+
+async def handle_flow_sessions(
+    scope: dict, receive: Callable[[], Awaitable[dict]]
+):
+    """Enumerate flow sessions by inspecting export manifests."""
+
+    if _method(scope) != "GET":
+        await _drain_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_body(receive)
+
+    qs = scope.get("query_string") or b""
+    try:
+        parsed = parse_qs(qs.decode("latin1", "ignore"))
+    except Exception:
+        parsed = {}
+
+    def _truthy(value: Optional[str]) -> bool:
+        if not value:
+            return False
+        lowered = value.strip().lower()
+        return lowered in {"1", "true", "yes", "y", "on"}
+
+    open_only = _truthy((parsed.get("open") or [None])[0])
+    prefix = (parsed.get("prefix") or [None])[0]
+    if prefix:
+        prefix = prefix.strip() or None
+
+    limit = 50
+    raw_limit = (parsed.get("limit") or [None])[0]
+    if raw_limit:
+        try:
+            limit = max(1, min(500, int(raw_limit)))
+        except Exception:
+            limit = 50
+
+    sessions: List[Dict] = []
+    try:
+        if EXPORT_ROOT.exists():
+            for entry in EXPORT_ROOT.iterdir():
+                if not entry.is_dir():
+                    continue
+                sid = entry.name
+                if prefix and not sid.startswith(prefix):
+                    continue
+
+                manifest_path = entry / "manifest.json"
+                if not manifest_path.exists():
+                    continue
+
+                try:
+                    manifest = json.loads(manifest_path.read_text("utf-8"))
+                except Exception:
+                    continue
+
+                is_open = bool(manifest.get("open", False))
+                if open_only and not is_open:
+                    continue
+
+                sessions.append(
+                    {
+                        "sid": manifest.get("sid", sid),
+                        "open": is_open,
+                        "started_ms": manifest.get("started_ms"),
+                        "ended_ms": manifest.get("ended_ms"),
+                        "events_written": manifest.get("events_written", 0),
+                        "by_type": manifest.get("by_type") or {},
+                    }
+                )
+    except Exception:
+        sessions = []
+
+    def _sort_key(item: Dict):
+        ts_value = item.get("ended_ms") or item.get("started_ms") or 0
+        try:
+            ts_int = int(ts_value)
+        except Exception:
+            ts_int = 0
+        return (not item.get("open", False), -ts_int)
+
+    sessions.sort(key=_sort_key)
+    if limit:
+        sessions = sessions[:limit]
+
+    return json_response(ok=True, count=len(sessions), sessions=sessions)
 
 
 def _method(scope: dict) -> str:
@@ -172,4 +272,4 @@ def _filter_events(
     return matched.getvalue()
 
 
-__all__ = ["handle_flow_trace", "handle_flow_zip"]
+__all__ = ["handle_flow_trace", "handle_flow_zip", "handle_flow_sessions"]
