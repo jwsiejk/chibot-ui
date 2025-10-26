@@ -18,14 +18,23 @@ _pool_lock = asyncio.Lock()
 def _environment_dsn() -> str:
     for key in ("DATABASE_URL", "NEON_DATABASE_URL"):
         value = os.getenv(key)
-        if value:
-            return value
+        if value is not None:
+            value_stripped = value.strip()
+            if value_stripped:
+                return value_stripped
 
-    host = os.getenv("PGHOST")
-    database = os.getenv("PGDATABASE")
-    user = os.getenv("PGUSER")
-    password = os.getenv("PGPASSWORD")
-    port = os.getenv("PGPORT") or "5432"
+    def _get_env(name: str) -> Optional[str]:
+        raw = os.getenv(name)
+        if raw is None:
+            return None
+        value = raw.strip()
+        return value or None
+
+    host = _get_env("PGHOST")
+    database = _get_env("PGDATABASE")
+    user = _get_env("PGUSER")
+    password = _get_env("PGPASSWORD")
+    port = _get_env("PGPORT") or "5432"
 
     missing = [
         name
