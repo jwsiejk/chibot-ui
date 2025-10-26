@@ -651,7 +651,9 @@
     const finalUrl = typeof url === "string" ? makeWsUrl(url) : url;
     const wsUrl = typeof finalUrl === "string" ? finalUrl : url;
 
-    // NEW: Require access_token when NOT resuming; block early if missing
+    const url = urlOverride || computeUrl(resumeTokenValue);
+    const wsUrl = typeof url === "string" ? makeWsUrl(url) : url;  
+    // Require a token unless we are resuming with a server-issued resume token
     const isResuming = Boolean(resumeTokenValue);
     const hasAccessToken = (typeof wsUrl === "string") && /[?&]access_token=/.test(wsUrl);
     if (!isResuming && !hasAccessToken) {
