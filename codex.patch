@@ -1,684 +1,425 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 60a4f8af65967908a4a052bc87d206058777e088..6c9c82d29aee193635788499f97b4c645ac2d5ab 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -1,92 +1,95 @@
- """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
- from __future__ import annotations
- 
- import hashlib
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Optional
- 
- from app import config
--from app.auth.http_handlers import post_ws_token
-+from app.auth.http_handlers import get_me, post_login, post_profile, post_ws_token
- from app.db.neon import init_schema
- from app.logging_config import configure_logging
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import FileExporter
- from app.versioning import get_build_id, inject_static_version
- from app.voice_v2.asr_runtime import ASRRuntime
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- from app.services.streaming_asr.deepgram_client import DeepgramClient
- 
- 
- configure_logging()
- 
- for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
-     _category_logger = logging.getLogger(_logger_name)
-     if _category_logger.level == logging.NOTSET:
-         _category_logger.setLevel(logging.INFO)
- 
- 
- logger = logging.getLogger(__name__)
- 
- 
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
- 
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
- 
- 
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
- 
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
- 
- 
- WS_ROUTE = "/ws/v2/chat"
- HEALTH_ROUTE = "/api/v1/health"
- LIVE_ROUTE = "/api/v1/live"
- READY_ROUTE = "/api/v1/ready"
- INFO_ROUTE = "/api/v1/info"
- WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
-+LOGIN_ROUTE = "/api/v1/auth/login"
-+ME_ROUTE = "/api/v1/auth/me"
-+PROFILE_ROUTE = "/api/v1/auth/profile"
- ROOT_ROUTE = "/"
- FAVICON_ROUTE = "/favicon.ico"
- STATIC_ROUTE_PREFIX = "/static/"
- EXPORT_ROOT = Path("exports")
- BASE_DIR = Path(__file__).resolve().parent
- STATIC_ROOT = BASE_DIR / "static"
- TEMPLATES_ROOT = BASE_DIR / "templates"
- INDEX_PATH = TEMPLATES_ROOT / "index.html"
- FAVICON_PATH = STATIC_ROOT / "favicon.ico"
- _DEFAULT_INDEX_HTML = (
-     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
- )
- 
- 
- HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
- 
- _adapter: Optional[ChatV2Adapter] = None
- _lifespan_started = False
- 
- 
- def _ws_route_matches(scope: dict, expected: str) -> bool:
-     """
-     Return True when the incoming websocket request targets the expected route,
-     robust to deployments mounted under a non-empty ASGI root_path.
-     """
-@@ -400,50 +403,53 @@ def _method_is_get(scope: dict) -> bool:
- 
- 
- def _get_adapter() -> ChatV2Adapter:
-     """Return a lazily instantiated ChatV2Adapter singleton."""
-     global _adapter
-     if _adapter is None:
-         exporter = FileExporter(EXPORT_ROOT)
-         engine = EngineV2(exporter=exporter)
-         tts_runtime = TTSRuntime(engine=engine)
-         asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
-         asr_runtime = ASRRuntime(engine=engine, client=asr_client)
-         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
-         _adapter.tts_runtime = tts_runtime
-         _adapter.asr_runtime = asr_runtime
-     return _adapter
- 
- 
- _HTTP_ROUTES: Dict[str, HttpHandler] = {
-     ROOT_ROUTE: _handle_index,
-     FAVICON_ROUTE: _handle_favicon,
-     HEALTH_ROUTE: _handle_health,
-     LIVE_ROUTE: _handle_live,
-     READY_ROUTE: _handle_ready,
-     INFO_ROUTE: _handle_info,
-     WS_TOKEN_ROUTE: post_ws_token,
-+    LOGIN_ROUTE: post_login,
-+    ME_ROUTE: get_me,
-+    PROFILE_ROUTE: post_profile,
+diff --git a/app/static/css/styles.css b/app/static/css/styles.css
+index 9e5b4636c71dab86e94f64e4f4729f23cafa98ac..fe5666c29961a33ec734f6495a8033d330e275f4 100644
+--- a/app/static/css/styles.css
++++ b/app/static/css/styles.css
+@@ -316,25 +316,70 @@ body.ptt-hold .chip-status{
  }
  
+ .dev-inspector__actions button{
+   border-radius:999px;
+   border:1px solid rgba(255,255,255,.12);
+   background:rgba(255,255,255,.06);
+   color:var(--text);
+   padding:6px 14px;
+   cursor:pointer;
+   font-weight:600;
+ }
  
- async def _enforce_admin_auth(
-     handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-     return await handler(scope, receive)
+ .dev-inspector__actions button:hover{
+   background:rgba(255,255,255,.14);
+ }
  
+ .dev-inspector a{
+   color:var(--accent);
+   text-decoration:none;
+ }
  
- asgi = app
+ .dev-inspector a[aria-disabled="true"]{
+   opacity:.6;
+   pointer-events:none;
+ }
++
++.modal{
++  position:fixed;
++  inset:0;
++  display:flex;
++  align-items:center;
++  justify-content:center;
++  padding:24px;
++  z-index:200;
++}
++
++.modal-card{
++  position:relative;
++  z-index:1;
++  background:var(--surface);
++  border:1px solid var(--border);
++  box-shadow:var(--shadow);
++  border-radius:16px;
++  padding:32px;
++  max-width:420px;
++  width:100%;
++  display:flex;
++  flex-direction:column;
++  gap:16px;
++}
++
++.modal .form{
++  display:flex;
++  flex-direction:column;
++  gap:12px;
++}
++
++.modal .actions{
++  display:flex;
++  justify-content:flex-end;
++  gap:12px;
++}
++
++.modal-backdrop{
++  position:absolute;
++  inset:0;
++  background:rgba(5,8,15,.72);
++  backdrop-filter:blur(6px);
++  z-index:0;
++}
+diff --git a/app/static/js/auth_ui.js b/app/static/js/auth_ui.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..130186eeaf63c03e96304be56809e56987df211c
+--- /dev/null
++++ b/app/static/js/auth_ui.js
+@@ -0,0 +1,267 @@
++(() => {
++  const loginModal = document.getElementById("loginModal");
++  const profileModal = document.getElementById("profileModal");
++  if (!loginModal || !profileModal) {
++    return;
++  }
++
++  const loginForm = document.getElementById("loginForm");
++  const profileForm = document.getElementById("profileForm");
++  const loginEmailInput = document.getElementById("loginEmail");
++  const profileEmailInput = document.getElementById("profileEmail");
++  const profileNameInput = document.getElementById("profileName");
++  const profileTitleInput = document.getElementById("profileTitle");
++  const profileRegionInput = document.getElementById("profileRegion");
++
++  const focusableSelector = [
++    "a[href]",
++    "button:not([disabled])",
++    "input:not([disabled])",
++    "select:not([disabled])",
++    "textarea:not([disabled])",
++    "[tabindex]:not([tabindex='-1'])",
++  ].join(",");
++
++  const state = {
++    activeModal: null,
++    previouslyFocused: null,
++    focusable: [],
++  };
++
++  function setModalVisibility(modal, visible) {
++    if (!modal) return;
++    if (visible) {
++      modal.classList.remove("hidden");
++      modal.setAttribute("aria-hidden", "false");
++    } else {
++      modal.classList.add("hidden");
++      modal.setAttribute("aria-hidden", "true");
++    }
++  }
++
++  function getFocusable(modal) {
++    if (!modal) return [];
++    return Array.from(modal.querySelectorAll(focusableSelector)).filter(
++      (el) => !el.hasAttribute("hidden") && el.offsetParent !== null
++    );
++  }
++
++  function enforceFocus(event) {
++    if (!state.activeModal) return;
++    if (state.activeModal.contains(event.target)) return;
++    if (state.focusable.length > 0) {
++      state.focusable[0].focus();
++    } else {
++      state.activeModal.focus({ preventScroll: true });
++    }
++    event.stopPropagation();
++    event.preventDefault();
++  }
++
++  function handleKeydown(event) {
++    if (!state.activeModal) return;
++
++    if (event.key === "Tab") {
++      if (state.focusable.length === 0) {
++        event.preventDefault();
++        return;
++      }
++      const first = state.focusable[0];
++      const last = state.focusable[state.focusable.length - 1];
++      if (event.shiftKey && document.activeElement === first) {
++        event.preventDefault();
++        last.focus();
++        return;
++      }
++      if (!event.shiftKey && document.activeElement === last) {
++        event.preventDefault();
++        first.focus();
++        return;
++      }
++    }
++
++    if (event.key === "Escape") {
++      if (state.activeModal === profileModal) {
++        hideProfileModal();
++      }
++      event.stopPropagation();
++    }
++  }
++
++  function activateFocusTrap(modal) {
++    state.activeModal = modal;
++    state.previouslyFocused = document.activeElement;
++    state.focusable = getFocusable(modal);
++    if (state.focusable.length > 0) {
++      state.focusable[0].focus({ preventScroll: true });
++    } else {
++      modal.setAttribute("tabindex", "-1");
++      modal.focus({ preventScroll: true });
++    }
++    document.addEventListener("focus", enforceFocus, true);
++    document.addEventListener("keydown", handleKeydown, true);
++  }
++
++  function deactivateFocusTrap() {
++    document.removeEventListener("focus", enforceFocus, true);
++    document.removeEventListener("keydown", handleKeydown, true);
++    const { previouslyFocused } = state;
++    state.activeModal = null;
++    state.focusable = [];
++    state.previouslyFocused = null;
++    if (previouslyFocused && typeof previouslyFocused.focus === "function") {
++      previouslyFocused.focus({ preventScroll: true });
++    }
++  }
++
++  function showLoginModal() {
++    setModalVisibility(profileModal, false);
++    setModalVisibility(loginModal, true);
++    activateFocusTrap(loginModal);
++    if (loginEmailInput) {
++      loginEmailInput.focus({ preventScroll: true });
++    }
++    console.log("evt=ui_modal_show", { which: "login" });
++  }
++
++  function hideLoginModal() {
++    setModalVisibility(loginModal, false);
++    deactivateFocusTrap();
++  }
++
++  function showProfileModal() {
++    setModalVisibility(loginModal, false);
++    setModalVisibility(profileModal, true);
++    activateFocusTrap(profileModal);
++    if (profileNameInput) {
++      profileNameInput.focus({ preventScroll: true });
++    }
++    console.log("evt=ui_modal_show", { which: "profile" });
++  }
++
++  function hideProfileModal() {
++    setModalVisibility(profileModal, false);
++    deactivateFocusTrap();
++  }
++
++  function readCookie(name) {
++    const cookie = document.cookie
++      .split(";")
++      .map((part) => part.trim())
++      .find((part) => part.startsWith(`${name}=`));
++    if (!cookie) return null;
++    return decodeURIComponent(cookie.split("=")[1]);
++  }
++
++  function getCsrfToken() {
++    const candidates = ["askchip_csrf", "csrftoken", "csrf_token"];
++    for (const name of candidates) {
++      const value = readCookie(name);
++      if (value) return value;
++    }
++    return null;
++  }
++
++  async function fetchCurrentUser() {
++    try {
++      const response = await fetch("/api/v1/auth/me", {
++        method: "GET",
++        credentials: "include",
++      });
++      if (response.status === 401) {
++        showLoginModal();
++        return;
++      }
++      if (!response.ok) {
++        showLoginModal();
++        return;
++      }
++      const payload = await response.json();
++      if (payload && payload.profile_complete === false) {
++        if (payload.email && profileEmailInput) {
++          profileEmailInput.value = payload.email;
++        }
++        showProfileModal();
++      }
++    } catch (err) {
++      console.warn("Failed to fetch current user", err);
++      showLoginModal();
++    }
++  }
++
++  async function handleLoginSubmit(event) {
++    event.preventDefault();
++    if (!loginEmailInput || !loginEmailInput.value) {
++      return;
++    }
++    const csrfToken = getCsrfToken();
++    const payload = { email: loginEmailInput.value };
++    try {
++      const response = await fetch("/api/v1/auth/login", {
++        method: "POST",
++        credentials: "include",
++        headers: {
++          "Content-Type": "application/json",
++          ...(csrfToken ? { "x-csrf-token": csrfToken } : {}),
++        },
++        body: JSON.stringify(payload),
++      });
++      if (!response.ok) {
++        return;
++      }
++      const result = await response.json();
++      if (result && result.next === "profile") {
++        if (profileEmailInput) {
++          profileEmailInput.value = loginEmailInput.value;
++        }
++        hideLoginModal();
++        showProfileModal();
++      } else if (result && result.next === "ready") {
++        hideLoginModal();
++      }
++    } catch (err) {
++      console.warn("Failed to login", err);
++    }
++  }
++
++  async function handleProfileSubmit(event) {
++    event.preventDefault();
++    if (!profileNameInput || !profileTitleInput || !profileRegionInput) {
++      return;
++    }
++    const csrfToken = getCsrfToken();
++    const payload = {
++      name: profileNameInput.value,
++      title: profileTitleInput.value,
++      region: profileRegionInput.value,
++    };
++    try {
++      const response = await fetch("/api/v1/auth/profile", {
++        method: "POST",
++        credentials: "include",
++        headers: {
++          "Content-Type": "application/json",
++          ...(csrfToken ? { "x-csrf-token": csrfToken } : {}),
++        },
++        body: JSON.stringify(payload),
++      });
++      if (!response.ok) {
++        return;
++      }
++      hideProfileModal();
++    } catch (err) {
++      console.warn("Failed to save profile", err);
++    }
++  }
++
++  if (loginForm) {
++    loginForm.addEventListener("submit", handleLoginSubmit);
++  }
++  if (profileForm) {
++    profileForm.addEventListener("submit", handleProfileSubmit);
++  }
++
++  document.addEventListener("DOMContentLoaded", () => {
++    fetchCurrentUser();
++  });
++})();
+diff --git a/app/templates/index.html b/app/templates/index.html
+index 994bd0e08f4d85276195603e789ae33ef6db94e8..1b0a5139142039f4cfce97bbe3aa1257a5ab6cb3 100644
+--- a/app/templates/index.html
++++ b/app/templates/index.html
+@@ -111,28 +111,72 @@
+           <header class="dev-inspector__header">
+             <h3>Flow inspector</h3>
+             <div class="dev-inspector__actions">
+               <button id="devInspectorRefresh" type="button">Refresh</button>
+               <button id="devInspectorClose" type="button">Close</button>
+             </div>
+           </header>
+           <p id="devInspectorSid">SID: —</p>
+           <p id="devInspectorStatus">Connect to capture flow events.</p>
+           <pre id="devInspectorOutput" aria-live="polite"></pre>
+           <a
+             id="devInspectorDownload"
+             href="#"
+             aria-disabled="true"
+             tabindex="-1"
+           >
+             Download flow.zip
+           </a>
+         </div>
+       </section>
+     </div>
  
- __all__ = ["app", "asgi"]
+     <div id="toast-root" class="toast-container" aria-live="polite"></div>
+     <div id="wserror-banner-root" aria-live="assertive"></div>
  
- 
- def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
-     headers = scope.get("headers") or []
-     for name, value in headers:
-         if name == header_name:
-             try:
-                 return value.decode("latin1")
-             except UnicodeDecodeError:
-                 return value.decode("latin1", errors="ignore")
-     return None
- 
- 
-diff --git a/app/auth/http_handlers.py b/app/auth/http_handlers.py
-index 210a6557434e45bedccd15f1c72b87ab24010d29..5caffcd1e39cef657ad898e08dbacfe768be5357 100644
---- a/app/auth/http_handlers.py
-+++ b/app/auth/http_handlers.py
-@@ -1,171 +1,482 @@
- """HTTP authentication handlers for minting WebSocket tokens."""
- from __future__ import annotations
- 
-+import base64
-+import hashlib
-+import hmac
- import logging
- import os
- import types
- import uuid
- from typing import Any, Mapping, MutableMapping, Optional
- 
-+import json
-+import secrets
++    <div id="loginModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
++      <div class="modal-backdrop"></div>
++      <div class="modal-card">
++        <h2 id="loginModalTitle">Welcome to AskChip</h2>
++        <p class="subtitle">Please login with your email address</p>
++        <form id="loginForm" class="form">
++          <label for="loginEmail">Email</label>
++          <input
++            id="loginEmail"
++            type="email"
++            class="input"
++            placeholder="you@company.com"
++            autocomplete="email"
++            required
++          />
++          <div class="actions">
++            <button type="submit" class="button primary">Login</button>
++          </div>
++        </form>
++      </div>
++    </div>
 +
-+from app.db.neon import get_user, profile_complete, upsert_user
++    <div id="profileModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle">
++      <div class="modal-backdrop"></div>
++      <div class="modal-card">
++        <h2 id="profileModalTitle">Complete your profile</h2>
++        <p class="subtitle">Fill out your profile to enter AskChip</p>
++        <form id="profileForm" class="form">
++          <label for="profileEmail">Email</label>
++          <input id="profileEmail" type="email" class="input" disabled />
++          <label for="profileName">Name</label>
++          <input id="profileName" class="input" required />
++          <label for="profileTitle">Title</label>
++          <input id="profileTitle" class="input" required />
++          <label for="profileRegion">Region</label>
++          <input id="profileRegion" class="input" required />
++          <div class="actions">
++            <button type="submit" class="button primary">Save</button>
++          </div>
++        </form>
++      </div>
++    </div>
 +
- try:  # pragma: no cover - optional dependency wiring
-     from app.security.jwt_utils import mint_ws_token as _mint_ws_token_impl
- except ModuleNotFoundError:  # pragma: no cover - fallback when jwt is unavailable
-     _mint_ws_token_impl = None
- 
--_log = logging.getLogger("app.auth.http")
-+_authlog = logging.getLogger("app.auth.http")
- 
- _CSRF_HEADER_NAME = b"x-csrf-token"
- _CSRF_COOKIE_CANDIDATES = ("csrf_token", "csrftoken", "askchip_csrf")
-+_SESSION_COOKIE_NAME = "askchip_session"
-+_CSRF_COOKIE_NAME = "askchip_csrf"
-+_SECRET_CACHE: Optional[bytes] = None
-+
-+
-+async def post_login(scope: Mapping[str, Any], receive) -> "Response":
-+    """Authenticate a user by email and issue a signed session cookie."""
-+
-+    from app.asgi_gateway import Response, json_response
-+
-+    method = _method(scope)
-+    if method != "POST":
-+        await _drain_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    try:
-+        payload = await _read_json_body(receive)
-+    except ValueError:
-+        return json_response(status=400, error="invalid_json")
-+
-+    email_raw = payload.get("email") if isinstance(payload, dict) else None
-+    if not isinstance(email_raw, str):
-+        return json_response(status=400, error="invalid_email")
-+
-+    email = _normalize_email(email_raw)
-+    if not email or "@" not in email:
-+        return json_response(status=400, error="invalid_email")
-+
-+    try:
-+        existing = await get_user(email)
-+        if existing is None:
-+            user = await upsert_user(email, None, None, None)
-+        else:
-+            user = await upsert_user(
-+                email,
-+                existing.get("name"),
-+                existing.get("title"),
-+                existing.get("region"),
-+            )
-+    except Exception:
-+        _authlog.exception("evt=login_failed email=%s", _safe(email))
-+        return json_response(status=500, error="server_error")
-+
-+    complete = profile_complete(user)
-+    next_step = "ready" if complete else "profile"
-+    is_admin = _is_admin(user)
-+
-+    try:
-+        session_token = _mint_session_token(email)
-+    except Exception:
-+        _authlog.exception("evt=login_session_error email=%s", _safe(email))
-+        return json_response(status=500, error="server_error")
-+    csrf_token = secrets.token_urlsafe(32)
-+
-+    response = json_response(
-+        next=next_step,
-+        user=_serialize_user(user),
-+        profile_complete=complete,
-+        is_admin=is_admin,
-+    )
-+
-+    headers = list(response.headers)
-+    headers.append(_build_cookie_header(_SESSION_COOKIE_NAME, session_token, http_only=True))
-+    headers.append(_build_cookie_header(_CSRF_COOKIE_NAME, csrf_token, http_only=False))
-+    response = Response(status=response.status, body=response.body, headers=tuple(headers))
-+
-+    _authlog.info("evt=login email=%s next=%s", _safe(email), next_step)
-+
-+    return response
-+
-+
-+async def get_me(scope: Mapping[str, Any], receive) -> "Response":
-+    """Return the authenticated user based on the session cookie."""
-+
-+    from app.asgi_gateway import json_response
-+
-+    method = _method(scope)
-+    if method != "GET":
-+        await _drain_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    email = _session_email(scope)
-+    if not email:
-+        await _drain_body(receive)
-+        return json_response(status=401, authenticated=False)
-+
-+    try:
-+        user = await get_user(email)
-+        if user is None:
-+            user = await upsert_user(email, None, None, None)
-+    except Exception:
-+        _authlog.exception("evt=me_failed email=%s", _safe(email))
-+        await _drain_body(receive)
-+        return json_response(status=500, error="server_error")
-+
-+    complete = profile_complete(user)
-+    is_admin = _is_admin(user)
-+
-+    await _drain_body(receive)
-+    return json_response(
-+        authenticated=True,
-+        user=_serialize_user(user),
-+        profile_complete=complete,
-+        is_admin=is_admin,
-+    )
-+
-+
-+async def post_profile(scope: Mapping[str, Any], receive) -> "Response":
-+    """Update the authenticated user's profile information."""
-+
-+    from app.asgi_gateway import json_response
-+
-+    method = _method(scope)
-+    if method != "POST":
-+        await _drain_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    email = _session_email(scope)
-+    if not email:
-+        await _drain_body(receive)
-+        return json_response(status=401, error="unauthorized")
-+
-+    if not _validate_csrf(scope):
-+        await _drain_body(receive)
-+        return json_response(status=403, error="forbidden")
-+
-+    try:
-+        payload = await _read_json_body(receive)
-+    except ValueError:
-+        return json_response(status=400, error="invalid_json")
-+
-+    if not isinstance(payload, dict):
-+        return json_response(status=400, error="invalid_payload")
-+
-+    name = _clean_field(payload.get("name"))
-+    title = _clean_field(payload.get("title"))
-+    region = _clean_field(payload.get("region"))
-+
-+    try:
-+        user = await upsert_user(email, name, title, region)
-+    except Exception:
-+        _authlog.exception("evt=profile_update_failed email=%s", _safe(email))
-+        return json_response(status=500, error="server_error")
-+
-+    complete = profile_complete(user)
-+
-+    _authlog.info("evt=profile_update email=%s", _safe(email))
-+
-+    return json_response(
-+        user=_serialize_user(user),
-+        profile_complete=complete,
-+    )
- 
- 
- async def post_ws_token(scope: Mapping[str, Any], receive) -> "Response":
-     """Mint a short-lived WebSocket token for the authenticated session."""
- 
-     from app.asgi_gateway import Response, json_response
- 
-     method = _method(scope)
-     if method != "POST":
-         await _drain_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     if not _has_cookie_session(scope):
-         await _drain_body(receive)
-         return json_response(status=401, error="unauthorized")
- 
-     if not _validate_csrf(scope):
-         await _drain_body(receive)
-         return json_response(status=403, error="forbidden")
- 
-+    session_email = _session_email(scope)
-+    if not session_email:
-+        await _drain_body(receive)
-+        return json_response(status=401, error="unauthorized")
-+
-     user = _get_authenticated_user(scope)
-+    if user is None:
-+        try:
-+            fetched = await get_user(session_email)
-+            if fetched is None:
-+                fetched = await upsert_user(session_email, None, None, None)
-+        except Exception:
-+            _authlog.exception("evt=ws_token_user_lookup_failed email=%s", _safe(session_email))
-+            await _drain_body(receive)
-+            return json_response(status=500, error="server_error")
-+        fetched = dict(fetched)
-+        fetched["profile_complete"] = profile_complete(fetched)
-+        user = fetched
-+        state = _state(scope)
-+        if isinstance(state, dict):
-+            state.setdefault("user", user)
-+        elif isinstance(state, types.SimpleNamespace):
-+            if not hasattr(state, "user"):
-+                setattr(state, "user", user)
-+
-     if user is None:
-         await _drain_body(receive)
-         return json_response(status=401, error="unauthorized")
- 
-     if not _profile_gate(user, scope):
-         await _drain_body(receive)
-         return json_response(status=409, error="profile_incomplete")
- 
-     user_identifier = _user_identifier(user)
-     if user_identifier is None:
-         await _drain_body(receive)
--        _log.warning("evt=ws_token_missing_identifier")
-+        _authlog.warning("evt=ws_token_missing_identifier")
-         return json_response(status=500, error="server_error")
- 
-     await _drain_body(receive)
- 
-     sid = uuid.uuid4().hex
-     is_admin = _is_admin(user)
-     token = _mint_ws_token(user_identifier, sid, is_admin, ttl_s=60)
- 
--    _log.info("evt=ws_token_mint sid=%s ttl=60", sid)
-+    _authlog.info("evt=ws_token_mint sid=%s ttl=60", sid)
- 
-     ttl_ms = 60 * 1000
-     return json_response(access_token=token, sid=sid, ttl_ms=ttl_ms)
- 
- 
- def _method(scope: Mapping[str, Any]) -> str:
-     value = scope.get("method")
-     if isinstance(value, bytes):
-         value = value.decode("latin1", "ignore")
-     if not isinstance(value, str):
-         return "GET"
-     return value.upper()
- 
- 
- async def _drain_body(receive) -> None:
-     while True:
-         message = await receive()
-         if message.get("type") != "http.request":
-             break
-         if not message.get("more_body", False):
-             break
- 
- 
- def _headers(scope: Mapping[str, Any]) -> MutableMapping[bytes, bytes]:
-     headers = scope.get("headers") or []
-     collected: dict[bytes, bytes] = {}
-     for name, value in headers:
-         if isinstance(name, str):
-             name = name.encode("latin1")
-         if isinstance(value, str):
-             value = value.encode("latin1")
-         collected[name.lower()] = value
-     return collected
- 
- 
- def _has_cookie_session(scope: Mapping[str, Any]) -> bool:
-+    email = _session_email(scope)
-+    return bool(email)
-+
-+
-+async def _read_json_body(receive) -> Any:
-+    body = await _read_request_body(receive)
-+    if not body:
-+        return {}
-+    try:
-+        text = body.decode("utf-8")
-+    except UnicodeDecodeError as exc:
-+        raise ValueError("invalid_json") from exc
-+    try:
-+        return json.loads(text)
-+    except json.JSONDecodeError as exc:
-+        raise ValueError("invalid_json") from exc
-+
-+
-+async def _read_request_body(receive) -> bytes:
-+    chunks = bytearray()
-+    while True:
-+        message = await receive()
-+        if message.get("type") != "http.request":
-+            break
-+        body = message.get("body") or b""
-+        if body:
-+            chunks.extend(body)
-+        if not message.get("more_body", False):
-+            break
-+    return bytes(chunks)
-+
-+
-+def _build_cookie_header(name: str, value: str, *, http_only: bool) -> tuple[bytes, bytes]:
-+    safe_value = value.replace("\r", "").replace("\n", "")
-+    parts = [f"{name}={safe_value}", "Path=/", "Secure", "SameSite=Lax"]
-+    if http_only:
-+        parts.append("HttpOnly")
-+    header_value = "; ".join(parts)
-+    return (b"set-cookie", header_value.encode("latin1", "ignore"))
-+
-+
-+def _normalize_email(value: str) -> str:
-+    return value.strip().lower()
-+
-+
-+def _clean_field(value: Any) -> Optional[str]:
-+    if not isinstance(value, str):
-+        return None
-+    stripped = value.strip()
-+    return stripped or None
-+
-+
-+def _mint_session_token(email: str) -> str:
-+    signature = _session_signature(email)
-+    return f"{email}|{signature}"
-+
-+
-+def _session_signature(email: str) -> str:
-+    key = _secret_key()
-+    digest = hmac.new(key, email.encode("utf-8"), hashlib.sha256).digest()
-+    encoded = base64.urlsafe_b64encode(digest).decode("ascii")
-+    return encoded.rstrip("=")
-+
-+
-+def _decode_session_token(token: str) -> Optional[str]:
-+    token = token.strip()
-+    if not token:
-+        return None
-+    try:
-+        email, provided_sig = token.split("|", 1)
-+    except ValueError:
-+        return None
-+    if not email or not provided_sig:
-+        return None
-+    try:
-+        expected_sig = _session_signature(email)
-+    except RuntimeError:
-+        raise
-+    if hmac.compare_digest(provided_sig, expected_sig):
-+        return email
-+    return None
-+
-+
-+def _session_email(scope: Mapping[str, Any]) -> Optional[str]:
-     header_map = _headers(scope)
--    cookie_header = header_map.get(b"cookie")
--    if not cookie_header:
--        return False
--    return bool(cookie_header.strip())
-+    cookies = _parse_cookies(header_map.get(b"cookie"))
-+    token = cookies.get(_SESSION_COOKIE_NAME)
-+    if not token:
-+        return None
-+    try:
-+        email = _decode_session_token(token)
-+    except RuntimeError:
-+        _authlog.exception("evt=session_secret_missing")
-+        return None
-+    if not email:
-+        return None
-+    return _normalize_email(email)
-+
-+
-+def _safe(value: Optional[str]) -> str:
-+    if not value:
-+        return "-"
-+    cleaned = value.replace("\n", "").replace("\r", "")
-+    return cleaned
-+
-+
-+def _serialize_user(user: Any) -> dict[str, Any]:
-+    if isinstance(user, dict):
-+        email = user.get("email")
-+        name = user.get("name")
-+        title = user.get("title")
-+        region = user.get("region")
-+    else:
-+        email = getattr(user, "email", None)
-+        name = getattr(user, "name", None)
-+        title = getattr(user, "title", None)
-+        region = getattr(user, "region", None)
-+    return {"email": email, "name": name, "title": title, "region": region}
-+
-+
-+def _secret_key() -> bytes:
-+    global _SECRET_CACHE
-+    if _SECRET_CACHE is not None:
-+        return _SECRET_CACHE
-+    key = os.getenv("SECRET_KEY")
-+    if not key:
-+        raise RuntimeError("SECRET_KEY is not configured")
-+    _SECRET_CACHE = key.encode("utf-8")
-+    return _SECRET_CACHE
- 
- 
- def _validate_csrf(scope: Mapping[str, Any]) -> bool:
-     header_map = _headers(scope)
-     provided = header_map.get(_CSRF_HEADER_NAME)
-     if not provided:
-         return False
- 
-     provided_str = provided.decode("utf-8", "ignore")
-     cookies = _parse_cookies(header_map.get(b"cookie"))
- 
-     for name in _CSRF_COOKIE_CANDIDATES:
-         expected = cookies.get(name)
-         if expected is None:
-             continue
-         return expected == provided_str
- 
-     state = _state(scope)
-     expected = None
-     if isinstance(state, dict):
-         expected = state.get("csrf_token") or state.get("csrf")
-     else:
-         expected = getattr(state, "csrf_token", None) or getattr(state, "csrf", None)
-     if expected is None:
-         return False
-     if isinstance(expected, bytes):
-         expected = expected.decode("utf-8", "ignore")
-     return str(expected) == provided_str
- 
- 
- def _parse_cookies(raw: Optional[bytes]) -> dict[str, str]:
-     if not raw:
-         return {}
-     try:
-         text = raw.decode("latin1")
-     except UnicodeDecodeError:
-         text = raw.decode("latin1", "ignore")
-     cookies: dict[str, str] = {}
-     for part in text.split(";"):
-         if not part.strip():
-             continue
-         if "=" not in part:
-             continue
-         name, value = part.split("=", 1)
--        cookies[name.strip()] = value.strip()
-+        cleaned_value = value.strip()
-+        if cleaned_value.startswith('"') and cleaned_value.endswith('"') and len(cleaned_value) >= 2:
-+            cleaned_value = cleaned_value[1:-1]
-+        cookies[name.strip()] = cleaned_value
-     return cookies
- 
- 
- def _get_authenticated_user(scope: Mapping[str, Any]) -> Any | None:
-     state = _state(scope)
-     if state is not None:
-         if isinstance(state, dict) and "user" in state:
-             return state.get("user")
-         if hasattr(state, "user"):
-             return getattr(state, "user")
-     if "user" in scope:
-         return scope.get("user")
-     return None
- 
- 
- def _profile_gate(user: Any, scope: Mapping[str, Any]) -> bool:
-     candidate_keys = ("profile_complete", "profile_completed", "has_profile", "profile_ready")
- 
-     for key in candidate_keys:
-         value = None
-         if isinstance(user, dict):
-             value = user.get(key)
-         else:
-             value = getattr(user, key, None)
-         if value is not None:
-@@ -201,32 +512,32 @@ def _user_email(user: Any) -> Optional[str]:
-     if value is None:
-         return None
-     return str(value).strip().lower()
- 
- 
- def _is_admin(user: Any) -> bool:
-     admin_raw = os.getenv("ADMIN_EMAILS", "")
-     if not admin_raw:
-         return False
-     user_email = _user_email(user)
-     if not user_email:
-         return False
-     admin_candidates = [item.strip().lower() for item in admin_raw.split(",") if item.strip()]
-     return user_email in admin_candidates
- 
- 
- def _state(scope: Mapping[str, Any]) -> Any:
-     state = scope.get("state")
-     if state is None:
-         return None
-     if isinstance(state, types.SimpleNamespace):
-         return state
-     return state
- 
- 
--__all__ = ["post_ws_token"]
-+__all__ = ["post_login", "get_me", "post_profile", "post_ws_token"]
- 
- 
- def _mint_ws_token(user_id: str, sid: str, is_admin: bool, *, ttl_s: int) -> str:
-     if _mint_ws_token_impl is None:  # pragma: no cover - dependency guard
-         raise RuntimeError("JWT support is not configured")
-     return _mint_ws_token_impl(user_id, sid, is_admin, ttl_s=ttl_s)
++    <script src="/static/js/auth_ui.js" defer></script>
+     <script src="/static/js/app.js" defer></script>
+   </body>
+ </html>

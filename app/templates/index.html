@@ -133,6 +133,50 @@
     <div id="toast-root" class="toast-container" aria-live="polite"></div>
     <div id="wserror-banner-root" aria-live="assertive"></div>
 
+    <div id="loginModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+      <div class="modal-backdrop"></div>
+      <div class="modal-card">
+        <h2 id="loginModalTitle">Welcome to AskChip</h2>
+        <p class="subtitle">Please login with your email address</p>
+        <form id="loginForm" class="form">
+          <label for="loginEmail">Email</label>
+          <input
+            id="loginEmail"
+            type="email"
+            class="input"
+            placeholder="you@company.com"
+            autocomplete="email"
+            required
+          />
+          <div class="actions">
+            <button type="submit" class="button primary">Login</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="profileModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle">
+      <div class="modal-backdrop"></div>
+      <div class="modal-card">
+        <h2 id="profileModalTitle">Complete your profile</h2>
+        <p class="subtitle">Fill out your profile to enter AskChip</p>
+        <form id="profileForm" class="form">
+          <label for="profileEmail">Email</label>
+          <input id="profileEmail" type="email" class="input" disabled />
+          <label for="profileName">Name</label>
+          <input id="profileName" class="input" required />
+          <label for="profileTitle">Title</label>
+          <input id="profileTitle" class="input" required />
+          <label for="profileRegion">Region</label>
+          <input id="profileRegion" class="input" required />
+          <div class="actions">
+            <button type="submit" class="button primary">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="/static/js/auth_ui.js" defer></script>
     <script src="/static/js/app.js" defer></script>
   </body>
 </html>
