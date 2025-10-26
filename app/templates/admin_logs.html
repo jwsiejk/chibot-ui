@@ -6,6 +6,10 @@
     <title>AskChip · Admin Logs</title>
     <link rel="icon" href="/static/favicon.ico" />
     <link rel="stylesheet" href="/static/css/styles.css" />
+    <style>
+      .admin-logs__type.disabled { opacity: 0.5; pointer-events: none; }
+      .admin-logs__type.disabled input { pointer-events: none; }
+    </style>
   </head>
   <body>
     <div id="app">
@@ -134,6 +138,18 @@
             <label class="admin-logs__type">
               <input type="checkbox" name="logType" value="EVT_LOG" checked />
               <span>Logs</span>
+            </label>
+            <label class="admin-logs__type" data-diabinds="audio">
+              <input type="checkbox" name="logType" value="EVT_DIAG_FIRST_AUDIO_FRAME" />
+              <span>Diag: first audio</span>
+            </label>
+            <label class="admin-logs__type" data-diabinds="audio">
+              <input type="checkbox" name="logType" value="EVT_DIAG_NO_AUDIO_FROM_CLIENT" />
+              <span>Diag: no audio</span>
+            </label>
+            <label class="admin-logs__type" data-diabinds="hud">
+              <input type="checkbox" name="logType" value="EVT_DIAG_HUD" />
+              <span>Diag: HUD</span>
             </label>
           </div>
         </section>

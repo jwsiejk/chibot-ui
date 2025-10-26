@@ -55,11 +55,40 @@
     }
   }
 
-  const typeCheckboxes = Array.from(document.querySelectorAll('input[name="logType"]'));
+  const TYPE_CHECKBOX_SELECTOR = 'input[name="logType"]';
+  const typeCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
+  const chipWrapHud = Array.from(
+    document.querySelectorAll('.admin-logs__type[data-diabinds="hud"]')
+  );
+  const chipWrapAudio = Array.from(
+    document.querySelectorAll('.admin-logs__type[data-diabinds="audio"]')
+  );
+  const chipsHud = chipWrapHud
+    .map((wrapper) => wrapper.querySelector(TYPE_CHECKBOX_SELECTOR))
+    .filter((input) => input instanceof HTMLInputElement);
+  const chipsAudio = chipWrapAudio
+    .map((wrapper) => wrapper.querySelector(TYPE_CHECKBOX_SELECTOR))
+    .filter((input) => input instanceof HTMLInputElement);
+
+  let chkHud = null;
+  let chkGuard = null;
+  let hudObserver = null;
+  let guardObserver = null;
+  let configPanelObserver = null;
 
   if (configPanelRoot && window.AdminConfigPanel && typeof window.AdminConfigPanel.init === 'function') {
     try {
       window.AdminConfigPanel.init(configPanelRoot, { statusElement: debugStatus });
+      if (!configPanelObserver) {
+        configPanelObserver = new MutationObserver(() => {
+          ensureToggleBindings();
+        });
+        configPanelObserver.observe(configPanelRoot, { childList: true, subtree: true });
+      }
+      window.requestAnimationFrame(() => {
+        ensureToggleBindings();
+        syncChipsWithDebug({ silent: true });
+      });
     } catch (err) {
       console.warn('Failed to initialize admin config panel', err);
       if (debugStatus) {
@@ -70,8 +99,205 @@
     debugStatus.textContent = '';
   }
 
+  window.requestAnimationFrame(() => {
+    ensureToggleBindings();
+    syncChipsWithDebug({ silent: true });
+  });
+
+  function getGlobalConfigFlag(key) {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    const cfg = window.__CFG__;
+    if (!cfg || typeof cfg !== 'object') {
+      return false;
+    }
+    if (!Object.prototype.hasOwnProperty.call(cfg, key)) {
+      return false;
+    }
+    return Boolean(cfg[key]);
+  }
+
+  function isHudDebugEnabled() {
+    if (chkHud instanceof HTMLInputElement) {
+      return Boolean(chkHud.checked);
+    }
+    return getGlobalConfigFlag('DIAG_CLIENT_HUD');
+  }
+
+  function isAudioDebugEnabled() {
+    if (chkGuard instanceof HTMLInputElement) {
+      return Boolean(chkGuard.checked);
+    }
+    return getGlobalConfigFlag('DIAG_AUDIO_GUARD');
+  }
+
+  function setChipGroupEnabled(wrappers, inputs, enabled) {
+    let updated = false;
+    const shouldDisable = !enabled;
+    wrappers.forEach((wrapper) => {
+      if (!(wrapper instanceof HTMLElement)) {
+        return;
+      }
+      const before = wrapper.classList.contains('disabled');
+      if (before !== shouldDisable) {
+        updated = true;
+      }
+      wrapper.classList.toggle('disabled', shouldDisable);
+    });
+    inputs.forEach((input) => {
+      if (!(input instanceof HTMLInputElement)) {
+        return;
+      }
+      if (input.disabled !== shouldDisable) {
+        input.disabled = shouldDisable;
+        updated = true;
+      }
+      if (shouldDisable && input.checked) {
+        input.checked = false;
+        updated = true;
+      }
+    });
+    return updated;
+  }
+
+  function observeToggle(input) {
+    if (!(input instanceof HTMLInputElement)) {
+      return null;
+    }
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'checked') {
+          syncChipsWithDebug({ silent: true });
+        }
+      }
+    });
+    observer.observe(input, { attributes: true, attributeFilter: ['checked'] });
+    return observer;
+  }
+
+  function handleDebugToggleChange() {
+    syncChipsWithDebug();
+  }
+
+  function ensureToggleBindings() {
+    let changed = false;
+
+    const hudElement = document.getElementById('admin-debug-diag_client_hud');
+    const guardElement = document.getElementById('admin-debug-diag_audio_guard');
+
+    const hudInput = hudElement instanceof HTMLInputElement ? hudElement : null;
+    const guardInput = guardElement instanceof HTMLInputElement ? guardElement : null;
+
+    if (chkHud !== hudInput) {
+      if (hudObserver) {
+        hudObserver.disconnect();
+        hudObserver = null;
+      }
+      chkHud = hudInput;
+      changed = true;
+      if (chkHud) {
+        if (!chkHud.dataset.diagSyncBound) {
+          chkHud.addEventListener('change', handleDebugToggleChange);
+          chkHud.dataset.diagSyncBound = '1';
+        }
+        hudObserver = observeToggle(chkHud);
+      }
+    }
+
+    if (chkGuard !== guardInput) {
+      if (guardObserver) {
+        guardObserver.disconnect();
+        guardObserver = null;
+      }
+      chkGuard = guardInput;
+      changed = true;
+      if (chkGuard) {
+        if (!chkGuard.dataset.diagSyncBound) {
+          chkGuard.addEventListener('change', handleDebugToggleChange);
+          chkGuard.dataset.diagSyncBound = '1';
+        }
+        guardObserver = observeToggle(chkGuard);
+      }
+    }
+
+    if (changed) {
+      syncChipsWithDebug({ silent: true });
+    }
+  }
+
+  function ensureDebugToggleOn(input) {
+    if (!(input instanceof HTMLInputElement)) {
+      return;
+    }
+    if (input.checked) {
+      return;
+    }
+    input.checked = true;
+    const event = new Event('change', { bubbles: true });
+    input.dispatchEvent(event);
+  }
+
+  function syncChipsWithDebug(options = {}) {
+    const silent = Boolean(options && options.silent);
+    const hudOn = isHudDebugEnabled();
+    const audioOn = isAudioDebugEnabled();
+    let updated = false;
+
+    if (setChipGroupEnabled(chipWrapHud, chipsHud, hudOn)) {
+      updated = true;
+    }
+    if (setChipGroupEnabled(chipWrapAudio, chipsAudio, audioOn)) {
+      updated = true;
+    }
+
+    if (hudOn) {
+      chipsHud.forEach((input) => {
+        if (!(input instanceof HTMLInputElement)) {
+          return;
+        }
+        if (!input.dataset._userTouched && !input.checked) {
+          input.checked = true;
+          updated = true;
+        }
+        if (!input.dataset._everEnabled) {
+          input.dataset._everEnabled = '1';
+        }
+      });
+    }
+
+    if (audioOn) {
+      chipsAudio.forEach((input) => {
+        if (!(input instanceof HTMLInputElement)) {
+          return;
+        }
+        if (!input.dataset._userTouched && !input.checked) {
+          input.checked = true;
+          updated = true;
+        }
+        if (!input.dataset._everEnabled) {
+          input.dataset._everEnabled = '1';
+        }
+      });
+    }
+
+    syncTypesAllButton();
+
+    if (!silent && updated) {
+      notifyFiltersUpdated();
+    }
+
+    return updated;
+  }
+
   function isLiveActive() {
     return Boolean(liveState.source || liveState.pollTimer);
+  }
+
+  function notifyFiltersUpdated() {
+    if (isLiveActive()) {
+      setLiveStatus('Filters updated — restart live tail to apply.');
+    }
   }
 
   function setSessionStatus(message) {
@@ -121,14 +347,20 @@
   };
 
   function selectedTypes() {
-    return typeCheckboxes
-      .filter((checkbox) => checkbox.checked)
+    return Array.from(
+      document.querySelectorAll(`${TYPE_CHECKBOX_SELECTOR}:checked`)
+    )
       .map((checkbox) => checkbox.value)
       .filter(Boolean);
   }
 
   function syncTypesAllButton() {
-    const allSelected = typeCheckboxes.every((checkbox) => checkbox.checked);
+    if (!typesAllBtn) {
+      return;
+    }
+    const allCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
+    const allSelected =
+      allCheckboxes.length > 0 && allCheckboxes.every((checkbox) => checkbox.checked);
     typesAllBtn.classList.toggle('is-active', allSelected);
     typesAllBtn.setAttribute('aria-pressed', String(allSelected));
   }
@@ -148,8 +380,12 @@
   }
 
   function buildTypesQuery(params) {
+    const allCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
+    const total = allCheckboxes.length;
     const types = selectedTypes();
-    if (types.length) {
+    if (!total || !types.length || types.length === total) {
+      params.delete('type');
+    } else {
       params.set('type', types.join(','));
     }
   }
@@ -785,20 +1021,41 @@
     }
   });
 
-  typesAllBtn.addEventListener('click', () => {
-    const shouldSelectAll = !typeCheckboxes.every((checkbox) => checkbox.checked);
-    typeCheckboxes.forEach((checkbox) => {
-      checkbox.checked = shouldSelectAll;
+  if (typesAllBtn) {
+    typesAllBtn.addEventListener('click', () => {
+      ensureToggleBindings();
+      ensureDebugToggleOn(chkHud);
+      ensureDebugToggleOn(chkGuard);
+
+      const checkboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
+      let changed = false;
+      checkboxes.forEach((checkbox) => {
+        if (checkbox.disabled) {
+          return;
+        }
+        if (!checkbox.checked) {
+          checkbox.checked = true;
+          changed = true;
+        }
+      });
+
+      syncTypesAllButton();
+      if (changed) {
+        notifyFiltersUpdated();
+      }
     });
-    syncTypesAllButton();
-  });
+  }
 
   typeCheckboxes.forEach((checkbox) => {
-    checkbox.addEventListener('change', () => {
-      syncTypesAllButton();
-      if (isLiveActive()) {
-        setLiveStatus('Filters updated — restart live tail to apply.');
+    checkbox.addEventListener('change', (event) => {
+      if (event && event.isTrusted) {
+        const diagWrapper = checkbox.closest('.admin-logs__type[data-diabinds]');
+        if (diagWrapper) {
+          checkbox.dataset._userTouched = '1';
+        }
       }
+      syncTypesAllButton();
+      notifyFiltersUpdated();
     });
   });
 

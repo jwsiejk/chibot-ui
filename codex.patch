@@ -1,71 +1,521 @@
 diff --git a/app/static/js/admin_logs.js b/app/static/js/admin_logs.js
-index cb9e169483b2eb3790c02c48db71672e3b74a37f..f3476501e18435da0ef84f80e96f4a8cfa4b9ffe 100644
+index f3476501e18435da0ef84f80e96f4a8cfa4b9ffe..e1519549d5eca92422860241aa106c4bc368e642 100644
 --- a/app/static/js/admin_logs.js
 +++ b/app/static/js/admin_logs.js
-@@ -523,51 +523,53 @@
+@@ -33,145 +33,381 @@
+   const historyPrev = document.getElementById('historyPrev');
+   const historyNext = document.getElementById('historyNext');
+   const historyCount = document.getElementById('historyCount');
+   const liveTab = document.getElementById('liveTab');
+   const historyTab = document.getElementById('historyTab');
+   const livePanel = document.getElementById('livePanel');
+   const historyPanel = document.getElementById('historyPanel');
+   const userLabel = document.getElementById('adminUserLabel');
+   const debugStatus = document.getElementById('adminDebugStatus');
+   const configPanelRoot = document.getElementById('adminConfigPanel');
+   const drawer = document.getElementById('jsonDrawer');
+   const drawerContent = document.getElementById('jsonDrawerContent');
+   const drawerClose = document.getElementById('jsonDrawerClose');
+   const drawerBackdrop = document.getElementById('jsonDrawerBackdrop');
+ 
+   if (userLabel) {
+     if (userEmail) {
+       userLabel.textContent = `Signed in as ${userEmail}`;
+     } else {
+       userLabel.textContent = '';
+       userLabel.setAttribute('aria-hidden', 'true');
+       userLabel.style.display = 'none';
+     }
+   }
+ 
+-  const typeCheckboxes = Array.from(document.querySelectorAll('input[name="logType"]'));
++  const TYPE_CHECKBOX_SELECTOR = 'input[name="logType"]';
++  const typeCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
++  const chipWrapHud = Array.from(
++    document.querySelectorAll('.admin-logs__type[data-diabinds="hud"]')
++  );
++  const chipWrapAudio = Array.from(
++    document.querySelectorAll('.admin-logs__type[data-diabinds="audio"]')
++  );
++  const chipsHud = chipWrapHud
++    .map((wrapper) => wrapper.querySelector(TYPE_CHECKBOX_SELECTOR))
++    .filter((input) => input instanceof HTMLInputElement);
++  const chipsAudio = chipWrapAudio
++    .map((wrapper) => wrapper.querySelector(TYPE_CHECKBOX_SELECTOR))
++    .filter((input) => input instanceof HTMLInputElement);
++
++  let chkHud = null;
++  let chkGuard = null;
++  let hudObserver = null;
++  let guardObserver = null;
++  let configPanelObserver = null;
+ 
+   if (configPanelRoot && window.AdminConfigPanel && typeof window.AdminConfigPanel.init === 'function') {
+     try {
+       window.AdminConfigPanel.init(configPanelRoot, { statusElement: debugStatus });
++      if (!configPanelObserver) {
++        configPanelObserver = new MutationObserver(() => {
++          ensureToggleBindings();
++        });
++        configPanelObserver.observe(configPanelRoot, { childList: true, subtree: true });
++      }
++      window.requestAnimationFrame(() => {
++        ensureToggleBindings();
++        syncChipsWithDebug({ silent: true });
++      });
+     } catch (err) {
+       console.warn('Failed to initialize admin config panel', err);
+       if (debugStatus) {
+         debugStatus.textContent = 'Failed to load debug controls.';
+       }
+     }
+   } else if (debugStatus) {
+     debugStatus.textContent = '';
+   }
+ 
++  window.requestAnimationFrame(() => {
++    ensureToggleBindings();
++    syncChipsWithDebug({ silent: true });
++  });
++
++  function getGlobalConfigFlag(key) {
++    if (typeof window === 'undefined') {
++      return false;
++    }
++    const cfg = window.__CFG__;
++    if (!cfg || typeof cfg !== 'object') {
++      return false;
++    }
++    if (!Object.prototype.hasOwnProperty.call(cfg, key)) {
++      return false;
++    }
++    return Boolean(cfg[key]);
++  }
++
++  function isHudDebugEnabled() {
++    if (chkHud instanceof HTMLInputElement) {
++      return Boolean(chkHud.checked);
++    }
++    return getGlobalConfigFlag('DIAG_CLIENT_HUD');
++  }
++
++  function isAudioDebugEnabled() {
++    if (chkGuard instanceof HTMLInputElement) {
++      return Boolean(chkGuard.checked);
++    }
++    return getGlobalConfigFlag('DIAG_AUDIO_GUARD');
++  }
++
++  function setChipGroupEnabled(wrappers, inputs, enabled) {
++    let updated = false;
++    const shouldDisable = !enabled;
++    wrappers.forEach((wrapper) => {
++      if (!(wrapper instanceof HTMLElement)) {
++        return;
++      }
++      const before = wrapper.classList.contains('disabled');
++      if (before !== shouldDisable) {
++        updated = true;
++      }
++      wrapper.classList.toggle('disabled', shouldDisable);
++    });
++    inputs.forEach((input) => {
++      if (!(input instanceof HTMLInputElement)) {
++        return;
++      }
++      if (input.disabled !== shouldDisable) {
++        input.disabled = shouldDisable;
++        updated = true;
++      }
++      if (shouldDisable && input.checked) {
++        input.checked = false;
++        updated = true;
++      }
++    });
++    return updated;
++  }
++
++  function observeToggle(input) {
++    if (!(input instanceof HTMLInputElement)) {
++      return null;
++    }
++    const observer = new MutationObserver((mutations) => {
++      for (const mutation of mutations) {
++        if (mutation.type === 'attributes' && mutation.attributeName === 'checked') {
++          syncChipsWithDebug({ silent: true });
++        }
++      }
++    });
++    observer.observe(input, { attributes: true, attributeFilter: ['checked'] });
++    return observer;
++  }
++
++  function handleDebugToggleChange() {
++    syncChipsWithDebug();
++  }
++
++  function ensureToggleBindings() {
++    let changed = false;
++
++    const hudElement = document.getElementById('admin-debug-diag_client_hud');
++    const guardElement = document.getElementById('admin-debug-diag_audio_guard');
++
++    const hudInput = hudElement instanceof HTMLInputElement ? hudElement : null;
++    const guardInput = guardElement instanceof HTMLInputElement ? guardElement : null;
++
++    if (chkHud !== hudInput) {
++      if (hudObserver) {
++        hudObserver.disconnect();
++        hudObserver = null;
++      }
++      chkHud = hudInput;
++      changed = true;
++      if (chkHud) {
++        if (!chkHud.dataset.diagSyncBound) {
++          chkHud.addEventListener('change', handleDebugToggleChange);
++          chkHud.dataset.diagSyncBound = '1';
++        }
++        hudObserver = observeToggle(chkHud);
++      }
++    }
++
++    if (chkGuard !== guardInput) {
++      if (guardObserver) {
++        guardObserver.disconnect();
++        guardObserver = null;
++      }
++      chkGuard = guardInput;
++      changed = true;
++      if (chkGuard) {
++        if (!chkGuard.dataset.diagSyncBound) {
++          chkGuard.addEventListener('change', handleDebugToggleChange);
++          chkGuard.dataset.diagSyncBound = '1';
++        }
++        guardObserver = observeToggle(chkGuard);
++      }
++    }
++
++    if (changed) {
++      syncChipsWithDebug({ silent: true });
++    }
++  }
++
++  function ensureDebugToggleOn(input) {
++    if (!(input instanceof HTMLInputElement)) {
++      return;
++    }
++    if (input.checked) {
++      return;
++    }
++    input.checked = true;
++    const event = new Event('change', { bubbles: true });
++    input.dispatchEvent(event);
++  }
++
++  function syncChipsWithDebug(options = {}) {
++    const silent = Boolean(options && options.silent);
++    const hudOn = isHudDebugEnabled();
++    const audioOn = isAudioDebugEnabled();
++    let updated = false;
++
++    if (setChipGroupEnabled(chipWrapHud, chipsHud, hudOn)) {
++      updated = true;
++    }
++    if (setChipGroupEnabled(chipWrapAudio, chipsAudio, audioOn)) {
++      updated = true;
++    }
++
++    if (hudOn) {
++      chipsHud.forEach((input) => {
++        if (!(input instanceof HTMLInputElement)) {
++          return;
++        }
++        if (!input.dataset._userTouched && !input.checked) {
++          input.checked = true;
++          updated = true;
++        }
++        if (!input.dataset._everEnabled) {
++          input.dataset._everEnabled = '1';
++        }
++      });
++    }
++
++    if (audioOn) {
++      chipsAudio.forEach((input) => {
++        if (!(input instanceof HTMLInputElement)) {
++          return;
++        }
++        if (!input.dataset._userTouched && !input.checked) {
++          input.checked = true;
++          updated = true;
++        }
++        if (!input.dataset._everEnabled) {
++          input.dataset._everEnabled = '1';
++        }
++      });
++    }
++
++    syncTypesAllButton();
++
++    if (!silent && updated) {
++      notifyFiltersUpdated();
++    }
++
++    return updated;
++  }
++
+   function isLiveActive() {
+     return Boolean(liveState.source || liveState.pollTimer);
+   }
+ 
++  function notifyFiltersUpdated() {
++    if (isLiveActive()) {
++      setLiveStatus('Filters updated — restart live tail to apply.');
++    }
++  }
++
+   function setSessionStatus(message) {
+     if (sessionStatus) {
+       sessionStatus.textContent = message;
+     }
+   }
+ 
+   function formatTimestamp(value) {
+     if (typeof value !== 'number' || !Number.isFinite(value)) {
+       return '—';
+     }
+     try {
+       return new Date(value).toISOString();
+     } catch (err) {
+       return String(value);
+     }
+   }
+ 
+   const liveState = {
+     source: null,
+     lines: [],
+     limit: 500,
+     pollTimer: null,
+     sinceMs: null,
+     sid: null,
+   };
+ 
+   const LIVE_POLL_INTERVAL_MS = 3000;
+   const LIVE_POLL_ERROR_INTERVAL_MS = 8000;
+ 
+   const sessionState = {
+     loading: false,
+     prefix: '',
+     openOnly: false,
+     sessions: [],
+     debounceId: null,
+   };
+ 
+   const historyState = {
+     offset: 0,
+     limit: 50,
+     sid: null,
+     events: [],
+     hasMore: false,
+     loading: false,
+   };
+ 
+   function selectedTypes() {
+-    return typeCheckboxes
+-      .filter((checkbox) => checkbox.checked)
++    return Array.from(
++      document.querySelectorAll(`${TYPE_CHECKBOX_SELECTOR}:checked`)
++    )
+       .map((checkbox) => checkbox.value)
+       .filter(Boolean);
+   }
+ 
+   function syncTypesAllButton() {
+-    const allSelected = typeCheckboxes.every((checkbox) => checkbox.checked);
++    if (!typesAllBtn) {
++      return;
++    }
++    const allCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
++    const allSelected =
++      allCheckboxes.length > 0 && allCheckboxes.every((checkbox) => checkbox.checked);
+     typesAllBtn.classList.toggle('is-active', allSelected);
+     typesAllBtn.setAttribute('aria-pressed', String(allSelected));
+   }
+ 
+   function ensureSid(context) {
+     const value = (sidInput.value || '').trim();
+     if (!value) {
+       sidInput.focus({ preventScroll: false });
+       if (context === 'live') {
+         setLiveStatus('Enter a session id to start live tailing.');
+       } else if (context === 'history') {
+         setHistoryStatus('Enter a session id to load history.');
+       }
+       return null;
+     }
+     return value;
+   }
+ 
+   function buildTypesQuery(params) {
++    const allCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
++    const total = allCheckboxes.length;
+     const types = selectedTypes();
+-    if (types.length) {
++    if (!total || !types.length || types.length === total) {
++      params.delete('type');
++    } else {
+       params.set('type', types.join(','));
+     }
+   }
+ 
+   function renderSessions(sessions) {
+     if (!sessionTableBody) {
+       return;
+     }
+ 
+     sessionTableBody.innerHTML = '';
+     sessionState.sessions = sessions;
+ 
+     if (!sessions.length) {
        const emptyRow = document.createElement('tr');
        const cell = document.createElement('td');
-       cell.colSpan = 3;
+       cell.colSpan = 6;
        cell.className = 'admin-logs__empty';
-       cell.textContent = 'No events found for these filters.';
+       cell.textContent = 'No sessions found.';
        emptyRow.appendChild(cell);
-       historyTableBody.appendChild(emptyRow);
-       historyCount.textContent = '0 events';
+       sessionTableBody.appendChild(emptyRow);
        return;
      }
  
      const fragment = document.createDocumentFragment();
-     events.forEach((event, index) => {
-       const row = document.createElement('tr');
-       row.dataset.index = String(index);
+     sessions.forEach((session) => {
+@@ -763,52 +999,73 @@
+   historyTableBody.addEventListener('click', (event) => {
+     const target = event.target;
+     if (!(target instanceof HTMLElement)) return;
+     const row = target.closest('tr');
+     if (!row) return;
+     const index = Number(row.dataset.index);
+     if (Number.isFinite(index)) {
+       openDrawerForRow(index);
+     }
+   });
  
-       const tsCell = document.createElement('td');
-       const typeCell = document.createElement('td');
-       const summaryCell = document.createElement('td');
- 
-       const tsValue = typeof event.ts_ms === 'number' ? event.ts_ms : event.ts_ms || '—';
-       const typeValue = event.type || '—';
-       let summaryValue = event.summary || '';
- 
-       if (!summaryValue) {
--        if (event.meta && typeof event.meta === 'object') {
-+        if (typeof event.msg === 'string' && event.msg) {
-+          summaryValue = event.msg;
-+        } else if (event.meta && typeof event.meta === 'object') {
-           summaryValue = JSON.stringify(event.meta);
-         } else if (event.text) {
-           summaryValue = String(event.text).slice(0, 160);
-         } else {
-           summaryValue = typeValue;
-         }
-       }
- 
-       tsCell.textContent = tsValue;
-       typeCell.textContent = typeValue;
-       summaryCell.textContent = summaryValue;
- 
-       row.appendChild(tsCell);
-       row.appendChild(typeCell);
-       row.appendChild(summaryCell);
-       fragment.appendChild(row);
-     });
- 
-     historyTableBody.appendChild(fragment);
-     historyCount.textContent = `${events.length} event${events.length === 1 ? '' : 's'}`;
+   if (drawerClose) {
+     drawerClose.addEventListener('click', () => toggleDrawer(false));
    }
  
-   function toggleDrawer(open, event) {
-     if (!drawer || !drawerContent || !drawerBackdrop) return;
-     if (open) {
+   if (drawerBackdrop) {
+     drawerBackdrop.addEventListener('click', () => toggleDrawer(false));
+   }
+ 
+   document.addEventListener('keydown', (event) => {
+     if (event.key === 'Escape' && drawer && !drawer.hidden) {
+       toggleDrawer(false);
+     }
+   });
+ 
+-  typesAllBtn.addEventListener('click', () => {
+-    const shouldSelectAll = !typeCheckboxes.every((checkbox) => checkbox.checked);
+-    typeCheckboxes.forEach((checkbox) => {
+-      checkbox.checked = shouldSelectAll;
++  if (typesAllBtn) {
++    typesAllBtn.addEventListener('click', () => {
++      ensureToggleBindings();
++      ensureDebugToggleOn(chkHud);
++      ensureDebugToggleOn(chkGuard);
++
++      const checkboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
++      let changed = false;
++      checkboxes.forEach((checkbox) => {
++        if (checkbox.disabled) {
++          return;
++        }
++        if (!checkbox.checked) {
++          checkbox.checked = true;
++          changed = true;
++        }
++      });
++
++      syncTypesAllButton();
++      if (changed) {
++        notifyFiltersUpdated();
++      }
+     });
+-    syncTypesAllButton();
+-  });
++  }
+ 
+   typeCheckboxes.forEach((checkbox) => {
+-    checkbox.addEventListener('change', () => {
+-      syncTypesAllButton();
+-      if (isLiveActive()) {
+-        setLiveStatus('Filters updated — restart live tail to apply.');
++    checkbox.addEventListener('change', (event) => {
++      if (event && event.isTrusted) {
++        const diagWrapper = checkbox.closest('.admin-logs__type[data-diabinds]');
++        if (diagWrapper) {
++          checkbox.dataset._userTouched = '1';
++        }
+       }
++      syncTypesAllButton();
++      notifyFiltersUpdated();
+     });
+   });
+ 
+   window.addEventListener('beforeunload', () => {
+     stopLive();
+   });
+ 
+   if (sessionTableBody) {
+     loadSessions();
+   }
+ 
+   syncTypesAllButton();
+ })();
 diff --git a/app/templates/admin_logs.html b/app/templates/admin_logs.html
-index 998eab407c83271672455888c6177f7e1e5fd742..cbbc70a28b4551f4fb6d12aa3afbcc9f95c1b6ce 100644
+index cbbc70a28b4551f4fb6d12aa3afbcc9f95c1b6ce..35f678db61af9eed5ab4fe404266b521ae96ba65 100644
 --- a/app/templates/admin_logs.html
 +++ b/app/templates/admin_logs.html
-@@ -109,50 +109,54 @@
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_JSON_SEND" checked />
-               <span>JSON send</span>
+@@ -1,33 +1,37 @@
+ <!doctype html>
+ <html lang="en">
+   <head>
+     <meta charset="utf-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1" />
+     <title>AskChip · Admin Logs</title>
+     <link rel="icon" href="/static/favicon.ico" />
+     <link rel="stylesheet" href="/static/css/styles.css" />
++    <style>
++      .admin-logs__type.disabled { opacity: 0.5; pointer-events: none; }
++      .admin-logs__type.disabled input { pointer-events: none; }
++    </style>
+   </head>
+   <body>
+     <div id="app">
+       <header class="topbar" role="banner">
+         <div class="topbar-left">
+           <span class="sid">Admin ▸ Logs</span>
+         </div>
+         <div class="topbar-right">
+           <span id="adminUserLabel" class="admin-logs__user" aria-live="polite">&nbsp;</span>
+           <a class="topbar-link" href="/">← Main UI</a>
+         </div>
+       </header>
+ 
+       <main class="admin-logs" role="main">
+         <section class="admin-logs__debug" aria-label="Debug settings">
+           <header class="admin-logs__debug-header">
+             <h2>Debug</h2>
+             <p id="adminDebugStatus" class="admin-logs__status" role="status" aria-live="polite"></p>
+           </header>
+           <div id="adminConfigPanel" class="admin-debug-card" data-role="config-panel"></div>
+         </section>
+ 
+         <section class="admin-logs__session-picker" aria-label="Session picker">
+           <header class="admin-logs__filter-header">
+             <h2>Sessions</h2>
+@@ -113,50 +117,62 @@
              </label>
              <label class="admin-logs__type">
                <input type="checkbox" name="logType" value="EVT_WS_JSON_RECV" />
@@ -87,9 +537,21 @@ index 998eab407c83271672455888c6177f7e1e5fd742..cbbc70a28b4551f4fb6d12aa3afbcc9f
                <input type="checkbox" name="logType" value="EVT_WS_AUDIO_SEND" />
                <span>Audio send</span>
              </label>
-+            <label class="admin-logs__type">
-+              <input type="checkbox" name="logType" value="EVT_LOG" checked />
-+              <span>Logs</span>
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_LOG" checked />
+               <span>Logs</span>
+             </label>
++            <label class="admin-logs__type" data-diabinds="audio">
++              <input type="checkbox" name="logType" value="EVT_DIAG_FIRST_AUDIO_FRAME" />
++              <span>Diag: first audio</span>
++            </label>
++            <label class="admin-logs__type" data-diabinds="audio">
++              <input type="checkbox" name="logType" value="EVT_DIAG_NO_AUDIO_FROM_CLIENT" />
++              <span>Diag: no audio</span>
++            </label>
++            <label class="admin-logs__type" data-diabinds="hud">
++              <input type="checkbox" name="logType" value="EVT_DIAG_HUD" />
++              <span>Diag: HUD</span>
 +            </label>
            </div>
          </section>
