@@ -5,7 +5,7 @@ import logging
 import threading
 from typing import Callable, Optional
 
-from app.config import get_env
+from app.db.postgres_config import get_postgres_config
 
 try:  # pragma: no cover - optional dependency guard
     import psycopg  # type: ignore
@@ -58,8 +58,9 @@ def _build_default_factory() -> _ConnectionFactory | None:
     if psycopg is None:  # pragma: no cover - dependency missing
         return None
 
-    dsn = get_env("DATABASE_URL")
-    if not dsn:
+    try:
+        dsn = get_postgres_config().admin.dsn
+    except RuntimeError:
         return None
 
     def _factory() -> "psycopg.Connection":  # type: ignore[name-defined]

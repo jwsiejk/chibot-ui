@@ -3,148 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Any, Dict, Optional
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import asyncpg
+
+from app.db.postgres_config import get_postgres_config, redact_dsn
 
 _log = logging.getLogger(__name__)
 
 _pool: Optional[asyncpg.Pool] = None
 _pool_lock = asyncio.Lock()
-
-def _normalize_env_var(name: str) -> Optional[str]:
-    """Return a trimmed environment variable and update the process env."""
-
-    raw = os.environ.get(name)
-    if raw is None:
-        return None
-
-    normalized = raw.strip()
-    if not normalized:
-        # Remove empty values so asyncpg/libpq does not see blank strings.
-        os.environ.pop(name, None)
-        return None
-
-    if normalized != raw:
-        os.environ[name] = normalized
-
-    return normalized
-
-def _environment_dsn() -> str:
-    # Ensure ssl configuration is normalized even if we return an existing DSN.
-    _normalize_env_var("PGSSLMODE")
-
-        for key in ("DATABASE_URL", "NEON_DATABASE_URL"):
-        value = _normalize_env_var(key)
-        if value is not None:
-            sanitized = _sanitize_dsn(value)
-            if sanitized != value:
-                os.environ[key] = sanitized
-            return sanitized
-
-    def _get_env(name: str) -> Optional[str]:
-        return _normalize_env_var(name)
-
-    host = _get_env("PGHOST")
-    database = _get_env("PGDATABASE")
-    user = _get_env("PGUSER")
-    password = _get_env("PGPASSWORD")
-    port = _get_env("PGPORT") or "5432"
-    sslmode_raw = _normalize_env_var("PGSSLMODE") or "require"
-    sslmode_enc = quote(sslmode_raw, safe="")
-    channel_binding_raw = _normalize_env_var("PGCHANNELBINDING")
-    if channel_binding_raw is None:
-        channel_binding_raw = _normalize_env_var("PGCHANNEL_BINDING")
-    channel_binding_enc = (
-        quote(channel_binding_raw, safe="") if channel_binding_raw else None
-    )
-
-    missing = [
-        name
-        for name, val in (
-            ("PGHOST", host),
-            ("PGDATABASE", database),
-            ("PGUSER", user),
-            ("PGPASSWORD", password),
-        )
-        if not val
-    ]
-    if missing:
-        raise RuntimeError(f"Missing Postgres configuration: {', '.join(missing)}")
-
-    user_enc = quote(user, safe="")
-    password_enc = quote(password, safe="")
-    host_enc = host.strip()
-    query_parts = [f"sslmode={sslmode_enc}"]
-    if channel_binding_enc:
-        query_parts.append(f"channel_binding={channel_binding_enc}")
-
-    query = "&".join(query_parts)
-    return f"postgresql://{user_enc}:{password_enc}@{host_enc}:{port}/{database}?{query}"
-
-
-def _sanitize_dsn(dsn: str) -> str:
-    """Return a DSN with trimmed query parameter values."""
-
-    stripped = dsn.strip()
-    try:
-        parsed = urlsplit(stripped)
-    except ValueError:
-        return stripped
-
-    if not parsed.query:
-        return stripped
-
-    changed = stripped != dsn
-    params = []
-    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
-        clean_key = key.strip()
-        clean_value = value.strip()
-        if clean_key != key or clean_value != value:
-            changed = True
-        params.append((clean_key, clean_value))
-
-    if not changed:
-        return stripped
-
-    cleaned_query = urlencode(params, doseq=True)
-    return urlunsplit(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            cleaned_query,
-            parsed.fragment,
-        )
-    )
-
-
-def _redact_dsn(dsn: str) -> str:
-    try:
-        parsed = urlsplit(dsn)
-    except ValueError:
-        return dsn
-
-    username = parsed.username
-    password = parsed.password
-    hostname = parsed.hostname or ""
-    port_part = f":{parsed.port}" if parsed.port else ""
-    host_display = hostname
-    if host_display and ":" in host_display and not host_display.startswith("["):
-        host_display = f"[{host_display}]"
-
-    if username is None:
-        netloc = parsed.netloc
-    else:
-        if password is None:
-            userinfo = username
-        else:
-            userinfo = f"{username}:***"
-        netloc = f"{userinfo}@{host_display}{port_part}"
-
-    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -154,13 +22,14 @@ async def get_pool() -> asyncpg.Pool:
     if _pool is None:
         async with _pool_lock:
             if _pool is None:
-                dsn = _environment_dsn()
+                config = get_postgres_config()
+                dsn = config.main.dsn
                 _pool = await asyncpg.create_pool(
                     dsn,
                     statement_cache_size=0,
                     max_size=10,
                 )
-                _log.info("evt=db_pool_ready dsn=%s", _redact_dsn(dsn))
+                _log.info("evt=db_pool_ready dsn=%s", redact_dsn(dsn))
     assert _pool is not None
     return _pool
 
