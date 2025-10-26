@@ -1,608 +1,527 @@
-diff --git a/app/admin/flow_zip.py b/app/admin/flow_zip.py
-index 68aeb684663dea58a49c2a78e67425539572b7fc..6435573e807f38588743022098fa93292fc1f288 100644
---- a/app/admin/flow_zip.py
-+++ b/app/admin/flow_zip.py
-@@ -2,113 +2,119 @@
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 597d156d8725ef2c908ed020ea52903da42e6b0e..69efc7fa4894ead160753bc1ed8c693c57c04bb0 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -91,75 +91,416 @@
+     const resolvedSrc = resolveScriptSrc(src);
+     return new Promise((resolve, reject) => {
+       const existing = document.querySelector(`script[data-dynamic="${resolvedSrc}"]`);
+       if (existing) {
+         if (existing.dataset.loaded === "true") {
+           resolve();
+         } else {
+           existing.addEventListener("load", resolve, { once: true });
+           existing.addEventListener("error", reject, { once: true });
+         }
+         return;
+       }
+       const el = document.createElement("script");
+       el.src = resolvedSrc;
+       el.async = false;
+       el.dataset.dynamic = resolvedSrc;
+       el.addEventListener("load", () => {
+         el.dataset.loaded = "true";
+         resolve();
+       }, { once: true });
+       el.addEventListener("error", reject, { once: true });
+       document.head.appendChild(el);
+     });
+   }
  
- from __future__ import annotations
++  async function bootstrapClientConfig() {
++    if (typeof window === "undefined") {
++      return {};
++    }
++    const existing = window.__CFG__;
++    if (existing && typeof existing === "object") {
++      return existing;
++    }
++    try {
++      const response = await fetch("/api/v1/admin/config", {
++        method: "GET",
++        credentials: "include"
++      });
++      if (response && response.ok) {
++        try {
++          const data = await response.json();
++          if (data && typeof data === "object") {
++            window.__CFG__ = data;
++            return data;
++          }
++        } catch (err) {
++          console.warn("Failed to parse admin config", err);
++        }
++      }
++    } catch (err) {
++      // Swallow network/config bootstrap failures silently; defaults will apply.
++    }
++    if (!window.__CFG__ || typeof window.__CFG__ !== "object") {
++      window.__CFG__ = {};
++    }
++    return window.__CFG__;
++  }
++
++  function diagHudEnabled() {
++    if (typeof window === "undefined") {
++      return true;
++    }
++    const cfg = window.__CFG__;
++    if (cfg && typeof cfg.DIAG_CLIENT_HUD === "boolean") {
++      return cfg.DIAG_CLIENT_HUD;
++    }
++    return true;
++  }
++
++  function diagChunkSampleN() {
++    if (typeof window === "undefined") {
++      return 10;
++    }
++    const cfg = window.__CFG__;
++    const candidate = cfg ? Number(cfg.DIAG_CHUNK_SAMPLE_N) : NaN;
++    if (Number.isFinite(candidate) && candidate > 0) {
++      return Math.floor(candidate);
++    }
++    return 10;
++  }
++
++  let diagBadgeEl = null;
++  let diagBadgePendingText = null;
++  let diagBadgeAwaitingDom = false;
++
++  function ensureDiagBadge() {
++    if (!diagHudEnabled()) {
++      return null;
++    }
++    if (typeof document === "undefined") {
++      return null;
++    }
++    if (diagBadgeEl && diagBadgeEl.isConnected) {
++      return diagBadgeEl;
++    }
++    const existing = document.getElementById("diagBadge");
++    if (existing) {
++      diagBadgeEl = existing;
++      if (diagBadgePendingText != null) {
++        existing.textContent = diagBadgePendingText;
++        diagBadgePendingText = null;
++      }
++      return existing;
++    }
++    if (!document.body) {
++      if (!diagBadgeAwaitingDom) {
++        diagBadgeAwaitingDom = true;
++        document.addEventListener("DOMContentLoaded", () => {
++          diagBadgeAwaitingDom = false;
++          const badge = ensureDiagBadge();
++          if (badge && diagBadgePendingText != null) {
++            badge.textContent = diagBadgePendingText;
++            diagBadgePendingText = null;
++          }
++        }, { once: true });
++      }
++      return null;
++    }
++    const badge = document.createElement("div");
++    badge.id = "diagBadge";
++    badge.setAttribute("role", "status");
++    const style = badge.style;
++    style.position = "fixed";
++    style.right = "12px";
++    style.bottom = "12px";
++    style.padding = "6px 10px";
++    style.borderRadius = "10px";
++    style.background = "rgba(17,24,39,0.78)";
++    style.color = "#f8fafc";
++    style.font = "12px/1.4 system-ui, -apple-system, \"Segoe UI\", sans-serif";
++    style.zIndex = "5000";
++    style.pointerEvents = "none";
++    style.boxShadow = "0 6px 24px rgba(15, 23, 42, 0.25)";
++    badge.textContent = diagBadgePendingText != null ? diagBadgePendingText : "diag";
++    diagBadgePendingText = null;
++    document.body.appendChild(badge);
++    diagBadgeEl = badge;
++    return badge;
++  }
++
++  function setBadge(text) {
++    if (!diagHudEnabled()) {
++      return;
++    }
++    const value = text == null ? "" : String(text);
++    const badge = ensureDiagBadge();
++    if (badge) {
++      badge.textContent = value;
++      diagBadgePendingText = null;
++    } else {
++      diagBadgePendingText = value;
++    }
++  }
++
++  async function getMicStream() {
++    if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
++      throw new Error("mediaDevices.getUserMedia unavailable");
++    }
++    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
++    if (diagHudEnabled()) {
++      const tracks = typeof stream.getAudioTracks === "function"
++        ? stream.getAudioTracks().map((track) => ({ label: track.label, enabled: track.enabled }))
++        : [];
++      console.info("DIAG_MEDIA_OK", tracks);
++      setBadge("mic:ok");
++    }
++    return stream;
++  }
++
++  function attachRecorder(stream, onChunk) {
++    if (!stream) {
++      throw new Error("MediaStream required");
++    }
++    if (typeof MediaRecorder === "undefined") {
++      throw new Error("MediaRecorder unsupported");
++    }
++    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
++    let sentBytes = 0;
++    let chunkCount = 0;
++    const sampleEvery = Math.max(1, diagChunkSampleN());
++    recorder.addEventListener("start", () => {
++      if (diagHudEnabled()) {
++        console.info("DIAG_RECORDER_STARTED", Date.now());
++        setBadge("rec:start");
++      }
++    });
++    recorder.addEventListener("dataavailable", async (event) => {
++      if (!event.data || !event.data.size) {
++        return;
++      }
++      chunkCount += 1;
++      const shouldSample = chunkCount % sampleEvery === 0;
++      if (diagHudEnabled() && shouldSample) {
++        console.debug("DIAG_CHUNK", { size: event.data.size, chunkCount });
++        setBadge(`chunks:${chunkCount}`);
++      }
++      try {
++        const buffer = await event.data.arrayBuffer();
++        if (typeof onChunk === "function") {
++          onChunk(buffer);
++        }
++        sentBytes += buffer.byteLength;
++        if (diagHudEnabled() && shouldSample) {
++          console.debug("DIAG_WS_BIN_SENT", { chunkCount, sentBytes });
++        }
++      } catch (err) {
++        if (diagHudEnabled()) {
++          console.warn("DIAG_CHUNK_ERROR", err);
++        }
++      }
++    });
++    return recorder;
++  }
++
++  const DiagRecorder = (() => {
++    let stream = null;
++    let recorder = null;
++    let startPromise = null;
++
++    function cleanupStream() {
++      if (!stream) {
++        return;
++      }
++      try {
++        const tracks = typeof stream.getTracks === "function" ? stream.getTracks() : [];
++        tracks.forEach((track) => {
++          try {
++            track.stop();
++          } catch (err) {
++            if (diagHudEnabled()) {
++              console.warn("DIAG_TRACK_STOP_ERROR", err);
++            }
++          }
++        });
++      } finally {
++        stream = null;
++      }
++    }
++
++    function stop(reason) {
++      if (recorder) {
++        try {
++          if (recorder.state !== "inactive") {
++            recorder.stop();
++          }
++        } catch (err) {
++          if (diagHudEnabled()) {
++            console.warn("DIAG_RECORDER_STOP_ERROR", err);
++          }
++        }
++        recorder = null;
++      }
++      cleanupStream();
++      if (diagHudEnabled()) {
++        if (reason) {
++          setBadge(`stop:${reason}`);
++        } else {
++          setBadge("stop");
++        }
++      }
++    }
++
++    async function startInternal(trigger) {
++      if (!diagHudEnabled()) {
++        return null;
++      }
++      if (recorder && recorder.state !== "inactive") {
++        return recorder;
++      }
++      const wsClient = window.WSClient;
++      const ws = wsClient && wsClient.socket;
++      if (!ws || ws.readyState !== WebSocket.OPEN) {
++        return null;
++      }
++      try {
++        stream = await getMicStream();
++      } catch (err) {
++        if (diagHudEnabled()) {
++          console.warn("DIAG_MEDIA_ERROR", err);
++          setBadge("mic:fail");
++        }
++        stream = null;
++        return null;
++      }
++      try {
++        recorder = attachRecorder(stream, (buffer) => {
++          if (!ws || ws.readyState !== WebSocket.OPEN) {
++            return;
++          }
++          try {
++            ws.send(buffer);
++          } catch (err) {
++            if (diagHudEnabled()) {
++              console.warn("DIAG_WS_SEND_ERROR", err);
++            }
++          }
++        });
++      } catch (err) {
++        if (diagHudEnabled()) {
++          console.warn("DIAG_RECORDER_ERROR", err);
++          setBadge("rec:fail");
++        }
++        cleanupStream();
++        recorder = null;
++        return null;
++      }
++      recorder.addEventListener("stop", () => {
++        if (diagHudEnabled()) {
++          setBadge("rec:stop");
++        }
++      });
++      try {
++        recorder.start(250);
++      } catch (err) {
++        if (diagHudEnabled()) {
++          console.warn("DIAG_RECORDER_START_ERROR", err);
++          setBadge("rec:fail");
++        }
++        stop("start_err");
++        return null;
++      }
++      if (diagHudEnabled()) {
++        setBadge(trigger ? `rec:${trigger}` : "rec");
++      }
++      return recorder;
++    }
++
++    function maybeStart(trigger) {
++      if (!diagHudEnabled()) {
++        return;
++      }
++      if (recorder && recorder.state !== "inactive") {
++        return;
++      }
++      if (startPromise) {
++        return;
++      }
++      const wsClient = window.WSClient;
++      const ws = wsClient && wsClient.socket;
++      if (!ws || ws.readyState !== WebSocket.OPEN) {
++        return;
++      }
++      const promise = startInternal(trigger);
++      if (!promise) {
++        return;
++      }
++      startPromise = promise;
++      promise.finally(() => {
++        if (startPromise === promise) {
++          startPromise = null;
++        }
++      }).catch(() => {
++        if (diagHudEnabled()) {
++          console.warn("DIAG_START_REJECTED");
++        }
++      });
++    }
++
++    return {
++      maybeStart,
++      stop,
++      hudEnabled: diagHudEnabled
++    };
++  })();
++
+   async function ensureRuntimeModules() {
+     if (!window.AppState) {
+       await loadScript("state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("audio_player.js");
+     }
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.AudioRecorder) {
+       await loadScript("audio_recorder.js");
+     }
+     if (!window.PolicyBadges) {
+       await loadScript("policy_badges.js");
+     }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+     if (!window.WSErrorUI) {
+       await loadScript("errors.js");
+     }
+   }
  
- import io
- import json
- from datetime import datetime, timezone
- from pathlib import Path
- from typing import Dict, Iterable, List, Tuple
- from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+   async function init() {
++    await bootstrapClientConfig();
+     await ensureRuntimeModules();
  
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import compute_sha256
- 
- 
- __all__ = ["build_flow_zip"]
- 
- 
- _ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
- _README_NAME = "README.txt"
- _MANIFEST_NAME = "manifest.json"
- _EVENTS_NAME = "events.ndjson"
- _EVENTS_REDACTED_NAME = "events.redacted.ndjson"
- _TIMELINE_NAME = "flow_timeline.ndjson"
- _NLU_NAME = "nlu.ndjson"
- _NLG_NAME = "nlg.ndjson"
-+_LOGS_NAME = "logs.ndjson"
- 
- _TIMELINE_TYPES = {
-     "EVT_TURN_BEGIN",
-     "EVT_TURN_END",
-     "EVT_TTS_START",
-     "EVT_TTS_END",
-     "EVT_TTS_MASK",
-     "EVT_MIC_GATE",
-     "EVT_POLICY_APPLIED",
-     "EVT_POLICY_SNAPSHOT",
-     "EVT_BARGE_IN",
-     "EVT_AUTH_DISABLED",
- }
- _WS_PREFIX = "EVT_WS_"
- _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SEND"}
- _PARTIAL_TYPES = {"EVT_ASR_PARTIAL"}
- 
- _DEFAULT_CAP_BYTES = 25 * 1024 * 1024
- 
- 
- class _EventWrapper(dict):
-     """Container storing a redacted event and its truncation category."""
- 
-     __slots__ = ()
- 
-     @property
-     def event(self) -> Dict[str, object]:
-         return self["event"]
- 
-     @property
-     def category(self) -> str:
-         return self["category"]
- 
- 
- def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _DEFAULT_CAP_BYTES) -> Path:
-     """Package the flow artifacts for ``sid`` into a deterministic ZIP archive."""
- 
-     session_dir = Path(root) / sid
-     manifest_path = session_dir / _MANIFEST_NAME
-     events_path = session_dir / _EVENTS_NAME
-+    logs_path = session_dir / _LOGS_NAME
- 
-     _assert_exists(manifest_path)
-     _assert_exists(events_path)
- 
-     manifest_data = _load_manifest(manifest_path.read_bytes())
-     created_label = _determine_created_label(manifest_data)
-     readme_bytes = _build_readme(sid, created_label)
- 
-     raw_events = _load_events(events_path)
-     wrapped_events = _wrap_events(raw_events)
- 
-     drop_counts = {"vendor_debug": 0, "partials": 0, "events_tail": 0}
-     archive_bytes: bytes = b""
-     payloads: Dict[str, bytes] = {}
-     manifest_bytes: bytes = b""
-+    logs_bytes: bytes | None = None
-+    if logs_path.is_file():
-+        logs_bytes = logs_path.read_bytes()
- 
-     while True:
-         payloads, manifest_bytes = _render_payloads(
-             wrapped_events,
-             manifest_data,
-             readme_bytes,
-             drop_counts,
-             cap_bytes,
-+            logs_bytes=logs_bytes,
-         )
-         entries = dict(payloads)
-         entries[_MANIFEST_NAME] = manifest_bytes
-         archive_bytes = _render_archive(entries)
- 
-         if len(archive_bytes) <= cap_bytes:
-             break
- 
-         if not _drop_next_event(wrapped_events, drop_counts):
-             break
- 
-     archive_path = session_dir / "flow.zip"
-     archive_path.write_bytes(archive_bytes)
-     return archive_path
- 
- 
- def _assert_exists(path: Path) -> None:
-     if not path.is_file():
-         raise FileNotFoundError(path)
- 
- 
- def _load_manifest(raw: bytes) -> Dict[str, object]:
-     try:
-         return json.loads(raw.decode("utf-8"))
-     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-@@ -165,112 +171,124 @@ def _build_readme(sid: str, created_label: str) -> bytes:
- def _wrap_events(events: List[Dict[str, object]]) -> List[_EventWrapper]:
-     wrapped: List[_EventWrapper] = []
-     for event in events:
-         redacted = _redact_event(event)
-         event_type = redacted.get("type")
-         category = _categorize_event(event_type)
-         wrapped.append(_EventWrapper(event=redacted, category=category))
-     return wrapped
- 
- 
- def _categorize_event(event_type: object) -> str:
-     if isinstance(event_type, str):
-         if event_type in _VENDOR_DEBUG_TYPES:
-             return "vendor_debug"
-         if event_type in _PARTIAL_TYPES:
-             return "partials"
-     return "main"
- 
- 
- def _render_payloads(
-     events: List[_EventWrapper],
-     manifest_data: Dict[str, object],
-     readme_bytes: bytes,
-     drop_counts: Dict[str, int],
-     cap_bytes: int,
-+    *,
-+    logs_bytes: bytes | None = None,
- ) -> Tuple[Dict[str, bytes], bytes]:
-     redacted_events = [wrapper.event for wrapper in events]
- 
-     events_bytes = _dump_ndjson(redacted_events)
-     timeline_events = [evt for evt in redacted_events if _is_timeline_event(evt)]
-     timeline_bytes = _dump_ndjson(timeline_events)
-     nlu_events = [evt for evt in redacted_events if evt.get("type") == "EVT_NLU"]
-     nlg_events = [evt for evt in redacted_events if evt.get("type") == "EVT_NLG"]
- 
-     payloads = {
-         _README_NAME: readme_bytes,
-         _EVENTS_REDACTED_NAME: events_bytes,
-         _TIMELINE_NAME: timeline_bytes,
-         _NLU_NAME: _dump_ndjson(nlu_events),
-         _NLG_NAME: _dump_ndjson(nlg_events),
+     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
+     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
+       try {
+         window.PolicyBadges.init();
+       } catch (err) {
+         console.warn("Failed to initialize PolicyBadges", err);
+       }
      }
  
-+    if logs_bytes is not None:
-+        payloads[_LOGS_NAME] = logs_bytes
-+
-     manifest_bytes = _build_manifest_payload(
-         manifest_data,
-         payloads,
-         drop_counts,
-         cap_bytes,
-     )
- 
-     return payloads, manifest_bytes
- 
- 
- def _is_timeline_event(event: Dict[str, object]) -> bool:
-     event_type = event.get("type")
-     if not isinstance(event_type, str):
-         return False
-     if event_type in _TIMELINE_TYPES:
-         return True
-     return event_type.startswith(_WS_PREFIX)
- 
- 
- def _dump_ndjson(events: Iterable[Dict[str, object]]) -> bytes:
-     lines = [json.dumps(event, separators=(",", ":"), ensure_ascii=False) for event in events]
-     if not lines:
-         return b""
-     return ("\n".join(lines) + "\n").encode("utf-8")
- 
- 
- def _build_manifest_payload(
-     manifest_data: Dict[str, object],
-     payloads: Dict[str, bytes],
-     drop_counts: Dict[str, int],
-     cap_bytes: int,
- ) -> bytes:
-     manifest_copy = dict(manifest_data)
- 
-     existing_sha = {}
-     if isinstance(manifest_copy.get("sha256"), dict):
-         existing_sha = dict(manifest_copy["sha256"])
- 
-     sha_entries = {
-         name: compute_sha256(content)
-         for name, content in payloads.items()
+     // --- App context (server-injected) ---
+     function readAppContext() {
+       const node = document.getElementById('appContext');
+       if (!node) return {};
+       try {
+         const raw = node.textContent || node.innerText || '{}';
+         return JSON.parse(raw);
+       } catch (err) {
+         console.warn('Failed to parse app context', err);
+         return {};
+       }
      }
-     existing_sha.update(sha_entries)
-     manifest_copy["sha256"] = existing_sha
- 
-+    file_entries = [
-+        {"name": name, "size": len(content)}
-+        for name, content in sorted(payloads.items())
-+    ]
-+    if file_entries:
-+        manifest_copy["files"] = file_entries
-+
-     if any(drop_counts.values()):
-         manifest_copy["truncated"] = True
-         manifest_copy["cap_bytes"] = cap_bytes
-         manifest_copy["dropped"] = {
-             "vendor_debug": drop_counts.get("vendor_debug", 0),
-             "partials": drop_counts.get("partials", 0),
-             "events_tail": drop_counts.get("events_tail", 0),
+@@ -1058,85 +1399,105 @@
+           try {
+             window.AudioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
+           }
          }
-     else:
-         manifest_copy.pop("truncated", None)
-         manifest_copy.pop("cap_bytes", None)
-         manifest_copy.pop("dropped", None)
- 
-     return json.dumps(manifest_copy, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
- 
- 
- def _render_archive(entries: Dict[str, bytes]) -> bytes:
-     buffer = io.BytesIO()
-     with ZipFile(buffer, mode="w") as zf:
-         for name in sorted(entries):
-             info = ZipInfo(filename=name)
-             info.date_time = _ARCHIVE_TIMESTAMP
-             info.compress_type = ZIP_DEFLATED
-             zf.writestr(info, entries[name])
-     return buffer.getvalue()
-diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
-index 066e8e195ea3018576b2f977e30edec79c25c948..2ac78597a8e65d1bb3329336ccb3422a8b9ff64e 100644
---- a/app/telemetry/exporter.py
-+++ b/app/telemetry/exporter.py
-@@ -3,83 +3,86 @@ from __future__ import annotations
- 
- import hashlib
- import json
- import os
- import time
- from dataclasses import dataclass, field
- from pathlib import Path
- from typing import Any, Dict, Optional
- 
- from app.telemetry import bus as telemetry_bus
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
- 
-     return int(time.time() * 1000)
- 
- 
- @dataclass
- class _SessionStats:
-     """In-memory counters tracked for each active session."""
- 
-     directory: Path
-     events_path: Path
-     manifest_path: Path
-+    logs_path: Path
-     events_written: int = 0
-     by_type: Dict[str, int] = field(default_factory=dict)
-     started_ms: Optional[int] = None
-     ended_ms: Optional[int] = None
-     subscription_token: Optional[str] = None
- 
- 
- class FileExporter:
-     """Write session telemetry to disk in a restart-friendly manner."""
- 
-     def __init__(self, root: Path | str = "exports", *, bus=telemetry_bus) -> None:
-         self._root = Path(root)
-         self._bus = bus
-         self._sessions: Dict[str, _SessionStats] = {}
- 
-     def begin(self, sid: str) -> None:
-         """Prepare an export directory and subscribe to telemetry for the session."""
- 
-         if sid in self._sessions:
-             # Duplicate begin calls should not create additional subscriptions.
-             return
- 
-         session_dir = self._root / sid
-         session_dir.mkdir(parents=True, exist_ok=True)
-         stats = _SessionStats(
-             directory=session_dir,
-             events_path=session_dir / "events.ndjson",
-             manifest_path=session_dir / "manifest.json",
-+            logs_path=session_dir / "logs.ndjson",
-             started_ms=_now_ms(),
-         )
- 
-         # Reset the NDJSON log for the session.
-         stats.events_path.write_text("", encoding="utf-8")
-+        stats.logs_path.write_text("", encoding="utf-8")
- 
-         def _callback(event: Dict[str, Any]) -> None:
-             if event.get("sid") != sid:
-                 return
-             self._handle_event(sid, event)
- 
-         token = self._bus.subscribe("*", _callback)
-         stats.subscription_token = token
-         self._sessions[sid] = stats
- 
-         manifest = {
-             "sid": sid,
-             "schema_version": "1",
-             "started_ms": stats.started_ms,
-             "open": True,
-             "events_written": 0,
-             "by_type": {},
+         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+           window.AudioPlayer.interrupt();
          }
-         self._write_manifest(stats, manifest)
+         setPttActive(false);
+       }
+       updateResumeBanner(state);
+     });
  
-     def end(self, sid: str, summary: Optional[Dict[str, Any]] = None) -> None:
-         """Finalize a session by writing manifest metadata and unsubscribing."""
+     const POST_TTS_RELEASE_MS = 150;
  
-         stats = self._sessions.pop(sid, None)
-         if not stats:
-@@ -102,50 +105,60 @@ class FileExporter:
-             "events_written": stats.events_written,
-             "by_type": dict(stats.by_type),
-             "ended_ms": ended_ms,
+     window.addEventListener('tts.start', (event) => {
+       const detail = event && event.detail;
+       if (detail) {
+         updateVoiceState(extractVoiceLocale(detail));
+       }
+       if (pttEnabled && !pttActive) {
+         applyPttMask({ force: true });
+       }
+     });
++    window.addEventListener('turn.state', (event) => {
++      const detail = event && event.detail;
++      if (!detail) {
++        return;
++      }
++      const state = typeof detail.state === 'string'
++        ? detail.state
++        : (detail.meta && typeof detail.meta.state === 'string' ? detail.meta.state : null);
++      if (!state || state.toLowerCase() !== 'ready') {
++        return;
++      }
++      const reason = typeof detail.reason === 'string'
++        ? detail.reason
++        : (detail.meta && typeof detail.meta.reason === 'string' ? detail.meta.reason : null);
++      if (!reason || reason.toLowerCase().includes('tts')) {
++        DiagRecorder.maybeStart('turn');
++      }
++    });
+     window.addEventListener('tts.end', () => {
+       const release = () => {
+         applyPttMask({ force: true });
++        DiagRecorder.maybeStart('ready');
+       };
+       if (POST_TTS_RELEASE_MS > 0) {
+         setTimeout(release, POST_TTS_RELEASE_MS);
+       } else {
+         release();
+       }
+     });
+     window.addEventListener('asr.ready', () => {
+       if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+         try {
+           const maybePromise = window.AudioRecorder.start();
+           if (maybePromise && typeof maybePromise.catch === 'function') {
+             maybePromise.catch((err) => {
+               console.error('AudioRecorder start on asr.ready failed', err);
+             });
+           }
+         } catch (err) {
+           console.error('AudioRecorder start on asr.ready failed', err);
          }
+       }
+       if (pttEnabled && !pttActive) {
+         applyPttMask({ force: true });
+       }
+     });
  
-         if summary is not None:
-             manifest["summary"] = dict(summary)
+     window.addEventListener('assistant.suggestions', (event) => {
+       const detail = event && event.detail;
+       applySuggestionsFrame(detail);
+     });
  
-         self._write_manifest(stats, manifest)
+     window.addEventListener('ws.close', () => {
+       resetSuggestions();
++      DiagRecorder.stop('ws');
+     });
  
-     def _handle_event(self, sid: str, event: Dict[str, Any]) -> None:
-         stats = self._sessions.get(sid)
-         if not stats:
-             return
+     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
+     if (urlParams.get('wsSmoke') === '1') {
+       const transitions = [];
+       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
  
-         with stats.events_path.open("a", encoding="utf-8") as handle:
-             json.dump(event, handle, separators=(",", ":"), ensure_ascii=False)
-             handle.write("\n")
- 
-         stats.events_written += 1
- 
-         event_type = event.get("type")
-         if isinstance(event_type, str) and event_type:
-             stats.by_type[event_type] = stats.by_type.get(event_type, 0) + 1
- 
-+            if event_type == "EVT_LOG":
-+                log_entry: Dict[str, Any]
-+                if isinstance(event, dict):
-+                    log_entry = dict(event)
-+                else:
-+                    log_entry = {"type": event_type}
-+                with stats.logs_path.open("a", encoding="utf-8") as log_handle:
-+                    json.dump(log_entry, log_handle, separators=(",", ":"), ensure_ascii=False)
-+                    log_handle.write("\n")
-+
-         ts_ms = event.get("ts_ms")
-         if isinstance(ts_ms, int):
-             candidate = ts_ms
-             if stats.started_ms is not None and candidate < stats.started_ms:
-                 candidate = stats.started_ms
-             stats.ended_ms = candidate
- 
-         manifest = {
-             "sid": sid,
-             "schema_version": "1",
-             "started_ms": stats.started_ms,
-             "open": True,
-             "events_written": stats.events_written,
-             "by_type": dict(stats.by_type),
+       class MockSocket extends EventTarget {
+         constructor() {
+           super();
+           this.readyState = WebSocket.CONNECTING;
+           setTimeout(() => {
+             this.readyState = WebSocket.OPEN;
+             this.dispatchEvent(new Event('open'));
+           }, 0);
          }
-         self._write_manifest(stats, manifest)
- 
-     def _write_manifest(self, stats: _SessionStats, manifest: Dict[str, Any]) -> None:
-         tmp_path = stats.manifest_path.with_name(stats.manifest_path.name + ".tmp")
-         tmp_path.write_text(
-             json.dumps(manifest, separators=(",", ":"), ensure_ascii=False),
-             encoding="utf-8",
-         )
-         os.replace(tmp_path, stats.manifest_path)
- 
-diff --git a/tests/test_flow_zip_packaging.py b/tests/test_flow_zip_packaging.py
-index 4655acafc5e26f0ec05f00666c6a8388f4f3473e..93493087e874d49235a4321edd5bf3c3ff3a29c5 100644
---- a/tests/test_flow_zip_packaging.py
-+++ b/tests/test_flow_zip_packaging.py
-@@ -1,115 +1,143 @@
- from __future__ import annotations
- 
- import base64
- import json
- import os
- import tempfile
- import unittest
- from pathlib import Path
- from zipfile import ZipFile
- 
- from app.admin.flow_zip import build_flow_zip
- 
- 
- _README = "README.txt"
- _EVENTS_REDACTED = "events.redacted.ndjson"
- _TIMELINE = "flow_timeline.ndjson"
- _MANIFEST = "manifest.json"
- _NLG = "nlg.ndjson"
- _NLU = "nlu.ndjson"
-+_LOGS = "logs.ndjson"
- 
- class BuildFlowZipPackagingTest(unittest.TestCase):
-     def test_redaction_and_sha_integrity(self) -> None:
-         with tempfile.TemporaryDirectory() as tmp:
-             root = Path(tmp) / "exports"
-             sid = "sid-redaction"
-             session_dir = self._prepare_session(root, sid)
- 
-             events = [
-                 {
-                     "type": "EVT_WS_JSON_RECV",
-                     "sid": sid,
-                     "ts_ms": 111,
-                     "meta": {
-                         "authorization": "Bearer supersecretvalue",
-                         "email": "agent@example.com",
-                     },
-                 },
-                 {
-                     "type": "EVT_NLU",
-                     "sid": sid,
-                     "ts_ms": 222,
-                     "meta": {"intent": "help_install"},
-                 },
-                 {
-                     "type": "EVT_NLG",
-                     "sid": sid,
-                     "ts_ms": 333,
-                     "meta": {"utterance": "Masked"},
-                 },
-             ]
-             self._write_events(session_dir, events)
- 
-+            logs = [
-+                {
-+                    "sid": sid,
-+                    "ts": 111.1,
-+                    "level": "INFO",
-+                    "logger": "test",
-+                    "msg": "first",
-+                },
-+                {
-+                    "sid": sid,
-+                    "ts": 222.2,
-+                    "level": "ERROR",
-+                    "logger": "test",
-+                    "msg": "second",
-+                },
-+            ]
-+            self._write_logs(session_dir, logs)
-+
-             archive_path = build_flow_zip(sid, root=root)
-             self.assertTrue(archive_path.exists())
- 
-             with ZipFile(archive_path) as zf:
-                 names = zf.namelist()
-                 self.assertEqual(
-                     names,
--                    [_README, _EVENTS_REDACTED, _TIMELINE, _MANIFEST, _NLG, _NLU],
-+                    [_README, _EVENTS_REDACTED, _TIMELINE, _LOGS, _MANIFEST, _NLG, _NLU],
-                 )
- 
-                 events_data = zf.read(_EVENTS_REDACTED).decode("utf-8").strip().splitlines()
-                 self.assertEqual(len(events_data), 3)
-                 first_event = json.loads(events_data[0])
-                 self.assertNotIn("supersecretvalue", json.dumps(first_event))
-                 self.assertIn("***@example.com", json.dumps(first_event))
-                 auth_value = first_event["meta"]["authorization"]
-                 self.assertTrue(auth_value.startswith("Bearer "))
-                 self.assertIn("****", auth_value)
- 
-+                logs_data = [json.loads(line) for line in zf.read(_LOGS).decode("utf-8").strip().splitlines() if line]
-+                self.assertEqual(len(logs_data), len(logs))
-+                self.assertEqual(logs_data[0]["msg"], "first")
-+
-                 manifest = json.loads(zf.read(_MANIFEST).decode("utf-8"))
-                 sha_map = manifest.get("sha256", {})
--                for name in [_README, _EVENTS_REDACTED, _TIMELINE, _NLG, _NLU]:
-+                for name in [_README, _EVENTS_REDACTED, _TIMELINE, _LOGS, _NLG, _NLU]:
-                     digest = self._sha256_bytes(zf.read(name))
-                     self.assertEqual(sha_map[name], digest)
- 
-+                manifest_files = manifest.get("files", [])
-+                self.assertTrue(
-+                    any(entry.get("name") == _LOGS and entry.get("size") == len(zf.read(_LOGS)) for entry in manifest_files)
-+                )
-+
-                 self.assertNotIn("events.ndjson", names)
-                 self.assertFalse(manifest.get("truncated"))
- 
-     def test_truncation_applies_cap_and_records_drops(self) -> None:
-         with tempfile.TemporaryDirectory() as tmp:
-             root = Path(tmp) / "exports"
-             sid = "sid-truncation"
-             session_dir = self._prepare_session(root, sid)
- 
--            cap_override = 200_000
--            vendor_events = [self._make_event("EVT_VENDOR_DEBUG", sid, self._blob(50_000)) for _ in range(3)]
--            partial_events = [self._make_event("EVT_ASR_PARTIAL", sid, self._blob(60_000)) for _ in range(3)]
--            main_events = [self._make_event("EVT_WS_JSON_SEND", sid, self._blob(70_000)) for _ in range(6)]
-+            cap_override = 1_500
-+            vendor_events = [self._make_event("EVT_VENDOR_DEBUG", sid, self._blob(8_000)) for _ in range(2)]
-+            partial_events = [self._make_event("EVT_ASR_PARTIAL", sid, self._blob(9_000)) for _ in range(2)]
-+            main_events = [self._make_event("EVT_WS_JSON_SEND", sid, self._blob(10_000)) for _ in range(3)]
-             events = vendor_events + partial_events + main_events
-             self._write_events(session_dir, events)
- 
-             archive_path = build_flow_zip(sid, root=root, cap_bytes=cap_override)
-             self.assertLessEqual(archive_path.stat().st_size, cap_override)
- 
-             with ZipFile(archive_path) as zf:
-                 manifest = json.loads(zf.read(_MANIFEST).decode("utf-8"))
-                 self.assertTrue(manifest.get("truncated"))
-                 self.assertEqual(manifest.get("cap_bytes"), cap_override)
-                 dropped = manifest.get("dropped", {})
-                 self.assertGreaterEqual(dropped.get("vendor_debug", 0), 1)
-                 self.assertGreaterEqual(dropped.get("partials", 0), 1)
-                 self.assertGreater(dropped.get("events_tail", 0), 0)
- 
-                 redacted_lines = [json.loads(line) for line in zf.read(_EVENTS_REDACTED).decode("utf-8").strip().splitlines() if line]
-                 vendor_remaining = sum(1 for evt in redacted_lines if evt.get("type") == "EVT_VENDOR_DEBUG")
-                 partial_remaining = sum(1 for evt in redacted_lines if evt.get("type") == "EVT_ASR_PARTIAL")
-                 self.assertEqual(
-                     vendor_remaining,
-                     len(vendor_events) - dropped.get("vendor_debug", 0),
-                 )
-                 self.assertEqual(
-                     partial_remaining,
-                     len(partial_events) - dropped.get("partials", 0),
-@@ -117,45 +145,52 @@ class BuildFlowZipPackagingTest(unittest.TestCase):
- 
-     def _prepare_session(self, root: Path, sid: str) -> Path:
-         session_dir = root / sid
-         session_dir.mkdir(parents=True, exist_ok=True)
-         manifest = {
-             "sid": sid,
-             "schema_version": "1",
-             "started_ms": 1_732_200_000_000,
-             "open": False,
-             "events_written": 0,
-             "by_type": {},
+         send(payload) {
+           this.lastSent = payload;
          }
-         (session_dir / "manifest.json").write_text(
-             json.dumps(manifest, separators=(",", ":"), ensure_ascii=False),
-             encoding="utf-8",
-         )
-         return session_dir
- 
-     def _write_events(self, session_dir: Path, events: list[dict]) -> None:
-         events_path = session_dir / "events.ndjson"
-         with events_path.open("w", encoding="utf-8") as handle:
-             for event in events:
-                 json.dump(event, handle, separators=(",", ":"), ensure_ascii=False)
-                 handle.write("\n")
- 
-+    def _write_logs(self, session_dir: Path, logs: list[dict]) -> None:
-+        logs_path = session_dir / "logs.ndjson"
-+        with logs_path.open("w", encoding="utf-8") as handle:
-+            for entry in logs:
-+                json.dump(entry, handle, separators=(",", ":"), ensure_ascii=False)
-+                handle.write("\n")
-+
-     def _sha256_bytes(self, payload: bytes) -> str:
-         import hashlib
- 
-         return hashlib.sha256(payload).hexdigest()
- 
-     def _blob(self, size: int) -> str:
-         return base64.b64encode(os.urandom(size)).decode("ascii")
- 
-     def _make_event(self, event_type: str, sid: str, blob: str) -> dict:
-         return {
-             "type": event_type,
-             "sid": sid,
-             "ts_ms": 1000,
-             "meta": {"hint": "ok"},
-             "payload": {"blob": blob},
-         }
- 
- 
- if __name__ == "__main__":
-     unittest.main()
+         close(code = 1000, reason = '') {
+           this.readyState = WebSocket.CLOSED;
+           const ev = new Event('close');
+           ev.code = code;
+           ev.reason = reason;
+           ev.wasClean = true;

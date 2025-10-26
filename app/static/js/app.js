@@ -113,6 +113,346 @@
     });
   }
 
+  async function bootstrapClientConfig() {
+    if (typeof window === "undefined") {
+      return {};
+    }
+    const existing = window.__CFG__;
+    if (existing && typeof existing === "object") {
+      return existing;
+    }
+    try {
+      const response = await fetch("/api/v1/admin/config", {
+        method: "GET",
+        credentials: "include"
+      });
+      if (response && response.ok) {
+        try {
+          const data = await response.json();
+          if (data && typeof data === "object") {
+            window.__CFG__ = data;
+            return data;
+          }
+        } catch (err) {
+          console.warn("Failed to parse admin config", err);
+        }
+      }
+    } catch (err) {
+      // Swallow network/config bootstrap failures silently; defaults will apply.
+    }
+    if (!window.__CFG__ || typeof window.__CFG__ !== "object") {
+      window.__CFG__ = {};
+    }
+    return window.__CFG__;
+  }
+
+  function diagHudEnabled() {
+    if (typeof window === "undefined") {
+      return true;
+    }
+    const cfg = window.__CFG__;
+    if (cfg && typeof cfg.DIAG_CLIENT_HUD === "boolean") {
+      return cfg.DIAG_CLIENT_HUD;
+    }
+    return true;
+  }
+
+  function diagChunkSampleN() {
+    if (typeof window === "undefined") {
+      return 10;
+    }
+    const cfg = window.__CFG__;
+    const candidate = cfg ? Number(cfg.DIAG_CHUNK_SAMPLE_N) : NaN;
+    if (Number.isFinite(candidate) && candidate > 0) {
+      return Math.floor(candidate);
+    }
+    return 10;
+  }
+
+  let diagBadgeEl = null;
+  let diagBadgePendingText = null;
+  let diagBadgeAwaitingDom = false;
+
+  function ensureDiagBadge() {
+    if (!diagHudEnabled()) {
+      return null;
+    }
+    if (typeof document === "undefined") {
+      return null;
+    }
+    if (diagBadgeEl && diagBadgeEl.isConnected) {
+      return diagBadgeEl;
+    }
+    const existing = document.getElementById("diagBadge");
+    if (existing) {
+      diagBadgeEl = existing;
+      if (diagBadgePendingText != null) {
+        existing.textContent = diagBadgePendingText;
+        diagBadgePendingText = null;
+      }
+      return existing;
+    }
+    if (!document.body) {
+      if (!diagBadgeAwaitingDom) {
+        diagBadgeAwaitingDom = true;
+        document.addEventListener("DOMContentLoaded", () => {
+          diagBadgeAwaitingDom = false;
+          const badge = ensureDiagBadge();
+          if (badge && diagBadgePendingText != null) {
+            badge.textContent = diagBadgePendingText;
+            diagBadgePendingText = null;
+          }
+        }, { once: true });
+      }
+      return null;
+    }
+    const badge = document.createElement("div");
+    badge.id = "diagBadge";
+    badge.setAttribute("role", "status");
+    const style = badge.style;
+    style.position = "fixed";
+    style.right = "12px";
+    style.bottom = "12px";
+    style.padding = "6px 10px";
+    style.borderRadius = "10px";
+    style.background = "rgba(17,24,39,0.78)";
+    style.color = "#f8fafc";
+    style.font = "12px/1.4 system-ui, -apple-system, \"Segoe UI\", sans-serif";
+    style.zIndex = "5000";
+    style.pointerEvents = "none";
+    style.boxShadow = "0 6px 24px rgba(15, 23, 42, 0.25)";
+    badge.textContent = diagBadgePendingText != null ? diagBadgePendingText : "diag";
+    diagBadgePendingText = null;
+    document.body.appendChild(badge);
+    diagBadgeEl = badge;
+    return badge;
+  }
+
+  function setBadge(text) {
+    if (!diagHudEnabled()) {
+      return;
+    }
+    const value = text == null ? "" : String(text);
+    const badge = ensureDiagBadge();
+    if (badge) {
+      badge.textContent = value;
+      diagBadgePendingText = null;
+    } else {
+      diagBadgePendingText = value;
+    }
+  }
+
+  async function getMicStream() {
+    if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+      throw new Error("mediaDevices.getUserMedia unavailable");
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (diagHudEnabled()) {
+      const tracks = typeof stream.getAudioTracks === "function"
+        ? stream.getAudioTracks().map((track) => ({ label: track.label, enabled: track.enabled }))
+        : [];
+      console.info("DIAG_MEDIA_OK", tracks);
+      setBadge("mic:ok");
+    }
+    return stream;
+  }
+
+  function attachRecorder(stream, onChunk) {
+    if (!stream) {
+      throw new Error("MediaStream required");
+    }
+    if (typeof MediaRecorder === "undefined") {
+      throw new Error("MediaRecorder unsupported");
+    }
+    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+    let sentBytes = 0;
+    let chunkCount = 0;
+    const sampleEvery = Math.max(1, diagChunkSampleN());
+    recorder.addEventListener("start", () => {
+      if (diagHudEnabled()) {
+        console.info("DIAG_RECORDER_STARTED", Date.now());
+        setBadge("rec:start");
+      }
+    });
+    recorder.addEventListener("dataavailable", async (event) => {
+      if (!event.data || !event.data.size) {
+        return;
+      }
+      chunkCount += 1;
+      const shouldSample = chunkCount % sampleEvery === 0;
+      if (diagHudEnabled() && shouldSample) {
+        console.debug("DIAG_CHUNK", { size: event.data.size, chunkCount });
+        setBadge(`chunks:${chunkCount}`);
+      }
+      try {
+        const buffer = await event.data.arrayBuffer();
+        if (typeof onChunk === "function") {
+          onChunk(buffer);
+        }
+        sentBytes += buffer.byteLength;
+        if (diagHudEnabled() && shouldSample) {
+          console.debug("DIAG_WS_BIN_SENT", { chunkCount, sentBytes });
+        }
+      } catch (err) {
+        if (diagHudEnabled()) {
+          console.warn("DIAG_CHUNK_ERROR", err);
+        }
+      }
+    });
+    return recorder;
+  }
+
+  const DiagRecorder = (() => {
+    let stream = null;
+    let recorder = null;
+    let startPromise = null;
+
+    function cleanupStream() {
+      if (!stream) {
+        return;
+      }
+      try {
+        const tracks = typeof stream.getTracks === "function" ? stream.getTracks() : [];
+        tracks.forEach((track) => {
+          try {
+            track.stop();
+          } catch (err) {
+            if (diagHudEnabled()) {
+              console.warn("DIAG_TRACK_STOP_ERROR", err);
+            }
+          }
+        });
+      } finally {
+        stream = null;
+      }
+    }
+
+    function stop(reason) {
+      if (recorder) {
+        try {
+          if (recorder.state !== "inactive") {
+            recorder.stop();
+          }
+        } catch (err) {
+          if (diagHudEnabled()) {
+            console.warn("DIAG_RECORDER_STOP_ERROR", err);
+          }
+        }
+        recorder = null;
+      }
+      cleanupStream();
+      if (diagHudEnabled()) {
+        if (reason) {
+          setBadge(`stop:${reason}`);
+        } else {
+          setBadge("stop");
+        }
+      }
+    }
+
+    async function startInternal(trigger) {
+      if (!diagHudEnabled()) {
+        return null;
+      }
+      if (recorder && recorder.state !== "inactive") {
+        return recorder;
+      }
+      const wsClient = window.WSClient;
+      const ws = wsClient && wsClient.socket;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        return null;
+      }
+      try {
+        stream = await getMicStream();
+      } catch (err) {
+        if (diagHudEnabled()) {
+          console.warn("DIAG_MEDIA_ERROR", err);
+          setBadge("mic:fail");
+        }
+        stream = null;
+        return null;
+      }
+      try {
+        recorder = attachRecorder(stream, (buffer) => {
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            return;
+          }
+          try {
+            ws.send(buffer);
+          } catch (err) {
+            if (diagHudEnabled()) {
+              console.warn("DIAG_WS_SEND_ERROR", err);
+            }
+          }
+        });
+      } catch (err) {
+        if (diagHudEnabled()) {
+          console.warn("DIAG_RECORDER_ERROR", err);
+          setBadge("rec:fail");
+        }
+        cleanupStream();
+        recorder = null;
+        return null;
+      }
+      recorder.addEventListener("stop", () => {
+        if (diagHudEnabled()) {
+          setBadge("rec:stop");
+        }
+      });
+      try {
+        recorder.start(250);
+      } catch (err) {
+        if (diagHudEnabled()) {
+          console.warn("DIAG_RECORDER_START_ERROR", err);
+          setBadge("rec:fail");
+        }
+        stop("start_err");
+        return null;
+      }
+      if (diagHudEnabled()) {
+        setBadge(trigger ? `rec:${trigger}` : "rec");
+      }
+      return recorder;
+    }
+
+    function maybeStart(trigger) {
+      if (!diagHudEnabled()) {
+        return;
+      }
+      if (recorder && recorder.state !== "inactive") {
+        return;
+      }
+      if (startPromise) {
+        return;
+      }
+      const wsClient = window.WSClient;
+      const ws = wsClient && wsClient.socket;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      const promise = startInternal(trigger);
+      if (!promise) {
+        return;
+      }
+      startPromise = promise;
+      promise.finally(() => {
+        if (startPromise === promise) {
+          startPromise = null;
+        }
+      }).catch(() => {
+        if (diagHudEnabled()) {
+          console.warn("DIAG_START_REJECTED");
+        }
+      });
+    }
+
+    return {
+      maybeStart,
+      stop,
+      hudEnabled: diagHudEnabled
+    };
+  })();
+
   async function ensureRuntimeModules() {
     if (!window.AppState) {
       await loadScript("state.js");
@@ -138,6 +478,7 @@
   }
 
   async function init() {
+    await bootstrapClientConfig();
     await ensureRuntimeModules();
 
     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
@@ -1080,9 +1421,28 @@
         applyPttMask({ force: true });
       }
     });
+    window.addEventListener('turn.state', (event) => {
+      const detail = event && event.detail;
+      if (!detail) {
+        return;
+      }
+      const state = typeof detail.state === 'string'
+        ? detail.state
+        : (detail.meta && typeof detail.meta.state === 'string' ? detail.meta.state : null);
+      if (!state || state.toLowerCase() !== 'ready') {
+        return;
+      }
+      const reason = typeof detail.reason === 'string'
+        ? detail.reason
+        : (detail.meta && typeof detail.meta.reason === 'string' ? detail.meta.reason : null);
+      if (!reason || reason.toLowerCase().includes('tts')) {
+        DiagRecorder.maybeStart('turn');
+      }
+    });
     window.addEventListener('tts.end', () => {
       const release = () => {
         applyPttMask({ force: true });
+        DiagRecorder.maybeStart('ready');
       };
       if (POST_TTS_RELEASE_MS > 0) {
         setTimeout(release, POST_TTS_RELEASE_MS);
@@ -1115,6 +1475,7 @@
 
     window.addEventListener('ws.close', () => {
       resetSuggestions();
+      DiagRecorder.stop('ws');
     });
 
     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
