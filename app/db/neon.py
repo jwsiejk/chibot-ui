@@ -5,7 +5,7 @@ import asyncio
 import logging
 import os
 from typing import Any, Dict, Optional
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import asyncpg
 
@@ -37,10 +37,12 @@ def _environment_dsn() -> str:
     _normalize_env_var("PGSSLMODE")
 
         for key in ("DATABASE_URL", "NEON_DATABASE_URL"):
-    
         value = _normalize_env_var(key)
         if value is not None:
-            return value
+            sanitized = _sanitize_dsn(value)
+            if sanitized != value:
+                os.environ[key] = sanitized
+            return sanitized
 
     def _get_env(name: str) -> Optional[str]:
         return _normalize_env_var(name)
@@ -52,6 +54,12 @@ def _environment_dsn() -> str:
     port = _get_env("PGPORT") or "5432"
     sslmode_raw = _normalize_env_var("PGSSLMODE") or "require"
     sslmode_enc = quote(sslmode_raw, safe="")
+    channel_binding_raw = _normalize_env_var("PGCHANNELBINDING")
+    if channel_binding_raw is None:
+        channel_binding_raw = _normalize_env_var("PGCHANNEL_BINDING")
+    channel_binding_enc = (
+        quote(channel_binding_raw, safe="") if channel_binding_raw else None
+    )
 
     missing = [
         name
@@ -69,8 +77,47 @@ def _environment_dsn() -> str:
     user_enc = quote(user, safe="")
     password_enc = quote(password, safe="")
     host_enc = host.strip()
-    return (
-        f"postgresql://{user_enc}:{password_enc}@{host_enc}:{port}/{database}?sslmode={sslmode_enc}"
+    query_parts = [f"sslmode={sslmode_enc}"]
+    if channel_binding_enc:
+        query_parts.append(f"channel_binding={channel_binding_enc}")
+
+    query = "&".join(query_parts)
+    return f"postgresql://{user_enc}:{password_enc}@{host_enc}:{port}/{database}?{query}"
+
+
+def _sanitize_dsn(dsn: str) -> str:
+    """Return a DSN with trimmed query parameter values."""
+
+    stripped = dsn.strip()
+    try:
+        parsed = urlsplit(stripped)
+    except ValueError:
+        return stripped
+
+    if not parsed.query:
+        return stripped
+
+    changed = stripped != dsn
+    params = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        clean_key = key.strip()
+        clean_value = value.strip()
+        if clean_key != key or clean_value != value:
+            changed = True
+        params.append((clean_key, clean_value))
+
+    if not changed:
+        return stripped
+
+    cleaned_query = urlencode(params, doseq=True)
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            cleaned_query,
+            parsed.fragment,
+        )
     )
 
 
