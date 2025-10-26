@@ -1,700 +1,491 @@
-diff --git a/app/config.py b/app/config.py
-index 09a6e98fa7461d54b56f9f3c55bb5e22c7f2a99d..b3f44f909a010bfe83bbf85b7731ab543ca88076 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -1,223 +1,304 @@
- """Application configuration helpers."""
- 
- from __future__ import annotations
- 
-+import logging
- import os
- import threading
- from typing import Any, Mapping, MutableMapping, Optional
- 
- try:
-     from dotenv import load_dotenv  # type: ignore
- except ImportError:  # pragma: no cover - optional dependency
-     load_dotenv = None
- else:  # pragma: no branch
-     load_dotenv(dotenv_path=".env", override=False)
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index 9e08eb5f0a023548c7a804e17f3db2602f108a2c..a43f3e1317dd0d8fb3067bacc37a3300ee2829c8 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -65,57 +65,59 @@ class Response:
  
  
- def env_bool(name: str, default: bool = False) -> bool:
-     """Return an environment variable parsed as a boolean."""
+ def json_response(*, status: int = 200, **payload: Any) -> Response:
+     """Serialize a payload to JSON using a compact representation."""
  
-     value = os.getenv(name)
-     if value is None:
-         return bool(default)
-     value = value.strip().lower()
-     if value in {"1", "true", "t", "yes", "y", "on"}:
-         return True
-     if value in {"0", "false", "f", "no", "n", "off"}:
-         return False
-     return bool(default)
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
+     )
+     return Response(status=status, body=body, headers=headers)
  
  
- DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
- ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
-     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
+ WS_ROUTE = "/ws/v2/chat"
+ HEALTH_ROUTE = "/api/v1/health"
+ LIVE_ROUTE = "/api/v1/live"
+ READY_ROUTE = "/api/v1/ready"
+ INFO_ROUTE = "/api/v1/info"
+ WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
+ LOGIN_ROUTE = "/api/v1/auth/login"
+ ME_ROUTE = "/api/v1/auth/me"
+ PROFILE_ROUTE = "/api/v1/auth/profile"
+ ROOT_ROUTE = "/"
+ ADMIN_LOGS_ROUTE = "/admin/logs"
+ ADMIN_SETTINGS_ROUTE = "/api/v1/admin/settings"
++ADMIN_CONFIG_ROUTE = "/api/v1/admin/config"
+ FAVICON_ROUTE = "/favicon.ico"
+ STATIC_ROUTE_PREFIX = "/static/"
+ ADMIN_UI_ROUTE_PREFIX = "/admin/ui/"
+ ADMIN_FLOW_ROUTE_PREFIX = "/api/v1/admin/flow"
+ ADMIN_FLOW_TRACE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/trace"
+ ADMIN_FLOW_ZIP_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/zip"
+ ADMIN_FLOW_SESSIONS_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/sessions"
++ADMIN_FLOW_LIVE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/live"
+ EXPORT_ROOT = Path("exports")
+ BASE_DIR = Path(__file__).resolve().parent
+ STATIC_ROOT = BASE_DIR / "static"
+ TEMPLATES_ROOT = BASE_DIR / "templates"
+ INDEX_PATH = TEMPLATES_ROOT / "index.html"
+ ADMIN_LOGS_PATH = TEMPLATES_ROOT / "admin_logs.html"
+ FAVICON_PATH = STATIC_ROOT / "favicon.ico"
+ ADMIN_UI_ROOT = BASE_DIR / "admin" / "ui"
+ _DEFAULT_INDEX_HTML = (
+     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
  )
- ASR_IDLE_CLOSE_MS = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
- ASR_TRACE = env_bool("ASR_TRACE", False)
+ _DEFAULT_ADMIN_HTML = (
+     "<!doctype html><title>Admin Logs</title><div id='admin-logs'></div>".encode("utf-8")
+ )
  
  
- def get_env(name: str, default=None):
-     """Retrieve an environment variable with an optional default."""
+ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
  
-     value = os.getenv(name)
-     return value if value is not None else default
+ _adapter: Optional[ChatV2Adapter] = None
+ _lifespan_started = False
  
  
-+_log = logging.getLogger(__name__)
-+
- _ADMIN_SETTINGS_LOCK = threading.RLock()
--_ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[str]] = {}
-+_ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
- _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
- _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
- 
- 
- def _normalize_key(key: str) -> str:
-     return key.strip().lower()
- 
- 
- def _env_name(key: str) -> str:
-     return _normalize_key(key).upper()
- 
- 
- def _get_admin_settings_store():
-     global _ADMIN_SETTINGS_STORE
-     if _ADMIN_SETTINGS_STORE is False:
-         return None
-     if _ADMIN_SETTINGS_STORE is None:
-         try:  # pragma: no cover - import guarded for optional deps
-             from app.db.admin_settings import AdminSettingsStore
-         except Exception:  # pragma: no cover - defensive import guard
-             _ADMIN_SETTINGS_STORE = False
-             return None
-         _ADMIN_SETTINGS_STORE = AdminSettingsStore()
-     return _ADMIN_SETTINGS_STORE
- 
- 
- def _coerce_bool(value: str, default: bool) -> bool:
-     candidate = value.strip().lower()
-     if candidate in {"1", "true", "t", "yes", "y", "on"}:
-         return True
-     if candidate in {"0", "false", "f", "no", "n", "off"}:
-         return False
-     return bool(default)
- 
- 
- def _coerce_int(value: str, default: int, *, minimum: Optional[int] = None) -> int:
-     try:
-         candidate = int(value.strip())
-     except (AttributeError, TypeError, ValueError):
-         return int(default)
-     if minimum is not None and candidate < minimum:
-         return minimum
-     return candidate
- 
- 
--def _get_cached_admin_setting(key: str) -> Optional[str]:
-+def _coerce_db_bool(value: Any, default: bool) -> bool:
-+    if isinstance(value, bool):
-+        return value
-+    if isinstance(value, (int, float)):
-+        return bool(value)
-+    if isinstance(value, str):
-+        return _coerce_bool(value, default)
-+    if isinstance(value, Mapping):
-+        lowered = {str(k).lower(): v for k, v in value.items() if isinstance(k, str)}
-+        if "enabled" in lowered:
-+            return _coerce_db_bool(lowered["enabled"], default)
-+        if "value" in lowered:
-+            return _coerce_db_bool(lowered["value"], default)
-+    return bool(default)
-+
-+
-+def _coerce_db_int(
-+    value: Any, default: int, *, minimum: Optional[int] = None
-+) -> int:
-+    candidate: Optional[int] = None
-+    if isinstance(value, bool):
-+        candidate = int(value)
-+    elif isinstance(value, (int, float)):
-+        candidate = int(value)
-+    elif isinstance(value, str):
-+        return _coerce_int(value, default, minimum=minimum)
-+    elif isinstance(value, Mapping):
-+        lowered = {str(k).lower(): v for k, v in value.items() if isinstance(k, str)}
-+        for key in ("value", "count", "enabled"):
-+            if key in lowered:
-+                return _coerce_db_int(lowered[key], default, minimum=minimum)
-+    if candidate is None:
-+        candidate = int(default)
-+    if minimum is not None and candidate < minimum:
-+        return minimum
-+    return candidate
-+
-+
-+def _get_cached_admin_setting(key: str) -> Optional[Any]:
-     normalized = _normalize_key(key)
-     with _ADMIN_SETTINGS_LOCK:
-         if normalized in _ADMIN_SETTINGS_CACHE:
-             return _ADMIN_SETTINGS_CACHE[normalized]
-     store = _get_admin_settings_store()
-     if store is None:
-         with _ADMIN_SETTINGS_LOCK:
-             _ADMIN_SETTINGS_CACHE.setdefault(normalized, None)
-         return None
-     value = store.get(normalized)
-     with _ADMIN_SETTINGS_LOCK:
-         _ADMIN_SETTINGS_CACHE[normalized] = value
-     return value
- 
- 
--def update_admin_settings_cache(updates: Mapping[str, Optional[str]]) -> None:
-+def update_admin_settings_cache(updates: Mapping[str, Optional[Any]]) -> None:
-     """Merge ``updates`` into the local admin settings cache and refresh flags."""
- 
-     changed = False
-     with _ADMIN_SETTINGS_LOCK:
-         for raw_key, raw_value in updates.items():
-             normalized = _normalize_key(raw_key)
-             if _ADMIN_SETTINGS_CACHE.get(normalized) != raw_value:
-                 _ADMIN_SETTINGS_CACHE[normalized] = raw_value
-                 changed = True
-     if changed:
-         reload_runtime_flags()
- 
- 
--def get_admin_setting_raw(key: str) -> Optional[str]:
-+def get_admin_setting_raw(key: str) -> Optional[Any]:
-     """Return the raw admin setting value for ``key`` when cached or stored."""
- 
-     return _get_cached_admin_setting(key)
- 
- 
--def set_admin_setting_raw(key: str, value: Optional[str]) -> None:
-+def set_admin_setting_raw(
-+    key: str, value: Optional[Any], *, updated_by: str | None = None
-+) -> None:
-     """Persist ``value`` for ``key`` and refresh runtime configuration."""
- 
-     normalized = _normalize_key(key)
-     store = _get_admin_settings_store()
-     if store is None:
-         raise RuntimeError("Admin settings store unavailable")
--    store.set(normalized, value)
-+    store.set(normalized, value, updated_by=updated_by)
-     update_admin_settings_cache({normalized: value})
- 
- 
-+def _resolve_bool_setting(name: str, default: bool) -> tuple[bool, str, Any]:
-+    env_value = os.getenv(_env_name(name))
-+    if env_value is not None:
-+        return _coerce_bool(env_value, default), "env", env_value
-+    stored = _get_cached_admin_setting(name)
-+    if stored is not None:
-+        return _coerce_db_bool(stored, default), "db", stored
-+    return bool(default), "default", None
-+
-+
- def bool_env_or_db(name: str, *, default: bool = False) -> bool:
-     """Resolve a boolean config value from env, admin settings, or default."""
- 
-+    value, _source, _raw = _resolve_bool_setting(name, default)
-+    return value
-+
-+
-+def _resolve_int_setting(
-+    name: str, default: int, *, minimum: Optional[int] = None
-+) -> tuple[int, str, Any]:
-     env_value = os.getenv(_env_name(name))
-     if env_value is not None:
--        return _coerce_bool(env_value, default)
-+        return _coerce_int(env_value, default, minimum=minimum), "env", env_value
-     stored = _get_cached_admin_setting(name)
-     if stored is not None:
--        return _coerce_bool(stored, default)
--    return bool(default)
-+        return _coerce_db_int(stored, default, minimum=minimum), "db", stored
-+    fallback = int(default)
-+    if minimum is not None and fallback < minimum:
-+        fallback = minimum
-+    return fallback, "default", None
- 
- 
- def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None) -> int:
-     """Resolve an integer config value from env, admin settings, or default."""
- 
--    env_value = os.getenv(_env_name(name))
--    if env_value is not None:
--        return _coerce_int(env_value, default, minimum=minimum)
--    stored = _get_cached_admin_setting(name)
--    if stored is not None:
--        return _coerce_int(stored, default, minimum=minimum)
--    if minimum is not None and default < minimum:
--        return minimum
--    return int(default)
-+    value, _source, _raw = _resolve_int_setting(name, default, minimum=minimum)
-+    return value
- 
- 
- def reload_runtime_flags() -> None:
-     """Refresh runtime configuration flags from env and admin settings."""
- 
-+    diag_client_hud, hud_source, _hud_raw = _resolve_bool_setting(
-+        "diag_client_hud", default=False
-+    )
-+    diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
-+        "diag_audio_guard", default=True
-+    )
-+    diag_chunk_sample_n, chunk_source, _chunk_raw = _resolve_int_setting(
-+        "diag_chunk_sample_n", default=10, minimum=1
-+    )
-+
-     flags = {
--        "DIAG_CLIENT_HUD": bool_env_or_db("diag_client_hud", default=False),
--        "DIAG_AUDIO_GUARD": bool_env_or_db("diag_audio_guard", default=True),
--        "DIAG_CHUNK_SAMPLE_N": int_env_or_db(
--            "diag_chunk_sample_n", default=10, minimum=1
--        ),
-+        "DIAG_CLIENT_HUD": diag_client_hud,
-+        "DIAG_AUDIO_GUARD": diag_audio_guard,
-+        "DIAG_CHUNK_SAMPLE_N": diag_chunk_sample_n,
-     }
-     with _ADMIN_SETTINGS_LOCK:
-         _RUNTIME_FLAGS.clear()
-         _RUNTIME_FLAGS.update(flags)
-     globals().update(flags)
- 
-+    log_snapshot = [
-+        {"key": "DIAG_CLIENT_HUD", "value": diag_client_hud, "source": hud_source},
-+        {"key": "DIAG_AUDIO_GUARD", "value": diag_audio_guard, "source": audio_source},
-+        {
-+            "key": "DIAG_CHUNK_SAMPLE_N",
-+            "value": diag_chunk_sample_n,
-+            "source": chunk_source,
-+        },
-+    ]
-+    _log.info(
-+        "evt=admin_settings_load flags=%s",
-+        log_snapshot,
-+        extra={"component": "admin.settings"},
-+    )
-+
- 
- def get_client_config_snapshot() -> dict[str, Any]:
-     """Return the current runtime flags exposed to browser clients."""
- 
-     with _ADMIN_SETTINGS_LOCK:
-         return dict(_RUNTIME_FLAGS)
- 
- 
--def set_admin_settings(values: Mapping[str, Optional[str]]) -> None:
-+def set_admin_settings(
-+    values: Mapping[str, Optional[Any]], *, updated_by: str | None = None
-+) -> None:
-     """Persist multiple admin settings and refresh runtime flags."""
- 
-     store = _get_admin_settings_store()
-     if store is None:
-         raise RuntimeError("Admin settings store unavailable")
--    normalized_updates: dict[str, Optional[str]] = {}
-+    normalized_updates: dict[str, Optional[Any]] = {}
-     for key, value in values.items():
-         normalized = _normalize_key(key)
--        store.set(normalized, value)
-+        store.set(normalized, value, updated_by=updated_by)
-         normalized_updates[normalized] = value
-     update_admin_settings_cache(normalized_updates)
- 
- 
- reload_runtime_flags()
- 
- 
- __all__ = [
-     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
-     "ASR_IDLE_CLOSE_MS",
-     "ASR_TRACE",
-     "DEEPGRAM_API_KEY",
-     "DIAG_AUDIO_GUARD",
-     "DIAG_CHUNK_SAMPLE_N",
-     "DIAG_CLIENT_HUD",
-     "bool_env_or_db",
-     "get_admin_setting_raw",
-     "get_client_config_snapshot",
-     "get_env",
-     "int_env_or_db",
-     "reload_runtime_flags",
-     "set_admin_setting_raw",
-     "set_admin_settings",
-     "update_admin_settings_cache",
- ]
-diff --git a/app/db/admin_settings.py b/app/db/admin_settings.py
-index 0ec6815c60a361d94686412223dd7d9a72c96c26..a0780d04052084baf539ac19480ec36cdc3ba1f3 100644
---- a/app/db/admin_settings.py
-+++ b/app/db/admin_settings.py
-@@ -1,271 +1,191 @@
- """Persistence helpers for the ``admin_settings`` table."""
- from __future__ import annotations
- 
-+import json
- import logging
- import threading
- from typing import Callable, Optional
- 
- from app.db.postgres_config import get_postgres_config
- 
- try:  # pragma: no cover - optional dependency guard
-     import psycopg  # type: ignore
--    from psycopg import errors as psy_errors  # type: ignore
--    from psycopg import sql  # type: ignore
- except Exception:  # pragma: no cover - defensive fallback when psycopg missing
-     psycopg = None  # type: ignore
--    psy_errors = None  # type: ignore
--    sql = None  # type: ignore
- 
- 
- _log = logging.getLogger(__name__)
- 
--_SettingsValue = Optional[str]
-+_SettingsValue = Optional[object]
- _ConnectionFactory = Callable[[], "psycopg.Connection"]  # type: ignore[name-defined]
- 
- 
--def _detect_column_error(exc: Exception) -> bool:
--    """Return ``True`` when the exception indicates a missing column."""
-+def _decode_json_value(value: object) -> object:
-+    """Best-effort conversion from database payloads to Python objects."""
- 
--    if psy_errors is None:  # pragma: no cover - dependency missing in runtime
--        return False
--
--    if isinstance(exc, psy_errors.UndefinedColumn):
--        return True
--
--    pgcode = getattr(exc, "pgcode", None)
--    if pgcode in {getattr(psy_errors, "UNDEFINED_COLUMN", None)}:
--        return True
--
--    return False
-+    if isinstance(value, memoryview):
-+        value = value.tobytes()
-+    if isinstance(value, (bytes, bytearray)):
-+        try:
-+            value = value.decode("utf-8")
-+        except UnicodeDecodeError:
-+            value = value.decode("latin1", "ignore")
-+    if isinstance(value, str):
-+        try:
-+            return json.loads(value)
-+        except json.JSONDecodeError:
-+            return value
-+    return value
- 
- 
--def _coerce_value(value: object) -> _SettingsValue:
--    """Normalize database values to plain strings."""
-+def _prepare_json_value(value: object | None) -> object | None:
-+    """Parse string values into JSON when possible."""
- 
-     if value is None:
-         return None
--    if isinstance(value, memoryview):
--        value = value.tobytes()
--    if isinstance(value, (bytes, bytearray)):
-+    if isinstance(value, str):
-+        candidate = value.strip()
-+        if not candidate:
-+            return ""
-         try:
--            return value.decode("utf-8")
--        except UnicodeDecodeError:
--            return value.decode("latin1", "ignore")
--    return str(value)
-+            return json.loads(candidate)
-+        except json.JSONDecodeError:
-+            return value
-+    return value
- 
- 
- def _build_default_factory() -> _ConnectionFactory | None:
-     """Create a connection factory from environment configuration when possible."""
- 
-     if psycopg is None:  # pragma: no cover - dependency missing
-         return None
- 
-     try:
-         dsn = get_postgres_config().admin.dsn
-     except RuntimeError:
-         return None
- 
-     def _factory() -> "psycopg.Connection":  # type: ignore[name-defined]
-         return psycopg.connect(dsn)  # type: ignore[call-arg]
- 
-     return _factory
- 
- 
- class AdminSettingsStore:
-     """Lightweight helper for reading and writing admin settings."""
- 
-     def __init__(
-         self,
-         conn_factory: _ConnectionFactory | None = None,
-         *,
-         allow_memory_fallback: bool = True,
-     ) -> None:
-         self._conn_factory = conn_factory or _build_default_factory()
-         self._allow_memory_fallback = allow_memory_fallback
--        self._memory: dict[str, str] = {}
-+        self._memory: dict[str, object] = {}
-         self._lock = threading.RLock()
--        self._key_column: str | None = None
--        self._value_column: str | None = None
- 
-     def _get_connection(self):
-         if self._conn_factory is None:
-             return None
-         try:
-             conn = self._conn_factory()
-         except Exception as exc:  # pragma: no cover - connection failures
-             _log.warning(
--                "evt=admin_settings_conn_failed err=%s", exc, extra={"component": "admin.settings"}
-+                "evt=admin_settings_conn_failed err=%s",
-+                exc,
-+                extra={"component": "admin.settings"},
-             )
-             return None
-         try:
-             if hasattr(conn, "autocommit"):
-                 conn.autocommit = True  # type: ignore[attr-defined]
-         except Exception:  # pragma: no cover - attribute missing
-             pass
-         return conn
- 
--    def _resolve_columns(self, cursor) -> tuple[str, str]:
--        """Determine the key/value column names for the admin settings table."""
--
--        if self._key_column and self._value_column:
--            return self._key_column, self._value_column
--
--        if sql is None:  # pragma: no cover - dependency missing
--            raise RuntimeError("psycopg is required to resolve admin_settings columns")
--
--        candidate_keys = ("key", "settings_key", "name", "setting_key")
--        candidate_values = ("value", "settings_value", "setting_value")
--
--        available: set[str] = set()
--
--        try:
--            cursor.execute(
--                """
--                SELECT column_name
--                FROM information_schema.columns
--                WHERE table_name = %s
--                  AND table_schema = current_schema()
--                """,
--                ("admin_settings",),
--            )
--        except Exception as exc:
--            if not _detect_column_error(exc):  # pragma: no cover - defensive
--                raise
--        else:
--            available = {row[0] for row in cursor.fetchall()}
--
--        key_column = next((name for name in candidate_keys if name in available), None)
--        value_column = next((name for name in candidate_values if name in available), None)
--
--        if key_column is None or value_column is None:
--            # As a last resort, attempt to probe using trial queries so legacy
--            # deployments without information_schema privileges continue to work.
--            if key_column is None:
--                for probe_key in candidate_keys:
--                    query = sql.SQL(
--                        "SELECT {key} FROM admin_settings LIMIT 0"
--                    ).format(key=sql.Identifier(probe_key))
--                    try:
--                        cursor.execute(query)
--                    except Exception as exc:
--                        if _detect_column_error(exc):
--                            continue
--                        raise
--                    else:
--                        key_column = probe_key
--                        break
--
--            if value_column is None:
--                for probe_value in candidate_values:
--                    query = sql.SQL(
--                        "SELECT {value} FROM admin_settings LIMIT 0"
--                    ).format(value=sql.Identifier(probe_value))
--                    try:
--                        cursor.execute(query)
--                    except Exception as exc:
--                        if _detect_column_error(exc):
--                            continue
--                        raise
--                    else:
--                        value_column = probe_value
--                        break
--
--        if key_column is None or value_column is None:
--            raise RuntimeError(
--                "Unable to determine admin_settings key/value column names"
--            )
--
--        self._key_column = key_column
--        self._value_column = value_column
--        return key_column, value_column
--
-     def _select(self, cursor, key: str):
--        key_column, value_column = self._resolve_columns(cursor)
--        if sql is None:  # pragma: no cover - dependency missing
--            raise RuntimeError("psycopg is required to query admin_settings")
--
--        query = sql.SQL(
--            "SELECT {value} FROM admin_settings WHERE {key} = %s LIMIT 1"
--        ).format(value=sql.Identifier(value_column), key=sql.Identifier(key_column))
--
--        cursor.execute(query, (key,))
-+        cursor.execute(
-+            "SELECT value_jsonb FROM admin_settings WHERE key = %s LIMIT 1",
-+            (key,),
-+        )
-         return cursor.fetchone()
- 
--    def _upsert(self, cursor, key: str, value: str | None) -> None:
--        key_column, value_column = self._resolve_columns(cursor)
--        if sql is None:  # pragma: no cover - dependency missing
--            raise RuntimeError("psycopg is required to modify admin_settings")
--
-+    def _upsert(
-+        self, cursor, key: str, value: object | None, updated_by: str | None
-+    ) -> None:
-         if value is None:
--            query = sql.SQL(
--                "DELETE FROM admin_settings WHERE {key} = %s"
--            ).format(key=sql.Identifier(key_column))
--            cursor.execute(query, (key,))
-+            cursor.execute("DELETE FROM admin_settings WHERE key = %s", (key,))
-             return
--        query = sql.SQL(
--            "INSERT INTO admin_settings ({key}, {value}) VALUES (%s, %s) "
--            "ON CONFLICT ({key}) DO UPDATE SET {value} = EXCLUDED.{value}"
--        ).format(
--            key=sql.Identifier(key_column),
--            value=sql.Identifier(value_column),
-+        payload = json.dumps(value)
-+        cursor.execute(
-+            """
-+            INSERT INTO admin_settings (key, value_jsonb, updated_by)
-+            VALUES (%s, %s::jsonb, %s)
-+            ON CONFLICT (key) DO UPDATE SET
-+                value_jsonb = EXCLUDED.value_jsonb,
-+                updated_at = NOW(),
-+                updated_by = COALESCE(EXCLUDED.updated_by, admin_settings.updated_by),
-+                version = admin_settings.version + 1
-+            """,
-+            (key, payload, updated_by),
+ def _ws_route_matches(scope: dict, expected: str) -> bool:
+     """
+     Return True when the incoming websocket request targets the expected route,
+@@ -221,50 +223,66 @@ async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) ->
+         return json_response(
+             status=503,
+             ok=False,
+             reason="export_path_unwritable",
+             export_path=str(EXPORT_ROOT),
          )
--        cursor.execute(query, (key, value))
  
-     def get(self, key: str) -> _SettingsValue:
--        """Return the string value for ``key`` or ``None`` when unset."""
-+        """Return the JSON value for ``key`` or ``None`` when unset."""
  
-         conn = self._get_connection()
-         if conn is None:
-             if not self._allow_memory_fallback:
-                 return None
-             with self._lock:
-                 return self._memory.get(key)
+ async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Return build metadata derived from environment configuration."""
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+         return json_response(status=405, error="method_not_allowed")
  
-         try:
-             with conn.cursor() as cursor:
-                 row = self._select(cursor, key)
-         finally:
+     await _drain_request_body(receive)
+ 
+     version = os.getenv("APP_VERSION") or "0.0.0+dev"
+     raw_sha = os.getenv("GIT_SHA") or ""
+     git_sha = raw_sha[:7] if raw_sha else "unknown"
+     built_at = os.getenv("BUILD_TIME") or datetime.now(timezone.utc).isoformat()
+ 
+     payload = {"version": version, "git_sha": git_sha, "built_at": built_at}
+     return json_response(**payload)
+ 
+ 
++async def _handle_admin_config(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
++    """Expose the runtime client configuration snapshot."""
++
++    method = scope.get("method", "GET").upper()
++    if method not in {"GET", "HEAD"}:
++        await _drain_request_body(receive)
++        return json_response(status=405, error="method_not_allowed")
++
++    await _drain_request_body(receive)
++    snapshot = config.get_client_config_snapshot()
++    response = json_response(status=200, **snapshot)
++    if method == "HEAD":
++        return Response(status=response.status, body=b"", headers=response.headers)
++    return response
++
++
+ async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     """Serve the primary HTML shell for the single-page application."""
+ 
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+         return json_response(status=405, error="method_not_allowed")
+ 
+     authenticated, is_admin, email = await _resolve_request_identity(scope)
+     await _drain_request_body(receive)
+     raw_html = _load_index_html()
+     try:
+         html_text = raw_html.decode("utf-8")
+     except UnicodeDecodeError:
+         html_text = raw_html.decode("utf-8", errors="replace")
+     rewritten = inject_static_version(html_text)
+     admin_link = ""
+     if is_admin:
+         admin_link = '<a class="topbar-link" href="/admin/logs">Admin ▸ Logs</a>'
+     context_payload = {
+         "isAdmin": is_admin,
+         "userEmail": email if authenticated else None,
+     }
+     context_json = _serialize_context(context_payload)
+     client_config_json = _serialize_context(config.get_client_config_snapshot())
+     rewritten = rewritten.replace("{{ADMIN_LINK}}", admin_link)
+@@ -295,88 +313,152 @@ async def _handle_admin_logs(scope: dict, receive: Callable[[], Awaitable[dict]]
+     await _drain_request_body(receive)
+     raw_html = _load_admin_logs_html()
+     try:
+         html_text = raw_html.decode("utf-8")
+     except UnicodeDecodeError:
+         html_text = raw_html.decode("utf-8", errors="replace")
+ 
+     rewritten = inject_static_version(html_text)
+     context_payload = {"isAdmin": is_admin, "userEmail": email}
+     context_json = _serialize_context(context_payload)
+     client_config_json = _serialize_context(config.get_client_config_snapshot())
+     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
+     rewritten = rewritten.replace("{{CLIENT_CONFIG}}", client_config_json)
+     body = rewritten.encode("utf-8")
+     build_id = get_build_id()
+     return _html_response(body, build_id=build_id)
+ 
+ 
+ async def _handle_admin_flow_sessions(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+     rejection = await _require_admin_api(scope, receive)
+     if rejection is not None:
+         return rejection
+     return await handle_flow_sessions(scope, receive)
+ 
+ 
++async def _handle_admin_flow_live_query(
++    scope: dict, receive: Callable[[], Awaitable[dict]]
++) -> Response:
++    sid = _get_query_argument(scope, "sid")
++    if not sid:
++        await _drain_request_body(receive)
++        return json_response(status=400, error="missing_sid")
++    return await _handle_admin_flow_live(scope, receive, sid=sid)
++
++
+ async def _handle_admin_flow_trace_query(
+     scope: dict, receive: Callable[[], Awaitable[dict]]
+ ) -> Response:
+     sid = _get_query_argument(scope, "sid")
+     if not sid:
+         await _drain_request_body(receive)
+         return json_response(status=400, error="missing_sid")
+     return await _handle_admin_flow_trace(scope, receive, sid=sid)
+ 
+ 
+ async def _handle_admin_flow_zip_query(
+     scope: dict, receive: Callable[[], Awaitable[dict]]
+ ) -> Response:
+     sid = _get_query_argument(scope, "sid")
+     if not sid:
+         await _drain_request_body(receive)
+         return json_response(status=400, error="missing_sid")
+     return await _handle_admin_flow_zip(scope, receive, sid=sid)
+ 
+ 
+ async def _handle_admin_flow_trace(
+     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
+ ) -> Response:
+     rejection = await _require_admin_api(scope, receive)
+     if rejection is not None:
+         return rejection
+     return await handle_flow_trace(scope, receive, sid=sid)
+ 
+ 
+ async def _handle_admin_flow_zip(
+     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
+ ) -> Response:
+     rejection = await _require_admin_api(scope, receive)
+     if rejection is not None:
+         return rejection
+     return await handle_flow_zip(scope, receive, sid=sid)
+ 
+ 
++async def _handle_admin_flow_live(
++    scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
++) -> Response:
++    rejection = await _require_admin_api(scope, receive)
++    if rejection is not None:
++        return rejection
++
++    method = scope.get("method", "GET").upper()
++    if method != "GET":
++        await _drain_request_body(receive)
++        return json_response(status=405, error="method_not_allowed")
++
++    await _drain_request_body(receive)
++
++    messages = [{"type": "http.request", "body": b"", "more_body": False}]
++
++    async def _trace_receive() -> dict:
++        if messages:
++            return messages.pop(0)
++        return {"type": "http.disconnect"}
++
++    trace_response = await handle_flow_trace(dict(scope), _trace_receive, sid=sid)
++
++    if trace_response.status != 200:
++        return Response(
++            status=trace_response.status,
++            body=trace_response.body,
++            headers=trace_response.headers,
++        )
++
++    try:
++        ndjson_text = trace_response.body.decode("utf-8")
++    except UnicodeDecodeError:
++        ndjson_text = trace_response.body.decode("utf-8", errors="replace")
++
++    segments: list[str] = []
++    for raw_line in ndjson_text.splitlines():
++        stripped = raw_line.strip()
++        if not stripped:
++            continue
++        segments.append(f"data: {stripped}\\n\\n")
++
++    if not segments:
++        segments.append(": no-events\\n\\n")
++
++    payload = "".join(segments).encode("utf-8")
++    headers = (
++        (b"content-type", b"text/event-stream; charset=utf-8"),
++        (b"cache-control", b"no-cache"),
++        (b"content-length", str(len(payload)).encode("ascii")),
++    )
++    return Response(status=200, body=payload, headers=headers)
++
++
+ def _get_query_argument(scope: dict, key: str) -> Optional[str]:
+     query = scope.get("query_string") or b""
+     try:
+         parsed = parse_qs(query.decode("latin1", "ignore"))
+     except Exception:
+         return None
+     values = parsed.get(key)
+     if not values:
+         return None
+     value = values[0].strip()
+     return value or None
+ 
+ 
+ async def _require_admin_api(
+     scope: dict, receive: Callable[[], Awaitable[dict]]
+ ) -> Optional[Response]:
+     authenticated, is_admin, _ = await _resolve_request_identity(scope)
+     if not authenticated:
+         await _drain_request_body(receive)
+         return json_response(status=401, error="unauthorized")
+     if not is_admin:
+         await _drain_request_body(receive)
+         return json_response(status=403, error="forbidden")
+     return None
+ 
+@@ -699,62 +781,64 @@ def _get_adapter() -> ChatV2Adapter:
+     if _adapter is None:
+         exporter = FileExporter(EXPORT_ROOT)
+         engine = EngineV2(exporter=exporter)
+         tts_runtime = TTSRuntime(engine=engine)
+         asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
+         asr_runtime = ASRRuntime(engine=engine, client=asr_client)
+         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
+         _adapter.tts_runtime = tts_runtime
+         _adapter.asr_runtime = asr_runtime
+     return _adapter
+ 
+ 
+ async def _handle_admin_settings_route(
+     scope: dict, receive: Callable[[], Awaitable[dict]]
+ ) -> Response:
+     rejection = await _require_admin_api(scope, receive)
+     if rejection is not None:
+         return rejection
+     return await handle_admin_settings(scope, receive)
+ 
+ 
+ _HTTP_ROUTES: Dict[str, HttpHandler] = {
+     ROOT_ROUTE: _handle_index,
+     ADMIN_LOGS_ROUTE: _handle_admin_logs,
+     ADMIN_SETTINGS_ROUTE: _handle_admin_settings_route,
++    ADMIN_CONFIG_ROUTE: _handle_admin_config,
+     FAVICON_ROUTE: _handle_favicon,
+     HEALTH_ROUTE: _handle_health,
+     LIVE_ROUTE: _handle_live,
+     READY_ROUTE: _handle_ready,
+     INFO_ROUTE: _handle_info,
+     WS_TOKEN_ROUTE: post_ws_token,
+     LOGIN_ROUTE: post_login,
+     ME_ROUTE: get_me,
+     PROFILE_ROUTE: post_profile,
+     ADMIN_FLOW_TRACE_ROUTE: _handle_admin_flow_trace_query,
+     ADMIN_FLOW_ZIP_ROUTE: _handle_admin_flow_zip_query,
+     ADMIN_FLOW_SESSIONS_ROUTE: _handle_admin_flow_sessions,
++    ADMIN_FLOW_LIVE_ROUTE: _handle_admin_flow_live_query,
+ }
+ 
+ 
+ asgi = app
+ 
+ __all__ = ["app", "asgi"]
+ 
+ 
+ def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
+     headers = scope.get("headers") or []
+     for name, value in headers:
+         if name == header_name:
              try:
-                 conn.close()
-             except Exception:  # pragma: no cover - defensive
-                 pass
- 
--        return _coerce_value(row[0]) if row else None
-+        if not row:
-+            return None
-+        return _decode_json_value(row[0])
- 
--    def set(self, key: str, value: str | None) -> None:
-+    def set(
-+        self, key: str, value: object | None, *, updated_by: str | None = None
-+    ) -> None:
-         """Persist ``value`` for ``key`` in the admin settings store."""
- 
--        if value is not None:
--            coerced = _coerce_value(value)
--            if coerced is None:
--                coerced = ""
--            value = coerced
-+        normalized_value = _prepare_json_value(value)
- 
-         conn = self._get_connection()
-         if conn is None:
-             if not self._allow_memory_fallback:
-                 raise RuntimeError("AdminSettingsStore has no database connection")
-             with self._lock:
--                if value is None:
-+                if normalized_value is None:
-                     self._memory.pop(key, None)
-                 else:
--                    self._memory[key] = value
-+                    self._memory[key] = normalized_value
-             return
- 
-         try:
-             with conn.cursor() as cursor:
--                self._upsert(cursor, key, value)
-+                self._upsert(cursor, key, normalized_value, updated_by)
-         finally:
-             try:
-                 conn.close()
-             except Exception:  # pragma: no cover - defensive
-                 pass
- 
--    def snapshot(self) -> dict[str, str]:
-+    def snapshot(self) -> dict[str, object]:
-         """Return a best-effort in-memory snapshot of cached settings."""
- 
-         with self._lock:
-             return dict(self._memory)
+                 return value.decode("latin1")
+             except UnicodeDecodeError:
+                 return value.decode("latin1", errors="ignore")
+     return None
  
  
- __all__ = ["AdminSettingsStore"]
-diff --git a/ops/ADMIN_SETTINGS.md b/ops/ADMIN_SETTINGS.md
+ async def _handle_lifespan(
+     receive: Callable[[], Awaitable[dict]],
+     send: Callable[[dict], Awaitable[None]],
+ ) -> None:
+     global _lifespan_started
+ 
+diff --git a/tests/test_admin_config_route.py b/tests/test_admin_config_route.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..64e0398bfd8df97783fdf9f75c2e90eca83528cd
+index 0000000000000000000000000000000000000000..f471f1232085184addc8cbe9290a27df3e8c6d77
 --- /dev/null
-+++ b/ops/ADMIN_SETTINGS.md
-@@ -0,0 +1,20 @@
-+# Admin settings bootstrap
++++ b/tests/test_admin_config_route.py
+@@ -0,0 +1,136 @@
++import asyncio
++import json
++import tempfile
++import unittest
++from pathlib import Path
++from unittest.mock import AsyncMock, patch
 +
-+The application expects a small set of runtime flags to exist in the `public.admin_settings` table. The canonical schema uses the columns `key` (primary key) and `value_jsonb` (JSONB payload). No legacy `value` or `settings_value` columns are required or supported.
++from app import asgi_gateway
++from app.admin import flow_api
 +
-+Seed the following keys to ensure deterministic behaviour on first boot:
 +
-+```sql
-+INSERT INTO public.admin_settings (key, value_jsonb, updated_by)
-+VALUES
-+  ('diag_client_hud', 'false', 'bootstrap'),
-+  ('diag_audio_guard', 'true', 'bootstrap'),
-+  ('diag_chunk_sample_n', '10', 'bootstrap')
-+ON CONFLICT (key) DO UPDATE SET
-+  value_jsonb = EXCLUDED.value_jsonb,
-+  updated_at = NOW(),
-+  updated_by = EXCLUDED.updated_by,
-+  version = admin_settings.version + 1;
-+```
++def _make_receive():
++    messages = [
++        {"type": "http.request", "body": b"", "more_body": False},
++    ]
 +
-+Values must be valid JSON literals (`true`, `false`, numbers, strings with quotes, or structured objects such as `{"enabled": true}`). Update the keys directly in Neon to toggle features at runtime without code changes.
++    async def _receive() -> dict:
++        if messages:
++            return messages.pop(0)
++        return {"type": "http.disconnect"}
++
++    return _receive
++
++
++class AdminConfigRouteTest(unittest.TestCase):
++    def test_get_returns_client_snapshot(self) -> None:
++        scope = {
++            "type": "http",
++            "method": "GET",
++            "path": "/api/v1/admin/config",
++            "query_string": b"",
++            "headers": [],
++        }
++
++        snapshot = {"DIAG_CLIENT_HUD": True, "DIAG_CHUNK_SAMPLE_N": 5}
++        with patch(
++            "app.config.get_client_config_snapshot",
++            return_value=snapshot,
++        ):
++            response = asyncio.run(asgi_gateway._handle_admin_config(scope, _make_receive()))
++
++        self.assertEqual(response.status, 200)
++        body = json.loads(response.body.decode("utf-8"))
++        self.assertEqual(body, snapshot)
++
++    def test_head_strips_body(self) -> None:
++        scope = {
++            "type": "http",
++            "method": "HEAD",
++            "path": "/api/v1/admin/config",
++            "query_string": b"",
++            "headers": [],
++        }
++
++        with patch("app.config.get_client_config_snapshot", return_value={}):
++            response = asyncio.run(asgi_gateway._handle_admin_config(scope, _make_receive()))
++
++        self.assertEqual(response.status, 200)
++        self.assertEqual(response.body, b"")
++
++    def test_rejects_unsupported_method(self) -> None:
++        scope = {
++            "type": "http",
++            "method": "POST",
++            "path": "/api/v1/admin/config",
++            "query_string": b"",
++            "headers": [],
++        }
++
++        response = asyncio.run(asgi_gateway._handle_admin_config(scope, _make_receive()))
++        self.assertEqual(response.status, 405)
++
++
++class AdminFlowLiveRouteTest(unittest.TestCase):
++    def setUp(self) -> None:
++        self._tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self._tmp.cleanup)
++
++        self.export_root = Path(self._tmp.name) / "exports"
++        self.export_root.mkdir(parents=True, exist_ok=True)
++
++        self.sid = "sid-live"
++        session_dir = self.export_root / self.sid
++        session_dir.mkdir(parents=True, exist_ok=True)
++
++        events_path = session_dir / "events.ndjson"
++        events_path.write_text(
++            json.dumps({"type": "EVT_TURN_BEGIN", "ts_ms": 1, "sid": self.sid}) + "\n",
++            encoding="utf-8",
++        )
++
++        self._orig_flow_export_root = flow_api.EXPORT_ROOT
++        self._orig_gateway_export_root = asgi_gateway.EXPORT_ROOT
++        flow_api.EXPORT_ROOT = self.export_root
++        asgi_gateway.EXPORT_ROOT = self.export_root
++        self.addCleanup(self._restore_export_roots)
++
++    def _restore_export_roots(self) -> None:
++        flow_api.EXPORT_ROOT = self._orig_flow_export_root
++        asgi_gateway.EXPORT_ROOT = self._orig_gateway_export_root
++
++    def test_streams_existing_events(self) -> None:
++        scope = {
++            "type": "http",
++            "method": "GET",
++            "path": "/api/v1/admin/flow/live",
++            "query_string": f"sid={self.sid}".encode("ascii"),
++            "headers": [],
++        }
++
++        with patch("app.asgi_gateway._require_admin_api", new=AsyncMock(return_value=None)):
++            response = asyncio.run(
++                asgi_gateway._handle_admin_flow_live_query(scope, _make_receive())
++            )
++
++        self.assertEqual(response.status, 200)
++        headers = dict(response.headers)
++        self.assertEqual(headers[b"content-type"], b"text/event-stream; charset=utf-8")
++        self.assertIn(b"data: {\"type\": \"EVT_TURN_BEGIN\"", response.body)
++
++    def test_missing_sid_returns_400(self) -> None:
++        scope = {
++            "type": "http",
++            "method": "GET",
++            "path": "/api/v1/admin/flow/live",
++            "query_string": b"",
++            "headers": [],
++        }
++
++        with patch("app.asgi_gateway._require_admin_api", new=AsyncMock(return_value=None)):
++            response = asyncio.run(
++                asgi_gateway._handle_admin_flow_live_query(scope, _make_receive())
++            )
++
++        self.assertEqual(response.status, 400)
++

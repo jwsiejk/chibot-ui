@@ -87,6 +87,7 @@ PROFILE_ROUTE = "/api/v1/auth/profile"
 ROOT_ROUTE = "/"
 ADMIN_LOGS_ROUTE = "/admin/logs"
 ADMIN_SETTINGS_ROUTE = "/api/v1/admin/settings"
+ADMIN_CONFIG_ROUTE = "/api/v1/admin/config"
 FAVICON_ROUTE = "/favicon.ico"
 STATIC_ROUTE_PREFIX = "/static/"
 ADMIN_UI_ROUTE_PREFIX = "/admin/ui/"
@@ -94,6 +95,7 @@ ADMIN_FLOW_ROUTE_PREFIX = "/api/v1/admin/flow"
 ADMIN_FLOW_TRACE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/trace"
 ADMIN_FLOW_ZIP_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/zip"
 ADMIN_FLOW_SESSIONS_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/sessions"
+ADMIN_FLOW_LIVE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/live"
 EXPORT_ROOT = Path("exports")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_ROOT = BASE_DIR / "static"
@@ -243,6 +245,22 @@ async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> R
     return json_response(**payload)
 
 
+async def _handle_admin_config(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+    """Expose the runtime client configuration snapshot."""
+
+    method = scope.get("method", "GET").upper()
+    if method not in {"GET", "HEAD"}:
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+    snapshot = config.get_client_config_snapshot()
+    response = json_response(status=200, **snapshot)
+    if method == "HEAD":
+        return Response(status=response.status, body=b"", headers=response.headers)
+    return response
+
+
 async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
     """Serve the primary HTML shell for the single-page application."""
 
@@ -317,6 +335,16 @@ async def _handle_admin_flow_sessions(scope: dict, receive: Callable[[], Awaitab
     return await handle_flow_sessions(scope, receive)
 
 
+async def _handle_admin_flow_live_query(
+    scope: dict, receive: Callable[[], Awaitable[dict]]
+) -> Response:
+    sid = _get_query_argument(scope, "sid")
+    if not sid:
+        await _drain_request_body(receive)
+        return json_response(status=400, error="missing_sid")
+    return await _handle_admin_flow_live(scope, receive, sid=sid)
+
+
 async def _handle_admin_flow_trace_query(
     scope: dict, receive: Callable[[], Awaitable[dict]]
 ) -> Response:
@@ -353,6 +381,60 @@ async def _handle_admin_flow_zip(
     if rejection is not None:
         return rejection
     return await handle_flow_zip(scope, receive, sid=sid)
+
+
+async def _handle_admin_flow_live(
+    scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
+) -> Response:
+    rejection = await _require_admin_api(scope, receive)
+    if rejection is not None:
+        return rejection
+
+    method = scope.get("method", "GET").upper()
+    if method != "GET":
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+
+    messages = [{"type": "http.request", "body": b"", "more_body": False}]
+
+    async def _trace_receive() -> dict:
+        if messages:
+            return messages.pop(0)
+        return {"type": "http.disconnect"}
+
+    trace_response = await handle_flow_trace(dict(scope), _trace_receive, sid=sid)
+
+    if trace_response.status != 200:
+        return Response(
+            status=trace_response.status,
+            body=trace_response.body,
+            headers=trace_response.headers,
+        )
+
+    try:
+        ndjson_text = trace_response.body.decode("utf-8")
+    except UnicodeDecodeError:
+        ndjson_text = trace_response.body.decode("utf-8", errors="replace")
+
+    segments: list[str] = []
+    for raw_line in ndjson_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        segments.append(f"data: {stripped}\\n\\n")
+
+    if not segments:
+        segments.append(": no-events\\n\\n")
+
+    payload = "".join(segments).encode("utf-8")
+    headers = (
+        (b"content-type", b"text/event-stream; charset=utf-8"),
+        (b"cache-control", b"no-cache"),
+        (b"content-length", str(len(payload)).encode("ascii")),
+    )
+    return Response(status=200, body=payload, headers=headers)
 
 
 def _get_query_argument(scope: dict, key: str) -> Optional[str]:
@@ -721,6 +803,7 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     ROOT_ROUTE: _handle_index,
     ADMIN_LOGS_ROUTE: _handle_admin_logs,
     ADMIN_SETTINGS_ROUTE: _handle_admin_settings_route,
+    ADMIN_CONFIG_ROUTE: _handle_admin_config,
     FAVICON_ROUTE: _handle_favicon,
     HEALTH_ROUTE: _handle_health,
     LIVE_ROUTE: _handle_live,
@@ -733,6 +816,7 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     ADMIN_FLOW_TRACE_ROUTE: _handle_admin_flow_trace_query,
     ADMIN_FLOW_ZIP_ROUTE: _handle_admin_flow_zip_query,
     ADMIN_FLOW_SESSIONS_ROUTE: _handle_admin_flow_sessions,
+    ADMIN_FLOW_LIVE_ROUTE: _handle_admin_flow_live_query,
 }
 
 
