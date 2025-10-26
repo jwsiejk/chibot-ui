@@ -1268,13 +1268,15 @@ class ChatV2Adapter:
                 ctx.diag_timer = None
             return
 
-bus.publish({
-    "type": "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
-    "sid": ctx.sid,
-    "since_ms": int(elapsed * 1000),
-    "suggestions": ["permission", "device", "recorder", "transport"],
-})
-ctx.diag_audio_seen = True
+        bus.publish(
+            {
+                "type": "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
+                "sid": ctx.sid,
+                "since_ms": int(elapsed * 1000),
+                "suggestions": ["permission", "device", "recorder", "transport"],
+            }
+        )
+        ctx.diag_audio_seen = True
 
     @staticmethod
     def _cancel_diag_timer(ctx: AdapterContext) -> None:
