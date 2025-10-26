@@ -760,7 +760,7 @@ class ChatV2Adapter:
         if config.DIAG_AUDIO_GUARD and not ctx.diag_audio_seen:
             ctx.diag_audio_seen = True
             self._cancel_diag_timer(ctx)
-            bus.publish("EVT_DIAG_FIRST_AUDIO_FRAME", {"sid": ctx.sid})
+            bus.publish({"type": "EVT_DIAG_FIRST_AUDIO_FRAME", "sid": ctx.sid})
 
         await self._ingest_audio_chunk(ctx, bytes(data), seq)
         return self._HandleResult(True)
@@ -1269,17 +1269,12 @@ class ChatV2Adapter:
             return
 
         bus.publish(
-            "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
             {
+                "type": "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
                 "sid": ctx.sid,
                 "since_ms": int(elapsed * 1000),
-                "suggestions": [
-                    "permission",
-                    "device",
-                    "recorder",
-                    "transport",
-                ],
-            },
+                "suggestions": ["permission", "device", "recorder", "transport"],
+            }
         )
         ctx.diag_audio_seen = True
 
