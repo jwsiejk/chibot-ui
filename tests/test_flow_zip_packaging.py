@@ -37,6 +37,13 @@ class BuildFlowZipPackagingTest(unittest.TestCase):
                     },
                 },
                 {
+                    "type": "EVT_DIAG_HUD",
+                    "sid": sid,
+                    "ts_ms": 444,
+                    "level": "info",
+                    "meta": {"event": "recorder_started", "badge": "rec:start"},
+                },
+                {
                     "type": "EVT_NLU",
                     "sid": sid,
                     "ts_ms": 222,
@@ -80,13 +87,23 @@ class BuildFlowZipPackagingTest(unittest.TestCase):
                 )
 
                 events_data = zf.read(_EVENTS_REDACTED).decode("utf-8").strip().splitlines()
-                self.assertEqual(len(events_data), 3)
+                self.assertEqual(len(events_data), 4)
                 first_event = json.loads(events_data[0])
                 self.assertNotIn("supersecretvalue", json.dumps(first_event))
                 self.assertIn("***@example.com", json.dumps(first_event))
                 auth_value = first_event["meta"]["authorization"]
                 self.assertTrue(auth_value.startswith("Bearer "))
                 self.assertIn("****", auth_value)
+
+                timeline_data = [
+                    json.loads(line)
+                    for line in zf.read(_TIMELINE).decode("utf-8").strip().splitlines()
+                    if line
+                ]
+                self.assertTrue(
+                    any(evt.get("type") == "EVT_DIAG_HUD" for evt in timeline_data),
+                    "timeline should include DIAG events",
+                )
 
                 logs_data = [json.loads(line) for line in zf.read(_LOGS).decode("utf-8").strip().splitlines() if line]
                 self.assertEqual(len(logs_data), len(logs))

@@ -117,10 +117,10 @@
     if (typeof window === "undefined") {
       return {};
     }
-    const existing = window.__CFG__;
-    if (existing && typeof existing === "object") {
-      return existing;
-    }
+    const existing = window.__CFG__ && typeof window.__CFG__ === "object"
+      ? window.__CFG__
+      : {};
+    let merged = existing;
     try {
       const response = await fetch("/api/v1/admin/config", {
         method: "GET",
@@ -130,8 +130,9 @@
         try {
           const data = await response.json();
           if (data && typeof data === "object") {
-            window.__CFG__ = data;
-            return data;
+            merged = Object.assign({}, existing, data);
+            window.__CFG__ = merged;
+            return merged;
           }
         } catch (err) {
           console.warn("Failed to parse admin config", err);
@@ -141,7 +142,7 @@
       // Swallow network/config bootstrap failures silently; defaults will apply.
     }
     if (!window.__CFG__ || typeof window.__CFG__ !== "object") {
-      window.__CFG__ = {};
+      window.__CFG__ = merged;
     }
     return window.__CFG__;
   }
