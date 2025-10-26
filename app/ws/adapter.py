@@ -255,33 +255,46 @@ class ChatV2Adapter:
         if connect_event.get("type") != "websocket.connect":
             return
 
-        subprotocols = scope.get("subprotocols") or []
-        _logger.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
-        if CHAT_V2_SUBPROTOCOL not in subprotocols:
-            _logger.warning("evt=ws_reject_subprotocol reason=missing_or_mismatch need='chat.v2'")
-            await self._reject_subprotocol(send)
-            return
-
-        headers = self._decode_headers(scope.get("headers", ()))
+        raw_path = scope.get("raw_path")
+        if isinstance(raw_path, bytes):
+            try:
+                path = raw_path.decode("utf-8")
+            except UnicodeDecodeError:  # pragma: no cover - defensive fallback
+                path = raw_path.decode("latin-1", errors="ignore")
+        else:
+            path = scope.get("path", "")
 
         query_bytes = scope.get("query_string") or b""
         try:
             query_string = query_bytes.decode("utf-8")
         except UnicodeDecodeError:  # pragma: no cover - defensive fallback
             query_string = query_bytes.decode("latin-1", errors="ignore")
+        path_qs = path
+        if query_string:
+            path_qs = f"{path}?{query_string}"
+
+        subprotocols = scope.get("subprotocols") or []
+        _logger.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
+        if CHAT_V2_SUBPROTOCOL not in subprotocols:
+            _wslog.warning("evt=ws_accept_reject code=4401 reason=bad_subprotocol path=%s", path_qs)
+            await self._reject_subprotocol(send)
+            return
+
+        headers = self._decode_headers(scope.get("headers", ()))
+
         query_params = parse_qs(query_string, keep_blank_values=True)
         access_token = query_params.get("access_token", [None])[0]
         if not access_token:
             reason = "missing_token"
-            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
+            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs)
             await send({"type": "websocket.close", "code": 4401, "reason": reason})
             return
 
         try:
             claims = verify_ws_token(access_token)
         except Exception:
-            reason = "invalid_token"
-            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
+            reason = "jwt_invalid_or_expired"
+            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs)
             await send({"type": "websocket.close", "code": 4401, "reason": reason})
             return
 

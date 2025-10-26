@@ -3,6 +3,9 @@
   const DEFAULT_CLOSE_REASON = "client_shutdown";
   const SUBPROTOCOL = "chat.v2";
   const INFO_DEADLINE_MS = 20000;
+  const TOKEN_EXPIRY_MS = 60 * 1000;
+  const TOAST_STYLE_ID = "wsclient-toast-styles";
+  const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
 
   const AppState = window.AppState;
   if (!AppState) {
@@ -19,6 +22,9 @@
   let rateLimitRetryTimerId = null;
   let rateLimitRetryCount = 0;
   let autoResumeAttemptToken = null;
+  let toastRoot = null;
+  let lastTokenValue = null;
+  let lastTokenMintedAt = null;
 
   function getResumeState() {
     const state = AppState.getState();
@@ -47,6 +53,92 @@
 
   function updateState(patch) {
     AppState.setState(patch);
+  }
+
+  function ensureToastRoot() {
+    toastRoot = toastRoot && toastRoot.isConnected ? toastRoot : document.getElementById("toast-root");
+    if (!toastRoot) {
+      toastRoot = document.createElement("div");
+      toastRoot.id = "toast-root";
+      toastRoot.className = "toast-container";
+      document.body.appendChild(toastRoot);
+    }
+    if (
+      !document.getElementById("inline-toast-styles") &&
+      !document.getElementById("ws-error-styles") &&
+      !document.getElementById(TOAST_STYLE_ID)
+    ) {
+      const styleTag = document.createElement("style");
+      styleTag.id = TOAST_STYLE_ID;
+      styleTag.textContent = TOAST_STYLE_TEXT;
+      document.head.appendChild(styleTag);
+    }
+    return toastRoot;
+  }
+
+  function showConnectionToast(message) {
+    if (!message) return;
+    const host = ensureToastRoot();
+    if (!host) return;
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.setAttribute("role", "alert");
+    const body = document.createElement("div");
+    body.className = "toast-body";
+    body.textContent = message;
+    toast.appendChild(body);
+    host.appendChild(toast);
+    setTimeout(() => {
+      toast.classList.add("toast-exit");
+      setTimeout(() => {
+        if (toast.parentNode) {
+          toast.parentNode.removeChild(toast);
+        }
+      }, 220);
+    }, 3600);
+  }
+  function trackTokenFromUrl(url) {
+    if (typeof url !== "string" || !url) {
+      return { token: null, mintedAt: null };
+    }
+    let token = null;
+    try {
+      const parsed = new URL(url, window.location.origin);
+      token = parsed.searchParams.get("access_token");
+    } catch (err) {
+      return { token: null, mintedAt: null };
+    }
+    if (typeof token === "string" && token) {
+      if (token !== lastTokenValue) {
+        lastTokenValue = token;
+        lastTokenMintedAt = Date.now();
+      }
+      return { token: lastTokenValue, mintedAt: lastTokenMintedAt };
+    }
+    return { token: null, mintedAt: null };
+  }
+
+  function maybeShowHandshakeToast(ws, closeCode) {
+    if (!ws || ws.__intentionalClose === true || ws.__handshakeToastShown) {
+      return;
+    }
+    if (ws.readyState !== WebSocket.CLOSED || closeCode !== 1006) {
+      return;
+    }
+    const info = ws.__accessTokenInfo || { token: null, mintedAt: null };
+    const mintedAt = info && typeof info.mintedAt === "number" && Number.isFinite(info.mintedAt)
+      ? info.mintedAt
+      : null;
+    let message = null;
+    if (!mintedAt) {
+      message = "Couldn’t connect. Please login or complete your profile.";
+    } else if (Date.now() - mintedAt > TOKEN_EXPIRY_MS) {
+      message = "Session token expired. Click Start again.";
+    } else {
+      message = "Connection failed. Please try again.";
+    }
+    showConnectionToast(message);
+    ws.__handshakeToastShown = true;
   }
 
   function computeUrl(resumeToken) {
@@ -535,7 +627,10 @@
       ? { url, protocols: wsProtocols }
       : { url, subprotocol: wsProtocols };
     console.log("WS opening", logPayload);
+    const tokenInfo = trackTokenFromUrl(url);
     const ws = transportFactory(url, wsProtocols);
+    ws.__accessTokenInfo = tokenInfo;
+    ws.__handshakeToastShown = false;
     ws.onopen = () => {
       // Lightweight breadcrumb; keep as console.log
       console.log("WebSocket open", { url, protocol: ws.protocol || wsProtocols });
@@ -543,6 +638,7 @@
 
     ws.onerror = (e) => {
       console.error("WebSocket error", e, { readyState: ws.readyState });
+      maybeShowHandshakeToast(ws, null);
     };
 
     ws.onclose = (e) => {
@@ -552,6 +648,7 @@
         wasClean: e.wasClean,
         readyState: ws.readyState,
       });
+      maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
     };
     socket = ws;
     updateState({

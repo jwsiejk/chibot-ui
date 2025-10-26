@@ -1,223 +1,16 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 769de5d3df3efd1aeb4fe9a518ceb700dff35e01..caf0a6bfc97eeac0b9f0ba9a8384e42c851a2a54 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -53,50 +53,53 @@
-       }, { once: true });
-       el.addEventListener("error", reject, { once: true });
-       document.head.appendChild(el);
-     });
-   }
- 
-   async function ensureRuntimeModules() {
-     if (!window.AppState) {
-       await loadScript("state.js");
-     }
-     if (!window.AudioPlayer) {
-       await loadScript("audio_player.js");
-     }
-     if (!window.WSClient) {
-       await loadScript("ws_client.js");
-     }
-     if (!window.AudioRecorder) {
-       await loadScript("audio_recorder.js");
-     }
-     if (!window.PolicyBadges) {
-       await loadScript("policy_badges.js");
-     }
-     if (!window.TranscriptView) {
-       await loadScript("transcript_view.js");
-     }
-+    if (!window.WSErrorUI) {
-+      await loadScript("errors.js");
-+    }
-   }
- 
-   async function init() {
-     await ensureRuntimeModules();
- 
-     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
-     const AppState = window.AppState;
-     const WSClient = window.WSClient;
-     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
-       try {
-         window.PolicyBadges.init();
-       } catch (err) {
-         console.warn("Failed to initialize PolicyBadges", err);
-       }
-     }
- 
-     // --- App context (server-injected) ---
-     function readAppContext() {
-       const node = document.getElementById('appContext');
-       if (!node) return {};
-       try {
-         const raw = node.textContent || node.innerText || '{}';
-         return JSON.parse(raw);
-       } catch (err) {
-         console.warn('Failed to parse app context', err);
-@@ -457,70 +460,143 @@
-           audioPlayer.interrupt();
-         }
-         return;
-       }
-     }
- 
-     function handleGlobalKeyUp(event) {
-       const { key, code, ctrlKey, metaKey, altKey } = event;
-       if ((key === ' ' || key === 'Spacebar' || code === 'Space') && !(ctrlKey || metaKey || altKey)) {
-         if (!pttActive) {
-           return;
-         }
-         event.preventDefault();
-         setPttActive(false);
-       }
-     }
- 
-     window.addEventListener('keydown', handleGlobalKeyDown, true);
-     window.addEventListener('keyup', handleGlobalKeyUp, true);
-     window.addEventListener('blur', () => {
-       if (pttActive) {
-         setPttActive(false);
-       }
-     });
- 
-+    const showToastMessage = (() => {
-+      let root = null;
-+      const styleId = 'inline-toast-styles';
-+      const styleText = '#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}';
-+      function ensureRoot() {
-+        root = root && root.isConnected ? root : document.getElementById('toast-root');
-+        if (!root) {
-+          root = document.createElement('div');
-+          root.id = 'toast-root';
-+          root.className = 'toast-container';
-+          document.body.appendChild(root);
-+        }
-+        if (!document.getElementById(styleId)) {
-+          document.head.appendChild(Object.assign(document.createElement('style'), { id: styleId, textContent: styleText }));
-+        }
-+        return root;
-+      }
-+      return (message) => {
-+        if (!message) return;
-+        const host = ensureRoot();
-+        const toast = document.createElement('div');
-+        toast.className = 'toast';
-+        toast.setAttribute('role', 'alert'); toast.innerHTML = '<div class="toast-body"></div>';
-+        toast.firstChild.textContent = message;
-+        host.appendChild(toast);
-+        setTimeout(() => {
-+          toast.classList.add('toast-exit');
-+          setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 220);
-+        }, 3600);
-+      };
-+    })();
-+
-+    function csrf() {
-+      const cookies = document.cookie ? document.cookie.split(';') : [];
-+      for (const name of ['askchip_csrf', 'csrftoken', 'csrf_token']) {
-+        const prefix = `${name}=`;
-+        for (const part of cookies) {
-+          const trimmed = part.trim();
-+          if (!trimmed.startsWith(prefix)) continue;
-+          const raw = trimmed.slice(prefix.length);
-+          if (!raw) continue;
-+          try { return decodeURIComponent(raw); } catch (err) {
-+            console.warn('Failed to decode CSRF cookie', err);
-+            return raw;
-+          }
-+        }
-+      }
-+      return '';
-+    }
-+
-     startBtn.addEventListener('click', async () => {
-       startBtn.disabled = true;
-       const state = AppState.getState();
-       const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
-       let resumeToken = null;
-       if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
-         resumeToken = resumeState.token;
-       }
-+
-+      const fail = (message) => { if (message) showToastMessage(message); startBtn.disabled = false; };
-+      const csrfToken = csrf();
-+      const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
-+      let payload = null;
-       try {
--        const options = resumeToken ? { resumeToken } : undefined;
--        AppState.setState({ resumeError: null });
--        if (options) {
--          WSClient.open(options);
--        } else {
--          WSClient.open();
--        }
-+        const response = await fetch('/api/v1/auth/ws-token', {
-+          method: 'POST',
-+          credentials: 'include',
-+          headers,
-+        });
-+        if (response.status === 401 || response.status === 403) return fail(response.status === 401 ? 'Please login first.' : 'Complete your profile first.');
-+        if (response.status === 409) return fail('Profile required. Please complete profile.');
-+        if (!response.ok) return fail('Couldn’t start session. Try again.');
-+        payload = await response.json();
-+      } catch (err) {
-+        console.error('Failed to fetch WS token', err);
-+        return fail('Couldn’t start session. Try again.');
-+      }
-+
-+      if (!payload || typeof payload.access_token !== 'string') return fail('Couldn’t start session. Try again.');
-+      const accessToken = payload.access_token;
-+      const sid = typeof payload.sid === 'string' ? payload.sid : null;
-+      const ttlMs = Number(payload.ttl_ms);
-+      if (sid) AppState.setState({ sid });
-+      console.log('evt=ws_token_obtained', { sid, ttl_ms: Number.isFinite(ttlMs) ? ttlMs : null });
-+      const params = new URLSearchParams({ access_token: accessToken });
-+      if (resumeToken) params.set('resume', resumeToken);
-+      const wsUrl = `/ws/v2/chat?${params.toString()}`;
-+      try {
-+        WSClient.open(wsUrl, ['chat.v2']);
-       } catch (err) {
-         console.error('Failed to open WS client', err);
-         AppState.setState({ connectionState: 'disconnected' });
--        startBtn.disabled = false;
-+        fail('Couldn’t start session. Try again.');
-         endBtn.disabled = true;
-       }
-     });
- 
-     endBtn.addEventListener('click', () => {
-       WSClient.close('user_requested');
-       if (typeof AppState.clearResume === 'function') {
-         AppState.clearResume();
-       }
-       if (window.AudioRecorder) {
-         try {
-           window.AudioRecorder.stop();
-         } catch (err) {
-           console.warn('Failed to stop audio recorder', err);
-         }
-       }
-       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
-         window.AudioPlayer.interrupt();
-       }
-     });
- 
-     // --- Resume banner ---
-     const resumeBanner = document.createElement('div');
-     resumeBanner.setAttribute('role', 'status');
-     resumeBanner.setAttribute('aria-live', 'polite');
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index ecaf376e36d2e8f3b45219be6c652143fd3ef14e..8f2d5e883d794f4470ae023af8cf59804f12b320 100644
+index 8f2d5e883d794f4470ae023af8cf59804f12b320..e74a7409d5827aa6cddfe29760b9ab8eba493532 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -1,43 +1,43 @@
+@@ -1,76 +1,168 @@
  (() => {
    const HEARTBEAT_INTERVAL_MS = 15000;
    const DEFAULT_CLOSE_REASON = "client_shutdown";
    const SUBPROTOCOL = "chat.v2";
    const INFO_DEADLINE_MS = 20000;
++  const TOKEN_EXPIRY_MS = 60 * 1000;
++  const TOAST_STYLE_ID = "wsclient-toast-styles";
++  const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
  
    const AppState = window.AppState;
    if (!AppState) {
@@ -230,11 +23,13 @@ index ecaf376e36d2e8f3b45219be6c652143fd3ef14e..8f2d5e883d794f4470ae023af8cf5980
    let expectInfoFrame = true;
    let infoWatchdogTimerId = null;
    let lastPingAt = null;
--  let transportFactory = (url, protocol = SUBPROTOCOL) => new WebSocket(url, protocol);
-+  let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
    let rateLimitRetryTimerId = null;
    let rateLimitRetryCount = 0;
    let autoResumeAttemptToken = null;
++  let toastRoot = null;
++  let lastTokenValue = null;
++  let lastTokenMintedAt = null;
  
    function getResumeState() {
      const state = AppState.getState();
@@ -257,59 +52,129 @@ index ecaf376e36d2e8f3b45219be6c652143fd3ef14e..8f2d5e883d794f4470ae023af8cf5980
    function clearResumeState() {
      if (typeof AppState.clearResume === "function") {
        AppState.clearResume();
-@@ -468,76 +468,99 @@
-     ws.removeEventListener("message", handlers.message);
-     ws.removeEventListener("error", handlers.error);
-     ws.removeEventListener("close", handlers.close);
-     delete ws.__handlers;
-     delete ws.__intentionalClose;
+     }
+     autoResumeAttemptToken = null;
    }
  
-   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
-     if (!ws) return;
-     detachSocket(ws);
-     ws.__intentionalClose = true;
-     try {
-       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-         ws.close(1000, reason);
-       }
-     } catch (err) {
-       console.warn("WSClient cleanup close error", err);
-     }
-     if (socket === ws) {
-       socket = null;
-       expectInfoFrame = true;
-       clearInfoWatchdog();
-     }
+   function updateState(patch) {
+     AppState.setState(patch);
    }
  
--  function open(options = {}) {
--    const { resumeToken = null, skipRateLimitCancel = false } = options;
--    const state = AppState.getState();
--    const resumeTokenValue = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
-+  function open(options = {}, protocolsOverride) {
-+    let resumeTokenValue = null;
-+    let skipRateLimitCancel = false;
-+    let urlOverride = null;
-+    let protocols = protocolsOverride;
-+
-+    if (typeof options === "string") {
-+      urlOverride = options;
-+    } else if (options && typeof options === "object") {
-+      const { resumeToken = null, skipRateLimitCancel: skip = false } = options;
-+      const candidate = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
-+      if (candidate) {
-+        resumeTokenValue = candidate;
-+      }
-+      skipRateLimitCancel = Boolean(skip);
-+      if (!urlOverride && typeof options.url === "string" && options.url.trim()) {
-+        urlOverride = options.url.trim();
-+      }
-+      if (protocols === undefined && options.protocols !== undefined) {
-+        protocols = options.protocols;
-+      }
++  function ensureToastRoot() {
++    toastRoot = toastRoot && toastRoot.isConnected ? toastRoot : document.getElementById("toast-root");
++    if (!toastRoot) {
++      toastRoot = document.createElement("div");
++      toastRoot.id = "toast-root";
++      toastRoot.className = "toast-container";
++      document.body.appendChild(toastRoot);
 +    }
++    if (
++      !document.getElementById("inline-toast-styles") &&
++      !document.getElementById("ws-error-styles") &&
++      !document.getElementById(TOAST_STYLE_ID)
++    ) {
++      const styleTag = document.createElement("style");
++      styleTag.id = TOAST_STYLE_ID;
++      styleTag.textContent = TOAST_STYLE_TEXT;
++      document.head.appendChild(styleTag);
++    }
++    return toastRoot;
++  }
 +
++  function showConnectionToast(message) {
++    if (!message) return;
++    const host = ensureToastRoot();
++    if (!host) return;
++    const toast = document.createElement("div");
++    toast.className = "toast";
++    toast.setAttribute("role", "alert");
++    const body = document.createElement("div");
++    body.className = "toast-body";
++    body.textContent = message;
++    toast.appendChild(body);
++    host.appendChild(toast);
++    setTimeout(() => {
++      toast.classList.add("toast-exit");
++      setTimeout(() => {
++        if (toast.parentNode) {
++          toast.parentNode.removeChild(toast);
++        }
++      }, 220);
++    }, 3600);
++  }
++  function trackTokenFromUrl(url) {
++    if (typeof url !== "string" || !url) {
++      return { token: null, mintedAt: null };
++    }
++    let token = null;
++    try {
++      const parsed = new URL(url, window.location.origin);
++      token = parsed.searchParams.get("access_token");
++    } catch (err) {
++      return { token: null, mintedAt: null };
++    }
++    if (typeof token === "string" && token) {
++      if (token !== lastTokenValue) {
++        lastTokenValue = token;
++        lastTokenMintedAt = Date.now();
++      }
++      return { token: lastTokenValue, mintedAt: lastTokenMintedAt };
++    }
++    return { token: null, mintedAt: null };
++  }
++
++  function maybeShowHandshakeToast(ws, closeCode) {
++    if (!ws || ws.__intentionalClose === true || ws.__handshakeToastShown) {
++      return;
++    }
++    if (ws.readyState !== WebSocket.CLOSED || closeCode !== 1006) {
++      return;
++    }
++    const info = ws.__accessTokenInfo || { token: null, mintedAt: null };
++    const mintedAt = info && typeof info.mintedAt === "number" && Number.isFinite(info.mintedAt)
++      ? info.mintedAt
++      : null;
++    let message = null;
++    if (!mintedAt) {
++      message = "Couldn’t connect. Please login or complete your profile.";
++    } else if (Date.now() - mintedAt > TOKEN_EXPIRY_MS) {
++      message = "Session token expired. Click Start again.";
++    } else {
++      message = "Connection failed. Please try again.";
++    }
++    showConnectionToast(message);
++    ws.__handshakeToastShown = true;
++  }
++
+   function computeUrl(resumeToken) {
+     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+     const base = `${protocol}//${window.location.host}/ws/v2/chat`;
+     const params = new URLSearchParams();
+     if (typeof resumeToken === "string" && resumeToken.trim()) {
+       params.set("resume", resumeToken.trim());
+     }
+     const query = params.toString();
+     return query ? `${base}?${query}` : base;
+   }
+ 
+   function clearInfoWatchdog() {
+     if (infoWatchdogTimerId) {
+       clearTimeout(infoWatchdogTimerId);
+       infoWatchdogTimerId = null;
+     }
+   }
+ 
+   function startInfoWatchdog() {
+     clearInfoWatchdog();
+     infoWatchdogTimerId = setTimeout(() => {
+       infoWatchdogTimerId = null;
+       console.warn("WS info frame not received within deadline");
+     }, INFO_DEADLINE_MS);
+   }
+@@ -513,67 +605,72 @@
+       }
+     }
+ 
      if (socket) {
        cleanupSocket(socket, "superseded");
      }
@@ -326,24 +191,24 @@ index ecaf376e36d2e8f3b45219be6c652143fd3ef14e..8f2d5e883d794f4470ae023af8cf5980
        clearRateLimitRetryTimer();
        rateLimitRetryCount = 0;
      }
--    const url = computeUrl(resumeTokenValue);
--    console.log("WS opening", { url, subprotocol: SUBPROTOCOL });
--    const ws = transportFactory(url, SUBPROTOCOL);
-+    const url = urlOverride || computeUrl(resumeTokenValue);
-+    const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
-+    const logPayload = Array.isArray(wsProtocols)
-+      ? { url, protocols: wsProtocols }
-+      : { url, subprotocol: wsProtocols };
-+    console.log("WS opening", logPayload);
-+    const ws = transportFactory(url, wsProtocols);
+     const url = urlOverride || computeUrl(resumeTokenValue);
+     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
+     const logPayload = Array.isArray(wsProtocols)
+       ? { url, protocols: wsProtocols }
+       : { url, subprotocol: wsProtocols };
+     console.log("WS opening", logPayload);
++    const tokenInfo = trackTokenFromUrl(url);
+     const ws = transportFactory(url, wsProtocols);
++    ws.__accessTokenInfo = tokenInfo;
++    ws.__handshakeToastShown = false;
      ws.onopen = () => {
        // Lightweight breadcrumb; keep as console.log
--      console.log("WebSocket open", { url, protocol: SUBPROTOCOL });
-+      console.log("WebSocket open", { url, protocol: ws.protocol || wsProtocols });
+       console.log("WebSocket open", { url, protocol: ws.protocol || wsProtocols });
      };
  
      ws.onerror = (e) => {
        console.error("WebSocket error", e, { readyState: ws.readyState });
++      maybeShowHandshakeToast(ws, null);
      };
  
      ws.onclose = (e) => {
@@ -353,6 +218,7 @@ index ecaf376e36d2e8f3b45219be6c652143fd3ef14e..8f2d5e883d794f4470ae023af8cf5980
          wasClean: e.wasClean,
          readyState: ws.readyState,
        });
++      maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
      };
      socket = ws;
      updateState({
@@ -365,49 +231,120 @@ index ecaf376e36d2e8f3b45219be6c652143fd3ef14e..8f2d5e883d794f4470ae023af8cf5980
      attachSocket(ws);
      return ws;
    }
-@@ -567,44 +590,44 @@
-     if (!socket || socket.readyState !== WebSocket.OPEN) {
-       console.warn("WSClient.send called without an open socket");
+ 
+   function close(reason = DEFAULT_CLOSE_REASON) {
+     if (!socket) {
+       updateState({ connectionState: "disconnected" });
        return;
      }
-     const payload = typeof frame === "string" ? frame : JSON.stringify(frame);
-     sendRaw(payload);
-   }
+     const ws = socket;
+     cleanupSocket(ws, reason);
+     clearHeartbeat();
+     clearRateLimitRetryTimer();
+     rateLimitRetryCount = 0;
+     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 874db470f09c0bc8746e92e0403135d9ae4416b4..d5d1d82ae65a9ab62a0c5e5cdb59756879344606 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -233,77 +233,90 @@ class ChatV2Adapter:
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+         )
+         self.tts_runtime = None
+         self.asr_runtime = None
  
-   function getBufferedAmount() {
-     if (!socket) return 0;
-     return socket.bufferedAmount || 0;
-   }
+     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+         if scope.get("type") != "websocket":
+             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
  
-   const debug = {
-     simulateIncomingFrame(frame) {
-       handleMessageFrame(frame);
-     },
-     recordPing(ts) {
-       lastPingAt = ts;
-       updateState({ lastPingAt: ts });
-     },
-     setTransportFactory(factory) {
-       transportFactory = typeof factory === "function" ? factory : transportFactory;
-     },
-     resetTransportFactory() {
--      transportFactory = (url, protocol) => new WebSocket(url, protocol);
-+      transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-     }
-   };
+         connect_event = await receive()
+         if connect_event.get("type") != "websocket.connect":
+             return
  
-   window.WSClient = {
-     open,
-     close,
-     send,
-     sendBinary,
-     getBufferedAmount,
-     get socket() {
-       return socket;
-     },
-     isConnected() {
-       return !!socket && socket.readyState === WebSocket.OPEN && AppState.getState().connectionState === "connected";
-     },
-     __debug: debug
-   };
- })();
++        raw_path = scope.get("raw_path")
++        if isinstance(raw_path, bytes):
++            try:
++                path = raw_path.decode("utf-8")
++            except UnicodeDecodeError:  # pragma: no cover - defensive fallback
++                path = raw_path.decode("latin-1", errors="ignore")
++        else:
++            path = scope.get("path", "")
++
++        query_bytes = scope.get("query_string") or b""
++        try:
++            query_string = query_bytes.decode("utf-8")
++        except UnicodeDecodeError:  # pragma: no cover - defensive fallback
++            query_string = query_bytes.decode("latin-1", errors="ignore")
++        path_qs = path
++        if query_string:
++            path_qs = f"{path}?{query_string}"
++
+         subprotocols = scope.get("subprotocols") or []
+         _logger.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
+         if CHAT_V2_SUBPROTOCOL not in subprotocols:
+-            _logger.warning("evt=ws_reject_subprotocol reason=missing_or_mismatch need='chat.v2'")
++            _wslog.warning("evt=ws_accept_reject code=4401 reason=bad_subprotocol path=%s", path_qs)
+             await self._reject_subprotocol(send)
+             return
+ 
+         headers = self._decode_headers(scope.get("headers", ()))
+ 
+-        query_bytes = scope.get("query_string") or b""
+-        try:
+-            query_string = query_bytes.decode("utf-8")
+-        except UnicodeDecodeError:  # pragma: no cover - defensive fallback
+-            query_string = query_bytes.decode("latin-1", errors="ignore")
+         query_params = parse_qs(query_string, keep_blank_values=True)
+         access_token = query_params.get("access_token", [None])[0]
+         if not access_token:
+             reason = "missing_token"
+-            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
++            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs)
+             await send({"type": "websocket.close", "code": 4401, "reason": reason})
+             return
+ 
+         try:
+             claims = verify_ws_token(access_token)
+         except Exception:
+-            reason = "invalid_token"
+-            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
++            reason = "jwt_invalid_or_expired"
++            _wslog.warning("evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs)
+             await send({"type": "websocket.close", "code": 4401, "reason": reason})
+             return
+ 
+         sid = claims.get("sid")
+         sub = claims.get("sub")
+         aud = claims.get("aud")
+         if not sid or not sub or aud != CHAT_V2_SUBPROTOCOL:
+             reason = "bad_claims"
+             _wslog.warning("evt=ws_accept_reject code=4401 reason=%s", reason)
+             await send({"type": "websocket.close", "code": 4401, "reason": reason})
+             return
+ 
+         principal: Dict[str, Any] = dict(claims)
+         is_admin = bool(principal.get("is_admin"))
+ 
+         _wslog.info("evt=ws_accept_token_ok sid=%s", sid)
+ 
+         _logger.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
+         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+ 
+         now_ms = int(time.time() * 1000)
+         info_frame: Dict[str, Any] = {
+             "type": "info",
+             "protocol": CHAT_V2_SUBPROTOCOL,
+             "sid": sid,
