@@ -37,6 +37,10 @@ from app.services.streaming_asr.deepgram_client import DeepgramClient
 
 configure_logging()
 
+logging.getLogger("app.ws.adapter").setLevel(logging.INFO)
+logging.getLogger("app.security.jwt").setLevel(logging.INFO)
+logging.getLogger("app.auth.http").setLevel(logging.INFO)
+
 for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
     _category_logger = logging.getLogger(_logger_name)
     if _category_logger.level == logging.NOTSET:

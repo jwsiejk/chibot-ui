@@ -1,136 +1,59 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 41884a6f9bfc1b3fe7be599ff19c3020194d951c..b78eb06282e2e1bd35617e0f0f5f12021ed33202 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -512,50 +512,92 @@
-           setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 220);
-         }, 3600);
-       };
-     })();
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index 72c8d95e63524be7d62e80472d6a543fdb2e526b..75a4ad5685426f125300c4d4d0cf8d4359c0a101 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -15,50 +15,54 @@ from tempfile import NamedTemporaryFile
+ from typing import Any, Awaitable, Callable, Dict, Optional
  
-     function csrf() {
-       const cookies = document.cookie ? document.cookie.split(';') : [];
-       for (const name of ['askchip_csrf', 'csrftoken', 'csrf_token']) {
-         const prefix = `${name}=`;
-         for (const part of cookies) {
-           const trimmed = part.trim();
-           if (!trimmed.startsWith(prefix)) continue;
-           const raw = trimmed.slice(prefix.length);
-           if (!raw) continue;
-           try { return decodeURIComponent(raw); } catch (err) {
-             console.warn('Failed to decode CSRF cookie', err);
-             return raw;
-           }
-         }
-       }
-       return '';
-     }
+ from app import config
+ from app.auth.http_handlers import (
+     get_me,
+     post_login,
+     post_profile,
+     post_ws_token,
+     _session_email as _auth_session_email,
+     _is_admin as _auth_is_admin,
+ )
+ from app.db import neon
+ from app.logging_config import configure_logging
+ from app.telemetry import bus as telemetry_bus
+ from app.telemetry.exporter import FileExporter
+ from app.versioning import get_build_id, inject_static_version
+ from app.voice_v2.asr_runtime import ASRRuntime
+ from app.voice_v2.engine import EngineV2
+ from app.voice_v2.tts_runtime import TTSRuntime
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+ from app.services.streaming_asr.deepgram_client import DeepgramClient
  
-     startBtn.addEventListener('click', async () => {
-       startBtn.disabled = true;
-+      try {
-+        const authResponse = await fetch('/api/v1/auth/me', {
-+          method: 'GET',
-+          credentials: 'include',
-+        });
-+        if (authResponse.status === 401) {
-+          if (window.AuthUI && typeof window.AuthUI.showLoginModal === 'function') {
-+            window.AuthUI.showLoginModal();
-+          }
-+          showToastMessage('Please login first.');
-+          startBtn.disabled = false;
-+          return;
-+        }
-+        if (!authResponse.ok) {
-+          console.error('Failed to verify auth', authResponse.status);
-+          showToastMessage('Couldn’t verify login. Try again.');
-+          startBtn.disabled = false;
-+          return;
-+        }
-+        let authPayload = null;
-+        try {
-+          authPayload = await authResponse.json();
-+        } catch (err) {
-+          console.error('Failed to parse auth response', err);
-+          showToastMessage('Couldn’t verify login. Try again.');
-+          startBtn.disabled = false;
-+          return;
-+        }
-+        if (authPayload && authPayload.profile_complete === false) {
-+          if (window.AuthUI && typeof window.AuthUI.showProfileModal === 'function') {
-+            window.AuthUI.showProfileModal();
-+          }
-+          showToastMessage('Complete your profile to continue.');
-+          startBtn.disabled = false;
-+          return;
-+        }
-+      } catch (err) {
-+        console.error('Failed to verify auth', err);
-+        showToastMessage('Couldn’t verify login. Try again.');
-+        startBtn.disabled = false;
-+        return;
-+      }
-       const state = AppState.getState();
-       const resumeState = state && typeof state.resume === 'object' ? state.resume : null;
-       let resumeToken = null;
-       if (resumeState && typeof resumeState.token === 'string' && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
-         resumeToken = resumeState.token;
-       }
  
-       const fail = (message) => { if (message) showToastMessage(message); startBtn.disabled = false; };
-       const csrfToken = csrf();
-       const headers = csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
-       let payload = null;
-       try {
-         const response = await fetch('/api/v1/auth/ws-token', {
-           method: 'POST',
-           credentials: 'include',
-           headers,
-         });
-         if (response.status === 401 || response.status === 403) return fail(response.status === 401 ? 'Please login first.' : 'Complete your profile first.');
-         if (response.status === 409) return fail('Profile required. Please complete profile.');
-         if (!response.ok) return fail('Couldn’t start session. Try again.');
-         payload = await response.json();
-       } catch (err) {
-         console.error('Failed to fetch WS token', err);
-         return fail('Couldn’t start session. Try again.');
-       }
-diff --git a/app/static/js/auth_ui.js b/app/static/js/auth_ui.js
-index 130186eeaf63c03e96304be56809e56987df211c..bb1385c4c1cfc5d3d6c55b54793b8717cc595698 100644
---- a/app/static/js/auth_ui.js
-+++ b/app/static/js/auth_ui.js
-@@ -239,29 +239,34 @@
-       const response = await fetch("/api/v1/auth/profile", {
-         method: "POST",
-         credentials: "include",
-         headers: {
-           "Content-Type": "application/json",
-           ...(csrfToken ? { "x-csrf-token": csrfToken } : {}),
-         },
-         body: JSON.stringify(payload),
-       });
-       if (!response.ok) {
-         return;
-       }
-       hideProfileModal();
-     } catch (err) {
-       console.warn("Failed to save profile", err);
-     }
-   }
+ configure_logging()
  
-   if (loginForm) {
-     loginForm.addEventListener("submit", handleLoginSubmit);
-   }
-   if (profileForm) {
-     profileForm.addEventListener("submit", handleProfileSubmit);
-   }
- 
-+  window.AuthUI = Object.assign(window.AuthUI || {}, {
-+    showLoginModal,
-+    showProfileModal,
-+  });
++logging.getLogger("app.ws.adapter").setLevel(logging.INFO)
++logging.getLogger("app.security.jwt").setLevel(logging.INFO)
++logging.getLogger("app.auth.http").setLevel(logging.INFO)
 +
-   document.addEventListener("DOMContentLoaded", () => {
-     fetchCurrentUser();
-   });
- })();
+ for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
+     _category_logger = logging.getLogger(_logger_name)
+     if _category_logger.level == logging.NOTSET:
+         _category_logger.setLevel(logging.INFO)
+ 
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ @dataclass(frozen=True)
+ class Response:
+     """Immutable container describing a serialized HTTP response."""
+ 
+     status: int
+     body: bytes
+     headers: tuple[tuple[bytes, bytes], ...]
+ 
+ 
+ def json_response(*, status: int = 200, **payload: Any) -> Response:
+     """Serialize a payload to JSON using a compact representation."""
+ 
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
