@@ -1,65 +1,119 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index c3194a19441fe3c7dafa494f9b728ec30e7b92da..6cce2ea2d9be97f6533ccc7c4a54d65f90894d32 100644
+index 6cce2ea2d9be97f6533ccc7c4a54d65f90894d32..597d156d8725ef2c908ed020ea52903da42e6b0e 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -649,54 +649,58 @@
-       const ttlValue = Number(ttl_ms);
-       if (!Number.isFinite(ttlValue) || ttlValue <= 0) {
-         console.error('ws-token ttl invalid', ttl_ms);
-         showStartToast('Could not start session. Try again.');
-         return;
-       }
+@@ -1,55 +1,112 @@
+ (() => {
+   const STATIC_JS_BASE = (() => {
+     if (typeof document === "undefined") {
+       return "/static/js/";
+     }
  
-       rememberToken(sid, ttlValue);
- 
-       if (!tokenFreshEnough()) {
-         console.error('ws-token considered stale', { sid, ttl_ms: ttlValue });
-         showStartToast('Could not start session. Try again.');
-         return;
-       }
- 
-       const params = new URLSearchParams({ access_token });
-       const state = AppState && typeof AppState.getState === 'function' ? AppState.getState() : null;
-       if (state && state.resume && typeof state.resume.token === 'string') {
-         const resume = state.resume;
-         if (Number.isFinite(resume.expiresAt) && Date.now() < resume.expiresAt) {
-           params.set('resume', resume.token);
-         }
-       }
-       const wsUrl = `/ws/v2/chat?${params.toString()}`;
- 
--      console.log('evt=ws_open_attempt', { url: wsUrl, proto: 'chat.v2', sid });
-+      // Add token as SECOND subprotocol so the server can read it if a proxy
-+      // or any client path drops the query string.
-+      const subprotocols = ['chat.v2', `jwt.${access_token}`];
-+
-+      console.log('evt=ws_open_attempt', { url: wsUrl, protocols: subprotocols, sid });
- 
+     const script = document.currentScript || document.querySelector('script[src$="/static/js/app.js"]');
+     if (script && script.src) {
        try {
--        WSClient.open(wsUrl, ['chat.v2']);
-+        WSClient.open(wsUrl, subprotocols);
+         const url = new URL(script.src, window.location.href);
+         return url.pathname.replace(/[^/]+$/, "");
        } catch (err) {
-         console.error('WSClient.open failed', err);
-         if (AppState && typeof AppState.setState === 'function') {
-           AppState.setState({ connectionState: 'disconnected' });
-         }
-         showStartToast('Could not open a session. Please try again.');
+         console.warn("Failed to parse static script URL", err);
        }
      }
  
-     startBtn.addEventListener('click', (event) => {
-       event.preventDefault();
-       if (startBtn.disabled) return;
-       startBtn.disabled = true;
-       Promise.resolve(handleStartSessionClick()).finally(() => {
-         startBtn.disabled = false;
-       });
-     });
+     return "/static/js/";
+   })();
  
-     endBtn.addEventListener('click', () => {
-       WSClient.close('user_requested');
-       if (typeof AppState.clearResume === 'function') {
-         AppState.clearResume();
++  const VERSION_QUERY = (() => {
++    if (typeof document === "undefined") {
++      return "";
++    }
++    try {
++      const current =
++        document.currentScript ||
++        document.querySelector('script[src*="/static/js/app.js"]') ||
++        null;
++      if (!current || !current.src) {
++        return "";
++      }
++      const url = new URL(current.src, window.location.href);
++      return url.search || "";
++    } catch (err) {
++      console.warn("Failed to derive version query", err);
++      return "";
++    }
++  })();
++
++  function isSameOrigin(url) {
++    try {
++      if (!/^(?:[a-z]+:)?\/\//i.test(url)) {
++        return true;
++      }
++      const parsed = new URL(url, window.location.href);
++      return parsed.origin === window.location.origin;
++    } catch (err) {
++      return false;
++    }
++  }
++
++  function isSpecialScheme(url) {
++    return /^(data:|blob:)/i.test(url);
++  }
++
++  function appendVersionQuery(url) {
++    if (!VERSION_QUERY || typeof url !== "string" || url.includes("?")) {
++      return url;
++    }
++    const hashIndex = url.indexOf("#");
++    if (hashIndex === -1) {
++      return `${url}${VERSION_QUERY}`;
++    }
++    return `${url.slice(0, hashIndex)}${VERSION_QUERY}${url.slice(hashIndex)}`;
++  }
++
+   function resolveScriptSrc(src) {
+     if (!src || typeof src !== "string") {
+       return src;
+     }
+ 
+-    if (/^(?:[a-z]+:)?\/\//i.test(src) || src.startsWith("/")) {
++    if (isSpecialScheme(src)) {
+       return src;
+     }
+ 
++    if (/^(?:[a-z]+:)?\/\//i.test(src) || src.startsWith("/")) {
++      if (!isSameOrigin(src)) {
++        return src;
++      }
++      return appendVersionQuery(src);
++    }
++
+     const normalized = src.replace(/^\.\//, "");
+-    return `${STATIC_JS_BASE.replace(/\/?$/, '/')}${normalized}`;
++    const base = STATIC_JS_BASE.replace(/\/?$/, "/");
++    const joined = `${base}${normalized}`;
++
++    return appendVersionQuery(joined);
+   }
+ 
+   function loadScript(src) {
+     const resolvedSrc = resolveScriptSrc(src);
+     return new Promise((resolve, reject) => {
+       const existing = document.querySelector(`script[data-dynamic="${resolvedSrc}"]`);
+       if (existing) {
+         if (existing.dataset.loaded === "true") {
+           resolve();
+         } else {
+           existing.addEventListener("load", resolve, { once: true });
+           existing.addEventListener("error", reject, { once: true });
+         }
+         return;
        }
-       if (window.AudioRecorder) {
-         try {
+       const el = document.createElement("script");
+       el.src = resolvedSrc;
+       el.async = false;
+       el.dataset.dynamic = resolvedSrc;
+       el.addEventListener("load", () => {
+         el.dataset.loaded = "true";
+         resolve();
+       }, { once: true });
+       el.addEventListener("error", reject, { once: true });
+       document.head.appendChild(el);

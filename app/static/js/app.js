@@ -17,17 +17,74 @@
     return "/static/js/";
   })();
 
+  const VERSION_QUERY = (() => {
+    if (typeof document === "undefined") {
+      return "";
+    }
+    try {
+      const current =
+        document.currentScript ||
+        document.querySelector('script[src*="/static/js/app.js"]') ||
+        null;
+      if (!current || !current.src) {
+        return "";
+      }
+      const url = new URL(current.src, window.location.href);
+      return url.search || "";
+    } catch (err) {
+      console.warn("Failed to derive version query", err);
+      return "";
+    }
+  })();
+
+  function isSameOrigin(url) {
+    try {
+      if (!/^(?:[a-z]+:)?\/\//i.test(url)) {
+        return true;
+      }
+      const parsed = new URL(url, window.location.href);
+      return parsed.origin === window.location.origin;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function isSpecialScheme(url) {
+    return /^(data:|blob:)/i.test(url);
+  }
+
+  function appendVersionQuery(url) {
+    if (!VERSION_QUERY || typeof url !== "string" || url.includes("?")) {
+      return url;
+    }
+    const hashIndex = url.indexOf("#");
+    if (hashIndex === -1) {
+      return `${url}${VERSION_QUERY}`;
+    }
+    return `${url.slice(0, hashIndex)}${VERSION_QUERY}${url.slice(hashIndex)}`;
+  }
+
   function resolveScriptSrc(src) {
     if (!src || typeof src !== "string") {
       return src;
     }
 
-    if (/^(?:[a-z]+:)?\/\//i.test(src) || src.startsWith("/")) {
+    if (isSpecialScheme(src)) {
       return src;
     }
 
+    if (/^(?:[a-z]+:)?\/\//i.test(src) || src.startsWith("/")) {
+      if (!isSameOrigin(src)) {
+        return src;
+      }
+      return appendVersionQuery(src);
+    }
+
     const normalized = src.replace(/^\.\//, "");
-    return `${STATIC_JS_BASE.replace(/\/?$/, '/')}${normalized}`;
+    const base = STATIC_JS_BASE.replace(/\/?$/, "/");
+    const joined = `${base}${normalized}`;
+
+    return appendVersionQuery(joined);
   }
 
   function loadScript(src) {
