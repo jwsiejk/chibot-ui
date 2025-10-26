@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from typing import Any, Mapping, MutableMapping, Optional
@@ -43,8 +44,10 @@ def get_env(name: str, default=None):
     return value if value is not None else default
 
 
+_log = logging.getLogger(__name__)
+
 _ADMIN_SETTINGS_LOCK = threading.RLock()
-_ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[str]] = {}
+_ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
 _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
 _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
 
@@ -90,7 +93,45 @@ def _coerce_int(value: str, default: int, *, minimum: Optional[int] = None) -> i
     return candidate
 
 
-def _get_cached_admin_setting(key: str) -> Optional[str]:
+def _coerce_db_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return _coerce_bool(value, default)
+    if isinstance(value, Mapping):
+        lowered = {str(k).lower(): v for k, v in value.items() if isinstance(k, str)}
+        if "enabled" in lowered:
+            return _coerce_db_bool(lowered["enabled"], default)
+        if "value" in lowered:
+            return _coerce_db_bool(lowered["value"], default)
+    return bool(default)
+
+
+def _coerce_db_int(
+    value: Any, default: int, *, minimum: Optional[int] = None
+) -> int:
+    candidate: Optional[int] = None
+    if isinstance(value, bool):
+        candidate = int(value)
+    elif isinstance(value, (int, float)):
+        candidate = int(value)
+    elif isinstance(value, str):
+        return _coerce_int(value, default, minimum=minimum)
+    elif isinstance(value, Mapping):
+        lowered = {str(k).lower(): v for k, v in value.items() if isinstance(k, str)}
+        for key in ("value", "count", "enabled"):
+            if key in lowered:
+                return _coerce_db_int(lowered[key], default, minimum=minimum)
+    if candidate is None:
+        candidate = int(default)
+    if minimum is not None and candidate < minimum:
+        return minimum
+    return candidate
+
+
+def _get_cached_admin_setting(key: str) -> Optional[Any]:
     normalized = _normalize_key(key)
     with _ADMIN_SETTINGS_LOCK:
         if normalized in _ADMIN_SETTINGS_CACHE:
@@ -106,7 +147,7 @@ def _get_cached_admin_setting(key: str) -> Optional[str]:
     return value
 
 
-def update_admin_settings_cache(updates: Mapping[str, Optional[str]]) -> None:
+def update_admin_settings_cache(updates: Mapping[str, Optional[Any]]) -> None:
     """Merge ``updates`` into the local admin settings cache and refresh flags."""
 
     changed = False
@@ -120,63 +161,101 @@ def update_admin_settings_cache(updates: Mapping[str, Optional[str]]) -> None:
         reload_runtime_flags()
 
 
-def get_admin_setting_raw(key: str) -> Optional[str]:
+def get_admin_setting_raw(key: str) -> Optional[Any]:
     """Return the raw admin setting value for ``key`` when cached or stored."""
 
     return _get_cached_admin_setting(key)
 
 
-def set_admin_setting_raw(key: str, value: Optional[str]) -> None:
+def set_admin_setting_raw(
+    key: str, value: Optional[Any], *, updated_by: str | None = None
+) -> None:
     """Persist ``value`` for ``key`` and refresh runtime configuration."""
 
     normalized = _normalize_key(key)
     store = _get_admin_settings_store()
     if store is None:
         raise RuntimeError("Admin settings store unavailable")
-    store.set(normalized, value)
+    store.set(normalized, value, updated_by=updated_by)
     update_admin_settings_cache({normalized: value})
+
+
+def _resolve_bool_setting(name: str, default: bool) -> tuple[bool, str, Any]:
+    env_value = os.getenv(_env_name(name))
+    if env_value is not None:
+        return _coerce_bool(env_value, default), "env", env_value
+    stored = _get_cached_admin_setting(name)
+    if stored is not None:
+        return _coerce_db_bool(stored, default), "db", stored
+    return bool(default), "default", None
 
 
 def bool_env_or_db(name: str, *, default: bool = False) -> bool:
     """Resolve a boolean config value from env, admin settings, or default."""
 
+    value, _source, _raw = _resolve_bool_setting(name, default)
+    return value
+
+
+def _resolve_int_setting(
+    name: str, default: int, *, minimum: Optional[int] = None
+) -> tuple[int, str, Any]:
     env_value = os.getenv(_env_name(name))
     if env_value is not None:
-        return _coerce_bool(env_value, default)
+        return _coerce_int(env_value, default, minimum=minimum), "env", env_value
     stored = _get_cached_admin_setting(name)
     if stored is not None:
-        return _coerce_bool(stored, default)
-    return bool(default)
+        return _coerce_db_int(stored, default, minimum=minimum), "db", stored
+    fallback = int(default)
+    if minimum is not None and fallback < minimum:
+        fallback = minimum
+    return fallback, "default", None
 
 
 def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None) -> int:
     """Resolve an integer config value from env, admin settings, or default."""
 
-    env_value = os.getenv(_env_name(name))
-    if env_value is not None:
-        return _coerce_int(env_value, default, minimum=minimum)
-    stored = _get_cached_admin_setting(name)
-    if stored is not None:
-        return _coerce_int(stored, default, minimum=minimum)
-    if minimum is not None and default < minimum:
-        return minimum
-    return int(default)
+    value, _source, _raw = _resolve_int_setting(name, default, minimum=minimum)
+    return value
 
 
 def reload_runtime_flags() -> None:
     """Refresh runtime configuration flags from env and admin settings."""
 
+    diag_client_hud, hud_source, _hud_raw = _resolve_bool_setting(
+        "diag_client_hud", default=False
+    )
+    diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
+        "diag_audio_guard", default=True
+    )
+    diag_chunk_sample_n, chunk_source, _chunk_raw = _resolve_int_setting(
+        "diag_chunk_sample_n", default=10, minimum=1
+    )
+
     flags = {
-        "DIAG_CLIENT_HUD": bool_env_or_db("diag_client_hud", default=False),
-        "DIAG_AUDIO_GUARD": bool_env_or_db("diag_audio_guard", default=True),
-        "DIAG_CHUNK_SAMPLE_N": int_env_or_db(
-            "diag_chunk_sample_n", default=10, minimum=1
-        ),
+        "DIAG_CLIENT_HUD": diag_client_hud,
+        "DIAG_AUDIO_GUARD": diag_audio_guard,
+        "DIAG_CHUNK_SAMPLE_N": diag_chunk_sample_n,
     }
     with _ADMIN_SETTINGS_LOCK:
         _RUNTIME_FLAGS.clear()
         _RUNTIME_FLAGS.update(flags)
     globals().update(flags)
+
+    log_snapshot = [
+        {"key": "DIAG_CLIENT_HUD", "value": diag_client_hud, "source": hud_source},
+        {"key": "DIAG_AUDIO_GUARD", "value": diag_audio_guard, "source": audio_source},
+        {
+            "key": "DIAG_CHUNK_SAMPLE_N",
+            "value": diag_chunk_sample_n,
+            "source": chunk_source,
+        },
+    ]
+    _log.info(
+        "evt=admin_settings_load flags=%s",
+        log_snapshot,
+        extra={"component": "admin.settings"},
+    )
 
 
 def get_client_config_snapshot() -> dict[str, Any]:
@@ -186,16 +265,18 @@ def get_client_config_snapshot() -> dict[str, Any]:
         return dict(_RUNTIME_FLAGS)
 
 
-def set_admin_settings(values: Mapping[str, Optional[str]]) -> None:
+def set_admin_settings(
+    values: Mapping[str, Optional[Any]], *, updated_by: str | None = None
+) -> None:
     """Persist multiple admin settings and refresh runtime flags."""
 
     store = _get_admin_settings_store()
     if store is None:
         raise RuntimeError("Admin settings store unavailable")
-    normalized_updates: dict[str, Optional[str]] = {}
+    normalized_updates: dict[str, Optional[Any]] = {}
     for key, value in values.items():
         normalized = _normalize_key(key)
-        store.set(normalized, value)
+        store.set(normalized, value, updated_by=updated_by)
         normalized_updates[normalized] = value
     update_admin_settings_cache(normalized_updates)
 
