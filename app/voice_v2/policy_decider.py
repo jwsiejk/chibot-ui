@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Mapping, MutableMapping
 
+from app.policy.loader import assistant_turn_actions
+
 
 EVT_POLICY_DECISION = "EVT_POLICY_DECISION"
 
@@ -32,8 +34,11 @@ class PolicyDecider:
         barge_in_enabled = bool(snapshot.get("barge_in_enabled", False))
         auto_commit = bool(snapshot.get("auto_commit_when_ready", False))
 
+        actions = assistant_turn_actions(snapshot)
+
         return {
             "action": action,
+            "actions": actions,
             "barge_in_enabled": barge_in_enabled,
             "auto_commit_when_ready": auto_commit,
         }

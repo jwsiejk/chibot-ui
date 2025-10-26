@@ -55,6 +55,10 @@ class TestPolicyAndNLGOncePerTurn(unittest.TestCase):
         self.assertEqual(req_id, nlg_event["req_id"])
 
         self.assertEqual("respond", policy_event["action"])
+        self.assertEqual(
+            ["assistant.say", "assistant.await_user"],
+            policy_event["actions"],
+        )
         self.assertTrue(policy_event["barge_in_enabled"])
         self.assertTrue(policy_event["auto_commit_when_ready"])
         self.assertEqual("Hi there! How can I help you today?", nlg_event["text"])
@@ -116,6 +120,10 @@ class TestPolicyAndNLGOncePerTurn(unittest.TestCase):
         for sid, evt in sid_to_policy.items():
             self.assertEqual(sid, evt["sid"])
             self.assertEqual("respond", evt["action"])
+            self.assertEqual(
+                ["assistant.say", "assistant.await_user"],
+                evt["actions"],
+            )
             self.assertEqual("1", evt["schema_version"])
 
         for sid, evt in sid_to_nlg.items():

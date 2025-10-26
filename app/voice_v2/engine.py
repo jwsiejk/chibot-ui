@@ -13,7 +13,7 @@ from typing import Any, Dict, Mapping, Optional
 
 from app import config
 from app.logging_config import apply_logging_policy
-from app.policy.loader import load_interaction_policy
+from app.policy.loader import assistant_turn_actions, load_interaction_policy
 from app.policy.watch import compute_diff, should_reapply
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
@@ -737,7 +737,8 @@ class EngineV2:
             max_tokens = 30
             msg_counts = {"system": 1, "developer": 1, "user": 1}
 
-            policy_payload = {"rule": "session_open.greet", "actions": ["assistant.say"]}
+            greet_actions = assistant_turn_actions(self.policy_snapshot)
+            policy_payload = {"rule": "session_open.greet", "actions": greet_actions}
             policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
             self._publish(policy_event)
 

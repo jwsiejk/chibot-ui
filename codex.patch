@@ -1,491 +1,376 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 9e08eb5f0a023548c7a804e17f3db2602f108a2c..a43f3e1317dd0d8fb3067bacc37a3300ee2829c8 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -65,57 +65,59 @@ class Response:
+diff --git a/app/policy/loader.py b/app/policy/loader.py
+index 68176cb887736a7312354024f8b139bd117b4cd6..d900fc59d4d1ed04132bb494be762f82c5964627 100644
+--- a/app/policy/loader.py
++++ b/app/policy/loader.py
+@@ -1,46 +1,56 @@
+ """Utilities for loading the interaction policy snapshot."""
+ from __future__ import annotations
  
+ from copy import deepcopy
+-from typing import Any, Dict
++from typing import Any, Dict, Mapping, Sequence
  
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
+ InteractionPolicySnapshot = Dict[str, Any]
  
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
- 
- 
- WS_ROUTE = "/ws/v2/chat"
- HEALTH_ROUTE = "/api/v1/health"
- LIVE_ROUTE = "/api/v1/live"
- READY_ROUTE = "/api/v1/ready"
- INFO_ROUTE = "/api/v1/info"
- WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
- LOGIN_ROUTE = "/api/v1/auth/login"
- ME_ROUTE = "/api/v1/auth/me"
- PROFILE_ROUTE = "/api/v1/auth/profile"
- ROOT_ROUTE = "/"
- ADMIN_LOGS_ROUTE = "/admin/logs"
- ADMIN_SETTINGS_ROUTE = "/api/v1/admin/settings"
-+ADMIN_CONFIG_ROUTE = "/api/v1/admin/config"
- FAVICON_ROUTE = "/favicon.ico"
- STATIC_ROUTE_PREFIX = "/static/"
- ADMIN_UI_ROUTE_PREFIX = "/admin/ui/"
- ADMIN_FLOW_ROUTE_PREFIX = "/api/v1/admin/flow"
- ADMIN_FLOW_TRACE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/trace"
- ADMIN_FLOW_ZIP_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/zip"
- ADMIN_FLOW_SESSIONS_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/sessions"
-+ADMIN_FLOW_LIVE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/live"
- EXPORT_ROOT = Path("exports")
- BASE_DIR = Path(__file__).resolve().parent
- STATIC_ROOT = BASE_DIR / "static"
- TEMPLATES_ROOT = BASE_DIR / "templates"
- INDEX_PATH = TEMPLATES_ROOT / "index.html"
- ADMIN_LOGS_PATH = TEMPLATES_ROOT / "admin_logs.html"
- FAVICON_PATH = STATIC_ROOT / "favicon.ico"
- ADMIN_UI_ROOT = BASE_DIR / "admin" / "ui"
- _DEFAULT_INDEX_HTML = (
-     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
- )
- _DEFAULT_ADMIN_HTML = (
-     "<!doctype html><title>Admin Logs</title><div id='admin-logs'></div>".encode("utf-8")
- )
- 
- 
- HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
- 
- _adapter: Optional[ChatV2Adapter] = None
- _lifespan_started = False
- 
- 
- def _ws_route_matches(scope: dict, expected: str) -> bool:
-     """
-     Return True when the incoming websocket request targets the expected route,
-@@ -221,50 +223,66 @@ async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) ->
-         return json_response(
-             status=503,
-             ok=False,
-             reason="export_path_unwritable",
-             export_path=str(EXPORT_ROOT),
-         )
- 
- 
- async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Return build metadata derived from environment configuration."""
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
- 
-     version = os.getenv("APP_VERSION") or "0.0.0+dev"
-     raw_sha = os.getenv("GIT_SHA") or ""
-     git_sha = raw_sha[:7] if raw_sha else "unknown"
-     built_at = os.getenv("BUILD_TIME") or datetime.now(timezone.utc).isoformat()
- 
-     payload = {"version": version, "git_sha": git_sha, "built_at": built_at}
-     return json_response(**payload)
- 
- 
-+async def _handle_admin_config(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-+    """Expose the runtime client configuration snapshot."""
++_ASSISTANT_TURN_SEQUENCE_KEY = "assistant_turn_sequence"
++_DEFAULT_ASSISTANT_TURN_ACTIONS: Sequence[str] = (
++    "assistant.say",
++    "assistant.await_user",
++)
 +
-+    method = scope.get("method", "GET").upper()
-+    if method not in {"GET", "HEAD"}:
-+        await _drain_request_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    await _drain_request_body(receive)
-+    snapshot = config.get_client_config_snapshot()
-+    response = json_response(status=200, **snapshot)
-+    if method == "HEAD":
-+        return Response(status=response.status, body=b"", headers=response.headers)
-+    return response
-+
-+
- async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Serve the primary HTML shell for the single-page application."""
- 
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     authenticated, is_admin, email = await _resolve_request_identity(scope)
-     await _drain_request_body(receive)
-     raw_html = _load_index_html()
-     try:
-         html_text = raw_html.decode("utf-8")
-     except UnicodeDecodeError:
-         html_text = raw_html.decode("utf-8", errors="replace")
-     rewritten = inject_static_version(html_text)
-     admin_link = ""
-     if is_admin:
-         admin_link = '<a class="topbar-link" href="/admin/logs">Admin ▸ Logs</a>'
-     context_payload = {
-         "isAdmin": is_admin,
-         "userEmail": email if authenticated else None,
-     }
-     context_json = _serialize_context(context_payload)
-     client_config_json = _serialize_context(config.get_client_config_snapshot())
-     rewritten = rewritten.replace("{{ADMIN_LINK}}", admin_link)
-@@ -295,88 +313,152 @@ async def _handle_admin_logs(scope: dict, receive: Callable[[], Awaitable[dict]]
-     await _drain_request_body(receive)
-     raw_html = _load_admin_logs_html()
-     try:
-         html_text = raw_html.decode("utf-8")
-     except UnicodeDecodeError:
-         html_text = raw_html.decode("utf-8", errors="replace")
- 
-     rewritten = inject_static_version(html_text)
-     context_payload = {"isAdmin": is_admin, "userEmail": email}
-     context_json = _serialize_context(context_payload)
-     client_config_json = _serialize_context(config.get_client_config_snapshot())
-     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
-     rewritten = rewritten.replace("{{CLIENT_CONFIG}}", client_config_json)
-     body = rewritten.encode("utf-8")
-     build_id = get_build_id()
-     return _html_response(body, build_id=build_id)
- 
- 
- async def _handle_admin_flow_sessions(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     rejection = await _require_admin_api(scope, receive)
-     if rejection is not None:
-         return rejection
-     return await handle_flow_sessions(scope, receive)
- 
- 
-+async def _handle_admin_flow_live_query(
-+    scope: dict, receive: Callable[[], Awaitable[dict]]
-+) -> Response:
-+    sid = _get_query_argument(scope, "sid")
-+    if not sid:
-+        await _drain_request_body(receive)
-+        return json_response(status=400, error="missing_sid")
-+    return await _handle_admin_flow_live(scope, receive, sid=sid)
-+
-+
- async def _handle_admin_flow_trace_query(
-     scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-     sid = _get_query_argument(scope, "sid")
-     if not sid:
-         await _drain_request_body(receive)
-         return json_response(status=400, error="missing_sid")
-     return await _handle_admin_flow_trace(scope, receive, sid=sid)
- 
- 
- async def _handle_admin_flow_zip_query(
-     scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-     sid = _get_query_argument(scope, "sid")
-     if not sid:
-         await _drain_request_body(receive)
-         return json_response(status=400, error="missing_sid")
-     return await _handle_admin_flow_zip(scope, receive, sid=sid)
- 
- 
- async def _handle_admin_flow_trace(
-     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
- ) -> Response:
-     rejection = await _require_admin_api(scope, receive)
-     if rejection is not None:
-         return rejection
-     return await handle_flow_trace(scope, receive, sid=sid)
- 
- 
- async def _handle_admin_flow_zip(
-     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
- ) -> Response:
-     rejection = await _require_admin_api(scope, receive)
-     if rejection is not None:
-         return rejection
-     return await handle_flow_zip(scope, receive, sid=sid)
- 
- 
-+async def _handle_admin_flow_live(
-+    scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
-+) -> Response:
-+    rejection = await _require_admin_api(scope, receive)
-+    if rejection is not None:
-+        return rejection
-+
-+    method = scope.get("method", "GET").upper()
-+    if method != "GET":
-+        await _drain_request_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    await _drain_request_body(receive)
-+
-+    messages = [{"type": "http.request", "body": b"", "more_body": False}]
-+
-+    async def _trace_receive() -> dict:
-+        if messages:
-+            return messages.pop(0)
-+        return {"type": "http.disconnect"}
-+
-+    trace_response = await handle_flow_trace(dict(scope), _trace_receive, sid=sid)
-+
-+    if trace_response.status != 200:
-+        return Response(
-+            status=trace_response.status,
-+            body=trace_response.body,
-+            headers=trace_response.headers,
-+        )
-+
-+    try:
-+        ndjson_text = trace_response.body.decode("utf-8")
-+    except UnicodeDecodeError:
-+        ndjson_text = trace_response.body.decode("utf-8", errors="replace")
-+
-+    segments: list[str] = []
-+    for raw_line in ndjson_text.splitlines():
-+        stripped = raw_line.strip()
-+        if not stripped:
-+            continue
-+        segments.append(f"data: {stripped}\\n\\n")
-+
-+    if not segments:
-+        segments.append(": no-events\\n\\n")
-+
-+    payload = "".join(segments).encode("utf-8")
-+    headers = (
-+        (b"content-type", b"text/event-stream; charset=utf-8"),
-+        (b"cache-control", b"no-cache"),
-+        (b"content-length", str(len(payload)).encode("ascii")),
-+    )
-+    return Response(status=200, body=payload, headers=headers)
-+
-+
- def _get_query_argument(scope: dict, key: str) -> Optional[str]:
-     query = scope.get("query_string") or b""
-     try:
-         parsed = parse_qs(query.decode("latin1", "ignore"))
-     except Exception:
-         return None
-     values = parsed.get(key)
-     if not values:
-         return None
-     value = values[0].strip()
-     return value or None
- 
- 
- async def _require_admin_api(
-     scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Optional[Response]:
-     authenticated, is_admin, _ = await _resolve_request_identity(scope)
-     if not authenticated:
-         await _drain_request_body(receive)
-         return json_response(status=401, error="unauthorized")
-     if not is_admin:
-         await _drain_request_body(receive)
-         return json_response(status=403, error="forbidden")
-     return None
- 
-@@ -699,62 +781,64 @@ def _get_adapter() -> ChatV2Adapter:
-     if _adapter is None:
-         exporter = FileExporter(EXPORT_ROOT)
-         engine = EngineV2(exporter=exporter)
-         tts_runtime = TTSRuntime(engine=engine)
-         asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
-         asr_runtime = ASRRuntime(engine=engine, client=asr_client)
-         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
-         _adapter.tts_runtime = tts_runtime
-         _adapter.asr_runtime = asr_runtime
-     return _adapter
- 
- 
- async def _handle_admin_settings_route(
-     scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-     rejection = await _require_admin_api(scope, receive)
-     if rejection is not None:
-         return rejection
-     return await handle_admin_settings(scope, receive)
- 
- 
- _HTTP_ROUTES: Dict[str, HttpHandler] = {
-     ROOT_ROUTE: _handle_index,
-     ADMIN_LOGS_ROUTE: _handle_admin_logs,
-     ADMIN_SETTINGS_ROUTE: _handle_admin_settings_route,
-+    ADMIN_CONFIG_ROUTE: _handle_admin_config,
-     FAVICON_ROUTE: _handle_favicon,
-     HEALTH_ROUTE: _handle_health,
-     LIVE_ROUTE: _handle_live,
-     READY_ROUTE: _handle_ready,
-     INFO_ROUTE: _handle_info,
-     WS_TOKEN_ROUTE: post_ws_token,
-     LOGIN_ROUTE: post_login,
-     ME_ROUTE: get_me,
-     PROFILE_ROUTE: post_profile,
-     ADMIN_FLOW_TRACE_ROUTE: _handle_admin_flow_trace_query,
-     ADMIN_FLOW_ZIP_ROUTE: _handle_admin_flow_zip_query,
-     ADMIN_FLOW_SESSIONS_ROUTE: _handle_admin_flow_sessions,
-+    ADMIN_FLOW_LIVE_ROUTE: _handle_admin_flow_live_query,
+ # NOTE: These defaults represent the deterministic policy snapshot returned by
+ # ``load_interaction_policy`` when no overrides are provided. The structure is
+ # intentionally shallow so that overrides replace entire child objects rather
+ # than performing recursive merges.
+ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
+     "mode": "idle",
+     "allow_auto_vad": True,
+     "barge_in_enabled": True,
+     "auto_commit_when_ready": True,
+     "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
+     "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
+     "suggestions": {"on_connect": True, "count": 3},
+-    "actions": {"allowed": ["answer"], "surface_via_suggestions": True},
++    "actions": {
++        "allowed": ["answer"],
++        "surface_via_suggestions": True,
++        _ASSISTANT_TURN_SEQUENCE_KEY: list(_DEFAULT_ASSISTANT_TURN_ACTIONS),
++    },
+     "telemetry": {
+         "enabled": True,
+         "level": "debug",
+         "categories": {
+             "ws": True,
+             "audio": True,
+             "policy": True,
+             "tts": True,
+             "gate": True,
+             "barge": True,
+             "asr": True,
+             "nlu": True,
+             "nlg": True,
+             "client_ui": True,
+             "provider_debug": True,
+         },
+         "redaction": {"pii": True, "secrets": True, "text": False},
+         "sampling": {"percent": 100},
+     },
  }
  
  
- asgi = app
+ def load_interaction_policy(
+     overrides: Dict[str, Any] | None = None,
+ ) -> InteractionPolicySnapshot:
+@@ -49,26 +59,60 @@ def load_interaction_policy(
+     The returned snapshot matches the defaults defined by the system of record
+     for the `chat.v2` contract. When ``overrides`` are provided, they are merged
+     shallowly on top of the defaults—each top-level key in ``overrides``
+     replaces the corresponding value entirely.
  
- __all__ = ["app", "asgi"]
+     Args:
+         overrides: Optional dictionary with top-level keys to replace in the
+             default policy snapshot. Nested merges are not performed; providing
+             a key overrides the whole value at that key.
+ 
+     Returns:
+         A new dictionary containing the policy snapshot with any specified
+         overrides applied. Mutating the returned dictionary will not affect the
+         stored defaults.
+     """
+ 
+     policy: InteractionPolicySnapshot = deepcopy(_DEFAULT_INTERACTION_POLICY)
+ 
+     if overrides:
+         for key, value in overrides.items():
+             policy[key] = value
+ 
+     return policy
  
  
- def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
-     headers = scope.get("headers") or []
-     for name, value in headers:
-         if name == header_name:
-             try:
-                 return value.decode("latin1")
-             except UnicodeDecodeError:
-                 return value.decode("latin1", errors="ignore")
-     return None
- 
- 
- async def _handle_lifespan(
-     receive: Callable[[], Awaitable[dict]],
-     send: Callable[[dict], Awaitable[None]],
- ) -> None:
-     global _lifespan_started
- 
-diff --git a/tests/test_admin_config_route.py b/tests/test_admin_config_route.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..f471f1232085184addc8cbe9290a27df3e8c6d77
---- /dev/null
-+++ b/tests/test_admin_config_route.py
-@@ -0,0 +1,136 @@
-+import asyncio
-+import json
-+import tempfile
-+import unittest
-+from pathlib import Path
-+from unittest.mock import AsyncMock, patch
+-__all__ = ["load_interaction_policy", "InteractionPolicySnapshot"]
++def assistant_turn_actions(
++    snapshot: Mapping[str, Any] | None = None,
++) -> list[str]:
++    """Return the configured assistant turn action sequence."""
 +
-+from app import asgi_gateway
-+from app.admin import flow_api
++    actions_block: Mapping[str, Any] | None = None
++    if isinstance(snapshot, Mapping):
++        actions_candidate = snapshot.get("actions")
++        if isinstance(actions_candidate, Mapping):
++            actions_block = actions_candidate
 +
-+
-+def _make_receive():
-+    messages = [
-+        {"type": "http.request", "body": b"", "more_body": False},
-+    ]
-+
-+    async def _receive() -> dict:
-+        if messages:
-+            return messages.pop(0)
-+        return {"type": "http.disconnect"}
-+
-+    return _receive
-+
-+
-+class AdminConfigRouteTest(unittest.TestCase):
-+    def test_get_returns_client_snapshot(self) -> None:
-+        scope = {
-+            "type": "http",
-+            "method": "GET",
-+            "path": "/api/v1/admin/config",
-+            "query_string": b"",
-+            "headers": [],
-+        }
-+
-+        snapshot = {"DIAG_CLIENT_HUD": True, "DIAG_CHUNK_SAMPLE_N": 5}
-+        with patch(
-+            "app.config.get_client_config_snapshot",
-+            return_value=snapshot,
++    if actions_block is not None:
++        candidate_sequence = actions_block.get(_ASSISTANT_TURN_SEQUENCE_KEY)
++        if isinstance(candidate_sequence, Sequence) and not isinstance(
++            candidate_sequence, (str, bytes)
 +        ):
-+            response = asyncio.run(asgi_gateway._handle_admin_config(scope, _make_receive()))
++            normalized = [
++                action.strip()
++                for action in candidate_sequence
++                if isinstance(action, str) and action.strip()
++            ]
++            if normalized:
++                return normalized
 +
-+        self.assertEqual(response.status, 200)
-+        body = json.loads(response.body.decode("utf-8"))
-+        self.assertEqual(body, snapshot)
++    if snapshot is None:
++        return list(_DEFAULT_ASSISTANT_TURN_ACTIONS)
 +
-+    def test_head_strips_body(self) -> None:
-+        scope = {
-+            "type": "http",
-+            "method": "HEAD",
-+            "path": "/api/v1/admin/config",
-+            "query_string": b"",
-+            "headers": [],
-+        }
-+
-+        with patch("app.config.get_client_config_snapshot", return_value={}):
-+            response = asyncio.run(asgi_gateway._handle_admin_config(scope, _make_receive()))
-+
-+        self.assertEqual(response.status, 200)
-+        self.assertEqual(response.body, b"")
-+
-+    def test_rejects_unsupported_method(self) -> None:
-+        scope = {
-+            "type": "http",
-+            "method": "POST",
-+            "path": "/api/v1/admin/config",
-+            "query_string": b"",
-+            "headers": [],
-+        }
-+
-+        response = asyncio.run(asgi_gateway._handle_admin_config(scope, _make_receive()))
-+        self.assertEqual(response.status, 405)
++    return assistant_turn_actions(None)
 +
 +
-+class AdminFlowLiveRouteTest(unittest.TestCase):
-+    def setUp(self) -> None:
-+        self._tmp = tempfile.TemporaryDirectory()
-+        self.addCleanup(self._tmp.cleanup)
++__all__ = [
++    "load_interaction_policy",
++    "InteractionPolicySnapshot",
++    "assistant_turn_actions",
++]
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index 26b0c2527d2a43c5680f1b252bae7ddb0ed3af39..6e65f9c7ae47d3a631aee9f7ce2e7362a29a7034 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -1,41 +1,41 @@
+ """Minimal Engine v2 shell with telemetry hooks and session exporting."""
+ from __future__ import annotations
+ 
+ import asyncio
+ from dataclasses import dataclass
+ import json
+ import logging
+ import re
+ import threading
+ import time
+ import uuid
+ from typing import Any, Dict, Mapping, Optional
+ 
+ from app import config
+ from app.logging_config import apply_logging_policy
+-from app.policy.loader import load_interaction_policy
++from app.policy.loader import assistant_turn_actions, load_interaction_policy
+ from app.policy.watch import compute_diff, should_reapply
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ACWR_RECOMPUTE,
+     EVT_CHAT_USER,
+     EVT_ASR_FINAL,
+     EVT_ASR_PARTIAL,
+     EVT_NLG,
+     EVT_NLU,
+     EVT_DIALOG_PLAN,
+     EVT_POLICY_APPLIED,
+     EVT_TTS_END,
+     EVT_TTS_START,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_CLOSE,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+     EVT_WS_OPEN,
+ )
+ from app.voice_v2.nlu import NLUAdapter
+ from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
+ from app.voice_v2.llm import LLMAdapter
+ from app.voice_v2.gate import GateController
+@@ -715,51 +715,52 @@ class EngineV2:
+         plan_payload: Dict[str, Any] = {"mode": "greet", "reason": "session_open"}
+ 
+         persona: Dict[str, Any] = {}
+         try:
+             persona_candidate = load_persona()
+         except Exception:
+             _log.exception("evt=greet_persona_load_failed sid=%s", sid)
+         else:
+             if isinstance(persona_candidate, dict):
+                 persona = persona_candidate
+ 
+         fallback_copy = persona.get("greet_copy") if isinstance(persona, dict) else None
+         if not isinstance(fallback_copy, str) or not fallback_copy.strip():
+             fallback_copy = "Hi there! I'm Chip. How can I help you today?"
+ 
+         greeting_text: str
+         if greet_mode == "persona":
+             provider = getattr(self._llm, "_provider", None)
+             model_name = getattr(provider, "default_model", None)
+             if not isinstance(model_name, str) or not model_name.strip():
+                 model_name = "gpt-4o-mini"
+             temperature = 0.4
+             max_tokens = 30
+             msg_counts = {"system": 1, "developer": 1, "user": 1}
+ 
+-            policy_payload = {"rule": "session_open.greet", "actions": ["assistant.say"]}
++            greet_actions = assistant_turn_actions(self.policy_snapshot)
++            policy_payload = {"rule": "session_open.greet", "actions": greet_actions}
+             policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
+             self._publish(policy_event)
+ 
+             _log.debug(
+                 "evt=greet_llm_request sid=%s purpose=%s model=%s temp=%s max_tokens=%s msg_counts=%s",
+                 sid,
+                 "greet",
+                 model_name,
+                 temperature,
+                 max_tokens,
+                 msg_counts,
+             )
+ 
+             request_payload = {
+                 "purpose": "greet",
+                 "model": model_name,
+                 "temp": temperature,
+                 "max_tokens": max_tokens,
+                 "msg_counts": msg_counts,
+             }
+             request_event = self._envelope(sid, EVT_LLM_REQUEST, request_payload)
+             self._publish(request_event)
+ 
+             greeting_candidate: str | None = None
+             start_time = time.perf_counter()
+diff --git a/app/voice_v2/policy_decider.py b/app/voice_v2/policy_decider.py
+index ccf9d2d8f3681b75dc52f77fc7f4aa9a509fc469..3b5ca6f0567bdb516a743ab728ad8f81004ea745 100644
+--- a/app/voice_v2/policy_decider.py
++++ b/app/voice_v2/policy_decider.py
+@@ -1,42 +1,47 @@
+ """Deterministic policy decider used by the voice engine."""
+ from __future__ import annotations
+ 
+ from typing import Mapping, MutableMapping
+ 
++from app.policy.loader import assistant_turn_actions
 +
-+        self.export_root = Path(self._tmp.name) / "exports"
-+        self.export_root.mkdir(parents=True, exist_ok=True)
+ 
+ EVT_POLICY_DECISION = "EVT_POLICY_DECISION"
+ 
+ 
+ class PolicyDecider:
+     """Return simple policy decisions based on the current snapshot."""
+ 
+     def decide(
+         self,
+         req_id: str,
+         nlu: Mapping[str, object] | None,
+         policy_snapshot: Mapping[str, object] | None,
+     ) -> MutableMapping[str, object]:
+         """Compute the dialog action for the current turn.
+ 
+         The implementation is intentionally lightweight. It inspects the
+         provided ``policy_snapshot`` (if any) to mirror the boolean flags that
+         downstream components expect while always returning an action of
+         ``"respond"`` so the stubbed LLM path can be exercised in tests.
+         """
+ 
+         if not isinstance(req_id, str) or not req_id:
+             raise ValueError("req_id must be a non-empty string")
+ 
+         snapshot = dict(policy_snapshot or {})
+         action = "respond"
+         barge_in_enabled = bool(snapshot.get("barge_in_enabled", False))
+         auto_commit = bool(snapshot.get("auto_commit_when_ready", False))
+ 
++        actions = assistant_turn_actions(snapshot)
 +
-+        self.sid = "sid-live"
-+        session_dir = self.export_root / self.sid
-+        session_dir.mkdir(parents=True, exist_ok=True)
-+
-+        events_path = session_dir / "events.ndjson"
-+        events_path.write_text(
-+            json.dumps({"type": "EVT_TURN_BEGIN", "ts_ms": 1, "sid": self.sid}) + "\n",
-+            encoding="utf-8",
+         return {
+             "action": action,
++            "actions": actions,
+             "barge_in_enabled": barge_in_enabled,
+             "auto_commit_when_ready": auto_commit,
+         }
+ 
+ 
+ __all__ = ["PolicyDecider", "EVT_POLICY_DECISION"]
+diff --git a/tests/test_policy_nlg_once_per_turn.py b/tests/test_policy_nlg_once_per_turn.py
+index 2772daeb593d6ca91e1d74abdb370f2ecc66ddf1..66ad6e35726e649ba577d3ec1d830116f9ff50a5 100644
+--- a/tests/test_policy_nlg_once_per_turn.py
++++ b/tests/test_policy_nlg_once_per_turn.py
+@@ -33,50 +33,54 @@ class TestPolicyAndNLGOncePerTurn(unittest.TestCase):
+         }
+ 
+         self.engine.on_asr_final(self.sid, "hello there")
+ 
+         finals = self._events(EVT_ASR_FINAL, sid=self.sid)
+         nlus = self._events(EVT_NLU, sid=self.sid)
+         policies = self._events(EVT_POLICY_DECISION, sid=self.sid)
+         nlgs = self._events(EVT_NLG, sid=self.sid)
+ 
+         self.assertEqual(1, len(finals))
+         self.assertEqual(1, len(nlus))
+         self.assertEqual(1, len(policies))
+         self.assertEqual(1, len(nlgs))
+ 
+         final_event = finals[0]
+         nlu_event = nlus[0]
+         policy_event = policies[0]
+         nlg_event = nlgs[0]
+ 
+         req_id = final_event["req_id"]
+         self.assertEqual(req_id, nlu_event["req_id"])
+         self.assertEqual(req_id, policy_event["req_id"])
+         self.assertEqual(req_id, nlg_event["req_id"])
+ 
+         self.assertEqual("respond", policy_event["action"])
++        self.assertEqual(
++            ["assistant.say", "assistant.await_user"],
++            policy_event["actions"],
 +        )
-+
-+        self._orig_flow_export_root = flow_api.EXPORT_ROOT
-+        self._orig_gateway_export_root = asgi_gateway.EXPORT_ROOT
-+        flow_api.EXPORT_ROOT = self.export_root
-+        asgi_gateway.EXPORT_ROOT = self.export_root
-+        self.addCleanup(self._restore_export_roots)
-+
-+    def _restore_export_roots(self) -> None:
-+        flow_api.EXPORT_ROOT = self._orig_flow_export_root
-+        asgi_gateway.EXPORT_ROOT = self._orig_gateway_export_root
-+
-+    def test_streams_existing_events(self) -> None:
-+        scope = {
-+            "type": "http",
-+            "method": "GET",
-+            "path": "/api/v1/admin/flow/live",
-+            "query_string": f"sid={self.sid}".encode("ascii"),
-+            "headers": [],
-+        }
-+
-+        with patch("app.asgi_gateway._require_admin_api", new=AsyncMock(return_value=None)):
-+            response = asyncio.run(
-+                asgi_gateway._handle_admin_flow_live_query(scope, _make_receive())
+         self.assertTrue(policy_event["barge_in_enabled"])
+         self.assertTrue(policy_event["auto_commit_when_ready"])
+         self.assertEqual("Hi there! How can I help you today?", nlg_event["text"])
+ 
+         self.assertEqual("1", policy_event["schema_version"])
+         self.assertEqual("1", nlg_event["schema_version"])
+ 
+         final_index = self.events.index(final_event)
+         nlu_index = self.events.index(nlu_event)
+         policy_index = self.events.index(policy_event)
+         nlg_index = self.events.index(nlg_event)
+ 
+         self.assertLess(final_index, nlu_index)
+         self.assertLess(nlu_index, policy_index)
+         self.assertLess(policy_index, nlg_index)
+ 
+     def test_duplicate_finals_deduped(self) -> None:
+         self.engine.policy_snapshot = {
+             "barge_in_enabled": False,
+             "auto_commit_when_ready": False,
+         }
+ 
+         self.engine.on_asr_final(self.sid, "status update please")
+         self.engine.on_asr_final(self.sid, "status update please")
+ 
+@@ -94,34 +98,38 @@ class TestPolicyAndNLGOncePerTurn(unittest.TestCase):
+         self.engine.policy_snapshot = {
+             "barge_in_enabled": True,
+             "auto_commit_when_ready": False,
+         }
+ 
+         self.engine.on_asr_final(self.sid, "need help with order 123")
+         self.engine.on_asr_final(sid_two, "hello agent")
+ 
+         policies = self._events(EVT_POLICY_DECISION)
+         nlgs = self._events(EVT_NLG)
+ 
+         self.assertEqual(2, len(policies))
+         self.assertEqual(2, len(nlgs))
+ 
+         sid_to_policy = {evt["sid"]: evt for evt in policies}
+         sid_to_nlg = {evt["sid"]: evt for evt in nlgs}
+ 
+         self.assertIn(self.sid, sid_to_policy)
+         self.assertIn(sid_two, sid_to_policy)
+         self.assertIn(self.sid, sid_to_nlg)
+         self.assertIn(sid_two, sid_to_nlg)
+ 
+         for sid, evt in sid_to_policy.items():
+             self.assertEqual(sid, evt["sid"])
+             self.assertEqual("respond", evt["action"])
++            self.assertEqual(
++                ["assistant.say", "assistant.await_user"],
++                evt["actions"],
 +            )
-+
-+        self.assertEqual(response.status, 200)
-+        headers = dict(response.headers)
-+        self.assertEqual(headers[b"content-type"], b"text/event-stream; charset=utf-8")
-+        self.assertIn(b"data: {\"type\": \"EVT_TURN_BEGIN\"", response.body)
-+
-+    def test_missing_sid_returns_400(self) -> None:
-+        scope = {
-+            "type": "http",
-+            "method": "GET",
-+            "path": "/api/v1/admin/flow/live",
-+            "query_string": b"",
-+            "headers": [],
-+        }
-+
-+        with patch("app.asgi_gateway._require_admin_api", new=AsyncMock(return_value=None)):
-+            response = asyncio.run(
-+                asgi_gateway._handle_admin_flow_live_query(scope, _make_receive())
-+            )
-+
-+        self.assertEqual(response.status, 400)
-+
+             self.assertEqual("1", evt["schema_version"])
+ 
+         for sid, evt in sid_to_nlg.items():
+             self.assertEqual(sid, evt["sid"])
+             self.assertEqual("1", evt["schema_version"])
+ 
+ 
+ if __name__ == "__main__":
+     unittest.main()
