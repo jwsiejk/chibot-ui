@@ -46,7 +46,7 @@ class TtsMaskLifecycleTests(unittest.TestCase):
         engine.on_tts_end(sid, utt_id)
 
         mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "cleared"])
+        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "off"])
 
         final_gate = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE][-1]
         final_gate_meta = final_gate["meta"]["gate"]

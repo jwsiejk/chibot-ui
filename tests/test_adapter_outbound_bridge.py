@@ -3,11 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import unittest
+import uuid
 from typing import Any, Callable, Dict
 
+os.environ.setdefault("SECRET_KEY", "test-secret")
+
 from app.telemetry import bus
-from app.voice_v2 import EVT_WS_AUDIO_SEND, EVT_WS_JSON_SEND
+from app.voice_v2 import EVT_ASR_OPEN, EVT_HUD_STATE, EVT_WS_AUDIO_SEND, EVT_WS_JSON_SEND
+from app.security.jwt_utils import mint_ws_token
 from app.ws.adapter import (
     CHAT_V2_SUBPROTOCOL,
     EVT_WS_OUTBOX_DROP,
@@ -25,17 +30,39 @@ class RecordingEngine:
         self.open_sid = sid
 
 
+class _StubAsrRuntime:
+    """ASR runtime stub that records prearm invocations."""
+
+    def __init__(self) -> None:
+        self.prearm_calls: list[str] = []
+
+    def on_ws_open(self, sid: str) -> None:  # pragma: no cover - noop for tests
+        return
+
+    def on_ws_close(self, sid: str) -> None:  # pragma: no cover - noop for tests
+        return
+
+    def on_ws_audio(self, sid: str, chunk: bytes) -> None:  # pragma: no cover - noop
+        return
+
+    def prearm(self, sid: str) -> None:
+        self.prearm_calls.append(sid)
+
+
 class OutboundHarness:
     """Helper for driving the adapter within an asyncio test."""
 
     def __init__(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
         self.adapter = adapter
         self.engine = engine
+        self._token_sid = f"sid-{uuid.uuid4().hex}"
+        token = mint_ws_token("user-1", self._token_sid, False)
         self.scope = {
             "type": "websocket",
             "subprotocols": [CHAT_V2_SUBPROTOCOL],
             "headers": [(b"authorization", b"Bearer test-token")],
             "client": ("127.0.0.1", 1234),
+            "query_string": f"access_token={token}".encode("ascii"),
         }
         self._inbound: asyncio.Queue[dict] = asyncio.Queue()
         self.sent: list[dict] = []
@@ -154,6 +181,9 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     def test_backpressure_reports_drops(self) -> None:
         asyncio.run(self._test_backpressure())
 
+    def test_start_listening_handoff_after_tts_end(self) -> None:
+        asyncio.run(self._test_start_listening_handoff())
+
     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
         asyncio.run(self._test_audio_forwarding())
 
@@ -260,6 +290,44 @@ class TestAdapterOutboundBridge(unittest.TestCase):
 
             await harness.wait_for_outbound(lambda data: data.get("type") == "info")
             await harness.wait_for(lambda: drop_count > 0)
+        finally:
+            bus.unsubscribe(token)
+            await harness.close()
+
+    async def _test_start_listening_handoff(self) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        runtime = _StubAsrRuntime()
+        adapter.asr_runtime = runtime
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+        hud_events: list[dict] = []
+        token = bus.subscribe(EVT_HUD_STATE, hud_events.append)
+        try:
+            sid = harness.sid
+            policy_payload = {
+                "type": "policy.interaction",
+                "interaction_id": "turn-1",
+                "actions": ["assistant.say", "assistant.await_user"],
+            }
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
+            await asyncio.sleep(0.01)
+
+            tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
+
+            await harness.wait_for(lambda: bool(runtime.prearm_calls))
+            self.assertEqual(runtime.prearm_calls, [sid])
+
+            bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
+
+            frame = await harness.wait_for_outbound(
+                lambda data: data.get("type") == "start_listening"
+            )
+            self.assertEqual(frame, {"type": "start_listening"})
+
+            await harness.wait_for(lambda: bool(hud_events))
+            self.assertEqual(hud_events[-1]["meta"].get("state"), "Listening")
         finally:
             bus.unsubscribe(token)
             await harness.close()

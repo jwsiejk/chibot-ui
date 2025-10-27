@@ -15,7 +15,13 @@ from app.config import (
     ASR_TRACE,
 )
 from app.telemetry import bus
-from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL, EVT_ASR_READY, EVT_WS_JSON_SEND
+from app.voice_v2 import (
+    EVT_ASR_FINAL,
+    EVT_ASR_OPEN,
+    EVT_ASR_PARTIAL,
+    EVT_ASR_READY,
+    EVT_WS_JSON_SEND,
+)
 from app.voice_v2.engine import EngineV2
 from app.services.streaming_asr.deepgram_client import DeepgramClient
 
@@ -57,6 +63,7 @@ class _SessionState:
     last_stream_id: Optional[str] = None
     ready_watchdog: asyncio.TimerHandle | None = None
     ready_armed_at: float = 0.0
+    prearm_requested: bool = False
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -163,6 +170,22 @@ class ASRRuntime:
             self._log_session_rollup(state)
         state.req_id = None
 
+    def prearm(self, sid: str) -> None:
+        """Request that the ASR stream open proactively for the session."""
+
+        if not isinstance(sid, str) or not sid:
+            return
+
+        state = self._sessions.get(sid)
+        if state is None:
+            state = _SessionState(sid=sid)
+            self._sessions[sid] = state
+        if state.stream_open:
+            return
+
+        state.prearm_requested = True
+        self._ensure_stream(sid, state)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -263,7 +286,7 @@ class ASRRuntime:
             return
         if state.stream_open:
             return
-        if not state.pending:
+        if not state.pending and not state.prearm_requested:
             return
         task = state.stream_open_task
         if task is not None and not task.done():
@@ -275,6 +298,7 @@ class ASRRuntime:
             stream_id = state.stream_id
             state.last_stream_id = stream_id
             state.close_reason = None
+            state.prearm_requested = False
             try:
                 qs = await asyncio.wait_for(
                     self._client.open_stream(
@@ -305,6 +329,7 @@ class ASRRuntime:
                 return
 
             state.stream_open = True
+            bus.publish({"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram", "stream_id": stream_id})
             _log.info(
                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
                 sid,

@@ -343,7 +343,7 @@ class DualVADAggregatorTests(unittest.TestCase):
         mask_index = next(
             i
             for i, evt in enumerate(bus.events)
-            if evt.get("type") == "EVT_TTS_MASK" and evt.get("phase") == "cleared"
+            if evt.get("type") == "EVT_TTS_MASK" and evt.get("phase") == "off"
         )
         mic_index = next(
             i

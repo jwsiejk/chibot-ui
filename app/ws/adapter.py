@@ -19,8 +19,10 @@ from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
 from app.voice_v2 import (
+    EVT_ASR_OPEN,
     EVT_ASR_READY,
     EVT_CHAT_USER,
+    EVT_HUD_STATE,
     EVT_WS_AUDIO_RECV,
     EVT_WS_AUDIO_SEND,
     EVT_WS_JSON_RECV,
@@ -220,6 +222,7 @@ class AdapterContext:
     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
     asr_ready: bool = False
     asr_subscription_token: Optional[str] = None
+    asr_open_subscription_token: Optional[str] = None
     server_keepalive_task: asyncio.Task[None] | None = None
     last_policy_interaction: Optional[Dict[str, Any]] = None
     partial_seq: int = 0
@@ -228,6 +231,8 @@ class AdapterContext:
     tts_end_ts: Optional[float] = None
     diag_audio_seen: bool = False
     diag_timer: asyncio.TimerHandle | None = None
+    await_user_expected: bool = False
+    await_user_pending: bool = False
 
 
 class ChatV2Adapter:
@@ -990,6 +995,7 @@ class ChatV2Adapter:
                 frame_type = payload.get("type")
                 if frame_type == "tts.end":
                     self._handle_tts_end_diag(ctx, loop)
+                    self._initiate_listen_handoff(ctx)
                 _enqueue(payload)
 
             try:
@@ -998,6 +1004,32 @@ class ChatV2Adapter:
                 pass
 
         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
+
+        def _handle_asr_open_event(event: dict) -> None:
+            if event.get("sid") != ctx.sid:
+                return
+
+            def _on_loop() -> None:
+                if not ctx.await_user_pending:
+                    return
+                ctx.await_user_pending = False
+                ctx.await_user_expected = False
+                if ctx.outbox is None:
+                    return
+                _enqueue({"type": "start_listening"})
+                try:
+                    asyncio.create_task(
+                        self._publish(EVT_HUD_STATE, ctx.sid, {"state": "Listening"})
+                    )
+                except RuntimeError:
+                    _log.warning("evt=ws_hud_state_publish_failed sid=%s", ctx.sid)
+
+            try:
+                loop.call_soon_threadsafe(_on_loop)
+            except RuntimeError:
+                pass
+
+        ctx.asr_open_subscription_token = bus.subscribe(EVT_ASR_OPEN, _handle_asr_open_event)
 
         def _handle_audio_event(event: dict) -> None:
             if event.get("sid") != ctx.sid:
@@ -1093,6 +1125,10 @@ class ChatV2Adapter:
             return None
 
         frame_type = payload.get("type") if isinstance(payload, dict) else None
+        if frame_type == "policy.interaction" and isinstance(payload, dict):
+            ctx.await_user_expected = self._policy_requests_listen(payload)
+            if not ctx.await_user_expected:
+                ctx.await_user_pending = False
         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
             return None
         normalized = dict(payload)
@@ -1128,6 +1164,15 @@ class ChatV2Adapter:
                 sanitized_policy = {}
             sanitized["policy"] = sanitized_policy
         return sanitized
+
+    @staticmethod
+    def _policy_requests_listen(frame: Dict[str, Any]) -> bool:
+        actions = frame.get("actions") if isinstance(frame, dict) else None
+        if isinstance(actions, list):
+            for action in actions:
+                if isinstance(action, str) and action.strip() == "assistant.await_user":
+                    return True
+        return False
 
     @staticmethod
     def _coerce_payload(raw: Any) -> Optional[Dict[str, Any]]:
@@ -1285,6 +1330,25 @@ class ChatV2Adapter:
         if timer is not None:
             timer.cancel()
 
+    def _initiate_listen_handoff(self, ctx: AdapterContext) -> None:
+        if not ctx.await_user_expected or ctx.await_user_pending:
+            return
+
+        runtime = getattr(self, "asr_runtime", None)
+        if runtime is None:
+            return
+
+        prearm = getattr(runtime, "prearm", None)
+        if not callable(prearm):
+            return
+
+        ctx.await_user_pending = True
+        try:
+            prearm(ctx.sid)
+        except Exception:  # pragma: no cover - defensive logging
+            ctx.await_user_pending = False
+            _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
+
     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
         token = ctx.asr_subscription_token
         ctx.asr_subscription_token = None
@@ -1292,6 +1356,11 @@ class ChatV2Adapter:
             bus.unsubscribe(token)
         ctx.asr_ready = False
 
+        open_token = ctx.asr_open_subscription_token
+        ctx.asr_open_subscription_token = None
+        if open_token:
+            bus.unsubscribe(open_token)
+        
     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
         """Record the estimated outbound queue depth and emit diagnostics if needed."""
 

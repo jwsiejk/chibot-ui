@@ -43,7 +43,7 @@ class BargeCancelMaskGateTests(unittest.TestCase):
         mask_events = [
             (idx, evt)
             for idx, evt in enumerate(bus.events)
-            if evt["type"] == "EVT_TTS_MASK" and evt.get("phase") == "cleared"
+            if evt["type"] == "EVT_TTS_MASK" and evt.get("phase") == "off"
         ]
         self.assertTrue(mask_events)
         mask_index, _ = mask_events[0]

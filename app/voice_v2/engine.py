@@ -1203,7 +1203,7 @@ class EngineV2:
         event = self._envelope(sid, EVT_TTS_END, payload)
         self._publish(event)
 
-        self._publish_tts_mask(sid, "cleared")
+        self._publish_tts_mask(sid, "off")
         self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
 
         if transition_to_ready:
