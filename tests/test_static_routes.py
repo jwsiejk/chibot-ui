@@ -80,3 +80,17 @@ def test_missing_static_asset_returns_not_found() -> None:
     assert headers[b"content-type"] == b"application/json; charset=utf-8"
     assert body["type"] == "http.response.body"
     assert b"not_found" in body["body"]
+
+
+def test_admin_ui_asset_uses_static_cache_headers() -> None:
+    messages = _dispatch("/admin/ui/config_panel.js")
+
+    assert len(messages) == 2
+    start, body = messages
+    assert start["status"] == 200
+    headers = _collect_headers(start["headers"])
+    assert headers[b"cache-control"] == b"public, max-age=31536000, immutable"
+    assert b"etag" in headers
+    assert body["type"] == "http.response.body"
+    length = int(headers[b"content-length"].decode("ascii"))
+    assert length == len(body["body"])

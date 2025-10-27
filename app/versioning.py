@@ -7,10 +7,24 @@ from datetime import datetime, timezone
 from typing import Optional
 
 _BUILD_ID: Optional[str] = None
-_STATIC_ATTR_PATTERN = re.compile(
-    r"(?P<attr>\b(?:src|href))(?P<before_eq>\s*)=(?P<after_eq>\s*)(?P<quote>['\"])(?P<url>/static/[^'\"]*)(?P=quote)",
-    re.IGNORECASE,
-)
+_STATIC_PATH_PREFIXES = ("static/", "admin/ui/")
+
+
+def _build_static_pattern() -> re.Pattern[str]:
+    prefixes = "|".join(re.escape(prefix) for prefix in _STATIC_PATH_PREFIXES)
+    pattern = (
+        r"(?P<attr>\b(?:src|href))"
+        r"(?P<before_eq>\s*)=(?P<after_eq>\s*)"
+        r"(?P<quote>['\"])"
+        r"(?P<url>/(?:"
+        + prefixes
+        + r")(?:[^'\"]*))"
+        r"(?P=quote)"
+    )
+    return re.compile(pattern, re.IGNORECASE)
+
+
+_STATIC_ATTR_PATTERN = _build_static_pattern()
 
 
 def get_build_id() -> str:

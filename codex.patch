@@ -1,226 +1,207 @@
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index 917dc859f9b3a796948ea708fcc2925c9576ec61..3733ce7f63f2fd7ed63510bc47dfbd58dff56799 100644
---- a/app/static/js/audio_recorder.js
-+++ b/app/static/js/audio_recorder.js
-@@ -239,63 +239,67 @@
-       if (!this._listening) return;
-       if (!this._stream || !this._asrReady) return;
-       if (this._audioCtx && typeof this._audioCtx.resume === "function") {
-         this._audioCtx.resume().catch(() => {});
-       }
-       if (
-         this._mediaRecorder &&
-         typeof this._mediaRecorder.state === "string" &&
-         this._mediaRecorder.state === "inactive"
-       ) {
-         try {
-           this._mediaRecorder.start(WEBM_TIMESLICE_MS);
-         } catch (err) {
-           console.warn("MediaRecorder failed to start on capture activation", err);
-         }
-       }
-       if (!this._micOpenEmitted) {
-         this._micOpenEmitted = true;
-         const eventDetail = {
-           type: CLIENT_MIC_OPEN_EVENT,
-           ts: Date.now(),
-           vendor: this._vendor || null
-         };
-         emitCustomEvent(CLIENT_MIC_OPEN_EVENT, eventDetail);
-         const wsClient = window.WSClient;
--        if (wsClient && typeof wsClient.send === "function") {
-+        if (wsClient && (typeof wsClient.send === "function" || typeof wsClient.sendJson === "function")) {
-           const micPayload = {
-             type: "client.ready",
-             mic: {
-               state: "open",
-               ts: eventDetail.ts
-             }
-           };
-           if (eventDetail.vendor) {
-             micPayload.mic.vendor = eventDetail.vendor;
-           }
-           try {
--            wsClient.send(micPayload);
-+            if (typeof wsClient.send === "function") {
-+              wsClient.send(micPayload);
-+            } else {
-+              wsClient.sendJson(micPayload);
-+            }
-           } catch (err) {
-             console.warn("Failed to send client mic open frame", err);
-           }
-         }
-         emitCustomEvent(CLIENT_HUD_STATE_EVENT, {
-           type: CLIENT_HUD_STATE_EVENT,
-           meta: { state: "Listening", source: "client" }
-         });
-       }
-     },
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index a43f3e1317dd0d8fb3067bacc37a3300ee2829c8..8952604b7360095037b60f533a98a57a8f2c4754 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -635,61 +635,56 @@ def _resolve_static_path(raw_path: str) -> Optional[Path]:
+         return None
  
-     _setListening(active, options = {}) {
-       const normalized = Boolean(active);
-       if (!normalized && options && options.resetMicEvent) {
-         this._micOpenEmitted = false;
-       }
-       if (this._listening === normalized) {
-         return;
-       }
-       this._listening = normalized;
-       if (normalized) {
-         this._maybeActivateCapture();
-       }
-     },
+     if not resolved.is_file():
+         return None
  
-@@ -466,68 +470,67 @@
-       const policy = frame && frame.policy;
-       if (policy && typeof policy.barge_in_enabled === "boolean") {
-         this._bargeInEnabled = policy.barge_in_enabled;
-         if (this._bargeInEnabled && this._mask.active) {
-           this._mask.holdMs = 0;
-           this._setMask(false);
-         }
-       }
-     },
+     return resolved
  
-     handleTtsStart(frame) {
-       if (this._bargeInEnabled) return;
-       const hold = Number(frame && frame.post_hold_ms);
-       this._mask.holdMs = Number.isFinite(hold) && hold > 0 ? hold : 0;
-       this._setMask(true);
-       this._setListening(false, { resetMicEvent: true });
-     },
  
-     handleTtsEnd() {
-       if (!this._mask.active) return;
-       const hold = Math.max(this._mask.holdMs || 0, POST_TTS_RELEASE_DELAY_MS);
-       this._mask.holdMs = 0;
-       this._scheduleMaskRelease(hold);
-     },
+ async def _handle_admin_ui_asset(
+     scope: dict,
+     receive: Callable[[], Awaitable[dict]],
+     *,
+     raw_path: str,
+ ) -> Response:
+     """Serve lightweight admin UI helper assets."""
  
--    async handleStartListening() {
-+    async startListening() {
-       try {
-         await this.start();
-       } catch (err) {
-         console.error("AudioRecorder start_listening start failed", err);
-         return;
-       }
-+      this._asrReady = true;
-       this._setMask(false);
-       this._setListening(true);
-     },
+     if not _method_is_get(scope):
+         await _drain_request_body(receive)
+         return json_response(status=405, error="method_not_allowed")
  
-+    async handleStartListening(frame) {
-+      return this.startListening(frame);
-+    },
+     await _drain_request_body(receive)
+     resolved = _resolve_admin_ui_path(raw_path)
+     if resolved is None:
+         return json_response(status=404, error="not_found")
+ 
+-    try:
+-        data = resolved.read_bytes()
+-    except OSError:
++    if_none_match = _get_request_header(scope, b"if-none-match")
++    response = _build_static_response(resolved, if_none_match=if_none_match)
++    if response is None:
+         return json_response(status=404, error="not_found")
+ 
+-    headers = (
+-        (b"content-type", b"application/javascript; charset=utf-8"),
+-        (b"cache-control", b"no-store"),
+-        (b"content-length", str(len(data)).encode("ascii")),
+-    )
+-    return Response(status=200, body=data, headers=headers)
++    return response
+ 
+ 
+ def _resolve_admin_ui_path(raw_path: str) -> Optional[Path]:
+     if not raw_path.startswith(ADMIN_UI_ROUTE_PREFIX):
+         return None
+ 
+     relative = raw_path[len(ADMIN_UI_ROUTE_PREFIX) :]
+     if not relative:
+         return None
+ 
+     target = ADMIN_UI_ROOT / relative
+     try:
+         resolved = target.resolve(strict=False)
+     except OSError:
+         return None
+ 
+     try:
+         resolved.relative_to(ADMIN_UI_ROOT)
+     except ValueError:
+         return None
+ 
+     if not resolved.is_file():
+         return None
+ 
+     return resolved
+diff --git a/app/versioning.py b/app/versioning.py
+index 381f013a4b79ffffc0648ad6e6491e0e423923c7..ec79ff9ef25aa6c978a80b1f9a5cdc0b72f82b64 100644
+--- a/app/versioning.py
++++ b/app/versioning.py
+@@ -1,38 +1,52 @@
+ """Helpers for static asset versioning and build metadata."""
+ from __future__ import annotations
+ 
+ import os
+ import re
+ from datetime import datetime, timezone
+ from typing import Optional
+ 
+ _BUILD_ID: Optional[str] = None
+-_STATIC_ATTR_PATTERN = re.compile(
+-    r"(?P<attr>\b(?:src|href))(?P<before_eq>\s*)=(?P<after_eq>\s*)(?P<quote>['\"])(?P<url>/static/[^'\"]*)(?P=quote)",
+-    re.IGNORECASE,
+-)
++_STATIC_PATH_PREFIXES = ("static/", "admin/ui/")
 +
-     handleWsClose() {
-       this._teardownEncoder();
-       this._asrReady = false;
-       this._descriptor = null;
-       this._pendingDescriptor = null;
-       this._vendor = null;
-       this._setMask(false);
-       this._setListening(false, { resetMicEvent: true });
-     }
-   };
++
++def _build_static_pattern() -> re.Pattern[str]:
++    prefixes = "|".join(re.escape(prefix) for prefix in _STATIC_PATH_PREFIXES)
++    pattern = (
++        r"(?P<attr>\b(?:src|href))"
++        r"(?P<before_eq>\s*)=(?P<after_eq>\s*)"
++        r"(?P<quote>['\"])"
++        r"(?P<url>/(?:"
++        + prefixes
++        + r")(?:[^'\"]*))"
++        r"(?P=quote)"
++    )
++    return re.compile(pattern, re.IGNORECASE)
++
++
++_STATIC_ATTR_PATTERN = _build_static_pattern()
  
--  window.addEventListener("asr.ready", (event) => {
--    recorder.handleAsrReady(event && event.detail);
--  });
-   window.addEventListener("policy.interaction", (event) => {
-     recorder.handlePolicy(event && event.detail);
-   });
-   window.addEventListener("tts.start", (event) => {
-     recorder.handleTtsStart(event && event.detail);
-   });
-   window.addEventListener("tts.end", () => {
-     recorder.handleTtsEnd();
-   });
--  window.addEventListener("start_listening", () => {
--    recorder.handleStartListening();
--  });
-   window.addEventListener("ws.close", () => {
-     recorder.handleWsClose();
-   });
  
-   window.AudioRecorder = recorder;
- })();
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 9c94f0251bfc1a47ddde70faf68e2ee218730fe4..732a87dfc231c3ed93168c25319e4ef08861ad12 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -465,55 +465,69 @@
-         console.error("Expected info frame first, received", frame.type);
-         close("bad_info_sequence");
-         return;
-       }
-       if (frame.type === "info") {
-         handleInfoFrame(frame);
-       }
-     } else if (frame.type === "info") {
-       handleInfoFrame(frame);
-     } else if (frame.type === "pong") {
-       handlePongFrame();
-     } else if (frame.type === "error") {
-       handleErrorFrame(frame);
-     } else if (frame.type === "tts.start") {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
-         audioPlayer.handleTtsStart(frame);
-       }
-     } else if (frame.type === "tts.end") {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
-         audioPlayer.handleTtsEnd(frame);
-       }
-     } else if (frame.type === "start_listening") {
-       const recorder = window.AudioRecorder;
--      if (recorder && typeof recorder.handleStartListening === "function") {
-+      if (recorder) {
-+        const handler = typeof recorder.startListening === "function"
-+          ? recorder.startListening
-+          : (typeof recorder.handleStartListening === "function" ? recorder.handleStartListening : null);
-+        if (handler) {
-+          try {
-+            handler.call(recorder, frame);
-+          } catch (err) {
-+            console.warn("AudioRecorder start_listening handler error", err);
-+          }
-+        }
-+      }
-+    } else if (frame.type === "asr.ready") {
-+      const recorder = window.AudioRecorder;
-+      if (recorder && typeof recorder.handleAsrReady === "function") {
-         try {
--          recorder.handleStartListening(frame);
-+          recorder.handleAsrReady(frame);
-         } catch (err) {
--          console.warn("AudioRecorder start_listening handler error", err);
-+          console.warn("AudioRecorder asr.ready handler error", err);
-         }
-       }
-     } else if (frame.type === "asr.partial") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handlePartial === "function") {
-         try {
-           view.handlePartial(frame);
-         } catch (err) {
-           console.warn("TranscriptView partial handler error", err);
-         }
-       }
-     } else if (frame.type === "asr.final") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleFinal === "function") {
-         try {
-           view.handleFinal(frame);
-         } catch (err) {
-           console.warn("TranscriptView final handler error", err);
-         }
-       }
-     } else if (frame.type === "chat.message") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleChatMessage === "function") {
-         try {
-           view.handleChatMessage(frame);
+ def get_build_id() -> str:
+     """Return a stable identifier for the current build."""
+ 
+     global _BUILD_ID
+     if _BUILD_ID is None:
+         for env_var in ("BUILD_ID", "RENDER_GIT_COMMIT", "GIT_SHA"):
+             value = os.getenv(env_var)
+             if value:
+                 _BUILD_ID = value
+                 break
+         else:
+             now = datetime.now(timezone.utc)
+             _BUILD_ID = now.strftime("%Y%m%d%H%M%S")
+     return _BUILD_ID
+ 
+ 
+ def inject_static_version(html: str) -> str:
+     """Append a cache-busting query string to static asset references."""
+ 
+     build_id = get_build_id()
+ 
+     def _replace(match: re.Match[str]) -> str:
+         url = match.group("url")
+diff --git a/tests/test_static_routes.py b/tests/test_static_routes.py
+index 1afc35d27124c5e12168b739d69de362f3afb9c7..c15d6b2ab03bc130e411523919ccd7dd42cd09c3 100644
+--- a/tests/test_static_routes.py
++++ b/tests/test_static_routes.py
+@@ -58,25 +58,39 @@ def test_root_route_serves_index_html() -> None:
+ 
+ def test_static_asset_served_from_app() -> None:
+     messages = _dispatch("/static/js/app.js")
+ 
+     assert len(messages) == 2
+     start, body = messages
+     assert start["status"] == 200
+     headers = _collect_headers(start["headers"])
+     assert headers[b"content-type"].startswith(b"text/javascript")
+     length = int(headers[b"content-length"].decode("ascii"))
+     assert body["type"] == "http.response.body"
+     assert length == len(body["body"])
+     assert body["body"]
+ 
+ 
+ def test_missing_static_asset_returns_not_found() -> None:
+     messages = _dispatch("/static/js/missing-file.js")
+ 
+     assert len(messages) == 2
+     start, body = messages
+     assert start["status"] == 404
+     headers = _collect_headers(start["headers"])
+     assert headers[b"content-type"] == b"application/json; charset=utf-8"
+     assert body["type"] == "http.response.body"
+     assert b"not_found" in body["body"]
++
++
++def test_admin_ui_asset_uses_static_cache_headers() -> None:
++    messages = _dispatch("/admin/ui/config_panel.js")
++
++    assert len(messages) == 2
++    start, body = messages
++    assert start["status"] == 200
++    headers = _collect_headers(start["headers"])
++    assert headers[b"cache-control"] == b"public, max-age=31536000, immutable"
++    assert b"etag" in headers
++    assert body["type"] == "http.response.body"
++    length = int(headers[b"content-length"].decode("ascii"))
++    assert length == len(body["body"])
+diff --git a/tests/test_versioning.py b/tests/test_versioning.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ef44fb2781bd42d2f27d3bfbe8a0aa3ab13f7316
+--- /dev/null
++++ b/tests/test_versioning.py
+@@ -0,0 +1,26 @@
++from __future__ import annotations
++
++import os
++
++from app import versioning
++
++
++def test_inject_static_version_handles_multiple_prefixes() -> None:
++    original_build_id = versioning._BUILD_ID
++    prev_env = os.environ.get("BUILD_ID")
++    os.environ["BUILD_ID"] = "test-build"
++    versioning._BUILD_ID = None
++    try:
++        html = (
++            '<link rel="stylesheet" href="/static/css/styles.css" />'
++            '<script src="/admin/ui/config_panel.js"></script>'
++        )
++        rewritten = versioning.inject_static_version(html)
++        assert "/static/css/styles.css?v=test-build" in rewritten
++        assert "/admin/ui/config_panel.js?v=test-build" in rewritten
++    finally:
++        versioning._BUILD_ID = original_build_id
++        if prev_env is None:
++            os.environ.pop("BUILD_ID", None)
++        else:
++            os.environ["BUILD_ID"] = prev_env

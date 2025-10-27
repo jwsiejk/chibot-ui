@@ -1,0 +1,2984 @@
+Admin ▸ Logs
+Signed in as jwsiejk@purestorage.com ← Main UI
+Debug
+Settings loaded.
+
+Enable the in-client diagnostics overlay.
+
+Emit server-side diagnostics when client audio stalls.
+
+Chunk sample N
+10
+Log every Nth audio chunk in the browser diagnostics overlay.
+
+Sessions
+Search
+sid prefix
+ Only open Refresh
+Showing 1 session.
+Session	Status	Started	Updated	Events	 
+20e800f684364d43812aedaabb5f7155	Open	2025-10-27T04:45:41.842Z	2025-10-27T04:45:41.842Z	26	Pick
+Session ID
+20e800f684364d43812aedaabb5f7155
+Stop Live
+Load History
+Download Zip
+Event types
+All
+
+Turn begin
+
+Turn end
+
+User chat
+
+JSON send
+
+JSON recv
+
+TTS start
+
+TTS end
+
+Audio recv
+
+Audio send
+
+Logs
+
+Diag: first audio
+
+Diag: no audio
+
+Diag: HUD
+Live
+History
+Live stream
+Polling for new events…
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540341.8433945,
+  "logger": "app.ws.adapter",
+  "level": "INFO",
+  "msg": "evt=ws_open_and_greet_start sid=20e800f684364d43812aedaabb5f7155",
+  "schema_version": "1",
+  "ts_ms": 1761540341843
+}
+
+{
+  "type": "EVT_WS_OPEN",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "headers": {
+      "host": "chibot-ui.onrender.com",
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+      "accept-encoding": "gzip, br",
+      "accept-language": "en-US,en;q=0.9",
+      "cache-control": "no-cache",
+      "cdn-loop": "cloudflare; loops=1",
+      "cf-connecting-ip": "170.85.75.32",
+      "cf-ipcountry": "US",
+      "cf-ray": "994f8b9d5bbb43cb-EWR",
+      "cf-visitor": "{\"scheme\":\"https\"}",
+      "connection": "Upgrade",
+      "cookie": "***@purestorage.com|qwlEWYW3Exk0EptuOu3i2Ux8Kf9GEVfKRnspFLGkocY; askchip_csrf=t5cF2VzXRNvhrliwPc-kXxNoJteAV5enzF2SBks1oSY",
+      "origin": "https://chibot-ui.onrender.com",
+      "pragma": "no-cache",
+      "render-cf-start-time-msec": "336",
+      "render-cf-start-time-sec": "1761540341",
+      "render-proxy-ttl": "4",
+      "rndr-id": "ba84c7ff-2490-4802",
+      "sec-websocket-key": "aJAQzGhf9L4a7Pi3c3vXMA==",
+      "sec-websocket-protocol": "chat.v2,…I-oToRQc",
+      "sec-websocket-version": "13",
+      "true-client-ip": "170.85.75.32",
+      "upgrade": "websocket",
+      "x-forwarded-for": "170.85.75.32, 10.226.234.131",
+      "x-forwarded-proto": "https",
+      "x-render-as-num": "22616",
+      "x-render-threat-score": "0"
+    },
+    "dir": "in"
+  },
+  "ts_ms": 1761540341844,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_WS_JSON_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "ws": {
+      "dir": "out",
+      "size": 707,
+      "preview": "{\"type\":…:100}}}}"
+    }
+  },
+  "frame": {
+    "type": "policy.interaction",
+    "policy": {
+      "mode": "idle",
+      "allow_auto_vad": true,
+      "barge_in_enabled": true,
+      "auto_commit_when_ready": true,
+      "voice": {
+        "voice_id": "alloy-en-US-001",
+        "locale": "en-US"
+      },
+      "greet": {
+        "enabled": true,
+        "mode": "persona",
+        "post_hold_ms": 200
+      },
+      "suggestions": {
+        "on_connect": true,
+        "count": 3
+      },
+      "actions": {
+        "allowed": [
+          "answer"
+        ],
+        "surface_via_suggestions": true,
+        "assistant_turn_sequence": [
+          "assistant.say",
+          "assistant.await_user"
+        ]
+      },
+      "telemetry": {
+        "enabled": true,
+        "level": "debug",
+        "categories": {
+          "ws": true,
+          "audio": true,
+          "policy": true,
+          "tts": true,
+          "gate": true,
+          "barge": true,
+          "asr": true,
+          "nlu": true,
+          "nlg": true,
+          "client_ui": true,
+          "provider_debug": true
+        },
+        "redaction": {
+          "pii": true,
+          "secrets": true,
+          "text": false
+        },
+        "sampling": {
+          "percent": 100
+        }
+      }
+    }
+  },
+  "ts_ms": 1761540341846,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_POLICY_APPLIED",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "policy": {
+      "diff": {
+        "voice": [
+          null,
+          {
+            "voice_id": "alloy-en-US-001",
+            "locale": "en-US"
+          }
+        ],
+        "barge_in_enabled": [
+          null,
+          true
+        ],
+        "suggestions": [
+          null,
+          {
+            "on_connect": true,
+            "count": 3
+          }
+        ],
+        "telemetry": [
+          null,
+          {
+            "enabled": true,
+            "level": "debug",
+            "categories": {
+              "ws": true,
+              "audio": true,
+              "policy": true,
+              "tts": true,
+              "gate": true,
+              "barge": true,
+              "asr": true,
+              "nlu": true,
+              "nlg": true,
+              "client_ui": true,
+              "provider_debug": true
+            },
+            "redaction": {
+              "pii": true,
+              "secrets": true,
+              "text": false
+            },
+            "sampling": {
+              "percent": 100
+            }
+          }
+        ],
+        "actions": [
+          null,
+          {
+            "allowed": [
+              "answer"
+            ],
+            "surface_via_suggestions": true,
+            "assistant_turn_sequence": [
+              "assistant.say",
+              "assistant.await_user"
+            ]
+          }
+        ],
+        "allow_auto_vad": [
+          null,
+          true
+        ],
+        "greet": [
+          null,
+          {
+            "enabled": true,
+            "mode": "persona",
+            "post_hold_ms": 200
+          }
+        ],
+        "mode": [
+          null,
+          "idle"
+        ],
+        "auto_commit_when_ready": [
+          null,
+          true
+        ]
+      }
+    }
+  },
+  "ts_ms": 1761540341846,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_ACWR_RECOMPUTE",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "policy_acwr": true,
+    "admin_enabled": null,
+    "effective": true
+  },
+  "ts_ms": 1761540341847,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_WS_JSON_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "ws": {
+      "dir": "out",
+      "size": 359,
+      "preview": "{\"type\":…ls\":1}}}"
+    }
+  },
+  "frame": {
+    "type": "info",
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "slo": {
+      "first_partial_ms": {
+        "target": 450,
+        "p95": 750
+      },
+      "final_ms": {
+        "target": 2000,
+        "p95": 3000
+      },
+      "tts_start_ms": {
+        "target": 350,
+        "p95": 600
+      }
+    },
+    "voice_id": "alloy-en-US-001",
+    "locale": "en-US",
+    "meta": {
+      "sid": "20e800f684364d43812aedaabb5f7155",
+      "audio": {
+        "codec": "pcm_s16le",
+        "rate_hz": 16000,
+        "channels": 1
+      }
+    }
+  },
+  "ts_ms": 1761540341847,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_POLICY_DECISION",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "rule": "session_open.greet",
+  "actions": [
+    "assistant.say",
+    "assistant.await_user"
+  ],
+  "ts_ms": 1761540341932,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540341.9331586,
+  "logger": "app.voice_v2.engine",
+  "level": "DEBUG",
+  "msg": "evt=greet_llm_request sid=20e800f684364d43812aedaabb5f7155 purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}",
+  "schema_version": "1",
+  "ts_ms": 1761540341933
+}
+
+{
+  "type": "EVT_LLM_RESPONSE_START",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "req_id": "req-a8f88fcf28bd472d86fba047dc36d5ba",
+  "purpose": "greet",
+  "model": "gpt-4o-mini",
+  "temp": 0.4,
+  "max_tokens": 30,
+  "msg_counts": {
+    "system": 1,
+    "developer": 1,
+    "user": 1
+  },
+  "ts_ms": 1761540341933,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_LLM_RESPONSE_END",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "req_id": "req-a8f88fcf28bd472d86fba047dc36d5ba",
+  "purpose": "greet",
+  "latency_ms": 4783,
+  "model": "gpt-4o-mini",
+  "ts_ms": 1761540346716,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540346.7175975,
+  "logger": "app.voice_v2.engine",
+  "level": "DEBUG",
+  "msg": "evt=greet_llm_complete sid=20e800f684364d43812aedaabb5f7155 purpose=greet latency_ms=4783 model=gpt-4o-mini",
+  "schema_version": "1",
+  "ts_ms": 1761540346717
+}
+
+{
+  "type": "EVT_NLG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "req_id": "req-a8f88fcf28bd472d86fba047dc36d5ba",
+  "text": "Welcome! Let’s explore Pure Storage together.",
+  "meta": {
+    "reason": "greet",
+    "post_hold_ms": 200
+  },
+  "ts_ms": 1761540346718,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_WS_JSON_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "ws": {
+      "dir": "out",
+      "size": 279,
+      "preview": "{\"type\":…0346718}"
+    }
+  },
+  "frame": {
+    "type": "chat.message",
+    "id": "a905e9a7-d378-4373-9349-2858b0d570f6",
+    "role": "assistant",
+    "text": "Welcome! Let’s explore Pure Storage together.",
+    "origin": "voice",
+    "turn_id": "e224981a-b3e8-4a46-b8ab-2318e693ffe5",
+    "req_id": "req-a8f88fcf28bd472d86fba047dc36d5ba",
+    "ts_ms": 1761540346718
+  },
+  "ts_ms": 1761540346718,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_WS_JSON_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "ws": {
+      "dir": "out",
+      "size": 310,
+      "preview": "{\"type\":…\"greet\"}"
+    }
+  },
+  "frame": {
+    "type": "assistant.suggestions",
+    "ts_ms": 1761540346719,
+    "items": [
+      {
+        "label": "Set your objective",
+        "kind": "action",
+        "id": "set-your-objective"
+      },
+      {
+        "label": "Explore FlashArray fit",
+        "kind": "action",
+        "id": "explore-flasharray-fit"
+      },
+      {
+        "label": "Review solution path",
+        "kind": "action",
+        "id": "review-solution-path"
+      }
+    ],
+    "mode": "greet"
+  },
+  "ts_ms": 1761540346719,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540346.8422456,
+  "logger": "httpcore.connection",
+  "level": "DEBUG",
+  "msg": "connect_tcp.started host='api.elevenlabs.io' port=443 local_address=None timeout=5.0 socket_options=None",
+  "schema_version": "1",
+  "ts_ms": 1761540346842
+}
+
+{
+  "schema_version": "1",
+  "type": "EVT_WS_JSON_RECV",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "ws_server",
+  "meta": {
+    "byte_count": 15,
+    "frame_type": "ping",
+    "ws": {
+      "dir": "in",
+      "size": 15,
+      "preview": "{\"type\":\"ping\"}"
+    }
+  },
+  "ts_ms": 1761540346843,
+  "level": "debug"
+}
+
+{
+  "schema_version": "1",
+  "type": "EVT_WS_JSON_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "ws_server",
+  "meta": {
+    "byte_count": 33,
+    "frame_type": "pong",
+    "ws": {
+      "dir": "out",
+      "size": 33,
+      "preview": "{\"type\":\"pong\",\"t\":1761540346843}"
+    }
+  },
+  "ts_ms": 1761540346843,
+  "level": "debug"
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540346.8647583,
+  "logger": "httpcore.connection",
+  "level": "DEBUG",
+  "msg": "connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7ad7ddc88b90>",
+  "schema_version": "1",
+  "ts_ms": 1761540346864
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540346.8652182,
+  "logger": "httpcore.connection",
+  "level": "DEBUG",
+  "msg": "start_tls.started ssl_context=<ssl.SSLContext object at 0x7ad7e0c734a0> server_hostname='api.elevenlabs.io' timeout=5.0",
+  "schema_version": "1",
+  "ts_ms": 1761540346865
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540346.9328647,
+  "logger": "httpcore.connection",
+  "level": "DEBUG",
+  "msg": "start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7ad7de953360>",
+  "schema_version": "1",
+  "ts_ms": 1761540346932
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540346.9341903,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "send_request_headers.started request=<Request [b'POST']>",
+  "schema_version": "1",
+  "ts_ms": 1761540346934
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540346.9348574,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "send_request_headers.complete",
+  "schema_version": "1",
+  "ts_ms": 1761540346934
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540346.9352658,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "send_request_body.started request=<Request [b'POST']>",
+  "schema_version": "1",
+  "ts_ms": 1761540346935
+}
+
+{
+  "schema_version": "1",
+  "type": "EVT_WS_JSON_RECV",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "ws_server",
+  "meta": {
+    "byte_count": 15,
+    "frame_type": "ping",
+    "ws": {
+      "dir": "in",
+      "size": 15,
+      "preview": "{\"type\":\"ping\"}"
+    }
+  },
+  "ts_ms": 1761540346935,
+  "level": "debug"
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540346.9361534,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "send_request_body.complete",
+  "schema_version": "1",
+  "ts_ms": 1761540346936
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540346.9366267,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "receive_response_headers.started request=<Request [b'POST']>",
+  "schema_version": "1",
+  "ts_ms": 1761540346936
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.601577,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Mon, 27 Oct 2025 04:45:46 GMT'), (b'server', b'uvicorn'), (b'request-id', b'umvGkurDCaxEA2NUl92s'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'4AqtLiRNMGG4vEhMuxgU'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'45'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'8b5f2dca1c733c91da3095a27d7dcf67'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])",
+  "schema_version": "1",
+  "ts_ms": 1761540347601
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.602482,
+  "logger": "httpx",
+  "level": "INFO",
+  "msg": "HTTP Request: POST https://api.elevenlabs.io/v1/text-to-speech/MIAWBMadvHL0ek6oJEXD/stream?optimize_streaming_latency=4&output_format=pcm_16000 \"HTTP/1.1 200 OK\"",
+  "schema_version": "1",
+  "ts_ms": 1761540347602
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.6029735,
+  "logger": "app.services.tts.elevenlabs_client",
+  "level": "INFO",
+  "msg": "evt=tts_provider_stream_opened provider=elevenlabs content_type=audio/pcm url_qs=optimize_streaming_latency=4&output_format=pcm_16000",
+  "schema_version": "1",
+  "ts_ms": 1761540347602
+}
+
+{
+  "type": "EVT_MIC_GATE",
+  "level": "debug",
+  "meta": {
+    "gate": {
+      "state": "on",
+      "mask": true,
+      "reason": "tts_active",
+      "reasons": {
+        "tts_active": true,
+        "manual_gate": false,
+        "system_hold": false
+      },
+      "tts": {
+        "utt_id": "utt-00001",
+        "post_hold_ms": 200
+      },
+      "voice_id": "alloy-en-US-001",
+      "locale": "en-US"
+    }
+  },
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "voice_engine",
+  "schema_version": "1",
+  "ts_ms": 1761540347603
+}
+
+{
+  "type": "EVT_TTS_MASK",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "phase": "on",
+  "ts_ms": 1761540347603,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_TTS_START",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "tts": {
+      "utt_id": "utt-00001",
+      "post_hold_ms": 200
+    },
+    "voice_id": "alloy-en-US-001",
+    "locale": "en-US"
+  },
+  "ts_ms": 1761540347604,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_TURN_STATE",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "state": "Responding",
+    "reason": "tts_start"
+  },
+  "ts_ms": 1761540347604,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.6055408,
+  "logger": "app.voice_v2.tts_runtime",
+  "level": "INFO",
+  "msg": "evt=tts_start sid=20e800f684364d43812aedaabb5f7155 utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=45",
+  "schema_version": "1",
+  "ts_ms": 1761540347605
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.6064765,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "receive_response_body.started request=<Request [b'POST']>",
+  "schema_version": "1",
+  "ts_ms": 1761540347606
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347608,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 1280
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.6090798,
+  "logger": "app.voice_v2.tts_runtime",
+  "level": "DEBUG",
+  "msg": "evt=tts_chunk sid=20e800f684364d43812aedaabb5f7155 utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280",
+  "schema_version": "1",
+  "ts_ms": 1761540347609
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347610,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 2560
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347612,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 3840
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347612,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 5120
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347614,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 6400
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347615,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 7680
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347615,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 8960
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347615,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 10240
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347616,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 11520
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347616,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 12800
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347617,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 14080
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347617,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 15360
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347617,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 16640
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347618,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 17920
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347618,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 19200
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347619,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 20480
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347619,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 21760
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347632,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 23040
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347633,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 24320
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347633,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 25600
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347633,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 26880
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347634,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 28160
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347634,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 29440
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347635,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 30720
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347635,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 32000
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347635,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 33280
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347636,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 34560
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347636,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 35840
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347636,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 37120
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347637,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 38400
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347637,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 39680
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347638,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 40960
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347638,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 42240
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347641,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 43520
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347641,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 44800
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347642,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 46080
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347642,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 47360
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347643,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 48640
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347643,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 49920
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347643,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 51200
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347644,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 52480
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347644,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 53760
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347645,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 55040
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347731,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 56320
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347732,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 57600
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347732,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 58880
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347733,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 60160
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347733,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 61440
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347733,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 62720
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347735,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 64000
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347736,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 65280
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347736,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 66560
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347736,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 67840
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347737,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 69120
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347737,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 70400
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347737,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 71680
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347738,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 72960
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347738,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 74240
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347738,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 75520
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347739,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 76800
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347739,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 78080
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347739,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 79360
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347740,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 80640
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347740,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 81920
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.741675,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "receive_response_body.complete",
+  "schema_version": "1",
+  "ts_ms": 1761540347741
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.742172,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "response_closed.started",
+  "schema_version": "1",
+  "ts_ms": 1761540347742
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347743,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 83200
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347743,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 84480
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347743,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 85760
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347744,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 87040
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347744,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 88320
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347744,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 89600
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347745,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 90880
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347745,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 92160
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347746,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 93440
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347746,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 94720
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347831,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 96000
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 1280,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 1280
+    }
+  },
+  "ts_ms": 1761540347832,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 1280,
+  "total_bytes": 97280
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.8329003,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "response_closed.complete",
+  "schema_version": "1",
+  "ts_ms": 1761540347832
+}
+
+{
+  "type": "EVT_WS_AUDIO_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "byte_count": 802,
+    "audio": {
+      "codec": "pcm_s16le",
+      "rate_hz": 16000,
+      "channels": 1
+    },
+    "ws": {
+      "dir": "out",
+      "size": 802
+    }
+  },
+  "ts_ms": 1761540347834,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "utt_id": "utt-00001",
+  "bytes": 802,
+  "total_bytes": 98082
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.8345683,
+  "logger": "app.voice_v2.tts_runtime",
+  "level": "DEBUG",
+  "msg": "evt=tts_chunk sid=20e800f684364d43812aedaabb5f7155 utt_id=utt-00001 chunks=76 bytes=96802 total_bytes=98082",
+  "schema_version": "1",
+  "ts_ms": 1761540347834
+}
+
+{
+  "type": "EVT_TTS_END",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "tts": {
+      "utt_id": "utt-00001"
+    }
+  },
+  "ts_ms": 1761540347835,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1",
+  "total_bytes": 98082,
+  "utt_id": "utt-00001"
+}
+
+{
+  "type": "EVT_TTS_MASK",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "phase": "off",
+  "ts_ms": 1761540347835,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "type": "EVT_MIC_GATE",
+  "level": "debug",
+  "meta": {
+    "gate": {
+      "state": "off",
+      "mask": false,
+      "reason": "tts_active",
+      "reasons": {
+        "tts_active": false,
+        "manual_gate": false,
+        "system_hold": false
+      },
+      "tts": {
+        "utt_id": "utt-00001"
+      }
+    }
+  },
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "voice_engine",
+  "schema_version": "1",
+  "ts_ms": 1761540347836
+}
+
+{
+  "type": "EVT_MIC_GATE",
+  "level": "debug",
+  "meta": {
+    "gate": {
+      "state": "on",
+      "mask": true,
+      "reason": "system_hold",
+      "reasons": {
+        "tts_active": false,
+        "manual_gate": false,
+        "system_hold": true
+      },
+      "tts": {
+        "utt_id": "utt-00001",
+        "post_hold_ms": 200
+      }
+    }
+  },
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "voice_engine",
+  "schema_version": "1",
+  "ts_ms": 1761540347836
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540347.836998,
+  "logger": "app.voice_v2.tts_runtime",
+  "level": "INFO",
+  "msg": "evt=tts_end sid=20e800f684364d43812aedaabb5f7155 utt_id=utt-00001 total_bytes=98082 duration_ms=231",
+  "schema_version": "1",
+  "ts_ms": 1761540347837
+}
+
+{
+  "type": "EVT_MIC_GATE",
+  "level": "debug",
+  "meta": {
+    "gate": {
+      "state": "off",
+      "mask": false,
+      "reason": "system_hold",
+      "reasons": {
+        "tts_active": false,
+        "manual_gate": false,
+        "system_hold": false
+      }
+    }
+  },
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "voice_engine",
+  "schema_version": "1",
+  "ts_ms": 1761540348037
+}
+
+{
+  "type": "EVT_TURN_STATE",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "state": "Ready",
+    "reason": "tts_end"
+  },
+  "ts_ms": 1761540348038,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}
+
+{
+  "schema_version": "1",
+  "type": "EVT_WS_JSON_RECV",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "ws_server",
+  "meta": {
+    "byte_count": 15,
+    "frame_type": "ping",
+    "ws": {
+      "dir": "in",
+      "size": 15,
+      "preview": "{\"type\":\"ping\"}"
+    }
+  },
+  "ts_ms": 1761540361881,
+  "level": "debug"
+}
+
+{
+  "schema_version": "1",
+  "type": "EVT_WS_JSON_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "ws_server",
+  "meta": {
+    "byte_count": 33,
+    "frame_type": "pong",
+    "ws": {
+      "dir": "out",
+      "size": 33,
+      "preview": "{\"type\":\"pong\",\"t\":1761540361881}"
+    }
+  },
+  "ts_ms": 1761540361881,
+  "level": "debug"
+}
+
+{
+  "schema_version": "1",
+  "type": "EVT_WS_JSON_RECV",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "ws_server",
+  "meta": {
+    "byte_count": 15,
+    "frame_type": "ping",
+    "ws": {
+      "dir": "in",
+      "size": 15,
+      "preview": "{\"type\":\"ping\"}"
+    }
+  },
+  "ts_ms": 1761540376884,
+  "level": "debug"
+}
+
+{
+  "schema_version": "1",
+  "type": "EVT_WS_JSON_SEND",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "who": "server",
+  "source": "ws_server",
+  "meta": {
+    "byte_count": 33,
+    "frame_type": "pong",
+    "ws": {
+      "dir": "out",
+      "size": 33,
+      "preview": "{\"type\":\"pong\",\"t\":1761540376885}"
+    }
+  },
+  "ts_ms": 1761540376885,
+  "level": "debug"
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "ts": 1761540377.5242546,
+  "logger": "app.voice_v2.asr_runtime",
+  "level": "INFO",
+  "msg": "evt=asr_rollup sid=20e800f684364d43812aedaabb5f7155 stream_id= opened_at_ms=1761540341842 last_audio_ts_ms=1761540341842 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=35682",
+  "schema_version": "1",
+  "ts_ms": 1761540377524
+}
+
+{
+  "type": "EVT_WS_CLOSE",
+  "sid": "20e800f684364d43812aedaabb5f7155",
+  "meta": {
+    "code": 1000,
+    "reason": "user_requested"
+  },
+  "ts_ms": 1761540377524,
+  "who": "server",
+  "source": "voice_engine",
+  "level": "debug",
+  "schema_version": "1"
+}

@@ -657,17 +657,12 @@ async def _handle_admin_ui_asset(
     if resolved is None:
         return json_response(status=404, error="not_found")
 
-    try:
-        data = resolved.read_bytes()
-    except OSError:
+    if_none_match = _get_request_header(scope, b"if-none-match")
+    response = _build_static_response(resolved, if_none_match=if_none_match)
+    if response is None:
         return json_response(status=404, error="not_found")
 
-    headers = (
-        (b"content-type", b"application/javascript; charset=utf-8"),
-        (b"cache-control", b"no-store"),
-        (b"content-length", str(len(data)).encode("ascii")),
-    )
-    return Response(status=200, body=data, headers=headers)
+    return response
 
 
 def _resolve_admin_ui_path(raw_path: str) -> Optional[Path]:
