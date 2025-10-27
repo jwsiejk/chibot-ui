@@ -300,7 +300,7 @@ json
 Copy code
 {"type":"EVT_ENGINE_STATE","from":"Idle","to":"AssistantSpeaking","ts_ms":...}
 {"type":"EVT_MIC_GATE","effective":true,"reasons":["tts_active"],"ts_ms":...}
-{"type":"EVT_TTS_MASK","phase":"engaged","ts_ms":...}
+{"type":"EVT_TTS_MASK","phase":"on","ts_ms":...}
 {"type":"EVT_BARGE_IN","source":"auto_vad","granted":false,"reason":"policy_disabled","ts_ms":...}
 reasons: tts_active | manual_gate | system_hold | error_hold
 
