@@ -18,6 +18,12 @@ _ARCHIVE_FILENAME = "flow.zip"
 _CONTENT_TYPE_NDJSON = b"application/x-ndjson"
 _CONTENT_TYPE_ZIP = b"application/zip"
 
+_TYPE_PREFIX_ALIASES: dict[str, tuple[str, ...]] = {
+    "EVT_DIAG_HUD": ("EVT_HUD_", "EVT_CLIENT_"),
+    "EVT_DIAG_FIRST_AUDIO_FRAME": ("EVT_AG_",),
+    "EVT_DIAG_NO_AUDIO_FROM_CLIENT": ("EVT_AG_",),
+}
+
 
 @dataclass(frozen=True)
 class Response:
@@ -254,7 +260,8 @@ def _filter_events(
             except json.JSONDecodeError as exc:  # pragma: no cover - defensive
                 raise ValueError("event payload must be valid JSON") from exc
 
-            if requested_types and event.get("type") not in requested_types:
+            event_type = event.get("type")
+            if requested_types and not _type_filter_matches(event_type, requested_types):
                 continue
 
             if since_ms is not None:
@@ -270,6 +277,21 @@ def _filter_events(
                 remaining -= 1
 
     return matched.getvalue()
+
+
+def _type_filter_matches(event_type: object, requested_types: set[str]) -> bool:
+    if not isinstance(event_type, str):
+        return False
+    if event_type in requested_types:
+        return True
+    for token in requested_types:
+        prefixes = _TYPE_PREFIX_ALIASES.get(token)
+        if not prefixes:
+            continue
+        for prefix in prefixes:
+            if event_type.startswith(prefix):
+                return True
+    return False
 
 
 __all__ = ["handle_flow_trace", "handle_flow_zip", "handle_flow_sessions"]

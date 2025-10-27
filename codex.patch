@@ -1,468 +1,283 @@
-diff --git a/app/config.py b/app/config.py
-index b3f44f909a010bfe83bbf85b7731ab543ca88076..05e0779197af0b3422642749ce22bff80d341c00 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -1,29 +1,30 @@
- """Application configuration helpers."""
+diff --git a/app/admin/flow_api.py b/app/admin/flow_api.py
+index eb27bfd37bd9c51822dc77dbbc3cdf35a8d51682..ad32ecd4f2b273d13a71900bd56c399515303a7e 100644
+--- a/app/admin/flow_api.py
++++ b/app/admin/flow_api.py
+@@ -1,45 +1,51 @@
+ """Admin HTTP endpoints exposing flow trace streams and ZIP archives."""
  
  from __future__ import annotations
  
-+import json
- import logging
- import os
- import threading
- from typing import Any, Mapping, MutableMapping, Optional
+ import json
+ from dataclasses import dataclass
+ from io import BytesIO
+ from pathlib import Path
+ from typing import Awaitable, Callable, Dict, List, Optional
+ from urllib.parse import parse_qs
  
- try:
-     from dotenv import load_dotenv  # type: ignore
- except ImportError:  # pragma: no cover - optional dependency
-     load_dotenv = None
- else:  # pragma: no branch
-     load_dotenv(dotenv_path=".env", override=False)
+ from app.admin.flow_zip import build_flow_zip
  
  
- def env_bool(name: str, default: bool = False) -> bool:
-     """Return an environment variable parsed as a boolean."""
+ EXPORT_ROOT = Path("exports")
+ _EVENTS_FILENAME = "events.ndjson"
+ _ARCHIVE_FILENAME = "flow.zip"
+ _CONTENT_TYPE_NDJSON = b"application/x-ndjson"
+ _CONTENT_TYPE_ZIP = b"application/zip"
  
-     value = os.getenv(name)
-     if value is None:
-         return bool(default)
-     value = value.strip().lower()
-     if value in {"1", "true", "t", "yes", "y", "on"}:
-         return True
-     if value in {"0", "false", "f", "no", "n", "off"}:
-         return False
-     return bool(default)
-@@ -109,50 +110,87 @@ def _coerce_db_bool(value: Any, default: bool) -> bool:
-     return bool(default)
- 
- 
- def _coerce_db_int(
-     value: Any, default: int, *, minimum: Optional[int] = None
- ) -> int:
-     candidate: Optional[int] = None
-     if isinstance(value, bool):
-         candidate = int(value)
-     elif isinstance(value, (int, float)):
-         candidate = int(value)
-     elif isinstance(value, str):
-         return _coerce_int(value, default, minimum=minimum)
-     elif isinstance(value, Mapping):
-         lowered = {str(k).lower(): v for k, v in value.items() if isinstance(k, str)}
-         for key in ("value", "count", "enabled"):
-             if key in lowered:
-                 return _coerce_db_int(lowered[key], default, minimum=minimum)
-     if candidate is None:
-         candidate = int(default)
-     if minimum is not None and candidate < minimum:
-         return minimum
-     return candidate
- 
- 
-+def _coerce_db_mapping(
-+    value: Any, default: Optional[Mapping[str, Any]] = None
-+) -> Mapping[str, Any]:
-+    base_default: Mapping[str, Any] = dict(default or {})
++_TYPE_PREFIX_ALIASES: dict[str, tuple[str, ...]] = {
++    "EVT_DIAG_HUD": ("EVT_HUD_", "EVT_CLIENT_"),
++    "EVT_DIAG_FIRST_AUDIO_FRAME": ("EVT_AG_",),
++    "EVT_DIAG_NO_AUDIO_FROM_CLIENT": ("EVT_AG_",),
++}
 +
-+    if isinstance(value, Mapping):
-+        return {str(k): v for k, v in value.items()}
-+
-+    if isinstance(value, memoryview):
-+        return _coerce_db_mapping(value.tobytes(), base_default)
-+
-+    if isinstance(value, (bytes, bytearray)):
-+        try:
-+            decoded = value.decode("utf-8")
-+        except UnicodeDecodeError:
-+            decoded = value.decode("latin1", "ignore")
-+        return _coerce_db_mapping(decoded, base_default)
-+
-+    if isinstance(value, str):
-+        try:
-+            parsed = json.loads(value)
-+        except json.JSONDecodeError:
-+            return dict(base_default)
-+        return _coerce_db_mapping(parsed, base_default)
-+
-+    if isinstance(value, bool):
-+        return {"enabled": bool(value)}
-+
-+    if isinstance(value, (int, float)):
-+        return {"value": value}
-+
-+    if value is None:
-+        return dict(base_default)
-+
-+    return dict(base_default)
-+
-+
- def _get_cached_admin_setting(key: str) -> Optional[Any]:
-     normalized = _normalize_key(key)
-     with _ADMIN_SETTINGS_LOCK:
-         if normalized in _ADMIN_SETTINGS_CACHE:
-             return _ADMIN_SETTINGS_CACHE[normalized]
-     store = _get_admin_settings_store()
-     if store is None:
-         with _ADMIN_SETTINGS_LOCK:
-             _ADMIN_SETTINGS_CACHE.setdefault(normalized, None)
-         return None
-     value = store.get(normalized)
-     with _ADMIN_SETTINGS_LOCK:
-         _ADMIN_SETTINGS_CACHE[normalized] = value
-     return value
+ 
+ @dataclass(frozen=True)
+ class Response:
+     status: int
+     body: bytes
+     headers: tuple[tuple[bytes, bytes], ...]
  
  
- def update_admin_settings_cache(updates: Mapping[str, Optional[Any]]) -> None:
-     """Merge ``updates`` into the local admin settings cache and refresh flags."""
- 
-     changed = False
-     with _ADMIN_SETTINGS_LOCK:
-         for raw_key, raw_value in updates.items():
-             normalized = _normalize_key(raw_key)
-             if _ADMIN_SETTINGS_CACHE.get(normalized) != raw_value:
-                 _ADMIN_SETTINGS_CACHE[normalized] = raw_value
-@@ -175,130 +213,169 @@ def set_admin_setting_raw(
-     normalized = _normalize_key(key)
-     store = _get_admin_settings_store()
-     if store is None:
-         raise RuntimeError("Admin settings store unavailable")
-     store.set(normalized, value, updated_by=updated_by)
-     update_admin_settings_cache({normalized: value})
- 
- 
- def _resolve_bool_setting(name: str, default: bool) -> tuple[bool, str, Any]:
-     env_value = os.getenv(_env_name(name))
-     if env_value is not None:
-         return _coerce_bool(env_value, default), "env", env_value
-     stored = _get_cached_admin_setting(name)
-     if stored is not None:
-         return _coerce_db_bool(stored, default), "db", stored
-     return bool(default), "default", None
- 
- 
- def bool_env_or_db(name: str, *, default: bool = False) -> bool:
-     """Resolve a boolean config value from env, admin settings, or default."""
- 
-     value, _source, _raw = _resolve_bool_setting(name, default)
-     return value
- 
- 
-+def _resolve_mapping_setting(
-+    name: str, default: Optional[Mapping[str, Any]] = None
-+) -> tuple[Mapping[str, Any], str, Any]:
-+    base_default: Mapping[str, Any] = dict(default or {})
-+
-+    env_value = os.getenv(_env_name(name))
-+    if env_value is not None:
-+        try:
-+            parsed = json.loads(env_value)
-+        except json.JSONDecodeError:
-+            if env_value.strip():
-+                _log.warning(
-+                    "evt=admin_settings_env_parse_failed key=%s source=env",
-+                    name,
-+                    extra={"component": "admin.settings"},
-+                )
-+            return dict(base_default), "env", env_value
-+        normalized = _coerce_db_mapping(parsed, base_default)
-+        return normalized, "env", env_value
-+
-+    stored = _get_cached_admin_setting(name)
-+    if stored is not None:
-+        return _coerce_db_mapping(stored, base_default), "db", stored
-+
-+    return dict(base_default), "default", None
-+
-+
- def _resolve_int_setting(
-     name: str, default: int, *, minimum: Optional[int] = None
- ) -> tuple[int, str, Any]:
-     env_value = os.getenv(_env_name(name))
-     if env_value is not None:
-         return _coerce_int(env_value, default, minimum=minimum), "env", env_value
-     stored = _get_cached_admin_setting(name)
-     if stored is not None:
-         return _coerce_db_int(stored, default, minimum=minimum), "db", stored
-     fallback = int(default)
-     if minimum is not None and fallback < minimum:
-         fallback = minimum
-     return fallback, "default", None
- 
- 
- def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None) -> int:
-     """Resolve an integer config value from env, admin settings, or default."""
- 
-     value, _source, _raw = _resolve_int_setting(name, default, minimum=minimum)
-     return value
- 
- 
- def reload_runtime_flags() -> None:
-     """Refresh runtime configuration flags from env and admin settings."""
- 
-     diag_client_hud, hud_source, _hud_raw = _resolve_bool_setting(
-         "diag_client_hud", default=False
+ def json_response(*, status: int = 200, **payload: object) -> Response:
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
      )
-+    audio_guardrails_default = {"enabled": True}
-+    audio_guardrails, guardrails_source, _guardrails_raw = _resolve_mapping_setting(
-+        "audio_guardrails", default=audio_guardrails_default
-+    )
-     diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
-         "diag_audio_guard", default=True
-     )
-     diag_chunk_sample_n, chunk_source, _chunk_raw = _resolve_int_setting(
-         "diag_chunk_sample_n", default=10, minimum=1
-     )
- 
-+    guardrails_value = dict(audio_guardrails)
-     flags = {
-         "DIAG_CLIENT_HUD": diag_client_hud,
-+        "AUDIO_GUARDRAILS": guardrails_value,
-         "DIAG_AUDIO_GUARD": diag_audio_guard,
-         "DIAG_CHUNK_SAMPLE_N": diag_chunk_sample_n,
-     }
-     with _ADMIN_SETTINGS_LOCK:
-         _RUNTIME_FLAGS.clear()
-         _RUNTIME_FLAGS.update(flags)
-     globals().update(flags)
- 
-     log_snapshot = [
-         {"key": "DIAG_CLIENT_HUD", "value": diag_client_hud, "source": hud_source},
-         {"key": "DIAG_AUDIO_GUARD", "value": diag_audio_guard, "source": audio_source},
-+        {
-+            "key": "AUDIO_GUARDRAILS",
-+            "value": guardrails_value,
-+            "source": guardrails_source,
-+        },
-         {
-             "key": "DIAG_CHUNK_SAMPLE_N",
-             "value": diag_chunk_sample_n,
-             "source": chunk_source,
-         },
-     ]
-     _log.info(
--        "evt=admin_settings_load flags=%s",
-+        "evt=EVT_ADMIN_SETTINGS_LOAD snapshot=%s",
-         log_snapshot,
-         extra={"component": "admin.settings"},
-     )
+     return Response(status=status, body=body, headers=headers)
  
  
- def get_client_config_snapshot() -> dict[str, Any]:
-     """Return the current runtime flags exposed to browser clients."""
+ async def handle_flow_trace(
+     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
+ ):
+     """Stream filtered redacted events for the given session identifier."""
  
-     with _ADMIN_SETTINGS_LOCK:
-         return dict(_RUNTIME_FLAGS)
- 
- 
- def set_admin_settings(
-     values: Mapping[str, Optional[Any]], *, updated_by: str | None = None
- ) -> None:
-     """Persist multiple admin settings and refresh runtime flags."""
- 
-     store = _get_admin_settings_store()
-     if store is None:
-         raise RuntimeError("Admin settings store unavailable")
-     normalized_updates: dict[str, Optional[Any]] = {}
-     for key, value in values.items():
-         normalized = _normalize_key(key)
-         store.set(normalized, value, updated_by=updated_by)
-         normalized_updates[normalized] = value
-     update_admin_settings_cache(normalized_updates)
+     if _method(scope) != "GET":
+         await _drain_body(receive)
+         return json_response(status=405, error="method_not_allowed")
+@@ -232,44 +238,60 @@ def _parse_trace_filters(query: bytes) -> tuple[Optional[set[str]], Optional[int
  
  
- reload_runtime_flags()
+ def _filter_events(
+     events_path: Path,
+     requested_types: Optional[set[str]],
+     since_ms: Optional[int],
+     limit: Optional[int],
+ ) -> bytes:
+     matched = BytesIO()
+     remaining = limit if limit is not None else None
+ 
+     with events_path.open("r", encoding="utf-8") as handle:
+         for raw_line in handle:
+             if remaining is not None and remaining <= 0:
+                 break
+ 
+             stripped = raw_line.strip()
+             if not stripped:
+                 continue
+ 
+             try:
+                 event = json.loads(stripped)
+             except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+                 raise ValueError("event payload must be valid JSON") from exc
+ 
+-            if requested_types and event.get("type") not in requested_types:
++            event_type = event.get("type")
++            if requested_types and not _type_filter_matches(event_type, requested_types):
+                 continue
+ 
+             if since_ms is not None:
+                 ts_value = event.get("ts_ms")
+                 if not isinstance(ts_value, int):
+                     continue
+                 if ts_value < since_ms:
+                     continue
+ 
+             matched.write(stripped.encode("utf-8"))
+             matched.write(b"\n")
+             if remaining is not None:
+                 remaining -= 1
+ 
+     return matched.getvalue()
  
  
- __all__ = [
-     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
-     "ASR_IDLE_CLOSE_MS",
-     "ASR_TRACE",
-+    "AUDIO_GUARDRAILS",
-     "DEEPGRAM_API_KEY",
-     "DIAG_AUDIO_GUARD",
-     "DIAG_CHUNK_SAMPLE_N",
-     "DIAG_CLIENT_HUD",
-     "bool_env_or_db",
-     "get_admin_setting_raw",
-     "get_client_config_snapshot",
-     "get_env",
-     "int_env_or_db",
-     "reload_runtime_flags",
-     "set_admin_setting_raw",
-     "set_admin_settings",
-     "update_admin_settings_cache",
- ]
-diff --git a/ops/ADMIN_SETTINGS.md b/ops/ADMIN_SETTINGS.md
-index 64e0398bfd8df97783fdf9f75c2e90eca83528cd..82053b00b0d8ca9ace9bcfa20f4a49797787c119 100644
---- a/ops/ADMIN_SETTINGS.md
-+++ b/ops/ADMIN_SETTINGS.md
-@@ -1,20 +1,21 @@
- # Admin settings bootstrap
- 
- The application expects a small set of runtime flags to exist in the `public.admin_settings` table. The canonical schema uses the columns `key` (primary key) and `value_jsonb` (JSONB payload). No legacy `value` or `settings_value` columns are required or supported.
- 
- Seed the following keys to ensure deterministic behaviour on first boot:
- 
- ```sql
- INSERT INTO public.admin_settings (key, value_jsonb, updated_by)
- VALUES
-   ('diag_client_hud', 'false', 'bootstrap'),
-+  ('audio_guardrails', '{"enabled": true}', 'bootstrap'),
-   ('diag_audio_guard', 'true', 'bootstrap'),
-   ('diag_chunk_sample_n', '10', 'bootstrap')
- ON CONFLICT (key) DO UPDATE SET
-   value_jsonb = EXCLUDED.value_jsonb,
-   updated_at = NOW(),
-   updated_by = EXCLUDED.updated_by,
-   version = admin_settings.version + 1;
- ```
- 
- Values must be valid JSON literals (`true`, `false`, numbers, strings with quotes, or structured objects such as `{"enabled": true}`). Update the keys directly in Neon to toggle features at runtime without code changes.
-diff --git a/tests/test_admin_settings_store.py b/tests/test_admin_settings_store.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..d385553759072269766aea0b1dc8ad7ae2909991
---- /dev/null
-+++ b/tests/test_admin_settings_store.py
-@@ -0,0 +1,58 @@
-+import json
-+import unittest
-+
-+from app.db.admin_settings import AdminSettingsStore
-+
-+
-+class _FakeCursor:
-+    def __init__(self, row):
-+        self._row = row
-+        self.executed = []
-+
-+    def execute(self, query, params=None):
-+        self.executed.append((query, params))
-+
-+    def fetchone(self):
-+        return self._row
-+
-+    def __enter__(self):
-+        return self
-+
-+    def __exit__(self, exc_type, exc, tb):
++def _type_filter_matches(event_type: object, requested_types: set[str]) -> bool:
++    if not isinstance(event_type, str):
 +        return False
++    if event_type in requested_types:
++        return True
++    for token in requested_types:
++        prefixes = _TYPE_PREFIX_ALIASES.get(token)
++        if not prefixes:
++            continue
++        for prefix in prefixes:
++            if event_type.startswith(prefix):
++                return True
++    return False
 +
 +
-+class _FakeConnection:
-+    def __init__(self, cursor):
-+        self._cursor = cursor
-+        self.autocommit = False
-+        self.closed = False
-+
-+    def cursor(self):
-+        return self._cursor
-+
-+    def close(self):
-+        self.closed = True
-+
-+
-+class AdminSettingsStoreTest(unittest.TestCase):
-+    def test_get_reads_value_jsonb_column(self) -> None:
-+        payload = json.dumps({"enabled": True})
-+        cursor = _FakeCursor((payload,))
-+        connection = _FakeConnection(cursor)
-+
-+        store = AdminSettingsStore(conn_factory=lambda: connection)
-+        value = store.get("audio_guardrails")
-+
-+        self.assertEqual(connection.closed, True)
-+        self.assertTrue(cursor.executed, "expected a SELECT to run")
-+        query, params = cursor.executed[0]
-+        self.assertIn("value_jsonb", query.lower())
-+        self.assertNotIn("settings_value", query.lower())
-+        self.assertNotIn(" value ", query.lower().replace("value_jsonb", ""))
-+        self.assertEqual(params, ("audio_guardrails",))
-+        self.assertEqual(value, {"enabled": True})
-+
-+
-+if __name__ == "__main__":  # pragma: no cover - unittest entrypoint
-+    unittest.main()
-diff --git a/tests/test_config_admin_settings.py b/tests/test_config_admin_settings.py
+ __all__ = ["handle_flow_trace", "handle_flow_zip", "handle_flow_sessions"]
+diff --git a/app/static/js/admin_logs.js b/app/static/js/admin_logs.js
+index e1519549d5eca92422860241aa106c4bc368e642..f9494dac09c1880b5732a1fda12a4e33e2e727e3 100644
+--- a/app/static/js/admin_logs.js
++++ b/app/static/js/admin_logs.js
+@@ -112,73 +112,87 @@
+     if (!cfg || typeof cfg !== 'object') {
+       return false;
+     }
+     if (!Object.prototype.hasOwnProperty.call(cfg, key)) {
+       return false;
+     }
+     return Boolean(cfg[key]);
+   }
+ 
+   function isHudDebugEnabled() {
+     if (chkHud instanceof HTMLInputElement) {
+       return Boolean(chkHud.checked);
+     }
+     return getGlobalConfigFlag('DIAG_CLIENT_HUD');
+   }
+ 
+   function isAudioDebugEnabled() {
+     if (chkGuard instanceof HTMLInputElement) {
+       return Boolean(chkGuard.checked);
+     }
+     return getGlobalConfigFlag('DIAG_AUDIO_GUARD');
+   }
+ 
+   function setChipGroupEnabled(wrappers, inputs, enabled) {
+     let updated = false;
+-    const shouldDisable = !enabled;
++    const shouldCheck = Boolean(enabled);
+     wrappers.forEach((wrapper) => {
+       if (!(wrapper instanceof HTMLElement)) {
+         return;
+       }
+-      const before = wrapper.classList.contains('disabled');
+-      if (before !== shouldDisable) {
++      if (!wrapper.classList.contains('disabled')) {
++        wrapper.classList.add('disabled');
+         updated = true;
+       }
+-      wrapper.classList.toggle('disabled', shouldDisable);
++      if (wrapper.getAttribute('aria-disabled') !== 'true') {
++        wrapper.setAttribute('aria-disabled', 'true');
++        updated = true;
++      }
++      const nextState = shouldCheck ? 'on' : 'off';
++      if (wrapper.dataset.diagState !== nextState) {
++        wrapper.dataset.diagState = nextState;
++      }
+     });
+     inputs.forEach((input) => {
+       if (!(input instanceof HTMLInputElement)) {
+         return;
+       }
+-      if (input.disabled !== shouldDisable) {
+-        input.disabled = shouldDisable;
++      if (!input.disabled) {
++        input.disabled = true;
+         updated = true;
+       }
+-      if (shouldDisable && input.checked) {
+-        input.checked = false;
++      if (input.checked !== shouldCheck) {
++        input.checked = shouldCheck;
+         updated = true;
+       }
++      if (shouldCheck) {
++        if (!input.dataset._everEnabled) {
++          input.dataset._everEnabled = '1';
++        }
++      } else if (input.dataset._everEnabled) {
++        delete input.dataset._everEnabled;
++      }
+     });
+     return updated;
+   }
+ 
+   function observeToggle(input) {
+     if (!(input instanceof HTMLInputElement)) {
+       return null;
+     }
+     const observer = new MutationObserver((mutations) => {
+       for (const mutation of mutations) {
+         if (mutation.type === 'attributes' && mutation.attributeName === 'checked') {
+           syncChipsWithDebug({ silent: true });
+         }
+       }
+     });
+     observer.observe(input, { attributes: true, attributeFilter: ['checked'] });
+     return observer;
+   }
+ 
+   function handleDebugToggleChange() {
+     syncChipsWithDebug();
+   }
+ 
+   function ensureToggleBindings() {
+     let changed = false;
+diff --git a/tests/test_admin_flow_api_filters.py b/tests/test_admin_flow_api_filters.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0b2e0e1a60dfd08b763b1d68aaae5f2f89dd4757
+index 0000000000000000000000000000000000000000..582f85866fe323fee94fbb800379b72898cb2e2e
 --- /dev/null
-+++ b/tests/test_config_admin_settings.py
-@@ -0,0 +1,78 @@
-+import os
-+import unittest
-+from unittest.mock import patch
++++ b/tests/test_admin_flow_api_filters.py
+@@ -0,0 +1,59 @@
++import json
 +
-+from app import config
++from app.admin import flow_api
 +
 +
-+class ConfigAdminSettingsTest(unittest.TestCase):
-+    def setUp(self) -> None:
-+        self._orig_cache = dict(config._ADMIN_SETTINGS_CACHE)
-+        self._orig_runtime = dict(config._RUNTIME_FLAGS)
-+        self._orig_store = config._ADMIN_SETTINGS_STORE
-+        self._orig_flags = {
-+            "DIAG_CLIENT_HUD": config.DIAG_CLIENT_HUD,
-+            "DIAG_AUDIO_GUARD": config.DIAG_AUDIO_GUARD,
-+            "DIAG_CHUNK_SAMPLE_N": config.DIAG_CHUNK_SAMPLE_N,
-+            "AUDIO_GUARDRAILS": dict(config.AUDIO_GUARDRAILS),
-+        }
-+        self.addCleanup(self._restore_config_state)
-+
-+        config._ADMIN_SETTINGS_CACHE.clear()
-+        config._RUNTIME_FLAGS.clear()
-+        config._ADMIN_SETTINGS_STORE = False
-+
-+    def _restore_config_state(self) -> None:
-+        config._ADMIN_SETTINGS_CACHE.clear()
-+        config._ADMIN_SETTINGS_CACHE.update(self._orig_cache)
-+        config._RUNTIME_FLAGS.clear()
-+        config._RUNTIME_FLAGS.update(self._orig_runtime)
-+        config._ADMIN_SETTINGS_STORE = self._orig_store
-+        config.DIAG_CLIENT_HUD = self._orig_flags["DIAG_CLIENT_HUD"]
-+        config.DIAG_AUDIO_GUARD = self._orig_flags["DIAG_AUDIO_GUARD"]
-+        config.DIAG_CHUNK_SAMPLE_N = self._orig_flags["DIAG_CHUNK_SAMPLE_N"]
-+        config.AUDIO_GUARDRAILS = dict(self._orig_flags["AUDIO_GUARDRAILS"])
-+        for key, value in self._orig_runtime.items():
-+            setattr(config, key, value)
-+
-+    def test_reload_runtime_flags_emits_snapshot_once(self) -> None:
-+        updates = {
-+            "diag_client_hud": True,
-+            "audio_guardrails": {"enabled": False, "mode": "strict"},
-+            "diag_audio_guard": False,
-+            "diag_chunk_sample_n": 7,
-+        }
-+
-+        with patch.object(config._log, "info") as mock_info:
-+            config.update_admin_settings_cache(updates)
-+
-+        self.assertEqual(mock_info.call_count, 1)
-+        args = mock_info.call_args.args
-+        self.assertIn("EVT_ADMIN_SETTINGS_LOAD", args[0])
-+        snapshot = args[1]
-+        self.assertTrue(any(item["key"] == "AUDIO_GUARDRAILS" for item in snapshot))
-+        guardrails_entry = next(item for item in snapshot if item["key"] == "AUDIO_GUARDRAILS")
-+        self.assertEqual(guardrails_entry["value"], {"enabled": False, "mode": "strict"})
-+        self.assertEqual(guardrails_entry["source"], "db")
-+        self.assertEqual(config.AUDIO_GUARDRAILS, {"enabled": False, "mode": "strict"})
-+        self.assertEqual(config.DIAG_CLIENT_HUD, True)
-+        self.assertEqual(config.DIAG_AUDIO_GUARD, False)
-+        self.assertEqual(config.DIAG_CHUNK_SAMPLE_N, 7)
-+
-+    def test_bool_guardrails_coerces_to_mapping(self) -> None:
-+        with patch.object(config._log, "info"):
-+            config.update_admin_settings_cache({"audio_guardrails": True})
-+        self.assertEqual(config.AUDIO_GUARDRAILS, {"enabled": True})
-+
-+    def test_env_parse_failure_falls_back_to_default(self) -> None:
-+        with patch.dict(os.environ, {"AUDIO_GUARDRAILS": "not-json"}, clear=False):
-+            with patch.object(config._log, "warning") as mock_warning, patch.object(
-+                config._log, "info"
-+            ):
-+                config.reload_runtime_flags()
-+        self.assertEqual(config.AUDIO_GUARDRAILS, {"enabled": True})
-+        mock_warning.assert_called_once()
++def _write_events(tmp_path, events):
++    path = tmp_path / "events.ndjson"
++    payload = "\n".join(json.dumps(event) for event in events) + "\n"
++    path.write_text(payload, encoding="utf-8")
++    return path
 +
 +
-+if __name__ == "__main__":  # pragma: no cover - unittest entrypoint
-+    unittest.main()
++def _decode_events(raw_bytes):
++    text = raw_bytes.decode("utf-8")
++    return [json.loads(line) for line in text.splitlines() if line.strip()]
++
++
++def test_filter_events_expands_hud_aliases(tmp_path):
++    events = [
++        {"type": "EVT_DIAG_HUD", "ts_ms": 1},
++        {"type": "EVT_HUD_STATE", "ts_ms": 2},
++        {"type": "EVT_CLIENT_MIC_OPEN", "ts_ms": 3},
++        {"type": "EVT_OTHER", "ts_ms": 4},
++    ]
++    path = _write_events(tmp_path, events)
++
++    raw = flow_api._filter_events(path, {"EVT_DIAG_HUD"}, since_ms=None, limit=None)
++    filtered = _decode_events(raw)
++
++    assert [event["type"] for event in filtered] == [
++        "EVT_DIAG_HUD",
++        "EVT_HUD_STATE",
++        "EVT_CLIENT_MIC_OPEN",
++    ]
++
++
++def test_filter_events_expands_guard_aliases(tmp_path):
++    events = [
++        {"type": "EVT_DIAG_FIRST_AUDIO_FRAME", "ts_ms": 5},
++        {"type": "EVT_AG_MONITOR", "ts_ms": 6},
++        {"type": "EVT_AG_ALERT", "ts_ms": 7},
++        {"type": "EVT_LOG", "ts_ms": 8},
++    ]
++    path = _write_events(tmp_path, events)
++
++    raw = flow_api._filter_events(
++        path,
++        {"EVT_DIAG_FIRST_AUDIO_FRAME"},
++        since_ms=None,
++        limit=None,
++    )
++    filtered = _decode_events(raw)
++
++    assert [event["type"] for event in filtered] == [
++        "EVT_DIAG_FIRST_AUDIO_FRAME",
++        "EVT_AG_MONITOR",
++        "EVT_AG_ALERT",
++    ]
++

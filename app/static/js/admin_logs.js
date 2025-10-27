@@ -134,28 +134,42 @@
 
   function setChipGroupEnabled(wrappers, inputs, enabled) {
     let updated = false;
-    const shouldDisable = !enabled;
+    const shouldCheck = Boolean(enabled);
     wrappers.forEach((wrapper) => {
       if (!(wrapper instanceof HTMLElement)) {
         return;
       }
-      const before = wrapper.classList.contains('disabled');
-      if (before !== shouldDisable) {
+      if (!wrapper.classList.contains('disabled')) {
+        wrapper.classList.add('disabled');
         updated = true;
       }
-      wrapper.classList.toggle('disabled', shouldDisable);
+      if (wrapper.getAttribute('aria-disabled') !== 'true') {
+        wrapper.setAttribute('aria-disabled', 'true');
+        updated = true;
+      }
+      const nextState = shouldCheck ? 'on' : 'off';
+      if (wrapper.dataset.diagState !== nextState) {
+        wrapper.dataset.diagState = nextState;
+      }
     });
     inputs.forEach((input) => {
       if (!(input instanceof HTMLInputElement)) {
         return;
       }
-      if (input.disabled !== shouldDisable) {
-        input.disabled = shouldDisable;
+      if (!input.disabled) {
+        input.disabled = true;
         updated = true;
       }
-      if (shouldDisable && input.checked) {
-        input.checked = false;
+      if (input.checked !== shouldCheck) {
+        input.checked = shouldCheck;
         updated = true;
+      }
+      if (shouldCheck) {
+        if (!input.dataset._everEnabled) {
+          input.dataset._everEnabled = '1';
+        }
+      } else if (input.dataset._everEnabled) {
+        delete input.dataset._everEnabled;
       }
     });
     return updated;
