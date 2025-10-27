@@ -331,14 +331,13 @@ class ASRRuntime:
                 return
 
             state.stream_open = True
-            bus.publish({"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram", "stream_id": stream_id})
+            open_event = {"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram"}
+            if stream_id:
+                open_event["stream_id"] = stream_id
+            bus.publish(open_event)
             _log.info(
                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
 
-                        try:
-                            bus.publish({"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram"})
-                        except Exception:
-                            pass
                 sid,
                 _CONTENT_TYPE,
                 qs or "",
