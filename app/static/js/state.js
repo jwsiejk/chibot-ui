@@ -8,7 +8,8 @@
     lastPingAt: null,
     heartbeatTimerId: null,
     websocket: null,
-    infoFrame: null
+    infoFrame: null,
+    serverBanner: null
   };
 
   let state = { ...initialState };

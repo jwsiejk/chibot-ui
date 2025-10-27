@@ -328,7 +328,7 @@
     } catch (err) {
       console.error("Auto-resume open failed", err);
       autoResumeAttemptToken = null;
-      updateState({ connectionState: "disconnected" });
+      updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
       return false;
     }
   }
@@ -641,6 +641,51 @@
     stopInputCapture({ reason: "input.stop" });
   }
 
+  function sanitizeServerBannerFrame(frame) {
+    const safe = { type: "server.banner" };
+    if (!frame || typeof frame !== "object") {
+      return safe;
+    }
+
+    const stringKeys = [
+      "build_id",
+      "host",
+      "cwd",
+      "python",
+      "platform",
+      "ws_path",
+      "subprotocol_selected",
+      "adapter_file",
+      "engine_file",
+      "asr_file"
+    ];
+    for (const key of stringKeys) {
+      if (typeof frame[key] === "string" && frame[key]) {
+        safe[key] = frame[key];
+      }
+    }
+
+    if (Number.isFinite(frame.pid)) {
+      safe.pid = frame.pid;
+    }
+
+    if (Array.isArray(frame.subprotocols_offered)) {
+      const subs = frame.subprotocols_offered.filter((value) => typeof value === "string" && value);
+      if (subs.length) {
+        safe.subprotocols_offered = subs;
+      }
+    }
+
+    return safe;
+  }
+
+  function handleServerBannerFrame(frame) {
+    const sanitized = sanitizeServerBannerFrame(frame);
+    updateState({ serverBanner: sanitized });
+    console.log("WS server banner", sanitized);
+    dispatchFrame(sanitized);
+  }
+
   function sanitizePolicyFrame(frame) {
     const safe = { type: "policy.interaction" };
     if (!frame || typeof frame !== "object") {
@@ -761,6 +806,11 @@
     if (frame.type === "policy.interaction") {
       const sanitized = sanitizePolicyFrame(frame);
       dispatchFrame(sanitized);
+      return;
+    }
+
+    if (frame.type === "server.banner") {
+      handleServerBannerFrame(frame);
       return;
     }
 
@@ -894,7 +944,7 @@
           resumed = attemptAutoResume();
         }
         if (!resumed) {
-          updateState({ connectionState: "disconnected" });
+          updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
         }
         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
       }
@@ -987,7 +1037,7 @@
     if (!isResuming && !hasAccessToken) {
       console.error("ws_open_missing_token_query", { originalUrl, finalUrl: wsUrl });
       showConnectionToast("Session token missing. Please click Start again.");
-      updateState({ connectionState: "disconnected" });
+      updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
       return;
     }
 
@@ -1029,7 +1079,9 @@
       websocket: ws,
       latencyMs: null,
       lastPingAt: null,
-      resumeError: null
+      resumeError: null,
+      infoFrame: null,
+      serverBanner: null
     });
     attachSocket(ws);
     return ws;
@@ -1037,7 +1089,7 @@
 
   function close(reason = DEFAULT_CLOSE_REASON) {
     if (!socket) {
-      updateState({ connectionState: "disconnected" });
+      updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
       return;
     }
     const ws = socket;
@@ -1053,7 +1105,7 @@
       }
     }
     autoResumeAttemptToken = null;
-    updateState({ connectionState: "disconnected", websocket: null });
+    updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
   }
 
   function send(frame) {

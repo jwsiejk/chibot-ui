@@ -1,143 +1,429 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index e1798a05a74b87e09b0c78f8b9596b29517d0875..aaf0bd2cbeaef20e0f77cb68714b5bbbfb6edcb3 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1,34 +1,33 @@
- """chat.v2 WebSocket adapter for AskChip."""
- from __future__ import annotations
+diff --git a/app/static/js/state.js b/app/static/js/state.js
+index f4b9590f73d24bc1222a53097c6545441825b8ea..6bb44353707666d7b380c8aa46a1a03f10a5ba3f 100644
+--- a/app/static/js/state.js
++++ b/app/static/js/state.js
+@@ -1,36 +1,37 @@
+ (() => {
+   const initialState = {
+     connectionState: "disconnected",
+     sid: null,
+     resume: null,
+     resumeError: null,
+     latencyMs: null,
+     lastPingAt: null,
+     heartbeatTimerId: null,
+     websocket: null,
+-    infoFrame: null
++    infoFrame: null,
++    serverBanner: null
+   };
  
- import asyncio
- import contextlib
--import inspect
- import logging
--import os
- import time
-+import sys, platform, socket, os, inspect
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
+   let state = { ...initialState };
+   const listeners = new Set();
  
- import json
- from urllib.parse import parse_qs
+   function snapshot() {
+     return { ...state };
+   }
  
- from app import config
- from app.logging_setup import current_sid
- from app.security.jwt_utils import verify_ws_token
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ASR_OPEN,
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_CLIENT_MIC_OPEN,
-     EVT_HUD_STATE,
-     EVT_TTS_END,
-     EVT_TTS_MASK,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_frame
-@@ -379,50 +378,102 @@ class ChatV2Adapter:
-             _log.warning(
-                 "evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs
-             )
-             await send({"type": "websocket.close", "code": 4401, "reason": reason})
-             return
+   function notify() {
+     const current = snapshot();
+     listeners.forEach((listener) => {
+       try {
+         listener(current);
+       } catch (err) {
+         console.error("AppState subscriber error", err);
+       }
+     });
+   }
  
-         sid = claims.get("sid")
-         sub = claims.get("sub")
-         aud = claims.get("aud")
-         if not sid or not sub or aud != CHAT_V2_SUBPROTOCOL:
-             reason = "jwt_claims_invalid"
-             _log.warning(
-                 "evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs
-             )
-             await send({"type": "websocket.close", "code": 4401, "reason": reason})
-             return
+   function setState(patch) {
+     if (!patch || typeof patch !== "object") return;
+     const sanitized = { ...patch };
+     if ("resume" in sanitized) {
+       delete sanitized.resume;
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 605dbd4ef02edcd9f15348f517b50d3f73cd0fba..4e1a1c87ae8de5ccdb7682638a59a307816ccc74 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -306,51 +306,51 @@
+     updateState({ heartbeatTimerId });
+   }
  
-         principal: Dict[str, Any] = dict(claims)
-         is_admin = bool(principal.get("is_admin"))
+   function attemptAutoResume() {
+     const resume = getResumeState();
+     if (!resume) {
+       return false;
+     }
+     if (Date.now() >= resume.expiresAt) {
+       clearResumeState();
+       updateState({ resumeError: "invalid" });
+       return false;
+     }
+     const state = AppState.getState();
+     if (autoResumeAttemptToken === resume.token) {
+       return false;
+     }
+     autoResumeAttemptToken = resume.token;
+     updateState({ connectionState: "resuming", resumeError: null });
+     try {
+       open({ resumeToken: resume.token, skipRateLimitCancel: true });
+       return true;
+     } catch (err) {
+       console.error("Auto-resume open failed", err);
+       autoResumeAttemptToken = null;
+-      updateState({ connectionState: "disconnected" });
++      updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+       return false;
+     }
+   }
  
-         _log.info("evt=ws_accept_token_ok sid=%s", sid)
+   function dispatchFrame(frame) {
+     if (!frame || typeof frame.type !== "string") return;
+     const type = frame.type;
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail: frame }));
+       if (type.includes(".")) {
+         const baseType = type.split(".")[0];
+         window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
+       }
+     } catch (err) {
+       console.warn("WSClient dispatch error", err);
+     }
+   }
  
-         _log.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
-         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+   function emitHudState(state) {
+     if (typeof window === "undefined" || !state) {
+       return;
+     }
+     try {
+       window.dispatchEvent(new CustomEvent(CLIENT_HUD_STATE_EVENT, {
+         detail: {
+@@ -619,50 +619,95 @@
+       window.__mediaRecorder = recorder;
+     }
+     activeInputReqId = reqId;
+     updateHudListening(true);
+     try {
+       recorder.start(timesliceMs);
+       emitClientMicOpenIfNeeded();
+     } catch (err) {
+       console.error("MediaRecorder start failed", err);
+       stopInputCapture();
+     }
+   }
  
-+        # ---- BEGIN RUNTIME BANNER ----
-+        try:
-+            adapter_file = __file__
-+            engine_file = None
-+            asr_file = None
-+            if self.engine is not None:
-+                eng_mod = sys.modules.get(self.engine.__class__.__module__)
-+                engine_file = getattr(eng_mod, "__file__", None)
-+            if getattr(self, "asr_runtime", None) is not None:
-+                asr_mod = sys.modules.get(self.asr_runtime.__class__.__module__)
-+                asr_file = getattr(asr_mod, "__file__", None)
+   function handleInputStartFrame(frame) {
+     Promise.resolve()
+       .then(() => startInputCapture(frame))
+       .catch((err) => {
+         console.error("input.start handler error", err);
+       });
+   }
+ 
+   function handleInputStopFrame() {
+     stopInputCapture({ reason: "input.stop" });
+   }
+ 
++  function sanitizeServerBannerFrame(frame) {
++    const safe = { type: "server.banner" };
++    if (!frame || typeof frame !== "object") {
++      return safe;
++    }
 +
-+            build_id = os.getenv("BUILD_ID", "") or os.getenv("SOURCE_VERSION", "") or "unknown"
-+            host = socket.gethostname()
-+            pid = os.getpid()
-+            cwd = os.getcwd()
++    const stringKeys = [
++      "build_id",
++      "host",
++      "cwd",
++      "python",
++      "platform",
++      "ws_path",
++      "subprotocol_selected",
++      "adapter_file",
++      "engine_file",
++      "asr_file"
++    ];
++    for (const key of stringKeys) {
++      if (typeof frame[key] === "string" && frame[key]) {
++        safe[key] = frame[key];
++      }
++    }
 +
-+            offered = scope.get("subprotocols", [])
-+            selected = "chat.v2"
++    if (Number.isFinite(frame.pid)) {
++      safe.pid = frame.pid;
++    }
 +
-+            banner = {
-+                "type": "server.banner",
-+                "build_id": build_id,
-+                "host": host,
-+                "pid": pid,
-+                "cwd": cwd,
-+                "python": sys.version.split()[0],
-+                "platform": platform.platform(),
-+                "ws_path": scope.get("path"),
-+                "subprotocols_offered": offered,
-+                "subprotocol_selected": selected,
-+                "adapter_file": adapter_file,
-+                "engine_file": engine_file,
-+                "asr_file": asr_file,
-+            }
++    if (Array.isArray(frame.subprotocols_offered)) {
++      const subs = frame.subprotocols_offered.filter((value) => typeof value === "string" && value);
++      if (subs.length) {
++        safe.subprotocols_offered = subs;
++      }
++    }
 +
-+            await send({"type": "websocket.send", "text": json.dumps(banner, separators=(",", ":"))})
-+            _log.info(
-+                "evt=server_banner build_id=%s host=%s pid=%d path=%s subproto=%s adapter=%s engine=%s asr=%s",
-+                build_id,
-+                host,
-+                pid,
-+                scope.get("path"),
-+                selected,
-+                adapter_file,
-+                engine_file,
-+                asr_file,
-+            )
-+        except Exception:
-+            _log.exception("evt=server_banner_emit_failed")
-+        # ---- END RUNTIME BANNER ----
++    return safe;
++  }
 +
-         now_ms = int(time.time() * 1000)
-         info_frame: Dict[str, Any] = {
-             "type": "info",
-             "protocol": CHAT_V2_SUBPROTOCOL,
-             "sid": sid,
-             "ts_ms": now_ms,
-             "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
++  function handleServerBannerFrame(frame) {
++    const sanitized = sanitizeServerBannerFrame(frame);
++    updateState({ serverBanner: sanitized });
++    console.log("WS server banner", sanitized);
++    dispatchFrame(sanitized);
++  }
++
+   function sanitizePolicyFrame(frame) {
+     const safe = { type: "policy.interaction" };
+     if (!frame || typeof frame !== "object") {
+       safe.policy = {};
+       return safe;
+     }
+     Object.keys(frame).forEach((key) => {
+       if (key === "policy") return;
+       safe[key] = frame[key];
+     });
+     const policy = {};
+     const source = frame.policy;
+     if (source && typeof source === "object") {
+       if (typeof source.mode === "string") {
+         policy.mode = source.mode;
+       }
+       if (typeof source.allow_auto_vad === "boolean") {
+         policy.allow_auto_vad = source.allow_auto_vad;
+       }
+       if (typeof source.barge_in_enabled === "boolean") {
+         policy.barge_in_enabled = source.barge_in_enabled;
+       }
+       if (typeof source.ws_auth_mode === "string" && source.ws_auth_mode.trim()) {
+         policy.ws_auth_mode = source.ws_auth_mode.trim();
+       }
+@@ -742,50 +787,55 @@
+     }
+     if (isResumeInvalid) {
+       close("resume_invalid");
+     }
+   }
+ 
+   function handleMessageFrame(frame) {
+     if (frame.type === "keepalive") {
+       // Some transports may emit a keepalive frame before the info frame has
+       // been sent. Treat it as a no-op and continue waiting for the info
+       // frame so we do not close the connection prematurely.
+       return;
+     }
+ 
+     if (frame.type === "ping") {
+       sendJson({ type: "pong", t: Date.now() });
+       return;
+     }
+ 
+     if (frame.type === "policy.interaction") {
+       const sanitized = sanitizePolicyFrame(frame);
+       dispatchFrame(sanitized);
+       return;
+     }
+ 
++    if (frame.type === "server.banner") {
++      handleServerBannerFrame(frame);
++      return;
++    }
++
+     if (expectInfoFrame) {
+       if (frame.type === "chat.history") {
+         handleChatHistoryFrame(frame);
+       } else if (frame.type === "error") {
+         handleErrorFrame(frame);
+         return;
+       } else if (frame.type !== "info") {
+         console.error("Expected info frame first, received", frame.type);
+         close("bad_info_sequence");
+         return;
+       }
+       if (frame.type === "info") {
+         handleInfoFrame(frame);
+       }
+     } else if (frame.type === "info") {
+       handleInfoFrame(frame);
+     } else if (frame.type === "pong") {
+       handlePongFrame();
+     } else if (frame.type === "error") {
+       handleErrorFrame(frame);
+     } else if (frame.type === "tts.start") {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+         audioPlayer.handleTtsStart(frame);
+       }
+@@ -872,51 +922,51 @@
+   function attachSocket(ws) {
+     ws.__intentionalClose = false;
+     const handlers = {
+       open: () => {
+         updateState({ websocket: ws });
+       },
+       message: parseFrame,
+       error: (event) => {
+         console.error("WebSocket error", event);
+         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
+       },
+       close: (event) => {
+         const expected = ws.__intentionalClose === true;
+         if (socket === ws) {
+           socket = null;
+           expectInfoFrame = true;
+           clearInfoWatchdog();
          }
-         info_frame["meta"] = {"sid": sid}
-         policy_snapshot = self._policy_snapshot()
-         if policy_snapshot:
-             info_frame["policy"] = policy_snapshot
-         await self._send_json(send, sid, info_frame)
-         _log.info("evt=ws_info_sent sid=%s", sid)
+         clearHeartbeat();
+         updateState({ websocket: null });
+         let resumed = false;
+         if (!expected) {
+           resumed = attemptAutoResume();
+         }
+         if (!resumed) {
+-          updateState({ connectionState: "disconnected" });
++          updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+         }
+         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
+       }
+     };
+     ws.addEventListener("open", handlers.open);
+     ws.addEventListener("message", handlers.message);
+     ws.addEventListener("error", handlers.error);
+     ws.addEventListener("close", handlers.close);
+     ws.__handlers = handlers;
+   }
  
-         ctx = AdapterContext(
-             sid=sid,
-             headers=dict(headers),
-             principal=principal,
-             user_id=sub,
-             is_admin=is_admin,
-         )
+   function detachSocket(ws) {
+     const handlers = ws && ws.__handlers;
+     if (!handlers) return;
+     ws.removeEventListener("open", handlers.open);
+     ws.removeEventListener("message", handlers.message);
+     ws.removeEventListener("error", handlers.error);
+     ws.removeEventListener("close", handlers.close);
+     delete ws.__handlers;
+     delete ws.__intentionalClose;
+   }
  
-         token = current_sid.set(ctx.sid)
-         try:
+   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
+     if (!ws) return;
+     detachSocket(ws);
+@@ -965,117 +1015,119 @@
+     if (socket) {
+       cleanupSocket(socket, "superseded");
+     }
+     expectInfoFrame = true;
+     startInfoWatchdog();
+     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+         window.WSErrorUI.cancelRateLimitCountdown("manual");
+       } catch (err) {
+         console.warn("Failed to cancel rate limit countdown", err);
+       }
+     }
+     if (!skipRateLimitCancel) {
+       clearRateLimitRetryTimer();
+       rateLimitRetryCount = 0;
+     }
+ 
+     const originalUrl = urlOverride || computeUrl(resumeTokenValue);
+     const wsUrl = typeof originalUrl === "string" ? makeWsUrl(originalUrl) : originalUrl;
+     // Require a token unless we are resuming with a server-issued resume token
+     const isResuming = Boolean(resumeTokenValue);
+     const hasAccessToken = (typeof wsUrl === "string") && /[?&]access_token=/.test(wsUrl);
+     if (!isResuming && !hasAccessToken) {
+       console.error("ws_open_missing_token_query", { originalUrl, finalUrl: wsUrl });
+       showConnectionToast("Session token missing. Please click Start again.");
+-      updateState({ connectionState: "disconnected" });
++      updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+       return;
+     }
+ 
+     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
+     console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
+     const logPayload = Array.isArray(wsProtocols)
+       ? { url: wsUrl, protocols: wsProtocols }
+       : { url: wsUrl, subprotocol: wsProtocols };
+     console.log("WS opening", logPayload);
+ 
+     const tokenInfo = trackTokenFromUrl(wsUrl);
+     const ws = transportFactory(wsUrl, wsProtocols);
+     ws.__accessTokenInfo = tokenInfo;
+     ws.__handshakeToastShown = false;
+ 
+     ws.onopen = () => {
+       // Lightweight breadcrumb; keep as console.log
+       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
+     };
+ 
+     ws.onerror = (e) => {
+       console.error("WebSocket error", e, { readyState: ws.readyState });
+       maybeShowHandshakeToast(ws, null);
+     };
+ 
+     ws.onclose = (e) => {
+       console.error("WebSocket closed", {
+         code: e.code,
+         reason: e.reason,
+         wasClean: e.wasClean,
+         readyState: ws.readyState,
+       });
+       maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
+     };
+ 
+     socket = ws;
+     updateState({
+       connectionState: resumeTokenValue ? "resuming" : "connecting",
+       websocket: ws,
+       latencyMs: null,
+       lastPingAt: null,
+-      resumeError: null
++      resumeError: null,
++      infoFrame: null,
++      serverBanner: null
+     });
+     attachSocket(ws);
+     return ws;
+   }
+ 
+   function close(reason = DEFAULT_CLOSE_REASON) {
+     if (!socket) {
+-      updateState({ connectionState: "disconnected" });
++      updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+       return;
+     }
+     const ws = socket;
+     cleanupSocket(ws, reason);
+     clearHeartbeat();
+     clearRateLimitRetryTimer();
+     rateLimitRetryCount = 0;
+     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+       try {
+         window.WSErrorUI.cancelRateLimitCountdown(reason);
+       } catch (err) {
+         console.warn("Failed to cancel countdown on close", err);
+       }
+     }
+     autoResumeAttemptToken = null;
+-    updateState({ connectionState: "disconnected", websocket: null });
++    updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
+   }
+ 
+   function send(frame) {
+     if (!socket || socket.readyState !== WebSocket.OPEN) {
+       console.warn("WSClient.send called without an open socket");
+       return;
+     }
+     const payload = typeof frame === "string" ? frame : JSON.stringify(frame);
+     sendRaw(payload);
+   }
+ 
+   function getBufferedAmount() {
+     if (!socket) return 0;
+     return socket.bufferedAmount || 0;
+   }
+ 
+   const debug = {
+     simulateIncomingFrame(frame) {
+       handleMessageFrame(frame);
+     },
+     recordPing(ts) {
+       lastPingAt = ts;
+       updateState({ lastPingAt: ts });
+     },
+     setTransportFactory(factory) {
