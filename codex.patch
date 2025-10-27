@@ -1,421 +1,463 @@
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index 39c1c8b807cb10e37631fe343448d37848b87c1c..9db2dfb7cf64672e1153482eaceb50a9e1a4e4c6 100644
---- a/app/static/js/audio_recorder.js
-+++ b/app/static/js/audio_recorder.js
-@@ -68,111 +68,125 @@
-     if (!channels || !channels.length) {
-       return new Float32Array(0);
-     }
-     if (channels.length === 1) {
-       return new Float32Array(channels[0]);
-     }
-     const length = channels[0].length;
-     const mono = new Float32Array(length);
-     for (let i = 0; i < length; i += 1) {
-       let sum = 0;
-       for (let c = 0; c < channels.length; c += 1) {
-         sum += channels[c][i] || 0;
-       }
-       mono[i] = sum / channels.length;
-     }
-     return mono;
-   }
+diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
+index d7937f10adebf4b69c741779cda394a803b34107..3e2cdc4061ebd58daeec554cf18b0ac1e7351639 100644
+--- a/app/voice_v2/__init__.py
++++ b/app/voice_v2/__init__.py
+@@ -1,51 +1,55 @@
+ """Event constants for AskChip voice v2 telemetry."""
  
-   function computePayloadSize(payload) {
-     if (payload instanceof Blob) return payload.size;
-     if (payload && typeof payload.byteLength === "number") return payload.byteLength;
-     if (payload && typeof payload.length === "number") return payload.length;
-     return 0;
-   }
+ EVT_WS_OPEN = "EVT_WS_OPEN"
+ EVT_WS_CLOSE = "EVT_WS_CLOSE"
+ EVT_WS_JSON_RECV = "EVT_WS_JSON_RECV"
+ EVT_WS_JSON_SEND = "EVT_WS_JSON_SEND"
+ EVT_WS_AUDIO_RECV = "EVT_WS_AUDIO_RECV"
+ EVT_WS_AUDIO_SEND = "EVT_WS_AUDIO_SEND"
+ EVT_CHAT_USER = "EVT_CHAT_USER"
  
-+  const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
-+  const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
-+
-+  function emitCustomEvent(type, detail) {
-+    try {
-+      window.dispatchEvent(new CustomEvent(type, { detail }));
-+    } catch (err) {
-+      console.warn("AudioRecorder event dispatch failed", type, err);
-+    }
-+  }
-+
-   const recorder = {
-     _stream: null,
-     _startPromise: null,
-     _mediaRecorder: null,
-     _audioCtx: null,
-     _sourceNode: null,
-     _processorNode: null,
-     _muteNode: null,
-     _downsampler: null,
-     _descriptor: null,
-     _pendingDescriptor: null,
-     _vendor: null,
-     _asrReady: false,
-     _mask: { active: false, holdMs: 0, timerId: null },
-+    _listening: false,
-+    _micOpenEmitted: false,
-     _bargeInEnabled: true,
+ EVT_TTS_START = "EVT_TTS_START"
+ EVT_TTS_END = "EVT_TTS_END"
  
-     async start() {
-       if (this._stream) return this._stream;
-       if (this._startPromise) return this._startPromise;
-       try {
-         this._startPromise = navigator.mediaDevices.getUserMedia({
-           audio: {
-             channelCount: 1,
-             echoCancellation: true,
-             noiseSuppression: true,
-             autoGainControl: false
-           }
-         });
-         const stream = await this._startPromise;
-         this._startPromise = null;
-         this._stream = stream;
-         if (this._pendingDescriptor) {
-           this._activateDescriptor(this._pendingDescriptor);
-           this._pendingDescriptor = null;
+ EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
+ EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
+ 
+ EVT_MIC_GATE = "EVT_MIC_GATE"
+ EVT_BARGE_IN = "EVT_BARGE_IN"
+ 
+ EVT_ASR_READY = "EVT_ASR_READY"
+ EVT_ASR_OPEN = "EVT_ASR_OPEN"
+ EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
+ EVT_ASR_FINAL = "EVT_ASR_FINAL"
+ EVT_NLU = "EVT_NLU"
+ EVT_NLG = "EVT_NLG"
++EVT_LLM_RESPONSE_START = "EVT_LLM_RESPONSE_START"
++EVT_LLM_RESPONSE_END = "EVT_LLM_RESPONSE_END"
+ EVT_DIALOG_PLAN = "EVT_DIALOG_PLAN"
+ EVT_HUD_STATE = "EVT_HUD_STATE"
+ 
+ __all__ = [
+     "EVT_WS_OPEN",
+     "EVT_WS_CLOSE",
+     "EVT_WS_JSON_RECV",
+     "EVT_WS_JSON_SEND",
+     "EVT_WS_AUDIO_RECV",
+     "EVT_WS_AUDIO_SEND",
+     "EVT_CHAT_USER",
+     "EVT_TTS_START",
+     "EVT_TTS_END",
+     "EVT_POLICY_APPLIED",
+     "EVT_ACWR_RECOMPUTE",
+     "EVT_MIC_GATE",
+     "EVT_BARGE_IN",
+     "EVT_ASR_READY",
+     "EVT_ASR_OPEN",
+     "EVT_ASR_PARTIAL",
+     "EVT_ASR_FINAL",
+     "EVT_NLU",
+     "EVT_NLG",
++    "EVT_LLM_RESPONSE_START",
++    "EVT_LLM_RESPONSE_END",
+     "EVT_DIALOG_PLAN",
+     "EVT_HUD_STATE",
+ ]
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index 1969db9f0a0812a23654d9d375c3d05e078b8b91..b762b2a3867319a27d54c400ea34dff81c209e3e 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -69,52 +69,52 @@ RESPONDING = "Responding"
+ CONFIRMING_BARGE = "ConfirmingBarge"
+ 
+ _PCM_CODEC = "pcm_s16le"
+ _PCM_RATE_HZ = 16000
+ _PCM_CHANNELS = 1
+ _PCM_DESCRIPTOR = {
+     "codec": _PCM_CODEC,
+     "rate_hz": _PCM_RATE_HZ,
+     "channels": _PCM_CHANNELS,
+ }
+ 
+ _DEFAULT_VOICE_ID = "alloy-en-US-001"
+ _DEFAULT_LOCALE = "en-US"
+ 
+ _INFO_SLO = {
+     "first_partial_ms": {"target": 450, "p95": 750},
+     "final_ms": {"target": 2000, "p95": 3000},
+     "tts_start_ms": {"target": 350, "p95": 600},
+ }
+ _PCM_SAMPLE_BYTES = 2 * _PCM_CHANNELS
+ 
+ EVT_TURN_STATE = "EVT_TURN_STATE"
+ EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
+ EVT_TURN_END = "EVT_TURN_END"
+ EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
+-EVT_LLM_REQUEST = "EVT_LLM_REQUEST"
+-EVT_LLM_COMPLETE = "EVT_LLM_COMPLETE"
++EVT_LLM_RESPONSE_START = "EVT_LLM_RESPONSE_START"
++EVT_LLM_RESPONSE_END = "EVT_LLM_RESPONSE_END"
+ 
+ 
+ @dataclass
+ class _Envelope:
+     """Normalized telemetry envelope returned by the engine hooks."""
+ 
+     type: str
+     sid: str
+     payload: Dict[str, Any]
+ 
+     def to_dict(self) -> Dict[str, Any]:
+         data = {"type": self.type, "sid": self.sid}
+         data.update(self.payload)
+         if "meta" in data and isinstance(data["meta"], Mapping):
+             data["meta"] = dict(data["meta"])
+         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
+             data["ts_ms"] = _now_ms()
+         data.setdefault("who", "server")
+         data.setdefault("source", "voice_engine")
+         data.setdefault("level", "debug")
+         return data
+ 
+ 
+ @dataclass
+ class _TurnSession:
+@@ -731,80 +731,84 @@ class EngineV2:
+         if greet_mode == "persona":
+             provider = getattr(self._llm, "_provider", None)
+             model_name = getattr(provider, "default_model", None)
+             if not isinstance(model_name, str) or not model_name.strip():
+                 model_name = "gpt-4o-mini"
+             temperature = 0.4
+             max_tokens = 30
+             msg_counts = {"system": 1, "developer": 1, "user": 1}
+ 
+             greet_actions = assistant_turn_actions(self.policy_snapshot)
+             policy_payload = {"rule": "session_open.greet", "actions": greet_actions}
+             policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
+             self._publish(policy_event)
+ 
+             _log.debug(
+                 "evt=greet_llm_request sid=%s purpose=%s model=%s temp=%s max_tokens=%s msg_counts=%s",
+                 sid,
+                 "greet",
+                 model_name,
+                 temperature,
+                 max_tokens,
+                 msg_counts,
+             )
+ 
+             request_payload = {
++                "req_id": req_id,
+                 "purpose": "greet",
+                 "model": model_name,
+                 "temp": temperature,
+                 "max_tokens": max_tokens,
+                 "msg_counts": msg_counts,
+             }
+-            request_event = self._envelope(sid, EVT_LLM_REQUEST, request_payload)
++            request_event = self._envelope(
++                sid, EVT_LLM_RESPONSE_START, request_payload
++            )
+             self._publish(request_event)
+ 
+             greeting_candidate: str | None = None
+             start_time = time.perf_counter()
+             try:
+                 greeting_candidate = self._llm.generate_greeting(
+                     sid,
+                     turn_id,
+                     req_id,
+                     plan_payload,
+                 )
+             except Exception:
+                 _log.exception("evt=greet_llm_failed sid=%s", sid)
+                 greeting_candidate = None
+             else:
+                 latency_ms = max(int((time.perf_counter() - start_time) * 1000), 0)
+                 complete_payload = {
++                    "req_id": req_id,
+                     "purpose": "greet",
+                     "latency_ms": latency_ms,
+                     "model": model_name,
+                 }
+                 complete_event = self._envelope(
+-                    sid, EVT_LLM_COMPLETE, complete_payload
++                    sid, EVT_LLM_RESPONSE_END, complete_payload
+                 )
+                 self._publish(complete_event)
+                 _log.debug(
+                     "evt=greet_llm_complete sid=%s purpose=%s latency_ms=%s model=%s",
+                     sid,
+                     "greet",
+                     latency_ms,
+                     model_name,
+                 )
+             greeting_text = greeting_candidate if isinstance(greeting_candidate, str) else ""
+         else:
+             greeting_text = ""
+ 
+         if not greeting_text.strip():
+             greeting_text = fallback_copy.strip()
+ 
+         nlg_payload: Dict[str, Any] = {
+             "req_id": req_id,
+             "text": greeting_text,
+             "meta": {"reason": "greet"},
          }
-         return stream;
-       } catch (err) {
-         this._startPromise = null;
-         console.error("AudioRecorder start failed", err);
-         throw err;
-       }
-     },
+         if post_hold_ms is not None:
+             nlg_payload.setdefault("meta", {})["post_hold_ms"] = post_hold_ms
+         nlg_event = self._envelope(sid, EVT_NLG, nlg_payload)
+         self._publish(nlg_event)
+@@ -1354,96 +1358,104 @@ class EngineV2:
  
-     stop() {
-       this._teardownEncoder();
-       if (this._stream) {
-         const tracks = this._stream.getTracks();
-         tracks.forEach((track) => {
-           try {
-             track.stop();
-           } catch (err) {
-             console.warn("Failed to stop track", err);
-           }
-         });
-         this._stream = null;
-       }
-       this._descriptor = null;
-       this._pendingDescriptor = null;
-       this._vendor = null;
-       this._asrReady = false;
-       this._setMask(false);
-+      this._setListening(false, { resetMicEvent: true });
-     },
+         if decision.get("action") != "respond" or session.nlg_emitted:
+             return
  
-     _teardownEncoder() {
-       this._asrReady = false;
-       if (this._mediaRecorder) {
-         try {
-           if (this._mediaRecorder.state !== "inactive") {
-             this._mediaRecorder.stop();
-           }
-         } catch (err) {
-           console.warn("MediaRecorder stop error", err);
-         }
-         this._mediaRecorder.removeEventListener("dataavailable", this._handleWebmData);
-         this._mediaRecorder.removeEventListener("error", this._handleRecorderError);
-         this._mediaRecorder = null;
-         this._handleWebmData = null;
-         this._handleRecorderError = null;
-       }
-       if (this._processorNode) {
-         try {
-           this._processorNode.disconnect();
-         } catch (err) {
-           console.warn("Processor disconnect error", err);
-         }
-         this._processorNode.onaudioprocess = null;
-@@ -184,64 +198,110 @@
-         } catch (err) {
-           console.warn("Mute node disconnect error", err);
-         }
-         this._muteNode = null;
-       }
-       if (this._sourceNode) {
-         try {
-           this._sourceNode.disconnect();
-         } catch (err) {
-           console.warn("Source disconnect error", err);
-         }
-         this._sourceNode = null;
-       }
-       if (this._audioCtx) {
-         try {
-           this._audioCtx.close();
-         } catch (err) {
-           console.warn("AudioContext close error", err);
-         }
-         this._audioCtx = null;
-       }
-       if (this._downsampler) {
-         this._downsampler.reset();
-         this._downsampler = null;
-       }
-+      this._setListening(false, { resetMicEvent: true });
-     },
+         intent = nlu_payload.get("intent")
+         if not isinstance(intent, str) or not intent:
+             intent = "chitchat.fallback"
  
-     _setMask(active) {
-       if (this._mask.active === active) return;
-       if (!active && this._mask.timerId) {
-         clearTimeout(this._mask.timerId);
-         this._mask.timerId = null;
-       }
-       this._mask.active = active;
-       if (active && this._downsampler) {
-         this._downsampler.reset();
-       }
-     },
+         entities = nlu_payload.get("entities")
+         if isinstance(entities, Mapping):
+             entity_payload = dict(entities)
+         else:
+             entity_payload = {}
  
-+    _maybeActivateCapture() {
-+      if (!this._listening) return;
-+      if (!this._stream || !this._asrReady) return;
-+      if (this._audioCtx && typeof this._audioCtx.resume === "function") {
-+        this._audioCtx.resume().catch(() => {});
-+      }
-+      if (
-+        this._mediaRecorder &&
-+        typeof this._mediaRecorder.state === "string" &&
-+        this._mediaRecorder.state === "inactive"
-+      ) {
-+        try {
-+          this._mediaRecorder.start(WEBM_TIMESLICE_MS);
-+        } catch (err) {
-+          console.warn("MediaRecorder failed to start on capture activation", err);
+         plan_context = session.plan if isinstance(session.plan, Mapping) else None
+         plan_mode = None
+         if plan_context is not None:
+             plan_req_id = plan_context.get("req_id")
+             if plan_req_id == req_id:
+                 candidate_mode = plan_context.get("mode")
+                 if isinstance(candidate_mode, str) and candidate_mode:
+                     plan_mode = candidate_mode
+ 
+         provider = getattr(self._llm, "_provider", None)
+         model_name = getattr(provider, "default_model", None)
+-        request_payload: Dict[str, Any] = {"purpose": "answer"}
++        request_payload: Dict[str, Any] = {"req_id": req_id, "purpose": "answer"}
+         if intent:
+             request_payload["intent"] = intent
+         if plan_mode:
+             request_payload["mode"] = plan_mode
+         if entity_payload:
+             request_payload["entity_count"] = len(entity_payload)
+ 
+-        request_event = self._envelope(sid, EVT_LLM_REQUEST, request_payload)
++        request_event = self._envelope(
++            sid, EVT_LLM_RESPONSE_START, request_payload
++        )
+         self._publish(request_event)
+ 
+         llm_start = time.perf_counter()
+         response_text: str
+ 
+         if plan_mode:
+             turn_id = session.turn_id or plan_context.get("turn_id") or nlu_payload.get("turn_id")
+             if not isinstance(turn_id, str) or not turn_id:
+                 turn_id = f"turn-{uuid.uuid4().hex}"
+             user_text = plan_context.get("user_text") if isinstance(plan_context, Mapping) else ""
+             if not isinstance(user_text, str):
+                 user_text = ""
+             plan_payload: Dict[str, Any] = {
+                 "mode": plan_mode,
+                 "missing_info": list(plan_context.get("missing_info") or []),
+                 "chips": list(plan_context.get("chips") or []),
+                 "reason": plan_context.get("reason"),
+             }
+             response_text = self._llm.generate_persona(
+                 sid,
+                 turn_id,
+                 req_id,
+                 user_text,
+                 plan_payload,
+             )
+         else:
+             llm_result = self._llm.generate(req_id, intent=intent, entities=entity_payload)
+             if isinstance(llm_result, Mapping):
+                 response_text = llm_result.get("text")
+             else:
+                 response_text = llm_result
+ 
+         latency_ms = max(int((time.perf_counter() - llm_start) * 1000), 0)
+-        complete_payload: Dict[str, Any] = {"purpose": "answer", "latency_ms": latency_ms}
++        complete_payload: Dict[str, Any] = {
++            "req_id": req_id,
++            "purpose": "answer",
++            "latency_ms": latency_ms,
 +        }
-+      }
-+      if (!this._micOpenEmitted) {
-+        this._micOpenEmitted = true;
-+        emitCustomEvent(CLIENT_MIC_OPEN_EVENT, {
-+          type: CLIENT_MIC_OPEN_EVENT,
-+          ts: Date.now(),
-+          vendor: this._vendor || null
-+        });
-+        emitCustomEvent(CLIENT_HUD_STATE_EVENT, {
-+          type: CLIENT_HUD_STATE_EVENT,
-+          meta: { state: "Listening", source: "client" }
-+        });
-+      }
-+    },
+         if isinstance(model_name, str) and model_name:
+             complete_payload["model"] = model_name
+-        complete_event = self._envelope(sid, EVT_LLM_COMPLETE, complete_payload)
++        complete_event = self._envelope(
++            sid, EVT_LLM_RESPONSE_END, complete_payload
++        )
+         self._publish(complete_event)
+ 
+         if not isinstance(response_text, str):
+             response_text = str(response_text)
+ 
+         nlg_payload = {"req_id": req_id, "text": response_text}
+         nlg_event = self._envelope(sid, EVT_NLG, nlg_payload)
+         self._publish(nlg_event)
+         session.nlg_emitted = True
+ 
+         self._llm.publish_chat_message(req_id, response_text)
+ 
+     def _emit_user_chat_message(
+         self,
+         sid: str,
+         text: str,
+         turn_id: str,
+         req_id: str,
+         client_msg_id: Optional[str] = None,
+         *,
+         origin: str = "text",
+     ) -> None:
+         frame: Dict[str, Any] = {
+             "type": "chat.message",
+             "id": str(uuid.uuid4()),
+diff --git a/tests/test_voice_turn_pipeline.py b/tests/test_voice_turn_pipeline.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f3df3a93cc363d834c036dc1caf6cccc3335352b
+--- /dev/null
++++ b/tests/test_voice_turn_pipeline.py
+@@ -0,0 +1,142 @@
++import unittest
 +
-+    _setListening(active, options = {}) {
-+      const normalized = Boolean(active);
-+      if (!normalized && options && options.resetMicEvent) {
-+        this._micOpenEmitted = false;
-+      }
-+      if (this._listening === normalized) {
-+        return;
-+      }
-+      this._listening = normalized;
-+      if (normalized) {
-+        this._maybeActivateCapture();
-+      }
-+    },
++from app.telemetry import bus
++from app.voice_v2 import (
++    EVT_ASR_FINAL,
++    EVT_NLU,
++    EVT_NLG,
++    EVT_TTS_END,
++    EVT_TTS_START,
++    EVT_LLM_RESPONSE_END,
++    EVT_LLM_RESPONSE_START,
++)
++from app.voice_v2.engine import EngineV2
++from app.voice_v2.policy_decider import EVT_POLICY_DECISION
++from app.voice_v2.tts import TTSAdapter
 +
-     _scheduleMaskRelease(delayMs) {
-       if (this._mask.timerId) {
-         clearTimeout(this._mask.timerId);
-         this._mask.timerId = null;
-       }
-       if (delayMs > 0) {
-         this._mask.timerId = setTimeout(() => {
-           this._mask.timerId = null;
-           this._setMask(false);
-         }, delayMs);
-       } else {
-         this._setMask(false);
-       }
-     },
- 
-     async handleAsrReady(frame) {
-       const descriptor = frame && frame.input;
-       const vendor = frame && frame.vendor;
-       if (!descriptor || !vendor) {
-         console.warn("Invalid asr.ready frame", frame);
-         return;
-       }
-       const normalized = {
-         container: String(descriptor.container || "").toLowerCase(),
-         codec: String(descriptor.codec || "").toLowerCase(),
-@@ -277,160 +337,178 @@
-     },
- 
-     _setupWebmRecorder() {
-       if (typeof MediaRecorder === "undefined") {
-         console.error("MediaRecorder not supported in this browser");
-         return;
-       }
-       const mimeType = "audio/webm;codecs=opus";
-       if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(mimeType)) {
-         console.error("MediaRecorder does not support", mimeType);
-         return;
-       }
-       try {
-         const recorder = new MediaRecorder(this._stream, { mimeType });
-         this._handleWebmData = (event) => {
-           const chunk = event.data;
-           if (!chunk || !chunk.size) return;
-           if (!this._canSend()) return;
-           this._sendChunk(chunk);
-         };
-         this._handleRecorderError = (event) => {
-           console.error("MediaRecorder error", event);
-         };
-         recorder.addEventListener("dataavailable", this._handleWebmData);
-         recorder.addEventListener("error", this._handleRecorderError);
--        recorder.start(WEBM_TIMESLICE_MS);
-         this._mediaRecorder = recorder;
-         this._asrReady = true;
-+        this._maybeActivateCapture();
-       } catch (err) {
-         console.error("Failed to start MediaRecorder", err);
-       }
-     },
- 
-     _setupPcmRecorder() {
-       if (!AudioContextCtor) {
-         console.error("Web Audio API is not supported");
-         return;
-       }
-       try {
-         const ctx = new AudioContextCtor();
-         const source = ctx.createMediaStreamSource(this._stream);
-         const channels = Math.max(1, source.channelCount || 1);
-         const processor = ctx.createScriptProcessor(4096, channels, 1);
-         const gain = ctx.createGain();
-         gain.gain.value = 0;
-         processor.connect(gain);
-         gain.connect(ctx.destination);
-         source.connect(processor);
-         this._downsampler = new PcmDownsampler(ctx.sampleRate, this._descriptor.rate_hz);
-         processor.onaudioprocess = (event) => {
-           if (!this._canSend()) {
-             if (this._downsampler) this._downsampler.reset();
-             return;
-           }
-           const input = event.inputBuffer;
-           const channelData = [];
-           for (let i = 0; i < input.numberOfChannels; i += 1) {
-             channelData.push(input.getChannelData(i));
-           }
-           const mono = downmixToMono(channelData);
-           this._downsampler.push(mono);
-           const int16 = this._downsampler.pullInt16();
-           if (int16 && int16.byteLength) {
-             this._sendChunk(int16.buffer, int16.byteLength);
-           }
-         };
-         if (typeof ctx.resume === "function") {
-           ctx.resume().catch(() => {});
-         }
-         this._audioCtx = ctx;
-         this._sourceNode = source;
-         this._processorNode = processor;
-         this._muteNode = gain;
-         this._asrReady = true;
-+        this._maybeActivateCapture();
-       } catch (err) {
-         console.error("Failed to set up PCM recorder", err);
-       }
-     },
- 
-     _canSend() {
-       if (!this._asrReady || !this._stream) return false;
-+      if (!this._listening) return false;
-       if (this._mask.active) return false;
-       const WSClient = window.WSClient;
-       if (!WSClient || typeof WSClient.isConnected !== "function" || typeof WSClient.sendBinary !== "function") {
-         return false;
-       }
-       return WSClient.isConnected();
-     },
- 
-     _sendChunk(payload, sizeOverride) {
-       const WSClient = window.WSClient;
-       if (!WSClient || typeof WSClient.sendBinary !== "function") return false;
-       const bufferedAmount = typeof WSClient.getBufferedAmount === "function" ? WSClient.getBufferedAmount() : 0;
-       if (bufferedAmount > BACKPRESSURE_LIMIT_BYTES) {
-         console.warn("Dropping audio chunk due to backpressure", bufferedAmount);
-         return false;
-       }
-       const sent = WSClient.sendBinary(payload, { dropIfBusy: true });
-       if (sent) {
-         const size = typeof sizeOverride === "number" ? sizeOverride : computePayloadSize(payload);
-         console.debug("[AudioRecorder] uplink chunk bytes", size);
-       } else {
-         console.warn("Failed to send audio chunk");
-       }
-       return sent;
-     },
- 
-     handlePolicy(frame) {
-       const policy = frame && frame.policy;
-       if (policy && typeof policy.barge_in_enabled === "boolean") {
-         this._bargeInEnabled = policy.barge_in_enabled;
-         if (this._bargeInEnabled && this._mask.active) {
-           this._mask.holdMs = 0;
-           this._setMask(false);
-         }
-       }
-     },
- 
-     handleTtsStart(frame) {
-       if (this._bargeInEnabled) return;
-       const hold = Number(frame && frame.post_hold_ms);
-       this._mask.holdMs = Number.isFinite(hold) && hold > 0 ? hold : 0;
-       this._setMask(true);
-+      this._setListening(false, { resetMicEvent: true });
-     },
- 
-     handleTtsEnd() {
-       if (!this._mask.active) return;
-       const hold = Math.max(this._mask.holdMs || 0, POST_TTS_RELEASE_DELAY_MS);
-       this._mask.holdMs = 0;
-       this._scheduleMaskRelease(hold);
-     },
- 
-+    async handleStartListening() {
-+      try {
-+        await this.start();
-+      } catch (err) {
-+        console.error("AudioRecorder start_listening start failed", err);
-+        return;
-+      }
-+      this._setMask(false);
-+      this._setListening(true);
-+    },
 +
-     handleWsClose() {
-       this._teardownEncoder();
-       this._asrReady = false;
-       this._descriptor = null;
-       this._pendingDescriptor = null;
-       this._vendor = null;
-       this._setMask(false);
-+      this._setListening(false, { resetMicEvent: true });
-     }
-   };
- 
-   window.addEventListener("asr.ready", (event) => {
-     recorder.handleAsrReady(event && event.detail);
-   });
-   window.addEventListener("policy.interaction", (event) => {
-     recorder.handlePolicy(event && event.detail);
-   });
-   window.addEventListener("tts.start", (event) => {
-     recorder.handleTtsStart(event && event.detail);
-   });
-   window.addEventListener("tts.end", () => {
-     recorder.handleTtsEnd();
-   });
-+  window.addEventListener("start_listening", () => {
-+    recorder.handleStartListening();
-+  });
-   window.addEventListener("ws.close", () => {
-     recorder.handleWsClose();
-   });
- 
-   window.AudioRecorder = recorder;
- })();
++class _RecordingBusProxy:
++    """Proxy ``bus`` that records publish order while delegating behavior."""
++
++    def __init__(self, inner_bus):
++        self._inner = inner_bus
++        self.published: list[dict] = []
++
++    def publish(self, event: dict) -> None:
++        snapshot = dict(event)
++        self.published.append(snapshot)
++        self._inner.publish(snapshot)
++
++    def subscribe(self, event_type: str, handler):
++        return self._inner.subscribe(event_type, handler)
++
++    def unsubscribe(self, token: str) -> None:
++        self._inner.unsubscribe(token)
++
++
++class TestVoiceTurnPipeline(unittest.TestCase):
++    def setUp(self) -> None:
++        bus.reset()
++        self.bus_proxy = _RecordingBusProxy(bus)
++        self.events: list[dict] = []
++        self.token_all = self.bus_proxy.subscribe("*", self.events.append)
++
++        self.tts_adapter = TTSAdapter(telemetry_bus=self.bus_proxy)
++
++        def _trigger_tts(event: dict) -> None:
++            req_id = event.get("req_id")
++            text = event.get("text")
++            if isinstance(req_id, str) and isinstance(text, str) and text.strip():
++                self.tts_adapter.speak(req_id=req_id, text=text)
++
++        self.token_nlg = self.bus_proxy.subscribe(EVT_NLG, _trigger_tts)
++
++        self.engine = EngineV2(telemetry_bus=self.bus_proxy)
++        self.sid = "sid-turn"
++        self.engine.on_open(self.sid, {})
++        self.engine.on_audio(self.sid, b"seed", seq=0)
++
++    def tearDown(self) -> None:
++        if self.token_all is not None:
++            self.bus_proxy.unsubscribe(self.token_all)
++        if self.token_nlg is not None:
++            self.bus_proxy.unsubscribe(self.token_nlg)
++        bus.reset()
++
++    def _published_by_type(self, event_type: str) -> list[dict]:
++        return [evt for evt in self.bus_proxy.published if evt.get("type") == event_type]
++
++    def test_first_turn_event_order(self) -> None:
++        self.engine.policy_snapshot = {
++            "barge_in_enabled": True,
++            "auto_commit_when_ready": True,
++        }
++
++        self.engine.on_asr_final(self.sid, "hello there status update")
++
++        interesting = {
++            EVT_ASR_FINAL,
++            EVT_NLU,
++            EVT_POLICY_DECISION,
++            EVT_LLM_RESPONSE_START,
++            EVT_LLM_RESPONSE_END,
++            EVT_NLG,
++            EVT_TTS_START,
++            EVT_TTS_END,
++        }
++        ordered_types = [
++            evt["type"]
++            for evt in self.bus_proxy.published
++            if evt.get("type") in interesting
++        ]
++        expected_order = [
++            EVT_ASR_FINAL,
++            EVT_NLU,
++            EVT_POLICY_DECISION,
++            EVT_LLM_RESPONSE_START,
++            EVT_LLM_RESPONSE_END,
++            EVT_NLG,
++            EVT_TTS_START,
++            EVT_TTS_END,
++        ]
++        self.assertEqual(expected_order, ordered_types)
++
++        finals = self._published_by_type(EVT_ASR_FINAL)
++        nlus = self._published_by_type(EVT_NLU)
++        policies = self._published_by_type(EVT_POLICY_DECISION)
++        llm_starts = self._published_by_type(EVT_LLM_RESPONSE_START)
++        llm_ends = self._published_by_type(EVT_LLM_RESPONSE_END)
++        nlgs = self._published_by_type(EVT_NLG)
++        tts_starts = self._published_by_type(EVT_TTS_START)
++        tts_ends = self._published_by_type(EVT_TTS_END)
++
++        self.assertEqual(1, len(finals))
++        self.assertEqual(1, len(nlus))
++        self.assertEqual(1, len(policies))
++        self.assertEqual(1, len(llm_starts))
++        self.assertEqual(1, len(llm_ends))
++        self.assertEqual(1, len(nlgs))
++        self.assertEqual(1, len(tts_starts))
++        self.assertEqual(1, len(tts_ends))
++
++        final_event = finals[0]
++        final_req_id = final_event.get("req_id")
++        self.assertIsInstance(final_req_id, str)
++        self.assertIn("confidence", final_event)
++
++        for collection in (
++            nlus,
++            policies,
++            llm_starts,
++            llm_ends,
++            nlgs,
++            tts_starts,
++            tts_ends,
++        ):
++            event = collection[0]
++            if "req_id" in event:
++                self.assertEqual(final_req_id, event["req_id"])
++
++
++if __name__ == "__main__":
++    unittest.main()

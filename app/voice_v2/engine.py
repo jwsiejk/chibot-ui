@@ -91,8 +91,8 @@ EVT_TURN_STATE = "EVT_TURN_STATE"
 EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
 EVT_TURN_END = "EVT_TURN_END"
 EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
-EVT_LLM_REQUEST = "EVT_LLM_REQUEST"
-EVT_LLM_COMPLETE = "EVT_LLM_COMPLETE"
+EVT_LLM_RESPONSE_START = "EVT_LLM_RESPONSE_START"
+EVT_LLM_RESPONSE_END = "EVT_LLM_RESPONSE_END"
 
 
 @dataclass
@@ -753,13 +753,16 @@ class EngineV2:
             )
 
             request_payload = {
+                "req_id": req_id,
                 "purpose": "greet",
                 "model": model_name,
                 "temp": temperature,
                 "max_tokens": max_tokens,
                 "msg_counts": msg_counts,
             }
-            request_event = self._envelope(sid, EVT_LLM_REQUEST, request_payload)
+            request_event = self._envelope(
+                sid, EVT_LLM_RESPONSE_START, request_payload
+            )
             self._publish(request_event)
 
             greeting_candidate: str | None = None
@@ -777,12 +780,13 @@ class EngineV2:
             else:
                 latency_ms = max(int((time.perf_counter() - start_time) * 1000), 0)
                 complete_payload = {
+                    "req_id": req_id,
                     "purpose": "greet",
                     "latency_ms": latency_ms,
                     "model": model_name,
                 }
                 complete_event = self._envelope(
-                    sid, EVT_LLM_COMPLETE, complete_payload
+                    sid, EVT_LLM_RESPONSE_END, complete_payload
                 )
                 self._publish(complete_event)
                 _log.debug(
@@ -1376,7 +1380,7 @@ class EngineV2:
 
         provider = getattr(self._llm, "_provider", None)
         model_name = getattr(provider, "default_model", None)
-        request_payload: Dict[str, Any] = {"purpose": "answer"}
+        request_payload: Dict[str, Any] = {"req_id": req_id, "purpose": "answer"}
         if intent:
             request_payload["intent"] = intent
         if plan_mode:
@@ -1384,7 +1388,9 @@ class EngineV2:
         if entity_payload:
             request_payload["entity_count"] = len(entity_payload)
 
-        request_event = self._envelope(sid, EVT_LLM_REQUEST, request_payload)
+        request_event = self._envelope(
+            sid, EVT_LLM_RESPONSE_START, request_payload
+        )
         self._publish(request_event)
 
         llm_start = time.perf_counter()
@@ -1418,10 +1424,16 @@ class EngineV2:
                 response_text = llm_result
 
         latency_ms = max(int((time.perf_counter() - llm_start) * 1000), 0)
-        complete_payload: Dict[str, Any] = {"purpose": "answer", "latency_ms": latency_ms}
+        complete_payload: Dict[str, Any] = {
+            "req_id": req_id,
+            "purpose": "answer",
+            "latency_ms": latency_ms,
+        }
         if isinstance(model_name, str) and model_name:
             complete_payload["model"] = model_name
-        complete_event = self._envelope(sid, EVT_LLM_COMPLETE, complete_payload)
+        complete_event = self._envelope(
+            sid, EVT_LLM_RESPONSE_END, complete_payload
+        )
         self._publish(complete_event)
 
         if not isinstance(response_text, str):
