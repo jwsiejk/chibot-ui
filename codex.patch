@@ -1,92 +1,278 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 64643bdfcbd51c7ef7b0d7c5e15544e6b898cbc6..83385cd41c814f052e4b60f6ae6c4f56860910e8 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1692,73 +1692,67 @@ window.addEventListener('tts.end', () => {
-     }
-   };
- 
-   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
-     setTimeout(release, POST_TTS_RELEASE_MS);
-   } else {
-     release();
-   }
- });
- 
- window.addEventListener('asr.ready', () => {
-   tryStartMic('asr.ready');
-   if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-     try {
-       const maybePromise = window.AudioRecorder.start();
-       if (maybePromise && typeof maybePromise.catch === 'function') {
-         maybePromise.catch((err) => {
-           console.error('AudioRecorder start on asr.ready failed', err);
-         });
-       }
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index 3733ce7f63f2fd7ed63510bc47dfbd58dff56799..267e2269cf44068c674e1fc13e75e09c8694e681 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -98,74 +98,84 @@
+       window.dispatchEvent(new CustomEvent(type, { detail }));
      } catch (err) {
-       console.error('AudioRecorder start on asr.ready threw', err);
+       console.warn("AudioRecorder event dispatch failed", type, err);
      }
    }
- });
--          }
+ 
+   const recorder = {
+     _stream: null,
+     _startPromise: null,
+     _mediaRecorder: null,
+     _audioCtx: null,
+     _sourceNode: null,
+     _processorNode: null,
+     _muteNode: null,
+     _downsampler: null,
+     _descriptor: null,
+     _pendingDescriptor: null,
+     _vendor: null,
+     _asrReady: false,
+     _mask: { active: false, holdMs: 0, timerId: null },
+     _listening: false,
+     _micOpenEmitted: false,
+     _bargeInEnabled: true,
+ 
+     async start() {
+-      if (this._stream) return this._stream;
++      if (this._stream) {
++        this._setListening(true);
++        this._maybeActivateCapture();
++        return this._stream;
++      }
+       if (this._startPromise) return this._startPromise;
+-      try {
+-        this._startPromise = navigator.mediaDevices.getUserMedia({
++      const request = navigator.mediaDevices
++        .getUserMedia({
+           audio: {
+             channelCount: 1,
+             echoCancellation: true,
+             noiseSuppression: true,
+             autoGainControl: false
+           }
++        })
++        .then((stream) => {
++          this._stream = stream;
++          if (this._pendingDescriptor) {
++            this._activateDescriptor(this._pendingDescriptor);
++            this._pendingDescriptor = null;
++          }
++          this._setListening(true);
++          this._maybeActivateCapture();
++          return stream;
++        })
++        .catch((err) => {
++          console.error("AudioRecorder start failed", err);
++          throw err;
++        })
++        .finally(() => {
++          this._startPromise = null;
+         });
+-        const stream = await this._startPromise;
+-        this._startPromise = null;
+-        this._stream = stream;
+-        if (this._pendingDescriptor) {
+-          this._activateDescriptor(this._pendingDescriptor);
+-          this._pendingDescriptor = null;
+-        }
+-        return stream;
+-      } catch (err) {
+-        this._startPromise = null;
+-        console.error("AudioRecorder start failed", err);
+-        throw err;
+-      }
++      this._startPromise = request;
++      return request;
+     },
+ 
+     stop() {
+       this._teardownEncoder();
+       if (this._stream) {
+         const tracks = this._stream.getTracks();
+         tracks.forEach((track) => {
+           try {
+             track.stop();
+           } catch (err) {
+             console.warn("Failed to stop track", err);
+           }
+         });
+         this._stream = null;
+       }
+       this._descriptor = null;
+       this._pendingDescriptor = null;
+       this._vendor = null;
+       this._asrReady = false;
+       this._setMask(false);
+       this._setListening(false, { resetMicEvent: true });
+     },
+ 
+     _teardownEncoder() {
+       this._asrReady = false;
+@@ -211,104 +221,108 @@
+       if (this._audioCtx) {
+         try {
+           this._audioCtx.close();
+         } catch (err) {
+           console.warn("AudioContext close error", err);
+         }
+         this._audioCtx = null;
+       }
+       if (this._downsampler) {
+         this._downsampler.reset();
+         this._downsampler = null;
+       }
+       this._setListening(false, { resetMicEvent: true });
+     },
+ 
+     _setMask(active) {
+       if (this._mask.active === active) return;
+       if (!active && this._mask.timerId) {
+         clearTimeout(this._mask.timerId);
+         this._mask.timerId = null;
+       }
+       this._mask.active = active;
+       if (active && this._downsampler) {
+         this._downsampler.reset();
+       }
++      if (!active && this._listening) {
++        this._maybeActivateCapture();
++      }
+     },
+ 
+     _maybeActivateCapture() {
+       if (!this._listening) return;
+-      if (!this._stream || !this._asrReady) return;
++      if (!this._stream) return;
+       if (this._audioCtx && typeof this._audioCtx.resume === "function") {
+         this._audioCtx.resume().catch(() => {});
+       }
+-      if (
+-        this._mediaRecorder &&
+-        typeof this._mediaRecorder.state === "string" &&
+-        this._mediaRecorder.state === "inactive"
+-      ) {
+-        try {
+-          this._mediaRecorder.start(WEBM_TIMESLICE_MS);
 -        } catch (err) {
--          console.error('AudioRecorder start on asr.ready failed', err);
+-          console.warn("MediaRecorder failed to start on capture activation", err);
 -        }
 -      }
--    });
- 
--    window.addEventListener('assistant.suggestions', (event) => {
--      const detail = event && event.detail;
--      applySuggestionsFrame(detail);
--    });
-+window.addEventListener('assistant.suggestions', (event) => {
-+  const detail = event && event.detail;
-+  applySuggestionsFrame(detail);
-+});
- 
--    
--    // Start mic immediately on ws.open as a safety net; send diag banner
--    window.addEventListener('ws.open', () => {
--      tryStartMic('ws.open');
--      try { WSClient && WSClient.send && WSClient.send({ type: 'client.banner', text: 'open-ok', sha: window.__BUILD_SHA__, ts: Date.now() }); } catch {}
--    });
-+
-+// Start mic immediately on ws.open as a safety net; send diag banner
-+window.addEventListener('ws.open', () => {
-+  tryStartMic('ws.open');
-+  try { WSClient && WSClient.send && WSClient.send({ type: 'client.banner', text: 'open-ok', sha: window.__BUILD_SHA__, ts: Date.now() }); } catch {}
-+});
- window.addEventListener('ws.close', () => {
--      stopMic('ws');
--      resetSuggestions();
--      DiagRecorder.stop('ws');
--    });
-+  stopMic('ws');
-+  resetSuggestions();
-+  DiagRecorder.stop('ws');
-+});
- 
-     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
-     if (urlParams.get('wsSmoke') === '1') {
-       const transitions = [];
-       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
- 
-       class MockSocket extends EventTarget {
-         constructor() {
-           super();
-           this.readyState = WebSocket.CONNECTING;
-           setTimeout(() => {
-             this.readyState = WebSocket.OPEN;
-             this.dispatchEvent(new Event('open'));
-           }, 0);
+       if (!this._micOpenEmitted) {
+         this._micOpenEmitted = true;
+         const eventDetail = {
+           type: CLIENT_MIC_OPEN_EVENT,
+           ts: Date.now(),
+           vendor: this._vendor || null
+         };
+         emitCustomEvent(CLIENT_MIC_OPEN_EVENT, eventDetail);
+         const wsClient = window.WSClient;
+         if (wsClient && (typeof wsClient.send === "function" || typeof wsClient.sendJson === "function")) {
+           const micPayload = {
+             type: "client.ready",
+             mic: {
+               state: "open",
+               ts: eventDetail.ts
+             }
+           };
+           if (eventDetail.vendor) {
+             micPayload.mic.vendor = eventDetail.vendor;
+           }
+           try {
+             if (typeof wsClient.send === "function") {
+               wsClient.send(micPayload);
+             } else {
+               wsClient.sendJson(micPayload);
+             }
+           } catch (err) {
+             console.warn("Failed to send client mic open frame", err);
+           }
          }
-         send(payload) {
-           this.lastSent = payload;
-         }
-         close(code = 1000, reason = '') {
-           this.readyState = WebSocket.CLOSED;
-           const ev = new Event('close');
-           ev.code = code;
-           ev.reason = reason;
-           ev.wasClean = true;
-           this.dispatchEvent(ev);
+         emitCustomEvent(CLIENT_HUD_STATE_EVENT, {
+           type: CLIENT_HUD_STATE_EVENT,
+           meta: { state: "Listening", source: "client" }
+         });
+       }
++      if (!this._asrReady || this._mask.active) return;
++      if (
++        this._mediaRecorder &&
++        typeof this._mediaRecorder.state === "string" &&
++        this._mediaRecorder.state === "inactive"
++      ) {
++        try {
++          this._mediaRecorder.start(WEBM_TIMESLICE_MS);
++        } catch (err) {
++          console.warn("MediaRecorder failed to start on capture activation", err);
++        }
++      }
+     },
+ 
+     _setListening(active, options = {}) {
+       const normalized = Boolean(active);
+       if (!normalized && options && options.resetMicEvent) {
+         this._micOpenEmitted = false;
+       }
+       if (this._listening === normalized) {
+         return;
+       }
+       this._listening = normalized;
+       if (normalized) {
+         this._maybeActivateCapture();
+       }
+     },
+ 
+     _scheduleMaskRelease(delayMs) {
+       if (this._mask.timerId) {
+         clearTimeout(this._mask.timerId);
+         this._mask.timerId = null;
+       }
+       if (delayMs > 0) {
+         this._mask.timerId = setTimeout(() => {
+           this._mask.timerId = null;
+           this._setMask(false);
+@@ -335,50 +349,51 @@
+       try {
+         await this.start();
+       } catch (err) {
+         console.error("AudioRecorder start failed for asr.ready", err);
+         return;
+       }
+       if (this._pendingDescriptor) {
+         this._activateDescriptor(this._pendingDescriptor);
+         this._pendingDescriptor = null;
+       }
+     },
+ 
+     _activateDescriptor(spec) {
+       if (!spec || !this._stream) return;
+       const { vendor, descriptor } = spec;
+       this._teardownEncoder();
+       this._vendor = vendor;
+       this._descriptor = descriptor;
+       if (descriptor.container === "webm" && descriptor.codec === "opus" && descriptor.rate_hz === 48000 && descriptor.channels === 1) {
+         this._setupWebmRecorder();
+       } else if (descriptor.container === "raw" && descriptor.codec === "pcm_s16le" && descriptor.rate_hz === 16000 && descriptor.channels === 1) {
+         this._setupPcmRecorder();
+       } else {
+         console.error("Unsupported ASR descriptor", descriptor);
+       }
++      this._maybeActivateCapture();
+     },
+ 
+     _setupWebmRecorder() {
+       if (typeof MediaRecorder === "undefined") {
+         console.error("MediaRecorder not supported in this browser");
+         return;
+       }
+       const mimeType = "audio/webm;codecs=opus";
+       if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(mimeType)) {
+         console.error("MediaRecorder does not support", mimeType);
+         return;
+       }
+       try {
+         const recorder = new MediaRecorder(this._stream, { mimeType });
+         this._handleWebmData = (event) => {
+           const chunk = event.data;
+           if (!chunk || !chunk.size) return;
+           if (!this._canSend()) return;
+           this._sendChunk(chunk);
+         };
+         this._handleRecorderError = (event) => {
+           console.error("MediaRecorder error", event);
+         };
+         recorder.addEventListener("dataavailable", this._handleWebmData);
+         recorder.addEventListener("error", this._handleRecorderError);

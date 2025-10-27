@@ -120,30 +120,40 @@
     _bargeInEnabled: true,
 
     async start() {
-      if (this._stream) return this._stream;
+      if (this._stream) {
+        this._setListening(true);
+        this._maybeActivateCapture();
+        return this._stream;
+      }
       if (this._startPromise) return this._startPromise;
-      try {
-        this._startPromise = navigator.mediaDevices.getUserMedia({
+      const request = navigator.mediaDevices
+        .getUserMedia({
           audio: {
             channelCount: 1,
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: false
           }
+        })
+        .then((stream) => {
+          this._stream = stream;
+          if (this._pendingDescriptor) {
+            this._activateDescriptor(this._pendingDescriptor);
+            this._pendingDescriptor = null;
+          }
+          this._setListening(true);
+          this._maybeActivateCapture();
+          return stream;
+        })
+        .catch((err) => {
+          console.error("AudioRecorder start failed", err);
+          throw err;
+        })
+        .finally(() => {
+          this._startPromise = null;
         });
-        const stream = await this._startPromise;
-        this._startPromise = null;
-        this._stream = stream;
-        if (this._pendingDescriptor) {
-          this._activateDescriptor(this._pendingDescriptor);
-          this._pendingDescriptor = null;
-        }
-        return stream;
-      } catch (err) {
-        this._startPromise = null;
-        console.error("AudioRecorder start failed", err);
-        throw err;
-      }
+      this._startPromise = request;
+      return request;
     },
 
     stop() {
@@ -233,24 +243,16 @@
       if (active && this._downsampler) {
         this._downsampler.reset();
       }
+      if (!active && this._listening) {
+        this._maybeActivateCapture();
+      }
     },
 
     _maybeActivateCapture() {
       if (!this._listening) return;
-      if (!this._stream || !this._asrReady) return;
+      if (!this._stream) return;
       if (this._audioCtx && typeof this._audioCtx.resume === "function") {
         this._audioCtx.resume().catch(() => {});
-      }
-      if (
-        this._mediaRecorder &&
-        typeof this._mediaRecorder.state === "string" &&
-        this._mediaRecorder.state === "inactive"
-      ) {
-        try {
-          this._mediaRecorder.start(WEBM_TIMESLICE_MS);
-        } catch (err) {
-          console.warn("MediaRecorder failed to start on capture activation", err);
-        }
       }
       if (!this._micOpenEmitted) {
         this._micOpenEmitted = true;
@@ -286,6 +288,18 @@
           type: CLIENT_HUD_STATE_EVENT,
           meta: { state: "Listening", source: "client" }
         });
+      }
+      if (!this._asrReady || this._mask.active) return;
+      if (
+        this._mediaRecorder &&
+        typeof this._mediaRecorder.state === "string" &&
+        this._mediaRecorder.state === "inactive"
+      ) {
+        try {
+          this._mediaRecorder.start(WEBM_TIMESLICE_MS);
+        } catch (err) {
+          console.warn("MediaRecorder failed to start on capture activation", err);
+        }
       }
     },
 
@@ -357,6 +371,7 @@
       } else {
         console.error("Unsupported ASR descriptor", descriptor);
       }
+      this._maybeActivateCapture();
     },
 
     _setupWebmRecorder() {
