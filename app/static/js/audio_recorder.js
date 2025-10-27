@@ -262,28 +262,6 @@
           vendor: this._vendor || null
         };
         emitCustomEvent(CLIENT_MIC_OPEN_EVENT, eventDetail);
-        const wsClient = window.WSClient;
-        if (wsClient && (typeof wsClient.send === "function" || typeof wsClient.sendJson === "function")) {
-          const micPayload = {
-            type: "client.ready",
-            mic: {
-              state: "open",
-              ts: eventDetail.ts
-            }
-          };
-          if (eventDetail.vendor) {
-            micPayload.mic.vendor = eventDetail.vendor;
-          }
-          try {
-            if (typeof wsClient.send === "function") {
-              wsClient.send(micPayload);
-            } else {
-              wsClient.sendJson(micPayload);
-            }
-          } catch (err) {
-            console.warn("Failed to send client mic open frame", err);
-          }
-        }
         emitCustomEvent(CLIENT_HUD_STATE_EVENT, {
           type: CLIENT_HUD_STATE_EVENT,
           meta: { state: "Listening", source: "client" }
