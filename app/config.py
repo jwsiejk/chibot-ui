@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -131,6 +132,43 @@ def _coerce_db_int(
     return candidate
 
 
+def _coerce_db_mapping(
+    value: Any, default: Optional[Mapping[str, Any]] = None
+) -> Mapping[str, Any]:
+    base_default: Mapping[str, Any] = dict(default or {})
+
+    if isinstance(value, Mapping):
+        return {str(k): v for k, v in value.items()}
+
+    if isinstance(value, memoryview):
+        return _coerce_db_mapping(value.tobytes(), base_default)
+
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            decoded = value.decode("utf-8")
+        except UnicodeDecodeError:
+            decoded = value.decode("latin1", "ignore")
+        return _coerce_db_mapping(decoded, base_default)
+
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return dict(base_default)
+        return _coerce_db_mapping(parsed, base_default)
+
+    if isinstance(value, bool):
+        return {"enabled": bool(value)}
+
+    if isinstance(value, (int, float)):
+        return {"value": value}
+
+    if value is None:
+        return dict(base_default)
+
+    return dict(base_default)
+
+
 def _get_cached_admin_setting(key: str) -> Optional[Any]:
     normalized = _normalize_key(key)
     with _ADMIN_SETTINGS_LOCK:
@@ -197,6 +235,33 @@ def bool_env_or_db(name: str, *, default: bool = False) -> bool:
     return value
 
 
+def _resolve_mapping_setting(
+    name: str, default: Optional[Mapping[str, Any]] = None
+) -> tuple[Mapping[str, Any], str, Any]:
+    base_default: Mapping[str, Any] = dict(default or {})
+
+    env_value = os.getenv(_env_name(name))
+    if env_value is not None:
+        try:
+            parsed = json.loads(env_value)
+        except json.JSONDecodeError:
+            if env_value.strip():
+                _log.warning(
+                    "evt=admin_settings_env_parse_failed key=%s source=env",
+                    name,
+                    extra={"component": "admin.settings"},
+                )
+            return dict(base_default), "env", env_value
+        normalized = _coerce_db_mapping(parsed, base_default)
+        return normalized, "env", env_value
+
+    stored = _get_cached_admin_setting(name)
+    if stored is not None:
+        return _coerce_db_mapping(stored, base_default), "db", stored
+
+    return dict(base_default), "default", None
+
+
 def _resolve_int_setting(
     name: str, default: int, *, minimum: Optional[int] = None
 ) -> tuple[int, str, Any]:
@@ -225,6 +290,10 @@ def reload_runtime_flags() -> None:
     diag_client_hud, hud_source, _hud_raw = _resolve_bool_setting(
         "diag_client_hud", default=False
     )
+    audio_guardrails_default = {"enabled": True}
+    audio_guardrails, guardrails_source, _guardrails_raw = _resolve_mapping_setting(
+        "audio_guardrails", default=audio_guardrails_default
+    )
     diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
         "diag_audio_guard", default=True
     )
@@ -232,8 +301,10 @@ def reload_runtime_flags() -> None:
         "diag_chunk_sample_n", default=10, minimum=1
     )
 
+    guardrails_value = dict(audio_guardrails)
     flags = {
         "DIAG_CLIENT_HUD": diag_client_hud,
+        "AUDIO_GUARDRAILS": guardrails_value,
         "DIAG_AUDIO_GUARD": diag_audio_guard,
         "DIAG_CHUNK_SAMPLE_N": diag_chunk_sample_n,
     }
@@ -246,13 +317,18 @@ def reload_runtime_flags() -> None:
         {"key": "DIAG_CLIENT_HUD", "value": diag_client_hud, "source": hud_source},
         {"key": "DIAG_AUDIO_GUARD", "value": diag_audio_guard, "source": audio_source},
         {
+            "key": "AUDIO_GUARDRAILS",
+            "value": guardrails_value,
+            "source": guardrails_source,
+        },
+        {
             "key": "DIAG_CHUNK_SAMPLE_N",
             "value": diag_chunk_sample_n,
             "source": chunk_source,
         },
     ]
     _log.info(
-        "evt=admin_settings_load flags=%s",
+        "evt=EVT_ADMIN_SETTINGS_LOAD snapshot=%s",
         log_snapshot,
         extra={"component": "admin.settings"},
     )
@@ -288,6 +364,7 @@ __all__ = [
     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
     "ASR_IDLE_CLOSE_MS",
     "ASR_TRACE",
+    "AUDIO_GUARDRAILS",
     "DEEPGRAM_API_KEY",
     "DIAG_AUDIO_GUARD",
     "DIAG_CHUNK_SAMPLE_N",

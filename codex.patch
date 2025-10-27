@@ -1,675 +1,468 @@
-diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
-index bd54b248233ae0f84b9629a7d357ae47d13610d5..b6c957d36c8a03e26dd2e24371263db35e0e45e7 100644
---- a/app/voice_v2/__init__.py
-+++ b/app/voice_v2/__init__.py
-@@ -1,65 +1,76 @@
- """Event constants for AskChip voice v2 telemetry."""
+diff --git a/app/config.py b/app/config.py
+index b3f44f909a010bfe83bbf85b7731ab543ca88076..05e0779197af0b3422642749ce22bff80d341c00 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -1,29 +1,30 @@
+ """Application configuration helpers."""
  
- EVT_WS_OPEN = "EVT_WS_OPEN"
- EVT_WS_CLOSE = "EVT_WS_CLOSE"
- EVT_WS_JSON_RECV = "EVT_WS_JSON_RECV"
- EVT_WS_JSON_SEND = "EVT_WS_JSON_SEND"
- EVT_WS_AUDIO_RECV = "EVT_WS_AUDIO_RECV"
- EVT_WS_AUDIO_SEND = "EVT_WS_AUDIO_SEND"
- EVT_CHAT_USER = "EVT_CHAT_USER"
+ from __future__ import annotations
  
- EVT_TTS_START = "EVT_TTS_START"
- EVT_TTS_END = "EVT_TTS_END"
- EVT_TTS_MASK = "EVT_TTS_MASK"
++import json
+ import logging
+ import os
+ import threading
+ from typing import Any, Mapping, MutableMapping, Optional
  
-+EVT_TURN_STATE = "EVT_TURN_STATE"
-+EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
-+EVT_TURN_END = "EVT_TURN_END"
-+EVT_TURN_ROLLUP = "EVT_TURN_ROLLUP"
-+EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
+ try:
+     from dotenv import load_dotenv  # type: ignore
+ except ImportError:  # pragma: no cover - optional dependency
+     load_dotenv = None
+ else:  # pragma: no branch
+     load_dotenv(dotenv_path=".env", override=False)
+ 
+ 
+ def env_bool(name: str, default: bool = False) -> bool:
+     """Return an environment variable parsed as a boolean."""
+ 
+     value = os.getenv(name)
+     if value is None:
+         return bool(default)
+     value = value.strip().lower()
+     if value in {"1", "true", "t", "yes", "y", "on"}:
+         return True
+     if value in {"0", "false", "f", "no", "n", "off"}:
+         return False
+     return bool(default)
+@@ -109,50 +110,87 @@ def _coerce_db_bool(value: Any, default: bool) -> bool:
+     return bool(default)
+ 
+ 
+ def _coerce_db_int(
+     value: Any, default: int, *, minimum: Optional[int] = None
+ ) -> int:
+     candidate: Optional[int] = None
+     if isinstance(value, bool):
+         candidate = int(value)
+     elif isinstance(value, (int, float)):
+         candidate = int(value)
+     elif isinstance(value, str):
+         return _coerce_int(value, default, minimum=minimum)
+     elif isinstance(value, Mapping):
+         lowered = {str(k).lower(): v for k, v in value.items() if isinstance(k, str)}
+         for key in ("value", "count", "enabled"):
+             if key in lowered:
+                 return _coerce_db_int(lowered[key], default, minimum=minimum)
+     if candidate is None:
+         candidate = int(default)
+     if minimum is not None and candidate < minimum:
+         return minimum
+     return candidate
+ 
+ 
++def _coerce_db_mapping(
++    value: Any, default: Optional[Mapping[str, Any]] = None
++) -> Mapping[str, Any]:
++    base_default: Mapping[str, Any] = dict(default or {})
 +
- EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
- EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
++    if isinstance(value, Mapping):
++        return {str(k): v for k, v in value.items()}
++
++    if isinstance(value, memoryview):
++        return _coerce_db_mapping(value.tobytes(), base_default)
++
++    if isinstance(value, (bytes, bytearray)):
++        try:
++            decoded = value.decode("utf-8")
++        except UnicodeDecodeError:
++            decoded = value.decode("latin1", "ignore")
++        return _coerce_db_mapping(decoded, base_default)
++
++    if isinstance(value, str):
++        try:
++            parsed = json.loads(value)
++        except json.JSONDecodeError:
++            return dict(base_default)
++        return _coerce_db_mapping(parsed, base_default)
++
++    if isinstance(value, bool):
++        return {"enabled": bool(value)}
++
++    if isinstance(value, (int, float)):
++        return {"value": value}
++
++    if value is None:
++        return dict(base_default)
++
++    return dict(base_default)
++
++
+ def _get_cached_admin_setting(key: str) -> Optional[Any]:
+     normalized = _normalize_key(key)
+     with _ADMIN_SETTINGS_LOCK:
+         if normalized in _ADMIN_SETTINGS_CACHE:
+             return _ADMIN_SETTINGS_CACHE[normalized]
+     store = _get_admin_settings_store()
+     if store is None:
+         with _ADMIN_SETTINGS_LOCK:
+             _ADMIN_SETTINGS_CACHE.setdefault(normalized, None)
+         return None
+     value = store.get(normalized)
+     with _ADMIN_SETTINGS_LOCK:
+         _ADMIN_SETTINGS_CACHE[normalized] = value
+     return value
  
- EVT_MIC_GATE = "EVT_MIC_GATE"
- EVT_BARGE_DETECTED = "EVT_BARGE_DETECTED"
- EVT_BARGE_CONFIRMED = "EVT_BARGE_CONFIRMED"
- EVT_BARGE_REJECTED = "EVT_BARGE_REJECTED"
- EVT_ACTION_SAY_END = "EVT_ACTION_SAY_END"
  
- EVT_ASR_READY = "EVT_ASR_READY"
- EVT_ASR_OPEN = "EVT_ASR_OPEN"
- EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
- EVT_ASR_FINAL = "EVT_ASR_FINAL"
- EVT_NLU = "EVT_NLU"
- EVT_NLG = "EVT_NLG"
- EVT_LLM_RESPONSE_START = "EVT_LLM_RESPONSE_START"
- EVT_LLM_RESPONSE_END = "EVT_LLM_RESPONSE_END"
- EVT_DIALOG_PLAN = "EVT_DIALOG_PLAN"
- EVT_HUD_STATE = "EVT_HUD_STATE"
- EVT_CLIENT_MIC_OPEN = "EVT_CLIENT_MIC_OPEN"
+ def update_admin_settings_cache(updates: Mapping[str, Optional[Any]]) -> None:
+     """Merge ``updates`` into the local admin settings cache and refresh flags."""
+ 
+     changed = False
+     with _ADMIN_SETTINGS_LOCK:
+         for raw_key, raw_value in updates.items():
+             normalized = _normalize_key(raw_key)
+             if _ADMIN_SETTINGS_CACHE.get(normalized) != raw_value:
+                 _ADMIN_SETTINGS_CACHE[normalized] = raw_value
+@@ -175,130 +213,169 @@ def set_admin_setting_raw(
+     normalized = _normalize_key(key)
+     store = _get_admin_settings_store()
+     if store is None:
+         raise RuntimeError("Admin settings store unavailable")
+     store.set(normalized, value, updated_by=updated_by)
+     update_admin_settings_cache({normalized: value})
+ 
+ 
+ def _resolve_bool_setting(name: str, default: bool) -> tuple[bool, str, Any]:
+     env_value = os.getenv(_env_name(name))
+     if env_value is not None:
+         return _coerce_bool(env_value, default), "env", env_value
+     stored = _get_cached_admin_setting(name)
+     if stored is not None:
+         return _coerce_db_bool(stored, default), "db", stored
+     return bool(default), "default", None
+ 
+ 
+ def bool_env_or_db(name: str, *, default: bool = False) -> bool:
+     """Resolve a boolean config value from env, admin settings, or default."""
+ 
+     value, _source, _raw = _resolve_bool_setting(name, default)
+     return value
+ 
+ 
++def _resolve_mapping_setting(
++    name: str, default: Optional[Mapping[str, Any]] = None
++) -> tuple[Mapping[str, Any], str, Any]:
++    base_default: Mapping[str, Any] = dict(default or {})
++
++    env_value = os.getenv(_env_name(name))
++    if env_value is not None:
++        try:
++            parsed = json.loads(env_value)
++        except json.JSONDecodeError:
++            if env_value.strip():
++                _log.warning(
++                    "evt=admin_settings_env_parse_failed key=%s source=env",
++                    name,
++                    extra={"component": "admin.settings"},
++                )
++            return dict(base_default), "env", env_value
++        normalized = _coerce_db_mapping(parsed, base_default)
++        return normalized, "env", env_value
++
++    stored = _get_cached_admin_setting(name)
++    if stored is not None:
++        return _coerce_db_mapping(stored, base_default), "db", stored
++
++    return dict(base_default), "default", None
++
++
+ def _resolve_int_setting(
+     name: str, default: int, *, minimum: Optional[int] = None
+ ) -> tuple[int, str, Any]:
+     env_value = os.getenv(_env_name(name))
+     if env_value is not None:
+         return _coerce_int(env_value, default, minimum=minimum), "env", env_value
+     stored = _get_cached_admin_setting(name)
+     if stored is not None:
+         return _coerce_db_int(stored, default, minimum=minimum), "db", stored
+     fallback = int(default)
+     if minimum is not None and fallback < minimum:
+         fallback = minimum
+     return fallback, "default", None
+ 
+ 
+ def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None) -> int:
+     """Resolve an integer config value from env, admin settings, or default."""
+ 
+     value, _source, _raw = _resolve_int_setting(name, default, minimum=minimum)
+     return value
+ 
+ 
+ def reload_runtime_flags() -> None:
+     """Refresh runtime configuration flags from env and admin settings."""
+ 
+     diag_client_hud, hud_source, _hud_raw = _resolve_bool_setting(
+         "diag_client_hud", default=False
+     )
++    audio_guardrails_default = {"enabled": True}
++    audio_guardrails, guardrails_source, _guardrails_raw = _resolve_mapping_setting(
++        "audio_guardrails", default=audio_guardrails_default
++    )
+     diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
+         "diag_audio_guard", default=True
+     )
+     diag_chunk_sample_n, chunk_source, _chunk_raw = _resolve_int_setting(
+         "diag_chunk_sample_n", default=10, minimum=1
+     )
+ 
++    guardrails_value = dict(audio_guardrails)
+     flags = {
+         "DIAG_CLIENT_HUD": diag_client_hud,
++        "AUDIO_GUARDRAILS": guardrails_value,
+         "DIAG_AUDIO_GUARD": diag_audio_guard,
+         "DIAG_CHUNK_SAMPLE_N": diag_chunk_sample_n,
+     }
+     with _ADMIN_SETTINGS_LOCK:
+         _RUNTIME_FLAGS.clear()
+         _RUNTIME_FLAGS.update(flags)
+     globals().update(flags)
+ 
+     log_snapshot = [
+         {"key": "DIAG_CLIENT_HUD", "value": diag_client_hud, "source": hud_source},
+         {"key": "DIAG_AUDIO_GUARD", "value": diag_audio_guard, "source": audio_source},
++        {
++            "key": "AUDIO_GUARDRAILS",
++            "value": guardrails_value,
++            "source": guardrails_source,
++        },
+         {
+             "key": "DIAG_CHUNK_SAMPLE_N",
+             "value": diag_chunk_sample_n,
+             "source": chunk_source,
+         },
+     ]
+     _log.info(
+-        "evt=admin_settings_load flags=%s",
++        "evt=EVT_ADMIN_SETTINGS_LOAD snapshot=%s",
+         log_snapshot,
+         extra={"component": "admin.settings"},
+     )
+ 
+ 
+ def get_client_config_snapshot() -> dict[str, Any]:
+     """Return the current runtime flags exposed to browser clients."""
+ 
+     with _ADMIN_SETTINGS_LOCK:
+         return dict(_RUNTIME_FLAGS)
+ 
+ 
+ def set_admin_settings(
+     values: Mapping[str, Optional[Any]], *, updated_by: str | None = None
+ ) -> None:
+     """Persist multiple admin settings and refresh runtime flags."""
+ 
+     store = _get_admin_settings_store()
+     if store is None:
+         raise RuntimeError("Admin settings store unavailable")
+     normalized_updates: dict[str, Optional[Any]] = {}
+     for key, value in values.items():
+         normalized = _normalize_key(key)
+         store.set(normalized, value, updated_by=updated_by)
+         normalized_updates[normalized] = value
+     update_admin_settings_cache(normalized_updates)
+ 
+ 
+ reload_runtime_flags()
+ 
  
  __all__ = [
-     "EVT_WS_OPEN",
-     "EVT_WS_CLOSE",
-     "EVT_WS_JSON_RECV",
-     "EVT_WS_JSON_SEND",
-     "EVT_WS_AUDIO_RECV",
-     "EVT_WS_AUDIO_SEND",
-     "EVT_CHAT_USER",
-     "EVT_TTS_START",
-     "EVT_TTS_END",
-     "EVT_TTS_MASK",
-+    "EVT_TURN_STATE",
-+    "EVT_TURN_BEGIN",
-+    "EVT_TURN_END",
-+    "EVT_TURN_ROLLUP",
-+    "EVT_PERF_SUMMARY",
-     "EVT_POLICY_APPLIED",
-     "EVT_ACWR_RECOMPUTE",
-     "EVT_MIC_GATE",
-     "EVT_BARGE_DETECTED",
-     "EVT_BARGE_CONFIRMED",
-     "EVT_BARGE_REJECTED",
-     "EVT_ACTION_SAY_END",
-     "EVT_ASR_READY",
-     "EVT_ASR_OPEN",
-     "EVT_ASR_PARTIAL",
-     "EVT_ASR_FINAL",
-     "EVT_NLU",
-     "EVT_NLG",
-     "EVT_LLM_RESPONSE_START",
-     "EVT_LLM_RESPONSE_END",
-     "EVT_DIALOG_PLAN",
-     "EVT_HUD_STATE",
-     "EVT_CLIENT_MIC_OPEN",
+     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
+     "ASR_IDLE_CLOSE_MS",
+     "ASR_TRACE",
++    "AUDIO_GUARDRAILS",
+     "DEEPGRAM_API_KEY",
+     "DIAG_AUDIO_GUARD",
+     "DIAG_CHUNK_SAMPLE_N",
+     "DIAG_CLIENT_HUD",
+     "bool_env_or_db",
+     "get_admin_setting_raw",
+     "get_client_config_snapshot",
+     "get_env",
+     "int_env_or_db",
+     "reload_runtime_flags",
+     "set_admin_setting_raw",
+     "set_admin_settings",
+     "update_admin_settings_cache",
  ]
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 21f5b309faa9eafdbf71435bd7a71b961ed7fe59..a5dc014f216ce3c30bb18bdd95c9198d06667473 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -27,50 +27,51 @@ from app.voice_v2 import (
-     EVT_BARGE_DETECTED,
-     EVT_BARGE_REJECTED,
-     EVT_NLG,
-     EVT_NLU,
-     EVT_DIALOG_PLAN,
-     EVT_POLICY_APPLIED,
-     EVT_TTS_END,
-     EVT_TTS_START,
-     EVT_TTS_MASK,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- from app.voice_v2.nlu import NLUAdapter
- from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
- from app.voice_v2.llm import LLMAdapter
- from app.voice_v2.gate import GateController
- from app.voice_v2.conversation_buffer import ConversationBuffer
- from app.voice_v2.vad import VADAggregator
- from app.voice_v2.planner import _MODE_CHIPS, plan_turn
- from app.voice_v2.persona import default_chips_for_mode, load_persona
- from app.voice_v2.streaming import StreamingController
-+from app.voice_v2.rollup import TurnRollupAggregator
+diff --git a/ops/ADMIN_SETTINGS.md b/ops/ADMIN_SETTINGS.md
+index 64e0398bfd8df97783fdf9f75c2e90eca83528cd..82053b00b0d8ca9ace9bcfa20f4a49797787c119 100644
+--- a/ops/ADMIN_SETTINGS.md
++++ b/ops/ADMIN_SETTINGS.md
+@@ -1,20 +1,21 @@
+ # Admin settings bootstrap
  
+ The application expects a small set of runtime flags to exist in the `public.admin_settings` table. The canonical schema uses the columns `key` (primary key) and `value_jsonb` (JSONB payload). No legacy `value` or `settings_value` columns are required or supported.
  
- _log = logging.getLogger(__name__)
+ Seed the following keys to ensure deterministic behaviour on first boot:
  
+ ```sql
+ INSERT INTO public.admin_settings (key, value_jsonb, updated_by)
+ VALUES
+   ('diag_client_hud', 'false', 'bootstrap'),
++  ('audio_guardrails', '{"enabled": true}', 'bootstrap'),
+   ('diag_audio_guard', 'true', 'bootstrap'),
+   ('diag_chunk_sample_n', '10', 'bootstrap')
+ ON CONFLICT (key) DO UPDATE SET
+   value_jsonb = EXCLUDED.value_jsonb,
+   updated_at = NOW(),
+   updated_by = EXCLUDED.updated_by,
+   version = admin_settings.version + 1;
+ ```
  
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
- def _slugify_action_label(label: str) -> str:
-     """Normalize a suggestion label into a stable slug identifier."""
- 
-     normalized = re.sub(r"[^a-z0-9]+", "-", label.strip().lower())
-     slug = normalized.strip("-")
-     return slug or "action"
- 
- 
- READY = "Ready"
- LISTENING = "Listening"
- THINKING = "Thinking"
- RESPONDING = "Responding"
- CONFIRMING_BARGE = "ConfirmingBarge"
- 
- _STATE_ORDER = {
-@@ -170,50 +171,51 @@ class _NullExporter:
- class EngineV2:
-     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
- 
-     def __init__(
-         self,
-         exporter: FileExporter | None = None,
-         *,
-         telemetry_bus=bus,
-         fake_exporter: FileExporter | None = None,
-     ) -> None:
-         if exporter is None:
-             exporter = fake_exporter
-         if exporter is None:
-             exporter = _NullExporter()
-         self._exporter = exporter
-         self._bus = telemetry_bus
-         self._policy_snapshot: Dict[str, Any] | None = None
-         self._last_sid: Optional[str] = None
-         self._gate = GateController(publish=self._publish_gate_event)
-         self._sessions: Dict[str, _TurnSession] = {}
-         self._barge_handles: Dict[str, object] = {}
-         self._barge_attempts: Dict[str, Dict[str, Any]] = {}
-         self._aggregators: Dict[str, VADAggregator] = {}
-         self._streaming = StreamingController()
-         self._conversation_buffer = ConversationBuffer()
-+        self._turn_rollup = TurnRollupAggregator(self._bus)
-         self._nlu = NLUAdapter()
-         self._policy_decider = PolicyDecider()
-         self._llm = LLMAdapter(telemetry_bus=self._bus, auto_publish=False)
-         subscribe = getattr(self._bus, "subscribe", None)
-         if callable(subscribe):
-             self._chat_subscription = subscribe(EVT_CHAT_USER, self._handle_chat_user_event)
-             self._ws_send_subscription = subscribe(
-                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
-             )
-         else:
-             self._chat_subscription = None
-             self._ws_send_subscription = bus.subscribe(
-                 EVT_WS_JSON_SEND, self._handle_outbound_chat_frame
-             )
- 
-     @property
-     def policy_snapshot(self) -> Dict[str, Any] | None:
-         return self._policy_snapshot
- 
-     @policy_snapshot.setter
-     def policy_snapshot(self, snapshot: Dict[str, Any] | None) -> None:
-         self._policy_snapshot = dict(snapshot) if snapshot is not None else None
- 
-     def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
-         """Capture a successful WebSocket upgrade."""
-@@ -401,50 +403,52 @@ class EngineV2:
-             session = self._ensure_session(sid)
-         if session.state != LISTENING:
-             _log.warning(
-                 "evt=audio_ignored state=%s", session.state, extra={"sid": sid}
-             )
-         else:
-             self._commit_turn_start(sid, "audio_rx")
-         byte_count = len(chunk)
-         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
-         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
-         self._publish(event)
- 
-     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
-         """Capture the WebSocket closing handshake."""
-         meta = {"code": code, "reason": reason}
-         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
-         self._publish(event)
-         if self._last_sid == sid:
-             self._last_sid = None
-             self._policy_snapshot = None
-         self.cancel_current_tts(sid, reason="ended")
-         self._streaming.close_session(sid)
-         self._gate.clear_all(sid=sid)
-         self._cancel_barge_confirmation(sid, reject_reason="session_closed")
-         self._aggregators.pop(sid, None)
-+        if hasattr(self, "_turn_rollup"):
-+            self._turn_rollup.clear_session(sid)
-         self._sessions.pop(sid, None)
-         buffers = getattr(self._conversation_buffer, "_buffers", None)
-         if isinstance(buffers, dict):
-             buffers.pop(sid, None)
- 
-     def on_tts_start(
-         self, sid: str, utt_id: str, post_hold_ms: int | None = None
-     ) -> None:
-         """Engage the TTS mask and emit a telemetry breadcrumb."""
- 
-         session = self._ensure_session(sid)
-         session.tts_utt_id = utt_id
-         if session.turn_started_ms is not None and session.perf_tts_start_ms is None:
-             elapsed = _now_ms() - session.turn_started_ms
-             if elapsed < 0:
-                 elapsed = 0
-             session.perf_tts_start_ms = elapsed
- 
-         hold_ms = post_hold_ms or 0
-         voice_id, locale = self._voice_profile()
-         tts_meta = {
-             "tts": {"utt_id": utt_id, "post_hold_ms": hold_ms},
-             "voice_id": voice_id,
-             "locale": locale,
-         }
-diff --git a/app/voice_v2/rollup.py b/app/voice_v2/rollup.py
+ Values must be valid JSON literals (`true`, `false`, numbers, strings with quotes, or structured objects such as `{"enabled": true}`). Update the keys directly in Neon to toggle features at runtime without code changes.
+diff --git a/tests/test_admin_settings_store.py b/tests/test_admin_settings_store.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..9594acfaac9dc6bc966facd3f7d3d7ac0a536d15
+index 0000000000000000000000000000000000000000..d385553759072269766aea0b1dc8ad7ae2909991
 --- /dev/null
-+++ b/app/voice_v2/rollup.py
-@@ -0,0 +1,340 @@
-+from __future__ import annotations
-+
-+from dataclasses import dataclass
-+from typing import Any, Dict, Mapping, Optional, Tuple
-+
-+from app.voice_v2 import (
-+    EVT_ACTION_SAY_END,
-+    EVT_ASR_FINAL,
-+    EVT_LLM_RESPONSE_END,
-+    EVT_LLM_RESPONSE_START,
-+    EVT_TTS_END,
-+    EVT_TTS_START,
-+    EVT_TURN_BEGIN,
-+    EVT_WS_AUDIO_SEND,
-+    EVT_TURN_ROLLUP,
-+)
-+
-+_PCM_BYTES_PER_MS = 32  # 16 kHz, 16-bit mono => 32 bytes per millisecond
-+
-+
-+@dataclass
-+class _TurnMetrics:
-+    """Accumulate telemetry details for a single turn."""
-+
-+    turn_id: Optional[str] = None
-+    turn_begin_ts: Optional[int] = None
-+    asr_final_ts: Optional[int] = None
-+    llm_start_ts: Optional[int] = None
-+    llm_end_ts: Optional[int] = None
-+    llm_latency_ms: Optional[int] = None
-+    tts_start_ts: Optional[int] = None
-+    tts_end_ts: Optional[int] = None
-+    audio_bytes: int = 0
-+    audio_total_bytes: int = 0
-+    input_tokens: int = 0
-+    output_tokens: int = 0
-+    cost_est: float = 0.0
-+    interruption_reason: Optional[str] = None
-+    utt_id: Optional[str] = None
-+    emitted: bool = False
-+
-+
-+class TurnRollupAggregator:
-+    """Observe turn telemetry and publish EVT_TURN_ROLLUP once per reply."""
-+
-+    def __init__(self, telemetry_bus) -> None:
-+        self._bus = telemetry_bus
-+        self._metrics: Dict[str, Dict[str, _TurnMetrics]] = {}
-+        self._active_req_by_sid: Dict[str, str] = {}
-+        self._last_req_by_sid: Dict[str, str] = {}
-+        self._emitted: set[Tuple[str, str]] = set()
-+        self._subscriptions: list[str] = []
-+
-+        subscribe = getattr(self._bus, "subscribe", None)
-+        if callable(subscribe):
-+            self._subscriptions.extend(
-+                [
-+                    subscribe(EVT_TURN_BEGIN, self._handle_turn_begin),
-+                    subscribe(EVT_ASR_FINAL, self._handle_asr_final),
-+                    subscribe(EVT_LLM_RESPONSE_START, self._handle_llm_start),
-+                    subscribe(EVT_LLM_RESPONSE_END, self._handle_llm_end),
-+                    subscribe(EVT_TTS_START, self._handle_tts_start),
-+                    subscribe(EVT_TTS_END, self._handle_tts_end),
-+                    subscribe(EVT_WS_AUDIO_SEND, self._handle_audio_chunk),
-+                    subscribe(EVT_ACTION_SAY_END, self._handle_say_end),
-+                ]
-+            )
-+
-+    # ------------------------------------------------------------------
-+    # Public helpers
-+    # ------------------------------------------------------------------
-+    def clear_session(self, sid: str) -> None:
-+        """Remove any cached state for ``sid`` (e.g., when the session closes)."""
-+
-+        if not isinstance(sid, str) or not sid:
-+            return
-+        self._metrics.pop(sid, None)
-+        self._active_req_by_sid.pop(sid, None)
-+        self._last_req_by_sid.pop(sid, None)
-+        self._emitted = {key for key in self._emitted if key[0] != sid}
-+
-+    # ------------------------------------------------------------------
-+    # Event handlers
-+    # ------------------------------------------------------------------
-+    def _handle_turn_begin(self, event: Mapping[str, Any]) -> None:
-+        sid, req_id = self._extract_ids(event)
-+        if not sid or not req_id:
-+            return
-+        metrics = self._ensure_metrics(sid, req_id)
-+        metrics.turn_id = self._coerce_str(event.get("turn_id"), metrics.turn_id)
-+        metrics.turn_begin_ts = self._coerce_ms(event.get("ts_ms"), metrics.turn_begin_ts)
-+
-+    def _handle_asr_final(self, event: Mapping[str, Any]) -> None:
-+        sid, req_id = self._extract_ids(event)
-+        if not sid or not req_id:
-+            return
-+        metrics = self._ensure_metrics(sid, req_id)
-+        metrics.turn_id = self._coerce_str(event.get("turn_id"), metrics.turn_id)
-+        metrics.asr_final_ts = self._coerce_ms(event.get("ts_ms"), metrics.asr_final_ts)
-+
-+    def _handle_llm_start(self, event: Mapping[str, Any]) -> None:
-+        sid, req_id = self._extract_ids(event)
-+        if not sid or not req_id:
-+            return
-+        metrics = self._ensure_metrics(sid, req_id)
-+        metrics.llm_start_ts = self._coerce_ms(event.get("ts_ms"), metrics.llm_start_ts)
-+
-+    def _handle_llm_end(self, event: Mapping[str, Any]) -> None:
-+        sid, req_id = self._extract_ids(event)
-+        if not sid or not req_id:
-+            return
-+        metrics = self._ensure_metrics(sid, req_id)
-+        metrics.llm_end_ts = self._coerce_ms(event.get("ts_ms"), metrics.llm_end_ts)
-+        latency = self._coerce_int(event.get("latency_ms"))
-+        if latency is not None:
-+            metrics.llm_latency_ms = latency
-+
-+        usage = event.get("usage")
-+        if isinstance(usage, Mapping):
-+            prompt = self._coerce_int(
-+                usage.get("input_tokens")
-+                or usage.get("prompt_tokens")
-+                or usage.get("prompt")
-+            )
-+            completion = self._coerce_int(
-+                usage.get("output_tokens")
-+                or usage.get("completion_tokens")
-+                or usage.get("completion")
-+            )
-+            cost_est = self._coerce_float(usage.get("cost_est") or usage.get("cost"))
-+            if prompt is not None:
-+                metrics.input_tokens = prompt
-+            if completion is not None:
-+                metrics.output_tokens = completion
-+            if cost_est is not None:
-+                metrics.cost_est = cost_est
-+
-+        input_tokens = self._coerce_int(event.get("input_tokens"))
-+        output_tokens = self._coerce_int(event.get("output_tokens"))
-+        cost_est = self._coerce_float(event.get("cost_est"))
-+        if input_tokens is not None:
-+            metrics.input_tokens = input_tokens
-+        if output_tokens is not None:
-+            metrics.output_tokens = output_tokens
-+        if cost_est is not None:
-+            metrics.cost_est = cost_est
-+
-+    def _handle_tts_start(self, event: Mapping[str, Any]) -> None:
-+        sid, req_id = self._extract_ids(event)
-+        if not sid or not req_id:
-+            return
-+        metrics = self._ensure_metrics(sid, req_id)
-+        metrics.tts_start_ts = self._coerce_ms(event.get("ts_ms"), metrics.tts_start_ts)
-+        utt_id = self._extract_utt_id(event.get("meta"))
-+        if utt_id:
-+            metrics.utt_id = utt_id
-+        self._active_req_by_sid[sid] = req_id
-+        metrics.audio_bytes = 0
-+        metrics.audio_total_bytes = 0
-+
-+    def _handle_tts_end(self, event: Mapping[str, Any]) -> None:
-+        sid, req_id = self._extract_ids(event)
-+        if not sid:
-+            return
-+        if not req_id:
-+            req_id = self._active_req_by_sid.get(sid)
-+            if not req_id:
-+                return
-+        metrics = self._ensure_metrics(sid, req_id)
-+        metrics.tts_end_ts = self._coerce_ms(event.get("ts_ms"), metrics.tts_end_ts)
-+        total_bytes = self._coerce_int(event.get("total_bytes"))
-+        if total_bytes is not None and total_bytes > metrics.audio_total_bytes:
-+            metrics.audio_total_bytes = total_bytes
-+        utt_id = self._extract_utt_id(event.get("meta"))
-+        if utt_id:
-+            metrics.utt_id = utt_id
-+        self._active_req_by_sid.pop(sid, None)
-+
-+    def _handle_audio_chunk(self, event: Mapping[str, Any]) -> None:
-+        sid = self._coerce_str(event.get("sid"))
-+        if not sid:
-+            return
-+        req_id = self._active_req_by_sid.get(sid)
-+        if not req_id:
-+            return
-+        metrics = self._ensure_metrics(sid, req_id)
-+        chunk_bytes = self._coerce_int(event.get("bytes"))
-+        if chunk_bytes is not None and chunk_bytes > 0:
-+            metrics.audio_bytes += chunk_bytes
-+            if metrics.audio_bytes > metrics.audio_total_bytes:
-+                metrics.audio_total_bytes = metrics.audio_bytes
-+        utt_id = self._coerce_str(event.get("utt_id"))
-+        if utt_id:
-+            metrics.utt_id = utt_id
-+
-+    def _handle_say_end(self, event: Mapping[str, Any]) -> None:
-+        sid, req_id = self._extract_ids(event)
-+        if not sid:
-+            return
-+        if not req_id:
-+            req_id = self._last_req_by_sid.get(sid)
-+            if not req_id:
-+                return
-+        if (sid, req_id) in self._emitted:
-+            return
-+        metrics = self._metrics.get(sid, {}).get(req_id)
-+        if metrics is None:
-+            metrics = self._ensure_metrics(sid, req_id)
-+        if metrics.emitted:
-+            return
-+
-+        metrics.interruption_reason = self._coerce_str(event.get("reason"))
-+        payload = self._build_rollup_payload(sid, req_id, metrics)
-+        metrics.emitted = True
-+        self._emitted.add((sid, req_id))
-+        self._publish(payload)
-+        metrics_by_sid = self._metrics.get(sid)
-+        if metrics_by_sid is not None:
-+            metrics_by_sid.pop(req_id, None)
-+            if not metrics_by_sid:
-+                self._metrics.pop(sid, None)
-+
-+    # ------------------------------------------------------------------
-+    # Internal helpers
-+    # ------------------------------------------------------------------
-+    def _publish(self, payload: Dict[str, Any]) -> None:
-+        if hasattr(self._bus, "publish"):
-+            self._bus.publish(payload)
-+
-+    def _build_rollup_payload(
-+        self, sid: str, req_id: str, metrics: _TurnMetrics
-+    ) -> Dict[str, Any]:
-+        turn_id = metrics.turn_id
-+        asr_ms = self._duration(metrics.turn_begin_ts, metrics.asr_final_ts)
-+        llm_ms = metrics.llm_latency_ms
-+        if llm_ms is None:
-+            llm_ms = self._duration(metrics.llm_start_ts, metrics.llm_end_ts)
-+        tts_ms = self._duration(metrics.tts_start_ts, metrics.tts_end_ts)
-+        total_bytes = metrics.audio_total_bytes or metrics.audio_bytes
-+        speech_ms = 0
-+        if total_bytes > 0:
-+            speech_ms = max(total_bytes // _PCM_BYTES_PER_MS, 0)
-+
-+        interruption = False
-+        reason = metrics.interruption_reason
-+        if reason and reason.lower() != "ended":
-+            interruption = True
-+
-+        rollup: Dict[str, Any] = {
-+            "type": EVT_TURN_ROLLUP,
-+            "sid": sid,
-+            "req_id": req_id,
-+            "turn_id": turn_id,
-+            "asr_ms": asr_ms if asr_ms is not None else 0,
-+            "llm_ms": llm_ms if llm_ms is not None else 0,
-+            "tts_ms": tts_ms if tts_ms is not None else 0,
-+            "speech_ms": speech_ms,
-+            "input_tokens": metrics.input_tokens,
-+            "output_tokens": metrics.output_tokens,
-+            "cost_est": round(metrics.cost_est, 6),
-+            "interruption_during_tts": interruption,
-+        }
-+        if reason:
-+            rollup["reason"] = reason
-+        if turn_id is None:
-+            rollup.pop("turn_id", None)
-+        return rollup
-+
-+    def _ensure_metrics(self, sid: str, req_id: str) -> _TurnMetrics:
-+        metrics_by_req = self._metrics.setdefault(sid, {})
-+        metrics = metrics_by_req.get(req_id)
-+        if metrics is None:
-+            metrics = _TurnMetrics()
-+            metrics_by_req[req_id] = metrics
-+        self._last_req_by_sid[sid] = req_id
-+        return metrics
-+
-+    @staticmethod
-+    def _extract_ids(event: Mapping[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-+        sid = event.get("sid")
-+        req_id = event.get("req_id")
-+        return (
-+            sid if isinstance(sid, str) and sid else None,
-+            req_id if isinstance(req_id, str) and req_id else None,
-+        )
-+
-+    @staticmethod
-+    def _extract_utt_id(meta: Any) -> Optional[str]:
-+        if isinstance(meta, Mapping):
-+            tts = meta.get("tts")
-+            if isinstance(tts, Mapping):
-+                utt_id = tts.get("utt_id")
-+                if isinstance(utt_id, str) and utt_id:
-+                    return utt_id
-+        return None
-+
-+    @staticmethod
-+    def _duration(start_ms: Optional[int], end_ms: Optional[int]) -> Optional[int]:
-+        if start_ms is None or end_ms is None:
-+            return None
-+        duration = end_ms - start_ms
-+        return duration if duration >= 0 else 0
-+
-+    @staticmethod
-+    def _coerce_ms(candidate: Any, current: Optional[int] = None) -> Optional[int]:
-+        value = TurnRollupAggregator._coerce_int(candidate)
-+        if value is None:
-+            return current
-+        return value if value >= 0 else 0
-+
-+    @staticmethod
-+    def _coerce_int(candidate: Any) -> Optional[int]:
-+        if isinstance(candidate, bool):
-+            return int(candidate)
-+        try:
-+            value = int(candidate)
-+        except (TypeError, ValueError):
-+            return None
-+        return value
-+
-+    @staticmethod
-+    def _coerce_float(candidate: Any) -> Optional[float]:
-+        if candidate is None:
-+            return None
-+        try:
-+            value = float(candidate)
-+        except (TypeError, ValueError):
-+            return None
-+        if value != value:  # NaN check
-+            return None
-+        return value
-+
-+    @staticmethod
-+    def _coerce_str(candidate: Any, fallback: Optional[str] = None) -> Optional[str]:
-+        if isinstance(candidate, str) and candidate:
-+            return candidate
-+        return fallback
-+
-+
-+__all__ = ["TurnRollupAggregator"]
-diff --git a/tests/test_turn_rollup.py b/tests/test_turn_rollup.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..24f3f84cf7fb4480ad48fd483c7dd0c53f2b6761
---- /dev/null
-+++ b/tests/test_turn_rollup.py
-@@ -0,0 +1,81 @@
++++ b/tests/test_admin_settings_store.py
+@@ -0,0 +1,58 @@
++import json
 +import unittest
 +
-+from app.telemetry import bus
-+from app.voice_v2 import EVT_TURN_ROLLUP, EVT_TURN_BEGIN
-+from app.voice_v2.engine import EngineV2
++from app.db.admin_settings import AdminSettingsStore
 +
 +
-+class TurnRollupPublisherTests(unittest.TestCase):
++class _FakeCursor:
++    def __init__(self, row):
++        self._row = row
++        self.executed = []
++
++    def execute(self, query, params=None):
++        self.executed.append((query, params))
++
++    def fetchone(self):
++        return self._row
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, exc_type, exc, tb):
++        return False
++
++
++class _FakeConnection:
++    def __init__(self, cursor):
++        self._cursor = cursor
++        self.autocommit = False
++        self.closed = False
++
++    def cursor(self):
++        return self._cursor
++
++    def close(self):
++        self.closed = True
++
++
++class AdminSettingsStoreTest(unittest.TestCase):
++    def test_get_reads_value_jsonb_column(self) -> None:
++        payload = json.dumps({"enabled": True})
++        cursor = _FakeCursor((payload,))
++        connection = _FakeConnection(cursor)
++
++        store = AdminSettingsStore(conn_factory=lambda: connection)
++        value = store.get("audio_guardrails")
++
++        self.assertEqual(connection.closed, True)
++        self.assertTrue(cursor.executed, "expected a SELECT to run")
++        query, params = cursor.executed[0]
++        self.assertIn("value_jsonb", query.lower())
++        self.assertNotIn("settings_value", query.lower())
++        self.assertNotIn(" value ", query.lower().replace("value_jsonb", ""))
++        self.assertEqual(params, ("audio_guardrails",))
++        self.assertEqual(value, {"enabled": True})
++
++
++if __name__ == "__main__":  # pragma: no cover - unittest entrypoint
++    unittest.main()
+diff --git a/tests/test_config_admin_settings.py b/tests/test_config_admin_settings.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0b2e0e1a60dfd08b763b1d68aaae5f2f89dd4757
+--- /dev/null
++++ b/tests/test_config_admin_settings.py
+@@ -0,0 +1,78 @@
++import os
++import unittest
++from unittest.mock import patch
++
++from app import config
++
++
++class ConfigAdminSettingsTest(unittest.TestCase):
 +    def setUp(self) -> None:
-+        bus.reset()
-+        self.events: list[dict] = []
-+        self.token = bus.subscribe("*", self.events.append)
-+        self.engine = EngineV2(telemetry_bus=bus)
-+        self.sid = "sid-rollup"
-+        self.engine.on_open(self.sid, {})
-+        self.engine.on_audio(self.sid, b"seed", seq=0)
-+        self.engine.policy_snapshot = {
-+            "barge_in_enabled": True,
-+            "auto_commit_when_ready": True,
++        self._orig_cache = dict(config._ADMIN_SETTINGS_CACHE)
++        self._orig_runtime = dict(config._RUNTIME_FLAGS)
++        self._orig_store = config._ADMIN_SETTINGS_STORE
++        self._orig_flags = {
++            "DIAG_CLIENT_HUD": config.DIAG_CLIENT_HUD,
++            "DIAG_AUDIO_GUARD": config.DIAG_AUDIO_GUARD,
++            "DIAG_CHUNK_SAMPLE_N": config.DIAG_CHUNK_SAMPLE_N,
++            "AUDIO_GUARDRAILS": dict(config.AUDIO_GUARDRAILS),
++        }
++        self.addCleanup(self._restore_config_state)
++
++        config._ADMIN_SETTINGS_CACHE.clear()
++        config._RUNTIME_FLAGS.clear()
++        config._ADMIN_SETTINGS_STORE = False
++
++    def _restore_config_state(self) -> None:
++        config._ADMIN_SETTINGS_CACHE.clear()
++        config._ADMIN_SETTINGS_CACHE.update(self._orig_cache)
++        config._RUNTIME_FLAGS.clear()
++        config._RUNTIME_FLAGS.update(self._orig_runtime)
++        config._ADMIN_SETTINGS_STORE = self._orig_store
++        config.DIAG_CLIENT_HUD = self._orig_flags["DIAG_CLIENT_HUD"]
++        config.DIAG_AUDIO_GUARD = self._orig_flags["DIAG_AUDIO_GUARD"]
++        config.DIAG_CHUNK_SAMPLE_N = self._orig_flags["DIAG_CHUNK_SAMPLE_N"]
++        config.AUDIO_GUARDRAILS = dict(self._orig_flags["AUDIO_GUARDRAILS"])
++        for key, value in self._orig_runtime.items():
++            setattr(config, key, value)
++
++    def test_reload_runtime_flags_emits_snapshot_once(self) -> None:
++        updates = {
++            "diag_client_hud": True,
++            "audio_guardrails": {"enabled": False, "mode": "strict"},
++            "diag_audio_guard": False,
++            "diag_chunk_sample_n": 7,
 +        }
 +
-+    def tearDown(self) -> None:
-+        try:
-+            self.engine.on_close(self.sid, 1000, "test_teardown")
-+        except Exception:  # pragma: no cover - defensive cleanup
-+            pass
-+        if self.token is not None:
-+            bus.unsubscribe(self.token)
-+        bus.reset()
++        with patch.object(config._log, "info") as mock_info:
++            config.update_admin_settings_cache(updates)
 +
-+    def _find_events(self, event_type: str) -> list[dict]:
-+        return [evt for evt in self.events if evt.get("type") == event_type]
++        self.assertEqual(mock_info.call_count, 1)
++        args = mock_info.call_args.args
++        self.assertIn("EVT_ADMIN_SETTINGS_LOAD", args[0])
++        snapshot = args[1]
++        self.assertTrue(any(item["key"] == "AUDIO_GUARDRAILS" for item in snapshot))
++        guardrails_entry = next(item for item in snapshot if item["key"] == "AUDIO_GUARDRAILS")
++        self.assertEqual(guardrails_entry["value"], {"enabled": False, "mode": "strict"})
++        self.assertEqual(guardrails_entry["source"], "db")
++        self.assertEqual(config.AUDIO_GUARDRAILS, {"enabled": False, "mode": "strict"})
++        self.assertEqual(config.DIAG_CLIENT_HUD, True)
++        self.assertEqual(config.DIAG_AUDIO_GUARD, False)
++        self.assertEqual(config.DIAG_CHUNK_SAMPLE_N, 7)
 +
-+    def test_rollup_emitted_once_after_say_end(self) -> None:
-+        self.engine.on_asr_partial(self.sid, "", 0.8, "hello there")
-+        self.engine.on_asr_final(self.sid, "hello there")
++    def test_bool_guardrails_coerces_to_mapping(self) -> None:
++        with patch.object(config._log, "info"):
++            config.update_admin_settings_cache({"audio_guardrails": True})
++        self.assertEqual(config.AUDIO_GUARDRAILS, {"enabled": True})
 +
-+        utt_id = "utt-001"
-+        self.engine.on_tts_start(self.sid, utt_id, post_hold_ms=0)
-+        # Emit 6,400 bytes of PCM audio => 200 ms of speech at 16 kHz mono.
-+        self.engine.emit_tts_audio_chunk(self.sid, b"\x00\x00" * 3200)
-+        canceled = self.engine.cancel_current_tts(self.sid, reason="ended")
-+        self.assertTrue(canceled)
-+
-+        rollups = self._find_events(EVT_TURN_ROLLUP)
-+        self.assertEqual(len(rollups), 1)
-+        rollup = rollups[0]
-+
-+        self.assertEqual(rollup.get("type"), EVT_TURN_ROLLUP)
-+        self.assertEqual(rollup.get("sid"), self.sid)
-+        begin_events = self._find_events(EVT_TURN_BEGIN)
-+        expected_req_id = None
-+        if begin_events:
-+            expected_req_id = begin_events[-1].get("req_id")
-+        self.assertIsInstance(rollup.get("req_id"), str)
-+        if expected_req_id:
-+            self.assertEqual(rollup.get("req_id"), expected_req_id)
-+        self.assertFalse(rollup.get("interruption_during_tts"))
-+        self.assertEqual(rollup.get("speech_ms"), 200)
-+        self.assertIn("asr_ms", rollup)
-+        self.assertIn("llm_ms", rollup)
-+        self.assertIn("tts_ms", rollup)
-+        self.assertIn("cost_est", rollup)
-+        self.assertIn("input_tokens", rollup)
-+        self.assertIn("output_tokens", rollup)
-+
-+        if begin_events:
-+            expected_turn_id = (
-+                begin_events[-1].get("turn_id")
-+                or begin_events[-1].get("meta", {}).get("turn_id")
-+            )
-+            if expected_turn_id:
-+                self.assertEqual(rollup.get("turn_id"), expected_turn_id)
-+
-+        # Ensure a second cancellation does not emit a duplicate rollup.
-+        self.engine.cancel_current_tts(self.sid, reason="ended")
-+        self.assertEqual(len(self._find_events(EVT_TURN_ROLLUP)), 1)
++    def test_env_parse_failure_falls_back_to_default(self) -> None:
++        with patch.dict(os.environ, {"AUDIO_GUARDRAILS": "not-json"}, clear=False):
++            with patch.object(config._log, "warning") as mock_warning, patch.object(
++                config._log, "info"
++            ):
++                config.reload_runtime_flags()
++        self.assertEqual(config.AUDIO_GUARDRAILS, {"enabled": True})
++        mock_warning.assert_called_once()
 +
 +
-+if __name__ == "__main__":
++if __name__ == "__main__":  # pragma: no cover - unittest entrypoint
 +    unittest.main()

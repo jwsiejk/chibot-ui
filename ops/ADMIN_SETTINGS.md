@@ -8,6 +8,7 @@ Seed the following keys to ensure deterministic behaviour on first boot:
 INSERT INTO public.admin_settings (key, value_jsonb, updated_by)
 VALUES
   ('diag_client_hud', 'false', 'bootstrap'),
+  ('audio_guardrails', '{"enabled": true}', 'bootstrap'),
   ('diag_audio_guard', 'true', 'bootstrap'),
   ('diag_chunk_sample_n', '10', 'bootstrap')
 ON CONFLICT (key) DO UPDATE SET
