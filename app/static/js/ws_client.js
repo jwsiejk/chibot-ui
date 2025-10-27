@@ -26,6 +26,21 @@
   let lastTokenValue = null;
   let lastTokenMintedAt = null;
 
+  const MEDIA_RECORDER_MIME_TYPE = "audio/webm;codecs=opus";
+  const DEFAULT_TIMESLICE_MS = 250;
+  const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
+  const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
+
+  let micStream = null;
+  let micStreamPromise = null;
+  let mediaRecorderInstance = null;
+  let mediaRecorderHandlers = null;
+  let activeInputReqId = null;
+  let micOpenEmitted = false;
+  let inputDescriptor = null;
+  let inputVendor = null;
+  let hudListening = false;
+
   // Build a full WS URL and PRESERVE the query string as-is.
   function makeWsUrl(pathWithQuery) {
     if (typeof pathWithQuery !== "string" || !pathWithQuery) {
@@ -332,6 +347,300 @@
     }
   }
 
+  function emitHudState(state) {
+    if (typeof window === "undefined" || !state) {
+      return;
+    }
+    try {
+      window.dispatchEvent(new CustomEvent(CLIENT_HUD_STATE_EVENT, {
+        detail: {
+          type: CLIENT_HUD_STATE_EVENT,
+          meta: { state, source: "client" }
+        }
+      }));
+    } catch (err) {
+      console.warn("WSClient HUD event dispatch failed", err);
+    }
+  }
+
+  function updateHudListening(active) {
+    const normalized = Boolean(active);
+    if (hudListening === normalized) {
+      return;
+    }
+    hudListening = normalized;
+    emitHudState(normalized ? "Listening" : "Idle");
+  }
+
+  function emitClientMicOpenIfNeeded() {
+    if (micOpenEmitted) {
+      return;
+    }
+    micOpenEmitted = true;
+    if (typeof window !== "undefined") {
+      const detail = {
+        type: CLIENT_MIC_OPEN_EVENT,
+        ts: Date.now(),
+        vendor: inputVendor || null
+      };
+      try {
+        window.dispatchEvent(new CustomEvent(CLIENT_MIC_OPEN_EVENT, { detail }));
+      } catch (err) {
+        console.warn("WSClient mic open event dispatch failed", err);
+      }
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        const payload = {
+          type: "client.ready",
+          mic: {
+            state: "open",
+            ts: detail.ts
+          }
+        };
+        if (detail.vendor) {
+          payload.mic.vendor = detail.vendor;
+        }
+        try {
+          sendJson(payload);
+        } catch (err) {
+          console.warn("Failed to send client.ready mic frame", err);
+        }
+      }
+    }
+  }
+
+  function stopMicStream() {
+    if (!micStream) {
+      return;
+    }
+    const tracks = typeof micStream.getTracks === "function" ? micStream.getTracks() : [];
+    tracks.forEach((track) => {
+      if (track && typeof track.stop === "function") {
+        try {
+          track.stop();
+        } catch (err) {
+          console.warn("Failed to stop mic track", err);
+        }
+      }
+    });
+    micStream = null;
+    if (typeof window !== "undefined") {
+      window.__micStream = null;
+    }
+  }
+
+  async function ensureMicStream() {
+    if (micStream) {
+      const audioTracks = typeof micStream.getAudioTracks === "function" ? micStream.getAudioTracks() : [];
+      const hasLiveTrack = audioTracks.some((track) => track && track.readyState === "live");
+      if (hasLiveTrack) {
+        return micStream;
+      }
+      stopMicStream();
+    }
+    if (micStreamPromise) {
+      return micStreamPromise;
+    }
+    if (typeof navigator === "undefined" || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+      console.error("Media capture is not supported in this browser");
+      return null;
+    }
+    const constraints = {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true
+      }
+    };
+    micStreamPromise = navigator.mediaDevices.getUserMedia(constraints)
+      .then((stream) => {
+        micStreamPromise = null;
+        micStream = stream;
+        if (typeof window !== "undefined") {
+          window.__micStream = stream;
+        }
+        return stream;
+      })
+      .catch((err) => {
+        micStreamPromise = null;
+        console.error("getUserMedia for input capture failed", err);
+        throw err;
+      });
+    return micStreamPromise;
+  }
+
+  function handleAsrReadyFrame(frame) {
+    const descriptor = frame && frame.input;
+    if (!descriptor || typeof descriptor !== "object") {
+      inputDescriptor = null;
+      inputVendor = frame && typeof frame.vendor === "string" && frame.vendor ? frame.vendor : null;
+      micOpenEmitted = false;
+      return;
+    }
+    inputDescriptor = {
+      container: typeof descriptor.container === "string" ? descriptor.container.toLowerCase() : "",
+      codec: typeof descriptor.codec === "string" ? descriptor.codec.toLowerCase() : "",
+      rate_hz: Number(descriptor.rate_hz) || null,
+      channels: Number(descriptor.channels) || null
+    };
+    inputVendor = frame && typeof frame.vendor === "string" && frame.vendor ? frame.vendor : null;
+    micOpenEmitted = false;
+  }
+
+  function stopInputCapture(options = {}) {
+    activeInputReqId = null;
+    micOpenEmitted = false;
+    const recorder = mediaRecorderInstance;
+    const handlers = mediaRecorderHandlers;
+    mediaRecorderInstance = null;
+    mediaRecorderHandlers = null;
+    if (typeof window !== "undefined") {
+      window.__mediaRecorder = null;
+    }
+    if (recorder) {
+      if (handlers) {
+        if (handlers.data) {
+          recorder.removeEventListener("dataavailable", handlers.data);
+        }
+        if (handlers.error) {
+          recorder.removeEventListener("error", handlers.error);
+        }
+        if (handlers.stop) {
+          recorder.removeEventListener("stop", handlers.stop);
+        }
+      }
+      try {
+        if (recorder.state !== "inactive") {
+          recorder.stop();
+        }
+      } catch (err) {
+        console.warn("Failed to stop MediaRecorder", err);
+      }
+    }
+    if (!options || options.resetStream !== false) {
+      micStreamPromise = null;
+      stopMicStream();
+    }
+    updateHudListening(false);
+  }
+
+  async function startInputCapture(frame) {
+    if (typeof MediaRecorder === "undefined") {
+      console.error("MediaRecorder is not supported in this browser");
+      return;
+    }
+    if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(MEDIA_RECORDER_MIME_TYPE)) {
+      console.error("MediaRecorder does not support", MEDIA_RECORDER_MIME_TYPE);
+      return;
+    }
+    if (!inputDescriptor || inputDescriptor.container !== "webm" || inputDescriptor.codec !== "opus") {
+      console.error("Unsupported or missing ASR descriptor", inputDescriptor);
+      return;
+    }
+    const reqId = frame && typeof frame.req_id === "string" && frame.req_id ? frame.req_id : null;
+    if (
+      reqId &&
+      activeInputReqId &&
+      mediaRecorderInstance &&
+      mediaRecorderInstance.state !== "inactive" &&
+      reqId === activeInputReqId
+    ) {
+      console.log("Duplicate input.start for req_id", reqId);
+      return;
+    }
+    if (mediaRecorderInstance) {
+      stopInputCapture({ resetStream: false });
+    }
+    const capture = frame && frame.capture;
+    const timesliceCandidate = capture && Number(capture.timeslice_ms);
+    const timesliceMs = Number.isFinite(timesliceCandidate) && timesliceCandidate > 0
+      ? timesliceCandidate
+      : DEFAULT_TIMESLICE_MS;
+    let stream;
+    try {
+      stream = await ensureMicStream();
+    } catch (err) {
+      console.error("Failed to acquire microphone stream", err);
+      return;
+    }
+    if (!stream) {
+      console.error("Microphone stream unavailable for input.start");
+      return;
+    }
+    let recorder;
+    try {
+      recorder = new MediaRecorder(stream, { mimeType: MEDIA_RECORDER_MIME_TYPE });
+    } catch (err) {
+      console.error("Failed to create MediaRecorder", err);
+      return;
+    }
+    const dataHandler = async (event) => {
+      if (!event || !event.data || !event.data.size) {
+        return;
+      }
+      if (recorder !== mediaRecorderInstance) {
+        return;
+      }
+      try {
+        const buffer = await event.data.arrayBuffer();
+        if (!buffer || !buffer.byteLength) {
+          return;
+        }
+        const sent = sendBinary(buffer, { dropIfBusy: true });
+        if (!sent) {
+          console.warn("Dropped input audio chunk due to backpressure");
+        }
+      } catch (err) {
+        console.error("Failed to process MediaRecorder data", err);
+      }
+    };
+    const errorHandler = (event) => {
+      console.error("MediaRecorder error", event);
+      stopInputCapture({ resetStream: false });
+    };
+    const stopHandler = () => {
+      if (recorder === mediaRecorderInstance) {
+        mediaRecorderInstance = null;
+        mediaRecorderHandlers = null;
+        activeInputReqId = null;
+        if (typeof window !== "undefined") {
+          window.__mediaRecorder = null;
+        }
+        updateHudListening(false);
+        micOpenEmitted = false;
+        micStreamPromise = null;
+        stopMicStream();
+      }
+    };
+    recorder.addEventListener("dataavailable", dataHandler);
+    recorder.addEventListener("error", errorHandler);
+    recorder.addEventListener("stop", stopHandler);
+    mediaRecorderInstance = recorder;
+    mediaRecorderHandlers = { data: dataHandler, error: errorHandler, stop: stopHandler };
+    if (typeof window !== "undefined") {
+      window.__mediaRecorder = recorder;
+    }
+    activeInputReqId = reqId;
+    updateHudListening(true);
+    try {
+      recorder.start(timesliceMs);
+      emitClientMicOpenIfNeeded();
+    } catch (err) {
+      console.error("MediaRecorder start failed", err);
+      stopInputCapture();
+    }
+  }
+
+  function handleInputStartFrame(frame) {
+    Promise.resolve()
+      .then(() => startInputCapture(frame))
+      .catch((err) => {
+        console.error("input.start handler error", err);
+      });
+  }
+
+  function handleInputStopFrame() {
+    stopInputCapture({ reason: "input.stop" });
+  }
+
   function sanitizePolicyFrame(frame) {
     const safe = { type: "policy.interaction" };
     if (!frame || typeof frame !== "object") {
@@ -499,15 +808,12 @@
           }
         }
       }
+    } else if (frame.type === "input.start") {
+      handleInputStartFrame(frame);
+    } else if (frame.type === "input.stop") {
+      handleInputStopFrame();
     } else if (frame.type === "asr.ready") {
-      const recorder = window.AudioRecorder;
-      if (recorder && typeof recorder.handleAsrReady === "function") {
-        try {
-          recorder.handleAsrReady(frame);
-        } catch (err) {
-          console.warn("AudioRecorder asr.ready handler error", err);
-        }
-      }
+      handleAsrReadyFrame(frame);
     } else if (frame.type === "asr.partial") {
       const view = window.TranscriptView;
       if (view && typeof view.handlePartial === "function") {
@@ -626,6 +932,9 @@
       socket = null;
       expectInfoFrame = true;
       clearInfoWatchdog();
+      stopInputCapture();
+      inputDescriptor = null;
+      inputVendor = null;
     }
   }
 

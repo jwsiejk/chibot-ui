@@ -1,680 +1,534 @@
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index 636c3b4306c2a3e1ed05467aac676c276e4b1d7d..3a19033bf0b6f7d68cda99587c6f8413780c8119 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -166,50 +166,94 @@ class ASRRuntime:
-         state.stream_open = False
-         try:
-             self._client.close_stream(sid)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_stream_close_failed sid=%s", sid)
-         finally:
-             self._log_session_rollup(state)
-         state.req_id = None
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 732a87dfc231c3ed93168c25319e4ef08861ad12..605dbd4ef02edcd9f15348f517b50d3f73cd0fba 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -4,50 +4,65 @@
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
  
-     def prearm(self, sid: str) -> None:
-         """Request that the ASR stream open proactively for the session."""
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading WSClient");
+   }
+   const getAudioPlayer = () => window.AudioPlayer;
  
-         if not isinstance(sid, str) or not sid:
-             return
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
+   let infoWatchdogTimerId = null;
+   let lastPingAt = null;
+   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
+   let autoResumeAttemptToken = null;
+   let toastRoot = null;
+   let lastTokenValue = null;
+   let lastTokenMintedAt = null;
  
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-         if state.stream_open:
-             return
- 
-         state.prearm_requested = True
-         self._ensure_stream(sid, state)
- 
-+    async def open_if_needed(self, sid: str, *, req_id: str | None = None) -> None:
-+        """Ensure the streaming session is open before capturing microphone audio."""
++  const MEDIA_RECORDER_MIME_TYPE = "audio/webm;codecs=opus";
++  const DEFAULT_TIMESLICE_MS = 250;
++  const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
++  const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
 +
-+        if not isinstance(sid, str) or not sid:
-+            return
++  let micStream = null;
++  let micStreamPromise = null;
++  let mediaRecorderInstance = null;
++  let mediaRecorderHandlers = null;
++  let activeInputReqId = null;
++  let micOpenEmitted = false;
++  let inputDescriptor = null;
++  let inputVendor = null;
++  let hudListening = false;
 +
-+        loop = self._ensure_loop()
-+        if loop is None:
-+            return
+   // Build a full WS URL and PRESERVE the query string as-is.
+   function makeWsUrl(pathWithQuery) {
+     if (typeof pathWithQuery !== "string" || !pathWithQuery) {
+       return pathWithQuery;
+     }
+     const trimmed = pathWithQuery.trim();
+     if (/^wss?:/i.test(trimmed)) {
+       return trimmed;
+     }
+     try {
+       const loc = (typeof window !== "undefined" && window.location)
+         ? window.location
+         : (typeof location !== "undefined" ? location : null);
+       const scheme = loc && loc.protocol === "https:" ? "wss://" : "ws://";
+       const parsed = new URL(trimmed, loc ? loc.origin : undefined);
+       // IMPORTANT: keep the search/query intact
+       return `${scheme}${parsed.host}${parsed.pathname}${parsed.search}`;
+     } catch (err) {
+       console.warn("Failed to construct WS URL", err);
+       return trimmed;
+     }
+   }
+ 
+   function getResumeState() {
+     const state = AppState.getState();
+@@ -310,50 +325,344 @@
+     try {
+       open({ resumeToken: resume.token, skipRateLimitCancel: true });
+       return true;
+     } catch (err) {
+       console.error("Auto-resume open failed", err);
+       autoResumeAttemptToken = null;
+       updateState({ connectionState: "disconnected" });
+       return false;
+     }
+   }
+ 
+   function dispatchFrame(frame) {
+     if (!frame || typeof frame.type !== "string") return;
+     const type = frame.type;
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail: frame }));
+       if (type.includes(".")) {
+         const baseType = type.split(".")[0];
+         window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
+       }
+     } catch (err) {
+       console.warn("WSClient dispatch error", err);
+     }
+   }
+ 
++  function emitHudState(state) {
++    if (typeof window === "undefined" || !state) {
++      return;
++    }
++    try {
++      window.dispatchEvent(new CustomEvent(CLIENT_HUD_STATE_EVENT, {
++        detail: {
++          type: CLIENT_HUD_STATE_EVENT,
++          meta: { state, source: "client" }
++        }
++      }));
++    } catch (err) {
++      console.warn("WSClient HUD event dispatch failed", err);
++    }
++  }
 +
-+        state = self._sessions.get(sid)
-+        if state is None:
-+            state = _SessionState(sid=sid)
-+            self._sessions[sid] = state
++  function updateHudListening(active) {
++    const normalized = Boolean(active);
++    if (hudListening === normalized) {
++      return;
++    }
++    hudListening = normalized;
++    emitHudState(normalized ? "Listening" : "Idle");
++  }
 +
-+        if isinstance(req_id, str) and req_id:
-+            state.req_id = req_id
++  function emitClientMicOpenIfNeeded() {
++    if (micOpenEmitted) {
++      return;
++    }
++    micOpenEmitted = true;
++    if (typeof window !== "undefined") {
++      const detail = {
++        type: CLIENT_MIC_OPEN_EVENT,
++        ts: Date.now(),
++        vendor: inputVendor || null
++      };
++      try {
++        window.dispatchEvent(new CustomEvent(CLIENT_MIC_OPEN_EVENT, { detail }));
++      } catch (err) {
++        console.warn("WSClient mic open event dispatch failed", err);
++      }
++      if (socket && socket.readyState === WebSocket.OPEN) {
++        const payload = {
++          type: "client.ready",
++          mic: {
++            state: "open",
++            ts: detail.ts
++          }
++        };
++        if (detail.vendor) {
++          payload.mic.vendor = detail.vendor;
++        }
++        try {
++          sendJson(payload);
++        } catch (err) {
++          console.warn("Failed to send client.ready mic frame", err);
++        }
++      }
++    }
++  }
 +
-+        if state.stream_open:
-+            return
++  function stopMicStream() {
++    if (!micStream) {
++      return;
++    }
++    const tracks = typeof micStream.getTracks === "function" ? micStream.getTracks() : [];
++    tracks.forEach((track) => {
++      if (track && typeof track.stop === "function") {
++        try {
++          track.stop();
++        } catch (err) {
++          console.warn("Failed to stop mic track", err);
++        }
++      }
++    });
++    micStream = null;
++    if (typeof window !== "undefined") {
++      window.__micStream = null;
++    }
++  }
 +
-+        state.prearm_requested = True
-+        self._ensure_stream(sid, state)
++  async function ensureMicStream() {
++    if (micStream) {
++      const audioTracks = typeof micStream.getAudioTracks === "function" ? micStream.getAudioTracks() : [];
++      const hasLiveTrack = audioTracks.some((track) => track && track.readyState === "live");
++      if (hasLiveTrack) {
++        return micStream;
++      }
++      stopMicStream();
++    }
++    if (micStreamPromise) {
++      return micStreamPromise;
++    }
++    if (typeof navigator === "undefined" || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
++      console.error("Media capture is not supported in this browser");
++      return null;
++    }
++    const constraints = {
++      audio: {
++        echoCancellation: true,
++        noiseSuppression: true
++      }
++    };
++    micStreamPromise = navigator.mediaDevices.getUserMedia(constraints)
++      .then((stream) => {
++        micStreamPromise = null;
++        micStream = stream;
++        if (typeof window !== "undefined") {
++          window.__micStream = stream;
++        }
++        return stream;
++      })
++      .catch((err) => {
++        micStreamPromise = null;
++        console.error("getUserMedia for input capture failed", err);
++        throw err;
++      });
++    return micStreamPromise;
++  }
 +
-+        deadline = time.monotonic() + max(0.0, _STREAM_OPEN_TIMEOUT_S)
-+        while not state.stream_open:
-+            task = state.stream_open_task
-+            now = time.monotonic()
-+            if task is None or task.done():
-+                if now >= deadline:
-+                    break
-+                self._ensure_stream(sid, state)
-+                await asyncio.sleep(0.01)
-+                continue
-+            remaining = deadline - now
-+            if remaining <= 0:
-+                break
-+            try:
-+                await asyncio.wait_for(task, timeout=remaining)
-+            except asyncio.TimeoutError:
-+                break
-+            except asyncio.CancelledError:
-+                raise
++  function handleAsrReadyFrame(frame) {
++    const descriptor = frame && frame.input;
++    if (!descriptor || typeof descriptor !== "object") {
++      inputDescriptor = null;
++      inputVendor = frame && typeof frame.vendor === "string" && frame.vendor ? frame.vendor : null;
++      micOpenEmitted = false;
++      return;
++    }
++    inputDescriptor = {
++      container: typeof descriptor.container === "string" ? descriptor.container.toLowerCase() : "",
++      codec: typeof descriptor.codec === "string" ? descriptor.codec.toLowerCase() : "",
++      rate_hz: Number(descriptor.rate_hz) || null,
++      channels: Number(descriptor.channels) || null
++    };
++    inputVendor = frame && typeof frame.vendor === "string" && frame.vendor ? frame.vendor : null;
++    micOpenEmitted = false;
++  }
 +
-     # ------------------------------------------------------------------
-     # Internal helpers
-     # ------------------------------------------------------------------
-     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
-         loop = self._loop
-         if loop is not None:
-             return loop
-         try:
-             loop = asyncio.get_running_loop()
-         except RuntimeError:
-             loop = None
-         self._loop = loop
-         return loop
- 
-     def _apply_backpressure(self, sid: str, state: _SessionState) -> None:
-         if _BACKPRESSURE_THRESHOLD <= 0:
-             return
-         if state.buffered_bytes <= _BACKPRESSURE_THRESHOLD:
-             return
- 
-         dropped_chunks = 0
-         while state.pending and state.buffered_bytes > _BACKPRESSURE_THRESHOLD:
-             removed = state.pending.popleft()
-             state.buffered_bytes = max(0, state.buffered_bytes - len(removed))
-             dropped_chunks += 1
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index a0b241e7d0428af7decabefcb5e0e8efa3e20194..d76dabc12403a9e830f5a716d7f273e2cc1e7212 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -2,50 +2,52 @@
- from __future__ import annotations
- 
- import asyncio
- import contextlib
- import inspect
- import logging
- import os
- import time
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
- 
- import json
- from urllib.parse import parse_qs
- 
- from app import config
- from app.logging_setup import current_sid
- from app.security.jwt_utils import verify_ws_token
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ASR_OPEN,
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_CLIENT_MIC_OPEN,
-     EVT_HUD_STATE,
-+    EVT_TTS_END,
-+    EVT_TTS_MASK,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_frame
- 
- try:  # pragma: no cover - uvicorn is an optional dependency in tests
-     from uvicorn.protocols.utils import ClientDisconnected
- except Exception:  # pragma: no cover - fallback when uvicorn missing
-     class ClientDisconnected(Exception):  # type: ignore[no-redef]
-         """Fallback placeholder when uvicorn is unavailable."""
- 
- 
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
- RATE_LIMIT_WINDOW_SECONDS = 2.0
- RATE_LIMIT_CLOSE_CODE = 1013
- _AUDIO_VIOLATION_LIMIT = 3
- 
- AUDIO_SEQ_WINDOW = 8
- 
-@@ -217,54 +219,59 @@ class AdapterContext:
-     accepting_audio: bool = True
-     audio_violation_count: int = 0
-     outbound_queue_depth: int = 0
-     backpressure_state: Literal["off", "on"] = "off"
-     outbox: asyncio.Queue[Dict[str, Any]] | None = None
-     outbound_task: asyncio.Task[None] | None = None
-     subscription_token: Optional[str] = None
-     audio_subscription_token: Optional[str] = None
-     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
-     asr_ready: bool = False
-     asr_subscription_token: Optional[str] = None
-     asr_open_subscription_token: Optional[str] = None
-     server_keepalive_task: asyncio.Task[None] | None = None
-     last_policy_interaction: Optional[Dict[str, Any]] = None
-     partial_seq: int = 0
-     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
-     send_lock: asyncio.Lock | None = None
-     tts_end_ts: Optional[float] = None
-     diag_audio_seen: bool = False
-     diag_timer: asyncio.TimerHandle | None = None
-     await_user_expected: bool = False
-     await_user_pending: bool = False
-     await_user_after_mask: bool = False
-     tts_mask_phase: str = "off"
-     mask_subscription_token: Optional[str] = None
-+    tts_end_subscription_token: Optional[str] = None
-     hud_state: Optional[str] = None
-     client_mic_open: bool = False
-     mic_open_timer: asyncio.TimerHandle | None = None
-     mic_nudge_sent: bool = False
-+    await_user_req_id: Optional[str] = None
-+    last_tts_end_req_id: Optional[str] = None
-+    listen_handoff_done: set[str] = field(default_factory=set)
-+    listen_handoff_task: asyncio.Task[None] | None = None
- 
- 
- class ChatV2Adapter:
-     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
- 
-     def __init__(
-         self,
-         engine: EngineHooks | None = None,
-         exporter: FileExporter | None = None,
-         *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
-     ) -> None:
-         self.engine = engine
-         self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
-         self._ip_buckets: Dict[str, TokenBucket] = {}
-         self._contexts: Dict[str, AdapterContext] = {}
-         self._ping_interval_ms = max(
-             0,
-             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
-         )
-         self.tts_runtime = None
-         self.asr_runtime = None
-@@ -999,127 +1006,228 @@ class ChatV2Adapter:
-                 except RuntimeError:
-                     pass
- 
-         def _enqueue(payload: Dict[str, Any]) -> None:
-             if payload.get("type") == "asr.partial":
-                 self._offer_partial_frame(
-                     ctx,
-                     loop,
-                     payload,
-                     lambda frame: _queue_payload(frame, clone=False),
-                 )
-                 return
-             _queue_payload(payload)
- 
-         def _handle_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid or ctx.outbox is None:
-                 return
-             payload = self._extract_outbound_payload(ctx, event)
-             if payload is None:
-                 return
- 
-             def _on_loop() -> None:
-                 frame_type = payload.get("type")
-                 if frame_type == "tts.end":
-                     self._handle_tts_end_diag(ctx, loop)
--                    self._initiate_listen_handoff(ctx)
-                 _enqueue(payload)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
- 
--        def _complete_listen_handoff() -> None:
--            if not ctx.await_user_pending:
--                ctx.await_user_after_mask = False
-+        async def _perform_listen_handoff(req_id: str) -> None:
-+            runtime = getattr(self, "asr_runtime", None)
-+            if runtime is None:
-+                ctx.await_user_pending = False
-+                return
-+            open_if_needed = getattr(runtime, "open_if_needed", None)
-+            if not callable(open_if_needed):
-+                ctx.await_user_pending = False
-+                return
-+            try:
-+                await open_if_needed(ctx.sid, req_id=req_id)
-+            except asyncio.CancelledError:
-+                ctx.await_user_pending = False
-+                raise
-+            except Exception:  # pragma: no cover - defensive logging
-+                ctx.await_user_pending = False
-+                _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
-+                return
++  function stopInputCapture(options = {}) {
++    activeInputReqId = null;
++    micOpenEmitted = false;
++    const recorder = mediaRecorderInstance;
++    const handlers = mediaRecorderHandlers;
++    mediaRecorderInstance = null;
++    mediaRecorderHandlers = null;
++    if (typeof window !== "undefined") {
++      window.__mediaRecorder = null;
++    }
++    if (recorder) {
++      if (handlers) {
++        if (handlers.data) {
++          recorder.removeEventListener("dataavailable", handlers.data);
++        }
++        if (handlers.error) {
++          recorder.removeEventListener("error", handlers.error);
++        }
++        if (handlers.stop) {
++          recorder.removeEventListener("stop", handlers.stop);
++        }
++      }
++      try {
++        if (recorder.state !== "inactive") {
++          recorder.stop();
++        }
++      } catch (err) {
++        console.warn("Failed to stop MediaRecorder", err);
++      }
++    }
++    if (!options || options.resetStream !== false) {
++      micStreamPromise = null;
++      stopMicStream();
++    }
++    updateHudListening(false);
++  }
 +
-+            deadline = time.monotonic() + 1.0
-+            while not ctx.asr_ready and time.monotonic() < deadline:
-+                await asyncio.sleep(0.01)
++  async function startInputCapture(frame) {
++    if (typeof MediaRecorder === "undefined") {
++      console.error("MediaRecorder is not supported in this browser");
++      return;
++    }
++    if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(MEDIA_RECORDER_MIME_TYPE)) {
++      console.error("MediaRecorder does not support", MEDIA_RECORDER_MIME_TYPE);
++      return;
++    }
++    if (!inputDescriptor || inputDescriptor.container !== "webm" || inputDescriptor.codec !== "opus") {
++      console.error("Unsupported or missing ASR descriptor", inputDescriptor);
++      return;
++    }
++    const reqId = frame && typeof frame.req_id === "string" && frame.req_id ? frame.req_id : null;
++    if (
++      reqId &&
++      activeInputReqId &&
++      mediaRecorderInstance &&
++      mediaRecorderInstance.state !== "inactive" &&
++      reqId === activeInputReqId
++    ) {
++      console.log("Duplicate input.start for req_id", reqId);
++      return;
++    }
++    if (mediaRecorderInstance) {
++      stopInputCapture({ resetStream: false });
++    }
++    const capture = frame && frame.capture;
++    const timesliceCandidate = capture && Number(capture.timeslice_ms);
++    const timesliceMs = Number.isFinite(timesliceCandidate) && timesliceCandidate > 0
++      ? timesliceCandidate
++      : DEFAULT_TIMESLICE_MS;
++    let stream;
++    try {
++      stream = await ensureMicStream();
++    } catch (err) {
++      console.error("Failed to acquire microphone stream", err);
++      return;
++    }
++    if (!stream) {
++      console.error("Microphone stream unavailable for input.start");
++      return;
++    }
++    let recorder;
++    try {
++      recorder = new MediaRecorder(stream, { mimeType: MEDIA_RECORDER_MIME_TYPE });
++    } catch (err) {
++      console.error("Failed to create MediaRecorder", err);
++      return;
++    }
++    const dataHandler = async (event) => {
++      if (!event || !event.data || !event.data.size) {
++        return;
++      }
++      if (recorder !== mediaRecorderInstance) {
++        return;
++      }
++      try {
++        const buffer = await event.data.arrayBuffer();
++        if (!buffer || !buffer.byteLength) {
++          return;
++        }
++        const sent = sendBinary(buffer, { dropIfBusy: true });
++        if (!sent) {
++          console.warn("Dropped input audio chunk due to backpressure");
++        }
++      } catch (err) {
++        console.error("Failed to process MediaRecorder data", err);
++      }
++    };
++    const errorHandler = (event) => {
++      console.error("MediaRecorder error", event);
++      stopInputCapture({ resetStream: false });
++    };
++    const stopHandler = () => {
++      if (recorder === mediaRecorderInstance) {
++        mediaRecorderInstance = null;
++        mediaRecorderHandlers = null;
++        activeInputReqId = null;
++        if (typeof window !== "undefined") {
++          window.__mediaRecorder = null;
++        }
++        updateHudListening(false);
++        micOpenEmitted = false;
++        micStreamPromise = null;
++        stopMicStream();
++      }
++    };
++    recorder.addEventListener("dataavailable", dataHandler);
++    recorder.addEventListener("error", errorHandler);
++    recorder.addEventListener("stop", stopHandler);
++    mediaRecorderInstance = recorder;
++    mediaRecorderHandlers = { data: dataHandler, error: errorHandler, stop: stopHandler };
++    if (typeof window !== "undefined") {
++      window.__mediaRecorder = recorder;
++    }
++    activeInputReqId = reqId;
++    updateHudListening(true);
++    try {
++      recorder.start(timesliceMs);
++      emitClientMicOpenIfNeeded();
++    } catch (err) {
++      console.error("MediaRecorder start failed", err);
++      stopInputCapture();
++    }
++  }
 +
-+            if not ctx.asr_ready:
-+                ctx.await_user_pending = False
-+                _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
-                 return
- 
-+            if ctx.outbox is None:
-+                ctx.await_user_pending = False
-+                return
++  function handleInputStartFrame(frame) {
++    Promise.resolve()
++      .then(() => startInputCapture(frame))
++      .catch((err) => {
++        console.error("input.start handler error", err);
++      });
++  }
 +
-+            ready_frame = {
-+                "type": "asr.ready",
-+                "input": {
-+                    "container": "webm",
-+                    "codec": "opus",
-+                    "rate_hz": 48000,
-+                    "channels": 1,
-+                    "mime": "audio/webm;codecs=opus",
-+                },
-+            }
-+            input_start = {
-+                "type": "input.start",
-+                "capture": {
-+                    "container": "webm",
-+                    "codec": "opus",
-+                    "mime": "audio/webm;codecs=opus",
-+                    "timeslice_ms": 250,
-+                    "manual_gate": False,
-+                },
-+            }
++  function handleInputStopFrame() {
++    stopInputCapture({ reason: "input.stop" });
++  }
 +
-+            _enqueue(ready_frame)
-+            _enqueue(input_start)
-+
-+            ctx.listen_handoff_done.add(req_id)
-             ctx.await_user_pending = False
-             ctx.await_user_expected = False
-             ctx.await_user_after_mask = False
-             ctx.client_mic_open = False
-             ctx.mic_nudge_sent = False
--            if ctx.outbox is None:
--                return
-+            ctx.await_user_req_id = None
-+            ctx.last_tts_end_req_id = None
+   function sanitizePolicyFrame(frame) {
+     const safe = { type: "policy.interaction" };
+     if (!frame || typeof frame !== "object") {
+       safe.policy = {};
+       return safe;
+     }
+     Object.keys(frame).forEach((key) => {
+       if (key === "policy") return;
+       safe[key] = frame[key];
+     });
+     const policy = {};
+     const source = frame.policy;
+     if (source && typeof source === "object") {
+       if (typeof source.mode === "string") {
+         policy.mode = source.mode;
+       }
+       if (typeof source.allow_auto_vad === "boolean") {
+         policy.allow_auto_vad = source.allow_auto_vad;
+       }
+       if (typeof source.barge_in_enabled === "boolean") {
+         policy.barge_in_enabled = source.barge_in_enabled;
+       }
+       if (typeof source.ws_auth_mode === "string" && source.ws_auth_mode.trim()) {
+         policy.ws_auth_mode = source.ws_auth_mode.trim();
+       }
+@@ -477,59 +786,56 @@
+       handleErrorFrame(frame);
+     } else if (frame.type === "tts.start") {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+         audioPlayer.handleTtsStart(frame);
+       }
+     } else if (frame.type === "tts.end") {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+     } else if (frame.type === "start_listening") {
+       const recorder = window.AudioRecorder;
+       if (recorder) {
+         const handler = typeof recorder.startListening === "function"
+           ? recorder.startListening
+           : (typeof recorder.handleStartListening === "function" ? recorder.handleStartListening : null);
+         if (handler) {
+           try {
+             handler.call(recorder, frame);
+           } catch (err) {
+             console.warn("AudioRecorder start_listening handler error", err);
+           }
+         }
+       }
++    } else if (frame.type === "input.start") {
++      handleInputStartFrame(frame);
++    } else if (frame.type === "input.stop") {
++      handleInputStopFrame();
+     } else if (frame.type === "asr.ready") {
+-      const recorder = window.AudioRecorder;
+-      if (recorder && typeof recorder.handleAsrReady === "function") {
+-        try {
+-          recorder.handleAsrReady(frame);
+-        } catch (err) {
+-          console.warn("AudioRecorder asr.ready handler error", err);
+-        }
+-      }
++      handleAsrReadyFrame(frame);
+     } else if (frame.type === "asr.partial") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handlePartial === "function") {
+         try {
+           view.handlePartial(frame);
+         } catch (err) {
+           console.warn("TranscriptView partial handler error", err);
+         }
+       }
+     } else if (frame.type === "asr.final") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleFinal === "function") {
+         try {
+           view.handleFinal(frame);
+         } catch (err) {
+           console.warn("TranscriptView final handler error", err);
+         }
+       }
+     } else if (frame.type === "chat.message") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleChatMessage === "function") {
+         try {
+           view.handleChatMessage(frame);
+         } catch (err) {
+           console.warn("TranscriptView chat handler error", err);
+@@ -604,50 +910,53 @@
+     const handlers = ws && ws.__handlers;
+     if (!handlers) return;
+     ws.removeEventListener("open", handlers.open);
+     ws.removeEventListener("message", handlers.message);
+     ws.removeEventListener("error", handlers.error);
+     ws.removeEventListener("close", handlers.close);
+     delete ws.__handlers;
+     delete ws.__intentionalClose;
+   }
  
--            _enqueue({"type": "start_listening"})
-             self._emit_hud_state(ctx, "Listening")
-             self._schedule_mic_open_guard(ctx, loop)
-+            _log.info(
-+                "evt=listen_handoff_ready sid=%s req_id=%s input=webm/opus rate=48000 ch=1",
-+                ctx.sid,
-+                req_id,
-+            )
-+
-+        def _schedule_listen_handoff(trigger_req_id: Optional[str]) -> None:
-+            if not ctx.await_user_expected:
-+                return
-+            candidate = trigger_req_id
-+            if not isinstance(candidate, str) or not candidate:
-+                candidate = ctx.await_user_req_id
-+            if not isinstance(candidate, str) or not candidate:
-+                return
-+            if ctx.last_tts_end_req_id != candidate:
-+                return
-+            if candidate in ctx.listen_handoff_done:
-+                return
-+            if ctx.tts_mask_phase != "off":
-+                ctx.await_user_after_mask = True
-+                return
-+            if ctx.outbox is None:
-+                return
-+            if ctx.listen_handoff_task is not None and not ctx.listen_handoff_task.done():
-+                return
-+            if not ctx.await_user_pending:
-+                initiated = self._initiate_listen_handoff(ctx)
-+                if not initiated:
-+                    return
-+            ctx.await_user_after_mask = False
-+
-+            async def _run() -> None:
-+                try:
-+                    await _perform_listen_handoff(candidate)
-+                finally:
-+                    ctx.listen_handoff_task = None
-+
-+            ctx.listen_handoff_task = asyncio.create_task(_run())
+   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
+     if (!ws) return;
+     detachSocket(ws);
+     ws.__intentionalClose = true;
+     try {
+       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+         ws.close(1000, reason);
+       }
+     } catch (err) {
+       console.warn("WSClient cleanup close error", err);
+     }
+     if (socket === ws) {
+       socket = null;
+       expectInfoFrame = true;
+       clearInfoWatchdog();
++      stopInputCapture();
++      inputDescriptor = null;
++      inputVendor = null;
+     }
+   }
  
-         def _handle_asr_open_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
+   // OPEN: Use the EXACT URL provided (must include ?access_token=... unless resuming)
+   function open(options = {}, protocolsOverride) {
+     let resumeTokenValue = null;
+     let skipRateLimitCancel = false;
+     let urlOverride = null;
+     let protocols = protocolsOverride;
  
-             def _on_loop() -> None:
--                if not ctx.await_user_pending:
--                    ctx.await_user_after_mask = False
--                    return
--                if ctx.tts_mask_phase != "off":
--                    ctx.await_user_after_mask = True
--                    return
--                _complete_listen_handoff()
-+                if ctx.await_user_pending:
-+                    _schedule_listen_handoff(None)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.asr_open_subscription_token = bus.subscribe(EVT_ASR_OPEN, _handle_asr_open_event)
- 
-+        def _handle_tts_end_event(event: dict) -> None:
-+            if event.get("sid") != ctx.sid:
-+                return
-+            req_id = event.get("req_id")
-+            req_value = req_id if isinstance(req_id, str) and req_id else None
-+
-+            def _on_loop() -> None:
-+                if req_value:
-+                    ctx.last_tts_end_req_id = req_value
-+                    ctx.await_user_req_id = req_value
-+                _schedule_listen_handoff(req_value)
-+
-+            try:
-+                loop.call_soon_threadsafe(_on_loop)
-+            except RuntimeError:
-+                pass
-+
-+        ctx.tts_end_subscription_token = bus.subscribe(EVT_TTS_END, _handle_tts_end_event)
-+
-         def _handle_tts_mask_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
- 
-             raw_phase = event.get("phase")
-             if not isinstance(raw_phase, str):
-                 return
- 
-             stripped = raw_phase.strip()
-             normalized = stripped.lower()
-             phase_value = normalized or stripped or raw_phase
- 
-             def _on_loop() -> None:
-                 ctx.tts_mask_phase = phase_value
-                 if ctx.tts_mask_phase != "off":
-                     ctx.await_user_after_mask = False
-                     ctx.client_mic_open = False
-                     ctx.hud_state = None
-                     ctx.mic_nudge_sent = False
-                     self._cancel_mic_open_timer(ctx)
-                     return
--                if ctx.await_user_pending and ctx.await_user_after_mask:
--                    _complete_listen_handoff()
-+                _schedule_listen_handoff(None)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
--        ctx.mask_subscription_token = bus.subscribe("EVT_TTS_MASK", _handle_tts_mask_event)
-+        ctx.mask_subscription_token = bus.subscribe(EVT_TTS_MASK, _handle_tts_mask_event)
- 
-         def _handle_audio_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
-             chunk = event.get("chunk")
-             if isinstance(chunk, (bytes, bytearray, memoryview)):
-                 chunk_bytes = bytes(chunk)
-             else:
-                 return
- 
-             def _deliver() -> None:
-                 task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
-                 ctx.audio_tasks.add(task)
- 
-                 def _on_done(done: asyncio.Task[None]) -> None:
-                     ctx.audio_tasks.discard(done)
-                     try:
-                         done.result()
-                     except asyncio.CancelledError:
-                         pass
-                     except Exception:  # pragma: no cover - defensive logging
-                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
- 
-                 task.add_done_callback(_on_done)
- 
-@@ -1173,54 +1281,67 @@ class ChatV2Adapter:
- 
-         ctx.asr_subscription_token = bus.subscribe(EVT_ASR_READY, _handle)
- 
-     def _extract_outbound_payload(
-         self, ctx: AdapterContext, event: dict
-     ) -> Optional[Dict[str, Any]]:
-         payload = self._coerce_payload(event.get("payload"))
-         if payload is None:
-             payload = self._coerce_payload(event.get("frame"))
- 
-         if payload is None:
-             meta = event.get("meta")
-             if isinstance(meta, dict):
-                 ws_meta = meta.get("ws")
-                 if isinstance(ws_meta, dict):
-                     payload = self._coerce_payload(ws_meta.get("frame"))
-                     if payload is None:
-                         payload = self._coerce_payload(ws_meta.get("preview"))
- 
-         if payload is None:
-             return None
- 
-         frame_type = payload.get("type") if isinstance(payload, dict) else None
-         if frame_type == "policy.interaction" and isinstance(payload, dict):
-             ctx.await_user_expected = self._policy_requests_listen(payload)
--            if not ctx.await_user_expected:
-+            req_id_value = payload.get("req_id") if isinstance(payload, dict) else None
-+            if isinstance(req_id_value, str) and req_id_value:
-+                ctx.await_user_req_id = req_id_value
-+            else:
-+                ctx.await_user_req_id = None
-+            if ctx.await_user_expected:
-+                ctx.await_user_pending = False
-+                ctx.await_user_after_mask = False
-+                ctx.last_tts_end_req_id = None
-+            else:
-                 ctx.await_user_pending = False
-+                ctx.await_user_after_mask = False
-+                ctx.last_tts_end_req_id = None
-                 ctx.mic_nudge_sent = False
-                 self._cancel_mic_open_timer(ctx)
-+        if frame_type == "asr.ready":
-+            return None
-         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
-             return None
-         normalized = dict(payload)
-         if frame_type == "policy.interaction":
-             normalized = self._sanitize_policy_interaction(normalized)
-             last_policy = ctx.last_policy_interaction
-             if last_policy is not None and last_policy == normalized:
-                 return None
-             ctx.last_policy_interaction = json.loads(
-                 json.dumps(normalized, separators=(",", ":"))
-             )
-         if frame_type == "info":
-             meta = {}
-             source_meta = normalized.get("meta")
-             if isinstance(source_meta, dict):
-                 meta = dict(source_meta)
-             meta["sid"] = ctx.sid
-             normalized["meta"] = meta
-         return normalized
- 
-     @staticmethod
-     def _sanitize_policy_interaction(frame: Dict[str, Any]) -> Dict[str, Any]:
-         sanitized = {key: value for key, value in frame.items() if key != "policy"}
-         if "policy" in frame:
-             policy = frame.get("policy")
-@@ -1308,59 +1429,71 @@ class ChatV2Adapter:
-                 await send({"type": "websocket.send", "bytes": chunk})
-             except ClientDisconnected:
-                 _log.info(
-                     "evt=ws_outbound_client_disconnect sid=%s phase=audio",
-                     ctx.sid,
-                 )
- 
-     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
-         self._cancel_diag_timer(ctx)
-         self._cancel_mic_open_timer(ctx)
-         token = ctx.subscription_token
-         ctx.subscription_token = None
-         if token:
-             bus.unsubscribe(token)
- 
-         audio_token = ctx.audio_subscription_token
-         ctx.audio_subscription_token = None
-         if audio_token:
-             bus.unsubscribe(audio_token)
- 
-         mask_token = ctx.mask_subscription_token
-         ctx.mask_subscription_token = None
-         if mask_token:
-             bus.unsubscribe(mask_token)
- 
-+        tts_end_token = ctx.tts_end_subscription_token
-+        ctx.tts_end_subscription_token = None
-+        if tts_end_token:
-+            bus.unsubscribe(tts_end_token)
-+
-         task = ctx.outbound_task
-         ctx.outbound_task = None
-         if task:
-             task.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await task
- 
-         ctx.partial_coalescer.cancel()
- 
-+        pending_handoff = ctx.listen_handoff_task
-+        ctx.listen_handoff_task = None
-+        if pending_handoff is not None:
-+            pending_handoff.cancel()
-+            with contextlib.suppress(asyncio.CancelledError):
-+                await pending_handoff
-+
-         for task in list(ctx.audio_tasks):
-             task.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await task
-         ctx.audio_tasks.clear()
- 
-         ctx.outbox = None
- 
-     def _handle_tts_end_diag(
-         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
-     ) -> None:
-         if not config.DIAG_AUDIO_GUARD:
-             return
-         ctx.tts_end_ts = time.monotonic()
-         ctx.diag_audio_seen = False
-         self._cancel_diag_timer(ctx)
-         try:
-             ctx.diag_timer = loop.call_later(
-                 _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS,
-                 self._emit_no_audio_diag,
-                 ctx,
-                 loop,
-             )
-         except RuntimeError:
-             ctx.diag_timer = None
-@@ -1484,69 +1617,72 @@ class ChatV2Adapter:
-         try:
-             asyncio.create_task(
-                 self._publish(
-                     "EVT_MIC_OPEN_TIMEOUT",
-                     ctx.sid,
-                     {"timeout_s": _MIC_OPEN_TIMEOUT_SECONDS},
-                 )
-             )
-         except RuntimeError:
-             pass
-         if ctx.outbox is not None:
-             nudge_frame = {
-                 "type": "hud.nudge",
-                 "code": "mic_permissions",
-                 "reason": "mic_open_timeout",
-             }
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": ctx.sid, "payload": nudge_frame})
- 
-     @staticmethod
-     def _cancel_mic_open_timer(ctx: AdapterContext) -> None:
-         timer = ctx.mic_open_timer
-         ctx.mic_open_timer = None
-         if timer is not None:
-             timer.cancel()
- 
--    def _initiate_listen_handoff(self, ctx: AdapterContext) -> None:
-+    def _initiate_listen_handoff(self, ctx: AdapterContext) -> bool:
-         if not ctx.await_user_expected or ctx.await_user_pending:
--            return
-+            return False
- 
-         runtime = getattr(self, "asr_runtime", None)
-         if runtime is None:
--            return
-+            return False
- 
-         prearm = getattr(runtime, "prearm", None)
-         if not callable(prearm):
--            return
-+            return False
- 
-         ctx.await_user_pending = True
-         ctx.await_user_after_mask = False
-         try:
-             prearm(ctx.sid)
-         except Exception:  # pragma: no cover - defensive logging
-             ctx.await_user_pending = False
-             _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
-+            return False
-+
-+        return True
- 
-     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
-         token = ctx.asr_subscription_token
-         ctx.asr_subscription_token = None
-         if token:
-             bus.unsubscribe(token)
-         ctx.asr_ready = False
-         ctx.await_user_after_mask = False
- 
-         open_token = ctx.asr_open_subscription_token
-         ctx.asr_open_subscription_token = None
-         if open_token:
-             bus.unsubscribe(open_token)
-         
-     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
-         """Record the estimated outbound queue depth and emit diagnostics if needed."""
- 
-         ctx = self._contexts.get(sid)
-         if ctx is None:
-             return
- 
-         if not isinstance(queued, int):
-             try:
-                 queued = int(queued)
-             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+     if (typeof options === "string") {
+       urlOverride = options;
+     } else if (options && typeof options === "object") {
+       const { resumeToken = null, skipRateLimitCancel: skip = false } = options;
+       const candidate = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
+       if (candidate) {
+         resumeTokenValue = candidate;
+       }
+       skipRateLimitCancel = Boolean(skip);
+       if (!urlOverride && typeof options.url === "string" && options.url.trim()) {
+         urlOverride = options.url.trim();
+       }
+       if (protocols === undefined && options.protocols !== undefined) {
+         protocols = options.protocols;
+       }
