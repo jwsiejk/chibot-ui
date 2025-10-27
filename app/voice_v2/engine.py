@@ -145,6 +145,7 @@ class _TurnSession:
     tts_utt_id: Optional[str] = None
     tts_mask_phase: str = "off"
     req_id: Optional[str] = None
+    nlu_req_id: Optional[str] = None
     perf_first_partial_ms: Optional[int] = None
     perf_final_ms: Optional[int] = None
     perf_tts_start_ms: Optional[int] = None
@@ -552,6 +553,15 @@ class EngineV2:
 
         req_id = active_req_id
 
+        if session.nlu_req_id == req_id and session.nlu_emitted:
+            _log.warning(
+                "evt=nlu_duplicate_req_id sid=%s req_id=%s",
+                sid,
+                req_id,
+                extra={"sid": sid, "req_id": req_id},
+            )
+            return
+
         if not session.asr_final_emitted:
             session.asr_final_emitted = True
 
@@ -564,12 +574,22 @@ class EngineV2:
             final_event = self._envelope(sid, EVT_ASR_FINAL, final_payload)
             self._publish(final_event)
 
-            if not session.nlu_emitted:
+            skip_nlu = session.nlu_req_id == req_id
+
+            if skip_nlu:
+                _log.warning(
+                    "evt=nlu_duplicate_req_id sid=%s req_id=%s",
+                    sid,
+                    req_id,
+                    extra={"sid": sid, "req_id": req_id},
+                )
+            elif not session.nlu_emitted:
                 nlu_result = self._nlu.extract(req_id, text)
                 nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
                 nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
                 self._publish(nlu_event)
                 session.nlu_emitted = True
+                session.nlu_req_id = req_id
                 self._emit_dialog_plan(sid, session, req_id, turn_id, text)
                 self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
 
@@ -1262,6 +1282,7 @@ class EngineV2:
         if new_state == LISTENING:
             session.turn_id = str(uuid.uuid4())
             session.req_id = f"req-{uuid.uuid4().hex}"
+            session.nlu_req_id = None
             session.turn_started_ms = now_ms
             session.perf_first_partial_ms = None
             session.perf_final_ms = None
@@ -1311,6 +1332,7 @@ class EngineV2:
             session.turn_started_ms = None
             session.tts_utt_id = None
             session.req_id = None
+            session.nlu_req_id = None
             session.perf_first_partial_ms = None
             session.perf_final_ms = None
             session.perf_tts_start_ms = None

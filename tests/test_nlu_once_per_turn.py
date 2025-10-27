@@ -2,7 +2,7 @@ import unittest
 
 from app.telemetry import bus
 from app.voice_v2 import EVT_ASR_FINAL, EVT_NLU
-from app.voice_v2.engine import EngineV2
+from app.voice_v2.engine import EngineV2, LISTENING
 
 
 class TestNLUOncePerTurn(unittest.TestCase):
@@ -49,6 +49,22 @@ class TestNLUOncePerTurn(unittest.TestCase):
         finals = self._events(EVT_ASR_FINAL)
         nlus = self._events(EVT_NLU)
         self.assertEqual(1, len(finals))
+        self.assertEqual(1, len(nlus))
+
+    def test_duplicate_req_id_guarded(self) -> None:
+        req_id = "req-guard"
+        self.engine.on_asr_partial(self.sid, req_id, 0.7, "guarded turn")
+        self.engine.on_asr_final(self.sid, "guarded turn", req_id=req_id)
+
+        session = self.engine._sessions[self.sid]
+        session.state = LISTENING
+        session.req_id = req_id
+        session.asr_final_emitted = False
+        session.nlu_emitted = False
+
+        self.engine.on_asr_final(self.sid, "guarded turn take 2", req_id=req_id)
+
+        nlus = self._events(EVT_NLU)
         self.assertEqual(1, len(nlus))
 
     def test_sessions_do_not_cross(self) -> None:

@@ -1,140 +1,341 @@
-diff --git a/tests/test_tts_mask_lifecycle.py b/tests/test_tts_mask_lifecycle.py
-index a97244cdc84151cdb71af76aea995e01143ded07..105426f6715a955e549ad679e7108eedd7448de8 100644
---- a/tests/test_tts_mask_lifecycle.py
-+++ b/tests/test_tts_mask_lifecycle.py
-@@ -1,124 +1,124 @@
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index e1ee8a6fd650a77745b8f0726ede9856f1045a31..21f5b309faa9eafdbf71435bd7a71b961ed7fe59 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -123,50 +123,51 @@ class _Envelope:
+     type: str
+     sid: str
+     payload: Dict[str, Any]
+ 
+     def to_dict(self) -> Dict[str, Any]:
+         data = {"type": self.type, "sid": self.sid}
+         data.update(self.payload)
+         if "meta" in data and isinstance(data["meta"], Mapping):
+             data["meta"] = dict(data["meta"])
+         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
+             data["ts_ms"] = _now_ms()
+         data.setdefault("who", "server")
+         data.setdefault("source", "voice_engine")
+         data.setdefault("level", "debug")
+         return data
+ 
+ 
+ @dataclass
+ class _TurnSession:
+     state: str = READY
+     turn_id: Optional[str] = None
+     turn_started_ms: Optional[int] = None
+     tts_utt_id: Optional[str] = None
+     tts_mask_phase: str = "off"
+     req_id: Optional[str] = None
++    nlu_req_id: Optional[str] = None
+     perf_first_partial_ms: Optional[int] = None
+     perf_final_ms: Optional[int] = None
+     perf_tts_start_ms: Optional[int] = None
+     asr_final_emitted: bool = False
+     nlu_emitted: bool = False
+     policy_emitted: bool = False
+     nlg_emitted: bool = False
+     plan_emitted: bool = False
+     greet_emitted: bool = False
+     plan: Optional[Dict[str, Any]] = None
+     suggestions_emitted: bool = False
+     turn_committed: bool = False
+ 
+ 
+ class _NullExporter:
+     """Exporter stub used when no exporter is provided."""
+ 
+     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
+         return
+ 
+ 
+ class EngineV2:
+     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
+ 
+     def __init__(
+@@ -530,68 +531,87 @@ class EngineV2:
+         if not isinstance(active_req_id, str) or not active_req_id:
+             active_req_id = provided_req_id or f"req-{uuid.uuid4().hex}"
+             session.req_id = active_req_id
+         elif provided_req_id is not None and provided_req_id != active_req_id:
+             _log.debug(
+                 "evt=asr_final_req_id_mismatch sid=%s active_req_id=%s provided_req_id=%s",
+                 sid,
+                 active_req_id,
+                 provided_req_id,
+             )
+             return
+ 
+         if session.turn_started_ms is not None:
+             elapsed = _now_ms() - session.turn_started_ms
+             if elapsed < 0:
+                 elapsed = 0
+             session.perf_final_ms = elapsed
+         else:
+             session.turn_started_ms = _now_ms()
+ 
+         turn_id = session.turn_id or str(uuid.uuid4())
+         session.turn_id = turn_id
+ 
+         req_id = active_req_id
+ 
++        if session.nlu_req_id == req_id and session.nlu_emitted:
++            _log.warning(
++                "evt=nlu_duplicate_req_id sid=%s req_id=%s",
++                sid,
++                req_id,
++                extra={"sid": sid, "req_id": req_id},
++            )
++            return
++
+         if not session.asr_final_emitted:
+             session.asr_final_emitted = True
+ 
+             final_payload: Dict[str, Any] = {
+                 "req_id": req_id,
+                 "turn_id": turn_id,
+                 "text": text,
+                 "confidence": 0.9,
+             }
+             final_event = self._envelope(sid, EVT_ASR_FINAL, final_payload)
+             self._publish(final_event)
+ 
+-            if not session.nlu_emitted:
++            skip_nlu = session.nlu_req_id == req_id
++
++            if skip_nlu:
++                _log.warning(
++                    "evt=nlu_duplicate_req_id sid=%s req_id=%s",
++                    sid,
++                    req_id,
++                    extra={"sid": sid, "req_id": req_id},
++                )
++            elif not session.nlu_emitted:
+                 nlu_result = self._nlu.extract(req_id, text)
+                 nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
+                 nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
+                 self._publish(nlu_event)
+                 session.nlu_emitted = True
++                session.nlu_req_id = req_id
+                 self._emit_dialog_plan(sid, session, req_id, turn_id, text)
+                 self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
+ 
+             self._emit_user_chat_message(
+                 sid,
+                 text,
+                 turn_id,
+                 req_id,
+                 origin="voice",
+             )
+ 
+         self._set_state(sid, THINKING, reason="asr_final")
+ 
+     def on_asr_partial(
+         self,
+         sid: str,
+         req_id: str,
+         confidence: float,
+         partial_text: Optional[str] = None,
+     ) -> None:
+         session = self._ensure_session(sid)
+ 
+         if session.state == READY:
+             self._set_state(sid, LISTENING, reason="asr_partial")
+             session = self._ensure_session(sid)
+@@ -1240,99 +1260,101 @@ class EngineV2:
+             relation = "unknown"
+             if prev_rank >= 0 and next_rank >= 0:
+                 relation = "forward" if next_rank > prev_rank else "backward"
+             _log.warning(
+                 "evt=state_transition_illegal from=%s to=%s relation=%s",
+                 previous,
+                 new_state,
+                 relation,
+                 extra={"sid": sid},
+             )
+             return
+ 
+         if new_state == LISTENING:
+             self._publish_tts_mask(sid, "off")
+             if session.tts_mask_phase != "off":
+                 _log.warning(
+                     "evt=state_transition_mask_blocked", extra={"sid": sid}
+                 )
+                 return
+ 
+         now_ms = _now_ms()
+ 
+         if new_state == LISTENING:
+             session.turn_id = str(uuid.uuid4())
+             session.req_id = f"req-{uuid.uuid4().hex}"
++            session.nlu_req_id = None
+             session.turn_started_ms = now_ms
+             session.perf_first_partial_ms = None
+             session.perf_final_ms = None
+             session.perf_tts_start_ms = None
+             session.asr_final_emitted = False
+             session.nlu_emitted = False
+             session.policy_emitted = False
+             session.nlg_emitted = False
+             session.plan_emitted = False
+             session.suggestions_emitted = False
+             session.plan = None
+             session.tts_mask_phase = "off"
+             session.turn_committed = False
+ 
+         if (
+             new_state == READY
+             and previous in {LISTENING, THINKING, RESPONDING}
+             and session.turn_id
+         ):
+             start_ms = session.turn_started_ms or now_ms
+             duration_ms = now_ms - start_ms
+             if duration_ms <= 0:
+                 duration_ms = 1
+             turn_id = session.turn_id
+             req_id = session.req_id
+             end_payload = {
+                 "turn_id": turn_id,
+                 "req_id": req_id,
+                 "meta": {
+                     "turn_id": turn_id,
+                     "req_id": req_id,
+                     "duration_ms": duration_ms,
+                 },
+             }
+             end_event = self._envelope(sid, EVT_TURN_END, end_payload)
+             self._publish(end_event)
+             summary_payload = {
+                 "turn_id": turn_id,
+                 "req_id": req_id,
+                 "t_first_partial_ms": session.perf_first_partial_ms,
+                 "t_final_ms": session.perf_final_ms,
+                 "t_tts_start_ms": session.perf_tts_start_ms,
+             }
+             perf_event = self._envelope(sid, EVT_PERF_SUMMARY, summary_payload)
+             self._publish(perf_event)
+             session.turn_id = None
+             session.turn_started_ms = None
+             session.tts_utt_id = None
+             session.req_id = None
++            session.nlu_req_id = None
+             session.perf_first_partial_ms = None
+             session.perf_final_ms = None
+             session.perf_tts_start_ms = None
+             session.asr_final_emitted = False
+             session.nlu_emitted = False
+             session.policy_emitted = False
+             session.nlg_emitted = False
+             session.plan_emitted = False
+             session.suggestions_emitted = False
+             session.plan = None
+             session.turn_committed = False
+ 
+         session.state = new_state
+ 
+         aggregator = self._aggregators.get(sid)
+         if aggregator is not None:
+             aggregator.on_engine_mode_change(new_state)
+ 
+         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
+         if reason is not None:
+             breadcrumb_meta["reason"] = reason
+         breadcrumb_payload = {"meta": breadcrumb_meta}
+         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
+         self._publish(breadcrumb_event)
+ 
+diff --git a/tests/test_nlu_once_per_turn.py b/tests/test_nlu_once_per_turn.py
+index 5e0e55df3dbb463d630b777082b760446b6b31fb..df31dc4dca6abe38735aa7ec85d6a000f80540fd 100644
+--- a/tests/test_nlu_once_per_turn.py
++++ b/tests/test_nlu_once_per_turn.py
+@@ -1,73 +1,89 @@
  import unittest
  
--from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END
-+from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END, EVT_TTS_MASK
- from app.voice_v2.engine import EngineV2
+ from app.telemetry import bus
+ from app.voice_v2 import EVT_ASR_FINAL, EVT_NLU
+-from app.voice_v2.engine import EngineV2
++from app.voice_v2.engine import EngineV2, LISTENING
  
  
- class _FakeExporter:
-     def __init__(self) -> None:
-         self.events: list[tuple[str, dict]] = []
- 
-     def write(self, sid: str, event: dict) -> None:  # pragma: no cover - exercised in tests
-         self.events.append((sid, dict(event)))
- 
- 
- class _FakeBus:
-     def __init__(self) -> None:
+ class TestNLUOncePerTurn(unittest.TestCase):
+     def setUp(self) -> None:
+         bus.reset()
          self.events: list[dict] = []
+         self.token = bus.subscribe("*", self.events.append)
+         self.engine = EngineV2(telemetry_bus=bus)
+         self.sid = "sid-nlu"
+         self.engine.on_open(self.sid, {})
+         self.engine.on_audio(self.sid, b"abc", seq=0)
  
-     def publish(self, event: dict) -> None:  # pragma: no cover - exercised in tests
-         self.events.append(dict(event))
+     def tearDown(self) -> None:
+         bus.unsubscribe(self.token)
+         bus.reset()
  
+     def _events(self, event_type: str) -> list[dict]:
+         return [evt for evt in self.events if evt["type"] == event_type]
  
- class TtsMaskLifecycleTests(unittest.TestCase):
-     def test_tts_mask_breadcrumb_sequence(self) -> None:
-         bus = _FakeBus()
-         exporter = _FakeExporter()
-         engine = EngineV2(exporter, telemetry_bus=bus)
+     def test_single_final_emits_nlu_once(self) -> None:
+         self.engine.on_asr_final(self.sid, "hello there order 12345")
  
-         sid = "sid-123"
-         utt_id = "utt-456"
+         finals = self._events(EVT_ASR_FINAL)
+         nlus = self._events(EVT_NLU)
+         self.assertEqual(1, len(finals))
+         self.assertEqual(1, len(nlus))
  
-         engine.on_tts_start(sid, utt_id)
+         final_event = finals[0]
+         nlu_event = nlus[0]
+         self.assertEqual(final_event["req_id"], nlu_event["req_id"])
+         self.assertEqual("1", nlu_event["schema_version"])
+         self.assertIn("intent", nlu_event)
+         self.assertIn("entities", nlu_event)
+         self.assertIn("confidence", nlu_event)
  
--        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-+        mask_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
-         self.assertEqual(len(mask_events), 1)
--        self.assertEqual(mask_events[0]["phase"], "engaged")
-+        self.assertEqual(mask_events[0]["phase"], "on")
+         final_index = self.events.index(final_event)
+         nlu_index = self.events.index(nlu_event)
+         self.assertLess(final_index, nlu_index)
  
-         gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
-         self.assertGreaterEqual(len(gate_events), 1)
-         engaged_gate = gate_events[-1]["meta"]["gate"]
-         engaged_effective = engaged_gate.get("effective", engaged_gate["mask"])
-         self.assertTrue(engaged_effective)
-         self.assertIn("tts_active", engaged_gate["reasons"])
-         self.assertTrue(engaged_gate["reasons"]["tts_active"])
+     def test_duplicate_finals_deduped(self) -> None:
+         self.engine.on_asr_final(self.sid, "status update please")
+         self.engine.on_asr_final(self.sid, "status update please")
  
-         engine.on_tts_end(sid, utt_id)
+         finals = self._events(EVT_ASR_FINAL)
+         nlus = self._events(EVT_NLU)
+         self.assertEqual(1, len(finals))
+         self.assertEqual(1, len(nlus))
  
--        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
--        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "off"])
-+        mask_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
-+        self.assertEqual([evt["phase"] for evt in mask_events], ["on", "off"])
++    def test_duplicate_req_id_guarded(self) -> None:
++        req_id = "req-guard"
++        self.engine.on_asr_partial(self.sid, req_id, 0.7, "guarded turn")
++        self.engine.on_asr_final(self.sid, "guarded turn", req_id=req_id)
++
++        session = self.engine._sessions[self.sid]
++        session.state = LISTENING
++        session.req_id = req_id
++        session.asr_final_emitted = False
++        session.nlu_emitted = False
++
++        self.engine.on_asr_final(self.sid, "guarded turn take 2", req_id=req_id)
++
++        nlus = self._events(EVT_NLU)
++        self.assertEqual(1, len(nlus))
++
+     def test_sessions_do_not_cross(self) -> None:
+         sid_two = "sid-nlu-2"
+         self.engine.on_open(sid_two, {})
+         self.engine.on_audio(sid_two, b"def", seq=0)
  
-         final_gate = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE][-1]
-         final_gate_meta = final_gate["meta"]["gate"]
-         final_effective = final_gate_meta.get("effective", final_gate_meta["mask"])
-         self.assertFalse(final_effective)
-         self.assertFalse(final_gate_meta["reasons"]["tts_active"])
+         self.engine.on_asr_final(self.sid, "hello order 456")
+         self.engine.on_asr_final(sid_two, "need help with product zenith")
  
-     def test_tts_mask_not_republished_when_phase_unchanged(self) -> None:
-         bus = _FakeBus()
-         exporter = _FakeExporter()
-         engine = EngineV2(exporter, telemetry_bus=bus)
+         nlus = self._events(EVT_NLU)
+         self.assertEqual(2, len(nlus))
  
-         sid = "sid-dup"
-         utt_id = "utt-dup"
- 
-         engine.on_tts_start(sid, utt_id)
-         engine.on_tts_end(sid, utt_id)
- 
--        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
--        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "off"])
-+        mask_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
-+        self.assertEqual([evt["phase"] for evt in mask_events], ["on", "off"])
- 
-         before_len = len(mask_events)
-         engine.on_tts_end(sid, utt_id)
--        mask_events_after = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-+        mask_events_after = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
-         self.assertEqual(len(mask_events_after), before_len)
--        self.assertEqual([evt["phase"] for evt in mask_events_after], ["engaged", "off"])
-+        self.assertEqual([evt["phase"] for evt in mask_events_after], ["on", "off"])
- 
-     def test_tts_end_emits_mask_after_end(self) -> None:
-         bus = _FakeBus()
-         exporter = _FakeExporter()
-         engine = EngineV2(exporter, telemetry_bus=bus)
- 
-         sid = "sid-order"
-         utt_id = "utt-order"
- 
-         engine.on_tts_start(sid, utt_id)
-         initial_len = len(bus.events)
-         engine.on_tts_end(sid, utt_id)
- 
-         events_after = bus.events[initial_len:]
-         interesting = [
-             evt
-             for evt in events_after
--            if evt["type"] in {EVT_TTS_END, "EVT_TTS_MASK"}
-+            if evt["type"] in {EVT_TTS_END, EVT_TTS_MASK}
-         ]
-         self.assertGreaterEqual(len(interesting), 2)
-         self.assertEqual(interesting[0]["type"], EVT_TTS_END)
--        self.assertEqual(interesting[1]["type"], "EVT_TTS_MASK")
-+        self.assertEqual(interesting[1]["type"], EVT_TTS_MASK)
-         self.assertEqual(interesting[1].get("phase"), "off")
- 
-     def test_listening_transition_forces_mask_off(self) -> None:
-         bus = _FakeBus()
-         exporter = _FakeExporter()
-         engine = EngineV2(exporter, telemetry_bus=bus)
- 
-         sid = "sid-listen"
-         utt_id = "utt-listen"
- 
-         engine.on_tts_start(sid, utt_id)
-         engine.on_audio(sid, b"\x00\x00" * 2, seq=1)
- 
-         off_index = None
-         turn_begin_index = None
-         for idx, event in enumerate(bus.events):
--            if event.get("type") == "EVT_TTS_MASK" and event.get("phase") == "off":
-+            if event.get("type") == EVT_TTS_MASK and event.get("phase") == "off":
-                 off_index = idx
-             if event.get("type") == "EVT_TURN_BEGIN" and turn_begin_index is None:
-                 turn_begin_index = idx
-         self.assertIsNotNone(off_index)
-         self.assertIsNotNone(turn_begin_index)
-         self.assertLess(off_index, turn_begin_index)  # mask off precedes listening begin
+         sid_map = {evt["sid"]: evt for evt in nlus}
+         self.assertIn(self.sid, sid_map)
+         self.assertIn(sid_two, sid_map)
+         self.assertEqual(self.sid, sid_map[self.sid]["sid"])
+         self.assertEqual(sid_two, sid_map[sid_two]["sid"])
  
  
  if __name__ == "__main__":
