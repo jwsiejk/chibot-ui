@@ -12,8 +12,8 @@
   - **Ping**: Server emits periodic WS `ping` as keepalive.
   - **Acceptance:** Client receives **exactly one** `policy.interaction` on connect; multi‑session isolation (no cross‑sid leakage); drop telemetry increments under stress.
 
-- **Mask Breadcrumbs**: Emit `EVT_TTS_MASK {phase:"engaged"|"cleared"}` on TTS start/end (in addition to existing TTS + gate events).
-  - **Acceptance:** Order: `engaged` before `cleared`; while engaged, `EVT_MIC_GATE.effective=true` with reason `tts_active`.
+- **Mask Breadcrumbs**: Emit `EVT_TTS_MASK {phase:"on"|"off"}` on TTS start/end (in addition to existing TTS + gate events).
+  - **Acceptance:** Order: `on` before `off`; while `on`, `EVT_MIC_GATE.effective=true` with reason `tts_active`.
 
 - **Telemetry Parity**: All events normalized to include `"schema_version":"1"` (centralized in the bus).
   - **Acceptance:** Mixed events from adapter/engine observed with `schema_version:"1"`.
@@ -50,7 +50,7 @@
   - Tests simulate failure→`EVT_PROVIDER_TRIP` and recovery→`EVT_PROVIDER_CLOSE` (or OPEN).
 
 - **B5-D — Cancellation Hooks (expand acceptance)**
-  - After barge-in cancel, assert `EVT_TTS_MASK {phase:"cleared"}` and the latest `EVT_MIC_GATE` removes `tts_active`.
+  - After barge-in cancel, assert `EVT_TTS_MASK {phase:"off"}` and the latest `EVT_MIC_GATE` removes `tts_active`.
 
 - **Test Matrix (edge cases)**
   - Duplicate `final` notices from ASR are suppressed (one `EVT_ASR_FINAL`/turn).
