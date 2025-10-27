@@ -90,6 +90,17 @@
     return 0;
   }
 
+  const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
+  const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
+
+  function emitCustomEvent(type, detail) {
+    try {
+      window.dispatchEvent(new CustomEvent(type, { detail }));
+    } catch (err) {
+      console.warn("AudioRecorder event dispatch failed", type, err);
+    }
+  }
+
   const recorder = {
     _stream: null,
     _startPromise: null,
@@ -104,6 +115,8 @@
     _vendor: null,
     _asrReady: false,
     _mask: { active: false, holdMs: 0, timerId: null },
+    _listening: false,
+    _micOpenEmitted: false,
     _bargeInEnabled: true,
 
     async start() {
@@ -151,6 +164,7 @@
       this._vendor = null;
       this._asrReady = false;
       this._setMask(false);
+      this._setListening(false, { resetMicEvent: true });
     },
 
     _teardownEncoder() {
@@ -206,6 +220,7 @@
         this._downsampler.reset();
         this._downsampler = null;
       }
+      this._setListening(false, { resetMicEvent: true });
     },
 
     _setMask(active) {
@@ -217,6 +232,51 @@
       this._mask.active = active;
       if (active && this._downsampler) {
         this._downsampler.reset();
+      }
+    },
+
+    _maybeActivateCapture() {
+      if (!this._listening) return;
+      if (!this._stream || !this._asrReady) return;
+      if (this._audioCtx && typeof this._audioCtx.resume === "function") {
+        this._audioCtx.resume().catch(() => {});
+      }
+      if (
+        this._mediaRecorder &&
+        typeof this._mediaRecorder.state === "string" &&
+        this._mediaRecorder.state === "inactive"
+      ) {
+        try {
+          this._mediaRecorder.start(WEBM_TIMESLICE_MS);
+        } catch (err) {
+          console.warn("MediaRecorder failed to start on capture activation", err);
+        }
+      }
+      if (!this._micOpenEmitted) {
+        this._micOpenEmitted = true;
+        emitCustomEvent(CLIENT_MIC_OPEN_EVENT, {
+          type: CLIENT_MIC_OPEN_EVENT,
+          ts: Date.now(),
+          vendor: this._vendor || null
+        });
+        emitCustomEvent(CLIENT_HUD_STATE_EVENT, {
+          type: CLIENT_HUD_STATE_EVENT,
+          meta: { state: "Listening", source: "client" }
+        });
+      }
+    },
+
+    _setListening(active, options = {}) {
+      const normalized = Boolean(active);
+      if (!normalized && options && options.resetMicEvent) {
+        this._micOpenEmitted = false;
+      }
+      if (this._listening === normalized) {
+        return;
+      }
+      this._listening = normalized;
+      if (normalized) {
+        this._maybeActivateCapture();
       }
     },
 
@@ -299,9 +359,9 @@
         };
         recorder.addEventListener("dataavailable", this._handleWebmData);
         recorder.addEventListener("error", this._handleRecorderError);
-        recorder.start(WEBM_TIMESLICE_MS);
         this._mediaRecorder = recorder;
         this._asrReady = true;
+        this._maybeActivateCapture();
       } catch (err) {
         console.error("Failed to start MediaRecorder", err);
       }
@@ -348,6 +408,7 @@
         this._processorNode = processor;
         this._muteNode = gain;
         this._asrReady = true;
+        this._maybeActivateCapture();
       } catch (err) {
         console.error("Failed to set up PCM recorder", err);
       }
@@ -355,6 +416,7 @@
 
     _canSend() {
       if (!this._asrReady || !this._stream) return false;
+      if (!this._listening) return false;
       if (this._mask.active) return false;
       const WSClient = window.WSClient;
       if (!WSClient || typeof WSClient.isConnected !== "function" || typeof WSClient.sendBinary !== "function") {
@@ -397,6 +459,7 @@
       const hold = Number(frame && frame.post_hold_ms);
       this._mask.holdMs = Number.isFinite(hold) && hold > 0 ? hold : 0;
       this._setMask(true);
+      this._setListening(false, { resetMicEvent: true });
     },
 
     handleTtsEnd() {
@@ -406,6 +469,17 @@
       this._scheduleMaskRelease(hold);
     },
 
+    async handleStartListening() {
+      try {
+        await this.start();
+      } catch (err) {
+        console.error("AudioRecorder start_listening start failed", err);
+        return;
+      }
+      this._setMask(false);
+      this._setListening(true);
+    },
+
     handleWsClose() {
       this._teardownEncoder();
       this._asrReady = false;
@@ -413,6 +487,7 @@
       this._pendingDescriptor = null;
       this._vendor = null;
       this._setMask(false);
+      this._setListening(false, { resetMicEvent: true });
     }
   };
 
@@ -427,6 +502,9 @@
   });
   window.addEventListener("tts.end", () => {
     recorder.handleTtsEnd();
+  });
+  window.addEventListener("start_listening", () => {
+    recorder.handleStartListening();
   });
   window.addEventListener("ws.close", () => {
     recorder.handleWsClose();
