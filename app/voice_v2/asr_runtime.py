@@ -28,6 +28,7 @@ from app.services.streaming_asr.deepgram_client import DeepgramClient
 _log = logging.getLogger(__name__)
 
 _CONTENT_TYPE = "audio/webm;codecs=opus"
+_DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
 _PARTIAL_CONFIDENCE = 0.55
 _FINAL_CONFIDENCE = 0.9
 _DEFAULT_IDLE_CLOSE_MS = 4000
@@ -87,6 +88,7 @@ class ASRRuntime:
 
         self._engine = engine
         self._client = client
+        self._configure_client()
         self._sessions: Dict[str, _SessionState] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         configured_idle = ASR_IDLE_CLOSE_MS
@@ -99,6 +101,25 @@ class ASRRuntime:
             self._idle_close_ms = int(configured_idle)
         if self._idle_close_ms < 0:
             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
+
+    def _configure_client(self) -> None:
+        """Force the Deepgram client to use the containerized listen URL."""
+
+        target_url = _DG_LISTEN_URL
+        current_url = getattr(self._client, "_url", None)
+        if current_url == target_url:
+            return
+        try:
+            setattr(self._client, "_url", target_url)
+        except Exception:  # pragma: no cover - defensive
+            _log.debug(
+                "evt=asr_runtime_set_listen_url_failed target_url=%s", target_url,
+                exc_info=True,
+            )
+        else:
+            _log.debug(
+                "evt=asr_runtime_listen_url_set url=%s", target_url
+            )
 
     # ------------------------------------------------------------------
     # Websocket hooks
@@ -137,9 +158,7 @@ class ASRRuntime:
             if state.pending:
                 self._ensure_stream(sid, state)
         else:
-            state.chunks_sent += 1
-            state.bytes_sent += chunk_len
-            self._client.send_audio(sid, data)
+            self._forward_chunk(sid, state, data)
 
         if _TRACE_ENABLED:
             _log.debug(
@@ -408,9 +427,7 @@ class ASRRuntime:
                 chunk = state.pending.popleft()
                 chunk_len = len(chunk)
                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
-                state.chunks_sent += 1
-                state.bytes_sent += chunk_len
-                self._client.send_audio(sid, chunk)
+                self._forward_chunk(sid, state, chunk)
             if state.chunks_sent == pre_chunks_sent:
                 self._start_ready_watchdog(sid, state)
             else:
@@ -424,6 +441,14 @@ class ASRRuntime:
 
         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
         state.stream_open_task.add_done_callback(_on_done)
+
+    def _forward_chunk(self, sid: str, state: _SessionState, chunk: bytes) -> None:
+        if not chunk:
+            return
+        chunk_len = len(chunk)
+        state.chunks_sent += 1
+        state.bytes_sent += chunk_len
+        self._client.send_audio(sid, chunk)
 
     def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:

@@ -1,534 +1,258 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 732a87dfc231c3ed93168c25319e4ef08861ad12..605dbd4ef02edcd9f15348f517b50d3f73cd0fba 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -4,50 +4,65 @@
-   const SUBPROTOCOL = "chat.v2";
-   const INFO_DEADLINE_MS = 20000;
-   const TOKEN_EXPIRY_MS = 60 * 1000;
-   const TOAST_STYLE_ID = "wsclient-toast-styles";
-   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 3a19033bf0b6f7d68cda99587c6f8413780c8119..5d7b7869243426fb49c8636150e64715658ff77d 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -6,50 +6,51 @@ import logging
+ import time
+ import uuid
+ from collections import deque
+ from dataclasses import dataclass, field
+ from typing import Callable, Deque, Dict, Optional
  
-   const AppState = window.AppState;
-   if (!AppState) {
-     throw new Error("AppState store is required before loading WSClient");
-   }
-   const getAudioPlayer = () => window.AudioPlayer;
+ from app.config import (
+     ASR_BACKPRESSURE_THRESHOLD_BYTES,
+     ASR_IDLE_CLOSE_MS,
+     ASR_TRACE,
+ )
+ from app.telemetry import bus
+ from app.voice_v2 import (
+     EVT_ASR_FINAL,
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
+     EVT_WS_JSON_SEND,
+ )
+ from app.voice_v2.engine import EngineV2
+ from app.services.streaming_asr.deepgram_client import DeepgramClient
  
-   let socket = null;
-   let heartbeatTimerId = null;
-   let expectInfoFrame = true;
-   let infoWatchdogTimerId = null;
-   let lastPingAt = null;
-   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-   let rateLimitRetryTimerId = null;
-   let rateLimitRetryCount = 0;
-   let autoResumeAttemptToken = null;
-   let toastRoot = null;
-   let lastTokenValue = null;
-   let lastTokenMintedAt = null;
+ _log = logging.getLogger(__name__)
  
-+  const MEDIA_RECORDER_MIME_TYPE = "audio/webm;codecs=opus";
-+  const DEFAULT_TIMESLICE_MS = 250;
-+  const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
-+  const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
-+
-+  let micStream = null;
-+  let micStreamPromise = null;
-+  let mediaRecorderInstance = null;
-+  let mediaRecorderHandlers = null;
-+  let activeInputReqId = null;
-+  let micOpenEmitted = false;
-+  let inputDescriptor = null;
-+  let inputVendor = null;
-+  let hudListening = false;
-+
-   // Build a full WS URL and PRESERVE the query string as-is.
-   function makeWsUrl(pathWithQuery) {
-     if (typeof pathWithQuery !== "string" || !pathWithQuery) {
-       return pathWithQuery;
-     }
-     const trimmed = pathWithQuery.trim();
-     if (/^wss?:/i.test(trimmed)) {
-       return trimmed;
-     }
-     try {
-       const loc = (typeof window !== "undefined" && window.location)
-         ? window.location
-         : (typeof location !== "undefined" ? location : null);
-       const scheme = loc && loc.protocol === "https:" ? "wss://" : "ws://";
-       const parsed = new URL(trimmed, loc ? loc.origin : undefined);
-       // IMPORTANT: keep the search/query intact
-       return `${scheme}${parsed.host}${parsed.pathname}${parsed.search}`;
-     } catch (err) {
-       console.warn("Failed to construct WS URL", err);
-       return trimmed;
-     }
-   }
+ _CONTENT_TYPE = "audio/webm;codecs=opus"
++_DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
+ _PARTIAL_CONFIDENCE = 0.55
+ _FINAL_CONFIDENCE = 0.9
+ _DEFAULT_IDLE_CLOSE_MS = 4000
+ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+ _TRACE_ENABLED = bool(ASR_TRACE)
+ _STREAM_OPEN_TIMEOUT_S = 5.0
+ _NO_AUDIO_TIMEOUT_S = 9.0
+ _LISTENING_STATE = "Listening"
+ _READY_STATES = {"Ready", "Idle"}
  
-   function getResumeState() {
-     const state = AppState.getState();
-@@ -310,50 +325,344 @@
-     try {
-       open({ resumeToken: resume.token, skipRateLimitCancel: true });
-       return true;
-     } catch (err) {
-       console.error("Auto-resume open failed", err);
-       autoResumeAttemptToken = null;
-       updateState({ connectionState: "disconnected" });
-       return false;
-     }
-   }
  
-   function dispatchFrame(frame) {
-     if (!frame || typeof frame.type !== "string") return;
-     const type = frame.type;
-     try {
-       window.dispatchEvent(new CustomEvent(type, { detail: frame }));
-       if (type.includes(".")) {
-         const baseType = type.split(".")[0];
-         window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
-       }
-     } catch (err) {
-       console.warn("WSClient dispatch error", err);
-     }
-   }
+ @dataclass
+ class _SessionState:
+     """Track per-session streaming state."""
  
-+  function emitHudState(state) {
-+    if (typeof window === "undefined" || !state) {
-+      return;
-+    }
-+    try {
-+      window.dispatchEvent(new CustomEvent(CLIENT_HUD_STATE_EVENT, {
-+        detail: {
-+          type: CLIENT_HUD_STATE_EVENT,
-+          meta: { state, source: "client" }
-+        }
-+      }));
-+    } catch (err) {
-+      console.warn("WSClient HUD event dispatch failed", err);
-+    }
-+  }
-+
-+  function updateHudListening(active) {
-+    const normalized = Boolean(active);
-+    if (hudListening === normalized) {
-+      return;
-+    }
-+    hudListening = normalized;
-+    emitHudState(normalized ? "Listening" : "Idle");
-+  }
-+
-+  function emitClientMicOpenIfNeeded() {
-+    if (micOpenEmitted) {
-+      return;
-+    }
-+    micOpenEmitted = true;
-+    if (typeof window !== "undefined") {
-+      const detail = {
-+        type: CLIENT_MIC_OPEN_EVENT,
-+        ts: Date.now(),
-+        vendor: inputVendor || null
-+      };
-+      try {
-+        window.dispatchEvent(new CustomEvent(CLIENT_MIC_OPEN_EVENT, { detail }));
-+      } catch (err) {
-+        console.warn("WSClient mic open event dispatch failed", err);
-+      }
-+      if (socket && socket.readyState === WebSocket.OPEN) {
-+        const payload = {
-+          type: "client.ready",
-+          mic: {
-+            state: "open",
-+            ts: detail.ts
-+          }
-+        };
-+        if (detail.vendor) {
-+          payload.mic.vendor = detail.vendor;
-+        }
-+        try {
-+          sendJson(payload);
-+        } catch (err) {
-+          console.warn("Failed to send client.ready mic frame", err);
-+        }
-+      }
-+    }
-+  }
-+
-+  function stopMicStream() {
-+    if (!micStream) {
-+      return;
-+    }
-+    const tracks = typeof micStream.getTracks === "function" ? micStream.getTracks() : [];
-+    tracks.forEach((track) => {
-+      if (track && typeof track.stop === "function") {
-+        try {
-+          track.stop();
-+        } catch (err) {
-+          console.warn("Failed to stop mic track", err);
-+        }
-+      }
-+    });
-+    micStream = null;
-+    if (typeof window !== "undefined") {
-+      window.__micStream = null;
-+    }
-+  }
-+
-+  async function ensureMicStream() {
-+    if (micStream) {
-+      const audioTracks = typeof micStream.getAudioTracks === "function" ? micStream.getAudioTracks() : [];
-+      const hasLiveTrack = audioTracks.some((track) => track && track.readyState === "live");
-+      if (hasLiveTrack) {
-+        return micStream;
-+      }
-+      stopMicStream();
-+    }
-+    if (micStreamPromise) {
-+      return micStreamPromise;
-+    }
-+    if (typeof navigator === "undefined" || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
-+      console.error("Media capture is not supported in this browser");
-+      return null;
-+    }
-+    const constraints = {
-+      audio: {
-+        echoCancellation: true,
-+        noiseSuppression: true
-+      }
-+    };
-+    micStreamPromise = navigator.mediaDevices.getUserMedia(constraints)
-+      .then((stream) => {
-+        micStreamPromise = null;
-+        micStream = stream;
-+        if (typeof window !== "undefined") {
-+          window.__micStream = stream;
-+        }
-+        return stream;
-+      })
-+      .catch((err) => {
-+        micStreamPromise = null;
-+        console.error("getUserMedia for input capture failed", err);
-+        throw err;
-+      });
-+    return micStreamPromise;
-+  }
-+
-+  function handleAsrReadyFrame(frame) {
-+    const descriptor = frame && frame.input;
-+    if (!descriptor || typeof descriptor !== "object") {
-+      inputDescriptor = null;
-+      inputVendor = frame && typeof frame.vendor === "string" && frame.vendor ? frame.vendor : null;
-+      micOpenEmitted = false;
-+      return;
-+    }
-+    inputDescriptor = {
-+      container: typeof descriptor.container === "string" ? descriptor.container.toLowerCase() : "",
-+      codec: typeof descriptor.codec === "string" ? descriptor.codec.toLowerCase() : "",
-+      rate_hz: Number(descriptor.rate_hz) || null,
-+      channels: Number(descriptor.channels) || null
-+    };
-+    inputVendor = frame && typeof frame.vendor === "string" && frame.vendor ? frame.vendor : null;
-+    micOpenEmitted = false;
-+  }
-+
-+  function stopInputCapture(options = {}) {
-+    activeInputReqId = null;
-+    micOpenEmitted = false;
-+    const recorder = mediaRecorderInstance;
-+    const handlers = mediaRecorderHandlers;
-+    mediaRecorderInstance = null;
-+    mediaRecorderHandlers = null;
-+    if (typeof window !== "undefined") {
-+      window.__mediaRecorder = null;
-+    }
-+    if (recorder) {
-+      if (handlers) {
-+        if (handlers.data) {
-+          recorder.removeEventListener("dataavailable", handlers.data);
-+        }
-+        if (handlers.error) {
-+          recorder.removeEventListener("error", handlers.error);
-+        }
-+        if (handlers.stop) {
-+          recorder.removeEventListener("stop", handlers.stop);
-+        }
-+      }
-+      try {
-+        if (recorder.state !== "inactive") {
-+          recorder.stop();
-+        }
-+      } catch (err) {
-+        console.warn("Failed to stop MediaRecorder", err);
-+      }
-+    }
-+    if (!options || options.resetStream !== false) {
-+      micStreamPromise = null;
-+      stopMicStream();
-+    }
-+    updateHudListening(false);
-+  }
-+
-+  async function startInputCapture(frame) {
-+    if (typeof MediaRecorder === "undefined") {
-+      console.error("MediaRecorder is not supported in this browser");
-+      return;
-+    }
-+    if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(MEDIA_RECORDER_MIME_TYPE)) {
-+      console.error("MediaRecorder does not support", MEDIA_RECORDER_MIME_TYPE);
-+      return;
-+    }
-+    if (!inputDescriptor || inputDescriptor.container !== "webm" || inputDescriptor.codec !== "opus") {
-+      console.error("Unsupported or missing ASR descriptor", inputDescriptor);
-+      return;
-+    }
-+    const reqId = frame && typeof frame.req_id === "string" && frame.req_id ? frame.req_id : null;
-+    if (
-+      reqId &&
-+      activeInputReqId &&
-+      mediaRecorderInstance &&
-+      mediaRecorderInstance.state !== "inactive" &&
-+      reqId === activeInputReqId
-+    ) {
-+      console.log("Duplicate input.start for req_id", reqId);
-+      return;
-+    }
-+    if (mediaRecorderInstance) {
-+      stopInputCapture({ resetStream: false });
-+    }
-+    const capture = frame && frame.capture;
-+    const timesliceCandidate = capture && Number(capture.timeslice_ms);
-+    const timesliceMs = Number.isFinite(timesliceCandidate) && timesliceCandidate > 0
-+      ? timesliceCandidate
-+      : DEFAULT_TIMESLICE_MS;
-+    let stream;
-+    try {
-+      stream = await ensureMicStream();
-+    } catch (err) {
-+      console.error("Failed to acquire microphone stream", err);
-+      return;
-+    }
-+    if (!stream) {
-+      console.error("Microphone stream unavailable for input.start");
-+      return;
-+    }
-+    let recorder;
-+    try {
-+      recorder = new MediaRecorder(stream, { mimeType: MEDIA_RECORDER_MIME_TYPE });
-+    } catch (err) {
-+      console.error("Failed to create MediaRecorder", err);
-+      return;
-+    }
-+    const dataHandler = async (event) => {
-+      if (!event || !event.data || !event.data.size) {
-+        return;
-+      }
-+      if (recorder !== mediaRecorderInstance) {
-+        return;
-+      }
-+      try {
-+        const buffer = await event.data.arrayBuffer();
-+        if (!buffer || !buffer.byteLength) {
-+          return;
-+        }
-+        const sent = sendBinary(buffer, { dropIfBusy: true });
-+        if (!sent) {
-+          console.warn("Dropped input audio chunk due to backpressure");
-+        }
-+      } catch (err) {
-+        console.error("Failed to process MediaRecorder data", err);
-+      }
-+    };
-+    const errorHandler = (event) => {
-+      console.error("MediaRecorder error", event);
-+      stopInputCapture({ resetStream: false });
-+    };
-+    const stopHandler = () => {
-+      if (recorder === mediaRecorderInstance) {
-+        mediaRecorderInstance = null;
-+        mediaRecorderHandlers = null;
-+        activeInputReqId = null;
-+        if (typeof window !== "undefined") {
-+          window.__mediaRecorder = null;
-+        }
-+        updateHudListening(false);
-+        micOpenEmitted = false;
-+        micStreamPromise = null;
-+        stopMicStream();
-+      }
-+    };
-+    recorder.addEventListener("dataavailable", dataHandler);
-+    recorder.addEventListener("error", errorHandler);
-+    recorder.addEventListener("stop", stopHandler);
-+    mediaRecorderInstance = recorder;
-+    mediaRecorderHandlers = { data: dataHandler, error: errorHandler, stop: stopHandler };
-+    if (typeof window !== "undefined") {
-+      window.__mediaRecorder = recorder;
-+    }
-+    activeInputReqId = reqId;
-+    updateHudListening(true);
-+    try {
-+      recorder.start(timesliceMs);
-+      emitClientMicOpenIfNeeded();
-+    } catch (err) {
-+      console.error("MediaRecorder start failed", err);
-+      stopInputCapture();
-+    }
-+  }
-+
-+  function handleInputStartFrame(frame) {
-+    Promise.resolve()
-+      .then(() => startInputCapture(frame))
-+      .catch((err) => {
-+        console.error("input.start handler error", err);
-+      });
-+  }
-+
-+  function handleInputStopFrame() {
-+    stopInputCapture({ reason: "input.stop" });
-+  }
-+
-   function sanitizePolicyFrame(frame) {
-     const safe = { type: "policy.interaction" };
-     if (!frame || typeof frame !== "object") {
-       safe.policy = {};
-       return safe;
-     }
-     Object.keys(frame).forEach((key) => {
-       if (key === "policy") return;
-       safe[key] = frame[key];
-     });
-     const policy = {};
-     const source = frame.policy;
-     if (source && typeof source === "object") {
-       if (typeof source.mode === "string") {
-         policy.mode = source.mode;
-       }
-       if (typeof source.allow_auto_vad === "boolean") {
-         policy.allow_auto_vad = source.allow_auto_vad;
-       }
-       if (typeof source.barge_in_enabled === "boolean") {
-         policy.barge_in_enabled = source.barge_in_enabled;
-       }
-       if (typeof source.ws_auth_mode === "string" && source.ws_auth_mode.trim()) {
-         policy.ws_auth_mode = source.ws_auth_mode.trim();
-       }
-@@ -477,59 +786,56 @@
-       handleErrorFrame(frame);
-     } else if (frame.type === "tts.start") {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
-         audioPlayer.handleTtsStart(frame);
-       }
-     } else if (frame.type === "tts.end") {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
-         audioPlayer.handleTtsEnd(frame);
-       }
-     } else if (frame.type === "start_listening") {
-       const recorder = window.AudioRecorder;
-       if (recorder) {
-         const handler = typeof recorder.startListening === "function"
-           ? recorder.startListening
-           : (typeof recorder.handleStartListening === "function" ? recorder.handleStartListening : null);
-         if (handler) {
-           try {
-             handler.call(recorder, frame);
-           } catch (err) {
-             console.warn("AudioRecorder start_listening handler error", err);
-           }
-         }
-       }
-+    } else if (frame.type === "input.start") {
-+      handleInputStartFrame(frame);
-+    } else if (frame.type === "input.stop") {
-+      handleInputStopFrame();
-     } else if (frame.type === "asr.ready") {
--      const recorder = window.AudioRecorder;
--      if (recorder && typeof recorder.handleAsrReady === "function") {
--        try {
--          recorder.handleAsrReady(frame);
--        } catch (err) {
--          console.warn("AudioRecorder asr.ready handler error", err);
--        }
--      }
-+      handleAsrReadyFrame(frame);
-     } else if (frame.type === "asr.partial") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handlePartial === "function") {
-         try {
-           view.handlePartial(frame);
-         } catch (err) {
-           console.warn("TranscriptView partial handler error", err);
-         }
-       }
-     } else if (frame.type === "asr.final") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleFinal === "function") {
-         try {
-           view.handleFinal(frame);
-         } catch (err) {
-           console.warn("TranscriptView final handler error", err);
-         }
-       }
-     } else if (frame.type === "chat.message") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleChatMessage === "function") {
-         try {
-           view.handleChatMessage(frame);
-         } catch (err) {
-           console.warn("TranscriptView chat handler error", err);
-@@ -604,50 +910,53 @@
-     const handlers = ws && ws.__handlers;
-     if (!handlers) return;
-     ws.removeEventListener("open", handlers.open);
-     ws.removeEventListener("message", handlers.message);
-     ws.removeEventListener("error", handlers.error);
-     ws.removeEventListener("close", handlers.close);
-     delete ws.__handlers;
-     delete ws.__intentionalClose;
-   }
+     sid: str
+     pending: Deque[bytes] = field(default_factory=deque)
+     buffered_bytes: int = 0
+     req_id: Optional[str] = None
+     stream_open_task: Optional[asyncio.Task[None]] = None
+     stream_open: bool = False
+     last_audio_ts: float = 0.0
+     idle_handle: asyncio.TimerHandle | None = None
+     stream_id: Optional[str] = None
+     close_reason: Optional[str] = None
+@@ -65,103 +66,121 @@ class _SessionState:
+     last_stream_id: Optional[str] = None
+     ready_watchdog: asyncio.TimerHandle | None = None
+     ready_armed_at: float = 0.0
+     prearm_requested: bool = False
  
-   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
-     if (!ws) return;
-     detachSocket(ws);
-     ws.__intentionalClose = true;
-     try {
-       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-         ws.close(1000, reason);
-       }
-     } catch (err) {
-       console.warn("WSClient cleanup close error", err);
-     }
-     if (socket === ws) {
-       socket = null;
-       expectInfoFrame = true;
-       clearInfoWatchdog();
-+      stopInputCapture();
-+      inputDescriptor = null;
-+      inputVendor = null;
-     }
-   }
+     def __post_init__(self) -> None:
+         now_monotonic = time.monotonic()
+         now_wall = time.time()
+         self.opened_at_monotonic = now_monotonic
+         self.opened_at_ms = int(now_wall * 1000)
+         self.last_audio_ts = now_monotonic
+         self.last_audio_ts_ms = int(now_wall * 1000)
  
-   // OPEN: Use the EXACT URL provided (must include ?access_token=... unless resuming)
-   function open(options = {}, protocolsOverride) {
-     let resumeTokenValue = null;
-     let skipRateLimitCancel = false;
-     let urlOverride = null;
-     let protocols = protocolsOverride;
  
-     if (typeof options === "string") {
-       urlOverride = options;
-     } else if (options && typeof options === "object") {
-       const { resumeToken = null, skipRateLimitCancel: skip = false } = options;
-       const candidate = typeof resumeToken === "string" && resumeToken.trim() ? resumeToken.trim() : null;
-       if (candidate) {
-         resumeTokenValue = candidate;
-       }
-       skipRateLimitCancel = Boolean(skip);
-       if (!urlOverride && typeof options.url === "string" && options.url.trim()) {
-         urlOverride = options.url.trim();
-       }
-       if (protocols === undefined && options.protocols !== undefined) {
-         protocols = options.protocols;
-       }
+ class ASRRuntime:
+     """Bridge websocket audio to Deepgram realtime transcription."""
+ 
+     def __init__(self, engine: EngineV2, client: DeepgramClient) -> None:
+         if engine is None:
+             raise ValueError("engine must be provided")
+         if client is None:
+             raise ValueError("client must be provided")
+ 
+         self._engine = engine
+         self._client = client
++        self._configure_client()
+         self._sessions: Dict[str, _SessionState] = {}
+         self._loop: asyncio.AbstractEventLoop | None = None
+         configured_idle = ASR_IDLE_CLOSE_MS
+         if not isinstance(configured_idle, (int, float)):
+             configured_idle = _DEFAULT_IDLE_CLOSE_MS
+         client_idle = getattr(client, "idle_close_ms", None)
+         if isinstance(client_idle, (int, float)) and client_idle >= 0:
+             self._idle_close_ms = int(client_idle)
+         else:
+             self._idle_close_ms = int(configured_idle)
+         if self._idle_close_ms < 0:
+             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
+ 
++    def _configure_client(self) -> None:
++        """Force the Deepgram client to use the containerized listen URL."""
++
++        target_url = _DG_LISTEN_URL
++        current_url = getattr(self._client, "_url", None)
++        if current_url == target_url:
++            return
++        try:
++            setattr(self._client, "_url", target_url)
++        except Exception:  # pragma: no cover - defensive
++            _log.debug(
++                "evt=asr_runtime_set_listen_url_failed target_url=%s", target_url,
++                exc_info=True,
++            )
++        else:
++            _log.debug(
++                "evt=asr_runtime_listen_url_set url=%s", target_url
++            )
++
+     # ------------------------------------------------------------------
+     # Websocket hooks
+     # ------------------------------------------------------------------
+     def on_ws_open(self, sid: str) -> None:
+         self._ensure_loop()
+         self._sessions[sid] = _SessionState(sid=sid)
+ 
+     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
+         if not isinstance(chunk, (bytes, bytearray, memoryview)):
+             raise TypeError("chunk must be bytes-like")
+         data = bytes(chunk)
+         if not data:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+ 
+         now_monotonic = time.monotonic()
+         state.last_audio_ts = now_monotonic
+         state.last_audio_ts_ms = int(time.time() * 1000)
+         if state.ready_watchdog is not None and state.ready_armed_at:
+             self._cancel_ready_watchdog(state)
+         chunk_len = len(data)
+ 
+         if state.stream_id is None:
+             state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
+             state.last_stream_id = state.stream_id
+ 
+         if not state.stream_open:
+             state.pending.append(data)
+             state.buffered_bytes += chunk_len
+             self._apply_backpressure(sid, state)
+             if state.pending:
+                 self._ensure_stream(sid, state)
+         else:
+-            state.chunks_sent += 1
+-            state.bytes_sent += chunk_len
+-            self._client.send_audio(sid, data)
++            self._forward_chunk(sid, state, data)
+ 
+         if _TRACE_ENABLED:
+             _log.debug(
+                 "evt=asr_audio_enqueued sid=%s stream_id=%s bytes=%d buffered_bytes=%d pending_chunks=%d",
+                 sid,
+                 state.stream_id or state.last_stream_id or "",
+                 chunk_len,
+                 state.buffered_bytes,
+                 len(state.pending),
+             )
+ 
+         self._reset_idle_timer(sid, state)
+ 
+     def on_ws_close(self, sid: str) -> None:
+         state = self._sessions.pop(sid, None)
+         if state is None:
+             return
+         state.close_reason = "client_ws_closed"
+         self._cancel_idle_timer(state)
+         self._cancel_ready_watchdog(state)
+         task = state.stream_open_task
+         if task is not None and not task.done():
+             task.cancel()
+         state.stream_open = False
+         try:
+@@ -386,67 +405,73 @@ class ASRRuntime:
+                 _CONTENT_TYPE,
+                 qs or "",
+             )
+             bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+ 
+             input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
+             asr_ready_frame = {
+                 "type": "asr.ready",
+                 "vendor": "deepgram",
+                 "input": input_desc,
+             }
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
+             if stream_id:
+                 _log.info(
+                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
+                     sid,
+                     stream_id,
+                     _CONTENT_TYPE,
+                     int(self._idle_close_ms),
+                 )
+             pre_chunks_sent = state.chunks_sent
+             while state.pending:
+                 chunk = state.pending.popleft()
+                 chunk_len = len(chunk)
+                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
+-                state.chunks_sent += 1
+-                state.bytes_sent += chunk_len
+-                self._client.send_audio(sid, chunk)
++                self._forward_chunk(sid, state, chunk)
+             if state.chunks_sent == pre_chunks_sent:
+                 self._start_ready_watchdog(sid, state)
+             else:
+                 self._cancel_ready_watchdog(state)
+             state.stream_open_task = None
+             self._reset_idle_timer(sid, state)
+ 
+         def _on_done(_task: asyncio.Task[None]) -> None:
+             if state.stream_open_task is _task:
+                 state.stream_open_task = None
+ 
+         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
+         state.stream_open_task.add_done_callback(_on_done)
+ 
++    def _forward_chunk(self, sid: str, state: _SessionState, chunk: bytes) -> None:
++        if not chunk:
++            return
++        chunk_len = len(chunk)
++        state.chunks_sent += 1
++        state.bytes_sent += chunk_len
++        self._client.send_audio(sid, chunk)
++
+     def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_partial(sid, text, metadata or {})
+ 
+         return _callback
+ 
+     def _make_final_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_final(sid, text, metadata or {})
+ 
+         return _callback
+ 
+     def _make_error_cb(self, sid: str) -> Callable[[str], None]:
+         def _callback(error: str) -> None:
+             self._on_error(sid, error)
+ 
+         return _callback
+ 
+     def _make_close_cb(self, sid: str, state: _SessionState) -> Callable[[int | None, str | None], None]:
+         def _callback(_code: int | None, _reason: str | None) -> None:
+             stream_id = state.stream_id
+             if not stream_id:
+                 return
+             reason = state.close_reason
+             if reason is None:
