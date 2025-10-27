@@ -651,6 +651,84 @@
     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
     const AppState = window.AppState;
     const WSClient = window.WSClient;
+
+    const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
+    let pendingClientReady = null;
+    let clientReadyTimerId = null;
+
+    function normalizeMicOpenDetail(detail) {
+      const rawTs = detail ? detail.ts : null;
+      const tsNumber = Number(rawTs);
+      const tsValue = Number.isFinite(tsNumber) ? tsNumber : Date.now();
+      const vendorValue = detail && typeof detail.vendor === 'string' ? detail.vendor.trim() : '';
+      const vendor = vendorValue ? vendorValue : null;
+      return { ts: tsValue, vendor };
+    }
+
+    function trySendClientReady(detail) {
+      if (!detail) return false;
+      const wsClient = window.WSClient;
+      if (!wsClient || typeof wsClient.send !== 'function') {
+        return false;
+      }
+      const socket = wsClient.socket;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      const payload = {
+        type: 'client.ready',
+        mic: {
+          state: 'open',
+          ts: detail.ts
+        }
+      };
+      if (detail.vendor) {
+        payload.mic.vendor = detail.vendor;
+      }
+      try {
+        wsClient.send(payload);
+        return true;
+      } catch (err) {
+        console.warn('client.ready send failed', err);
+        return false;
+      }
+    }
+
+    function flushPendingClientReady() {
+      if (!pendingClientReady) {
+        clientReadyTimerId = null;
+        return;
+      }
+      if (trySendClientReady(pendingClientReady)) {
+        pendingClientReady = null;
+        clientReadyTimerId = null;
+        return;
+      }
+      clientReadyTimerId = window.setTimeout(flushPendingClientReady, 200);
+    }
+
+    function enqueueClientReady(detail) {
+      pendingClientReady = normalizeMicOpenDetail(detail);
+      if (!pendingClientReady) {
+        return;
+      }
+      if (clientReadyTimerId !== null) {
+        return;
+      }
+      flushPendingClientReady();
+    }
+
+    window.addEventListener(CLIENT_MIC_OPEN_EVENT, (event) => {
+      enqueueClientReady(event && event.detail);
+    });
+
+    window.addEventListener('ws.close', () => {
+      pendingClientReady = null;
+      if (clientReadyTimerId !== null) {
+        clearTimeout(clientReadyTimerId);
+        clientReadyTimerId = null;
+      }
+    });
     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
       try {
         window.PolicyBadges.init();
@@ -1619,19 +1697,22 @@
 
       if (becameConnected) {
         Waveform.start();
-        
+
         tryStartMic('connected');
-if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+        if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
           window.AudioRecorder.start()
             .catch((err) => {
               console.error('AudioRecorder start error', err);
             });
         }
+        if (pendingClientReady && clientReadyTimerId === null) {
+          flushPendingClientReady();
+        }
       } else if (becameDisconnected) {
         Waveform.stop();
-        
+
         stopMic('disconnect');
-if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+        if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
           try {
             window.AudioRecorder.stop();
           } catch (err) {

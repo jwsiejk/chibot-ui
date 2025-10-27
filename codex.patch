@@ -1,5 +1,514 @@
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 83385cd41c814f052e4b60f6ae6c4f56860910e8..df5cad93d0521d2ab2e7952f0e38bb0658e915a1 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -183,95 +183,134 @@
+       }
+     }
+   }
+ 
+   function cloneDiagDetail(detail) {
+     if (detail === undefined) {
+       return undefined;
+     }
+     if (detail === null) {
+       return null;
+     }
+     const valueType = typeof detail;
+     if (valueType === "string" || valueType === "number" || valueType === "boolean") {
+       return detail;
+     }
+     if (valueType === "object") {
+       try {
+         return JSON.parse(JSON.stringify(detail));
+       } catch (err) {
+         return { summary: toDiagString(detail) };
+       }
+     }
+     return toDiagString(detail);
+   }
+ 
+-  function sendDiagHudEvent(eventName, detail, options = {}) {
+-    if (!diagHudEnabled()) {
+-      return;
++  function getWsClient() {
++    if (typeof window === "undefined") {
++      return null;
+     }
+-    const wsClient = typeof window !== "undefined" ? window.WSClient : null;
++    return window.WSClient || null;
++  }
++
++  function wsClientIsConnected(wsClient) {
+     if (!wsClient || typeof wsClient.send !== "function") {
++      return false;
++    }
++    try {
++      if (typeof wsClient.isConnected === "function") {
++        return Boolean(wsClient.isConnected());
++      }
++    } catch (err) {
++      // Ignore connectivity helper failures and fall back to socket state checks.
++    }
++    const socket = wsClient.socket;
++    return Boolean(socket && socket.readyState === WebSocket.OPEN);
++  }
++
++  function sendDiagHudEvent(eventName, detail, options = {}) {
++    if (!diagHudEnabled()) {
+       return;
+     }
+-    const isConnected = typeof wsClient.isConnected === "function"
+-      ? wsClient.isConnected()
+-      : wsClient.socket && wsClient.socket.readyState === WebSocket.OPEN;
+-    if (!isConnected) {
++    const wsClient = getWsClient();
++    if (!wsClientIsConnected(wsClient)) {
+       return;
+     }
+     const frame = {
+       type: "client.diag",
+       event: typeof eventName === "string" && eventName ? eventName.slice(0, 64) : "event",
+       ts: Date.now()
+     };
+     const level = options && typeof options.level === "string" ? options.level.trim() : "";
+     if (level) {
+       frame.level = level.slice(0, 16);
+     }
+     const badge = options && typeof options.badge === "string" ? options.badge.trim() : "";
+     if (badge) {
+       frame.badge = badge.slice(0, 64);
+     }
+     if (options && typeof options.sample === "boolean") {
+       frame.sample = options.sample;
+     }
+     const message = options && typeof options.message === "string" ? options.message.trim() : "";
+     if (message) {
+       frame.message = message.slice(0, 256);
+     }
+     const normalizedDetail = cloneDiagDetail(detail);
+     if (normalizedDetail !== undefined) {
+       frame.data = normalizedDetail;
+     }
+     try {
+       wsClient.send(frame);
+     } catch (err) {
+       console.warn("Failed to send diag HUD event", err);
+     }
+   }
+ 
++  function sendClientLog(label, detail) {
++    const wsClient = getWsClient();
++    if (!wsClientIsConnected(wsClient)) {
++      return false;
++    }
++    const frame = {
++      type: "client.log",
++      label: typeof label === "string" && label ? label.slice(0, 64) : "event",
++      ts: Date.now(),
++    };
++    const normalizedDetail = cloneDiagDetail(detail);
++    if (normalizedDetail !== undefined) {
++      frame.detail = normalizedDetail;
++    }
++    try {
++      wsClient.send(frame);
++      return true;
++    } catch (err) {
++      console.warn("Failed to send client.log event", err);
++      return false;
++    }
++  }
++
+   function diagChunkSampleN() {
+     if (typeof window === "undefined") {
+       return 10;
+     }
+     const cfg = window.__CFG__;
+     const candidate = cfg ? Number(cfg.DIAG_CHUNK_SAMPLE_N) : NaN;
+     if (Number.isFinite(candidate) && candidate > 0) {
+       return Math.floor(candidate);
+     }
+     return 10;
+   }
+ 
+   let diagBadgeEl = null;
+   let diagBadgePendingText = null;
+   let diagBadgeAwaitingDom = false;
+ 
+   function ensureDiagBadge() {
+     if (!diagHudEnabled()) {
+       return null;
+     }
+     if (typeof document === "undefined") {
+       return null;
+     }
+     if (diagBadgeEl && diagBadgeEl.isConnected) {
+       return diagBadgeEl;
+@@ -629,50 +668,290 @@
+     }
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.AudioRecorder) {
+       await loadScript("audio_recorder.js");
+     }
+     if (!window.PolicyBadges) {
+       await loadScript("policy_badges.js");
+     }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+     if (!window.WSErrorUI) {
+       await loadScript("errors.js");
+     }
+   }
+ 
+   async function init() {
+     await bootstrapClientConfig();
+     await ensureRuntimeModules();
+ 
+     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
++
++    const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
++    let pendingClientReady = null;
++    let clientReadyTimerId = null;
++    let clientReadyStats = null;
++    const deferredClientLogs = [];
++
++    function startClientReadyTracking(detail) {
++      clientReadyStats = {
++        detail,
++        attempts: 0,
++        events: [],
++        startedAt: Date.now(),
++      };
++      recordClientReadyEvent('enqueue', {
++        vendor: detail && detail.vendor ? detail.vendor : undefined,
++        micTs: detail && typeof detail.ts === 'number' ? detail.ts : undefined,
++      });
++    }
++
++    function recordClientReadyEvent(kind, meta) {
++      if (!clientReadyStats) {
++        return;
++      }
++      const entry = {
++        kind: typeof kind === 'string' && kind ? kind.slice(0, 32) : 'event',
++        ts: Date.now(),
++      };
++      if (meta && typeof meta === 'object') {
++        const sanitized = {};
++        const keys = Object.keys(meta);
++        for (let i = 0; i < keys.length && i < 8; i += 1) {
++          const key = keys[i];
++          if (!key) continue;
++          const value = meta[key];
++          if (value === undefined || value === null) continue;
++          const shortKey = key.slice(0, 32);
++          if (typeof value === 'number') {
++            if (Number.isFinite(value)) {
++              sanitized[shortKey] = value;
++            }
++          } else if (typeof value === 'string') {
++            sanitized[shortKey] = value.slice(0, 96);
++          } else if (typeof value === 'boolean') {
++            sanitized[shortKey] = value;
++          }
++        }
++        if (Object.keys(sanitized).length) {
++          entry.meta = sanitized;
++        }
++      }
++      clientReadyStats.events.push(entry);
++      if (clientReadyStats.events.length > 12) {
++        clientReadyStats.events.splice(0, clientReadyStats.events.length - 12);
++      }
++    }
++
++    function enqueueDeferredClientLog(label, detail) {
++      deferredClientLogs.push({ label, detail });
++      if (deferredClientLogs.length > 20) {
++        deferredClientLogs.splice(0, deferredClientLogs.length - 20);
++      }
++    }
++
++    function flushDeferredClientLogs() {
++      if (!deferredClientLogs.length) {
++        return;
++      }
++      let remaining = deferredClientLogs.length;
++      while (remaining > 0 && deferredClientLogs.length) {
++        const entry = deferredClientLogs.shift();
++        remaining -= 1;
++        if (!entry) {
++          continue;
++        }
++        if (!sendClientLog(entry.label, entry.detail)) {
++          deferredClientLogs.unshift(entry);
++          break;
++        }
++      }
++    }
++
++    function maybeLogClientReadyOutcome(outcome, extraMeta) {
++      if (!clientReadyStats) {
++        return;
++      }
++      const summary = {
++        outcome: typeof outcome === 'string' && outcome ? outcome.slice(0, 32) : 'unknown',
++        attempts: clientReadyStats.attempts,
++        startedMs: clientReadyStats.startedAt,
++      };
++      if (typeof clientReadyStats.startedAt === 'number') {
++        const elapsed = Date.now() - clientReadyStats.startedAt;
++        if (Number.isFinite(elapsed)) {
++          summary.durationMs = Math.max(0, elapsed);
++        }
++      }
++      if (clientReadyStats.detail && typeof clientReadyStats.detail.ts === 'number') {
++        summary.micTs = clientReadyStats.detail.ts;
++      }
++      if (clientReadyStats.detail && clientReadyStats.detail.vendor) {
++        summary.vendor = clientReadyStats.detail.vendor.slice(0, 64);
++      }
++      if (clientReadyStats.events.length) {
++        summary.events = clientReadyStats.events.slice(-12);
++      }
++      const extraDetail = cloneDiagDetail(extraMeta);
++      if (extraDetail !== undefined) {
++        summary.extra = extraDetail;
++      }
++      const wsClient = getWsClient();
++      const socket = wsClient && wsClient.socket;
++      if (socket && typeof socket.readyState === 'number') {
++        summary.readyState = socket.readyState;
++      }
++      if (!sendClientLog('client_ready_handshake', summary)) {
++        enqueueDeferredClientLog('client_ready_handshake', summary);
++      } else {
++        flushDeferredClientLogs();
++      }
++      clientReadyStats = null;
++    }
++
++    function normalizeMicOpenDetail(detail) {
++      const rawTs = detail ? detail.ts : null;
++      const tsNumber = Number(rawTs);
++      const tsValue = Number.isFinite(tsNumber) ? tsNumber : Date.now();
++      const vendorValue = detail && typeof detail.vendor === 'string' ? detail.vendor.trim() : '';
++      const vendor = vendorValue ? vendorValue.slice(0, 64) : null;
++      return { ts: tsValue, vendor };
++    }
++
++    function trySendClientReady(detail) {
++      if (!detail) return false;
++      const wsClient = getWsClient();
++      if (!wsClient || typeof wsClient.send !== 'function') {
++        recordClientReadyEvent('wsclient_missing');
++        return false;
++      }
++      const socket = wsClient.socket;
++      const readyState = socket && typeof socket.readyState === 'number' ? socket.readyState : -1;
++      if (clientReadyStats) {
++        clientReadyStats.attempts += 1;
++        recordClientReadyEvent('attempt', { readyState });
++      }
++      if (!socket || readyState !== WebSocket.OPEN) {
++        recordClientReadyEvent('socket_not_open', { readyState });
++        return false;
++      }
++      const payload = {
++        type: 'client.ready',
++        mic: {
++          state: 'open',
++          ts: detail.ts
++        }
++      };
++      if (detail.vendor) {
++        payload.mic.vendor = detail.vendor;
++      }
++      try {
++        wsClient.send(payload);
++        recordClientReadyEvent('sent', { readyState });
++        return true;
++      } catch (err) {
++        recordClientReadyEvent('send_error', {
++          readyState,
++          message: err && err.message ? String(err.message).slice(0, 120) : 'send_failed'
++        });
++        console.warn('client.ready send failed', err);
++        return false;
++      }
++    }
++
++    function flushPendingClientReady() {
++      if (!pendingClientReady) {
++        clientReadyTimerId = null;
++        return;
++      }
++      if (trySendClientReady(pendingClientReady)) {
++        pendingClientReady = null;
++        clientReadyTimerId = null;
++        maybeLogClientReadyOutcome('sent');
++        return;
++      }
++      recordClientReadyEvent('retry_wait', { delayMs: 200 });
++      clientReadyTimerId = window.setTimeout(flushPendingClientReady, 200);
++    }
++
++    function enqueueClientReady(detail) {
++      const normalized = normalizeMicOpenDetail(detail);
++      if (!normalized) {
++        return;
++      }
++      const detailChanged =
++        !!clientReadyStats &&
++        (clientReadyStats.detail.ts !== normalized.ts || clientReadyStats.detail.vendor !== normalized.vendor);
++      if (detailChanged) {
++        const replacementMeta = {
++          reason: 'detail_changed',
++          prevTs: clientReadyStats.detail && typeof clientReadyStats.detail.ts === 'number'
++            ? clientReadyStats.detail.ts
++            : undefined,
++          prevVendor: clientReadyStats.detail && clientReadyStats.detail.vendor
++            ? clientReadyStats.detail.vendor.slice(0, 64)
++            : undefined,
++        };
++        recordClientReadyEvent('detail_replaced', replacementMeta);
++        maybeLogClientReadyOutcome('replaced', replacementMeta);
++      }
++      pendingClientReady = normalized;
++      if (!clientReadyStats) {
++        startClientReadyTracking(normalized);
++      } else {
++        recordClientReadyEvent('enqueue_duplicate');
++      }
++      if (clientReadyTimerId !== null) {
++        return;
++      }
++      flushPendingClientReady();
++    }
++
++    window.addEventListener(CLIENT_MIC_OPEN_EVENT, (event) => {
++      enqueueClientReady(event && event.detail);
++    });
++
++    window.addEventListener('ws.close', () => {
++      if (clientReadyStats && pendingClientReady) {
++        recordClientReadyEvent('socket_closed', { reason: 'ws.close' });
++        maybeLogClientReadyOutcome('socket_closed', { reason: 'ws.close' });
++      }
++      pendingClientReady = null;
++      if (clientReadyTimerId !== null) {
++        clearTimeout(clientReadyTimerId);
++        clientReadyTimerId = null;
++      }
++    });
++
++    window.addEventListener('ws.open', () => {
++      flushDeferredClientLogs();
++    });
+     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
+       try {
+         window.PolicyBadges.init();
+       } catch (err) {
+         console.warn("Failed to initialize PolicyBadges", err);
+       }
+     }
+ 
+     // --- App context (server-injected) ---
+     function readAppContext() {
+       const node = document.getElementById('appContext');
+       if (!node) return {};
+       try {
+         const raw = node.textContent || node.innerText || '{}';
+         return JSON.parse(raw);
+       } catch (err) {
+         console.warn('Failed to parse app context', err);
+         return {};
+       }
+     }
+ 
+     const serverContext = readAppContext();
+     const currentUserEmail = typeof serverContext.userEmail === 'string' && serverContext.userEmail
+       ? serverContext.userEmail
+       : 'user@example.com';
+@@ -1597,63 +1876,66 @@
+       else if (state.connectionState === 'resuming') label = 'Resuming…';
+       connLabel.textContent = label;
+       const active = state.connectionState !== 'disconnected';
+       statusDot.classList.toggle('on', active);
+       startBtn.disabled = active;
+       endBtn.disabled = !active;
+       if (state.latencyMs != null) {
+         latencyHint.textContent = `Latency: ${Math.round(state.latencyMs)} ms`;
+       } else {
+         latencyHint.textContent = 'Latency: —';
+       }
+       if (state.connectionState === 'disconnected') {
+         resetVoiceState();
+         resetSuggestions();
+       } else if (state.infoFrame) {
+         updateVoiceState(extractVoiceLocale(state.infoFrame));
+       }
+       const prevConnectionState = previousConnectionState;
+       const nextConnectionState = state.connectionState;
+       const becameConnected = prevConnectionState !== 'connected' && nextConnectionState === 'connected';
+       const becameDisconnected = prevConnectionState !== 'disconnected' && nextConnectionState === 'disconnected';
+       previousConnectionState = nextConnectionState;
+ 
+       if (becameConnected) {
+         Waveform.start();
+-        
++
+         tryStartMic('connected');
+-if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
++        if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+           window.AudioRecorder.start()
+             .catch((err) => {
+               console.error('AudioRecorder start error', err);
+             });
+         }
++        if (pendingClientReady && clientReadyTimerId === null) {
++          flushPendingClientReady();
++        }
+       } else if (becameDisconnected) {
+         Waveform.stop();
+-        
++
+         stopMic('disconnect');
+-if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
++        if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+           try {
+             window.AudioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
+           }
+         }
+         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+           window.AudioPlayer.interrupt();
+         }
+       }
+       updateResumeBanner(state);
+     });
+ 
+     const POST_TTS_RELEASE_MS = 150;
+ 
+ window.addEventListener('tts.start', (event) => {
+   const detail = event && event.detail;
+   if (detail) {
+     updateVoiceState(extractVoiceLocale(detail));
+   }
+ });
+ 
+ // Turn becomes Ready → hand control to user
+ window.addEventListener('turn.state', (event) => {
+   const detail = (event && event.detail) || {};
 diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index 3733ce7f63f2fd7ed63510bc47dfbd58dff56799..267e2269cf44068c674e1fc13e75e09c8694e681 100644
+index 3733ce7f63f2fd7ed63510bc47dfbd58dff56799..50f901ef8a4c5007c2748544c5de17d9b71d0b50 100644
 --- a/app/static/js/audio_recorder.js
 +++ b/app/static/js/audio_recorder.js
 @@ -98,74 +98,84 @@
@@ -103,7 +612,7 @@ index 3733ce7f63f2fd7ed63510bc47dfbd58dff56799..267e2269cf44068c674e1fc13e75e09c
  
      _teardownEncoder() {
        this._asrReady = false;
-@@ -211,104 +221,108 @@
+@@ -211,104 +221,86 @@
        if (this._audioCtx) {
          try {
            this._audioCtx.close();
@@ -160,28 +669,28 @@ index 3733ce7f63f2fd7ed63510bc47dfbd58dff56799..267e2269cf44068c674e1fc13e75e09c
            vendor: this._vendor || null
          };
          emitCustomEvent(CLIENT_MIC_OPEN_EVENT, eventDetail);
-         const wsClient = window.WSClient;
-         if (wsClient && (typeof wsClient.send === "function" || typeof wsClient.sendJson === "function")) {
-           const micPayload = {
-             type: "client.ready",
-             mic: {
-               state: "open",
-               ts: eventDetail.ts
-             }
-           };
-           if (eventDetail.vendor) {
-             micPayload.mic.vendor = eventDetail.vendor;
-           }
-           try {
-             if (typeof wsClient.send === "function") {
-               wsClient.send(micPayload);
-             } else {
-               wsClient.sendJson(micPayload);
-             }
-           } catch (err) {
-             console.warn("Failed to send client mic open frame", err);
-           }
-         }
+-        const wsClient = window.WSClient;
+-        if (wsClient && (typeof wsClient.send === "function" || typeof wsClient.sendJson === "function")) {
+-          const micPayload = {
+-            type: "client.ready",
+-            mic: {
+-              state: "open",
+-              ts: eventDetail.ts
+-            }
+-          };
+-          if (eventDetail.vendor) {
+-            micPayload.mic.vendor = eventDetail.vendor;
+-          }
+-          try {
+-            if (typeof wsClient.send === "function") {
+-              wsClient.send(micPayload);
+-            } else {
+-              wsClient.sendJson(micPayload);
+-            }
+-          } catch (err) {
+-            console.warn("Failed to send client mic open frame", err);
+-          }
+-        }
          emitCustomEvent(CLIENT_HUD_STATE_EVENT, {
            type: CLIENT_HUD_STATE_EVENT,
            meta: { state: "Listening", source: "client" }
@@ -224,7 +733,7 @@ index 3733ce7f63f2fd7ed63510bc47dfbd58dff56799..267e2269cf44068c674e1fc13e75e09c
          this._mask.timerId = setTimeout(() => {
            this._mask.timerId = null;
            this._setMask(false);
-@@ -335,50 +349,51 @@
+@@ -335,50 +327,51 @@
        try {
          await this.start();
        } catch (err) {
@@ -276,3 +785,447 @@ index 3733ce7f63f2fd7ed63510bc47dfbd58dff56799..267e2269cf44068c674e1fc13e75e09c
          };
          recorder.addEventListener("dataavailable", this._handleWebmData);
          recorder.addEventListener("error", this._handleRecorderError);
+diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
+index e2682f21b6ccc9bbac34e5a5fcd98c3842e1af10..7e135fe430f4b731bff624237c87f9cb8cc14798 100644
+--- a/app/voice_v2/__init__.py
++++ b/app/voice_v2/__init__.py
+@@ -17,62 +17,64 @@ EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
+ EVT_TURN_END = "EVT_TURN_END"
+ EVT_TURN_ROLLUP = "EVT_TURN_ROLLUP"
+ EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
+ 
+ EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
+ EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
+ 
+ EVT_MIC_GATE = "EVT_MIC_GATE"
+ EVT_BARGE_DETECTED = "EVT_BARGE_DETECTED"
+ EVT_BARGE_CONFIRMED = "EVT_BARGE_CONFIRMED"
+ EVT_BARGE_REJECTED = "EVT_BARGE_REJECTED"
+ EVT_ACTION_SAY_END = "EVT_ACTION_SAY_END"
+ 
+ EVT_ASR_READY = "EVT_ASR_READY"
+ EVT_ASR_OPEN = "EVT_ASR_OPEN"
+ EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
+ EVT_ASR_FINAL = "EVT_ASR_FINAL"
+ EVT_NLU = "EVT_NLU"
+ EVT_NLG = "EVT_NLG"
+ EVT_LLM_RESPONSE_START = "EVT_LLM_RESPONSE_START"
+ EVT_LLM_RESPONSE_END = "EVT_LLM_RESPONSE_END"
+ EVT_DIALOG_PLAN = "EVT_DIALOG_PLAN"
+ EVT_HUD_STATE = "EVT_HUD_STATE"
+ EVT_CLIENT_MIC_OPEN = "EVT_CLIENT_MIC_OPEN"
+ EVT_CLIENT_BANNER = "EVT_CLIENT_BANNER"
++EVT_CLIENT_LOG = "EVT_CLIENT_LOG"
+ 
+ __all__ = [
+     "EVT_WS_OPEN",
+     "EVT_WS_CLOSE",
+     "EVT_WS_JSON_RECV",
+     "EVT_WS_JSON_SEND",
+     "EVT_WS_AUDIO_RECV",
+     "EVT_WS_AUDIO_SEND",
+     "EVT_CHAT_USER",
+     "EVT_TTS_START",
+     "EVT_TTS_END",
+     "EVT_TTS_MASK",
+     "EVT_TURN_STATE",
+     "EVT_TURN_BEGIN",
+     "EVT_TURN_END",
+     "EVT_TURN_ROLLUP",
+     "EVT_PERF_SUMMARY",
+     "EVT_POLICY_APPLIED",
+     "EVT_ACWR_RECOMPUTE",
+     "EVT_MIC_GATE",
+     "EVT_BARGE_DETECTED",
+     "EVT_BARGE_CONFIRMED",
+     "EVT_BARGE_REJECTED",
+     "EVT_ACTION_SAY_END",
+     "EVT_ASR_READY",
+     "EVT_ASR_OPEN",
+     "EVT_ASR_PARTIAL",
+     "EVT_ASR_FINAL",
+     "EVT_NLU",
+     "EVT_NLG",
+     "EVT_LLM_RESPONSE_START",
+     "EVT_LLM_RESPONSE_END",
+     "EVT_DIALOG_PLAN",
+     "EVT_HUD_STATE",
+     "EVT_CLIENT_MIC_OPEN",
+     "EVT_CLIENT_BANNER",
++    "EVT_CLIENT_LOG",
+ ]
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index bdfd39000d2a464de69146742c66348a35123e9a..01d8b879d29c44a8beb91cf3f225d114ff3ae7d7 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -1,54 +1,55 @@
+ """chat.v2 WebSocket adapter for AskChip."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import contextlib
+ import logging
+ import math
+ import time
+ import sys, platform, socket, os, inspect
+ from dataclasses import dataclass, field
+-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Optional, Protocol, runtime_checkable
++from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
+ 
+ import json
+ from urllib.parse import parse_qs
+ 
+ from app import config
+ from app.logging_setup import current_sid
+ from app.security.jwt_utils import verify_ws_token
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ASR_OPEN,
+     EVT_ASR_READY,
+     EVT_CHAT_USER,
+     EVT_CLIENT_BANNER,
+     EVT_CLIENT_MIC_OPEN,
+     EVT_HUD_STATE,
+     EVT_TTS_END,
+     EVT_TTS_MASK,
++    EVT_CLIENT_LOG,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.ws.validator import validate_frame
+ 
+ try:  # pragma: no cover - uvicorn is an optional dependency in tests
+     from uvicorn.protocols.utils import ClientDisconnected
+ except Exception:  # pragma: no cover - fallback when uvicorn missing
+     class ClientDisconnected(Exception):  # type: ignore[no-redef]
+         """Fallback placeholder when uvicorn is unavailable."""
+ 
+ 
+ CHAT_V2_SUBPROTOCOL = "chat.v2"
+ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
+ BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ PING_MIN_INTERVAL_MS = 500
+ RATE_LIMIT_CAPACITY = 25
+ RATE_LIMIT_WINDOW_SECONDS = 2.0
+ RATE_LIMIT_CLOSE_CODE = 1013
+ _AUDIO_VIOLATION_LIMIT = 3
+ 
+ AUDIO_SEQ_WINDOW = 8
+ 
+@@ -815,50 +816,87 @@ class ChatV2Adapter:
+                     "duplicate or conflicting audio.header",
+                 )
+                 return self._HandleResult(True)
+             ctx.audio_profile = profile
+             if seq_start is not None:
+                 ctx.audio_seq = max(0, seq_start)
+                 ctx.audio_expected_seq = ctx.audio_seq
+                 ctx.audio_highest_seq = ctx.audio_seq - 1
+                 ctx.audio_buffer.clear()
+ 
+         if frame_type == "client.ready":
+             mic_info = frame.get("mic")
+             if isinstance(mic_info, dict):
+                 state = mic_info.get("state")
+                 if isinstance(state, str) and state.lower() == "open":
+                     vendor = mic_info.get("vendor")
+                     opened_ts = mic_info.get("ts")
+                     ts_value = opened_ts if isinstance(opened_ts, int) else None
+                     self._emit_client_mic_open(
+                         ctx,
+                         vendor=vendor if isinstance(vendor, str) else None,
+                         opened_ts=ts_value,
+                     )
+                     ctx.mic_nudge_sent = False
+ 
++        if frame_type == "client.log":
++            sanitized_log = self._sanitize_client_log(frame)
++            if sanitized_log:
++                meta["client_log"] = {
++                    key: value
++                    for key, value in sanitized_log.items()
++                    if key != "detail"
++                }
++                detail_payload = sanitized_log.get("detail")
++                outcome = None
++                attempts = None
++                if isinstance(detail_payload, Mapping):
++                    outcome = detail_payload.get("outcome")
++                    attempts = detail_payload.get("attempts")
++                _log.info(
++                    "evt=ws_client_log sid=%s label=%s outcome=%s attempts=%s",
++                    ctx.sid,
++                    sanitized_log.get("label"),
++                    outcome,
++                    attempts,
++                )
++                bus.publish(
++                    {
++                        "type": EVT_CLIENT_LOG,
++                        "sid": ctx.sid,
++                        "who": "client",
++                        "source": "client_log",
++                        "meta": sanitized_log,
++                    }
++                )
++            else:
++                _log.info(
++                    "evt=ws_client_log sid=%s label=%s detail=empty",
++                    ctx.sid,
++                    frame.get("label"),
++                )
++
+         if frame_type == "client.banner":
+             sanitized_info = self._sanitize_client_banner_info(frame.get("info"))
+             if sanitized_info:
+                 ctx.client_banner_info = sanitized_info
+             elif ctx.client_banner_info is None:
+                 ctx.client_banner_info = {}
+             sanitized_event = self._sanitize_client_banner_event(frame.get("event"))
+             if sanitized_event is None:
+                 meta["error"] = "schema_invalid"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                 await self._send_error(
+                     send,
+                     ctx.sid,
+                     "schema_invalid",
+                     "client.banner event requires a label",
+                 )
+                 return self._HandleResult(True)
+             ctx.client_banner_events.append(dict(sanitized_event))
+             if len(ctx.client_banner_events) > 64:
+                 del ctx.client_banner_events[: len(ctx.client_banner_events) - 64]
+             log_meta: Dict[str, Any] = {
+                 "label": sanitized_event.get("label"),
+                 "client_ts_ms": sanitized_event.get("ts_ms"),
+             }
+             event_meta = sanitized_event.get("meta")
+@@ -1632,50 +1670,88 @@ class ChatV2Adapter:
+         if not isinstance(payload, dict):
+             return None
+         label = payload.get("label") or payload.get("event") or payload.get("reason")
+         if not isinstance(label, str) or not label.strip():
+             return None
+         normalized: Dict[str, Any] = {
+             "label": ChatV2Adapter._truncate_banner_string(label.strip(), 64)
+         }
+         ts_value = payload.get("ts_ms")
+         if isinstance(ts_value, (int, float)) and math.isfinite(ts_value):
+             normalized["ts_ms"] = int(ts_value)
+         else:
+             alt_ts = payload.get("ts")
+             if isinstance(alt_ts, (int, float)) and math.isfinite(alt_ts):
+                 normalized["ts_ms"] = int(alt_ts)
+         meta_payload = payload.get("meta")
+         sanitized_meta = ChatV2Adapter._sanitize_banner_value(meta_payload)
+         if isinstance(sanitized_meta, dict) and sanitized_meta:
+             normalized["meta"] = sanitized_meta
+         elif isinstance(sanitized_meta, list) and sanitized_meta:
+             normalized["meta"] = sanitized_meta
+         if "ts_ms" not in normalized:
+             normalized["ts_ms"] = int(time.time() * 1000)
+         return normalized
+ 
++    @staticmethod
++    def _sanitize_client_log(payload: Any) -> Dict[str, Any]:
++        if not isinstance(payload, Mapping):
++            return {}
++
++        sanitized: Dict[str, Any] = {}
++
++        label = payload.get("label")
++        if isinstance(label, str) and label.strip():
++            sanitized["label"] = label.strip()[:64]
++
++        message = payload.get("message")
++        if isinstance(message, str) and message.strip():
++            sanitized["message"] = message.strip()[:256]
++
++        client_ts = payload.get("ts") or payload.get("client_ts")
++        if isinstance(client_ts, (int, float)) and math.isfinite(client_ts):
++            sanitized["client_ts_ms"] = int(client_ts)
++
++        detail = payload.get("detail")
++        if detail is not None:
++            try:
++                sanitized["detail"] = bus.redact_payload(detail)
++            except Exception:
++                try:
++                    sanitized["detail"] = bus.redact_payload(str(detail))
++                except Exception:
++                    sanitized["detail"] = str(detail)
++
++        extra = payload.get("extra")
++        if extra is not None:
++            try:
++                sanitized["extra"] = bus.redact_payload(extra)
++            except Exception:
++                sanitized["extra"] = str(extra)
++
++        return sanitized
++
+     @staticmethod
+     def _sanitize_policy_interaction(frame: Dict[str, Any]) -> Dict[str, Any]:
+         sanitized = {key: value for key, value in frame.items() if key != "policy"}
+         if "policy" in frame:
+             policy = frame.get("policy")
+             if isinstance(policy, dict):
+                 sanitized_policy = {
+                     key: policy[key]
+                     for key in _POLICY_STABLE_KEYS
+                     if key in policy
+                 }
+             else:
+                 sanitized_policy = {}
+             sanitized["policy"] = sanitized_policy
+         return sanitized
+ 
+     @staticmethod
+     def _policy_requests_listen(frame: Dict[str, Any]) -> bool:
+         actions = frame.get("actions") if isinstance(frame, dict) else None
+         if isinstance(actions, list):
+             for action in actions:
+                 if isinstance(action, str) and action.strip() == "assistant.await_user":
+                     return True
+         return False
+ 
+@@ -1883,121 +1959,135 @@ class ChatV2Adapter:
+             return
+ 
+         ctx.hud_state = state
+         try:
+             asyncio.create_task(self._publish(EVT_HUD_STATE, ctx.sid, {"state": state}))
+         except RuntimeError:
+             _log.warning("evt=ws_hud_state_publish_failed sid=%s", ctx.sid)
+ 
+     def _emit_client_mic_open(
+         self,
+         ctx: AdapterContext,
+         *,
+         vendor: Optional[str] = None,
+         opened_ts: Optional[int] = None,
+     ) -> None:
+         if ctx.client_mic_open:
+             return
+ 
+         self._cancel_mic_open_timer(ctx)
+         ctx.client_mic_open = True
+         payload: Dict[str, object] = {"state": "open"}
+         if isinstance(vendor, str) and vendor:
+             payload["vendor"] = vendor[:64]
+         if isinstance(opened_ts, int):
+             payload["ts"] = opened_ts
++        _log.info(
++            "evt=ws_client_mic_open sid=%s vendor=%s ts=%s",
++            ctx.sid,
++            payload.get("vendor") or "",
++            payload.get("ts"),
++        )
+         try:
+             asyncio.create_task(
+                 self._publish(EVT_CLIENT_MIC_OPEN, ctx.sid, payload)
+             )
+         except RuntimeError:
+             _log.warning("evt=ws_client_mic_publish_failed sid=%s", ctx.sid)
+ 
+     def _handle_client_audio_activity(self, ctx: AdapterContext) -> None:
+         if ctx.client_mic_open:
+             return
+ 
+         was_nudged = ctx.mic_nudge_sent
+         ctx.mic_nudge_sent = False
+         self._cancel_mic_open_timer(ctx)
+         if was_nudged:
+             _log.info("evt=ws_mic_open_recovered sid=%s", ctx.sid)
+         self._emit_client_mic_open(ctx)
+ 
+     def _schedule_mic_open_guard(
+         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
+     ) -> None:
+         if _MIC_OPEN_TIMEOUT_SECONDS <= 0:
+             return
+         if ctx.client_mic_open:
+             return
+         self._cancel_mic_open_timer(ctx)
+ 
+         def _fire() -> None:
+             ctx.mic_open_timer = None
+             self._handle_mic_open_timeout(ctx)
+ 
+         try:
++            _log.info(
++                "evt=ws_mic_guard_arm sid=%s timeout_s=%.2f",
++                ctx.sid,
++                _MIC_OPEN_TIMEOUT_SECONDS,
++            )
+             ctx.mic_open_timer = loop.call_later(_MIC_OPEN_TIMEOUT_SECONDS, _fire)
+         except RuntimeError:
+             ctx.mic_open_timer = None
+ 
+     def _handle_mic_open_timeout(self, ctx: AdapterContext) -> None:
+         if ctx.client_mic_open:
+             return
+         if ctx.mic_nudge_sent:
+             return
+ 
+         ctx.mic_nudge_sent = True
+         _log.warning(
+-            "evt=ws_mic_open_timeout sid=%s timeout_s=%.2f",
++            "evt=ws_mic_open_timeout sid=%s timeout_s=%.2f mic_open=%s nudged=%s",
+             ctx.sid,
+             _MIC_OPEN_TIMEOUT_SECONDS,
++            ctx.client_mic_open,
++            ctx.mic_nudge_sent,
+         )
+         try:
+             asyncio.create_task(
+                 self._publish(
+                     "EVT_MIC_OPEN_TIMEOUT",
+                     ctx.sid,
+                     {"timeout_s": _MIC_OPEN_TIMEOUT_SECONDS},
+                 )
+             )
+         except RuntimeError:
+             pass
+         if ctx.outbox is not None:
+             nudge_frame = {
+                 "type": "hud.nudge",
+                 "code": "mic_permissions",
+                 "reason": "mic_open_timeout",
+             }
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": ctx.sid, "payload": nudge_frame})
+ 
+     @staticmethod
+     def _cancel_mic_open_timer(ctx: AdapterContext) -> None:
+         timer = ctx.mic_open_timer
+         ctx.mic_open_timer = None
+         if timer is not None:
++            _log.info("evt=ws_mic_guard_cancel sid=%s", ctx.sid)
+             timer.cancel()
+ 
+     def _initiate_listen_handoff(self, ctx: AdapterContext, req_id: str) -> bool:
+         if not ctx.await_user_expected or ctx.await_user_pending:
+             return False
+ 
+         runtime = getattr(self, "asr_runtime", None)
+         if runtime is None:
+             return False
+ 
+         prearm = getattr(runtime, "prearm", None)
+         if not callable(prearm):
+             return False
+ 
+         key = self._turn_key(ctx, req_id)
+         self._set_pending_for_key(ctx, key)
+         self._clear_after_mask_for_key(ctx, key)
+         try:
+             prearm(ctx.sid)
+         except Exception:  # pragma: no cover - defensive logging
+             self._clear_pending_for_key(ctx, key)
+             _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
+             return False
+ 
+         return True
