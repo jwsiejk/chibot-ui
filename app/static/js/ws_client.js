@@ -487,11 +487,25 @@
       }
     } else if (frame.type === "start_listening") {
       const recorder = window.AudioRecorder;
-      if (recorder && typeof recorder.handleStartListening === "function") {
+      if (recorder) {
+        const handler = typeof recorder.startListening === "function"
+          ? recorder.startListening
+          : (typeof recorder.handleStartListening === "function" ? recorder.handleStartListening : null);
+        if (handler) {
+          try {
+            handler.call(recorder, frame);
+          } catch (err) {
+            console.warn("AudioRecorder start_listening handler error", err);
+          }
+        }
+      }
+    } else if (frame.type === "asr.ready") {
+      const recorder = window.AudioRecorder;
+      if (recorder && typeof recorder.handleAsrReady === "function") {
         try {
-          recorder.handleStartListening(frame);
+          recorder.handleAsrReady(frame);
         } catch (err) {
-          console.warn("AudioRecorder start_listening handler error", err);
+          console.warn("AudioRecorder asr.ready handler error", err);
         }
       }
     } else if (frame.type === "asr.partial") {

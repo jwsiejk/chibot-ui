@@ -1,15 +1,8 @@
 diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index 9db2dfb7cf64672e1153482eaceb50a9e1a4e4c6..917dc859f9b3a796948ea708fcc2925c9576ec61 100644
+index 917dc859f9b3a796948ea708fcc2925c9576ec61..3733ce7f63f2fd7ed63510bc47dfbd58dff56799 100644
 --- a/app/static/js/audio_recorder.js
 +++ b/app/static/js/audio_recorder.js
-@@ -232,55 +232,74 @@
-       this._mask.active = active;
-       if (active && this._downsampler) {
-         this._downsampler.reset();
-       }
-     },
- 
-     _maybeActivateCapture() {
+@@ -239,63 +239,67 @@
        if (!this._listening) return;
        if (!this._stream || !this._asrReady) return;
        if (this._audioCtx && typeof this._audioCtx.resume === "function") {
@@ -28,32 +21,36 @@ index 9db2dfb7cf64672e1153482eaceb50a9e1a4e4c6..917dc859f9b3a796948ea708fcc2925c
        }
        if (!this._micOpenEmitted) {
          this._micOpenEmitted = true;
--        emitCustomEvent(CLIENT_MIC_OPEN_EVENT, {
-+        const eventDetail = {
+         const eventDetail = {
            type: CLIENT_MIC_OPEN_EVENT,
            ts: Date.now(),
            vendor: this._vendor || null
--        });
-+        };
-+        emitCustomEvent(CLIENT_MIC_OPEN_EVENT, eventDetail);
-+        const wsClient = window.WSClient;
-+        if (wsClient && typeof wsClient.send === "function") {
-+          const micPayload = {
-+            type: "client.ready",
-+            mic: {
-+              state: "open",
-+              ts: eventDetail.ts
+         };
+         emitCustomEvent(CLIENT_MIC_OPEN_EVENT, eventDetail);
+         const wsClient = window.WSClient;
+-        if (wsClient && typeof wsClient.send === "function") {
++        if (wsClient && (typeof wsClient.send === "function" || typeof wsClient.sendJson === "function")) {
+           const micPayload = {
+             type: "client.ready",
+             mic: {
+               state: "open",
+               ts: eventDetail.ts
+             }
+           };
+           if (eventDetail.vendor) {
+             micPayload.mic.vendor = eventDetail.vendor;
+           }
+           try {
+-            wsClient.send(micPayload);
++            if (typeof wsClient.send === "function") {
++              wsClient.send(micPayload);
++            } else {
++              wsClient.sendJson(micPayload);
 +            }
-+          };
-+          if (eventDetail.vendor) {
-+            micPayload.mic.vendor = eventDetail.vendor;
-+          }
-+          try {
-+            wsClient.send(micPayload);
-+          } catch (err) {
-+            console.warn("Failed to send client mic open frame", err);
-+          }
-+        }
+           } catch (err) {
+             console.warn("Failed to send client mic open frame", err);
+           }
+         }
          emitCustomEvent(CLIENT_HUD_STATE_EVENT, {
            type: CLIENT_HUD_STATE_EVENT,
            meta: { state: "Listening", source: "client" }
@@ -75,17 +72,86 @@ index 9db2dfb7cf64672e1153482eaceb50a9e1a4e4c6..917dc859f9b3a796948ea708fcc2925c
        }
      },
  
-     _scheduleMaskRelease(delayMs) {
-       if (this._mask.timerId) {
-         clearTimeout(this._mask.timerId);
-         this._mask.timerId = null;
+@@ -466,68 +470,67 @@
+       const policy = frame && frame.policy;
+       if (policy && typeof policy.barge_in_enabled === "boolean") {
+         this._bargeInEnabled = policy.barge_in_enabled;
+         if (this._bargeInEnabled && this._mask.active) {
+           this._mask.holdMs = 0;
+           this._setMask(false);
+         }
+       }
+     },
+ 
+     handleTtsStart(frame) {
+       if (this._bargeInEnabled) return;
+       const hold = Number(frame && frame.post_hold_ms);
+       this._mask.holdMs = Number.isFinite(hold) && hold > 0 ? hold : 0;
+       this._setMask(true);
+       this._setListening(false, { resetMicEvent: true });
+     },
+ 
+     handleTtsEnd() {
+       if (!this._mask.active) return;
+       const hold = Math.max(this._mask.holdMs || 0, POST_TTS_RELEASE_DELAY_MS);
+       this._mask.holdMs = 0;
+       this._scheduleMaskRelease(hold);
+     },
+ 
+-    async handleStartListening() {
++    async startListening() {
+       try {
+         await this.start();
+       } catch (err) {
+         console.error("AudioRecorder start_listening start failed", err);
+         return;
+       }
++      this._asrReady = true;
+       this._setMask(false);
+       this._setListening(true);
+     },
+ 
++    async handleStartListening(frame) {
++      return this.startListening(frame);
++    },
++
+     handleWsClose() {
+       this._teardownEncoder();
+       this._asrReady = false;
+       this._descriptor = null;
+       this._pendingDescriptor = null;
+       this._vendor = null;
+       this._setMask(false);
+       this._setListening(false, { resetMicEvent: true });
+     }
+   };
+ 
+-  window.addEventListener("asr.ready", (event) => {
+-    recorder.handleAsrReady(event && event.detail);
+-  });
+   window.addEventListener("policy.interaction", (event) => {
+     recorder.handlePolicy(event && event.detail);
+   });
+   window.addEventListener("tts.start", (event) => {
+     recorder.handleTtsStart(event && event.detail);
+   });
+   window.addEventListener("tts.end", () => {
+     recorder.handleTtsEnd();
+   });
+-  window.addEventListener("start_listening", () => {
+-    recorder.handleStartListening();
+-  });
+   window.addEventListener("ws.close", () => {
+     recorder.handleWsClose();
+   });
+ 
+   window.AudioRecorder = recorder;
+ })();
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 2ad03da31f6f56fc865793e1f2e65a4444346c25..9c94f0251bfc1a47ddde70faf68e2ee218730fe4 100644
+index 9c94f0251bfc1a47ddde70faf68e2ee218730fe4..732a87dfc231c3ed93168c25319e4ef08861ad12 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -463,50 +463,59 @@
-         return;
-       } else if (frame.type !== "info") {
+@@ -465,55 +465,69 @@
          console.error("Expected info frame first, received", frame.type);
          close("bad_info_sequence");
          return;
@@ -109,15 +175,32 @@ index 2ad03da31f6f56fc865793e1f2e65a4444346c25..9c94f0251bfc1a47ddde70faf68e2ee2
        if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
          audioPlayer.handleTtsEnd(frame);
        }
-+    } else if (frame.type === "start_listening") {
-+      const recorder = window.AudioRecorder;
-+      if (recorder && typeof recorder.handleStartListening === "function") {
-+        try {
-+          recorder.handleStartListening(frame);
-+        } catch (err) {
-+          console.warn("AudioRecorder start_listening handler error", err);
+     } else if (frame.type === "start_listening") {
+       const recorder = window.AudioRecorder;
+-      if (recorder && typeof recorder.handleStartListening === "function") {
++      if (recorder) {
++        const handler = typeof recorder.startListening === "function"
++          ? recorder.startListening
++          : (typeof recorder.handleStartListening === "function" ? recorder.handleStartListening : null);
++        if (handler) {
++          try {
++            handler.call(recorder, frame);
++          } catch (err) {
++            console.warn("AudioRecorder start_listening handler error", err);
++          }
 +        }
 +      }
++    } else if (frame.type === "asr.ready") {
++      const recorder = window.AudioRecorder;
++      if (recorder && typeof recorder.handleAsrReady === "function") {
+         try {
+-          recorder.handleStartListening(frame);
++          recorder.handleAsrReady(frame);
+         } catch (err) {
+-          console.warn("AudioRecorder start_listening handler error", err);
++          console.warn("AudioRecorder asr.ready handler error", err);
+         }
+       }
      } else if (frame.type === "asr.partial") {
        const view = window.TranscriptView;
        if (view && typeof view.handlePartial === "function") {
@@ -141,275 +224,3 @@ index 2ad03da31f6f56fc865793e1f2e65a4444346c25..9c94f0251bfc1a47ddde70faf68e2ee2
        if (view && typeof view.handleChatMessage === "function") {
          try {
            view.handleChatMessage(frame);
-         } catch (err) {
-           console.warn("TranscriptView chat handler error", err);
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 6915b2bda31e52d8ea7546ca50418d79a805f3bd..a0b241e7d0428af7decabefcb5e0e8efa3e20194 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -687,50 +687,65 @@ class ChatV2Adapter:
-                     await self._send_error(
-                         send,
-                         ctx.sid,
-                         "schema_invalid",
-                         "audio.header seq_start must be >= 0",
-                     )
-                     return self._HandleResult(False, 1003, "schema_invalid")
-                 profile["seq_start"] = seq_start
-             if ctx.audio_profile is not None:
-                 meta["error"] = "schema_invalid"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "duplicate or conflicting audio.header",
-                 )
-                 return self._HandleResult(True)
-             ctx.audio_profile = profile
-             if seq_start is not None:
-                 ctx.audio_seq = max(0, seq_start)
-                 ctx.audio_expected_seq = ctx.audio_seq
-                 ctx.audio_highest_seq = ctx.audio_seq - 1
-                 ctx.audio_buffer.clear()
- 
-+        if frame_type == "client.ready":
-+            mic_info = frame.get("mic")
-+            if isinstance(mic_info, dict):
-+                state = mic_info.get("state")
-+                if isinstance(state, str) and state.lower() == "open":
-+                    vendor = mic_info.get("vendor")
-+                    opened_ts = mic_info.get("ts")
-+                    ts_value = opened_ts if isinstance(opened_ts, int) else None
-+                    self._emit_client_mic_open(
-+                        ctx,
-+                        vendor=vendor if isinstance(vendor, str) else None,
-+                        opened_ts=ts_value,
-+                    )
-+                    ctx.mic_nudge_sent = False
-+
-         await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-         await self._invoke_engine("on_json", ctx.sid, frame)
-         return self._HandleResult(True)
- 
-     async def _handle_binary(
-         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> _HandleResult:
-         byte_count = len(data)
- 
-         limited = await self._check_rate_limit(ctx, send)
-         if limited is not None:
-             return limited
- 
-         if byte_count > self.binary_limit_bytes:
-             await self._publish(
-                 EVT_WS_AUDIO_RECV,
-                 ctx.sid,
-                 {
-                     "byte_count": byte_count,
-                     "error": "frame_too_large",
-                     "ws": {"dir": "in", "size": byte_count},
-                 },
-             )
-             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
-             return self._HandleResult(False, 1009, "frame_too_large")
-@@ -1379,59 +1394,70 @@ class ChatV2Adapter:
-                 "type": "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
-                 "sid": ctx.sid,
-                 "since_ms": int(elapsed * 1000),
-                 "suggestions": ["permission", "device", "recorder", "transport"],
-             }
-         )
-         ctx.diag_audio_seen = True
- 
-     @staticmethod
-     def _cancel_diag_timer(ctx: AdapterContext) -> None:
-         timer = ctx.diag_timer
-         ctx.diag_timer = None
-         if timer is not None:
-             timer.cancel()
- 
-     def _emit_hud_state(self, ctx: AdapterContext, state: str) -> None:
-         if ctx.hud_state == state:
-             return
- 
-         ctx.hud_state = state
-         try:
-             asyncio.create_task(self._publish(EVT_HUD_STATE, ctx.sid, {"state": state}))
-         except RuntimeError:
-             _log.warning("evt=ws_hud_state_publish_failed sid=%s", ctx.sid)
- 
--    def _emit_client_mic_open(self, ctx: AdapterContext) -> None:
-+    def _emit_client_mic_open(
-+        self,
-+        ctx: AdapterContext,
-+        *,
-+        vendor: Optional[str] = None,
-+        opened_ts: Optional[int] = None,
-+    ) -> None:
-         if ctx.client_mic_open:
-             return
- 
-         self._cancel_mic_open_timer(ctx)
-         ctx.client_mic_open = True
-+        payload: Dict[str, object] = {"state": "open"}
-+        if isinstance(vendor, str) and vendor:
-+            payload["vendor"] = vendor[:64]
-+        if isinstance(opened_ts, int):
-+            payload["ts"] = opened_ts
-         try:
-             asyncio.create_task(
--                self._publish(EVT_CLIENT_MIC_OPEN, ctx.sid, {"state": "open"})
-+                self._publish(EVT_CLIENT_MIC_OPEN, ctx.sid, payload)
-             )
-         except RuntimeError:
-             _log.warning("evt=ws_client_mic_publish_failed sid=%s", ctx.sid)
- 
-     def _handle_client_audio_activity(self, ctx: AdapterContext) -> None:
-         if ctx.client_mic_open:
-             return
- 
-         was_nudged = ctx.mic_nudge_sent
-         ctx.mic_nudge_sent = False
-         self._cancel_mic_open_timer(ctx)
-         if was_nudged:
-             _log.info("evt=ws_mic_open_recovered sid=%s", ctx.sid)
-         self._emit_client_mic_open(ctx)
- 
-     def _schedule_mic_open_guard(
-         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
-     ) -> None:
-         if _MIC_OPEN_TIMEOUT_SECONDS <= 0:
-             return
-         if ctx.client_mic_open:
-             return
-         self._cancel_mic_open_timer(ctx)
- 
-         def _fire() -> None:
-diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
-index 0ef9386e1780ea148f785e30f6fc5bd808d0f0a4..254b18acd901a97580db78f4225d9cf4763edac2 100644
---- a/tests/test_adapter_outbound_bridge.py
-+++ b/tests/test_adapter_outbound_bridge.py
-@@ -173,50 +173,53 @@ class TestAdapterOutboundBridge(unittest.TestCase):
-                     "messages": [{"id": "m-1", "role": "user", "text": "hi"}],
-                 }
-             )
-         )
- 
-     def test_sid_isolation_drops_other_sessions(self) -> None:
-         asyncio.run(self._test_sid_isolation())
- 
-     def test_chat_message_dropped_for_other_sessions(self) -> None:
-         asyncio.run(
-             self._test_payload_other_sid_drop({"type": "chat.message", "message_id": "ignored"})
-         )
- 
-     def test_allow_list_blocks_unknown_types(self) -> None:
-         asyncio.run(self._test_allow_list())
- 
-     def test_backpressure_reports_drops(self) -> None:
-         asyncio.run(self._test_backpressure())
- 
-     def test_start_listening_handoff_after_tts_end(self) -> None:
-         asyncio.run(self._test_start_listening_handoff())
- 
-     def test_listen_handoff_waits_for_mask_off(self) -> None:
-         asyncio.run(self._test_listen_handoff_waits_for_mask_off())
- 
-+    def test_client_ready_mic_open_confirms_listen(self) -> None:
-+        asyncio.run(self._test_client_ready_mic_open())
-+
-     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
-         asyncio.run(self._test_audio_forwarding())
- 
-     def test_mic_open_timeout_triggers_nudge(self) -> None:
-         asyncio.run(self._test_mic_open_timeout_nudge())
- 
-     async def _test_happy_path(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             payload = {"type": "policy.interaction", "interaction_id": "abc123"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
- 
-             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction")
-             self.assertEqual(frame, payload)
- 
-             frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
-             self.assertEqual(len(frames), 1)
-         finally:
-             await harness.close()
- 
-     async def _test_payload_forwarded(self, payload: Dict[str, Any]) -> None:
-         engine = RecordingEngine()
-@@ -335,50 +338,68 @@ class TestAdapterOutboundBridge(unittest.TestCase):
-             await harness.wait_for(lambda: bool(runtime.prearm_calls))
-             self.assertEqual(runtime.prearm_calls, [sid])
- 
-             bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
- 
-             frame = await harness.wait_for_outbound(
-                 lambda data: data.get("type") == "start_listening"
-             )
-             self.assertEqual(frame, {"type": "start_listening"})
- 
-             ctx = adapter._contexts.get(sid)
-             if ctx is not None:
-                 ctx.asr_ready = True
-             await harness._inbound.put({"type": "websocket.receive", "bytes": b"\x00\x00"})
- 
-             await harness.wait_for(lambda: bool(mic_events))
-             self.assertEqual(mic_events[-1].get("meta", {}).get("state"), "open")
- 
-             await harness.wait_for(lambda: bool(hud_events))
-             self.assertEqual(hud_events[-1]["meta"].get("state"), "Listening")
-         finally:
-             bus.unsubscribe(token)
-             bus.unsubscribe(mic_token)
-             await harness.close()
- 
-+    async def _test_client_ready_mic_open(self) -> None:
-+        engine = RecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+        harness = OutboundHarness(adapter, engine)
-+        await harness.start()
-+        mic_events: list[dict] = []
-+        token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
-+        try:
-+            payload = {"type": "client.ready", "mic": {"state": "open", "vendor": "browser", "ts": 12345}}
-+            await harness._inbound.put({"type": "websocket.receive", "text": json.dumps(payload)})
-+            await harness.wait_for(lambda: bool(mic_events))
-+            self.assertEqual(mic_events[-1]["meta"].get("state"), "open")
-+            self.assertEqual(mic_events[-1]["meta"].get("vendor"), "browser")
-+            self.assertEqual(mic_events[-1]["meta"].get("ts"), 12345)
-+        finally:
-+            bus.unsubscribe(token)
-+            await harness.close()
-+
-     async def _test_listen_handoff_waits_for_mask_off(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         runtime = _StubAsrRuntime()
-         adapter.asr_runtime = runtime
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
- 
-         sid = harness.sid
-         recorded: list[dict] = []
-         interesting = {EVT_TTS_MASK, EVT_HUD_STATE, EVT_CLIENT_MIC_OPEN}
- 
-         def _record(event: dict) -> None:
-             if event.get("sid") != sid:
-                 return
-             if event.get("type") in interesting:
-                 recorded.append(dict(event))
- 
-         token_order = bus.subscribe("*", _record)
-         try:
-             policy_payload = {
-                 "type": "policy.interaction",
-                 "interaction_id": "turn-1",
-                 "actions": ["assistant.say", "assistant.await_user"],
-             }

@@ -261,7 +261,7 @@
         };
         emitCustomEvent(CLIENT_MIC_OPEN_EVENT, eventDetail);
         const wsClient = window.WSClient;
-        if (wsClient && typeof wsClient.send === "function") {
+        if (wsClient && (typeof wsClient.send === "function" || typeof wsClient.sendJson === "function")) {
           const micPayload = {
             type: "client.ready",
             mic: {
@@ -273,7 +273,11 @@
             micPayload.mic.vendor = eventDetail.vendor;
           }
           try {
-            wsClient.send(micPayload);
+            if (typeof wsClient.send === "function") {
+              wsClient.send(micPayload);
+            } else {
+              wsClient.sendJson(micPayload);
+            }
           } catch (err) {
             console.warn("Failed to send client mic open frame", err);
           }
@@ -488,15 +492,20 @@
       this._scheduleMaskRelease(hold);
     },
 
-    async handleStartListening() {
+    async startListening() {
       try {
         await this.start();
       } catch (err) {
         console.error("AudioRecorder start_listening start failed", err);
         return;
       }
+      this._asrReady = true;
       this._setMask(false);
       this._setListening(true);
+    },
+
+    async handleStartListening(frame) {
+      return this.startListening(frame);
     },
 
     handleWsClose() {
@@ -510,9 +519,6 @@
     }
   };
 
-  window.addEventListener("asr.ready", (event) => {
-    recorder.handleAsrReady(event && event.detail);
-  });
   window.addEventListener("policy.interaction", (event) => {
     recorder.handlePolicy(event && event.detail);
   });
@@ -521,9 +527,6 @@
   });
   window.addEventListener("tts.end", () => {
     recorder.handleTtsEnd();
-  });
-  window.addEventListener("start_listening", () => {
-    recorder.handleStartListening();
   });
   window.addEventListener("ws.close", () => {
     recorder.handleWsClose();
