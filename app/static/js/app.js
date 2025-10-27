@@ -758,6 +758,129 @@
     const localeLabel = document.getElementById('localeLabel');
     const textChatForm = document.getElementById('textChatForm');
     const textChatInput = document.getElementById('textChatInput');
+    
+    // === Added: chat submit wiring + fallback PCM16 streamer and mic helpers ===
+    // Send typed chat to the server using chat.message frames
+    if (textChatForm) {
+      textChatForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const text = (textChatInput && textChatInput.value || '').trim();
+        if (!text) return;
+        try {
+          WSClient && WSClient.send && WSClient.send({ type: 'chat.message', role: 'user', text });
+          textChatInput.value = '';
+        } catch (err) {
+          console.error('chat.message send failed', err);
+        }
+      });
+    }
+    
+    // Fallback PCM16 mono @16kHz streamer, used only if AudioRecorder is absent or fails
+    const FallbackPCMStreamer = (() => {
+      const TARGET_RATE = 16000;
+      let ctx = null, source = null, processor = null, gain = null, stream = null, running = false;
+      function base64FromArrayBuffer(ab) {
+        const bytes = new Uint8Array(ab);
+        let binary = '';
+        const len = bytes.length;
+        for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+        return btoa(binary);
+      }
+      function downsampleFloat32(input, inRate, outRate) {
+        if (outRate === inRate) return input;
+        const ratio = inRate / outRate;
+        const newLen = Math.floor(input.length / ratio);
+        const result = new Float32Array(newLen);
+        let i = 0, j = 0;
+        while (i < newLen) {
+          const start = Math.floor(j);
+          const end = Math.min(Math.floor(j + ratio), input.length);
+          let sum = 0, count = 0;
+          for (let k = start; k < end; k++) { sum += input[k]; count++; }
+          result[i++] = count ? (sum / count) : 0;
+          j += ratio;
+        }
+        return result;
+      }
+      function floatTo16BitPCM(float32) {
+        const out = new Int16Array(float32.length);
+        for (let i = 0; i < float32.length; i++) {
+          const s = Math.max(-1, Math.min(1, float32[i]));
+          out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+        return out;
+      }
+      async function start() {
+        if (running) return true;
+        const ws = WSClient && WSClient.socket;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+          console.error('FallbackPCM getUserMedia failed', err);
+          return false;
+        }
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        try { await ctx.resume(); } catch {}
+        source = ctx.createMediaStreamSource(stream);
+        processor = ctx.createScriptProcessor(4096, 1, 1);
+        gain = ctx.createGain(); gain.gain.value = 0;
+        source.connect(processor); processor.connect(gain); gain.connect(ctx.destination);
+        // announce start
+        try { WSClient.send({ type: 'audio.start', audio: { codec: 'pcm_s16le', rate_hz: TARGET_RATE, channels: 1 } }); } catch {}
+        processor.onaudioprocess = (ev) => {
+          try {
+            const input = ev.inputBuffer.getChannelData(0);
+            const fsIn = ctx.sampleRate || 48000;
+            const f32 = downsampleFloat32(input, fsIn, TARGET_RATE);
+            const i16 = floatTo16BitPCM(f32);
+            const b64 = base64FromArrayBuffer(i16.buffer);
+            WSClient.send({ type: 'audio.chunk', audio: { data: b64, encoding: 'base64' } });
+          } catch (err) {
+            console.warn('fallback pcm process error', err);
+          }
+        };
+        running = true;
+        return true;
+      }
+      function stop() {
+        if (!running) return;
+        try { WSClient.send({ type: 'audio.end' }); } catch {}
+        try { if (processor) processor.disconnect(); } catch {}
+        try { if (gain) gain.disconnect(); } catch {}
+        try { if (source) source.disconnect(); } catch {}
+        if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
+        if (ctx) { try { ctx.close(); } catch {} }
+        stream = source = processor = gain = ctx = null;
+        running = false;
+      }
+      return { start, stop, isRunning: () => running };
+    })();
+    
+    let __MIC_RUNNING__ = false;
+    async function tryStartMic(trigger) {
+      const ws = WSClient && WSClient.socket;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (__MIC_RUNNING__) return;
+      if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+        try {
+          await window.AudioRecorder.start();
+          __MIC_RUNNING__ = true;
+          return;
+        } catch (err) {
+          console.warn('AudioRecorder.start failed; falling back', err);
+        }
+      }
+      const ok = await FallbackPCMStreamer.start();
+      if (ok) __MIC_RUNNING__ = true;
+    }
+    function stopMic(reason) {
+      __MIC_RUNNING__ = false;
+      try { if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') window.AudioRecorder.stop(); } catch {}
+      try { FallbackPCMStreamer.stop(); } catch {}
+    }
+    // === end additions ===
+    
 
     const voiceState = { voiceId: null, locale: null };
 
@@ -1496,7 +1619,9 @@
 
       if (becameConnected) {
         Waveform.start();
-        if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+        
+        tryStartMic('connected');
+if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
           window.AudioRecorder.start()
             .catch((err) => {
               console.error('AudioRecorder start error', err);
@@ -1504,7 +1629,9 @@
         }
       } else if (becameDisconnected) {
         Waveform.stop();
-        if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+        
+        stopMic('disconnect');
+if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
           try {
             window.AudioRecorder.stop();
           } catch (err) {
@@ -1542,11 +1669,13 @@
         : (detail.meta && typeof detail.meta.reason === 'string' ? detail.meta.reason : null);
       if (!reason || reason.toLowerCase().includes('tts')) {
         DiagRecorder.maybeStart('turn');
+        tryStartMic('turn');
       }
     });
     window.addEventListener('tts.end', () => {
       const release = () => {
         DiagRecorder.maybeStart('ready');
+        tryStartMic('ready');
       };
       if (POST_TTS_RELEASE_MS > 0) {
         setTimeout(release, POST_TTS_RELEASE_MS);
@@ -1555,6 +1684,7 @@
       }
     });
     window.addEventListener('asr.ready', () => {
+      tryStartMic('asr.ready');
       if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
         try {
           const maybePromise = window.AudioRecorder.start();
@@ -1574,7 +1704,14 @@
       applySuggestionsFrame(detail);
     });
 
-    window.addEventListener('ws.close', () => {
+    
+    // Start mic immediately on ws.open as a safety net; send diag banner
+    window.addEventListener('ws.open', () => {
+      tryStartMic('ws.open');
+      try { WSClient && WSClient.send && WSClient.send({ type: 'client.banner', text: 'open-ok', sha: window.__BUILD_SHA__, ts: Date.now() }); } catch {}
+    });
+window.addEventListener('ws.close', () => {
+      stopMic('ws');
       resetSuggestions();
       DiagRecorder.stop('ws');
     });
