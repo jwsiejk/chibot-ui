@@ -282,10 +282,6 @@ body{
   border:0 !important;
 }
 
-body.ptt-hold .chip-status{
-  box-shadow:0 0 0 2px rgba(91,157,255,.45);
-}
-
 .text-chat-form{
   display:flex;
   padding:0 16px 20px;

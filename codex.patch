@@ -1,283 +1,915 @@
-diff --git a/app/admin/flow_api.py b/app/admin/flow_api.py
-index eb27bfd37bd9c51822dc77dbbc3cdf35a8d51682..ad32ecd4f2b273d13a71900bd56c399515303a7e 100644
---- a/app/admin/flow_api.py
-+++ b/app/admin/flow_api.py
-@@ -1,45 +1,51 @@
- """Admin HTTP endpoints exposing flow trace streams and ZIP archives."""
+diff --git a/app/static/css/styles.css b/app/static/css/styles.css
+index cfd654822604e67fefbea8677908f1efb421e432..32a4b418bc6208e708ed5665c29f80702f5de28d 100644
+--- a/app/static/css/styles.css
++++ b/app/static/css/styles.css
+@@ -260,54 +260,50 @@ body{
+ .pill.end{background:linear-gradient(135deg, #ff6b81, #ff3b55); color:#190307}
+ .pill.secondary{background:linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.09)); border-color:var(--border)}
+ .pill.secondary.is-active{
+   border-color:rgba(91,157,255,.6);
+   box-shadow:inset 0 0 0 1px rgba(91,157,255,.45);
+   color:var(--accent);
+ }
  
- from __future__ import annotations
+ .pill[disabled]{opacity:.6; cursor:not-allowed}
+ .toolbar-right{justify-self:end; color:var(--muted); font-size:12px}
  
- import json
- from dataclasses import dataclass
- from io import BytesIO
- from pathlib import Path
- from typing import Awaitable, Callable, Dict, List, Optional
- from urllib.parse import parse_qs
+ /* Utilities */
+ .hidden{display:none !important}
+ .visually-hidden{
+   position:absolute !important;
+   width:1px !important;
+   height:1px !important;
+   padding:0 !important;
+   margin:-1px !important;
+   overflow:hidden !important;
+   clip:rect(0,0,0,0) !important;
+   white-space:nowrap !important;
+   border:0 !important;
+ }
  
- from app.admin.flow_zip import build_flow_zip
+-body.ptt-hold .chip-status{
+-  box-shadow:0 0 0 2px rgba(91,157,255,.45);
+-}
+-
+ .text-chat-form{
+   display:flex;
+   padding:0 16px 20px;
+   gap:10px;
+   background:linear-gradient(180deg, rgba(8,12,20,.02), rgba(8,12,20,.35));
+   border:1px solid var(--border);
+   border-top:0;
+   border-radius:0 0 16px 16px;
+ }
  
+ .text-chat-form input[type="text"]{
+   flex:1 1 auto;
+   border-radius:999px;
+   border:1px solid rgba(255,255,255,.12);
+   background:rgba(11,16,28,.85);
+   color:var(--text);
+   padding:10px 18px;
+   font-size:14px;
+   box-shadow:inset 0 2px 6px rgba(0,0,0,.35);
+ }
  
- EXPORT_ROOT = Path("exports")
- _EVENTS_FILENAME = "events.ndjson"
- _ARCHIVE_FILENAME = "flow.zip"
- _CONTENT_TYPE_NDJSON = b"application/x-ndjson"
- _CONTENT_TYPE_ZIP = b"application/zip"
+ .text-chat-form input[type="text"]::placeholder{
+   color:rgba(255,255,255,.45);
+ }
  
-+_TYPE_PREFIX_ALIASES: dict[str, tuple[str, ...]] = {
-+    "EVT_DIAG_HUD": ("EVT_HUD_", "EVT_CLIENT_"),
-+    "EVT_DIAG_FIRST_AUDIO_FRAME": ("EVT_AG_",),
-+    "EVT_DIAG_NO_AUDIO_FROM_CLIENT": ("EVT_AG_",),
-+}
-+
- 
- @dataclass(frozen=True)
- class Response:
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
- 
- 
- def json_response(*, status: int = 200, **payload: object) -> Response:
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
- 
- 
- async def handle_flow_trace(
-     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
- ):
-     """Stream filtered redacted events for the given session identifier."""
- 
-     if _method(scope) != "GET":
-         await _drain_body(receive)
-         return json_response(status=405, error="method_not_allowed")
-@@ -232,44 +238,60 @@ def _parse_trace_filters(query: bytes) -> tuple[Optional[set[str]], Optional[int
- 
- 
- def _filter_events(
-     events_path: Path,
-     requested_types: Optional[set[str]],
-     since_ms: Optional[int],
-     limit: Optional[int],
- ) -> bytes:
-     matched = BytesIO()
-     remaining = limit if limit is not None else None
- 
-     with events_path.open("r", encoding="utf-8") as handle:
-         for raw_line in handle:
-             if remaining is not None and remaining <= 0:
-                 break
- 
-             stripped = raw_line.strip()
-             if not stripped:
-                 continue
- 
-             try:
-                 event = json.loads(stripped)
-             except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-                 raise ValueError("event payload must be valid JSON") from exc
- 
--            if requested_types and event.get("type") not in requested_types:
-+            event_type = event.get("type")
-+            if requested_types and not _type_filter_matches(event_type, requested_types):
-                 continue
- 
-             if since_ms is not None:
-                 ts_value = event.get("ts_ms")
-                 if not isinstance(ts_value, int):
-                     continue
-                 if ts_value < since_ms:
-                     continue
- 
-             matched.write(stripped.encode("utf-8"))
-             matched.write(b"\n")
-             if remaining is not None:
-                 remaining -= 1
- 
-     return matched.getvalue()
- 
- 
-+def _type_filter_matches(event_type: object, requested_types: set[str]) -> bool:
-+    if not isinstance(event_type, str):
-+        return False
-+    if event_type in requested_types:
-+        return True
-+    for token in requested_types:
-+        prefixes = _TYPE_PREFIX_ALIASES.get(token)
-+        if not prefixes:
-+            continue
-+        for prefix in prefixes:
-+            if event_type.startswith(prefix):
-+                return True
-+    return False
-+
-+
- __all__ = ["handle_flow_trace", "handle_flow_zip", "handle_flow_sessions"]
-diff --git a/app/static/js/admin_logs.js b/app/static/js/admin_logs.js
-index e1519549d5eca92422860241aa106c4bc368e642..f9494dac09c1880b5732a1fda12a4e33e2e727e3 100644
---- a/app/static/js/admin_logs.js
-+++ b/app/static/js/admin_logs.js
-@@ -112,73 +112,87 @@
-     if (!cfg || typeof cfg !== 'object') {
-       return false;
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 8c0939669c936d5cbb62a60f42903bda4966479d..a867fd4c45c2b3ce3a9cd2ebafd51851e7a9f2b3 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -310,310 +310,310 @@
+   function setBadge(text) {
+     if (!diagHudEnabled()) {
+       return;
      }
-     if (!Object.prototype.hasOwnProperty.call(cfg, key)) {
-       return false;
+     const value = text == null ? "" : String(text);
+     const badge = ensureDiagBadge();
+     if (badge) {
+       badge.textContent = value;
+       diagBadgePendingText = null;
+     } else {
+       diagBadgePendingText = value;
      }
-     return Boolean(cfg[key]);
    }
  
-   function isHudDebugEnabled() {
-     if (chkHud instanceof HTMLInputElement) {
-       return Boolean(chkHud.checked);
+   async function getMicStream() {
+     if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+       throw new Error("mediaDevices.getUserMedia unavailable");
      }
-     return getGlobalConfigFlag('DIAG_CLIENT_HUD');
+     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+     if (diagHudEnabled()) {
+       const tracks = typeof stream.getAudioTracks === "function"
+         ? stream.getAudioTracks().map((track) => ({ label: track.label, enabled: track.enabled }))
+         : [];
+       console.info("DIAG_MEDIA_OK", tracks);
+       setBadge("mic:ok");
+-      sendDiagHudEvent("media_ok", { tracks }, { level: "info", badge: "mic:ok", message: "Media stream ready" });
++      sendDiagHudEvent("EVT_CLIENT_MEDIA_OK", { tracks }, { level: "info", badge: "mic:ok", message: "Media stream ready" });
+     }
+     return stream;
    }
  
-   function isAudioDebugEnabled() {
-     if (chkGuard instanceof HTMLInputElement) {
-       return Boolean(chkGuard.checked);
+   function attachRecorder(stream, onChunk) {
+     if (!stream) {
+       throw new Error("MediaStream required");
      }
-     return getGlobalConfigFlag('DIAG_AUDIO_GUARD');
-   }
- 
-   function setChipGroupEnabled(wrappers, inputs, enabled) {
-     let updated = false;
--    const shouldDisable = !enabled;
-+    const shouldCheck = Boolean(enabled);
-     wrappers.forEach((wrapper) => {
-       if (!(wrapper instanceof HTMLElement)) {
+     if (typeof MediaRecorder === "undefined") {
+       throw new Error("MediaRecorder unsupported");
+     }
+     const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+     let sentBytes = 0;
+     let chunkCount = 0;
+     const sampleEvery = Math.max(1, diagChunkSampleN());
+     recorder.addEventListener("start", () => {
+       if (diagHudEnabled()) {
+         const ts = Date.now();
+         console.info("DIAG_RECORDER_STARTED", ts);
+         const badge = "rec:start";
+         setBadge(badge);
+         sendDiagHudEvent(
+-          "recorder_started",
++          "EVT_CLIENT_RECORDER_STARTED",
+           { timestamp: ts },
+           { level: "info", badge, message: "Recorder started" }
+         );
+       }
+     });
+     recorder.addEventListener("dataavailable", async (event) => {
+       if (!event.data || !event.data.size) {
          return;
        }
--      const before = wrapper.classList.contains('disabled');
--      if (before !== shouldDisable) {
-+      if (!wrapper.classList.contains('disabled')) {
-+        wrapper.classList.add('disabled');
-         updated = true;
+       chunkCount += 1;
+       const shouldSample = chunkCount % sampleEvery === 0;
+       if (diagHudEnabled() && shouldSample) {
+         console.debug("DIAG_CHUNK", { size: event.data.size, chunkCount });
+         const badge = `chunks:${chunkCount}`;
+         setBadge(badge);
+         sendDiagHudEvent(
+-          "chunk_sample",
++          "EVT_CLIENT_CHUNK_SAMPLE",
+           { size: event.data.size, chunkCount },
+           { level: "debug", badge, sample: true, message: "Sampled recorder chunk" }
+         );
        }
--      wrapper.classList.toggle('disabled', shouldDisable);
-+      if (wrapper.getAttribute('aria-disabled') !== 'true') {
-+        wrapper.setAttribute('aria-disabled', 'true');
-+        updated = true;
-+      }
-+      const nextState = shouldCheck ? 'on' : 'off';
-+      if (wrapper.dataset.diagState !== nextState) {
-+        wrapper.dataset.diagState = nextState;
-+      }
-     });
-     inputs.forEach((input) => {
-       if (!(input instanceof HTMLInputElement)) {
-         return;
-       }
--      if (input.disabled !== shouldDisable) {
--        input.disabled = shouldDisable;
-+      if (!input.disabled) {
-+        input.disabled = true;
-         updated = true;
-       }
--      if (shouldDisable && input.checked) {
--        input.checked = false;
-+      if (input.checked !== shouldCheck) {
-+        input.checked = shouldCheck;
-         updated = true;
-       }
-+      if (shouldCheck) {
-+        if (!input.dataset._everEnabled) {
-+          input.dataset._everEnabled = '1';
-+        }
-+      } else if (input.dataset._everEnabled) {
-+        delete input.dataset._everEnabled;
-+      }
-     });
-     return updated;
-   }
- 
-   function observeToggle(input) {
-     if (!(input instanceof HTMLInputElement)) {
-       return null;
-     }
-     const observer = new MutationObserver((mutations) => {
-       for (const mutation of mutations) {
-         if (mutation.type === 'attributes' && mutation.attributeName === 'checked') {
-           syncChipsWithDebug({ silent: true });
+       try {
+         const buffer = await event.data.arrayBuffer();
+         if (typeof onChunk === "function") {
+           onChunk(buffer);
+         }
+         sentBytes += buffer.byteLength;
+         if (diagHudEnabled() && shouldSample) {
+           console.debug("DIAG_WS_BIN_SENT", { chunkCount, sentBytes });
+           sendDiagHudEvent(
+-            "ws_binary_sent",
++            "EVT_CLIENT_WS_BINARY_SENT",
+             { chunkCount, sentBytes },
+             { level: "debug", sample: true, message: "Sampled binary chunk sent" }
+           );
+         }
+       } catch (err) {
+         if (diagHudEnabled()) {
+           console.warn("DIAG_CHUNK_ERROR", err);
+-          sendDiagHudEvent("chunk_error", { message: err && err.message }, {
++          sendDiagHudEvent("EVT_CLIENT_CHUNK_ERROR", { message: err && err.message }, {
+             level: "warn",
+             message: "Failed to process chunk"
+           });
          }
        }
      });
-     observer.observe(input, { attributes: true, attributeFilter: ['checked'] });
-     return observer;
+     return recorder;
    }
  
-   function handleDebugToggleChange() {
-     syncChipsWithDebug();
-   }
+   const DiagRecorder = (() => {
+     let stream = null;
+     let recorder = null;
+     let startPromise = null;
  
-   function ensureToggleBindings() {
-     let changed = false;
-diff --git a/tests/test_admin_flow_api_filters.py b/tests/test_admin_flow_api_filters.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..582f85866fe323fee94fbb800379b72898cb2e2e
---- /dev/null
-+++ b/tests/test_admin_flow_api_filters.py
-@@ -0,0 +1,59 @@
-+import json
-+
-+from app.admin import flow_api
-+
-+
-+def _write_events(tmp_path, events):
-+    path = tmp_path / "events.ndjson"
-+    payload = "\n".join(json.dumps(event) for event in events) + "\n"
-+    path.write_text(payload, encoding="utf-8")
-+    return path
-+
-+
-+def _decode_events(raw_bytes):
-+    text = raw_bytes.decode("utf-8")
-+    return [json.loads(line) for line in text.splitlines() if line.strip()]
-+
-+
-+def test_filter_events_expands_hud_aliases(tmp_path):
-+    events = [
-+        {"type": "EVT_DIAG_HUD", "ts_ms": 1},
-+        {"type": "EVT_HUD_STATE", "ts_ms": 2},
-+        {"type": "EVT_CLIENT_MIC_OPEN", "ts_ms": 3},
-+        {"type": "EVT_OTHER", "ts_ms": 4},
-+    ]
-+    path = _write_events(tmp_path, events)
-+
-+    raw = flow_api._filter_events(path, {"EVT_DIAG_HUD"}, since_ms=None, limit=None)
-+    filtered = _decode_events(raw)
-+
-+    assert [event["type"] for event in filtered] == [
-+        "EVT_DIAG_HUD",
-+        "EVT_HUD_STATE",
-+        "EVT_CLIENT_MIC_OPEN",
-+    ]
-+
-+
-+def test_filter_events_expands_guard_aliases(tmp_path):
-+    events = [
-+        {"type": "EVT_DIAG_FIRST_AUDIO_FRAME", "ts_ms": 5},
-+        {"type": "EVT_AG_MONITOR", "ts_ms": 6},
-+        {"type": "EVT_AG_ALERT", "ts_ms": 7},
-+        {"type": "EVT_LOG", "ts_ms": 8},
-+    ]
-+    path = _write_events(tmp_path, events)
-+
-+    raw = flow_api._filter_events(
-+        path,
-+        {"EVT_DIAG_FIRST_AUDIO_FRAME"},
-+        since_ms=None,
-+        limit=None,
-+    )
-+    filtered = _decode_events(raw)
-+
-+    assert [event["type"] for event in filtered] == [
-+        "EVT_DIAG_FIRST_AUDIO_FRAME",
-+        "EVT_AG_MONITOR",
-+        "EVT_AG_ALERT",
-+    ]
-+
+     function cleanupStream() {
+       if (!stream) {
+         return;
+       }
+       try {
+         const tracks = typeof stream.getTracks === "function" ? stream.getTracks() : [];
+         tracks.forEach((track) => {
+           try {
+             track.stop();
+           } catch (err) {
+             if (diagHudEnabled()) {
+               console.warn("DIAG_TRACK_STOP_ERROR", err);
+-              sendDiagHudEvent("track_stop_error", { message: err && err.message }, {
++              sendDiagHudEvent("EVT_CLIENT_TRACK_STOP_ERROR", { message: err && err.message }, {
+                 level: "warn",
+                 message: "Failed to stop track"
+               });
+             }
+           }
+         });
+       } finally {
+         stream = null;
+       }
+     }
+ 
+     function stop(reason) {
+       if (recorder) {
+         try {
+           if (recorder.state !== "inactive") {
+             recorder.stop();
+           }
+         } catch (err) {
+           if (diagHudEnabled()) {
+             console.warn("DIAG_RECORDER_STOP_ERROR", err);
+-            sendDiagHudEvent("recorder_stop_error", { message: err && err.message }, {
++            sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP_ERROR", { message: err && err.message }, {
+               level: "warn",
+               message: "Recorder stop error"
+             });
+           }
+         }
+         recorder = null;
+       }
+       cleanupStream();
+       if (diagHudEnabled()) {
+         if (reason) {
+           setBadge(`stop:${reason}`);
+-          sendDiagHudEvent("recorder_stop", { reason }, {
++          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", { reason }, {
+             level: "info",
+             badge: `stop:${reason}`,
+             message: "Recorder stopped"
+           });
+         } else {
+           setBadge("stop");
+-          sendDiagHudEvent("recorder_stop", null, {
++          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", null, {
+             level: "info",
+             badge: "stop",
+             message: "Recorder stopped"
+           });
+         }
+       }
+     }
+ 
+     async function startInternal(trigger) {
+       if (!diagHudEnabled()) {
+         return null;
+       }
+       if (recorder && recorder.state !== "inactive") {
+         return recorder;
+       }
+       const wsClient = window.WSClient;
+       const ws = wsClient && wsClient.socket;
+       if (!ws || ws.readyState !== WebSocket.OPEN) {
+         return null;
+       }
+       try {
+         stream = await getMicStream();
+       } catch (err) {
+         if (diagHudEnabled()) {
+           console.warn("DIAG_MEDIA_ERROR", err);
+           setBadge("mic:fail");
+-          sendDiagHudEvent("media_error", { message: err && err.message }, {
++          sendDiagHudEvent("EVT_CLIENT_MEDIA_ERROR", { message: err && err.message }, {
+             level: "warn",
+             badge: "mic:fail",
+             message: "Failed to access microphone"
+           });
+         }
+         stream = null;
+         return null;
+       }
+       try {
+         recorder = attachRecorder(stream, (buffer) => {
+           if (!ws || ws.readyState !== WebSocket.OPEN) {
+             return;
+           }
+           try {
+             ws.send(buffer);
+           } catch (err) {
+             if (diagHudEnabled()) {
+               console.warn("DIAG_WS_SEND_ERROR", err);
+-              sendDiagHudEvent("ws_send_error", { message: err && err.message }, {
++              sendDiagHudEvent("EVT_CLIENT_WS_SEND_ERROR", { message: err && err.message }, {
+                 level: "warn",
+                 message: "Binary send failed"
+               });
+             }
+           }
+         });
+       } catch (err) {
+         if (diagHudEnabled()) {
+           console.warn("DIAG_RECORDER_ERROR", err);
+           setBadge("rec:fail");
+-          sendDiagHudEvent("recorder_error", { message: err && err.message }, {
++          sendDiagHudEvent("EVT_CLIENT_RECORDER_ERROR", { message: err && err.message }, {
+             level: "warn",
+             badge: "rec:fail",
+             message: "Recorder initialization failed"
+           });
+         }
+         cleanupStream();
+         recorder = null;
+         return null;
+       }
+       recorder.addEventListener("stop", () => {
+         if (diagHudEnabled()) {
+           setBadge("rec:stop");
+-          sendDiagHudEvent("recorder_stop", null, {
++          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", null, {
+             level: "info",
+             badge: "rec:stop",
+             message: "Recorder stopped"
+           });
+         }
+       });
+       try {
+         recorder.start(250);
+       } catch (err) {
+         if (diagHudEnabled()) {
+           console.warn("DIAG_RECORDER_START_ERROR", err);
+           setBadge("rec:fail");
+-          sendDiagHudEvent("recorder_start_error", { message: err && err.message }, {
++          sendDiagHudEvent("EVT_CLIENT_RECORDER_START_ERROR", { message: err && err.message }, {
+             level: "warn",
+             badge: "rec:fail",
+             message: "Recorder start error"
+           });
+         }
+         stop("start_err");
+         return null;
+       }
+       if (diagHudEnabled()) {
+         setBadge(trigger ? `rec:${trigger}` : "rec");
+-        sendDiagHudEvent("recorder_active", { trigger }, {
++        sendDiagHudEvent("EVT_CLIENT_RECORDER_ACTIVE", { trigger }, {
+           level: "info",
+           badge: trigger ? `rec:${trigger}` : "rec",
+           message: "Recorder active"
+         });
+       }
+       return recorder;
+     }
+ 
+     function maybeStart(trigger) {
+       if (!diagHudEnabled()) {
+         return;
+       }
+       if (recorder && recorder.state !== "inactive") {
+         return;
+       }
+       if (startPromise) {
+         return;
+       }
+       const wsClient = window.WSClient;
+       const ws = wsClient && wsClient.socket;
+       if (!ws || ws.readyState !== WebSocket.OPEN) {
+         return;
+       }
+       const promise = startInternal(trigger);
+       if (!promise) {
+         return;
+       }
+       startPromise = promise;
+       promise.finally(() => {
+         if (startPromise === promise) {
+           startPromise = null;
+         }
+       }).catch(() => {
+         if (diagHudEnabled()) {
+           console.warn("DIAG_START_REJECTED");
+-          sendDiagHudEvent("recorder_start_rejected", null, {
++          sendDiagHudEvent("EVT_CLIENT_RECORDER_START_REJECTED", null, {
+             level: "warn",
+             message: "Recorder start promise rejected"
+           });
+         }
+       });
+     }
+ 
+     return {
+       maybeStart,
+       stop,
+       hudEnabled: diagHudEnabled
+     };
+   })();
+ 
+   async function ensureRuntimeModules() {
+     if (!window.AppState) {
+       await loadScript("state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("audio_player.js");
+     }
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.AudioRecorder) {
+@@ -867,193 +867,116 @@
+       }
+       const meta = frame.meta && typeof frame.meta === 'object' ? frame.meta : null;
+       if (meta) {
+         if (!voiceId && typeof meta.voice_id === 'string') {
+           voiceId = meta.voice_id;
+         }
+         if (!locale && typeof meta.locale === 'string') {
+           locale = meta.locale;
+         }
+         const ttsMeta = meta.tts && typeof meta.tts === 'object' ? meta.tts : null;
+         if (ttsMeta) {
+           if (!voiceId && typeof ttsMeta.voice_id === 'string') {
+             voiceId = ttsMeta.voice_id;
+           }
+           if (!locale && typeof ttsMeta.locale === 'string') {
+             locale = ttsMeta.locale;
+           }
+         }
+       }
+       return { voiceId, locale };
+     }
+ 
+     renderVoiceState();
+     renderSuggestions();
+ 
+-    let pttEnabled = false;
+-    let pttActive = false;
+-    let pttMaskState = null;
+-
+-    function applyPttMask({ force = false } = {}) {
+-      if (!window.AudioRecorder || typeof window.AudioRecorder._setMask !== 'function') {
+-        return;
+-      }
+-      const shouldMask = pttEnabled && !pttActive;
+-      if (force || pttMaskState !== shouldMask) {
+-        try {
+-          window.AudioRecorder._setMask(shouldMask);
+-          pttMaskState = shouldMask;
+-        } catch (err) {
+-          console.warn('Failed to toggle push-to-talk mask', err);
+-        }
+-      }
+-    }
+-
+-    function setPttEnabled(enabled) {
+-      if (pttEnabled === enabled) {
+-        applyPttMask({ force: true });
+-        return;
+-      }
+-      pttEnabled = enabled;
+-      if (!enabled && pttActive) {
+-        pttActive = false;
+-        if (document.body) {
+-          document.body.classList.remove('ptt-hold');
+-        }
+-      }
+-      pttMaskState = null;
+-      applyPttMask({ force: true });
+-    }
+-
+-    function setPttActive(active) {
+-      if (!pttEnabled) {
+-        active = false;
+-      }
+-      if (pttActive === active) {
+-        return;
+-      }
+-      pttActive = active;
+-      if (document.body) {
+-        document.body.classList.toggle('ptt-hold', pttActive);
+-      }
+-      applyPttMask({ force: true });
+-    }
+-
+     function isInteractiveTarget(target) {
+       if (!target || target === document.body || target === document.documentElement) {
+         return false;
+       }
+       if (target.isContentEditable) {
+         return true;
+       }
+       if (!(target instanceof HTMLElement)) {
+         return false;
+       }
+       const tag = target.tagName;
+       if (tag) {
+         const normalized = tag.toUpperCase();
+         if (normalized === 'INPUT' || normalized === 'TEXTAREA' || normalized === 'SELECT' || normalized === 'BUTTON') {
+           return true;
+         }
+       }
+       if (target.closest('input, textarea, select, button, a[href], [role="textbox"], [role="button"], [role="menuitem"]')) {
+         return true;
+       }
+       return false;
+     }
+ 
+     function handleGlobalKeyDown(event) {
+       if (event.defaultPrevented) return;
+-      const { key, code, ctrlKey, metaKey, altKey, repeat } = event;
++      const { key, ctrlKey, metaKey, altKey } = event;
+       const isModifier = ctrlKey || metaKey || altKey;
+-      if ((key === ' ' || key === 'Spacebar' || code === 'Space') && !isModifier) {
+-        if (repeat || isInteractiveTarget(event.target)) {
+-          return;
+-        }
+-        if (!pttEnabled) {
+-          return;
+-        }
+-        event.preventDefault();
+-        setPttActive(true);
+-        return;
+-      }
+       if (key === 'Enter' && !isModifier) {
+         if (isInteractiveTarget(event.target)) {
+           return;
+         }
+         if (textChatInput) {
+           const value = textChatInput.value || '';
+           if (value.trim()) {
+             event.preventDefault();
+             if (textChatForm && typeof textChatForm.requestSubmit === 'function') {
+               textChatForm.requestSubmit();
+             } else if (textChatForm) {
+               textChatForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+             }
+           } else {
+             event.preventDefault();
+             textChatInput.focus();
+           }
+         }
+         return;
+       }
+       if (key === 'Escape') {
+         if (brandMenu && brandMenu.classList.contains('open')) {
+           event.preventDefault();
+           closeMenu();
+           brandBtn.focus();
+           return;
+         }
+         if (isInteractiveTarget(event.target)) {
+           return;
+         }
+         const audioPlayer = window.AudioPlayer;
+         if (audioPlayer && typeof audioPlayer.interrupt === 'function') {
+           audioPlayer.interrupt();
+         }
+         return;
+       }
+     }
+ 
+-    function handleGlobalKeyUp(event) {
+-      const { key, code, ctrlKey, metaKey, altKey } = event;
+-      if ((key === ' ' || key === 'Spacebar' || code === 'Space') && !(ctrlKey || metaKey || altKey)) {
+-        if (!pttActive) {
+-          return;
+-        }
+-        event.preventDefault();
+-        setPttActive(false);
+-      }
+-    }
+-
+     window.addEventListener('keydown', handleGlobalKeyDown, true);
+-    window.addEventListener('keyup', handleGlobalKeyUp, true);
+-    window.addEventListener('blur', () => {
+-      if (pttActive) {
+-        setPttActive(false);
+-      }
+-    });
+ 
+     const showToastMessage = (() => {
+       let root = null;
+       const styleId = 'inline-toast-styles';
+       const styleText = '#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}';
+       function ensureRoot() {
+         root = root && root.isConnected ? root : document.getElementById('toast-root');
+         if (!root) {
+           root = document.createElement('div');
+           root.id = 'toast-root';
+           root.className = 'toast-container';
+           document.body.appendChild(root);
+         }
+         if (!document.getElementById(styleId)) {
+           document.head.appendChild(Object.assign(document.createElement('style'), { id: styleId, textContent: styleText }));
+         }
+         return root;
+       }
+       return (message) => {
+         if (!message) return;
+         const host = ensureRoot();
+         const toast = document.createElement('div');
+         toast.className = 'toast';
+         toast.setAttribute('role', 'alert'); toast.innerHTML = '<div class="toast-body"></div>';
+         toast.firstChild.textContent = message;
+@@ -1062,51 +985,51 @@
+           toast.classList.add('toast-exit');
+           setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 220);
+         }, 3600);
+       };
+     })();
+ 
+     let lastMicNudgeTs = 0;
+     window.addEventListener('hud.nudge', (event) => {
+       const detail = event && event.detail;
+       if (!detail || detail.code !== 'mic_permissions') {
+         return;
+       }
+       const now = Date.now();
+       if (now - lastMicNudgeTs < 1800) {
+         return;
+       }
+       lastMicNudgeTs = now;
+       const reason = typeof detail.reason === 'string' && detail.reason
+         ? detail.reason
+         : 'mic_open_timeout';
+       const message = reason === 'mic_open_timeout'
+         ? "We haven't heard from your microphone yet. Check your browser permissions."
+         : "We couldn't access your microphone. Please review your browser permissions.";
+       showToastMessage(message);
+       sendDiagHudEvent(
+-        'mic_permission_nudge',
++        'EVT_CLIENT_MIC_PERMISSION_NUDGE',
+         { reason },
+         { level: 'info', badge: 'mic:nudge', message: 'Prompted user to review mic permissions' }
+       );
+     });
+ 
+     function csrf() {
+       const cookies = document.cookie ? document.cookie.split(';') : [];
+       for (const name of ['askchip_csrf', 'csrftoken', 'csrf_token']) {
+         const prefix = `${name}=`;
+         for (const part of cookies) {
+           const trimmed = part.trim();
+           if (!trimmed.startsWith(prefix)) continue;
+           const raw = trimmed.slice(prefix.length);
+           if (!raw) continue;
+           try { return decodeURIComponent(raw); } catch (err) {
+             console.warn('Failed to decode CSRF cookie', err);
+             return raw;
+           }
+         }
+       }
+       return '';
+     }
+ 
+     async function getMe() {
+       try {
+@@ -1529,143 +1452,129 @@
+     })();
+ 
+     let previousConnectionState = AppState.getState().connectionState;
+     AppState.subscribe((state) => {
+       sidText.textContent = state.sid || '—';
+       let label = 'Disconnected';
+       if (state.connectionState === 'connected') label = 'Connected';
+       else if (state.connectionState === 'connecting') label = 'Connecting…';
+       else if (state.connectionState === 'resuming') label = 'Resuming…';
+       connLabel.textContent = label;
+       const active = state.connectionState !== 'disconnected';
+       statusDot.classList.toggle('on', active);
+       startBtn.disabled = active;
+       endBtn.disabled = !active;
+       if (state.latencyMs != null) {
+         latencyHint.textContent = `Latency: ${Math.round(state.latencyMs)} ms`;
+       } else {
+         latencyHint.textContent = 'Latency: —';
+       }
+       if (state.connectionState === 'disconnected') {
+         resetVoiceState();
+         resetSuggestions();
+       } else if (state.infoFrame) {
+         updateVoiceState(extractVoiceLocale(state.infoFrame));
+       }
+-      setPttEnabled(state.connectionState === 'connected');
+       const prevConnectionState = previousConnectionState;
+       const nextConnectionState = state.connectionState;
+       const becameConnected = prevConnectionState !== 'connected' && nextConnectionState === 'connected';
+       const becameDisconnected = prevConnectionState !== 'disconnected' && nextConnectionState === 'disconnected';
+       previousConnectionState = nextConnectionState;
+ 
+       if (becameConnected) {
+         Waveform.start();
+         if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+           window.AudioRecorder.start()
+-            .then(() => {
+-              if (pttEnabled && !pttActive) {
+-                applyPttMask({ force: true });
+-              }
+-            })
+             .catch((err) => {
+               console.error('AudioRecorder start error', err);
+             });
+         }
+       } else if (becameDisconnected) {
+         Waveform.stop();
+         if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+           try {
+             window.AudioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
+           }
+         }
+         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+           window.AudioPlayer.interrupt();
+         }
+-        setPttActive(false);
+       }
+       updateResumeBanner(state);
+     });
+ 
+     const POST_TTS_RELEASE_MS = 150;
+ 
+     window.addEventListener('tts.start', (event) => {
+       const detail = event && event.detail;
+       if (detail) {
+         updateVoiceState(extractVoiceLocale(detail));
+       }
+-      if (pttEnabled && !pttActive) {
+-        applyPttMask({ force: true });
+-      }
+     });
+     window.addEventListener('turn.state', (event) => {
+       const detail = event && event.detail;
+       if (!detail) {
+         return;
+       }
+       const state = typeof detail.state === 'string'
+         ? detail.state
+         : (detail.meta && typeof detail.meta.state === 'string' ? detail.meta.state : null);
+       if (!state || state.toLowerCase() !== 'ready') {
+         return;
+       }
+       const reason = typeof detail.reason === 'string'
+         ? detail.reason
+         : (detail.meta && typeof detail.meta.reason === 'string' ? detail.meta.reason : null);
+       if (!reason || reason.toLowerCase().includes('tts')) {
+         DiagRecorder.maybeStart('turn');
+       }
+     });
+     window.addEventListener('tts.end', () => {
+       const release = () => {
+-        applyPttMask({ force: true });
+         DiagRecorder.maybeStart('ready');
+       };
+       if (POST_TTS_RELEASE_MS > 0) {
+         setTimeout(release, POST_TTS_RELEASE_MS);
+       } else {
+         release();
+       }
+     });
+     window.addEventListener('asr.ready', () => {
+       if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+         try {
+           const maybePromise = window.AudioRecorder.start();
+           if (maybePromise && typeof maybePromise.catch === 'function') {
+             maybePromise.catch((err) => {
+               console.error('AudioRecorder start on asr.ready failed', err);
+             });
+           }
+         } catch (err) {
+           console.error('AudioRecorder start on asr.ready failed', err);
+         }
+       }
+-      if (pttEnabled && !pttActive) {
+-        applyPttMask({ force: true });
+-      }
+     });
+ 
+     window.addEventListener('assistant.suggestions', (event) => {
+       const detail = event && event.detail;
+       applySuggestionsFrame(detail);
+     });
+ 
+     window.addEventListener('ws.close', () => {
+       resetSuggestions();
+       DiagRecorder.stop('ws');
+     });
+ 
+     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
+     if (urlParams.get('wsSmoke') === '1') {
+       const transitions = [];
+       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
+ 
+       class MockSocket extends EventTarget {
+         constructor() {
+           super();
+           this.readyState = WebSocket.CONNECTING;
+           setTimeout(() => {
+             this.readyState = WebSocket.OPEN;
+             this.dispatchEvent(new Event('open'));
+           }, 0);
+diff --git a/tests/test_client_diag_events.py b/tests/test_client_diag_events.py
+index 3cdb58aae79267222f5daa02d34b6cf16030a01c..6f184a8fafaa7b735cf031ce353b0b6e1313bd23 100644
+--- a/tests/test_client_diag_events.py
++++ b/tests/test_client_diag_events.py
+@@ -1,68 +1,68 @@
+ from __future__ import annotations
+ 
+ import unittest
+ 
+ from app import config
+ from app.telemetry import bus
+ from app.voice_v2.engine import EngineV2
+ 
+ 
+ class ClientDiagEventsTest(unittest.TestCase):
+     def setUp(self) -> None:
+         self._original_flag = config.DIAG_CLIENT_HUD
+         config.DIAG_CLIENT_HUD = True
+         bus.reset()
+         self._events = []
+         self._token = bus.subscribe("*", self._events.append)
+         self.engine = EngineV2()
+ 
+     def tearDown(self) -> None:
+         bus.reset()
+         config.DIAG_CLIENT_HUD = self._original_flag
+ 
+     def test_emits_diag_event_when_enabled(self) -> None:
+         frame = {
+             "type": "client.diag",
+-            "event": "recorder_started",
++            "event": "EVT_CLIENT_RECORDER_STARTED",
+             "data": {"foo": "bar"},
+             "level": "info",
+             "badge": "rec:start",
+             "ts": 1_234_567,
+             "sample": True,
+             "message": "Recorder started",
+         }
+ 
+         self.engine.on_json("sid-diag", frame)
+ 
+         diag_events = [evt for evt in self._events if evt.get("type") == "EVT_DIAG_HUD"]
+         self.assertEqual(len(diag_events), 1)
+         diag = diag_events[0]
+ 
+         self.assertEqual(diag.get("sid"), "sid-diag")
+         self.assertEqual(diag.get("who"), "client")
+         self.assertEqual(diag.get("source"), "client_hud")
+         self.assertEqual(diag.get("level"), "info")
+ 
+         meta = diag.get("meta") or {}
+-        self.assertEqual(meta.get("event"), "recorder_started")
++        self.assertEqual(meta.get("event"), "EVT_CLIENT_RECORDER_STARTED")
+         self.assertEqual(meta.get("badge"), "rec:start")
+         self.assertTrue(meta.get("sample"))
+         self.assertEqual(meta.get("client_ts"), 1_234_567)
+         self.assertEqual(meta.get("dir"), "in")
+         self.assertIn("data", meta)
+ 
+     def test_does_not_emit_when_disabled(self) -> None:
+         config.DIAG_CLIENT_HUD = False
+         frame = {
+             "type": "client.diag",
+-            "event": "recorder_started",
++            "event": "EVT_CLIENT_RECORDER_STARTED",
+         }
+ 
+         self.engine.on_json("sid-diag", frame)
+ 
+         diag_events = [evt for evt in self._events if evt.get("type") == "EVT_DIAG_HUD"]
+         self.assertEqual(diag_events, [])
+ 
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tests/test_flow_zip_packaging.py b/tests/test_flow_zip_packaging.py
+index 065a04f0fdc2223296b8cfdd81ccea01c0e048ed..a756a3337e92debca2e83f6d1e9158cd4c315e74 100644
+--- a/tests/test_flow_zip_packaging.py
++++ b/tests/test_flow_zip_packaging.py
+@@ -19,51 +19,51 @@ _NLG = "nlg.ndjson"
+ _NLU = "nlu.ndjson"
+ _LOGS = "logs.ndjson"
+ 
+ class BuildFlowZipPackagingTest(unittest.TestCase):
+     def test_redaction_and_sha_integrity(self) -> None:
+         with tempfile.TemporaryDirectory() as tmp:
+             root = Path(tmp) / "exports"
+             sid = "sid-redaction"
+             session_dir = self._prepare_session(root, sid)
+ 
+             events = [
+                 {
+                     "type": "EVT_WS_JSON_RECV",
+                     "sid": sid,
+                     "ts_ms": 111,
+                     "meta": {
+                         "authorization": "Bearer supersecretvalue",
+                         "email": "agent@example.com",
+                     },
+                 },
+                 {
+                     "type": "EVT_DIAG_HUD",
+                     "sid": sid,
+                     "ts_ms": 444,
+                     "level": "info",
+-                    "meta": {"event": "recorder_started", "badge": "rec:start"},
++                    "meta": {"event": "EVT_CLIENT_RECORDER_STARTED", "badge": "rec:start"},
+                 },
+                 {
+                     "type": "EVT_NLU",
+                     "sid": sid,
+                     "ts_ms": 222,
+                     "meta": {"intent": "help_install"},
+                 },
+                 {
+                     "type": "EVT_NLG",
+                     "sid": sid,
+                     "ts_ms": 333,
+                     "meta": {"utterance": "Masked"},
+                 },
+             ]
+             self._write_events(session_dir, events)
+ 
+             logs = [
+                 {
+                     "sid": sid,
+                     "ts": 111.1,
+                     "level": "INFO",
+                     "logger": "test",
+                     "msg": "first",
+                 },
+                 {

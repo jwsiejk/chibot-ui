@@ -23,7 +23,7 @@ class ClientDiagEventsTest(unittest.TestCase):
     def test_emits_diag_event_when_enabled(self) -> None:
         frame = {
             "type": "client.diag",
-            "event": "recorder_started",
+            "event": "EVT_CLIENT_RECORDER_STARTED",
             "data": {"foo": "bar"},
             "level": "info",
             "badge": "rec:start",
@@ -44,7 +44,7 @@ class ClientDiagEventsTest(unittest.TestCase):
         self.assertEqual(diag.get("level"), "info")
 
         meta = diag.get("meta") or {}
-        self.assertEqual(meta.get("event"), "recorder_started")
+        self.assertEqual(meta.get("event"), "EVT_CLIENT_RECORDER_STARTED")
         self.assertEqual(meta.get("badge"), "rec:start")
         self.assertTrue(meta.get("sample"))
         self.assertEqual(meta.get("client_ts"), 1_234_567)
@@ -55,7 +55,7 @@ class ClientDiagEventsTest(unittest.TestCase):
         config.DIAG_CLIENT_HUD = False
         frame = {
             "type": "client.diag",
-            "event": "recorder_started",
+            "event": "EVT_CLIENT_RECORDER_STARTED",
         }
 
         self.engine.on_json("sid-diag", frame)

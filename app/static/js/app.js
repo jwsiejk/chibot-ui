@@ -332,7 +332,7 @@
         : [];
       console.info("DIAG_MEDIA_OK", tracks);
       setBadge("mic:ok");
-      sendDiagHudEvent("media_ok", { tracks }, { level: "info", badge: "mic:ok", message: "Media stream ready" });
+      sendDiagHudEvent("EVT_CLIENT_MEDIA_OK", { tracks }, { level: "info", badge: "mic:ok", message: "Media stream ready" });
     }
     return stream;
   }
@@ -355,7 +355,7 @@
         const badge = "rec:start";
         setBadge(badge);
         sendDiagHudEvent(
-          "recorder_started",
+          "EVT_CLIENT_RECORDER_STARTED",
           { timestamp: ts },
           { level: "info", badge, message: "Recorder started" }
         );
@@ -372,7 +372,7 @@
         const badge = `chunks:${chunkCount}`;
         setBadge(badge);
         sendDiagHudEvent(
-          "chunk_sample",
+          "EVT_CLIENT_CHUNK_SAMPLE",
           { size: event.data.size, chunkCount },
           { level: "debug", badge, sample: true, message: "Sampled recorder chunk" }
         );
@@ -386,7 +386,7 @@
         if (diagHudEnabled() && shouldSample) {
           console.debug("DIAG_WS_BIN_SENT", { chunkCount, sentBytes });
           sendDiagHudEvent(
-            "ws_binary_sent",
+            "EVT_CLIENT_WS_BINARY_SENT",
             { chunkCount, sentBytes },
             { level: "debug", sample: true, message: "Sampled binary chunk sent" }
           );
@@ -394,7 +394,7 @@
       } catch (err) {
         if (diagHudEnabled()) {
           console.warn("DIAG_CHUNK_ERROR", err);
-          sendDiagHudEvent("chunk_error", { message: err && err.message }, {
+          sendDiagHudEvent("EVT_CLIENT_CHUNK_ERROR", { message: err && err.message }, {
             level: "warn",
             message: "Failed to process chunk"
           });
@@ -421,7 +421,7 @@
           } catch (err) {
             if (diagHudEnabled()) {
               console.warn("DIAG_TRACK_STOP_ERROR", err);
-              sendDiagHudEvent("track_stop_error", { message: err && err.message }, {
+              sendDiagHudEvent("EVT_CLIENT_TRACK_STOP_ERROR", { message: err && err.message }, {
                 level: "warn",
                 message: "Failed to stop track"
               });
@@ -442,7 +442,7 @@
         } catch (err) {
           if (diagHudEnabled()) {
             console.warn("DIAG_RECORDER_STOP_ERROR", err);
-            sendDiagHudEvent("recorder_stop_error", { message: err && err.message }, {
+            sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP_ERROR", { message: err && err.message }, {
               level: "warn",
               message: "Recorder stop error"
             });
@@ -454,14 +454,14 @@
       if (diagHudEnabled()) {
         if (reason) {
           setBadge(`stop:${reason}`);
-          sendDiagHudEvent("recorder_stop", { reason }, {
+          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", { reason }, {
             level: "info",
             badge: `stop:${reason}`,
             message: "Recorder stopped"
           });
         } else {
           setBadge("stop");
-          sendDiagHudEvent("recorder_stop", null, {
+          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", null, {
             level: "info",
             badge: "stop",
             message: "Recorder stopped"
@@ -488,7 +488,7 @@
         if (diagHudEnabled()) {
           console.warn("DIAG_MEDIA_ERROR", err);
           setBadge("mic:fail");
-          sendDiagHudEvent("media_error", { message: err && err.message }, {
+          sendDiagHudEvent("EVT_CLIENT_MEDIA_ERROR", { message: err && err.message }, {
             level: "warn",
             badge: "mic:fail",
             message: "Failed to access microphone"
@@ -507,7 +507,7 @@
           } catch (err) {
             if (diagHudEnabled()) {
               console.warn("DIAG_WS_SEND_ERROR", err);
-              sendDiagHudEvent("ws_send_error", { message: err && err.message }, {
+              sendDiagHudEvent("EVT_CLIENT_WS_SEND_ERROR", { message: err && err.message }, {
                 level: "warn",
                 message: "Binary send failed"
               });
@@ -518,7 +518,7 @@
         if (diagHudEnabled()) {
           console.warn("DIAG_RECORDER_ERROR", err);
           setBadge("rec:fail");
-          sendDiagHudEvent("recorder_error", { message: err && err.message }, {
+          sendDiagHudEvent("EVT_CLIENT_RECORDER_ERROR", { message: err && err.message }, {
             level: "warn",
             badge: "rec:fail",
             message: "Recorder initialization failed"
@@ -531,7 +531,7 @@
       recorder.addEventListener("stop", () => {
         if (diagHudEnabled()) {
           setBadge("rec:stop");
-          sendDiagHudEvent("recorder_stop", null, {
+          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", null, {
             level: "info",
             badge: "rec:stop",
             message: "Recorder stopped"
@@ -544,7 +544,7 @@
         if (diagHudEnabled()) {
           console.warn("DIAG_RECORDER_START_ERROR", err);
           setBadge("rec:fail");
-          sendDiagHudEvent("recorder_start_error", { message: err && err.message }, {
+          sendDiagHudEvent("EVT_CLIENT_RECORDER_START_ERROR", { message: err && err.message }, {
             level: "warn",
             badge: "rec:fail",
             message: "Recorder start error"
@@ -555,7 +555,7 @@
       }
       if (diagHudEnabled()) {
         setBadge(trigger ? `rec:${trigger}` : "rec");
-        sendDiagHudEvent("recorder_active", { trigger }, {
+        sendDiagHudEvent("EVT_CLIENT_RECORDER_ACTIVE", { trigger }, {
           level: "info",
           badge: trigger ? `rec:${trigger}` : "rec",
           message: "Recorder active"
@@ -591,7 +591,7 @@
       }).catch(() => {
         if (diagHudEnabled()) {
           console.warn("DIAG_START_REJECTED");
-          sendDiagHudEvent("recorder_start_rejected", null, {
+          sendDiagHudEvent("EVT_CLIENT_RECORDER_START_REJECTED", null, {
             level: "warn",
             message: "Recorder start promise rejected"
           });
@@ -889,55 +889,6 @@
     renderVoiceState();
     renderSuggestions();
 
-    let pttEnabled = false;
-    let pttActive = false;
-    let pttMaskState = null;
-
-    function applyPttMask({ force = false } = {}) {
-      if (!window.AudioRecorder || typeof window.AudioRecorder._setMask !== 'function') {
-        return;
-      }
-      const shouldMask = pttEnabled && !pttActive;
-      if (force || pttMaskState !== shouldMask) {
-        try {
-          window.AudioRecorder._setMask(shouldMask);
-          pttMaskState = shouldMask;
-        } catch (err) {
-          console.warn('Failed to toggle push-to-talk mask', err);
-        }
-      }
-    }
-
-    function setPttEnabled(enabled) {
-      if (pttEnabled === enabled) {
-        applyPttMask({ force: true });
-        return;
-      }
-      pttEnabled = enabled;
-      if (!enabled && pttActive) {
-        pttActive = false;
-        if (document.body) {
-          document.body.classList.remove('ptt-hold');
-        }
-      }
-      pttMaskState = null;
-      applyPttMask({ force: true });
-    }
-
-    function setPttActive(active) {
-      if (!pttEnabled) {
-        active = false;
-      }
-      if (pttActive === active) {
-        return;
-      }
-      pttActive = active;
-      if (document.body) {
-        document.body.classList.toggle('ptt-hold', pttActive);
-      }
-      applyPttMask({ force: true });
-    }
-
     function isInteractiveTarget(target) {
       if (!target || target === document.body || target === document.documentElement) {
         return false;
@@ -963,19 +914,8 @@
 
     function handleGlobalKeyDown(event) {
       if (event.defaultPrevented) return;
-      const { key, code, ctrlKey, metaKey, altKey, repeat } = event;
+      const { key, ctrlKey, metaKey, altKey } = event;
       const isModifier = ctrlKey || metaKey || altKey;
-      if ((key === ' ' || key === 'Spacebar' || code === 'Space') && !isModifier) {
-        if (repeat || isInteractiveTarget(event.target)) {
-          return;
-        }
-        if (!pttEnabled) {
-          return;
-        }
-        event.preventDefault();
-        setPttActive(true);
-        return;
-      }
       if (key === 'Enter' && !isModifier) {
         if (isInteractiveTarget(event.target)) {
           return;
@@ -1014,24 +954,7 @@
       }
     }
 
-    function handleGlobalKeyUp(event) {
-      const { key, code, ctrlKey, metaKey, altKey } = event;
-      if ((key === ' ' || key === 'Spacebar' || code === 'Space') && !(ctrlKey || metaKey || altKey)) {
-        if (!pttActive) {
-          return;
-        }
-        event.preventDefault();
-        setPttActive(false);
-      }
-    }
-
     window.addEventListener('keydown', handleGlobalKeyDown, true);
-    window.addEventListener('keyup', handleGlobalKeyUp, true);
-    window.addEventListener('blur', () => {
-      if (pttActive) {
-        setPttActive(false);
-      }
-    });
 
     const showToastMessage = (() => {
       let root = null;
@@ -1084,7 +1007,7 @@
         : "We couldn't access your microphone. Please review your browser permissions.";
       showToastMessage(message);
       sendDiagHudEvent(
-        'mic_permission_nudge',
+        'EVT_CLIENT_MIC_PERMISSION_NUDGE',
         { reason },
         { level: 'info', badge: 'mic:nudge', message: 'Prompted user to review mic permissions' }
       );
@@ -1551,7 +1474,6 @@
       } else if (state.infoFrame) {
         updateVoiceState(extractVoiceLocale(state.infoFrame));
       }
-      setPttEnabled(state.connectionState === 'connected');
       const prevConnectionState = previousConnectionState;
       const nextConnectionState = state.connectionState;
       const becameConnected = prevConnectionState !== 'connected' && nextConnectionState === 'connected';
@@ -1562,11 +1484,6 @@
         Waveform.start();
         if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
           window.AudioRecorder.start()
-            .then(() => {
-              if (pttEnabled && !pttActive) {
-                applyPttMask({ force: true });
-              }
-            })
             .catch((err) => {
               console.error('AudioRecorder start error', err);
             });
@@ -1583,7 +1500,6 @@
         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
           window.AudioPlayer.interrupt();
         }
-        setPttActive(false);
       }
       updateResumeBanner(state);
     });
@@ -1594,9 +1510,6 @@
       const detail = event && event.detail;
       if (detail) {
         updateVoiceState(extractVoiceLocale(detail));
-      }
-      if (pttEnabled && !pttActive) {
-        applyPttMask({ force: true });
       }
     });
     window.addEventListener('turn.state', (event) => {
@@ -1619,7 +1532,6 @@
     });
     window.addEventListener('tts.end', () => {
       const release = () => {
-        applyPttMask({ force: true });
         DiagRecorder.maybeStart('ready');
       };
       if (POST_TTS_RELEASE_MS > 0) {
@@ -1640,9 +1552,6 @@
         } catch (err) {
           console.error('AudioRecorder start on asr.ready failed', err);
         }
-      }
-      if (pttEnabled && !pttActive) {
-        applyPttMask({ force: true });
       }
     });
 
