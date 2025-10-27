@@ -1647,51 +1647,73 @@ if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
 
     const POST_TTS_RELEASE_MS = 150;
 
-    window.addEventListener('tts.start', (event) => {
-      const detail = event && event.detail;
-      if (detail) {
-        updateVoiceState(extractVoiceLocale(detail));
-      }
-    });
-    window.addEventListener('turn.state', (event) => {
-      const detail = event && event.detail;
-      if (!detail) {
-        return;
-      }
-      const state = typeof detail.state === 'string'
-        ? detail.state
-        : (detail.meta && typeof detail.meta.state === 'string' ? detail.meta.state : null);
-      if (!state || state.toLowerCase() !== 'ready') {
-        return;
-      }
-      const reason = typeof detail.reason === 'string'
-        ? detail.reason
-        : (detail.meta && typeof detail.meta.reason === 'string' ? detail.meta.reason : null);
-      if (!reason || reason.toLowerCase().includes('tts')) {
-        DiagRecorder.maybeStart('turn');
-        tryStartMic('turn');
-      }
-    });
-    window.addEventListener('tts.end', () => {
-      const release = () => {
-        DiagRecorder.maybeStart('ready');
-        tryStartMic('ready');
-      };
-      if (POST_TTS_RELEASE_MS > 0) {
-        setTimeout(release, POST_TTS_RELEASE_MS);
-      } else {
-        release();
-      }
-    });
-    window.addEventListener('asr.ready', () => {
-      tryStartMic('asr.ready');
+window.addEventListener('tts.start', (event) => {
+  const detail = event && event.detail;
+  if (detail) {
+    updateVoiceState(extractVoiceLocale(detail));
+  }
+});
+
+// Turn becomes Ready → hand control to user
+window.addEventListener('turn.state', (event) => {
+  const detail = (event && event.detail) || {};
+  const state = (typeof detail.state === 'string')
+    ? detail.state
+    : (detail.meta && typeof detail.meta.state === 'string' ? detail.meta.state : null);
+  if (!state || state.toLowerCase() !== 'ready') return;
+
+  // Optional: why we became ready (e.g., 'tts')
+  const reason = (typeof detail.reason === 'string')
+    ? detail.reason
+    : (detail.meta && typeof detail.meta.reason === 'string' ? detail.meta.reason : null);
+  void reason; // not strictly needed, but kept for clarity
+
+  DiagRecorder.maybeStart('turn');
+
+  try {
+    if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+      window.AudioRecorder.start();
+    }
+  } catch (err) {
+    console.error('AudioRecorder start on turn.ready failed:', err);
+  }
+});
+
+// Assistant TTS finished → open mic after optional delay
+window.addEventListener('tts.end', () => {
+  const release = () => {
+    DiagRecorder.maybeStart('ready');
+    try {
       if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-        try {
-          const maybePromise = window.AudioRecorder.start();
-          if (maybePromise && typeof maybePromise.catch === 'function') {
-            maybePromise.catch((err) => {
-              console.error('AudioRecorder start on asr.ready failed', err);
-            });
+        window.AudioRecorder.start();
+      }
+    } catch (err) {
+      console.error('AudioRecorder start after tts.end failed:', err);
+    }
+  };
+
+  if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
+    setTimeout(release, POST_TTS_RELEASE_MS);
+  } else {
+    release();
+  }
+});
+
+window.addEventListener('asr.ready', () => {
+  tryStartMic('asr.ready');
+  if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+    try {
+      const maybePromise = window.AudioRecorder.start();
+      if (maybePromise && typeof maybePromise.catch === 'function') {
+        maybePromise.catch((err) => {
+          console.error('AudioRecorder start on asr.ready failed', err);
+        });
+      }
+    } catch (err) {
+      console.error('AudioRecorder start on asr.ready threw', err);
+    }
+  }
+});
           }
         } catch (err) {
           console.error('AudioRecorder start on asr.ready failed', err);
