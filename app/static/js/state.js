@@ -9,7 +9,11 @@
     heartbeatTimerId: null,
     websocket: null,
     infoFrame: null,
-    serverBanner: null
+    serverBanner: null,
+    clientBanner: {
+      info: null,
+      events: []
+    }
   };
 
   let state = { ...initialState };

@@ -1,0 +1,116 @@
+INFO:app.security.jwt_utils:evt=ws_jwt_mint sid=8454441b475f49e98c66d1806e8ac9ed ttl=60
+INFO:app.auth.http_handlers:evt=ws_token_mint sid=8454441b475f49e98c66d1806e8ac9ed ttl=60
+170.85.75.32:0 - "POST /api/v1/auth/ws-token HTTP/1.1" 200
+INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6Ijg0NTQ0NDFiNDc1ZjQ5ZTk4YzY2ZDE4MDZlOGFjOWVkIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTU4Nzc5OCwiZXhwIjoxNzYxNTg3ODU4LCJqdGkiOiJhMDZkZjQ4MC03M2ZhLTRlOTYtYjIzZC03N2Y1OWQ1NDUxOTIiLCJpc19hZG1pbiI6dHJ1ZX0.EI_SC5UcNJbQjSbTM8Wj8hQbyWBxMtw1lVyYCMBjixc'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6Ijg0NTQ0NDFiNDc1ZjQ5ZTk4YzY2ZDE4MDZlOGFjOWVkIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTU4Nzc5OCwiZXhwIjoxNzYxNTg3ODU4LCJqdGkiOiJhMDZkZjQ4MC03M2ZhLTRlOTYtYjIzZC03N2Y1OWQ1NDUxOTIiLCJpc19hZG1pbiI6dHJ1ZX0.EI_SC5UcNJbQjSbTM8Wj8hQbyWBxMtw1lVyYCMBjixc' root_path=
+INFO:app.voice_v2.tts_runtime:evt=tts_provider_ready provider=elevenlabs
+INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6Ijg0NTQ0NDFiNDc1ZjQ5ZTk4YzY2ZDE4MDZlOGFjOWVkIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTU4Nzc5OCwiZXhwIjoxNzYxNTg3ODU4LCJqdGkiOiJhMDZkZjQ4MC03M2ZhLTRlOTYtYjIzZC03N2Y1OWQ1NDUxOTIiLCJpc19hZG1pbiI6dHJ1ZX0.EI_SC5UcNJbQjSbTM8Wj8hQbyWBxMtw1lVyYCMBjixc'] need='chat.v2'
+INFO:app.ws.adapter:evt=ws_accept_token_ok sid=8454441b475f49e98c66d1806e8ac9ed
+INFO:app.ws.adapter:evt=ws_accept subprotocol='chat.v2'
+[2025-10-27 17:56:40 +0000] [60] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6Ijg0NTQ0NDFiNDc1ZjQ5ZTk4YzY2ZDE4MDZlOGFjOWVkIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTU4Nzc5OCwiZXhwIjoxNzYxNTg3ODU4LCJqdGkiOiJhMDZkZjQ4MC03M2ZhLTRlOTYtYjIzZC03N2Y1OWQ1NDUxOTIiLCJpc19hZG1pbiI6dHJ1ZX0.EI_SC5UcNJbQjSbTM8Wj8hQbyWBxMtw1lVyYCMBjixc" [accepted]
+[2025-10-27 17:56:40 +0000] [60] [INFO] connection open
+INFO:app.ws.adapter:evt=server_banner build_id=unknown host=srv-d26hqi3e5dus73b43g10-hibernate-776ff49569-wwprk pid=60 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py asr=/opt/render/project/src/app/voice_v2/asr_runtime.py
+INFO:app.ws.adapter:evt=ws_info_sent sid=8454441b475f49e98c66d1806e8ac9ed
+INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=8454441b475f49e98c66d1806e8ac9ed
+DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=8454441b475f49e98c66d1806e8ac9ed purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
+DEBUG:asyncio:Using selector: EpollSelector
+10.225.25.92:32940 - "GET /api/v1/health HTTP/1.1" 200
+DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-851c6ef5-df4b-41ed-8efe-9a8a52bd8387', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
+DEBUG:openai._base_client:Sending HTTP Request: POST https://api.openai.com/v1/chat/completions
+DEBUG:httpcore.connection:connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=5.0 socket_options=None
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7915cc194830>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7915ced1d880> server_hostname='api.openai.com' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7915cc433ed0>
+DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:send_request_headers.complete
+DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:send_request_body.complete
+DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Mon, 27 Oct 2025 17:56:45 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'619'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'958'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199892'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'32ms'), (b'x-request-id', b'req_b106801698c24699b4f4ceee2f584c22'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=cLTsQNZVGM93qMTaLAr49ohLDN8oUsqia5_HBZ145Ls-1761587805-1.0.1.1-Vuv8zsFraRGQMpixric2T04ZAaQ.PGEzPj03j8ELnXqxXPbW80fvSNt2aqbrqVbMMPWumKg7uymVhcCQMNQwtIwcsPDvzFw5iieAmhcCr0o; path=/; expires=Mon, 27-Oct-25 18:26:45 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=.2P8r8GCBv.QEXnkvvMUeoT_R.jkDPQXnRGxXHhKJ9k-1761587805860-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'99541260bad08793-IAD'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
+INFO:httpx:HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:receive_response_body.complete
+DEBUG:httpcore.http11:response_closed.started
+DEBUG:httpcore.http11:response_closed.complete
+DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Mon, 27 Oct 2025 17:56:45 GMT'), ('content-type', 'application/json'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-e0uazp84dxwznca9mgbvta53'), ('openai-processing-ms', '619'), ('openai-project', 'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '958'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '200000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '199892'), ('x-ratelimit-reset-requests', '8.64s'), ('x-ratelimit-reset-tokens', '32ms'), ('x-request-id', 'req_b106801698c24699b4f4ceee2f584c22'), ('x-openai-proxy-wasm', 'v0.1'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=cLTsQNZVGM93qMTaLAr49ohLDN8oUsqia5_HBZ145Ls-1761587805-1.0.1.1-Vuv8zsFraRGQMpixric2T04ZAaQ.PGEzPj03j8ELnXqxXPbW80fvSNt2aqbrqVbMMPWumKg7uymVhcCQMNQwtIwcsPDvzFw5iieAmhcCr0o; path=/; expires=Mon, 27-Oct-25 18:26:45 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=.2P8r8GCBv.QEXnkvvMUeoT_R.jkDPQXnRGxXHhKJ9k-1761587805860-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '99541260bad08793-IAD'), ('content-encoding', 'gzip'), ('alt-svc', 'h3=":443"; ma=86400')])
+DEBUG:openai._base_client:request_id: req_b106801698c24699b4f4ceee2f584c22
+DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=8454441b475f49e98c66d1806e8ac9ed purpose=greet latency_ms=5709 model=gpt-4o-mini
+DEBUG:httpcore.connection:connect_tcp.started host='api.elevenlabs.io' port=443 local_address=None timeout=5.0 socket_options=None
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7915cc1a6490>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7915ced1f9b0> server_hostname='api.elevenlabs.io' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7915ce93be10>
+DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:send_request_headers.complete
+DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
+DEBUG:httpcore.http11:send_request_body.complete
+DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
+170.85.75.32:0 - "GET /api/v1/admin/flow/sessions?open=1 HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/sessions?open=1 HTTP/1.1" 200
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Mon, 27 Oct 2025 17:56:45 GMT'), (b'server', b'uvicorn'), (b'request-id', b'znitsO3EoWgVSPhaZ9P1'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'kkFtFLDVrn6QfLBr8Tbb'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'45'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'b030604dbc28a7bec67a34dc0ad59a26'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
+INFO:httpx:HTTP Request: POST https://api.elevenlabs.io/v1/text-to-speech/MIAWBMadvHL0ek6oJEXD/stream?optimize_streaming_latency=4&output_format=pcm_16000 "HTTP/1.1 200 OK"
+INFO:app.services.tts.elevenlabs_client:evt=tts_provider_stream_opened provider=elevenlabs content_type=audio/pcm url_qs=optimize_streaming_latency=4&output_format=pcm_16000
+INFO:app.voice_v2.tts_runtime:evt=tts_start sid=8454441b475f49e98c66d1806e8ac9ed utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=45
+DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=8454441b475f49e98c66d1806e8ac9ed utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
+DEBUG:httpcore.http11:receive_response_body.complete
+DEBUG:httpcore.http11:response_closed.started
+DEBUG:httpcore.http11:response_closed.complete
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=8454441b475f49e98c66d1806e8ac9ed utt_id=utt-00001 chunks=76 bytes=96802 total_bytes=98082
+INFO:app.voice_v2.tts_runtime:evt=tts_end sid=8454441b475f49e98c66d1806e8ac9ed utt_id=utt-00001 total_bytes=98082 duration_ms=170
+170.85.75.32:0 - "GET /static/favicon.ico?v=be7850a55e4fe2efb171da78a3a0a3d3f28a5368 HTTP/1.1" 404
+170.85.75.32:0 - "GET /api/v1/admin/flow/live?sid=8454441b475f49e98c66d1806e8ac9ed HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&limit=200 HTTP/1.1" 200
+10.225.25.92:50228 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.92:50226 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587807479&limit=200 HTTP/1.1" 200
+10.225.25.92:50244 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587807479&limit=200 HTTP/1.1" 200
+10.225.25.92:34654 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587807479&limit=200 HTTP/1.1" 200
+[2025-10-27 17:57:00 +0000] [60] [DEBUG] % sending keepalive ping
+[2025-10-27 17:57:00 +0000] [60] [DEBUG] % received keepalive pong
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587807479&limit=200 HTTP/1.1" 200
+10.225.25.92:34662 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587821227&limit=200 HTTP/1.1" 200
+10.225.25.92:57866 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587821227&limit=200 HTTP/1.1" 200
+10.225.25.92:57870 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587821227&limit=200 HTTP/1.1" 200
+[2025-10-27 17:57:17 +0000] [60] [DEBUG] = connection is CLOSED
+[2025-10-27 17:57:17 +0000] [60] [INFO] connection closed
+INFO:app.voice_v2.asr_runtime:evt=asr_rollup sid=8454441b475f49e98c66d1806e8ac9ed stream_id= opened_at_ms=1761587800071 last_audio_ts_ms=1761587800071 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=37299
+10.225.25.92:40072 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.92:40074 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587821227&limit=200 HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:40092 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:57562 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:57576 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:42556 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:42564 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:50294 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.92:50292 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:50318 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:44326 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:44334 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:36986 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:37002 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=1761587837372&limit=200 HTTP/1.1" 200
+10.225.25.92:60766 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.92:60754 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=8454441b475f49e98c66d1806e8ac9ed&since_ms=

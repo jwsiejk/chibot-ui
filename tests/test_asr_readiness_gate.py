@@ -1,11 +1,13 @@
 import asyncio
 import json
 import unittest
+import uuid
 from typing import Any, Dict, List
 
 from app.telemetry import bus
 from app.voice_v2 import EVT_ASR_READY, EVT_WS_AUDIO_RECV
 from app.ws.adapter import ChatV2Adapter
+from app.security.jwt_utils import mint_ws_token
 
 
 class RecordingEngine:
@@ -36,11 +38,14 @@ class TestASRReadinessGate(unittest.TestCase):
 
     @staticmethod
     def _make_scope() -> Dict[str, Any]:
+        sid = f"sid-{uuid.uuid4().hex}"
+        token = mint_ws_token("user-1", sid, False)
         return {
             "type": "websocket",
             "subprotocols": ["chat.v2"],
-            "headers": [(b"authorization", b"Bearer test-token")],
+            "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
             "client": ("127.0.0.1", 12345),
+            "query_string": f"access_token={token}".encode("ascii"),
         }
 
     async def _exercise(self, publish_ready: bool) -> tuple[List[dict], RecordingEngine, List[dict]]:

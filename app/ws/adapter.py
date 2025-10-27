@@ -4,10 +4,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import time
 import sys, platform, socket, os, inspect
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Optional, Protocol, runtime_checkable
 
 import json
 from urllib.parse import parse_qs
@@ -21,6 +22,7 @@ from app.voice_v2 import (
     EVT_ASR_OPEN,
     EVT_ASR_READY,
     EVT_CHAT_USER,
+    EVT_CLIENT_BANNER,
     EVT_CLIENT_MIC_OPEN,
     EVT_HUD_STATE,
     EVT_TTS_END,
@@ -92,6 +94,7 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "admin.toggle",
     "chat.user",
     "client.diag",
+    "client.banner",
 }
 
 
@@ -254,6 +257,8 @@ class AdapterContext:
     listen_handoff_task: asyncio.Task[None] | None = None
     listen_handoff_task_key: Optional[str] = None
     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    client_banner_info: Optional[Dict[str, Any]] = None
+    client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class ChatV2Adapter:
@@ -356,6 +361,15 @@ class ChatV2Adapter:
         query_params = parse_qs(query_string, keep_blank_values=True)
         query_token = query_params.get("access_token", [None])[0]
         token = query_token
+
+        if not token:
+            auth_header = headers.get("authorization")
+            if isinstance(auth_header, str) and auth_header:
+                parts = auth_header.split(" ", 1)
+                if parts and parts[0].lower() == "bearer" and len(parts) == 2:
+                    candidate = parts[1].strip()
+                    if candidate:
+                        token = candidate
 
         if not token:
             for p in subprotocols or []:
@@ -585,7 +599,7 @@ class ChatV2Adapter:
         return self._contexts.get(sid)
 
     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
-        detail = f"missing required subprotocol '{CHAT_V2_SUBPROTOCOL}'"
+        detail = "use chat.v2"
         body = json.dumps(
             {
                 "type": "error",
@@ -822,6 +836,46 @@ class ChatV2Adapter:
                         opened_ts=ts_value,
                     )
                     ctx.mic_nudge_sent = False
+
+        if frame_type == "client.banner":
+            sanitized_info = self._sanitize_client_banner_info(frame.get("info"))
+            if sanitized_info:
+                ctx.client_banner_info = sanitized_info
+            elif ctx.client_banner_info is None:
+                ctx.client_banner_info = {}
+            sanitized_event = self._sanitize_client_banner_event(frame.get("event"))
+            if sanitized_event is None:
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.banner event requires a label",
+                )
+                return self._HandleResult(True)
+            ctx.client_banner_events.append(dict(sanitized_event))
+            if len(ctx.client_banner_events) > 64:
+                del ctx.client_banner_events[: len(ctx.client_banner_events) - 64]
+            log_meta: Dict[str, Any] = {
+                "label": sanitized_event.get("label"),
+                "client_ts_ms": sanitized_event.get("ts_ms"),
+            }
+            event_meta = sanitized_event.get("meta")
+            if event_meta:
+                log_meta["event_meta"] = event_meta
+            if ctx.client_banner_info:
+                log_meta["info"] = ctx.client_banner_info
+            meta["client_banner"] = {"label": sanitized_event.get("label")}
+            bus.publish(
+                {
+                    "type": EVT_CLIENT_BANNER,
+                    "sid": ctx.sid,
+                    "who": "client",
+                    "source": "ws_client",
+                    "meta": log_meta,
+                }
+            )
 
         await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
         await self._invoke_engine("on_json", ctx.sid, frame)
@@ -1516,6 +1570,88 @@ class ChatV2Adapter:
                 meta = dict(source_meta)
             meta["sid"] = ctx.sid
             normalized["meta"] = meta
+        return normalized
+
+    @staticmethod
+    def _truncate_banner_string(value: str, limit: int = 240) -> str:
+        if not isinstance(value, str):
+            return ""
+        if limit <= 0:
+            return ""
+        if len(value) <= limit:
+            return value
+        return value[: limit - 1] + "\u2026"
+
+    @staticmethod
+    def _sanitize_banner_value(value: Any, depth: int = 0) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            if isinstance(value, float) and not math.isfinite(value):
+                return None
+            return value
+        if isinstance(value, str):
+            return ChatV2Adapter._truncate_banner_string(value)
+        if depth >= 2:
+            return None
+        if isinstance(value, dict):
+            sanitized: Dict[str, Any] = {}
+            for index, (key, inner) in enumerate(value.items()):
+                if index >= 16:
+                    break
+                if not isinstance(key, str) or not key:
+                    continue
+                inner_sanitized = ChatV2Adapter._sanitize_banner_value(inner, depth + 1)
+                if inner_sanitized is None:
+                    continue
+                sanitized[ChatV2Adapter._truncate_banner_string(key, 48)] = inner_sanitized
+            return sanitized
+        if isinstance(value, (list, tuple, set)):
+            sanitized_list = []
+            for item in value:
+                if len(sanitized_list) >= 8:
+                    break
+                inner_sanitized = ChatV2Adapter._sanitize_banner_value(item, depth + 1)
+                if inner_sanitized is None:
+                    continue
+                sanitized_list.append(inner_sanitized)
+            return sanitized_list
+        return None
+
+    @staticmethod
+    def _sanitize_client_banner_info(payload: Any) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+        sanitized = ChatV2Adapter._sanitize_banner_value(payload)
+        return sanitized if isinstance(sanitized, dict) else {}
+
+    @staticmethod
+    def _sanitize_client_banner_event(payload: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return None
+        label = payload.get("label") or payload.get("event") or payload.get("reason")
+        if not isinstance(label, str) or not label.strip():
+            return None
+        normalized: Dict[str, Any] = {
+            "label": ChatV2Adapter._truncate_banner_string(label.strip(), 64)
+        }
+        ts_value = payload.get("ts_ms")
+        if isinstance(ts_value, (int, float)) and math.isfinite(ts_value):
+            normalized["ts_ms"] = int(ts_value)
+        else:
+            alt_ts = payload.get("ts")
+            if isinstance(alt_ts, (int, float)) and math.isfinite(alt_ts):
+                normalized["ts_ms"] = int(alt_ts)
+        meta_payload = payload.get("meta")
+        sanitized_meta = ChatV2Adapter._sanitize_banner_value(meta_payload)
+        if isinstance(sanitized_meta, dict) and sanitized_meta:
+            normalized["meta"] = sanitized_meta
+        elif isinstance(sanitized_meta, list) and sanitized_meta:
+            normalized["meta"] = sanitized_meta
+        if "ts_ms" not in normalized:
+            normalized["ts_ms"] = int(time.time() * 1000)
         return normalized
 
     @staticmethod

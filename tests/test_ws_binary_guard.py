@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from typing import Any, Dict, List
 
 import unittest
@@ -10,6 +11,7 @@ import unittest
 from app.telemetry import bus
 from app.voice_v2 import EVT_ASR_READY, EVT_WS_AUDIO_RECV
 from app.ws.adapter import ChatV2Adapter
+from app.security.jwt_utils import mint_ws_token
 
 
 class RecordingEngine:
@@ -45,11 +47,14 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
 
     @staticmethod
     def _make_scope() -> Dict[str, Any]:
+        sid = f"sid-{uuid.uuid4().hex}"
+        token = mint_ws_token("user-1", sid, False)
         return {
             "type": "websocket",
             "subprotocols": ["chat.v2"],
-            "headers": [(b"authorization", b"Bearer test-token")],
+            "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
             "client": ("127.0.0.1", 12345),
+            "query_string": f"access_token={token}".encode("ascii"),
         }
 
     async def _run_adapter(self, adapter: ChatV2Adapter, events: List[dict]) -> List[dict]:

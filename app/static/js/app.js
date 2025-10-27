@@ -1,4 +1,13 @@
 (() => {
+  try {
+    const _el = document.currentScript || document.querySelector('script[src*="/static/js/app.js"]');
+    const _build = _el ? new URL(_el.src, location.href).searchParams.get("v") : null;
+    if (_build) {
+      window.__BUILD_SHA__ = _build;
+      console.log("AskChip build:", _build);
+    }
+  } catch (_) {}
+
   const STATIC_JS_BASE = (() => {
     if (typeof document === "undefined") {
       return "/static/js/";

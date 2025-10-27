@@ -68,7 +68,7 @@ class OutboundHarness:
         self.scope = {
             "type": "websocket",
             "subprotocols": [CHAT_V2_SUBPROTOCOL],
-            "headers": [(b"authorization", b"Bearer test-token")],
+            "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
             "client": ("127.0.0.1", 1234),
             "query_string": f"access_token={token}".encode("ascii"),
         }

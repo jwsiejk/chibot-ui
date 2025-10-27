@@ -12,6 +12,7 @@
     throw new Error("AppState store is required before loading WSClient");
   }
   const getAudioPlayer = () => window.AudioPlayer;
+  ensureClientBannerState();
 
   let socket = null;
   let heartbeatTimerId = null;
@@ -30,6 +31,11 @@
   const DEFAULT_TIMESLICE_MS = 250;
   const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
   const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
+  const CLIENT_BANNER_TYPE = "client.banner";
+  const CLIENT_BANNER_MAX_HISTORY = 24;
+  const CLIENT_BANNER_MAX_QUEUE = 24;
+  const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
+  const CLIENT_BANNER_STRING_MAX = 240;
 
   let micStream = null;
   let micStreamPromise = null;
@@ -40,6 +46,348 @@
   let inputDescriptor = null;
   let inputVendor = null;
   let hudListening = false;
+  let clientBannerQueue = [];
+
+  function truncateBannerString(value, max = CLIENT_BANNER_STRING_MAX) {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    if (!max || max <= 0) {
+      return "";
+    }
+    if (value.length <= max) {
+      return value;
+    }
+    return `${value.slice(0, max - 1)}…`;
+  }
+
+  function sanitizeBannerNumber(value) {
+    if (typeof value !== "number") {
+      return undefined;
+    }
+    if (!Number.isFinite(value)) {
+      return undefined;
+    }
+    return value;
+  }
+
+  function sanitizeBannerArray(array, depth) {
+    if (!Array.isArray(array)) {
+      return undefined;
+    }
+    const limit = 8;
+    const result = [];
+    for (let i = 0; i < array.length && result.length < limit; i += 1) {
+      const sanitized = sanitizeBannerValue(array[i], depth + 1);
+      if (sanitized !== undefined) {
+        result.push(sanitized);
+      }
+    }
+    return result;
+  }
+
+  function sanitizeBannerObject(obj, depth) {
+    if (!obj || typeof obj !== "object") {
+      return undefined;
+    }
+    const result = {};
+    const keys = Object.keys(obj);
+    const limit = 16;
+    for (let i = 0; i < keys.length && Object.keys(result).length < limit; i += 1) {
+      const rawKey = keys[i];
+      if (typeof rawKey !== "string" || !rawKey) {
+        continue;
+      }
+      const key = truncateBannerString(rawKey, 48);
+      const sanitized = sanitizeBannerValue(obj[rawKey], depth + 1);
+      if (sanitized !== undefined) {
+        result[key] = sanitized;
+      }
+    }
+    return result;
+  }
+
+  function sanitizeBannerValue(value, depth = 0) {
+    if (value === null) {
+      return null;
+    }
+    if (typeof value === "string") {
+      return truncateBannerString(value);
+    }
+    if (typeof value === "number") {
+      return sanitizeBannerNumber(value);
+    }
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (depth >= 2) {
+      return undefined;
+    }
+    if (Array.isArray(value)) {
+      return sanitizeBannerArray(value, depth);
+    }
+    if (typeof value === "object") {
+      return sanitizeBannerObject(value, depth);
+    }
+    return undefined;
+  }
+
+  function sanitizeUrlForBanner(url) {
+    if (typeof url !== "string" || !url) {
+      return undefined;
+    }
+    try {
+      const parsed = new URL(url, window.location && window.location.origin ? window.location.origin : undefined);
+      const info = {
+        origin: truncateBannerString(parsed.origin, 120),
+        pathname: truncateBannerString(parsed.pathname, 160),
+      };
+      if (parsed.hash) {
+        info.hash = truncateBannerString(parsed.hash, 80);
+      }
+      if (parsed.search) {
+        const params = new URLSearchParams(parsed.search);
+        const keys = [];
+        const iterator = params.keys();
+        for (let i = 0; i < 12; i += 1) {
+          const { value, done } = iterator.next();
+          if (done) {
+            break;
+          }
+          if (typeof value === "string" && value) {
+            keys.push(truncateBannerString(value, 64));
+          }
+        }
+        if (keys.length) {
+          info.query_keys = keys;
+        }
+      }
+      return info;
+    } catch (err) {
+      return { raw: truncateBannerString(url) };
+    }
+  }
+
+  function collectClientBannerInfo() {
+    if (typeof window === "undefined") {
+      return {};
+    }
+    const info = {};
+    const nav = typeof navigator !== "undefined" ? navigator : null;
+    if (nav) {
+      if (typeof nav.userAgent === "string" && nav.userAgent) {
+        info.user_agent = truncateBannerString(nav.userAgent);
+      }
+      if (typeof nav.platform === "string" && nav.platform) {
+        info.platform = truncateBannerString(nav.platform, 120);
+      }
+      if (typeof nav.vendor === "string" && nav.vendor) {
+        info.vendor = truncateBannerString(nav.vendor, 120);
+      }
+      if (typeof nav.product === "string" && nav.product) {
+        info.product = truncateBannerString(nav.product, 120);
+      }
+      if (typeof nav.language === "string" && nav.language) {
+        info.language = truncateBannerString(nav.language, 32);
+      }
+      if (Array.isArray(nav.languages) && nav.languages.length) {
+        info.languages = nav.languages
+          .filter((lang) => typeof lang === "string" && lang)
+          .slice(0, 8)
+          .map((lang) => truncateBannerString(lang, 32));
+      }
+      if (typeof nav.hardwareConcurrency === "number" && Number.isFinite(nav.hardwareConcurrency)) {
+        info.hardware_concurrency = Math.max(0, Math.floor(nav.hardwareConcurrency));
+      }
+      if (typeof nav.deviceMemory === "number" && Number.isFinite(nav.deviceMemory)) {
+        info.device_memory = Math.max(0, nav.deviceMemory);
+      }
+      if (typeof nav.maxTouchPoints === "number" && Number.isFinite(nav.maxTouchPoints)) {
+        info.max_touch_points = Math.max(0, nav.maxTouchPoints);
+      }
+      if (typeof nav.cookieEnabled === "boolean") {
+        info.cookies_enabled = nav.cookieEnabled;
+      }
+      if (typeof nav.onLine === "boolean") {
+        info.online = nav.onLine;
+      }
+      const connection = nav.connection || nav.mozConnection || nav.webkitConnection;
+      if (connection && typeof connection === "object") {
+        const conn = {};
+        if (typeof connection.effectiveType === "string" && connection.effectiveType) {
+          conn.effective_type = truncateBannerString(connection.effectiveType, 32);
+        }
+        if (typeof connection.type === "string" && connection.type) {
+          conn.type = truncateBannerString(connection.type, 32);
+        }
+        if (typeof connection.downlink === "number" && Number.isFinite(connection.downlink)) {
+          conn.downlink = connection.downlink;
+        }
+        if (typeof connection.rtt === "number" && Number.isFinite(connection.rtt)) {
+          conn.rtt = connection.rtt;
+        }
+        if (Object.keys(conn).length) {
+          info.connection = conn;
+        }
+      }
+    }
+    const screenInfo = typeof window.screen !== "undefined" ? window.screen : null;
+    if (screenInfo) {
+      const screenPayload = {};
+      if (Number.isFinite(screenInfo.width) && Number.isFinite(screenInfo.height)) {
+        screenPayload.width = screenInfo.width;
+        screenPayload.height = screenInfo.height;
+      }
+      if (Number.isFinite(screenInfo.availWidth) && Number.isFinite(screenInfo.availHeight)) {
+        screenPayload.avail_width = screenInfo.availWidth;
+        screenPayload.avail_height = screenInfo.availHeight;
+      }
+      if (Object.keys(screenPayload).length) {
+        info.screen = screenPayload;
+      }
+    }
+    if (Number.isFinite(window.innerWidth) && Number.isFinite(window.innerHeight)) {
+      info.viewport = {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      };
+    }
+    if (typeof window.devicePixelRatio === "number" && Number.isFinite(window.devicePixelRatio)) {
+      info.device_pixel_ratio = window.devicePixelRatio;
+    }
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions();
+      if (tz && typeof tz.timeZone === "string" && tz.timeZone) {
+        info.timezone = truncateBannerString(tz.timeZone, 96);
+      }
+    } catch (err) {
+      // ignore timezone errors
+    }
+    const offset = new Date().getTimezoneOffset();
+    if (Number.isFinite(offset)) {
+      info.tz_offset_minutes = offset;
+    }
+    if (typeof document !== "undefined") {
+      if (typeof document.referrer === "string" && document.referrer) {
+        info.referrer = truncateBannerString(document.referrer);
+      }
+      if (typeof document.visibilityState === "string" && document.visibilityState) {
+        info.visibility_state = truncateBannerString(document.visibilityState, 32);
+      }
+    }
+    if (typeof window.matchMedia === "function") {
+      try {
+        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+        if (prefersDark && typeof prefersDark.matches === "boolean") {
+          info.prefers_dark = prefersDark.matches;
+        }
+      } catch (err) {
+        // ignore matchMedia errors
+      }
+    }
+    if (typeof window.location !== "undefined") {
+      const locationInfo = sanitizeUrlForBanner(window.location.href);
+      if (locationInfo) {
+        info.location = locationInfo;
+      }
+    }
+    return info;
+  }
+
+  function ensureClientBannerState() {
+    const state = AppState.getState();
+    const existing = state && state.clientBanner && typeof state.clientBanner === "object" ? state.clientBanner : null;
+    if (existing && existing.info) {
+      return {
+        info: existing.info,
+        events: Array.isArray(existing.events) ? existing.events : [],
+      };
+    }
+    const info = collectClientBannerInfo();
+    const snapshot = { info, events: [] };
+    updateState({ clientBanner: snapshot });
+    return snapshot;
+  }
+
+  function updateClientBannerState(info, events) {
+    const state = {
+      info,
+      events,
+    };
+    updateState({ clientBanner: state });
+    return state;
+  }
+
+  function queueClientBannerPayload(payload) {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    clientBannerQueue = clientBannerQueue.concat([payload]);
+    if (clientBannerQueue.length > CLIENT_BANNER_MAX_QUEUE) {
+      clientBannerQueue = clientBannerQueue.slice(clientBannerQueue.length - CLIENT_BANNER_MAX_QUEUE);
+    }
+    flushClientBannerQueue();
+  }
+
+  function flushClientBannerQueue() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    while (clientBannerQueue.length) {
+      const next = clientBannerQueue[0];
+      try {
+        sendJson(next);
+        clientBannerQueue.shift();
+      } catch (err) {
+        console.warn("Failed to flush client banner", err);
+        break;
+      }
+    }
+  }
+
+  function recordClientBannerEvent(label, meta) {
+    if (typeof label !== "string" || !label) {
+      return;
+    }
+    const baseState = ensureClientBannerState();
+    const info = collectClientBannerInfo();
+    const events = Array.isArray(baseState.events) ? baseState.events.slice() : [];
+    const entry = {
+      label: truncateBannerString(label, CLIENT_BANNER_EVENT_LABEL_MAX),
+      ts_ms: Date.now(),
+    };
+    const sanitizedMeta = sanitizeBannerValue(meta);
+    if (sanitizedMeta && typeof sanitizedMeta === "object" && Object.keys(sanitizedMeta).length) {
+      entry.meta = sanitizedMeta;
+    }
+    events.push(entry);
+    if (events.length > CLIENT_BANNER_MAX_HISTORY) {
+      events.splice(0, events.length - CLIENT_BANNER_MAX_HISTORY);
+    }
+    updateClientBannerState(info, events);
+    queueClientBannerPayload({
+      type: CLIENT_BANNER_TYPE,
+      info,
+      event: entry,
+    });
+  }
+
+  function getErrorMessage(err) {
+    if (!err) {
+      return undefined;
+    }
+    if (typeof err === "string") {
+      return truncateBannerString(err);
+    }
+    if (err && typeof err.message === "string") {
+      return truncateBannerString(err.message);
+    }
+    try {
+      return truncateBannerString(String(err));
+    } catch (inner) {
+      return undefined;
+    }
+  }
 
   // Build a full WS URL and PRESERVE the query string as-is.
   function makeWsUrl(pathWithQuery) {
@@ -178,6 +526,11 @@
     }
     showConnectionToast(message);
     ws.__handshakeToastShown = true;
+    recordClientBannerEvent("ws.handshake.toast", {
+      message,
+      minted_ms: mintedAt,
+      close_code: closeCode,
+    });
   }
 
   function computeUrl(resumeToken) {
@@ -203,6 +556,7 @@
     infoWatchdogTimerId = setTimeout(() => {
       infoWatchdogTimerId = null;
       console.warn("WS info frame not received within deadline");
+      recordClientBannerEvent("ws.info.deadline", null);
     }, INFO_DEADLINE_MS);
   }
 
@@ -238,6 +592,7 @@
     if (!Number.isFinite(delay) || delay <= 0) return false;
     if (rateLimitRetryTimerId || rateLimitRetryCount >= 1) return false;
     rateLimitRetryCount += 1;
+    recordClientBannerEvent("ws.retry.scheduled", { delay_ms: delay });
     rateLimitRetryTimerId = setTimeout(() => {
       rateLimitRetryTimerId = null;
       if (callbacks && typeof callbacks.onRetryStart === "function") {
@@ -254,9 +609,11 @@
         resumeToken = resumeState.token;
       }
       try {
+        recordClientBannerEvent("ws.retry.begin", { resume_token_present: Boolean(resumeToken) });
         open({ resumeToken, skipRateLimitCancel: true });
       } catch (err) {
         console.error("Auto-retry open failed", err);
+        recordClientBannerEvent("ws.retry.failed", { message: getErrorMessage(err) });
       }
     }, delay);
     return true;
@@ -314,6 +671,7 @@
     if (Date.now() >= resume.expiresAt) {
       clearResumeState();
       updateState({ resumeError: "invalid" });
+      recordClientBannerEvent("ws.auto_resume.expired", { expires_at_ms: resume.expiresAt });
       return false;
     }
     const state = AppState.getState();
@@ -322,6 +680,7 @@
     }
     autoResumeAttemptToken = resume.token;
     updateState({ connectionState: "resuming", resumeError: null });
+    recordClientBannerEvent("ws.auto_resume.start", { resume_token_present: true, expires_at_ms: resume.expiresAt });
     try {
       open({ resumeToken: resume.token, skipRateLimitCancel: true });
       return true;
@@ -329,6 +688,7 @@
       console.error("Auto-resume open failed", err);
       autoResumeAttemptToken = null;
       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+      recordClientBannerEvent("ws.auto_resume.failed", { message: getErrorMessage(err) });
       return false;
     }
   }
@@ -745,6 +1105,7 @@
       resumeError: null
     });
     startHeartbeat();
+    flushClientBannerQueue();
   }
 
   function handlePongFrame() {
@@ -771,6 +1132,20 @@
 
   function handleErrorFrame(frame) {
     console.error("WS error frame", frame);
+    const errorMeta = {};
+    if (frame && typeof frame.code === "string") {
+      errorMeta.code = truncateBannerString(frame.code, 64);
+    }
+    if (frame && typeof frame.detail === "string" && frame.detail) {
+      errorMeta.detail = truncateBannerString(frame.detail, 160);
+    } else if (frame && typeof frame.message === "string" && frame.message) {
+      errorMeta.detail = truncateBannerString(frame.message, 160);
+    }
+    if (Object.keys(errorMeta).length) {
+      recordClientBannerEvent("ws.error.frame", errorMeta);
+    } else {
+      recordClientBannerEvent("ws.error.frame", null);
+    }
     const isResumeInvalid = frame && frame.code === "resume_invalid";
     if (isResumeInvalid) {
       clearResumeState();
@@ -971,6 +1346,7 @@
     if (!ws) return;
     detachSocket(ws);
     ws.__intentionalClose = true;
+    recordClientBannerEvent("ws.cleanup", { reason: truncateBannerString(reason || "", 80) });
     try {
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close(1000, reason);
@@ -1034,14 +1410,32 @@
     // Require a token unless we are resuming with a server-issued resume token
     const isResuming = Boolean(resumeTokenValue);
     const hasAccessToken = (typeof wsUrl === "string") && /[?&]access_token=/.test(wsUrl);
+    const bannerUrlMeta = typeof wsUrl === "string" ? sanitizeUrlForBanner(wsUrl) : undefined;
     if (!isResuming && !hasAccessToken) {
       console.error("ws_open_missing_token_query", { originalUrl, finalUrl: wsUrl });
       showConnectionToast("Session token missing. Please click Start again.");
       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+      recordClientBannerEvent("ws.open.blocked", {
+        reason: "missing_access_token",
+        url: bannerUrlMeta,
+      });
       return;
     }
 
     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
+    const bannerProtocols = Array.isArray(wsProtocols)
+      ? wsProtocols
+        .filter((proto) => typeof proto === "string" && proto)
+        .map((proto) => truncateBannerString(proto, 48))
+        .slice(0, 4)
+      : (typeof wsProtocols === "string" && wsProtocols ? truncateBannerString(wsProtocols, 48) : undefined);
+    recordClientBannerEvent("ws.open.request", {
+      resume: isResuming,
+      skip_rate_limit_cancel: Boolean(skipRateLimitCancel),
+      has_access_token: hasAccessToken,
+      url: bannerUrlMeta,
+      protocols: bannerProtocols,
+    });
     console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
     const logPayload = Array.isArray(wsProtocols)
       ? { url: wsUrl, protocols: wsProtocols }
@@ -1056,11 +1450,18 @@
     ws.onopen = () => {
       // Lightweight breadcrumb; keep as console.log
       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
+      recordClientBannerEvent("ws.socket.open", {
+        protocol: truncateBannerString(ws.protocol || (typeof wsProtocols === "string" ? wsProtocols : ""), 48),
+      });
+      flushClientBannerQueue();
     };
 
     ws.onerror = (e) => {
       console.error("WebSocket error", e, { readyState: ws.readyState });
       maybeShowHandshakeToast(ws, null);
+      recordClientBannerEvent("ws.socket.error", {
+        ready_state: ws.readyState,
+      });
     };
 
     ws.onclose = (e) => {
@@ -1071,6 +1472,12 @@
         readyState: ws.readyState,
       });
       maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
+      recordClientBannerEvent("ws.socket.close", {
+        code: typeof e.code === "number" ? e.code : undefined,
+        reason: truncateBannerString(e.reason || "", 160),
+        was_clean: Boolean(e.wasClean),
+        ready_state: ws.readyState,
+      });
     };
 
     socket = ws;
@@ -1088,6 +1495,7 @@
   }
 
   function close(reason = DEFAULT_CLOSE_REASON) {
+    recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
     if (!socket) {
       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
       return;

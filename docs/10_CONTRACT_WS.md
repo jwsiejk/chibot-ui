@@ -23,8 +23,12 @@ On successful upgrade, the server emits an initial `info` frame with connection 
 
 - `{"type":"ping"}`
 - `{"type":"client.ready"}`
+- `{"type":"client.banner","info":{…},"event":{"label":"ws.open.request","ts_ms":1730000000000}}`
+  - Optional telemetry from the browser capturing sanitized environment details
+    and connection checkpoints. Entries are append-only and surface in
+    `/admin/logs` alongside server events.
 
-- **Audio (binary frames):**  
+- **Audio (binary frames):**
   The **server policy** selects the ASR provider and **required input audio**. Clients **MUST** follow the descriptor the server announces (see `asr.ready`). The client **MUST NOT** change codecs/containers; format is controlled by policy (Deepgram primary, Speechmatics secondary).  
 
   - **Primary (Deepgram):** **WebM containerized Opus**, mono, **48 kHz**.  

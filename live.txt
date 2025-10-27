@@ -17,9 +17,9 @@ sid prefix
  Only open Refresh
 Showing 1 session.
 Session	Status	Started	Updated	Events	 
-a99589e3fffb4e0b97c707e6419041bb	Open	2025-10-27T08:14:22.126Z	2025-10-27T08:14:22.126Z	26	Pick
+54f644a349364fc28f55a6c931e075ab	Open	2025-10-27T19:42:41.762Z	2025-10-27T19:42:41.762Z	142	Pick
 Session ID
-a99589e3fffb4e0b97c707e6419041bb
+54f644a349364fc28f55a6c931e075ab
 Stop Live
 Load History
 Download Zip
@@ -57,18 +57,18 @@ Live stream
 Polling for new events…
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552862.1274173,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587800.157196,
   "logger": "app.ws.adapter",
   "level": "INFO",
-  "msg": "evt=ws_open_and_greet_start sid=a99589e3fffb4e0b97c707e6419041bb",
+  "msg": "evt=ws_open_and_greet_start sid=8454441b475f49e98c66d1806e8ac9ed",
   "schema_version": "1",
-  "ts_ms": 1761552862127
+  "ts_ms": 1761587800157
 }
 
 {
   "type": "EVT_WS_OPEN",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "headers": {
       "host": "chibot-ui.onrender.com",
@@ -79,29 +79,29 @@ Polling for new events…
       "cdn-loop": "cloudflare; loops=1",
       "cf-connecting-ip": "170.85.75.32",
       "cf-ipcountry": "US",
-      "cf-ray": "9950bd465a6e2dae-EWR",
+      "cf-ray": "9954124029b06a5b-EWR",
       "cf-visitor": "{\"scheme\":\"https\"}",
       "connection": "Upgrade",
       "cookie": "***@purestorage.com|qwlEWYW3Exk0EptuOu3i2Ux8Kf9GEVfKRnspFLGkocY; askchip_csrf=t5cF2VzXRNvhrliwPc-kXxNoJteAV5enzF2SBks1oSY",
       "origin": "https://chibot-ui.onrender.com",
       "pragma": "no-cache",
-      "render-cf-start-time-msec": "179",
-      "render-cf-start-time-sec": "1761552861",
+      "render-cf-start-time-msec": "69",
+      "render-cf-start-time-sec": "1761587799",
       "render-proxy-ttl": "4",
-      "rndr-id": "7f1d84b2-60b1-46a9",
-      "sec-websocket-key": "6OnFvbI3/FKvcDqrPIlv1Q==",
-      "sec-websocket-protocol": "chat.v2,…boM_wzhk",
+      "rndr-id": "74dcb279-67e1-4f05",
+      "sec-websocket-key": "oSul+M8sAg2+0FzoxWUJeQ==",
+      "sec-websocket-protocol": "chat.v2,…YCMBjixc",
       "sec-websocket-version": "13",
       "true-client-ip": "170.85.75.32",
       "upgrade": "websocket",
-      "x-forwarded-for": "170.85.75.32, 10.226.234.131",
+      "x-forwarded-for": "170.85.75.32, 10.226.197.4",
       "x-forwarded-proto": "https",
       "x-render-as-num": "22616",
       "x-render-threat-score": "0"
     },
     "dir": "in"
   },
-  "ts_ms": 1761552862127,
+  "ts_ms": 1761587800157,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -110,7 +110,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "ws": {
       "dir": "out",
@@ -175,7 +175,7 @@ Polling for new events…
       }
     }
   },
-  "ts_ms": 1761552862129,
+  "ts_ms": 1761587800159,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -184,16 +184,13 @@ Polling for new events…
 
 {
   "type": "EVT_POLICY_APPLIED",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "policy": {
       "diff": {
-        "voice": [
+        "mode": [
           null,
-          {
-            "voice_id": "alloy-en-US-001",
-            "locale": "en-US"
-          }
+          "idle"
         ],
         "actions": [
           null,
@@ -208,6 +205,17 @@ Polling for new events…
             ]
           }
         ],
+        "voice": [
+          null,
+          {
+            "voice_id": "alloy-en-US-001",
+            "locale": "en-US"
+          }
+        ],
+        "allow_auto_vad": [
+          null,
+          true
+        ],
         "suggestions": [
           null,
           {
@@ -215,17 +223,9 @@ Polling for new events…
             "count": 3
           }
         ],
-        "barge_in_enabled": [
+        "auto_commit_when_ready": [
           null,
           true
-        ],
-        "greet": [
-          null,
-          {
-            "enabled": true,
-            "mode": "persona",
-            "post_hold_ms": 200
-          }
         ],
         "telemetry": [
           null,
@@ -255,22 +255,22 @@ Polling for new events…
             }
           }
         ],
-        "auto_commit_when_ready": [
+        "barge_in_enabled": [
           null,
           true
         ],
-        "mode": [
+        "greet": [
           null,
-          "idle"
-        ],
-        "allow_auto_vad": [
-          null,
-          true
+          {
+            "enabled": true,
+            "mode": "persona",
+            "post_hold_ms": 200
+          }
         ]
       }
     }
   },
-  "ts_ms": 1761552862130,
+  "ts_ms": 1761587800160,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -279,13 +279,13 @@ Polling for new events…
 
 {
   "type": "EVT_ACWR_RECOMPUTE",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "policy_acwr": true,
     "admin_enabled": null,
     "effective": true
   },
-  "ts_ms": 1761552862131,
+  "ts_ms": 1761587800161,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -294,7 +294,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "ws": {
       "dir": "out",
@@ -326,7 +326,7 @@ Polling for new events…
     "voice_id": "alloy-en-US-001",
     "locale": "en-US",
     "meta": {
-      "sid": "a99589e3fffb4e0b97c707e6419041bb",
+      "sid": "8454441b475f49e98c66d1806e8ac9ed",
       "audio": {
         "codec": "pcm_s16le",
         "rate_hz": 16000,
@@ -334,7 +334,7 @@ Polling for new events…
       }
     }
   },
-  "ts_ms": 1761552862131,
+  "ts_ms": 1761587800162,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -343,13 +343,13 @@ Polling for new events…
 
 {
   "type": "EVT_POLICY_DECISION",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "rule": "session_open.greet",
   "actions": [
     "assistant.say",
     "assistant.await_user"
   ],
-  "ts_ms": 1761552862132,
+  "ts_ms": 1761587800163,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -358,19 +358,19 @@ Polling for new events…
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552862.1331668,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587800.1641119,
   "logger": "app.voice_v2.engine",
   "level": "DEBUG",
-  "msg": "evt=greet_llm_request sid=a99589e3fffb4e0b97c707e6419041bb purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}",
+  "msg": "evt=greet_llm_request sid=8454441b475f49e98c66d1806e8ac9ed purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}",
   "schema_version": "1",
-  "ts_ms": 1761552862133
+  "ts_ms": 1761587800164
 }
 
 {
   "type": "EVT_LLM_RESPONSE_START",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "req_id": "req-a86d296d25d044b387ec2fa57e148c79",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "req_id": "req-271cfb8449434574a09830b371c596bb",
   "purpose": "greet",
   "model": "gpt-4o-mini",
   "temp": 0.4,
@@ -380,7 +380,7 @@ Polling for new events…
     "developer": 1,
     "user": 1
   },
-  "ts_ms": 1761552862219,
+  "ts_ms": 1761587800165,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -389,12 +389,12 @@ Polling for new events…
 
 {
   "type": "EVT_LLM_RESPONSE_END",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "req_id": "req-a86d296d25d044b387ec2fa57e148c79",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "req_id": "req-271cfb8449434574a09830b371c596bb",
   "purpose": "greet",
-  "latency_ms": 4903,
+  "latency_ms": 5709,
   "model": "gpt-4o-mini",
-  "ts_ms": 1761552867123,
+  "ts_ms": 1761587805874,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -403,25 +403,25 @@ Polling for new events…
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552867.1240845,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587805.875317,
   "logger": "app.voice_v2.engine",
   "level": "DEBUG",
-  "msg": "evt=greet_llm_complete sid=a99589e3fffb4e0b97c707e6419041bb purpose=greet latency_ms=4903 model=gpt-4o-mini",
+  "msg": "evt=greet_llm_complete sid=8454441b475f49e98c66d1806e8ac9ed purpose=greet latency_ms=5709 model=gpt-4o-mini",
   "schema_version": "1",
-  "ts_ms": 1761552867124
+  "ts_ms": 1761587805875
 }
 
 {
   "type": "EVT_NLG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "req_id": "req-a86d296d25d044b387ec2fa57e148c79",
-  "text": "Welcome! Excited to explore Pure Storage together!",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "req_id": "req-271cfb8449434574a09830b371c596bb",
+  "text": "Welcome! Let’s explore Pure Storage together.",
   "meta": {
     "reason": "greet",
     "post_hold_ms": 200
   },
-  "ts_ms": 1761552867124,
+  "ts_ms": 1761587805876,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -430,25 +430,25 @@ Polling for new events…
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "ws": {
       "dir": "out",
-      "size": 282,
-      "preview": "{\"type\":…2867125}"
+      "size": 279,
+      "preview": "{\"type\":…7805876}"
     }
   },
   "frame": {
     "type": "chat.message",
-    "id": "555cddb6-a786-48f8-8343-6eae9053c63f",
+    "id": "580b1008-db61-44b3-8ed3-da2c08543de6",
     "role": "assistant",
-    "text": "Welcome! Excited to explore Pure Storage together!",
+    "text": "Welcome! Let’s explore Pure Storage together.",
     "origin": "voice",
-    "turn_id": "69dd47a0-23f6-458b-9812-5d9c2324c368",
-    "req_id": "req-a86d296d25d044b387ec2fa57e148c79",
-    "ts_ms": 1761552867125
+    "turn_id": "93307841-c138-4b5c-a709-ec699219a8fd",
+    "req_id": "req-271cfb8449434574a09830b371c596bb",
+    "ts_ms": 1761587805876
   },
-  "ts_ms": 1761552867125,
+  "ts_ms": 1761587805876,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -457,7 +457,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "ws": {
       "dir": "out",
@@ -467,7 +467,7 @@ Polling for new events…
   },
   "frame": {
     "type": "assistant.suggestions",
-    "ts_ms": 1761552867126,
+    "ts_ms": 1761587805877,
     "items": [
       {
         "label": "Set your objective",
@@ -487,7 +487,7 @@ Polling for new events…
     ],
     "mode": "greet"
   },
-  "ts_ms": 1761552867126,
+  "ts_ms": 1761587805877,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -496,19 +496,19 @@ Polling for new events…
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552867.3293424,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587806.1652143,
   "logger": "httpcore.connection",
   "level": "DEBUG",
   "msg": "connect_tcp.started host='api.elevenlabs.io' port=443 local_address=None timeout=5.0 socket_options=None",
   "schema_version": "1",
-  "ts_ms": 1761552867329
+  "ts_ms": 1761587806165
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "ws_server",
   "meta": {
@@ -520,14 +520,14 @@ Polling for new events…
       "preview": "{\"type\":\"ping\"}"
     }
   },
-  "ts_ms": 1761552867330,
+  "ts_ms": 1761587806166,
   "level": "debug"
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "ws_server",
   "meta": {
@@ -536,83 +536,39 @@ Polling for new events…
     "ws": {
       "dir": "out",
       "size": 33,
-      "preview": "{\"type\":\"pong\",\"t\":1761552867330}"
+      "preview": "{\"type\":\"pong\",\"t\":1761587806166}"
     }
   },
-  "ts_ms": 1761552867330,
+  "ts_ms": 1761587806167,
   "level": "debug"
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552867.3425434,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587806.1764212,
   "logger": "httpcore.connection",
   "level": "DEBUG",
-  "msg": "connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7a9531446710>",
+  "msg": "connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7915cc1a6490>",
   "schema_version": "1",
-  "ts_ms": 1761552867342
+  "ts_ms": 1761587806176
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552867.3432121,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587806.1769056,
   "logger": "httpcore.connection",
   "level": "DEBUG",
-  "msg": "start_tls.started ssl_context=<ssl.SSLContext object at 0x7a95346ef6e0> server_hostname='api.elevenlabs.io' timeout=5.0",
+  "msg": "start_tls.started ssl_context=<ssl.SSLContext object at 0x7915ced1f9b0> server_hostname='api.elevenlabs.io' timeout=5.0",
   "schema_version": "1",
-  "ts_ms": 1761552867343
-}
-
-{
-  "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552867.4201057,
-  "logger": "httpcore.connection",
-  "level": "DEBUG",
-  "msg": "start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7a953148c510>",
-  "schema_version": "1",
-  "ts_ms": 1761552867420
-}
-
-{
-  "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552867.4209163,
-  "logger": "httpcore.http11",
-  "level": "DEBUG",
-  "msg": "send_request_headers.started request=<Request [b'POST']>",
-  "schema_version": "1",
-  "ts_ms": 1761552867420
-}
-
-{
-  "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552867.422004,
-  "logger": "httpcore.http11",
-  "level": "DEBUG",
-  "msg": "send_request_headers.complete",
-  "schema_version": "1",
-  "ts_ms": 1761552867422
-}
-
-{
-  "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552867.4225204,
-  "logger": "httpcore.http11",
-  "level": "DEBUG",
-  "msg": "send_request_body.started request=<Request [b'POST']>",
-  "schema_version": "1",
-  "ts_ms": 1761552867422
+  "ts_ms": 1761587806176
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "ws_server",
   "meta": {
@@ -624,63 +580,107 @@ Polling for new events…
       "preview": "{\"type\":\"ping\"}"
     }
   },
-  "ts_ms": 1761552867423,
+  "ts_ms": 1761587806257,
   "level": "debug"
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552867.4246516,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587806.2646747,
+  "logger": "httpcore.connection",
+  "level": "DEBUG",
+  "msg": "start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7915ce93be10>",
+  "schema_version": "1",
+  "ts_ms": 1761587806264
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587806.265349,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "send_request_headers.started request=<Request [b'POST']>",
+  "schema_version": "1",
+  "ts_ms": 1761587806265
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587806.2664652,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "send_request_headers.complete",
+  "schema_version": "1",
+  "ts_ms": 1761587806266
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587806.2669003,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "send_request_body.started request=<Request [b'POST']>",
+  "schema_version": "1",
+  "ts_ms": 1761587806266
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587806.2680323,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "send_request_body.complete",
   "schema_version": "1",
-  "ts_ms": 1761552867424
+  "ts_ms": 1761587806268
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552867.4250433,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587806.2685018,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "receive_response_headers.started request=<Request [b'POST']>",
   "schema_version": "1",
-  "ts_ms": 1761552867425
+  "ts_ms": 1761587806268
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.2784798,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.0998216,
   "logger": "httpcore.http11",
   "level": "DEBUG",
-  "msg": "receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Mon, 27 Oct 2025 08:14:26 GMT'), (b'server', b'uvicorn'), (b'request-id', b'jqoL5gGjJAkocnTb6p3S'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'EZJXHoTnzSWd4Lnz5jem'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'50'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'60a69ff56773a43fc37653fa316c589b'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])",
+  "msg": "receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Mon, 27 Oct 2025 17:56:45 GMT'), (b'server', b'uvicorn'), (b'request-id', b'znitsO3EoWgVSPhaZ9P1'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'kkFtFLDVrn6QfLBr8Tbb'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'45'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'b030604dbc28a7bec67a34dc0ad59a26'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])",
   "schema_version": "1",
-  "ts_ms": 1761552868278
+  "ts_ms": 1761587807099
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.2793334,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.1007128,
   "logger": "httpx",
   "level": "INFO",
   "msg": "HTTP Request: POST https://api.elevenlabs.io/v1/text-to-speech/MIAWBMadvHL0ek6oJEXD/stream?optimize_streaming_latency=4&output_format=pcm_16000 \"HTTP/1.1 200 OK\"",
   "schema_version": "1",
-  "ts_ms": 1761552868279
+  "ts_ms": 1761587807100
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.2797632,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.1014903,
   "logger": "app.services.tts.elevenlabs_client",
   "level": "INFO",
   "msg": "evt=tts_provider_stream_opened provider=elevenlabs content_type=audio/pcm url_qs=optimize_streaming_latency=4&output_format=pcm_16000",
   "schema_version": "1",
-  "ts_ms": 1761552868279
+  "ts_ms": 1761587807101
 }
 
 {
@@ -704,18 +704,18 @@ Polling for new events…
       "locale": "en-US"
     }
   },
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "voice_engine",
   "schema_version": "1",
-  "ts_ms": 1761552868280
+  "ts_ms": 1761587807102
 }
 
 {
   "type": "EVT_TTS_MASK",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "phase": "on",
-  "ts_ms": 1761552868281,
+  "ts_ms": 1761587807102,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -724,7 +724,7 @@ Polling for new events…
 
 {
   "type": "EVT_TTS_START",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "tts": {
       "utt_id": "utt-00001",
@@ -733,7 +733,7 @@ Polling for new events…
     "voice_id": "alloy-en-US-001",
     "locale": "en-US"
   },
-  "ts_ms": 1761552868282,
+  "ts_ms": 1761587807103,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -742,12 +742,12 @@ Polling for new events…
 
 {
   "type": "EVT_TURN_STATE",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "state": "Responding",
     "reason": "tts_start"
   },
-  "ts_ms": 1761552868282,
+  "ts_ms": 1761587807103,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -756,29 +756,29 @@ Polling for new events…
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.2840278,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.1050165,
   "logger": "app.voice_v2.tts_runtime",
   "level": "INFO",
-  "msg": "evt=tts_start sid=a99589e3fffb4e0b97c707e6419041bb utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=50",
+  "msg": "evt=tts_start sid=8454441b475f49e98c66d1806e8ac9ed utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=45",
   "schema_version": "1",
-  "ts_ms": 1761552868284
+  "ts_ms": 1761587807105
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.284629,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.105594,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "receive_response_body.started request=<Request [b'POST']>",
   "schema_version": "1",
-  "ts_ms": 1761552868284
+  "ts_ms": 1761587807105
 }
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -791,7 +791,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868290,
+  "ts_ms": 1761587807107,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -803,18 +803,18 @@ Polling for new events…
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.290646,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.1082606,
   "logger": "app.voice_v2.tts_runtime",
   "level": "DEBUG",
-  "msg": "evt=tts_chunk sid=a99589e3fffb4e0b97c707e6419041bb utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280",
+  "msg": "evt=tts_chunk sid=8454441b475f49e98c66d1806e8ac9ed utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280",
   "schema_version": "1",
-  "ts_ms": 1761552868290
+  "ts_ms": 1761587807108
 }
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -827,7 +827,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868291,
+  "ts_ms": 1761587807109,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -839,7 +839,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -852,7 +852,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868292,
+  "ts_ms": 1761587807109,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -864,7 +864,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -877,7 +877,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868293,
+  "ts_ms": 1761587807110,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -889,7 +889,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -902,7 +902,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868293,
+  "ts_ms": 1761587807110,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -914,7 +914,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -927,7 +927,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868294,
+  "ts_ms": 1761587807111,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -939,7 +939,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -952,7 +952,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868294,
+  "ts_ms": 1761587807111,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -964,7 +964,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -977,7 +977,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868295,
+  "ts_ms": 1761587807112,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -989,7 +989,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1002,7 +1002,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868296,
+  "ts_ms": 1761587807113,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1014,7 +1014,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1027,7 +1027,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868297,
+  "ts_ms": 1761587807114,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1039,7 +1039,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1052,7 +1052,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868297,
+  "ts_ms": 1761587807114,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1064,7 +1064,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1077,7 +1077,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868298,
+  "ts_ms": 1761587807115,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1089,7 +1089,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1102,7 +1102,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868298,
+  "ts_ms": 1761587807115,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1114,7 +1114,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1127,7 +1127,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868299,
+  "ts_ms": 1761587807116,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1139,7 +1139,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1152,7 +1152,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868300,
+  "ts_ms": 1761587807118,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1164,7 +1164,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1177,7 +1177,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868301,
+  "ts_ms": 1761587807119,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1189,7 +1189,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1202,7 +1202,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868301,
+  "ts_ms": 1761587807120,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1214,7 +1214,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1227,7 +1227,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868302,
+  "ts_ms": 1761587807120,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1239,7 +1239,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1252,7 +1252,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868302,
+  "ts_ms": 1761587807121,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1264,7 +1264,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1277,7 +1277,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868319,
+  "ts_ms": 1761587807121,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1289,7 +1289,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1302,7 +1302,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868319,
+  "ts_ms": 1761587807122,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1314,7 +1314,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1327,7 +1327,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868320,
+  "ts_ms": 1761587807123,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1339,7 +1339,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1352,7 +1352,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868321,
+  "ts_ms": 1761587807155,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1364,7 +1364,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1377,7 +1377,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868325,
+  "ts_ms": 1761587807156,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1389,7 +1389,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1402,7 +1402,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868325,
+  "ts_ms": 1761587807157,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1414,7 +1414,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1427,7 +1427,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868326,
+  "ts_ms": 1761587807157,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1439,7 +1439,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1452,7 +1452,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868327,
+  "ts_ms": 1761587807158,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1464,7 +1464,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1477,7 +1477,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868328,
+  "ts_ms": 1761587807159,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1489,7 +1489,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1502,7 +1502,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868328,
+  "ts_ms": 1761587807159,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1514,7 +1514,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1527,7 +1527,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868329,
+  "ts_ms": 1761587807160,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1539,7 +1539,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1552,7 +1552,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868329,
+  "ts_ms": 1761587807161,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1564,7 +1564,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1577,7 +1577,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868330,
+  "ts_ms": 1761587807161,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1589,7 +1589,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1602,7 +1602,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868331,
+  "ts_ms": 1761587807162,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1614,7 +1614,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1627,7 +1627,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868332,
+  "ts_ms": 1761587807162,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1639,7 +1639,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1652,7 +1652,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868332,
+  "ts_ms": 1761587807163,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1664,7 +1664,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1677,7 +1677,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868333,
+  "ts_ms": 1761587807165,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1689,7 +1689,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1702,7 +1702,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868334,
+  "ts_ms": 1761587807165,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1714,7 +1714,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1727,7 +1727,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868335,
+  "ts_ms": 1761587807166,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1739,7 +1739,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1752,7 +1752,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868335,
+  "ts_ms": 1761587807167,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1764,7 +1764,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1777,7 +1777,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868336,
+  "ts_ms": 1761587807167,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1789,7 +1789,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1802,7 +1802,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868337,
+  "ts_ms": 1761587807168,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1814,7 +1814,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1827,7 +1827,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868338,
+  "ts_ms": 1761587807169,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1838,8 +1838,30 @@ Polling for new events…
 }
 
 {
+  "type": "EVT_LOG",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.1717834,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "receive_response_body.complete",
+  "schema_version": "1",
+  "ts_ms": 1761587807171
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.1722798,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "response_closed.started",
+  "schema_version": "1",
+  "ts_ms": 1761587807172
+}
+
+{
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1852,7 +1874,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868338,
+  "ts_ms": 1761587807174,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1864,7 +1886,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1877,7 +1899,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868339,
+  "ts_ms": 1761587807174,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1889,7 +1911,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1902,7 +1924,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868340,
+  "ts_ms": 1761587807176,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1914,7 +1936,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1927,7 +1949,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868341,
+  "ts_ms": 1761587807176,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1939,7 +1961,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1952,7 +1974,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868341,
+  "ts_ms": 1761587807177,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1964,7 +1986,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1977,7 +1999,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868342,
+  "ts_ms": 1761587807177,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1989,7 +2011,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2002,7 +2024,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868343,
+  "ts_ms": 1761587807256,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2014,7 +2036,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2027,7 +2049,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868420,
+  "ts_ms": 1761587807256,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2039,7 +2061,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2052,7 +2074,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868420,
+  "ts_ms": 1761587807257,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2064,7 +2086,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2077,7 +2099,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868421,
+  "ts_ms": 1761587807257,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2089,7 +2111,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2102,7 +2124,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868422,
+  "ts_ms": 1761587807258,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2114,7 +2136,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2127,7 +2149,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868423,
+  "ts_ms": 1761587807258,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2139,7 +2161,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2152,7 +2174,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868423,
+  "ts_ms": 1761587807259,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2164,7 +2186,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2177,7 +2199,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868424,
+  "ts_ms": 1761587807259,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2189,7 +2211,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2202,7 +2224,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868424,
+  "ts_ms": 1761587807260,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2214,7 +2236,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2227,7 +2249,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868425,
+  "ts_ms": 1761587807260,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2239,7 +2261,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2252,7 +2274,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868425,
+  "ts_ms": 1761587807261,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2264,7 +2286,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2277,7 +2299,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868426,
+  "ts_ms": 1761587807261,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2289,7 +2311,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2302,7 +2324,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868427,
+  "ts_ms": 1761587807262,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2314,7 +2336,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2327,7 +2349,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868428,
+  "ts_ms": 1761587807262,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2339,7 +2361,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2352,7 +2374,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868428,
+  "ts_ms": 1761587807263,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2364,7 +2386,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2377,7 +2399,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868429,
+  "ts_ms": 1761587807263,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2389,7 +2411,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2402,7 +2424,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868429,
+  "ts_ms": 1761587807264,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2413,30 +2435,8 @@ Polling for new events…
 }
 
 {
-  "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.4339046,
-  "logger": "httpcore.http11",
-  "level": "DEBUG",
-  "msg": "receive_response_body.complete",
-  "schema_version": "1",
-  "ts_ms": 1761552868433
-}
-
-{
-  "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.4344902,
-  "logger": "httpcore.http11",
-  "level": "DEBUG",
-  "msg": "response_closed.started",
-  "schema_version": "1",
-  "ts_ms": 1761552868434
-}
-
-{
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2449,7 +2449,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868436,
+  "ts_ms": 1761587807264,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2461,7 +2461,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2474,7 +2474,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868436,
+  "ts_ms": 1761587807265,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2486,7 +2486,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2499,7 +2499,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868437,
+  "ts_ms": 1761587807265,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2511,7 +2511,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2524,7 +2524,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868438,
+  "ts_ms": 1761587807266,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2536,7 +2536,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2549,7 +2549,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868439,
+  "ts_ms": 1761587807267,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2561,7 +2561,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2574,7 +2574,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868519,
+  "ts_ms": 1761587807267,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2586,7 +2586,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2599,7 +2599,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868520,
+  "ts_ms": 1761587807268,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2611,7 +2611,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2624,7 +2624,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868524,
+  "ts_ms": 1761587807268,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2636,7 +2636,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2649,7 +2649,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868524,
+  "ts_ms": 1761587807269,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2661,7 +2661,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2674,7 +2674,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868526,
+  "ts_ms": 1761587807269,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2686,7 +2686,7 @@ Polling for new events…
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2699,7 +2699,7 @@ Polling for new events…
       "size": 1280
     }
   },
-  "ts_ms": 1761552868530,
+  "ts_ms": 1761587807270,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2710,421 +2710,21 @@ Polling for new events…
 }
 
 {
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868530,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 98560
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868531,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 99840
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868532,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 101120
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868533,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 102400
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868533,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 103680
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868534,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 104960
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868535,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 106240
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868536,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 107520
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868538,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 108800
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868539,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 110080
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868540,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 111360
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868541,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 112640
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868542,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 113920
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868542,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 115200
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868543,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 116480
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761552868545,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 117760
-}
-
-{
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.5467017,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.2709672,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "response_closed.complete",
   "schema_version": "1",
-  "ts_ms": 1761552868546
+  "ts_ms": 1761587807270
 }
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
-    "byte_count": 1126,
+    "byte_count": 802,
     "audio": {
       "codec": "pcm_s16le",
       "rate_hz": 16000,
@@ -3132,52 +2732,52 @@ Polling for new events…
     },
     "ws": {
       "dir": "out",
-      "size": 1126
+      "size": 802
     }
   },
-  "ts_ms": 1761552868548,
+  "ts_ms": 1761587807272,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
   "schema_version": "1",
   "utt_id": "utt-00001",
-  "bytes": 1126,
-  "total_bytes": 118886
+  "bytes": 802,
+  "total_bytes": 98082
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.548767,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.2727542,
   "logger": "app.voice_v2.tts_runtime",
   "level": "DEBUG",
-  "msg": "evt=tts_chunk sid=a99589e3fffb4e0b97c707e6419041bb utt_id=utt-00001 chunks=92 bytes=117606 total_bytes=118886",
+  "msg": "evt=tts_chunk sid=8454441b475f49e98c66d1806e8ac9ed utt_id=utt-00001 chunks=76 bytes=96802 total_bytes=98082",
   "schema_version": "1",
-  "ts_ms": 1761552868548
+  "ts_ms": 1761587807272
 }
 
 {
   "type": "EVT_TTS_END",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "tts": {
       "utt_id": "utt-00001"
     }
   },
-  "ts_ms": 1761552868549,
+  "ts_ms": 1761587807273,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
   "schema_version": "1",
-  "total_bytes": 118886,
+  "total_bytes": 98082,
   "utt_id": "utt-00001"
 }
 
 {
   "type": "EVT_TTS_MASK",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "phase": "off",
-  "ts_ms": 1761552868550,
+  "ts_ms": 1761587807273,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3202,11 +2802,11 @@ Polling for new events…
       }
     }
   },
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "voice_engine",
   "schema_version": "1",
-  "ts_ms": 1761552868619
+  "ts_ms": 1761587807274
 }
 
 {
@@ -3228,22 +2828,22 @@ Polling for new events…
       }
     }
   },
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "voice_engine",
   "schema_version": "1",
-  "ts_ms": 1761552868620
+  "ts_ms": 1761587807275
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552868.622099,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587807.275963,
   "logger": "app.voice_v2.tts_runtime",
   "level": "INFO",
-  "msg": "evt=tts_end sid=a99589e3fffb4e0b97c707e6419041bb utt_id=utt-00001 total_bytes=118886 duration_ms=338",
+  "msg": "evt=tts_end sid=8454441b475f49e98c66d1806e8ac9ed utt_id=utt-00001 total_bytes=98082 duration_ms=170",
   "schema_version": "1",
-  "ts_ms": 1761552868622
+  "ts_ms": 1761587807275
 }
 
 {
@@ -3261,21 +2861,21 @@ Polling for new events…
       }
     }
   },
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "voice_engine",
   "schema_version": "1",
-  "ts_ms": 1761552868822
+  "ts_ms": 1761587807477
 }
 
 {
   "type": "EVT_TURN_STATE",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "state": "Ready",
     "reason": "tts_end"
   },
-  "ts_ms": 1761552868823,
+  "ts_ms": 1761587807478,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3285,7 +2885,7 @@ Polling for new events…
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "ws_server",
   "meta": {
@@ -3297,14 +2897,14 @@ Polling for new events…
       "preview": "{\"type\":\"ping\"}"
     }
   },
-  "ts_ms": 1761552882360,
+  "ts_ms": 1761587821225,
   "level": "debug"
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "ws_server",
   "meta": {
@@ -3313,17 +2913,17 @@ Polling for new events…
     "ws": {
       "dir": "out",
       "size": 33,
-      "preview": "{\"type\":\"pong\",\"t\":1761552882360}"
+      "preview": "{\"type\":\"pong\",\"t\":1761587821226}"
     }
   },
-  "ts_ms": 1761552882361,
+  "ts_ms": 1761587821226,
   "level": "debug"
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "ws_server",
   "meta": {
@@ -3335,14 +2935,14 @@ Polling for new events…
       "preview": "{\"type\":\"ping\"}"
     }
   },
-  "ts_ms": 1761552897376,
+  "ts_ms": 1761587836216,
   "level": "debug"
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_SEND",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "who": "server",
   "source": "ws_server",
   "meta": {
@@ -3351,32 +2951,32 @@ Polling for new events…
     "ws": {
       "dir": "out",
       "size": 33,
-      "preview": "{\"type\":\"pong\",\"t\":1761552897377}"
+      "preview": "{\"type\":\"pong\",\"t\":1761587836217}"
     }
   },
-  "ts_ms": 1761552897377,
+  "ts_ms": 1761587836217,
   "level": "debug"
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
-  "ts": 1761552897.564942,
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
+  "ts": 1761587837.3708355,
   "logger": "app.voice_v2.asr_runtime",
   "level": "INFO",
-  "msg": "evt=asr_rollup sid=a99589e3fffb4e0b97c707e6419041bb stream_id= opened_at_ms=1761552862126 last_audio_ts_ms=1761552862126 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=35438",
+  "msg": "evt=asr_rollup sid=8454441b475f49e98c66d1806e8ac9ed stream_id= opened_at_ms=1761587800071 last_audio_ts_ms=1761587800071 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=37299",
   "schema_version": "1",
-  "ts_ms": 1761552897564
+  "ts_ms": 1761587837370
 }
 
 {
   "type": "EVT_WS_CLOSE",
-  "sid": "a99589e3fffb4e0b97c707e6419041bb",
+  "sid": "8454441b475f49e98c66d1806e8ac9ed",
   "meta": {
     "code": 1000,
     "reason": "user_requested"
   },
-  "ts_ms": 1761552897565,
+  "ts_ms": 1761587837371,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",

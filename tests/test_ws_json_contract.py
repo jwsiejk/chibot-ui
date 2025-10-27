@@ -4,9 +4,12 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+import uuid
 from typing import Any, Callable, Dict, List
 
 from app.telemetry import bus
+from app.voice_v2 import EVT_CLIENT_BANNER
+from app.security.jwt_utils import mint_ws_token
 from app.ws.adapter import (
     CHAT_V2_SUBPROTOCOL,
     EVT_BACKPRESSURE_OFF,
@@ -38,11 +41,14 @@ class TestWebSocketJsonContract(unittest.TestCase):
 
     @staticmethod
     def _make_scope(*, subprotocols: List[str] | None = None) -> Dict[str, Any]:
+        sid = f"sid-{uuid.uuid4().hex}"
+        token = mint_ws_token("user-1", sid, False)
         return {
             "type": "websocket",
             "subprotocols": subprotocols if subprotocols is not None else [CHAT_V2_SUBPROTOCOL],
-            "headers": [(b"authorization", b"Bearer test-token")],
+            "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
             "client": ("127.0.0.1", 1234),
+            "query_string": f"access_token={token}".encode("ascii"),
         }
 
     async def _run_adapter(
@@ -107,9 +113,14 @@ class TestWebSocketJsonContract(unittest.TestCase):
         accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
         self.assertEqual(len(accepts), 1)
 
-        errors = [msg for msg in sent if msg.get("type") == "websocket.send"]
-        self.assertEqual(len(errors), 1)
-        payload = json.loads(errors[0]["text"])
+        send_payloads = [
+            json.loads(msg["text"])
+            for msg in sent
+            if msg.get("type") == "websocket.send" and msg.get("text") is not None
+        ]
+        error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
+        self.assertEqual(len(error_payloads), 1)
+        payload = error_payloads[0]
         self.assertEqual(
             payload,
             {"type": "error", "code": "unknown_type", "detail": "client.foo"},
@@ -162,6 +173,37 @@ class TestWebSocketJsonContract(unittest.TestCase):
         accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
         if not accepts:
             raise AssertionError("connection was not accepted")
+
+    def test_client_banner_events_are_published(self) -> None:
+        adapter = ChatV2Adapter()
+        frame = {
+            "type": "client.banner",
+            "info": {"user_agent": "TestAgent/1.0", "viewport": {"width": 800, "height": 600}},
+            "event": {
+                "label": "ws.socket.open",
+                "ts_ms": 1_234_567,
+                "meta": {"ready_state": 1},
+            },
+        }
+        received: List[dict] = []
+        token = bus.subscribe(EVT_CLIENT_BANNER, lambda event: received.append(event))
+        try:
+            events = [
+                {"type": "websocket.connect"},
+                {"type": "websocket.receive", "text": json.dumps(frame)},
+                {"type": "websocket.disconnect", "code": 1000},
+            ]
+            self._drive(adapter, events)
+        finally:
+            bus.unsubscribe(token)
+
+        self.assertEqual(len(received), 1)
+        event = received[0]
+        self.assertEqual(event.get("type"), EVT_CLIENT_BANNER)
+        meta = event.get("meta") or {}
+        self.assertEqual(meta.get("label"), "ws.socket.open")
+        self.assertIn("info", meta)
+        self.assertIn("event_meta", meta)
 
     @staticmethod
     async def _wait_for(predicate: Callable[[], bool], timeout: float = 1.0) -> None:

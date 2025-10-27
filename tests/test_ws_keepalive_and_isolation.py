@@ -2,12 +2,14 @@ import asyncio
 import json
 import os
 import unittest
+import uuid
 from unittest.mock import patch
 
 from app.services.streaming_asr.deepgram_client import DeepgramClient
 from app.telemetry import bus
 from app.voice_v2 import EVT_WS_JSON_SEND
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+from app.security.jwt_utils import mint_ws_token
 
 
 class FakeDeepgramWebSocket:
@@ -48,14 +50,17 @@ class AdapterHarness:
         self.adapter = adapter
         self.engine = engine
         self.label = label
+        sid = f"sid-{uuid.uuid4().hex}"
+        token = mint_ws_token("user-1", sid, False)
         self.scope = {
             "type": "websocket",
             "subprotocols": [CHAT_V2_SUBPROTOCOL],
             "headers": [
-                (b"authorization", b"Bearer test-token"),
+                (b"authorization", f"Bearer {token}".encode("ascii")),
                 (b"x-test-label", label.encode("ascii")),
             ],
             "client": ("127.0.0.1", 1234),
+            "query_string": f"access_token={token}".encode("ascii"),
         }
         self._inbound: asyncio.Queue[dict] = asyncio.Queue()
         self.sent: list[dict] = []

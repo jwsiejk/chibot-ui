@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+import uuid
 from typing import Any, Callable, Dict, List
 
 from app.telemetry import bus
 from app.voice_v2 import EVT_WS_JSON_SEND
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+from app.security.jwt_utils import mint_ws_token
 
 
 class RecordingEngine:
@@ -32,18 +34,27 @@ class ResumeHarness:
     ) -> None:
         self.adapter = adapter
         self.engine = engine
+        sid = f"sid-{uuid.uuid4().hex}"
+        token = mint_ws_token("user-1", sid, False)
         self.scope: Dict[str, Any] = {
             "type": "websocket",
             "subprotocols": [CHAT_V2_SUBPROTOCOL],
-            "headers": [(b"authorization", b"Bearer test-token")],
+            "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
             "client": ("127.0.0.1", 1234),
         }
+        access_token_param = f"access_token={token}".encode("ascii")
         if query_string is not None:
             if isinstance(query_string, str):
                 query_bytes = query_string.encode("utf-8")
             else:
                 query_bytes = query_string
+            if query_bytes:
+                query_bytes = query_bytes + b"&" + access_token_param
+            else:
+                query_bytes = access_token_param
             self.scope["query_string"] = query_bytes
+        else:
+            self.scope["query_string"] = access_token_param
         self._inbound: asyncio.Queue[dict] = asyncio.Queue()
         self.sent: List[dict] = []
         self.outbound_frames: List[Dict[str, Any]] = []

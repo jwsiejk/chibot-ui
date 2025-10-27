@@ -4,11 +4,13 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+import uuid
 from typing import Any, Callable, Dict
 
 from app.telemetry import bus
 from app.voice_v2 import EVT_WS_JSON_SEND
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+from app.security.jwt_utils import mint_ws_token
 
 
 class RecordingEngine:
@@ -27,11 +29,14 @@ class OutboundHarness:
     def __init__(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
         self.adapter = adapter
         self.engine = engine
+        sid = f"sid-{uuid.uuid4().hex}"
+        token = mint_ws_token("user-1", sid, False)
         self.scope = {
             "type": "websocket",
             "subprotocols": [CHAT_V2_SUBPROTOCOL],
-            "headers": [(b"authorization", b"Bearer test-token")],
+            "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
             "client": ("127.0.0.1", 1234),
+            "query_string": f"access_token={token}".encode("ascii"),
         }
         self._inbound: asyncio.Queue[dict] = asyncio.Queue()
         self.sent: list[dict] = []
