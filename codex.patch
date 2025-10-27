@@ -1,207 +1,680 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index a43f3e1317dd0d8fb3067bacc37a3300ee2829c8..8952604b7360095037b60f533a98a57a8f2c4754 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -635,61 +635,56 @@ def _resolve_static_path(raw_path: str) -> Optional[Path]:
-         return None
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 636c3b4306c2a3e1ed05467aac676c276e4b1d7d..3a19033bf0b6f7d68cda99587c6f8413780c8119 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -166,50 +166,94 @@ class ASRRuntime:
+         state.stream_open = False
+         try:
+             self._client.close_stream(sid)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_stream_close_failed sid=%s", sid)
+         finally:
+             self._log_session_rollup(state)
+         state.req_id = None
  
-     if not resolved.is_file():
-         return None
+     def prearm(self, sid: str) -> None:
+         """Request that the ASR stream open proactively for the session."""
  
-     return resolved
+         if not isinstance(sid, str) or not sid:
+             return
  
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+         if state.stream_open:
+             return
  
- async def _handle_admin_ui_asset(
-     scope: dict,
-     receive: Callable[[], Awaitable[dict]],
-     *,
-     raw_path: str,
- ) -> Response:
-     """Serve lightweight admin UI helper assets."""
+         state.prearm_requested = True
+         self._ensure_stream(sid, state)
  
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
++    async def open_if_needed(self, sid: str, *, req_id: str | None = None) -> None:
++        """Ensure the streaming session is open before capturing microphone audio."""
++
++        if not isinstance(sid, str) or not sid:
++            return
++
++        loop = self._ensure_loop()
++        if loop is None:
++            return
++
++        state = self._sessions.get(sid)
++        if state is None:
++            state = _SessionState(sid=sid)
++            self._sessions[sid] = state
++
++        if isinstance(req_id, str) and req_id:
++            state.req_id = req_id
++
++        if state.stream_open:
++            return
++
++        state.prearm_requested = True
++        self._ensure_stream(sid, state)
++
++        deadline = time.monotonic() + max(0.0, _STREAM_OPEN_TIMEOUT_S)
++        while not state.stream_open:
++            task = state.stream_open_task
++            now = time.monotonic()
++            if task is None or task.done():
++                if now >= deadline:
++                    break
++                self._ensure_stream(sid, state)
++                await asyncio.sleep(0.01)
++                continue
++            remaining = deadline - now
++            if remaining <= 0:
++                break
++            try:
++                await asyncio.wait_for(task, timeout=remaining)
++            except asyncio.TimeoutError:
++                break
++            except asyncio.CancelledError:
++                raise
++
+     # ------------------------------------------------------------------
+     # Internal helpers
+     # ------------------------------------------------------------------
+     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
+         loop = self._loop
+         if loop is not None:
+             return loop
+         try:
+             loop = asyncio.get_running_loop()
+         except RuntimeError:
+             loop = None
+         self._loop = loop
+         return loop
  
-     await _drain_request_body(receive)
-     resolved = _resolve_admin_ui_path(raw_path)
-     if resolved is None:
-         return json_response(status=404, error="not_found")
+     def _apply_backpressure(self, sid: str, state: _SessionState) -> None:
+         if _BACKPRESSURE_THRESHOLD <= 0:
+             return
+         if state.buffered_bytes <= _BACKPRESSURE_THRESHOLD:
+             return
  
--    try:
--        data = resolved.read_bytes()
--    except OSError:
-+    if_none_match = _get_request_header(scope, b"if-none-match")
-+    response = _build_static_response(resolved, if_none_match=if_none_match)
-+    if response is None:
-         return json_response(status=404, error="not_found")
- 
--    headers = (
--        (b"content-type", b"application/javascript; charset=utf-8"),
--        (b"cache-control", b"no-store"),
--        (b"content-length", str(len(data)).encode("ascii")),
--    )
--    return Response(status=200, body=data, headers=headers)
-+    return response
- 
- 
- def _resolve_admin_ui_path(raw_path: str) -> Optional[Path]:
-     if not raw_path.startswith(ADMIN_UI_ROUTE_PREFIX):
-         return None
- 
-     relative = raw_path[len(ADMIN_UI_ROUTE_PREFIX) :]
-     if not relative:
-         return None
- 
-     target = ADMIN_UI_ROOT / relative
-     try:
-         resolved = target.resolve(strict=False)
-     except OSError:
-         return None
- 
-     try:
-         resolved.relative_to(ADMIN_UI_ROOT)
-     except ValueError:
-         return None
- 
-     if not resolved.is_file():
-         return None
- 
-     return resolved
-diff --git a/app/versioning.py b/app/versioning.py
-index 381f013a4b79ffffc0648ad6e6491e0e423923c7..ec79ff9ef25aa6c978a80b1f9a5cdc0b72f82b64 100644
---- a/app/versioning.py
-+++ b/app/versioning.py
-@@ -1,38 +1,52 @@
- """Helpers for static asset versioning and build metadata."""
+         dropped_chunks = 0
+         while state.pending and state.buffered_bytes > _BACKPRESSURE_THRESHOLD:
+             removed = state.pending.popleft()
+             state.buffered_bytes = max(0, state.buffered_bytes - len(removed))
+             dropped_chunks += 1
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index a0b241e7d0428af7decabefcb5e0e8efa3e20194..d76dabc12403a9e830f5a716d7f273e2cc1e7212 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -2,50 +2,52 @@
  from __future__ import annotations
  
+ import asyncio
+ import contextlib
+ import inspect
+ import logging
  import os
- import re
- from datetime import datetime, timezone
- from typing import Optional
+ import time
+ from dataclasses import dataclass, field
+ from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
  
- _BUILD_ID: Optional[str] = None
--_STATIC_ATTR_PATTERN = re.compile(
--    r"(?P<attr>\b(?:src|href))(?P<before_eq>\s*)=(?P<after_eq>\s*)(?P<quote>['\"])(?P<url>/static/[^'\"]*)(?P=quote)",
--    re.IGNORECASE,
--)
-+_STATIC_PATH_PREFIXES = ("static/", "admin/ui/")
+ import json
+ from urllib.parse import parse_qs
+ 
+ from app import config
+ from app.logging_setup import current_sid
+ from app.security.jwt_utils import verify_ws_token
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ASR_OPEN,
+     EVT_ASR_READY,
+     EVT_CHAT_USER,
+     EVT_CLIENT_MIC_OPEN,
+     EVT_HUD_STATE,
++    EVT_TTS_END,
++    EVT_TTS_MASK,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.ws.validator import validate_frame
+ 
+ try:  # pragma: no cover - uvicorn is an optional dependency in tests
+     from uvicorn.protocols.utils import ClientDisconnected
+ except Exception:  # pragma: no cover - fallback when uvicorn missing
+     class ClientDisconnected(Exception):  # type: ignore[no-redef]
+         """Fallback placeholder when uvicorn is unavailable."""
+ 
+ 
+ CHAT_V2_SUBPROTOCOL = "chat.v2"
+ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
+ BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ PING_MIN_INTERVAL_MS = 500
+ RATE_LIMIT_CAPACITY = 25
+ RATE_LIMIT_WINDOW_SECONDS = 2.0
+ RATE_LIMIT_CLOSE_CODE = 1013
+ _AUDIO_VIOLATION_LIMIT = 3
+ 
+ AUDIO_SEQ_WINDOW = 8
+ 
+@@ -217,54 +219,59 @@ class AdapterContext:
+     accepting_audio: bool = True
+     audio_violation_count: int = 0
+     outbound_queue_depth: int = 0
+     backpressure_state: Literal["off", "on"] = "off"
+     outbox: asyncio.Queue[Dict[str, Any]] | None = None
+     outbound_task: asyncio.Task[None] | None = None
+     subscription_token: Optional[str] = None
+     audio_subscription_token: Optional[str] = None
+     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+     asr_ready: bool = False
+     asr_subscription_token: Optional[str] = None
+     asr_open_subscription_token: Optional[str] = None
+     server_keepalive_task: asyncio.Task[None] | None = None
+     last_policy_interaction: Optional[Dict[str, Any]] = None
+     partial_seq: int = 0
+     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+     send_lock: asyncio.Lock | None = None
+     tts_end_ts: Optional[float] = None
+     diag_audio_seen: bool = False
+     diag_timer: asyncio.TimerHandle | None = None
+     await_user_expected: bool = False
+     await_user_pending: bool = False
+     await_user_after_mask: bool = False
+     tts_mask_phase: str = "off"
+     mask_subscription_token: Optional[str] = None
++    tts_end_subscription_token: Optional[str] = None
+     hud_state: Optional[str] = None
+     client_mic_open: bool = False
+     mic_open_timer: asyncio.TimerHandle | None = None
+     mic_nudge_sent: bool = False
++    await_user_req_id: Optional[str] = None
++    last_tts_end_req_id: Optional[str] = None
++    listen_handoff_done: set[str] = field(default_factory=set)
++    listen_handoff_task: asyncio.Task[None] | None = None
+ 
+ 
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
+ 
+     def __init__(
+         self,
+         engine: EngineHooks | None = None,
+         exporter: FileExporter | None = None,
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+         )
+         self.tts_runtime = None
+         self.asr_runtime = None
+@@ -999,127 +1006,228 @@ class ChatV2Adapter:
+                 except RuntimeError:
+                     pass
+ 
+         def _enqueue(payload: Dict[str, Any]) -> None:
+             if payload.get("type") == "asr.partial":
+                 self._offer_partial_frame(
+                     ctx,
+                     loop,
+                     payload,
+                     lambda frame: _queue_payload(frame, clone=False),
+                 )
+                 return
+             _queue_payload(payload)
+ 
+         def _handle_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+             payload = self._extract_outbound_payload(ctx, event)
+             if payload is None:
+                 return
+ 
+             def _on_loop() -> None:
+                 frame_type = payload.get("type")
+                 if frame_type == "tts.end":
+                     self._handle_tts_end_diag(ctx, loop)
+-                    self._initiate_listen_handoff(ctx)
+                 _enqueue(payload)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
+ 
+-        def _complete_listen_handoff() -> None:
+-            if not ctx.await_user_pending:
+-                ctx.await_user_after_mask = False
++        async def _perform_listen_handoff(req_id: str) -> None:
++            runtime = getattr(self, "asr_runtime", None)
++            if runtime is None:
++                ctx.await_user_pending = False
++                return
++            open_if_needed = getattr(runtime, "open_if_needed", None)
++            if not callable(open_if_needed):
++                ctx.await_user_pending = False
++                return
++            try:
++                await open_if_needed(ctx.sid, req_id=req_id)
++            except asyncio.CancelledError:
++                ctx.await_user_pending = False
++                raise
++            except Exception:  # pragma: no cover - defensive logging
++                ctx.await_user_pending = False
++                _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
++                return
 +
++            deadline = time.monotonic() + 1.0
++            while not ctx.asr_ready and time.monotonic() < deadline:
++                await asyncio.sleep(0.01)
 +
-+def _build_static_pattern() -> re.Pattern[str]:
-+    prefixes = "|".join(re.escape(prefix) for prefix in _STATIC_PATH_PREFIXES)
-+    pattern = (
-+        r"(?P<attr>\b(?:src|href))"
-+        r"(?P<before_eq>\s*)=(?P<after_eq>\s*)"
-+        r"(?P<quote>['\"])"
-+        r"(?P<url>/(?:"
-+        + prefixes
-+        + r")(?:[^'\"]*))"
-+        r"(?P=quote)"
-+    )
-+    return re.compile(pattern, re.IGNORECASE)
++            if not ctx.asr_ready:
++                ctx.await_user_pending = False
++                _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
+                 return
+ 
++            if ctx.outbox is None:
++                ctx.await_user_pending = False
++                return
 +
++            ready_frame = {
++                "type": "asr.ready",
++                "input": {
++                    "container": "webm",
++                    "codec": "opus",
++                    "rate_hz": 48000,
++                    "channels": 1,
++                    "mime": "audio/webm;codecs=opus",
++                },
++            }
++            input_start = {
++                "type": "input.start",
++                "capture": {
++                    "container": "webm",
++                    "codec": "opus",
++                    "mime": "audio/webm;codecs=opus",
++                    "timeslice_ms": 250,
++                    "manual_gate": False,
++                },
++            }
 +
-+_STATIC_ATTR_PATTERN = _build_static_pattern()
- 
- 
- def get_build_id() -> str:
-     """Return a stable identifier for the current build."""
- 
-     global _BUILD_ID
-     if _BUILD_ID is None:
-         for env_var in ("BUILD_ID", "RENDER_GIT_COMMIT", "GIT_SHA"):
-             value = os.getenv(env_var)
-             if value:
-                 _BUILD_ID = value
-                 break
-         else:
-             now = datetime.now(timezone.utc)
-             _BUILD_ID = now.strftime("%Y%m%d%H%M%S")
-     return _BUILD_ID
- 
- 
- def inject_static_version(html: str) -> str:
-     """Append a cache-busting query string to static asset references."""
- 
-     build_id = get_build_id()
- 
-     def _replace(match: re.Match[str]) -> str:
-         url = match.group("url")
-diff --git a/tests/test_static_routes.py b/tests/test_static_routes.py
-index 1afc35d27124c5e12168b739d69de362f3afb9c7..c15d6b2ab03bc130e411523919ccd7dd42cd09c3 100644
---- a/tests/test_static_routes.py
-+++ b/tests/test_static_routes.py
-@@ -58,25 +58,39 @@ def test_root_route_serves_index_html() -> None:
- 
- def test_static_asset_served_from_app() -> None:
-     messages = _dispatch("/static/js/app.js")
- 
-     assert len(messages) == 2
-     start, body = messages
-     assert start["status"] == 200
-     headers = _collect_headers(start["headers"])
-     assert headers[b"content-type"].startswith(b"text/javascript")
-     length = int(headers[b"content-length"].decode("ascii"))
-     assert body["type"] == "http.response.body"
-     assert length == len(body["body"])
-     assert body["body"]
- 
- 
- def test_missing_static_asset_returns_not_found() -> None:
-     messages = _dispatch("/static/js/missing-file.js")
- 
-     assert len(messages) == 2
-     start, body = messages
-     assert start["status"] == 404
-     headers = _collect_headers(start["headers"])
-     assert headers[b"content-type"] == b"application/json; charset=utf-8"
-     assert body["type"] == "http.response.body"
-     assert b"not_found" in body["body"]
++            _enqueue(ready_frame)
++            _enqueue(input_start)
 +
++            ctx.listen_handoff_done.add(req_id)
+             ctx.await_user_pending = False
+             ctx.await_user_expected = False
+             ctx.await_user_after_mask = False
+             ctx.client_mic_open = False
+             ctx.mic_nudge_sent = False
+-            if ctx.outbox is None:
+-                return
++            ctx.await_user_req_id = None
++            ctx.last_tts_end_req_id = None
+ 
+-            _enqueue({"type": "start_listening"})
+             self._emit_hud_state(ctx, "Listening")
+             self._schedule_mic_open_guard(ctx, loop)
++            _log.info(
++                "evt=listen_handoff_ready sid=%s req_id=%s input=webm/opus rate=48000 ch=1",
++                ctx.sid,
++                req_id,
++            )
 +
-+def test_admin_ui_asset_uses_static_cache_headers() -> None:
-+    messages = _dispatch("/admin/ui/config_panel.js")
++        def _schedule_listen_handoff(trigger_req_id: Optional[str]) -> None:
++            if not ctx.await_user_expected:
++                return
++            candidate = trigger_req_id
++            if not isinstance(candidate, str) or not candidate:
++                candidate = ctx.await_user_req_id
++            if not isinstance(candidate, str) or not candidate:
++                return
++            if ctx.last_tts_end_req_id != candidate:
++                return
++            if candidate in ctx.listen_handoff_done:
++                return
++            if ctx.tts_mask_phase != "off":
++                ctx.await_user_after_mask = True
++                return
++            if ctx.outbox is None:
++                return
++            if ctx.listen_handoff_task is not None and not ctx.listen_handoff_task.done():
++                return
++            if not ctx.await_user_pending:
++                initiated = self._initiate_listen_handoff(ctx)
++                if not initiated:
++                    return
++            ctx.await_user_after_mask = False
 +
-+    assert len(messages) == 2
-+    start, body = messages
-+    assert start["status"] == 200
-+    headers = _collect_headers(start["headers"])
-+    assert headers[b"cache-control"] == b"public, max-age=31536000, immutable"
-+    assert b"etag" in headers
-+    assert body["type"] == "http.response.body"
-+    length = int(headers[b"content-length"].decode("ascii"))
-+    assert length == len(body["body"])
-diff --git a/tests/test_versioning.py b/tests/test_versioning.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..ef44fb2781bd42d2f27d3bfbe8a0aa3ab13f7316
---- /dev/null
-+++ b/tests/test_versioning.py
-@@ -0,0 +1,26 @@
-+from __future__ import annotations
++            async def _run() -> None:
++                try:
++                    await _perform_listen_handoff(candidate)
++                finally:
++                    ctx.listen_handoff_task = None
 +
-+import os
++            ctx.listen_handoff_task = asyncio.create_task(_run())
+ 
+         def _handle_asr_open_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+ 
+             def _on_loop() -> None:
+-                if not ctx.await_user_pending:
+-                    ctx.await_user_after_mask = False
+-                    return
+-                if ctx.tts_mask_phase != "off":
+-                    ctx.await_user_after_mask = True
+-                    return
+-                _complete_listen_handoff()
++                if ctx.await_user_pending:
++                    _schedule_listen_handoff(None)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.asr_open_subscription_token = bus.subscribe(EVT_ASR_OPEN, _handle_asr_open_event)
+ 
++        def _handle_tts_end_event(event: dict) -> None:
++            if event.get("sid") != ctx.sid:
++                return
++            req_id = event.get("req_id")
++            req_value = req_id if isinstance(req_id, str) and req_id else None
 +
-+from app import versioning
++            def _on_loop() -> None:
++                if req_value:
++                    ctx.last_tts_end_req_id = req_value
++                    ctx.await_user_req_id = req_value
++                _schedule_listen_handoff(req_value)
 +
++            try:
++                loop.call_soon_threadsafe(_on_loop)
++            except RuntimeError:
++                pass
 +
-+def test_inject_static_version_handles_multiple_prefixes() -> None:
-+    original_build_id = versioning._BUILD_ID
-+    prev_env = os.environ.get("BUILD_ID")
-+    os.environ["BUILD_ID"] = "test-build"
-+    versioning._BUILD_ID = None
-+    try:
-+        html = (
-+            '<link rel="stylesheet" href="/static/css/styles.css" />'
-+            '<script src="/admin/ui/config_panel.js"></script>'
-+        )
-+        rewritten = versioning.inject_static_version(html)
-+        assert "/static/css/styles.css?v=test-build" in rewritten
-+        assert "/admin/ui/config_panel.js?v=test-build" in rewritten
-+    finally:
-+        versioning._BUILD_ID = original_build_id
-+        if prev_env is None:
-+            os.environ.pop("BUILD_ID", None)
-+        else:
-+            os.environ["BUILD_ID"] = prev_env
++        ctx.tts_end_subscription_token = bus.subscribe(EVT_TTS_END, _handle_tts_end_event)
++
+         def _handle_tts_mask_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+ 
+             raw_phase = event.get("phase")
+             if not isinstance(raw_phase, str):
+                 return
+ 
+             stripped = raw_phase.strip()
+             normalized = stripped.lower()
+             phase_value = normalized or stripped or raw_phase
+ 
+             def _on_loop() -> None:
+                 ctx.tts_mask_phase = phase_value
+                 if ctx.tts_mask_phase != "off":
+                     ctx.await_user_after_mask = False
+                     ctx.client_mic_open = False
+                     ctx.hud_state = None
+                     ctx.mic_nudge_sent = False
+                     self._cancel_mic_open_timer(ctx)
+                     return
+-                if ctx.await_user_pending and ctx.await_user_after_mask:
+-                    _complete_listen_handoff()
++                _schedule_listen_handoff(None)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+-        ctx.mask_subscription_token = bus.subscribe("EVT_TTS_MASK", _handle_tts_mask_event)
++        ctx.mask_subscription_token = bus.subscribe(EVT_TTS_MASK, _handle_tts_mask_event)
+ 
+         def _handle_audio_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+             chunk = event.get("chunk")
+             if isinstance(chunk, (bytes, bytearray, memoryview)):
+                 chunk_bytes = bytes(chunk)
+             else:
+                 return
+ 
+             def _deliver() -> None:
+                 task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
+                 ctx.audio_tasks.add(task)
+ 
+                 def _on_done(done: asyncio.Task[None]) -> None:
+                     ctx.audio_tasks.discard(done)
+                     try:
+                         done.result()
+                     except asyncio.CancelledError:
+                         pass
+                     except Exception:  # pragma: no cover - defensive logging
+                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
+ 
+                 task.add_done_callback(_on_done)
+ 
+@@ -1173,54 +1281,67 @@ class ChatV2Adapter:
+ 
+         ctx.asr_subscription_token = bus.subscribe(EVT_ASR_READY, _handle)
+ 
+     def _extract_outbound_payload(
+         self, ctx: AdapterContext, event: dict
+     ) -> Optional[Dict[str, Any]]:
+         payload = self._coerce_payload(event.get("payload"))
+         if payload is None:
+             payload = self._coerce_payload(event.get("frame"))
+ 
+         if payload is None:
+             meta = event.get("meta")
+             if isinstance(meta, dict):
+                 ws_meta = meta.get("ws")
+                 if isinstance(ws_meta, dict):
+                     payload = self._coerce_payload(ws_meta.get("frame"))
+                     if payload is None:
+                         payload = self._coerce_payload(ws_meta.get("preview"))
+ 
+         if payload is None:
+             return None
+ 
+         frame_type = payload.get("type") if isinstance(payload, dict) else None
+         if frame_type == "policy.interaction" and isinstance(payload, dict):
+             ctx.await_user_expected = self._policy_requests_listen(payload)
+-            if not ctx.await_user_expected:
++            req_id_value = payload.get("req_id") if isinstance(payload, dict) else None
++            if isinstance(req_id_value, str) and req_id_value:
++                ctx.await_user_req_id = req_id_value
++            else:
++                ctx.await_user_req_id = None
++            if ctx.await_user_expected:
++                ctx.await_user_pending = False
++                ctx.await_user_after_mask = False
++                ctx.last_tts_end_req_id = None
++            else:
+                 ctx.await_user_pending = False
++                ctx.await_user_after_mask = False
++                ctx.last_tts_end_req_id = None
+                 ctx.mic_nudge_sent = False
+                 self._cancel_mic_open_timer(ctx)
++        if frame_type == "asr.ready":
++            return None
+         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
+             return None
+         normalized = dict(payload)
+         if frame_type == "policy.interaction":
+             normalized = self._sanitize_policy_interaction(normalized)
+             last_policy = ctx.last_policy_interaction
+             if last_policy is not None and last_policy == normalized:
+                 return None
+             ctx.last_policy_interaction = json.loads(
+                 json.dumps(normalized, separators=(",", ":"))
+             )
+         if frame_type == "info":
+             meta = {}
+             source_meta = normalized.get("meta")
+             if isinstance(source_meta, dict):
+                 meta = dict(source_meta)
+             meta["sid"] = ctx.sid
+             normalized["meta"] = meta
+         return normalized
+ 
+     @staticmethod
+     def _sanitize_policy_interaction(frame: Dict[str, Any]) -> Dict[str, Any]:
+         sanitized = {key: value for key, value in frame.items() if key != "policy"}
+         if "policy" in frame:
+             policy = frame.get("policy")
+@@ -1308,59 +1429,71 @@ class ChatV2Adapter:
+                 await send({"type": "websocket.send", "bytes": chunk})
+             except ClientDisconnected:
+                 _log.info(
+                     "evt=ws_outbound_client_disconnect sid=%s phase=audio",
+                     ctx.sid,
+                 )
+ 
+     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
+         self._cancel_diag_timer(ctx)
+         self._cancel_mic_open_timer(ctx)
+         token = ctx.subscription_token
+         ctx.subscription_token = None
+         if token:
+             bus.unsubscribe(token)
+ 
+         audio_token = ctx.audio_subscription_token
+         ctx.audio_subscription_token = None
+         if audio_token:
+             bus.unsubscribe(audio_token)
+ 
+         mask_token = ctx.mask_subscription_token
+         ctx.mask_subscription_token = None
+         if mask_token:
+             bus.unsubscribe(mask_token)
+ 
++        tts_end_token = ctx.tts_end_subscription_token
++        ctx.tts_end_subscription_token = None
++        if tts_end_token:
++            bus.unsubscribe(tts_end_token)
++
+         task = ctx.outbound_task
+         ctx.outbound_task = None
+         if task:
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task
+ 
+         ctx.partial_coalescer.cancel()
+ 
++        pending_handoff = ctx.listen_handoff_task
++        ctx.listen_handoff_task = None
++        if pending_handoff is not None:
++            pending_handoff.cancel()
++            with contextlib.suppress(asyncio.CancelledError):
++                await pending_handoff
++
+         for task in list(ctx.audio_tasks):
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task
+         ctx.audio_tasks.clear()
+ 
+         ctx.outbox = None
+ 
+     def _handle_tts_end_diag(
+         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
+     ) -> None:
+         if not config.DIAG_AUDIO_GUARD:
+             return
+         ctx.tts_end_ts = time.monotonic()
+         ctx.diag_audio_seen = False
+         self._cancel_diag_timer(ctx)
+         try:
+             ctx.diag_timer = loop.call_later(
+                 _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS,
+                 self._emit_no_audio_diag,
+                 ctx,
+                 loop,
+             )
+         except RuntimeError:
+             ctx.diag_timer = None
+@@ -1484,69 +1617,72 @@ class ChatV2Adapter:
+         try:
+             asyncio.create_task(
+                 self._publish(
+                     "EVT_MIC_OPEN_TIMEOUT",
+                     ctx.sid,
+                     {"timeout_s": _MIC_OPEN_TIMEOUT_SECONDS},
+                 )
+             )
+         except RuntimeError:
+             pass
+         if ctx.outbox is not None:
+             nudge_frame = {
+                 "type": "hud.nudge",
+                 "code": "mic_permissions",
+                 "reason": "mic_open_timeout",
+             }
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": ctx.sid, "payload": nudge_frame})
+ 
+     @staticmethod
+     def _cancel_mic_open_timer(ctx: AdapterContext) -> None:
+         timer = ctx.mic_open_timer
+         ctx.mic_open_timer = None
+         if timer is not None:
+             timer.cancel()
+ 
+-    def _initiate_listen_handoff(self, ctx: AdapterContext) -> None:
++    def _initiate_listen_handoff(self, ctx: AdapterContext) -> bool:
+         if not ctx.await_user_expected or ctx.await_user_pending:
+-            return
++            return False
+ 
+         runtime = getattr(self, "asr_runtime", None)
+         if runtime is None:
+-            return
++            return False
+ 
+         prearm = getattr(runtime, "prearm", None)
+         if not callable(prearm):
+-            return
++            return False
+ 
+         ctx.await_user_pending = True
+         ctx.await_user_after_mask = False
+         try:
+             prearm(ctx.sid)
+         except Exception:  # pragma: no cover - defensive logging
+             ctx.await_user_pending = False
+             _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
++            return False
++
++        return True
+ 
+     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
+         token = ctx.asr_subscription_token
+         ctx.asr_subscription_token = None
+         if token:
+             bus.unsubscribe(token)
+         ctx.asr_ready = False
+         ctx.await_user_after_mask = False
+ 
+         open_token = ctx.asr_open_subscription_token
+         ctx.asr_open_subscription_token = None
+         if open_token:
+             bus.unsubscribe(open_token)
+         
+     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
+         """Record the estimated outbound queue depth and emit diagnostics if needed."""
+ 
+         ctx = self._contexts.get(sid)
+         if ctx is None:
+             return
+ 
+         if not isinstance(queued, int):
+             try:
+                 queued = int(queued)
+             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive

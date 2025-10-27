@@ -24,6 +24,8 @@ from app.voice_v2 import (
     EVT_CHAT_USER,
     EVT_CLIENT_MIC_OPEN,
     EVT_HUD_STATE,
+    EVT_TTS_END,
+    EVT_TTS_MASK,
     EVT_WS_AUDIO_RECV,
     EVT_WS_AUDIO_SEND,
     EVT_WS_JSON_RECV,
@@ -239,10 +241,15 @@ class AdapterContext:
     await_user_after_mask: bool = False
     tts_mask_phase: str = "off"
     mask_subscription_token: Optional[str] = None
+    tts_end_subscription_token: Optional[str] = None
     hud_state: Optional[str] = None
     client_mic_open: bool = False
     mic_open_timer: asyncio.TimerHandle | None = None
     mic_nudge_sent: bool = False
+    await_user_req_id: Optional[str] = None
+    last_tts_end_req_id: Optional[str] = None
+    listen_handoff_done: set[str] = field(default_factory=set)
+    listen_handoff_task: asyncio.Task[None] | None = None
 
 
 class ChatV2Adapter:
@@ -1021,7 +1028,6 @@ class ChatV2Adapter:
                 frame_type = payload.get("type")
                 if frame_type == "tts.end":
                     self._handle_tts_end_diag(ctx, loop)
-                    self._initiate_listen_handoff(ctx)
                 _enqueue(payload)
 
             try:
@@ -1031,35 +1037,119 @@ class ChatV2Adapter:
 
         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
 
-        def _complete_listen_handoff() -> None:
-            if not ctx.await_user_pending:
-                ctx.await_user_after_mask = False
+        async def _perform_listen_handoff(req_id: str) -> None:
+            runtime = getattr(self, "asr_runtime", None)
+            if runtime is None:
+                ctx.await_user_pending = False
+                return
+            open_if_needed = getattr(runtime, "open_if_needed", None)
+            if not callable(open_if_needed):
+                ctx.await_user_pending = False
+                return
+            try:
+                await open_if_needed(ctx.sid, req_id=req_id)
+            except asyncio.CancelledError:
+                ctx.await_user_pending = False
+                raise
+            except Exception:  # pragma: no cover - defensive logging
+                ctx.await_user_pending = False
+                _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
                 return
 
+            deadline = time.monotonic() + 1.0
+            while not ctx.asr_ready and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            if not ctx.asr_ready:
+                ctx.await_user_pending = False
+                _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
+                return
+
+            if ctx.outbox is None:
+                ctx.await_user_pending = False
+                return
+
+            ready_frame = {
+                "type": "asr.ready",
+                "input": {
+                    "container": "webm",
+                    "codec": "opus",
+                    "rate_hz": 48000,
+                    "channels": 1,
+                    "mime": "audio/webm;codecs=opus",
+                },
+            }
+            input_start = {
+                "type": "input.start",
+                "capture": {
+                    "container": "webm",
+                    "codec": "opus",
+                    "mime": "audio/webm;codecs=opus",
+                    "timeslice_ms": 250,
+                    "manual_gate": False,
+                },
+            }
+
+            _enqueue(ready_frame)
+            _enqueue(input_start)
+
+            ctx.listen_handoff_done.add(req_id)
             ctx.await_user_pending = False
             ctx.await_user_expected = False
             ctx.await_user_after_mask = False
             ctx.client_mic_open = False
             ctx.mic_nudge_sent = False
-            if ctx.outbox is None:
-                return
+            ctx.await_user_req_id = None
+            ctx.last_tts_end_req_id = None
 
-            _enqueue({"type": "start_listening"})
             self._emit_hud_state(ctx, "Listening")
             self._schedule_mic_open_guard(ctx, loop)
+            _log.info(
+                "evt=listen_handoff_ready sid=%s req_id=%s input=webm/opus rate=48000 ch=1",
+                ctx.sid,
+                req_id,
+            )
+
+        def _schedule_listen_handoff(trigger_req_id: Optional[str]) -> None:
+            if not ctx.await_user_expected:
+                return
+            candidate = trigger_req_id
+            if not isinstance(candidate, str) or not candidate:
+                candidate = ctx.await_user_req_id
+            if not isinstance(candidate, str) or not candidate:
+                return
+            if ctx.last_tts_end_req_id != candidate:
+                return
+            if candidate in ctx.listen_handoff_done:
+                return
+            if ctx.tts_mask_phase != "off":
+                ctx.await_user_after_mask = True
+                return
+            if ctx.outbox is None:
+                return
+            if ctx.listen_handoff_task is not None and not ctx.listen_handoff_task.done():
+                return
+            if not ctx.await_user_pending:
+                initiated = self._initiate_listen_handoff(ctx)
+                if not initiated:
+                    return
+            ctx.await_user_after_mask = False
+
+            async def _run() -> None:
+                try:
+                    await _perform_listen_handoff(candidate)
+                finally:
+                    ctx.listen_handoff_task = None
+
+            ctx.listen_handoff_task = asyncio.create_task(_run())
 
         def _handle_asr_open_event(event: dict) -> None:
             if event.get("sid") != ctx.sid:
                 return
 
             def _on_loop() -> None:
-                if not ctx.await_user_pending:
-                    ctx.await_user_after_mask = False
-                    return
-                if ctx.tts_mask_phase != "off":
-                    ctx.await_user_after_mask = True
-                    return
-                _complete_listen_handoff()
+                if ctx.await_user_pending:
+                    _schedule_listen_handoff(None)
 
             try:
                 loop.call_soon_threadsafe(_on_loop)
@@ -1067,6 +1157,25 @@ class ChatV2Adapter:
                 pass
 
         ctx.asr_open_subscription_token = bus.subscribe(EVT_ASR_OPEN, _handle_asr_open_event)
+
+        def _handle_tts_end_event(event: dict) -> None:
+            if event.get("sid") != ctx.sid:
+                return
+            req_id = event.get("req_id")
+            req_value = req_id if isinstance(req_id, str) and req_id else None
+
+            def _on_loop() -> None:
+                if req_value:
+                    ctx.last_tts_end_req_id = req_value
+                    ctx.await_user_req_id = req_value
+                _schedule_listen_handoff(req_value)
+
+            try:
+                loop.call_soon_threadsafe(_on_loop)
+            except RuntimeError:
+                pass
+
+        ctx.tts_end_subscription_token = bus.subscribe(EVT_TTS_END, _handle_tts_end_event)
 
         def _handle_tts_mask_event(event: dict) -> None:
             if event.get("sid") != ctx.sid:
@@ -1089,15 +1198,14 @@ class ChatV2Adapter:
                     ctx.mic_nudge_sent = False
                     self._cancel_mic_open_timer(ctx)
                     return
-                if ctx.await_user_pending and ctx.await_user_after_mask:
-                    _complete_listen_handoff()
+                _schedule_listen_handoff(None)
 
             try:
                 loop.call_soon_threadsafe(_on_loop)
             except RuntimeError:
                 pass
 
-        ctx.mask_subscription_token = bus.subscribe("EVT_TTS_MASK", _handle_tts_mask_event)
+        ctx.mask_subscription_token = bus.subscribe(EVT_TTS_MASK, _handle_tts_mask_event)
 
         def _handle_audio_event(event: dict) -> None:
             if event.get("sid") != ctx.sid:
@@ -1195,10 +1303,23 @@ class ChatV2Adapter:
         frame_type = payload.get("type") if isinstance(payload, dict) else None
         if frame_type == "policy.interaction" and isinstance(payload, dict):
             ctx.await_user_expected = self._policy_requests_listen(payload)
-            if not ctx.await_user_expected:
+            req_id_value = payload.get("req_id") if isinstance(payload, dict) else None
+            if isinstance(req_id_value, str) and req_id_value:
+                ctx.await_user_req_id = req_id_value
+            else:
+                ctx.await_user_req_id = None
+            if ctx.await_user_expected:
                 ctx.await_user_pending = False
+                ctx.await_user_after_mask = False
+                ctx.last_tts_end_req_id = None
+            else:
+                ctx.await_user_pending = False
+                ctx.await_user_after_mask = False
+                ctx.last_tts_end_req_id = None
                 ctx.mic_nudge_sent = False
                 self._cancel_mic_open_timer(ctx)
+        if frame_type == "asr.ready":
+            return None
         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
             return None
         normalized = dict(payload)
@@ -1330,6 +1451,11 @@ class ChatV2Adapter:
         if mask_token:
             bus.unsubscribe(mask_token)
 
+        tts_end_token = ctx.tts_end_subscription_token
+        ctx.tts_end_subscription_token = None
+        if tts_end_token:
+            bus.unsubscribe(tts_end_token)
+
         task = ctx.outbound_task
         ctx.outbound_task = None
         if task:
@@ -1338,6 +1464,13 @@ class ChatV2Adapter:
                 await task
 
         ctx.partial_coalescer.cancel()
+
+        pending_handoff = ctx.listen_handoff_task
+        ctx.listen_handoff_task = None
+        if pending_handoff is not None:
+            pending_handoff.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pending_handoff
 
         for task in list(ctx.audio_tasks):
             task.cancel()
@@ -1506,17 +1639,17 @@ class ChatV2Adapter:
         if timer is not None:
             timer.cancel()
 
-    def _initiate_listen_handoff(self, ctx: AdapterContext) -> None:
+    def _initiate_listen_handoff(self, ctx: AdapterContext) -> bool:
         if not ctx.await_user_expected or ctx.await_user_pending:
-            return
+            return False
 
         runtime = getattr(self, "asr_runtime", None)
         if runtime is None:
-            return
+            return False
 
         prearm = getattr(runtime, "prearm", None)
         if not callable(prearm):
-            return
+            return False
 
         ctx.await_user_pending = True
         ctx.await_user_after_mask = False
@@ -1525,6 +1658,9 @@ class ChatV2Adapter:
         except Exception:  # pragma: no cover - defensive logging
             ctx.await_user_pending = False
             _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
+            return False
+
+        return True
 
     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
         token = ctx.asr_subscription_token

@@ -188,6 +188,50 @@ class ASRRuntime:
         state.prearm_requested = True
         self._ensure_stream(sid, state)
 
+    async def open_if_needed(self, sid: str, *, req_id: str | None = None) -> None:
+        """Ensure the streaming session is open before capturing microphone audio."""
+
+        if not isinstance(sid, str) or not sid:
+            return
+
+        loop = self._ensure_loop()
+        if loop is None:
+            return
+
+        state = self._sessions.get(sid)
+        if state is None:
+            state = _SessionState(sid=sid)
+            self._sessions[sid] = state
+
+        if isinstance(req_id, str) and req_id:
+            state.req_id = req_id
+
+        if state.stream_open:
+            return
+
+        state.prearm_requested = True
+        self._ensure_stream(sid, state)
+
+        deadline = time.monotonic() + max(0.0, _STREAM_OPEN_TIMEOUT_S)
+        while not state.stream_open:
+            task = state.stream_open_task
+            now = time.monotonic()
+            if task is None or task.done():
+                if now >= deadline:
+                    break
+                self._ensure_stream(sid, state)
+                await asyncio.sleep(0.01)
+                continue
+            remaining = deadline - now
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait_for(task, timeout=remaining)
+            except asyncio.TimeoutError:
+                break
+            except asyncio.CancelledError:
+                raise
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
