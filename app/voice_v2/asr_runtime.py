@@ -35,6 +35,8 @@ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
 _TRACE_ENABLED = bool(ASR_TRACE)
 _STREAM_OPEN_TIMEOUT_S = 5.0
 _NO_AUDIO_TIMEOUT_S = 9.0
+_LISTENING_STATE = "Listening"
+_READY_STATES = {"Ready", "Idle"}
 
 
 @dataclass
@@ -647,7 +649,14 @@ class ASRRuntime:
             if engine_session is not None:
                 engine_state = getattr(engine_session, "state", None)
 
-        if engine_state not in {"Ready", "Idle"}:
+        close_for_prearm = False
+        if engine_state == _LISTENING_STATE:
+            if state.chunks_sent == 0 and not state.pending:
+                close_for_prearm = True
+            else:
+                self._reset_idle_timer(sid, state)
+                return
+        elif engine_state not in _READY_STATES:
             # Re-arm the timer to check again once the engine transitions.
             self._reset_idle_timer(sid, state)
             return
@@ -658,12 +667,20 @@ class ASRRuntime:
             else self._idle_close_ms
         )
         stream_id = state.stream_id or state.last_stream_id or ""
-        _log.info(
-            "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
-            sid,
-            stream_id,
-            idle_ms,
-        )
+        if close_for_prearm:
+            _log.warning(
+                "evt=asr_prearm_idle sid=%s stream_id=%s idle_ms=%d action=close",
+                sid,
+                stream_id,
+                idle_ms,
+            )
+        else:
+            _log.info(
+                "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
+                sid,
+                stream_id,
+                idle_ms,
+            )
         try:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive

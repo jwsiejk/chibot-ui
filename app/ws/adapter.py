@@ -62,6 +62,7 @@ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
 EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
 
 _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
+_MIC_OPEN_TIMEOUT_SECONDS = 2.5
 
 _OUTBOUND_ALLOWED_TYPES = {
     "policy.interaction",
@@ -75,6 +76,7 @@ _OUTBOUND_ALLOWED_TYPES = {
     "chat.message",
     "chat.history",
     "dialog.plan",
+    "hud.nudge",
 }
 
 _OUTBOX_MAXSIZE = 256
@@ -239,6 +241,8 @@ class AdapterContext:
     mask_subscription_token: Optional[str] = None
     hud_state: Optional[str] = None
     client_mic_open: bool = False
+    mic_open_timer: asyncio.TimerHandle | None = None
+    mic_nudge_sent: bool = False
 
 
 class ChatV2Adapter:
@@ -874,6 +878,7 @@ class ChatV2Adapter:
             "ws": {"dir": "in", "size": byte_count},
         }
         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+        self._handle_client_audio_activity(ctx)
         asr_runtime = getattr(self, "asr_runtime", None)
         if asr_runtime is not None:
             try:
@@ -1019,12 +1024,14 @@ class ChatV2Adapter:
             ctx.await_user_pending = False
             ctx.await_user_expected = False
             ctx.await_user_after_mask = False
+            ctx.client_mic_open = False
+            ctx.mic_nudge_sent = False
             if ctx.outbox is None:
                 return
 
             _enqueue({"type": "start_listening"})
             self._emit_hud_state(ctx, "Listening")
-            self._emit_client_mic_open(ctx)
+            self._schedule_mic_open_guard(ctx, loop)
 
         def _handle_asr_open_event(event: dict) -> None:
             if event.get("sid") != ctx.sid:
@@ -1064,6 +1071,8 @@ class ChatV2Adapter:
                     ctx.await_user_after_mask = False
                     ctx.client_mic_open = False
                     ctx.hud_state = None
+                    ctx.mic_nudge_sent = False
+                    self._cancel_mic_open_timer(ctx)
                     return
                 if ctx.await_user_pending and ctx.await_user_after_mask:
                     _complete_listen_handoff()
@@ -1173,6 +1182,8 @@ class ChatV2Adapter:
             ctx.await_user_expected = self._policy_requests_listen(payload)
             if not ctx.await_user_expected:
                 ctx.await_user_pending = False
+                ctx.mic_nudge_sent = False
+                self._cancel_mic_open_timer(ctx)
         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
             return None
         normalized = dict(payload)
@@ -1288,6 +1299,7 @@ class ChatV2Adapter:
 
     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
         self._cancel_diag_timer(ctx)
+        self._cancel_mic_open_timer(ctx)
         token = ctx.subscription_token
         ctx.subscription_token = None
         if token:
@@ -1393,6 +1405,7 @@ class ChatV2Adapter:
         if ctx.client_mic_open:
             return
 
+        self._cancel_mic_open_timer(ctx)
         ctx.client_mic_open = True
         try:
             asyncio.create_task(
@@ -1400,6 +1413,72 @@ class ChatV2Adapter:
             )
         except RuntimeError:
             _log.warning("evt=ws_client_mic_publish_failed sid=%s", ctx.sid)
+
+    def _handle_client_audio_activity(self, ctx: AdapterContext) -> None:
+        if ctx.client_mic_open:
+            return
+
+        was_nudged = ctx.mic_nudge_sent
+        ctx.mic_nudge_sent = False
+        self._cancel_mic_open_timer(ctx)
+        if was_nudged:
+            _log.info("evt=ws_mic_open_recovered sid=%s", ctx.sid)
+        self._emit_client_mic_open(ctx)
+
+    def _schedule_mic_open_guard(
+        self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        if _MIC_OPEN_TIMEOUT_SECONDS <= 0:
+            return
+        if ctx.client_mic_open:
+            return
+        self._cancel_mic_open_timer(ctx)
+
+        def _fire() -> None:
+            ctx.mic_open_timer = None
+            self._handle_mic_open_timeout(ctx)
+
+        try:
+            ctx.mic_open_timer = loop.call_later(_MIC_OPEN_TIMEOUT_SECONDS, _fire)
+        except RuntimeError:
+            ctx.mic_open_timer = None
+
+    def _handle_mic_open_timeout(self, ctx: AdapterContext) -> None:
+        if ctx.client_mic_open:
+            return
+        if ctx.mic_nudge_sent:
+            return
+
+        ctx.mic_nudge_sent = True
+        _log.warning(
+            "evt=ws_mic_open_timeout sid=%s timeout_s=%.2f",
+            ctx.sid,
+            _MIC_OPEN_TIMEOUT_SECONDS,
+        )
+        try:
+            asyncio.create_task(
+                self._publish(
+                    "EVT_MIC_OPEN_TIMEOUT",
+                    ctx.sid,
+                    {"timeout_s": _MIC_OPEN_TIMEOUT_SECONDS},
+                )
+            )
+        except RuntimeError:
+            pass
+        if ctx.outbox is not None:
+            nudge_frame = {
+                "type": "hud.nudge",
+                "code": "mic_permissions",
+                "reason": "mic_open_timeout",
+            }
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": ctx.sid, "payload": nudge_frame})
+
+    @staticmethod
+    def _cancel_mic_open_timer(ctx: AdapterContext) -> None:
+        timer = ctx.mic_open_timer
+        ctx.mic_open_timer = None
+        if timer is not None:
+            timer.cancel()
 
     def _initiate_listen_handoff(self, ctx: AdapterContext) -> None:
         if not ctx.await_user_expected or ctx.await_user_pending:

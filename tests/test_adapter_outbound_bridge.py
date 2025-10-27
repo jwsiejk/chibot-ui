@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import unittest
+from unittest import mock
 import uuid
 from typing import Any, Callable, Dict
 
@@ -196,6 +197,9 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
         asyncio.run(self._test_audio_forwarding())
 
+    def test_mic_open_timeout_triggers_nudge(self) -> None:
+        asyncio.run(self._test_mic_open_timeout_nudge())
+
     async def _test_happy_path(self) -> None:
         engine = RecordingEngine()
         adapter = ChatV2Adapter(engine=engine)
@@ -311,7 +315,9 @@ class TestAdapterOutboundBridge(unittest.TestCase):
         harness = OutboundHarness(adapter, engine)
         await harness.start()
         hud_events: list[dict] = []
+        mic_events: list[dict] = []
         token = bus.subscribe(EVT_HUD_STATE, hud_events.append)
+        mic_token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
         try:
             sid = harness.sid
             policy_payload = {
@@ -335,10 +341,19 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             )
             self.assertEqual(frame, {"type": "start_listening"})
 
+            ctx = adapter._contexts.get(sid)
+            if ctx is not None:
+                ctx.asr_ready = True
+            await harness._inbound.put({"type": "websocket.receive", "bytes": b"\x00\x00"})
+
+            await harness.wait_for(lambda: bool(mic_events))
+            self.assertEqual(mic_events[-1].get("meta", {}).get("state"), "open")
+
             await harness.wait_for(lambda: bool(hud_events))
             self.assertEqual(hud_events[-1]["meta"].get("state"), "Listening")
         finally:
             bus.unsubscribe(token)
+            bus.unsubscribe(mic_token)
             await harness.close()
 
     async def _test_listen_handoff_waits_for_mask_off(self) -> None:
@@ -392,6 +407,11 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             )
             self.assertEqual(frame, {"type": "start_listening"})
 
+            ctx = adapter._contexts.get(sid)
+            if ctx is not None:
+                ctx.asr_ready = True
+            await harness._inbound.put({"type": "websocket.receive", "bytes": b"\x01\x02"})
+
             await harness.wait_for(
                 lambda: any(evt.get("type") == EVT_CLIENT_MIC_OPEN for evt in recorded)
             )
@@ -444,6 +464,59 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             self.assertEqual(received, chunk)
         finally:
             await harness.close()
+
+    async def _test_mic_open_timeout_nudge(self) -> None:
+        with mock.patch("app.ws.adapter._MIC_OPEN_TIMEOUT_SECONDS", 0.05):
+            engine = RecordingEngine()
+            adapter = ChatV2Adapter(engine=engine)
+            runtime = _StubAsrRuntime()
+            adapter.asr_runtime = runtime
+            harness = OutboundHarness(adapter, engine)
+            await harness.start()
+
+            sid = harness.sid
+            mic_events: list[dict] = []
+            token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
+            try:
+                policy_payload = {
+                    "type": "policy.interaction",
+                    "interaction_id": "turn-1",
+                    "actions": ["assistant.say", "assistant.await_user"],
+                }
+                bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
+                await asyncio.sleep(0.01)
+
+                tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
+                bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
+
+                await harness.wait_for(lambda: bool(runtime.prearm_calls))
+                bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
+
+                frame = await harness.wait_for_outbound(
+                    lambda data: data.get("type") == "start_listening"
+                )
+                self.assertEqual(frame, {"type": "start_listening"})
+
+                nudge_frame = await harness.wait_for_outbound(
+                    lambda data: data.get("type") == "hud.nudge"
+                )
+                self.assertEqual(nudge_frame.get("code"), "mic_permissions")
+                self.assertEqual(nudge_frame.get("reason"), "mic_open_timeout")
+                self.assertFalse(mic_events)
+
+                ctx = adapter._contexts.get(sid)
+                if ctx is not None:
+                    ctx.asr_ready = True
+                await harness._inbound.put({"type": "websocket.receive", "bytes": b"\x03\x03"})
+
+                await harness.wait_for(lambda: bool(mic_events))
+                nudge_frames = [
+                    frame for frame in harness.outbound_frames if frame.get("type") == "hud.nudge"
+                ]
+                self.assertEqual(len(nudge_frames), 1)
+            finally:
+                bus.unsubscribe(token)
+                await harness.close()
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience

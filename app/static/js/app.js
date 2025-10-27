@@ -1065,6 +1065,31 @@
       };
     })();
 
+    let lastMicNudgeTs = 0;
+    window.addEventListener('hud.nudge', (event) => {
+      const detail = event && event.detail;
+      if (!detail || detail.code !== 'mic_permissions') {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastMicNudgeTs < 1800) {
+        return;
+      }
+      lastMicNudgeTs = now;
+      const reason = typeof detail.reason === 'string' && detail.reason
+        ? detail.reason
+        : 'mic_open_timeout';
+      const message = reason === 'mic_open_timeout'
+        ? "We haven't heard from your microphone yet. Check your browser permissions."
+        : "We couldn't access your microphone. Please review your browser permissions.";
+      showToastMessage(message);
+      sendDiagHudEvent(
+        'mic_permission_nudge',
+        { reason },
+        { level: 'info', badge: 'mic:nudge', message: 'Prompted user to review mic permissions' }
+      );
+    });
+
     function csrf() {
       const cookies = document.cookie ? document.cookie.split(';') : [];
       for (const name of ['askchip_csrf', 'csrftoken', 'csrf_token']) {
