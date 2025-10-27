@@ -334,6 +334,11 @@ class ASRRuntime:
             bus.publish({"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram", "stream_id": stream_id})
             _log.info(
                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
+
+                        try:
+                            bus.publish({"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram"})
+                        except Exception:
+                            pass
                 sid,
                 _CONTENT_TYPE,
                 qs or "",
