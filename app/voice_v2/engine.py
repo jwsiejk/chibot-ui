@@ -66,7 +66,20 @@ READY = "Ready"
 LISTENING = "Listening"
 THINKING = "Thinking"
 RESPONDING = "Responding"
-CONFIRMING_BARGE = "ConfirmingBarge"
+
+_STATE_ORDER = {
+    READY: 0,
+    LISTENING: 1,
+    THINKING: 2,
+    RESPONDING: 3,
+}
+
+_ALLOWED_TRANSITIONS = {
+    READY: {LISTENING},
+    LISTENING: {THINKING},
+    THINKING: {RESPONDING},
+    RESPONDING: {READY},
+}
 
 _PCM_CODEC = "pcm_s16le"
 _PCM_RATE_HZ = 16000
@@ -200,10 +213,11 @@ class EngineV2:
         self._last_sid = sid
         self._policy_snapshot = None
         self._streaming.reset_session(sid)
-        self._ensure_session(sid)
+        session = self._ensure_session(sid)
         self.reapply_policy()
         self._emit_info_frame(sid)
-        self._set_state(sid, READY, reason="ws_open")
+        if session.state != READY:
+            self._set_state(sid, READY, reason="ws_open")
 
     async def start_greet(self, sid: str) -> None:
         """Begin the greeting flow asynchronously."""
@@ -300,6 +314,7 @@ class EngineV2:
 
         session = self._ensure_session(sid)
         previous_state = session.state
+        was_responding = previous_state == RESPONDING
         policy = self.policy_snapshot or {}
         barge_enabled = bool(policy.get("barge_in_enabled"))
 
@@ -309,13 +324,21 @@ class EngineV2:
             self._publish_barge(sid, "text", granted, reason)
             if granted:
                 self.cancel_current_tts(sid, reason="canceled")
+            self._set_state(sid, READY, reason="text_barge_reset" if granted else "text_input_reset")
+            session = self._ensure_session(sid)
+            previous_state = session.state
 
         if previous_state != READY:
-            reset_reason = "text_barge_reset" if (previous_state == RESPONDING and barge_enabled) else "text_input_reset"
-            self._set_state(sid, READY, reason=reset_reason)
+            _log.warning(
+                "evt=text_input_ignored state=%s", previous_state, extra={"sid": sid}
+            )
+            return
 
-        listen_reason = "text_barge" if (previous_state == RESPONDING and barge_enabled) else "text_input"
+        listen_reason = "text_barge" if (was_responding and barge_enabled) else "text_input"
         self._set_state(sid, LISTENING, reason=listen_reason)
+        session = self._ensure_session(sid)
+        if session.state != LISTENING:
+            return
 
         session = self._ensure_session(sid)
         turn_id = session.turn_id or str(uuid.uuid4())
@@ -329,8 +352,13 @@ class EngineV2:
     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
         """Capture an incoming audio chunk."""
         session = self._ensure_session(sid)
-        if session.state != LISTENING:
+        if session.state == READY:
             self._set_state(sid, LISTENING, reason="audio_rx")
+            session = self._ensure_session(sid)
+        if session.state != LISTENING:
+            _log.warning(
+                "evt=audio_ignored state=%s", session.state, extra={"sid": sid}
+            )
         byte_count = len(chunk)
         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
@@ -441,6 +469,12 @@ class EngineV2:
 
         session = self._ensure_session(sid)
 
+        if session.state != LISTENING:
+            _log.warning(
+                "evt=asr_final_ignored state=%s", session.state, extra={"sid": sid}
+            )
+            return
+
         provided_req_id = req_id if isinstance(req_id, str) and req_id else None
 
         active_req_id = session.req_id
@@ -513,6 +547,8 @@ class EngineV2:
         if session.state == READY:
             self._set_state(sid, LISTENING, reason="asr_partial")
             session = self._ensure_session(sid)
+            if session.state != LISTENING:
+                return
 
         if session.turn_started_ms is None:
             session.turn_started_ms = _now_ms()
@@ -594,8 +630,16 @@ class EngineV2:
 
         if granted:
             self.cancel_current_tts(sid, reason="canceled")
-            self._set_state(sid, CONFIRMING_BARGE, reason="auto_barge")
-            self._schedule_barge_confirmation(sid)
+            self._set_state(sid, READY, reason="auto_barge")
+            session = self._ensure_session(sid)
+            if session.state == READY:
+                self._schedule_barge_confirmation(sid)
+            else:
+                _log.warning(
+                    "evt=auto_barge_ready_blocked state=%s",
+                    session.state,
+                    extra={"sid": sid},
+                )
         else:
             _log.info(
                 "evt=barge_auto_denied reason=%s source=%s",
@@ -985,7 +1029,7 @@ class EngineV2:
         self._publish(event)
 
     def _schedule_barge_confirmation(self, sid: str) -> None:
-        """Transition from confirming to listening after a short delay."""
+        """Transition to listening after a short delay for mask clearing."""
 
         async def _confirm() -> None:
             await asyncio.sleep(0.5)
@@ -1063,10 +1107,34 @@ class EngineV2:
         session = self._ensure_session(sid)
         previous = session.state
         if previous == new_state:
+            _log.warning(
+                "evt=state_transition_duplicate state=%s", new_state, extra={"sid": sid}
+            )
+            return
+
+        allowed = _ALLOWED_TRANSITIONS.get(previous, set())
+        if new_state not in allowed:
+            prev_rank = _STATE_ORDER.get(previous, -1)
+            next_rank = _STATE_ORDER.get(new_state, -1)
+            relation = "unknown"
+            if prev_rank >= 0 and next_rank >= 0:
+                relation = "forward" if next_rank > prev_rank else "backward"
+            _log.warning(
+                "evt=state_transition_illegal from=%s to=%s relation=%s",
+                previous,
+                new_state,
+                relation,
+                extra={"sid": sid},
+            )
             return
 
         if new_state == LISTENING:
             self._publish_tts_mask(sid, "off")
+            if session.tts_mask_phase != "off":
+                _log.warning(
+                    "evt=state_transition_mask_blocked", extra={"sid": sid}
+                )
+                return
 
         now_ms = _now_ms()
 
