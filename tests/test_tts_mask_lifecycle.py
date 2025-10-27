@@ -1,6 +1,6 @@
 import unittest
 
-from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END
+from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END, EVT_TTS_MASK
 from app.voice_v2.engine import EngineV2
 
 
@@ -31,9 +31,9 @@ class TtsMaskLifecycleTests(unittest.TestCase):
 
         engine.on_tts_start(sid, utt_id)
 
-        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
+        mask_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
         self.assertEqual(len(mask_events), 1)
-        self.assertEqual(mask_events[0]["phase"], "engaged")
+        self.assertEqual(mask_events[0]["phase"], "on")
 
         gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
         self.assertGreaterEqual(len(gate_events), 1)
@@ -45,8 +45,8 @@ class TtsMaskLifecycleTests(unittest.TestCase):
 
         engine.on_tts_end(sid, utt_id)
 
-        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "off"])
+        mask_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
+        self.assertEqual([evt["phase"] for evt in mask_events], ["on", "off"])
 
         final_gate = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE][-1]
         final_gate_meta = final_gate["meta"]["gate"]
@@ -65,14 +65,14 @@ class TtsMaskLifecycleTests(unittest.TestCase):
         engine.on_tts_start(sid, utt_id)
         engine.on_tts_end(sid, utt_id)
 
-        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "off"])
+        mask_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
+        self.assertEqual([evt["phase"] for evt in mask_events], ["on", "off"])
 
         before_len = len(mask_events)
         engine.on_tts_end(sid, utt_id)
-        mask_events_after = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
+        mask_events_after = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
         self.assertEqual(len(mask_events_after), before_len)
-        self.assertEqual([evt["phase"] for evt in mask_events_after], ["engaged", "off"])
+        self.assertEqual([evt["phase"] for evt in mask_events_after], ["on", "off"])
 
     def test_tts_end_emits_mask_after_end(self) -> None:
         bus = _FakeBus()
@@ -90,11 +90,11 @@ class TtsMaskLifecycleTests(unittest.TestCase):
         interesting = [
             evt
             for evt in events_after
-            if evt["type"] in {EVT_TTS_END, "EVT_TTS_MASK"}
+            if evt["type"] in {EVT_TTS_END, EVT_TTS_MASK}
         ]
         self.assertGreaterEqual(len(interesting), 2)
         self.assertEqual(interesting[0]["type"], EVT_TTS_END)
-        self.assertEqual(interesting[1]["type"], "EVT_TTS_MASK")
+        self.assertEqual(interesting[1]["type"], EVT_TTS_MASK)
         self.assertEqual(interesting[1].get("phase"), "off")
 
     def test_listening_transition_forces_mask_off(self) -> None:
@@ -111,7 +111,7 @@ class TtsMaskLifecycleTests(unittest.TestCase):
         off_index = None
         turn_begin_index = None
         for idx, event in enumerate(bus.events):
-            if event.get("type") == "EVT_TTS_MASK" and event.get("phase") == "off":
+            if event.get("type") == EVT_TTS_MASK and event.get("phase") == "off":
                 off_index = idx
             if event.get("type") == "EVT_TURN_BEGIN" and turn_begin_index is None:
                 turn_begin_index = idx

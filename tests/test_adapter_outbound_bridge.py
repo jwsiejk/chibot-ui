@@ -16,6 +16,7 @@ from app.voice_v2 import (
     EVT_ASR_OPEN,
     EVT_CLIENT_MIC_OPEN,
     EVT_HUD_STATE,
+    EVT_TTS_MASK,
     EVT_WS_AUDIO_SEND,
     EVT_WS_JSON_SEND,
 )
@@ -366,7 +367,7 @@ class TestAdapterOutboundBridge(unittest.TestCase):
 
         sid = harness.sid
         recorded: list[dict] = []
-        interesting = {"EVT_TTS_MASK", EVT_HUD_STATE, EVT_CLIENT_MIC_OPEN}
+        interesting = {EVT_TTS_MASK, EVT_HUD_STATE, EVT_CLIENT_MIC_OPEN}
 
         def _record(event: dict) -> None:
             if event.get("sid") != sid:
@@ -384,7 +385,7 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
             await asyncio.sleep(0.01)
 
-            bus.publish({"type": "EVT_TTS_MASK", "sid": sid, "phase": "engaged"})
+            bus.publish({"type": EVT_TTS_MASK, "sid": sid, "phase": "on"})
 
             tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
@@ -400,7 +401,7 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             ]
             self.assertFalse(start_frames)
 
-            bus.publish({"type": "EVT_TTS_MASK", "sid": sid, "phase": "off"})
+            bus.publish({"type": EVT_TTS_MASK, "sid": sid, "phase": "off"})
 
             frame = await harness.wait_for_outbound(
                 lambda data: data.get("type") == "start_listening"
@@ -419,7 +420,7 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             mask_off_index = next(
                 idx
                 for idx, event in enumerate(recorded)
-                if event.get("type") == "EVT_TTS_MASK" and event.get("phase") == "off"
+                if event.get("type") == EVT_TTS_MASK and event.get("phase") == "off"
             )
             hud_index = next(
                 idx

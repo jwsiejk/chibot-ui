@@ -3,6 +3,14 @@ from __future__ import annotations
 import unittest
 from typing import Any, Dict, List, Optional
 
+from app.voice_v2 import (
+    EVT_ACTION_SAY_END,
+    EVT_BARGE_CONFIRMED,
+    EVT_BARGE_DETECTED,
+    EVT_MIC_GATE,
+    EVT_TTS_END,
+    EVT_TTS_MASK,
+)
 from app.voice_v2.engine import CONFIRMING_BARGE, LISTENING, RESPONDING, EngineV2
 from app.voice_v2.vad import VADAggregator
 
@@ -338,17 +346,17 @@ class DualVADAggregatorTests(unittest.TestCase):
         self.assertEqual(session.state, CONFIRMING_BARGE)
 
         types = [evt.get("type") for evt in bus.events]
-        barge_index = types.index("EVT_BARGE_IN")
-        tts_end_index = types.index("EVT_TTS_END")
+        barge_index = types.index(EVT_BARGE_DETECTED)
+        tts_end_index = types.index(EVT_TTS_END)
         mask_index = next(
             i
             for i, evt in enumerate(bus.events)
-            if evt.get("type") == "EVT_TTS_MASK" and evt.get("phase") == "off"
+            if evt.get("type") == EVT_TTS_MASK and evt.get("phase") == "off"
         )
         mic_index = next(
             i
             for i, evt in enumerate(bus.events)
-            if evt.get("type") == "EVT_MIC_GATE"
+            if evt.get("type") == EVT_MIC_GATE
             and not evt.get("meta", {}).get("gate", {}).get("reasons", {}).get("tts_active", True)
         )
 
@@ -359,8 +367,15 @@ class DualVADAggregatorTests(unittest.TestCase):
         tts_end_event = bus.events[tts_end_index]
         self.assertEqual(tts_end_event.get("reason"), "canceled")
 
+        say_end_events = [evt for evt in bus.events if evt.get("type") == EVT_ACTION_SAY_END]
+        self.assertTrue(say_end_events)
+        self.assertEqual(say_end_events[-1].get("reason"), "canceled")
+
         engine._complete_auto_barge(sid)
         self.assertEqual(session.state, LISTENING)
+
+        confirmed_events = [evt for evt in bus.events if evt.get("type") == EVT_BARGE_CONFIRMED]
+        self.assertTrue(confirmed_events)
 
 
 if __name__ == "__main__":

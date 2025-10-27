@@ -1,80 +1,141 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 8fd43b0e35b11c6dc6abf078a1dbb690d84183df..8c0939669c936d5cbb62a60f42903bda4966479d 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1043,50 +1043,75 @@
-           root = document.createElement('div');
-           root.id = 'toast-root';
-           root.className = 'toast-container';
-           document.body.appendChild(root);
-         }
-         if (!document.getElementById(styleId)) {
-           document.head.appendChild(Object.assign(document.createElement('style'), { id: styleId, textContent: styleText }));
-         }
-         return root;
-       }
-       return (message) => {
-         if (!message) return;
-         const host = ensureRoot();
-         const toast = document.createElement('div');
-         toast.className = 'toast';
-         toast.setAttribute('role', 'alert'); toast.innerHTML = '<div class="toast-body"></div>';
-         toast.firstChild.textContent = message;
-         host.appendChild(toast);
-         setTimeout(() => {
-           toast.classList.add('toast-exit');
-           setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 220);
-         }, 3600);
-       };
-     })();
+diff --git a/tests/test_tts_mask_lifecycle.py b/tests/test_tts_mask_lifecycle.py
+index a97244cdc84151cdb71af76aea995e01143ded07..105426f6715a955e549ad679e7108eedd7448de8 100644
+--- a/tests/test_tts_mask_lifecycle.py
++++ b/tests/test_tts_mask_lifecycle.py
+@@ -1,124 +1,124 @@
+ import unittest
  
-+    let lastMicNudgeTs = 0;
-+    window.addEventListener('hud.nudge', (event) => {
-+      const detail = event && event.detail;
-+      if (!detail || detail.code !== 'mic_permissions') {
-+        return;
-+      }
-+      const now = Date.now();
-+      if (now - lastMicNudgeTs < 1800) {
-+        return;
-+      }
-+      lastMicNudgeTs = now;
-+      const reason = typeof detail.reason === 'string' && detail.reason
-+        ? detail.reason
-+        : 'mic_open_timeout';
-+      const message = reason === 'mic_open_timeout'
-+        ? "We haven't heard from your microphone yet. Check your browser permissions."
-+        : "We couldn't access your microphone. Please review your browser permissions.";
-+      showToastMessage(message);
-+      sendDiagHudEvent(
-+        'mic_permission_nudge',
-+        { reason },
-+        { level: 'info', badge: 'mic:nudge', message: 'Prompted user to review mic permissions' }
-+      );
-+    });
-+
-     function csrf() {
-       const cookies = document.cookie ? document.cookie.split(';') : [];
-       for (const name of ['askchip_csrf', 'csrftoken', 'csrf_token']) {
-         const prefix = `${name}=`;
-         for (const part of cookies) {
-           const trimmed = part.trim();
-           if (!trimmed.startsWith(prefix)) continue;
-           const raw = trimmed.slice(prefix.length);
-           if (!raw) continue;
-           try { return decodeURIComponent(raw); } catch (err) {
-             console.warn('Failed to decode CSRF cookie', err);
-             return raw;
-           }
-         }
-       }
-       return '';
-     }
+-from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END
++from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END, EVT_TTS_MASK
+ from app.voice_v2.engine import EngineV2
  
-     async function getMe() {
-       try {
-         const r = await fetch('/api/v1/auth/me', { method: 'GET', credentials: 'include' });
-         if (!r.ok) return { authenticated: false };
-         return await r.json();
-       } catch {
-         return { authenticated: false };
+ 
+ class _FakeExporter:
+     def __init__(self) -> None:
+         self.events: list[tuple[str, dict]] = []
+ 
+     def write(self, sid: str, event: dict) -> None:  # pragma: no cover - exercised in tests
+         self.events.append((sid, dict(event)))
+ 
+ 
+ class _FakeBus:
+     def __init__(self) -> None:
+         self.events: list[dict] = []
+ 
+     def publish(self, event: dict) -> None:  # pragma: no cover - exercised in tests
+         self.events.append(dict(event))
+ 
+ 
+ class TtsMaskLifecycleTests(unittest.TestCase):
+     def test_tts_mask_breadcrumb_sequence(self) -> None:
+         bus = _FakeBus()
+         exporter = _FakeExporter()
+         engine = EngineV2(exporter, telemetry_bus=bus)
+ 
+         sid = "sid-123"
+         utt_id = "utt-456"
+ 
+         engine.on_tts_start(sid, utt_id)
+ 
+-        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
++        mask_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
+         self.assertEqual(len(mask_events), 1)
+-        self.assertEqual(mask_events[0]["phase"], "engaged")
++        self.assertEqual(mask_events[0]["phase"], "on")
+ 
+         gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
+         self.assertGreaterEqual(len(gate_events), 1)
+         engaged_gate = gate_events[-1]["meta"]["gate"]
+         engaged_effective = engaged_gate.get("effective", engaged_gate["mask"])
+         self.assertTrue(engaged_effective)
+         self.assertIn("tts_active", engaged_gate["reasons"])
+         self.assertTrue(engaged_gate["reasons"]["tts_active"])
+ 
+         engine.on_tts_end(sid, utt_id)
+ 
+-        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
+-        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "off"])
++        mask_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
++        self.assertEqual([evt["phase"] for evt in mask_events], ["on", "off"])
+ 
+         final_gate = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE][-1]
+         final_gate_meta = final_gate["meta"]["gate"]
+         final_effective = final_gate_meta.get("effective", final_gate_meta["mask"])
+         self.assertFalse(final_effective)
+         self.assertFalse(final_gate_meta["reasons"]["tts_active"])
+ 
+     def test_tts_mask_not_republished_when_phase_unchanged(self) -> None:
+         bus = _FakeBus()
+         exporter = _FakeExporter()
+         engine = EngineV2(exporter, telemetry_bus=bus)
+ 
+         sid = "sid-dup"
+         utt_id = "utt-dup"
+ 
+         engine.on_tts_start(sid, utt_id)
+         engine.on_tts_end(sid, utt_id)
+ 
+-        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
+-        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "off"])
++        mask_events = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
++        self.assertEqual([evt["phase"] for evt in mask_events], ["on", "off"])
+ 
+         before_len = len(mask_events)
+         engine.on_tts_end(sid, utt_id)
+-        mask_events_after = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
++        mask_events_after = [evt for evt in bus.events if evt["type"] == EVT_TTS_MASK]
+         self.assertEqual(len(mask_events_after), before_len)
+-        self.assertEqual([evt["phase"] for evt in mask_events_after], ["engaged", "off"])
++        self.assertEqual([evt["phase"] for evt in mask_events_after], ["on", "off"])
+ 
+     def test_tts_end_emits_mask_after_end(self) -> None:
+         bus = _FakeBus()
+         exporter = _FakeExporter()
+         engine = EngineV2(exporter, telemetry_bus=bus)
+ 
+         sid = "sid-order"
+         utt_id = "utt-order"
+ 
+         engine.on_tts_start(sid, utt_id)
+         initial_len = len(bus.events)
+         engine.on_tts_end(sid, utt_id)
+ 
+         events_after = bus.events[initial_len:]
+         interesting = [
+             evt
+             for evt in events_after
+-            if evt["type"] in {EVT_TTS_END, "EVT_TTS_MASK"}
++            if evt["type"] in {EVT_TTS_END, EVT_TTS_MASK}
+         ]
+         self.assertGreaterEqual(len(interesting), 2)
+         self.assertEqual(interesting[0]["type"], EVT_TTS_END)
+-        self.assertEqual(interesting[1]["type"], "EVT_TTS_MASK")
++        self.assertEqual(interesting[1]["type"], EVT_TTS_MASK)
+         self.assertEqual(interesting[1].get("phase"), "off")
+ 
+     def test_listening_transition_forces_mask_off(self) -> None:
+         bus = _FakeBus()
+         exporter = _FakeExporter()
+         engine = EngineV2(exporter, telemetry_bus=bus)
+ 
+         sid = "sid-listen"
+         utt_id = "utt-listen"
+ 
+         engine.on_tts_start(sid, utt_id)
+         engine.on_audio(sid, b"\x00\x00" * 2, seq=1)
+ 
+         off_index = None
+         turn_begin_index = None
+         for idx, event in enumerate(bus.events):
+-            if event.get("type") == "EVT_TTS_MASK" and event.get("phase") == "off":
++            if event.get("type") == EVT_TTS_MASK and event.get("phase") == "off":
+                 off_index = idx
+             if event.get("type") == "EVT_TURN_BEGIN" and turn_begin_index is None:
+                 turn_begin_index = idx
+         self.assertIsNotNone(off_index)
+         self.assertIsNotNone(turn_begin_index)
+         self.assertLess(off_index, turn_begin_index)  # mask off precedes listening begin
+ 
+ 
+ if __name__ == "__main__":
+     unittest.main()

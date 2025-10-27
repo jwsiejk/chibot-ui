@@ -1,6 +1,12 @@
 import unittest
 
-from app.voice_v2 import EVT_MIC_GATE
+from app.voice_v2 import (
+    EVT_ACTION_SAY_END,
+    EVT_BARGE_DETECTED,
+    EVT_MIC_GATE,
+    EVT_TTS_END,
+    EVT_TTS_MASK,
+)
 from app.voice_v2.engine import CONFIRMING_BARGE, LISTENING, RESPONDING, EngineV2
 
 
@@ -38,12 +44,12 @@ class BargeCancelMaskGateTests(unittest.TestCase):
         self.assertEqual(session.state, CONFIRMING_BARGE)
 
         types = [evt["type"] for evt in bus.events]
-        barge_index = types.index("EVT_BARGE_IN")
-        tts_end_index = types.index("EVT_TTS_END")
+        barge_index = types.index(EVT_BARGE_DETECTED)
+        tts_end_index = types.index(EVT_TTS_END)
         mask_events = [
             (idx, evt)
             for idx, evt in enumerate(bus.events)
-            if evt["type"] == "EVT_TTS_MASK" and evt.get("phase") == "off"
+            if evt["type"] == EVT_TTS_MASK and evt.get("phase") == "off"
         ]
         self.assertTrue(mask_events)
         mask_index, _ = mask_events[0]
@@ -53,6 +59,12 @@ class BargeCancelMaskGateTests(unittest.TestCase):
 
         tts_end_event = bus.events[tts_end_index]
         self.assertEqual(tts_end_event.get("reason"), "canceled")
+
+        say_end_events = [
+            evt for evt in bus.events if evt["type"] == EVT_ACTION_SAY_END
+        ]
+        self.assertTrue(say_end_events)
+        self.assertEqual(say_end_events[-1].get("reason"), "canceled")
 
         gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
         self.assertTrue(gate_events)

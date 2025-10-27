@@ -22,12 +22,17 @@ from app.voice_v2 import (
     EVT_CHAT_USER,
     EVT_ASR_FINAL,
     EVT_ASR_PARTIAL,
+    EVT_ACTION_SAY_END,
+    EVT_BARGE_CONFIRMED,
+    EVT_BARGE_DETECTED,
+    EVT_BARGE_REJECTED,
     EVT_NLG,
     EVT_NLU,
     EVT_DIALOG_PLAN,
     EVT_POLICY_APPLIED,
     EVT_TTS_END,
     EVT_TTS_START,
+    EVT_TTS_MASK,
     EVT_WS_AUDIO_RECV,
     EVT_WS_AUDIO_SEND,
     EVT_WS_CLOSE,
@@ -80,7 +85,7 @@ _ALLOWED_TRANSITIONS = {
     READY: {LISTENING, RESPONDING},
     LISTENING: {THINKING},
     THINKING: {RESPONDING},
-    RESPONDING: {READY, CONFIRMING_BARGE},
+    RESPONDING: {READY, CONFIRMING_BARGE, LISTENING},
     CONFIRMING_BARGE: {READY, LISTENING},
 }
 
@@ -326,21 +331,29 @@ class EngineV2:
         if previous_state == RESPONDING:
             granted = barge_enabled
             reason = None if granted else "policy_disabled"
-            self._publish_barge_phase(
+            self._publish_barge_event(
                 sid,
                 "text",
-                "detected",
+                event_type=EVT_BARGE_DETECTED,
                 granted=granted,
                 reason=reason,
             )
             if granted:
-                self._publish_barge_phase(
-                    sid, "text", "confirmed", granted=True
-                )
                 self.cancel_current_tts(sid, reason="canceled")
+                self._publish_barge_event(
+                    sid,
+                    "text",
+                    event_type=EVT_BARGE_CONFIRMED,
+                    granted=True,
+                )
             else:
-                self._publish_barge_phase(
-                    sid, "text", "rejected", granted=False, reason=reason
+                reject_reason = reason or "policy_disabled"
+                self._publish_barge_event(
+                    sid,
+                    "text",
+                    event_type=EVT_BARGE_REJECTED,
+                    granted=False,
+                    reason=reject_reason,
                 )
             self._set_state(
                 sid,
@@ -377,13 +390,20 @@ class EngineV2:
     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
         """Capture an incoming audio chunk."""
         session = self._ensure_session(sid)
+        if session.tts_mask_phase != "off":
+            self._publish_tts_mask(sid, "off")
         if session.state == READY:
+            self._set_state(sid, LISTENING, reason="audio_rx")
+            session = self._ensure_session(sid)
+        elif session.state == RESPONDING:
             self._set_state(sid, LISTENING, reason="audio_rx")
             session = self._ensure_session(sid)
         if session.state != LISTENING:
             _log.warning(
                 "evt=audio_ignored state=%s", session.state, extra={"sid": sid}
             )
+        else:
+            self._commit_turn_start(sid, "audio_rx")
         byte_count = len(chunk)
         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
@@ -434,7 +454,7 @@ class EngineV2:
             meta=tts_meta,
         )
 
-        self._publish_tts_mask(sid, "engaged")
+        self._publish_tts_mask(sid, "on")
 
         payload = {"meta": tts_meta}
         req_id = session.req_id
@@ -655,12 +675,13 @@ class EngineV2:
             granted = False
             deny_reason = deny_reason or "policy_disabled"
 
-        self._publish_barge_phase(
+        detected_reason = reason if granted else deny_reason
+        self._publish_barge_event(
             sid,
             source,
-            "detected",
+            event_type=EVT_BARGE_DETECTED,
             granted=granted,
-            reason=reason if granted else deny_reason,
+            reason=detected_reason,
         )
 
         if granted:
@@ -682,12 +703,17 @@ class EngineV2:
                 )
                 self._reject_auto_barge(sid, "ready_state_blocked")
         else:
-            self._publish_barge_phase(
-                sid, source, "rejected", granted=False, reason=deny_reason
+            reject_reason = deny_reason or "unknown"
+            self._publish_barge_event(
+                sid,
+                source,
+                event_type=EVT_BARGE_REJECTED,
+                granted=False,
+                reason=reject_reason,
             )
             _log.info(
                 "evt=barge_auto_denied reason=%s source=%s",
-                deny_reason,
+                reject_reason,
                 source,
                 extra={"sid": sid},
             )
@@ -1058,16 +1084,16 @@ class EngineV2:
 
         session.suggestions_emitted = True
 
-    def _publish_barge_phase(
+    def _publish_barge_event(
         self,
         sid: str,
         source: str,
-        phase: str,
         *,
+        event_type: str,
         granted: bool,
         reason: str | None = None,
     ) -> None:
-        """Publish EVT_BARGE_IN with explicit lifecycle phases."""
+        """Publish lifecycle-specific barge telemetry events."""
 
         if source not in {"auto_vad", "asr_evidence", "text"}:
             return
@@ -1076,12 +1102,11 @@ class EngineV2:
             "barge": {
                 "source": source,
                 "granted": bool(granted),
-                "phase": phase,
             }
         }
         if reason is not None:
-            meta["barge"]["reason"] = reason
-        event = self._envelope(sid, "EVT_BARGE_IN", {"meta": meta})
+            meta["barge"]["reason"] = str(reason)
+        event = self._envelope(sid, event_type, {"meta": meta})
         self._publish(event)
 
     def _schedule_barge_confirmation(self, sid: str) -> None:
@@ -1137,7 +1162,12 @@ class EngineV2:
 
         self._barge_attempts.pop(sid, None)
         source = str(attempt.get("source", "auto_vad"))
-        self._publish_barge_phase(sid, source, "confirmed", granted=True)
+        self._publish_barge_event(
+            sid,
+            source,
+            event_type=EVT_BARGE_CONFIRMED,
+            granted=True,
+        )
         self._set_state(sid, LISTENING, reason="auto_barge_confirmed")
         self._gate.set_reason("tts_active", False, sid=sid)
         self._commit_turn_start(sid, "server_vad")
@@ -1147,7 +1177,14 @@ class EngineV2:
         if attempt is None:
             return
         source = str(attempt.get("source", "auto_vad"))
-        self._publish_barge_phase(sid, source, "rejected", granted=False, reason=reason)
+        reject_reason = reason or str(attempt.get("deny_reason") or "unknown")
+        self._publish_barge_event(
+            sid,
+            source,
+            event_type=EVT_BARGE_REJECTED,
+            granted=False,
+            reason=reject_reason,
+        )
 
     async def _release_system_hold_after(self, sid: str, post_hold_ms: int) -> None:
         """Release the system_hold reason after the requested delay."""
@@ -1382,14 +1419,29 @@ class EngineV2:
 
         return voice_id, locale
 
-    def _publish_tts_mask(self, sid: str, phase: str) -> None:
+    def _publish_tts_mask(self, sid: str, phase: str, *, force: bool = False) -> None:
         session = self._ensure_session(sid)
+        phase_value = str(phase)
         current = session.tts_mask_phase
-        if current == phase:
+        if not force and current == phase_value:
             return
-        session.tts_mask_phase = phase
-        mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})
+        session.tts_mask_phase = phase_value
+        mask_event = self._envelope(sid, EVT_TTS_MASK, {"phase": phase_value})
         self._publish(mask_event)
+
+    def _publish_action_say_end(
+        self,
+        sid: str,
+        utt_id: str,
+        *,
+        reason: str,
+        req_id: str | None,
+    ) -> None:
+        payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}, "reason": reason}
+        if isinstance(req_id, str) and req_id:
+            payload["req_id"] = req_id
+        event = self._envelope(sid, EVT_ACTION_SAY_END, payload)
+        self._publish(event)
 
     def _teardown_tts(
         self,
@@ -1402,7 +1454,8 @@ class EngineV2:
     ) -> None:
         self._streaming.set_output_finalizer(sid, None)
         session = self._ensure_session(sid)
-        if session.tts_utt_id == utt_id:
+        was_active = session.tts_utt_id == utt_id
+        if was_active:
             session.tts_utt_id = None
 
         aggregator = self._aggregators.get(sid)
@@ -1411,15 +1464,24 @@ class EngineV2:
 
         payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
         req_id = session.req_id
-        if isinstance(req_id, str) and req_id:
-            payload["req_id"] = req_id
+        req_id_value = req_id if isinstance(req_id, str) and req_id else None
+        if req_id_value:
+            payload["req_id"] = req_id_value
         if reason:
             payload["reason"] = reason
 
         event = self._envelope(sid, EVT_TTS_END, payload)
         self._publish(event)
 
-        self._publish_tts_mask(sid, "off")
+        if reason:
+            self._publish_action_say_end(
+                sid,
+                utt_id,
+                reason=reason,
+                req_id=req_id_value,
+            )
+
+        self._publish_tts_mask(sid, "off", force=was_active)
         self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
 
         if transition_to_ready:
