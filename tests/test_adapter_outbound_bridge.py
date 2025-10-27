@@ -195,6 +195,9 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     def test_listen_handoff_waits_for_mask_off(self) -> None:
         asyncio.run(self._test_listen_handoff_waits_for_mask_off())
 
+    def test_client_ready_mic_open_confirms_listen(self) -> None:
+        asyncio.run(self._test_client_ready_mic_open())
+
     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
         asyncio.run(self._test_audio_forwarding())
 
@@ -355,6 +358,24 @@ class TestAdapterOutboundBridge(unittest.TestCase):
         finally:
             bus.unsubscribe(token)
             bus.unsubscribe(mic_token)
+            await harness.close()
+
+    async def _test_client_ready_mic_open(self) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+        mic_events: list[dict] = []
+        token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
+        try:
+            payload = {"type": "client.ready", "mic": {"state": "open", "vendor": "browser", "ts": 12345}}
+            await harness._inbound.put({"type": "websocket.receive", "text": json.dumps(payload)})
+            await harness.wait_for(lambda: bool(mic_events))
+            self.assertEqual(mic_events[-1]["meta"].get("state"), "open")
+            self.assertEqual(mic_events[-1]["meta"].get("vendor"), "browser")
+            self.assertEqual(mic_events[-1]["meta"].get("ts"), 12345)
+        finally:
+            bus.unsubscribe(token)
             await harness.close()
 
     async def _test_listen_handoff_waits_for_mask_off(self) -> None:

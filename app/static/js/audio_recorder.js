@@ -254,11 +254,30 @@
       }
       if (!this._micOpenEmitted) {
         this._micOpenEmitted = true;
-        emitCustomEvent(CLIENT_MIC_OPEN_EVENT, {
+        const eventDetail = {
           type: CLIENT_MIC_OPEN_EVENT,
           ts: Date.now(),
           vendor: this._vendor || null
-        });
+        };
+        emitCustomEvent(CLIENT_MIC_OPEN_EVENT, eventDetail);
+        const wsClient = window.WSClient;
+        if (wsClient && typeof wsClient.send === "function") {
+          const micPayload = {
+            type: "client.ready",
+            mic: {
+              state: "open",
+              ts: eventDetail.ts
+            }
+          };
+          if (eventDetail.vendor) {
+            micPayload.mic.vendor = eventDetail.vendor;
+          }
+          try {
+            wsClient.send(micPayload);
+          } catch (err) {
+            console.warn("Failed to send client mic open frame", err);
+          }
+        }
         emitCustomEvent(CLIENT_HUD_STATE_EVENT, {
           type: CLIENT_HUD_STATE_EVENT,
           meta: { state: "Listening", source: "client" }

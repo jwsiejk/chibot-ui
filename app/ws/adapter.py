@@ -709,6 +709,21 @@ class ChatV2Adapter:
                 ctx.audio_highest_seq = ctx.audio_seq - 1
                 ctx.audio_buffer.clear()
 
+        if frame_type == "client.ready":
+            mic_info = frame.get("mic")
+            if isinstance(mic_info, dict):
+                state = mic_info.get("state")
+                if isinstance(state, str) and state.lower() == "open":
+                    vendor = mic_info.get("vendor")
+                    opened_ts = mic_info.get("ts")
+                    ts_value = opened_ts if isinstance(opened_ts, int) else None
+                    self._emit_client_mic_open(
+                        ctx,
+                        vendor=vendor if isinstance(vendor, str) else None,
+                        opened_ts=ts_value,
+                    )
+                    ctx.mic_nudge_sent = False
+
         await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
         await self._invoke_engine("on_json", ctx.sid, frame)
         return self._HandleResult(True)
@@ -1401,15 +1416,26 @@ class ChatV2Adapter:
         except RuntimeError:
             _log.warning("evt=ws_hud_state_publish_failed sid=%s", ctx.sid)
 
-    def _emit_client_mic_open(self, ctx: AdapterContext) -> None:
+    def _emit_client_mic_open(
+        self,
+        ctx: AdapterContext,
+        *,
+        vendor: Optional[str] = None,
+        opened_ts: Optional[int] = None,
+    ) -> None:
         if ctx.client_mic_open:
             return
 
         self._cancel_mic_open_timer(ctx)
         ctx.client_mic_open = True
+        payload: Dict[str, object] = {"state": "open"}
+        if isinstance(vendor, str) and vendor:
+            payload["vendor"] = vendor[:64]
+        if isinstance(opened_ts, int):
+            payload["ts"] = opened_ts
         try:
             asyncio.create_task(
-                self._publish(EVT_CLIENT_MIC_OPEN, ctx.sid, {"state": "open"})
+                self._publish(EVT_CLIENT_MIC_OPEN, ctx.sid, payload)
             )
         except RuntimeError:
             _log.warning("evt=ws_client_mic_publish_failed sid=%s", ctx.sid)

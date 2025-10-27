@@ -485,6 +485,15 @@
       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
         audioPlayer.handleTtsEnd(frame);
       }
+    } else if (frame.type === "start_listening") {
+      const recorder = window.AudioRecorder;
+      if (recorder && typeof recorder.handleStartListening === "function") {
+        try {
+          recorder.handleStartListening(frame);
+        } catch (err) {
+          console.warn("AudioRecorder start_listening handler error", err);
+        }
+      }
     } else if (frame.type === "asr.partial") {
       const view = window.TranscriptView;
       if (view && typeof view.handlePartial === "function") {
