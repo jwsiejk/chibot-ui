@@ -384,6 +384,9 @@ class EngineV2:
         self._publish_tts_mask(sid, "engaged")
 
         payload = {"meta": tts_meta}
+        req_id = session.req_id
+        if isinstance(req_id, str) and req_id:
+            payload["req_id"] = req_id
         event = self._envelope(sid, EVT_TTS_START, payload)
         self._publish(event)
         self._set_state(sid, RESPONDING, reason="tts_start")
@@ -439,8 +442,20 @@ class EngineV2:
         session = self._ensure_session(sid)
 
         provided_req_id = req_id if isinstance(req_id, str) and req_id else None
-        if provided_req_id is not None:
-            session.req_id = provided_req_id
+
+        active_req_id = session.req_id
+
+        if not isinstance(active_req_id, str) or not active_req_id:
+            active_req_id = provided_req_id or f"req-{uuid.uuid4().hex}"
+            session.req_id = active_req_id
+        elif provided_req_id is not None and provided_req_id != active_req_id:
+            _log.debug(
+                "evt=asr_final_req_id_mismatch sid=%s active_req_id=%s provided_req_id=%s",
+                sid,
+                active_req_id,
+                provided_req_id,
+            )
+            return
 
         if session.turn_started_ms is not None:
             elapsed = _now_ms() - session.turn_started_ms
@@ -453,8 +468,7 @@ class EngineV2:
         turn_id = session.turn_id or str(uuid.uuid4())
         session.turn_id = turn_id
 
-        req_id = session.req_id or provided_req_id or f"req-{uuid.uuid4().hex}"
-        session.req_id = req_id
+        req_id = active_req_id
 
         if not session.asr_final_emitted:
             session.asr_final_emitted = True
@@ -503,11 +517,22 @@ class EngineV2:
         if session.turn_started_ms is None:
             session.turn_started_ms = _now_ms()
 
-        if isinstance(req_id, str) and req_id:
-            session.req_id = req_id
-        else:
-            req_id = session.req_id or f"req-{uuid.uuid4().hex}"
-            session.req_id = req_id
+        active_req_id = session.req_id
+        if not isinstance(active_req_id, str) or not active_req_id:
+            if isinstance(req_id, str) and req_id:
+                active_req_id = req_id
+            else:
+                active_req_id = f"req-{uuid.uuid4().hex}"
+            session.req_id = active_req_id
+        elif isinstance(req_id, str) and req_id and req_id != active_req_id:
+            _log.debug(
+                "evt=asr_partial_req_id_mismatch sid=%s active_req_id=%s provided_req_id=%s",
+                sid,
+                active_req_id,
+                req_id,
+            )
+
+        req_id = session.req_id or active_req_id
 
         if session.turn_id is None:
             session.turn_id = str(uuid.uuid4())
@@ -1211,6 +1236,9 @@ class EngineV2:
             aggregator.on_tts_end()
 
         payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
+        req_id = session.req_id
+        if isinstance(req_id, str) and req_id:
+            payload["req_id"] = req_id
         if reason:
             payload["reason"] = reason
 

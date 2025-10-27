@@ -1,219 +1,365 @@
-diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
-index 3e2cdc4061ebd58daeec554cf18b0ac1e7351639..5033b509596cd95f58b9f318326d0ee0092dd143 100644
---- a/app/voice_v2/__init__.py
-+++ b/app/voice_v2/__init__.py
-@@ -5,51 +5,53 @@ EVT_WS_CLOSE = "EVT_WS_CLOSE"
- EVT_WS_JSON_RECV = "EVT_WS_JSON_RECV"
- EVT_WS_JSON_SEND = "EVT_WS_JSON_SEND"
- EVT_WS_AUDIO_RECV = "EVT_WS_AUDIO_RECV"
- EVT_WS_AUDIO_SEND = "EVT_WS_AUDIO_SEND"
- EVT_CHAT_USER = "EVT_CHAT_USER"
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 9a11e398dc2e406c68e96601b4ebbfb7f6bc1106..0e49d223ce44efd0ce50e55e94c0b8a478fec9c2 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -430,109 +430,131 @@ class ASRRuntime:
+             meta_stream = metadata.get("stream_id")
+             if isinstance(meta_stream, str) and meta_stream:
+                 state.stream_id = meta_stream
+         stream_id = state.stream_id or ""
+         if not stream_id:
+             stream_id = f"dg-stream-{uuid.uuid4().hex}"
+             state.stream_id = stream_id
+         state.last_stream_id = stream_id
+         state.dg_msgs_partial += 1
+         len_chars = int(metadata.get("len_chars") or len(text))
+         utterance_id = metadata.get("utterance_id")
+         if not utterance_id:
+             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+         latency_ms = int(metadata.get("latency_ms") or 0)
  
- EVT_TTS_START = "EVT_TTS_START"
- EVT_TTS_END = "EVT_TTS_END"
+         _log.debug(
+             "evt=dg_partial sid=%s stream_id=%s len_chars=%d is_final=false "
+             "utterance_id=%s latency_ms=%d",
+             sid,
+             stream_id,
+             len_chars,
+             utterance_id,
+             latency_ms,
+         )
  
- EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
- EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
+-        req_id = state.req_id
+-        if req_id is None:
+-            req_id = f"dg-{uuid.uuid4().hex}"
++        ensure_session = getattr(self._engine, "_ensure_session", None)
++        engine_session = ensure_session(sid) if callable(ensure_session) else None
++        engine_req_id = None
++        if engine_session is not None:
++            candidate = getattr(engine_session, "req_id", None)
++            if isinstance(candidate, str) and candidate:
++                engine_req_id = candidate
++
++        if isinstance(engine_req_id, str) and engine_req_id:
++            req_id = engine_req_id
+             state.req_id = req_id
+-        session = getattr(self._engine, "_ensure_session", None)
+-        if callable(session):
+-            engine_session = session(sid)
+-            if getattr(engine_session, "req_id", None) != req_id:
++        else:
++            req_id = state.req_id
++            if not isinstance(req_id, str) or not req_id:
++                req_id = f"dg-{uuid.uuid4().hex}"
++                state.req_id = req_id
++            if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
+                 engine_session.req_id = req_id
  
- EVT_MIC_GATE = "EVT_MIC_GATE"
- EVT_BARGE_IN = "EVT_BARGE_IN"
+         try:
+             self._engine.on_asr_partial(sid, req_id, _PARTIAL_CONFIDENCE, text)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_engine_partial_failed sid=%s", sid)
  
- EVT_ASR_READY = "EVT_ASR_READY"
- EVT_ASR_OPEN = "EVT_ASR_OPEN"
- EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
- EVT_ASR_FINAL = "EVT_ASR_FINAL"
- EVT_NLU = "EVT_NLU"
- EVT_NLG = "EVT_NLG"
- EVT_LLM_RESPONSE_START = "EVT_LLM_RESPONSE_START"
- EVT_LLM_RESPONSE_END = "EVT_LLM_RESPONSE_END"
- EVT_DIALOG_PLAN = "EVT_DIALOG_PLAN"
- EVT_HUD_STATE = "EVT_HUD_STATE"
-+EVT_CLIENT_MIC_OPEN = "EVT_CLIENT_MIC_OPEN"
+         event = {
+             "type": EVT_ASR_PARTIAL,
+             "sid": sid,
+             "req_id": req_id,
+             "text": text,
+             "confidence": _PARTIAL_CONFIDENCE,
+             "vendor": "deepgram",
+         }
+         bus.publish(event)
  
- __all__ = [
-     "EVT_WS_OPEN",
-     "EVT_WS_CLOSE",
-     "EVT_WS_JSON_RECV",
-     "EVT_WS_JSON_SEND",
-     "EVT_WS_AUDIO_RECV",
-     "EVT_WS_AUDIO_SEND",
-     "EVT_CHAT_USER",
-     "EVT_TTS_START",
-     "EVT_TTS_END",
-     "EVT_POLICY_APPLIED",
-     "EVT_ACWR_RECOMPUTE",
-     "EVT_MIC_GATE",
-     "EVT_BARGE_IN",
-     "EVT_ASR_READY",
-     "EVT_ASR_OPEN",
-     "EVT_ASR_PARTIAL",
-     "EVT_ASR_FINAL",
-     "EVT_NLU",
-     "EVT_NLG",
-     "EVT_LLM_RESPONSE_START",
-     "EVT_LLM_RESPONSE_END",
-     "EVT_DIALOG_PLAN",
-     "EVT_HUD_STATE",
-+    "EVT_CLIENT_MIC_OPEN",
- ]
+     def _on_final(
+         self, sid: str, text: str, metadata: Dict[str, object] | None = None
+     ) -> None:
+         if not isinstance(text, str) or not text.strip():
+             return
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+ 
+         metadata = metadata or {}
+         if state.stream_id is None:
+             meta_stream = metadata.get("stream_id")
+             if isinstance(meta_stream, str) and meta_stream:
+                 state.stream_id = meta_stream
+         stream_id = state.stream_id or ""
+         if not stream_id:
+             stream_id = f"dg-stream-{uuid.uuid4().hex}"
+             state.stream_id = stream_id
+         state.last_stream_id = stream_id
+         state.dg_msgs_final += 1
+         len_chars = int(metadata.get("len_chars") or len(text))
+         utterance_id = metadata.get("utterance_id")
+         if not utterance_id:
+             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+         latency_ms = int(metadata.get("latency_ms") or 0)
+ 
+-        req_id = str(uuid.uuid4())
+-        state.req_id = None
+-
+         ensure_session = getattr(self._engine, "_ensure_session", None)
+-        if callable(ensure_session):
+-            engine_session = ensure_session(sid)
+-            engine_session.req_id = req_id
++        engine_session = ensure_session(sid) if callable(ensure_session) else None
++        engine_req_id = None
++        if engine_session is not None:
++            candidate = getattr(engine_session, "req_id", None)
++            if isinstance(candidate, str) and candidate:
++                engine_req_id = candidate
++
++        if isinstance(engine_req_id, str) and engine_req_id:
++            req_id = engine_req_id
++        elif isinstance(state.req_id, str) and state.req_id:
++            req_id = state.req_id
++            if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
++                engine_session.req_id = req_id
++        else:
++            req_id = f"req-{uuid.uuid4().hex}"
++            if engine_session is not None:
++                engine_session.req_id = req_id
++
++        state.req_id = None
+ 
+         _log.debug(
+             "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
+             "utterance_id=%s latency_ms=%d req_id=%s",
+             sid,
+             stream_id,
+             len_chars,
+             utterance_id,
+             latency_ms,
+             req_id,
+         )
+ 
+         try:
+             self._engine.on_asr_final(sid, text, req_id)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_engine_final_failed sid=%s", sid)
+ 
+         event = {
+             "type": EVT_ASR_FINAL,
+             "sid": sid,
+             "req_id": req_id,
+             "text": text,
+             "confidence": _FINAL_CONFIDENCE,
+             "vendor": "deepgram",
+         }
 diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index b762b2a3867319a27d54c400ea34dff81c209e3e..5b2bd6cc13bf4d624b857f32bad450dc00d161f0 100644
+index 5b2bd6cc13bf4d624b857f32bad450dc00d161f0..a2a1a358c3fe85116f49fb2215c4dd8cdab9fec4 100644
 --- a/app/voice_v2/engine.py
 +++ b/app/voice_v2/engine.py
-@@ -100,50 +100,51 @@ class _Envelope:
-     """Normalized telemetry envelope returned by the engine hooks."""
- 
-     type: str
-     sid: str
-     payload: Dict[str, Any]
- 
-     def to_dict(self) -> Dict[str, Any]:
-         data = {"type": self.type, "sid": self.sid}
-         data.update(self.payload)
-         if "meta" in data and isinstance(data["meta"], Mapping):
-             data["meta"] = dict(data["meta"])
-         if "ts_ms" not in data or not isinstance(data["ts_ms"], int):
-             data["ts_ms"] = _now_ms()
-         data.setdefault("who", "server")
-         data.setdefault("source", "voice_engine")
-         data.setdefault("level", "debug")
-         return data
- 
- 
- @dataclass
- class _TurnSession:
-     state: str = READY
-     turn_id: Optional[str] = None
-     turn_started_ms: Optional[int] = None
-     tts_utt_id: Optional[str] = None
-+    tts_mask_phase: str = "off"
-     req_id: Optional[str] = None
-     perf_first_partial_ms: Optional[int] = None
-     perf_final_ms: Optional[int] = None
-     perf_tts_start_ms: Optional[int] = None
-     asr_final_emitted: bool = False
-     nlu_emitted: bool = False
-     policy_emitted: bool = False
-     nlg_emitted: bool = False
-     plan_emitted: bool = False
-     greet_emitted: bool = False
-     plan: Optional[Dict[str, Any]] = None
-     suggestions_emitted: bool = False
- 
- 
- class _NullExporter:
-     """Exporter stub used when no exporter is provided."""
- 
-     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
-         return
- 
- 
- class EngineV2:
-     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
- 
-     def __init__(
-@@ -1017,66 +1018,70 @@ class EngineV2:
-         def _policy_supplier() -> Dict[str, Any]:
-             snapshot = self.policy_snapshot or {}
-             return dict(snapshot)
- 
-         aggregator = VADAggregator(sid, self._bus, _policy_supplier)
-         aggregator.set_grant_handler(
-             lambda source, info, *, _sid=sid: self._handle_vad_grant(_sid, source, info)
-         )
-         self._aggregators[sid] = aggregator
- 
-     def _handle_vad_grant(self, sid: str, source: str, info: Dict[str, Any]) -> None:
-         reason = "vad_grant"
-         mode = info.get("mode") if isinstance(info, Mapping) else None
-         if mode == "and":
-             reason = "vad_grant_dual"
-         self.on_auto_barge_attempt(sid, source, reason=reason)
- 
-     def _set_state(self, sid: str, new_state: str, *, reason: str | None = None) -> None:
-         """Transition the session state machine and emit telemetry breadcrumbs."""
- 
+@@ -362,50 +362,53 @@ class EngineV2:
          session = self._ensure_session(sid)
-         previous = session.state
-         if previous == new_state:
+         session.tts_utt_id = utt_id
+         if session.turn_started_ms is not None and session.perf_tts_start_ms is None:
+             elapsed = _now_ms() - session.turn_started_ms
+             if elapsed < 0:
+                 elapsed = 0
+             session.perf_tts_start_ms = elapsed
+ 
+         hold_ms = post_hold_ms or 0
+         voice_id, locale = self._voice_profile()
+         tts_meta = {
+             "tts": {"utt_id": utt_id, "post_hold_ms": hold_ms},
+             "voice_id": voice_id,
+             "locale": locale,
+         }
+         self._gate.set_reason(
+             "tts_active",
+             True,
+             sid=sid,
+             meta=tts_meta,
+         )
+ 
+         self._publish_tts_mask(sid, "engaged")
+ 
+         payload = {"meta": tts_meta}
++        req_id = session.req_id
++        if isinstance(req_id, str) and req_id:
++            payload["req_id"] = req_id
+         event = self._envelope(sid, EVT_TTS_START, payload)
+         self._publish(event)
+         self._set_state(sid, RESPONDING, reason="tts_start")
+ 
+         aggregator = self._aggregators.get(sid)
+         if aggregator is not None:
+             aggregator.on_tts_start()
+ 
+         self._streaming.set_output_finalizer(
+             sid, lambda _sid=sid: self.cancel_current_tts(_sid, reason="ended")
+         )
+ 
+     def on_tts_end(
+         self, sid: str, utt_id: str, post_hold_ms: int | None = None
+     ) -> None:
+         """Release the TTS mask and optionally engage a post-hold."""
+ 
+         hold_ms = post_hold_ms or 0
+         self._teardown_tts(sid, utt_id, post_hold_ms=hold_ms, transition_to_ready=True)
+ 
+     def emit_tts_audio_chunk(self, sid: str, chunk: bytes | bytearray | memoryview) -> None:
+         """Emit a PCM chunk for server-to-client playback."""
+ 
+         if not isinstance(sid, str) or not sid:
+             raise ValueError("sid must be a non-empty string")
+@@ -417,119 +420,141 @@ class EngineV2:
+         else:  # pragma: no cover - defensive guard
+             raise TypeError("chunk must be bytes-like")
+ 
+         if not pcm_chunk:
              return
  
-+        if new_state == LISTENING:
-+            self._publish_tts_mask(sid, "off")
-+
-         now_ms = _now_ms()
+         byte_count = len(pcm_chunk)
+         if byte_count % _PCM_SAMPLE_BYTES != 0:
+             raise ValueError("PCM chunk must align to 16-bit mono frames")
  
-         if new_state == LISTENING:
-             session.turn_id = str(uuid.uuid4())
-             session.req_id = f"req-{uuid.uuid4().hex}"
-             session.turn_started_ms = now_ms
-             session.perf_first_partial_ms = None
-             session.perf_final_ms = None
-             session.perf_tts_start_ms = None
-             session.asr_final_emitted = False
-             session.nlu_emitted = False
-             session.policy_emitted = False
-             session.nlg_emitted = False
-             session.plan_emitted = False
-             session.suggestions_emitted = False
-             session.plan = None
-+            session.tts_mask_phase = "off"
-             begin_payload = {
-                 "turn_id": session.turn_id,
-                 "req_id": session.req_id,
-                 "meta": {
-                     "turn_id": session.turn_id,
-                     "req_id": session.req_id,
-                     "state": LISTENING,
-                 },
+         meta = {
+             "byte_count": byte_count,
+             "audio": dict(_PCM_DESCRIPTOR),
+             "ws": {"dir": "out", "size": byte_count},
+         }
+         payload: Dict[str, Any] = {"meta": meta, "chunk": pcm_chunk}
+         event = self._envelope(sid, EVT_WS_AUDIO_SEND, payload)
+         self._publish(event)
+ 
+     def on_asr_final(self, sid: str, text: str, req_id: str | None = None) -> None:
+         """Observe the final ASR transcript for a turn."""
+ 
+         session = self._ensure_session(sid)
+ 
+         provided_req_id = req_id if isinstance(req_id, str) and req_id else None
+-        if provided_req_id is not None:
+-            session.req_id = provided_req_id
++
++        active_req_id = session.req_id
++
++        if not isinstance(active_req_id, str) or not active_req_id:
++            active_req_id = provided_req_id or f"req-{uuid.uuid4().hex}"
++            session.req_id = active_req_id
++        elif provided_req_id is not None and provided_req_id != active_req_id:
++            _log.debug(
++                "evt=asr_final_req_id_mismatch sid=%s active_req_id=%s provided_req_id=%s",
++                sid,
++                active_req_id,
++                provided_req_id,
++            )
++            return
+ 
+         if session.turn_started_ms is not None:
+             elapsed = _now_ms() - session.turn_started_ms
+             if elapsed < 0:
+                 elapsed = 0
+             session.perf_final_ms = elapsed
+         else:
+             session.turn_started_ms = _now_ms()
+ 
+         turn_id = session.turn_id or str(uuid.uuid4())
+         session.turn_id = turn_id
+ 
+-        req_id = session.req_id or provided_req_id or f"req-{uuid.uuid4().hex}"
+-        session.req_id = req_id
++        req_id = active_req_id
+ 
+         if not session.asr_final_emitted:
+             session.asr_final_emitted = True
+ 
+             final_payload: Dict[str, Any] = {
+                 "req_id": req_id,
+                 "turn_id": turn_id,
+                 "text": text,
+                 "confidence": 0.9,
              }
-             begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
-             self._publish(begin_event)
+             final_event = self._envelope(sid, EVT_ASR_FINAL, final_payload)
+             self._publish(final_event)
+ 
+             if not session.nlu_emitted:
+                 nlu_result = self._nlu.extract(req_id, text)
+                 nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
+                 nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
+                 self._publish(nlu_event)
+                 session.nlu_emitted = True
+                 self._emit_dialog_plan(sid, session, req_id, turn_id, text)
+                 self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
+ 
+             self._emit_user_chat_message(
+                 sid,
+                 text,
+                 turn_id,
+                 req_id,
+                 origin="voice",
+             )
+ 
+         self._set_state(sid, THINKING, reason="asr_final")
+ 
+     def on_asr_partial(
+         self,
+         sid: str,
+         req_id: str,
+         confidence: float,
+         partial_text: Optional[str] = None,
+     ) -> None:
+         session = self._ensure_session(sid)
+ 
+         if session.state == READY:
+             self._set_state(sid, LISTENING, reason="asr_partial")
+             session = self._ensure_session(sid)
+ 
+         if session.turn_started_ms is None:
+             session.turn_started_ms = _now_ms()
+ 
+-        if isinstance(req_id, str) and req_id:
+-            session.req_id = req_id
+-        else:
+-            req_id = session.req_id or f"req-{uuid.uuid4().hex}"
+-            session.req_id = req_id
++        active_req_id = session.req_id
++        if not isinstance(active_req_id, str) or not active_req_id:
++            if isinstance(req_id, str) and req_id:
++                active_req_id = req_id
++            else:
++                active_req_id = f"req-{uuid.uuid4().hex}"
++            session.req_id = active_req_id
++        elif isinstance(req_id, str) and req_id and req_id != active_req_id:
++            _log.debug(
++                "evt=asr_partial_req_id_mismatch sid=%s active_req_id=%s provided_req_id=%s",
++                sid,
++                active_req_id,
++                req_id,
++            )
++
++        req_id = session.req_id or active_req_id
+ 
+         if session.turn_id is None:
+             session.turn_id = str(uuid.uuid4())
+ 
+         if isinstance(partial_text, str):
+             partial_value = partial_text
+         elif partial_text:
+             partial_value = str(partial_text)
+         else:
+             partial_value = ""
+ 
+         payload: Dict[str, Any] = {
+             "req_id": req_id,
+             "text": partial_value,
+             "confidence": float(confidence),
+         }
+         partial_event = self._envelope(sid, EVT_ASR_PARTIAL, payload)
+         self._publish(partial_event)
  
          if (
-             new_state == READY
-             and previous in {LISTENING, THINKING, RESPONDING}
-             and session.turn_id
+             session.perf_first_partial_ms is None
+             and session.turn_started_ms is not None
+             and session.req_id == req_id
          ):
-             start_ms = session.turn_started_ms or now_ms
-             duration_ms = now_ms - start_ms
-             if duration_ms <= 0:
-                 duration_ms = 1
-             turn_id = session.turn_id
-             req_id = session.req_id
-             end_payload = {
-                 "turn_id": turn_id,
-@@ -1157,50 +1162,55 @@ class EngineV2:
-         voice_block = snapshot.get("voice")
-         if isinstance(voice_block, Mapping):
-             voice_candidate = voice_block.get("voice_id")
-             if isinstance(voice_candidate, str) and voice_candidate:
-                 voice_id = voice_candidate
-             locale_candidate = voice_block.get("locale")
-             if isinstance(locale_candidate, str) and locale_candidate:
-                 locale = locale_candidate
- 
-         top_level_voice = snapshot.get("voice_id")
-         if isinstance(top_level_voice, str) and top_level_voice:
-             voice_id = voice_id or top_level_voice
- 
-         top_level_locale = snapshot.get("locale")
-         if isinstance(top_level_locale, str) and top_level_locale:
-             locale = locale or top_level_locale
- 
-         if not voice_id:
-             voice_id = _DEFAULT_VOICE_ID
-         if not locale:
-             locale = _DEFAULT_LOCALE
- 
-         return voice_id, locale
- 
-     def _publish_tts_mask(self, sid: str, phase: str) -> None:
-+        session = self._ensure_session(sid)
-+        current = session.tts_mask_phase
-+        if current == phase:
-+            return
-+        session.tts_mask_phase = phase
+             elapsed = _now_ms() - session.turn_started_ms
+@@ -1189,50 +1214,53 @@ class EngineV2:
+         if current == phase:
+             return
+         session.tts_mask_phase = phase
          mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})
          self._publish(mask_event)
  
@@ -236,649 +382,43 @@ index b762b2a3867319a27d54c400ea34dff81c209e3e..5b2bd6cc13bf4d624b857f32bad450dc
              aggregator.on_tts_end()
  
          payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
++        req_id = session.req_id
++        if isinstance(req_id, str) and req_id:
++            payload["req_id"] = req_id
          if reason:
              payload["reason"] = reason
  
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 4f9768558b6684ad857e6a970e5b23486bef31bc..c3cfd2e8736f112c04daf17dcf51e42bad209583 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1,49 +1,50 @@
- """chat.v2 WebSocket adapter for AskChip."""
- from __future__ import annotations
+         event = self._envelope(sid, EVT_TTS_END, payload)
+         self._publish(event)
  
- import asyncio
- import contextlib
- import inspect
- import logging
- import os
- import time
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
+         self._publish_tts_mask(sid, "off")
+         self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
  
- import json
- from urllib.parse import parse_qs
- 
- from app import config
- from app.logging_setup import current_sid
- from app.security.jwt_utils import verify_ws_token
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ASR_OPEN,
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-+    EVT_CLIENT_MIC_OPEN,
-     EVT_HUD_STATE,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_frame
- 
- try:  # pragma: no cover - uvicorn is an optional dependency in tests
-     from uvicorn.protocols.utils import ClientDisconnected
- except Exception:  # pragma: no cover - fallback when uvicorn missing
-     class ClientDisconnected(Exception):  # type: ignore[no-redef]
-         """Fallback placeholder when uvicorn is unavailable."""
- 
- 
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
- RATE_LIMIT_WINDOW_SECONDS = 2.0
- RATE_LIMIT_CLOSE_CODE = 1013
- _AUDIO_VIOLATION_LIMIT = 3
- 
- AUDIO_SEQ_WINDOW = 8
-@@ -211,50 +212,55 @@ class AdapterContext:
-     sid_bucket: Optional[TokenBucket] = None
-     ip_bucket: Optional[TokenBucket] = None
-     audio_profile: Optional[Dict[str, Any]] = None
-     accepting_audio: bool = True
-     audio_violation_count: int = 0
-     outbound_queue_depth: int = 0
-     backpressure_state: Literal["off", "on"] = "off"
-     outbox: asyncio.Queue[Dict[str, Any]] | None = None
-     outbound_task: asyncio.Task[None] | None = None
-     subscription_token: Optional[str] = None
-     audio_subscription_token: Optional[str] = None
-     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
-     asr_ready: bool = False
-     asr_subscription_token: Optional[str] = None
-     asr_open_subscription_token: Optional[str] = None
-     server_keepalive_task: asyncio.Task[None] | None = None
-     last_policy_interaction: Optional[Dict[str, Any]] = None
-     partial_seq: int = 0
-     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
-     send_lock: asyncio.Lock | None = None
-     tts_end_ts: Optional[float] = None
-     diag_audio_seen: bool = False
-     diag_timer: asyncio.TimerHandle | None = None
-     await_user_expected: bool = False
-     await_user_pending: bool = False
-+    await_user_after_mask: bool = False
-+    tts_mask_phase: str = "off"
-+    mask_subscription_token: Optional[str] = None
-+    hud_state: Optional[str] = None
-+    client_mic_open: bool = False
- 
- 
- class ChatV2Adapter:
-     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
- 
-     def __init__(
-         self,
-         engine: EngineHooks | None = None,
-         exporter: FileExporter | None = None,
-         *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
-     ) -> None:
-         self.engine = engine
-         self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
-         self._ip_buckets: Dict[str, TokenBucket] = {}
-         self._contexts: Dict[str, AdapterContext] = {}
-         self._ping_interval_ms = max(
-             0,
-             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
-         )
-         self.tts_runtime = None
-         self.asr_runtime = None
-@@ -983,76 +989,114 @@ class ChatV2Adapter:
+         if transition_to_ready:
+             if post_hold_ms > 0:
+                 self._gate.set_reason(
+                     "system_hold",
+                     True,
+                     sid=sid,
+                     meta={"tts": {"utt_id": utt_id, "post_hold_ms": post_hold_ms}},
                  )
-                 return
-             _queue_payload(payload)
- 
-         def _handle_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid or ctx.outbox is None:
-                 return
-             payload = self._extract_outbound_payload(ctx, event)
-             if payload is None:
-                 return
- 
-             def _on_loop() -> None:
-                 frame_type = payload.get("type")
-                 if frame_type == "tts.end":
-                     self._handle_tts_end_diag(ctx, loop)
-                     self._initiate_listen_handoff(ctx)
-                 _enqueue(payload)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
- 
-+        def _complete_listen_handoff() -> None:
-+            if not ctx.await_user_pending:
-+                ctx.await_user_after_mask = False
-+                return
-+
-+            ctx.await_user_pending = False
-+            ctx.await_user_expected = False
-+            ctx.await_user_after_mask = False
-+            if ctx.outbox is None:
-+                return
-+
-+            _enqueue({"type": "start_listening"})
-+            self._emit_hud_state(ctx, "Listening")
-+            self._emit_client_mic_open(ctx)
-+
-         def _handle_asr_open_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
- 
-             def _on_loop() -> None:
-                 if not ctx.await_user_pending:
-+                    ctx.await_user_after_mask = False
-                     return
--                ctx.await_user_pending = False
--                ctx.await_user_expected = False
--                if ctx.outbox is None:
-+                if ctx.tts_mask_phase != "off":
-+                    ctx.await_user_after_mask = True
-                     return
--                _enqueue({"type": "start_listening"})
--                try:
--                    asyncio.create_task(
--                        self._publish(EVT_HUD_STATE, ctx.sid, {"state": "Listening"})
--                    )
--                except RuntimeError:
--                    _log.warning("evt=ws_hud_state_publish_failed sid=%s", ctx.sid)
-+                _complete_listen_handoff()
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.asr_open_subscription_token = bus.subscribe(EVT_ASR_OPEN, _handle_asr_open_event)
- 
-+        def _handle_tts_mask_event(event: dict) -> None:
-+            if event.get("sid") != ctx.sid:
-+                return
-+
-+            raw_phase = event.get("phase")
-+            if not isinstance(raw_phase, str):
-+                return
-+
-+            stripped = raw_phase.strip()
-+            normalized = stripped.lower()
-+            phase_value = normalized or stripped or raw_phase
-+
-+            def _on_loop() -> None:
-+                ctx.tts_mask_phase = phase_value
-+                if ctx.tts_mask_phase != "off":
-+                    ctx.await_user_after_mask = False
-+                    ctx.client_mic_open = False
-+                    ctx.hud_state = None
-+                    return
-+                if ctx.await_user_pending and ctx.await_user_after_mask:
-+                    _complete_listen_handoff()
-+
-+            try:
-+                loop.call_soon_threadsafe(_on_loop)
-+            except RuntimeError:
-+                pass
-+
-+        ctx.mask_subscription_token = bus.subscribe("EVT_TTS_MASK", _handle_tts_mask_event)
-+
-         def _handle_audio_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
-             chunk = event.get("chunk")
-             if isinstance(chunk, (bytes, bytearray, memoryview)):
-                 chunk_bytes = bytes(chunk)
+                 asyncio.create_task(self._release_system_hold_after(sid, post_hold_ms))
              else:
-                 return
+                 self._set_state(sid, READY, reason="tts_end")
  
-             def _deliver() -> None:
-                 task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
-                 ctx.audio_tasks.add(task)
- 
-                 def _on_done(done: asyncio.Task[None]) -> None:
-                     ctx.audio_tasks.discard(done)
-                     try:
-                         done.result()
-                     except asyncio.CancelledError:
-                         pass
-                     except Exception:  # pragma: no cover - defensive logging
-                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
- 
-                 task.add_done_callback(_on_done)
- 
-             try:
-@@ -1232,50 +1276,55 @@ class ChatV2Adapter:
-         send: Callable[[dict], Awaitable[None]],
-         chunk: bytes,
-     ) -> None:
-         lock = self._ensure_send_lock(ctx)
-         async with lock:
-             try:
-                 await send({"type": "websocket.send", "bytes": chunk})
-             except ClientDisconnected:
-                 _log.info(
-                     "evt=ws_outbound_client_disconnect sid=%s phase=audio",
-                     ctx.sid,
-                 )
- 
-     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
-         self._cancel_diag_timer(ctx)
-         token = ctx.subscription_token
-         ctx.subscription_token = None
-         if token:
-             bus.unsubscribe(token)
- 
-         audio_token = ctx.audio_subscription_token
-         ctx.audio_subscription_token = None
-         if audio_token:
-             bus.unsubscribe(audio_token)
- 
-+        mask_token = ctx.mask_subscription_token
-+        ctx.mask_subscription_token = None
-+        if mask_token:
-+            bus.unsubscribe(mask_token)
-+
-         task = ctx.outbound_task
-         ctx.outbound_task = None
-         if task:
-             task.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await task
- 
-         ctx.partial_coalescer.cancel()
- 
-         for task in list(ctx.audio_tasks):
-             task.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await task
-         ctx.audio_tasks.clear()
- 
-         ctx.outbox = None
- 
-     def _handle_tts_end_diag(
-         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
-     ) -> None:
-         if not config.DIAG_AUDIO_GUARD:
-             return
-         ctx.tts_end_ts = time.monotonic()
-         ctx.diag_audio_seen = False
-         self._cancel_diag_timer(ctx)
-@@ -1308,75 +1357,99 @@ class ChatV2Adapter:
-                     self._emit_no_audio_diag,
-                     ctx,
-                     loop,
-                 )
-             except RuntimeError:
-                 ctx.diag_timer = None
-             return
- 
-         bus.publish(
-             {
-                 "type": "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
-                 "sid": ctx.sid,
-                 "since_ms": int(elapsed * 1000),
-                 "suggestions": ["permission", "device", "recorder", "transport"],
-             }
-         )
-         ctx.diag_audio_seen = True
- 
-     @staticmethod
-     def _cancel_diag_timer(ctx: AdapterContext) -> None:
-         timer = ctx.diag_timer
-         ctx.diag_timer = None
-         if timer is not None:
-             timer.cancel()
- 
-+    def _emit_hud_state(self, ctx: AdapterContext, state: str) -> None:
-+        if ctx.hud_state == state:
-+            return
-+
-+        ctx.hud_state = state
-+        try:
-+            asyncio.create_task(self._publish(EVT_HUD_STATE, ctx.sid, {"state": state}))
-+        except RuntimeError:
-+            _log.warning("evt=ws_hud_state_publish_failed sid=%s", ctx.sid)
-+
-+    def _emit_client_mic_open(self, ctx: AdapterContext) -> None:
-+        if ctx.client_mic_open:
-+            return
-+
-+        ctx.client_mic_open = True
-+        try:
-+            asyncio.create_task(
-+                self._publish(EVT_CLIENT_MIC_OPEN, ctx.sid, {"state": "open"})
-+            )
-+        except RuntimeError:
-+            _log.warning("evt=ws_client_mic_publish_failed sid=%s", ctx.sid)
-+
-     def _initiate_listen_handoff(self, ctx: AdapterContext) -> None:
-         if not ctx.await_user_expected or ctx.await_user_pending:
-             return
- 
-         runtime = getattr(self, "asr_runtime", None)
-         if runtime is None:
-             return
- 
-         prearm = getattr(runtime, "prearm", None)
-         if not callable(prearm):
-             return
- 
-         ctx.await_user_pending = True
-+        ctx.await_user_after_mask = False
-         try:
-             prearm(ctx.sid)
-         except Exception:  # pragma: no cover - defensive logging
-             ctx.await_user_pending = False
-             _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
- 
-     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
-         token = ctx.asr_subscription_token
-         ctx.asr_subscription_token = None
-         if token:
-             bus.unsubscribe(token)
-         ctx.asr_ready = False
-+        ctx.await_user_after_mask = False
- 
-         open_token = ctx.asr_open_subscription_token
-         ctx.asr_open_subscription_token = None
-         if open_token:
-             bus.unsubscribe(open_token)
-         
-     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
-         """Record the estimated outbound queue depth and emit diagnostics if needed."""
- 
-         ctx = self._contexts.get(sid)
-         if ctx is None:
-             return
- 
-         if not isinstance(queued, int):
-             try:
-                 queued = int(queued)
-             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
-                 raise TypeError("queued must be an integer") from exc
- 
-         await self._update_backpressure(ctx, max(0, queued))
- 
-     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
-         event = {
-             "schema_version": "1",
-             "type": event_type,
-diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
-index 3a7943c5e2198386cf31c40fa64e4a87751adafb..2269a1eaaee7584600dccbde4b545076b1641da5 100644
---- a/tests/test_adapter_outbound_bridge.py
-+++ b/tests/test_adapter_outbound_bridge.py
-@@ -1,39 +1,45 @@
- """Tests for the outbound WebSocket bridge in the chat.v2 adapter."""
- from __future__ import annotations
- 
- import asyncio
- import json
- import os
- import unittest
- import uuid
- from typing import Any, Callable, Dict
- 
- os.environ.setdefault("SECRET_KEY", "test-secret")
- 
- from app.telemetry import bus
--from app.voice_v2 import EVT_ASR_OPEN, EVT_HUD_STATE, EVT_WS_AUDIO_SEND, EVT_WS_JSON_SEND
-+from app.voice_v2 import (
-+    EVT_ASR_OPEN,
-+    EVT_CLIENT_MIC_OPEN,
-+    EVT_HUD_STATE,
-+    EVT_WS_AUDIO_SEND,
-+    EVT_WS_JSON_SEND,
-+)
- from app.security.jwt_utils import mint_ws_token
- from app.ws.adapter import (
-     CHAT_V2_SUBPROTOCOL,
-     EVT_WS_OUTBOX_DROP,
-     ChatV2Adapter,
- )
- 
- 
- class RecordingEngine:
-     """Engine stub that captures the opened session identifier."""
- 
-     def __init__(self) -> None:
-         self.open_sid: str | None = None
- 
-     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
-         self.open_sid = sid
- 
- 
- class _StubAsrRuntime:
-     """ASR runtime stub that records prearm invocations."""
- 
-     def __init__(self) -> None:
-         self.prearm_calls: list[str] = []
- 
-     def on_ws_open(self, sid: str) -> None:  # pragma: no cover - noop for tests
-@@ -162,50 +168,53 @@ class TestAdapterOutboundBridge(unittest.TestCase):
-             self._test_payload_forwarded(
-                 {
-                     "type": "chat.history",
-                     "messages": [{"id": "m-1", "role": "user", "text": "hi"}],
-                 }
-             )
-         )
- 
-     def test_sid_isolation_drops_other_sessions(self) -> None:
-         asyncio.run(self._test_sid_isolation())
- 
-     def test_chat_message_dropped_for_other_sessions(self) -> None:
-         asyncio.run(
-             self._test_payload_other_sid_drop({"type": "chat.message", "message_id": "ignored"})
-         )
- 
-     def test_allow_list_blocks_unknown_types(self) -> None:
-         asyncio.run(self._test_allow_list())
- 
-     def test_backpressure_reports_drops(self) -> None:
-         asyncio.run(self._test_backpressure())
- 
-     def test_start_listening_handoff_after_tts_end(self) -> None:
-         asyncio.run(self._test_start_listening_handoff())
- 
-+    def test_listen_handoff_waits_for_mask_off(self) -> None:
-+        asyncio.run(self._test_listen_handoff_waits_for_mask_off())
-+
-     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
-         asyncio.run(self._test_audio_forwarding())
- 
-     async def _test_happy_path(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             payload = {"type": "policy.interaction", "interaction_id": "abc123"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
- 
-             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction")
-             self.assertEqual(frame, payload)
- 
-             frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
-             self.assertEqual(len(frames), 1)
-         finally:
-             await harness.close()
- 
-     async def _test_payload_forwarded(self, payload: Dict[str, Any]) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-@@ -310,48 +319,132 @@ class TestAdapterOutboundBridge(unittest.TestCase):
-                 "interaction_id": "turn-1",
-                 "actions": ["assistant.say", "assistant.await_user"],
-             }
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
-             await asyncio.sleep(0.01)
- 
-             tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
- 
-             await harness.wait_for(lambda: bool(runtime.prearm_calls))
-             self.assertEqual(runtime.prearm_calls, [sid])
- 
-             bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
- 
-             frame = await harness.wait_for_outbound(
-                 lambda data: data.get("type") == "start_listening"
-             )
-             self.assertEqual(frame, {"type": "start_listening"})
- 
-             await harness.wait_for(lambda: bool(hud_events))
-             self.assertEqual(hud_events[-1]["meta"].get("state"), "Listening")
-         finally:
-             bus.unsubscribe(token)
-             await harness.close()
- 
-+    async def _test_listen_handoff_waits_for_mask_off(self) -> None:
-+        engine = RecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+        runtime = _StubAsrRuntime()
-+        adapter.asr_runtime = runtime
-+        harness = OutboundHarness(adapter, engine)
-+        await harness.start()
-+
-+        sid = harness.sid
-+        recorded: list[dict] = []
-+        interesting = {"EVT_TTS_MASK", EVT_HUD_STATE, EVT_CLIENT_MIC_OPEN}
-+
-+        def _record(event: dict) -> None:
-+            if event.get("sid") != sid:
-+                return
-+            if event.get("type") in interesting:
-+                recorded.append(dict(event))
-+
-+        token_order = bus.subscribe("*", _record)
-+        try:
-+            policy_payload = {
-+                "type": "policy.interaction",
-+                "interaction_id": "turn-1",
-+                "actions": ["assistant.say", "assistant.await_user"],
-+            }
-+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
-+            await asyncio.sleep(0.01)
-+
-+            bus.publish({"type": "EVT_TTS_MASK", "sid": sid, "phase": "engaged"})
-+
-+            tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
-+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
-+
-+            await harness.wait_for(lambda: bool(runtime.prearm_calls))
-+            self.assertEqual(runtime.prearm_calls, [sid])
-+
-+            bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
-+
-+            await asyncio.sleep(0.05)
-+            start_frames = [
-+                frame for frame in harness.outbound_frames if frame.get("type") == "start_listening"
-+            ]
-+            self.assertFalse(start_frames)
-+
-+            bus.publish({"type": "EVT_TTS_MASK", "sid": sid, "phase": "off"})
-+
-+            frame = await harness.wait_for_outbound(
-+                lambda data: data.get("type") == "start_listening"
-+            )
-+            self.assertEqual(frame, {"type": "start_listening"})
-+
-+            await harness.wait_for(
-+                lambda: any(evt.get("type") == EVT_CLIENT_MIC_OPEN for evt in recorded)
-+            )
-+
-+            mask_off_index = next(
-+                idx
-+                for idx, event in enumerate(recorded)
-+                if event.get("type") == "EVT_TTS_MASK" and event.get("phase") == "off"
-+            )
-+            hud_index = next(
-+                idx
-+                for idx, event in enumerate(recorded)
-+                if event.get("type") == EVT_HUD_STATE
-+            )
-+            mic_index = next(
-+                idx
-+                for idx, event in enumerate(recorded)
-+                if event.get("type") == EVT_CLIENT_MIC_OPEN
-+            )
-+
-+            hud_events = [evt for evt in recorded if evt.get("type") == EVT_HUD_STATE]
-+            mic_events = [evt for evt in recorded if evt.get("type") == EVT_CLIENT_MIC_OPEN]
-+
-+            self.assertLess(mask_off_index, hud_index)
-+            self.assertLess(hud_index, mic_index)
-+            self.assertEqual(recorded[hud_index]["meta"].get("state"), "Listening")
-+            self.assertEqual(recorded[mic_index]["meta"].get("state"), "open")
-+            self.assertEqual(len(hud_events), 1)
-+            self.assertEqual(len(mic_events), 1)
-+        finally:
-+            bus.unsubscribe(token_order)
-+            await harness.close()
-+
-     async def _test_audio_forwarding(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             chunk = b"\x01\x02" * 80
-             event = {
-                 "type": EVT_WS_AUDIO_SEND,
-                 "sid": harness.sid,
-                 "chunk": chunk,
-                 "meta": {"byte_count": len(chunk)},
-             }
-             bus.publish(event)
- 
-             received = await harness.wait_for_binary(lambda data: data == chunk)
-             self.assertEqual(received, chunk)
-         finally:
-             await harness.close()
- 
- 
- if __name__ == "__main__":  # pragma: no cover - convenience
-     unittest.main()
-diff --git a/tests/test_tts_mask_lifecycle.py b/tests/test_tts_mask_lifecycle.py
-index cb754f527a7c99d72fec1b10ce45835dece2a9a7..a97244cdc84151cdb71af76aea995e01143ded07 100644
---- a/tests/test_tts_mask_lifecycle.py
-+++ b/tests/test_tts_mask_lifecycle.py
-@@ -1,28 +1,28 @@
+     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
+         frame = {"type": "policy.interaction", "policy": snapshot}
+         preview = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {"ws": {"dir": "out", "size": len(preview.encode("utf-8")), "preview": preview}}
+diff --git a/tests/test_turn_state_machine.py b/tests/test_turn_state_machine.py
+index 889be5eacc1cb2a70b36d33addab0b9e6f59cb88..50a342811555239edf658e2337f8b3974452d834 100644
+--- a/tests/test_turn_state_machine.py
++++ b/tests/test_turn_state_machine.py
+@@ -1,27 +1,28 @@
  import unittest
  
--from app.voice_v2 import EVT_MIC_GATE
-+from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END
- from app.voice_v2.engine import EngineV2
++from app.voice_v2 import EVT_ASR_FINAL
+ from app.voice_v2.engine import EngineV2, EVT_TURN_BEGIN, EVT_TURN_END
  
  
  class _FakeExporter:
@@ -897,103 +437,97 @@ index cb754f527a7c99d72fec1b10ce45835dece2a9a7..a97244cdc84151cdb71af76aea995e01
          self.events.append(dict(event))
  
  
- class TtsMaskLifecycleTests(unittest.TestCase):
-     def test_tts_mask_breadcrumb_sequence(self) -> None:
-         bus = _FakeBus()
-         exporter = _FakeExporter()
-         engine = EngineV2(exporter, telemetry_bus=bus)
+ class TurnStateMachineTests(unittest.TestCase):
+     def setUp(self) -> None:
+         self.bus = _FakeBus()
+         self.exporter = _FakeExporter()
+         self.engine = EngineV2(self.exporter, telemetry_bus=self.bus)
+         self.sid = "sid-turn"
+@@ -53,28 +54,50 @@ class TurnStateMachineTests(unittest.TestCase):
  
-@@ -32,28 +32,93 @@ class TtsMaskLifecycleTests(unittest.TestCase):
-         engine.on_tts_start(sid, utt_id)
+         begin_index = self.bus.events.index(begin_event)
+         end_index = self.bus.events.index(end_event)
+         self.assertLess(begin_index, end_index)
  
-         mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-         self.assertEqual(len(mask_events), 1)
-         self.assertEqual(mask_events[0]["phase"], "engaged")
+     def test_new_turn_id_on_second_listening(self) -> None:
+         self.engine.on_open(self.sid, {})
+         self.engine.on_audio(self.sid, b"abc", seq=1)
+         self.engine.on_asr_final(self.sid, "hi")
+         self.engine.on_tts_start(self.sid, "utt-1")
+         self.engine.on_tts_end(self.sid, "utt-1")
  
-         gate_events = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE]
-         self.assertGreaterEqual(len(gate_events), 1)
-         engaged_gate = gate_events[-1]["meta"]["gate"]
-         engaged_effective = engaged_gate.get("effective", engaged_gate["mask"])
-         self.assertTrue(engaged_effective)
-         self.assertIn("tts_active", engaged_gate["reasons"])
-         self.assertTrue(engaged_gate["reasons"]["tts_active"])
+         first_turn_id = self._turn_events(EVT_TURN_BEGIN)[0]["meta"]["turn_id"]
  
-         engine.on_tts_end(sid, utt_id)
+         self.engine.on_audio(self.sid, b"def", seq=1)
+         self.engine.on_asr_final(self.sid, "hello")
+         self.engine.on_tts_start(self.sid, "utt-2")
+         self.engine.on_tts_end(self.sid, "utt-2")
  
-         mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-         self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "off"])
+         begin_events = self._turn_events(EVT_TURN_BEGIN)
+         self.assertEqual(len(begin_events), 2)
+         second_turn_id = begin_events[-1]["meta"]["turn_id"]
  
-         final_gate = [evt for evt in bus.events if evt["type"] == EVT_MIC_GATE][-1]
-         final_gate_meta = final_gate["meta"]["gate"]
-         final_effective = final_gate_meta.get("effective", final_gate_meta["mask"])
-         self.assertFalse(final_effective)
-         self.assertFalse(final_gate_meta["reasons"]["tts_active"])
+         self.assertNotEqual(first_turn_id, second_turn_id)
  
-+    def test_tts_mask_not_republished_when_phase_unchanged(self) -> None:
-+        bus = _FakeBus()
-+        exporter = _FakeExporter()
-+        engine = EngineV2(exporter, telemetry_bus=bus)
++    def test_stale_final_req_id_ignored(self) -> None:
++        self.engine.on_open(self.sid, {})
++        self.engine.on_audio(self.sid, b"abc", seq=1)
 +
-+        sid = "sid-dup"
-+        utt_id = "utt-dup"
++        first_begin = self._turn_events(EVT_TURN_BEGIN)[0]
++        first_req_id = first_begin["req_id"]
 +
-+        engine.on_tts_start(sid, utt_id)
-+        engine.on_tts_end(sid, utt_id)
++        self.engine.on_asr_final(self.sid, "hi", req_id=first_req_id)
++        self.engine.on_tts_start(self.sid, "utt-1")
++        self.engine.on_tts_end(self.sid, "utt-1")
 +
-+        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-+        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "off"])
++        first_final_count = len(self._turn_events(EVT_ASR_FINAL))
 +
-+        before_len = len(mask_events)
-+        engine.on_tts_end(sid, utt_id)
-+        mask_events_after = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
-+        self.assertEqual(len(mask_events_after), before_len)
-+        self.assertEqual([evt["phase"] for evt in mask_events_after], ["engaged", "off"])
++        self.engine.on_audio(self.sid, b"def", seq=2)
++        current_req_id = self._turn_events(EVT_TURN_BEGIN)[-1]["req_id"]
++        self.assertNotEqual(first_req_id, current_req_id)
 +
-+    def test_tts_end_emits_mask_after_end(self) -> None:
-+        bus = _FakeBus()
-+        exporter = _FakeExporter()
-+        engine = EngineV2(exporter, telemetry_bus=bus)
++        self.engine.on_asr_final(self.sid, "late final", req_id=first_req_id)
 +
-+        sid = "sid-order"
-+        utt_id = "utt-order"
++        finals_after_stale = len(self._turn_events(EVT_ASR_FINAL))
++        self.assertEqual(first_final_count, finals_after_stale)
 +
-+        engine.on_tts_start(sid, utt_id)
-+        initial_len = len(bus.events)
-+        engine.on_tts_end(sid, utt_id)
-+
-+        events_after = bus.events[initial_len:]
-+        interesting = [
-+            evt
-+            for evt in events_after
-+            if evt["type"] in {EVT_TTS_END, "EVT_TTS_MASK"}
-+        ]
-+        self.assertGreaterEqual(len(interesting), 2)
-+        self.assertEqual(interesting[0]["type"], EVT_TTS_END)
-+        self.assertEqual(interesting[1]["type"], "EVT_TTS_MASK")
-+        self.assertEqual(interesting[1].get("phase"), "off")
-+
-+    def test_listening_transition_forces_mask_off(self) -> None:
-+        bus = _FakeBus()
-+        exporter = _FakeExporter()
-+        engine = EngineV2(exporter, telemetry_bus=bus)
-+
-+        sid = "sid-listen"
-+        utt_id = "utt-listen"
-+
-+        engine.on_tts_start(sid, utt_id)
-+        engine.on_audio(sid, b"\x00\x00" * 2, seq=1)
-+
-+        off_index = None
-+        turn_begin_index = None
-+        for idx, event in enumerate(bus.events):
-+            if event.get("type") == "EVT_TTS_MASK" and event.get("phase") == "off":
-+                off_index = idx
-+            if event.get("type") == "EVT_TURN_BEGIN" and turn_begin_index is None:
-+                turn_begin_index = idx
-+        self.assertIsNotNone(off_index)
-+        self.assertIsNotNone(turn_begin_index)
-+        self.assertLess(off_index, turn_begin_index)  # mask off precedes listening begin
-+
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tests/test_voice_turn_pipeline.py b/tests/test_voice_turn_pipeline.py
+index f3df3a93cc363d834c036dc1caf6cccc3335352b..27b648fda527635520c9be4baf8600a2c35ac850 100644
+--- a/tests/test_voice_turn_pipeline.py
++++ b/tests/test_voice_turn_pipeline.py
+@@ -112,31 +112,30 @@ class TestVoiceTurnPipeline(unittest.TestCase):
+ 
+         self.assertEqual(1, len(finals))
+         self.assertEqual(1, len(nlus))
+         self.assertEqual(1, len(policies))
+         self.assertEqual(1, len(llm_starts))
+         self.assertEqual(1, len(llm_ends))
+         self.assertEqual(1, len(nlgs))
+         self.assertEqual(1, len(tts_starts))
+         self.assertEqual(1, len(tts_ends))
+ 
+         final_event = finals[0]
+         final_req_id = final_event.get("req_id")
+         self.assertIsInstance(final_req_id, str)
+         self.assertIn("confidence", final_event)
+ 
+         for collection in (
+             nlus,
+             policies,
+             llm_starts,
+             llm_ends,
+             nlgs,
+             tts_starts,
+             tts_ends,
+         ):
+             event = collection[0]
+-            if "req_id" in event:
+-                self.assertEqual(final_req_id, event["req_id"])
++            self.assertEqual(final_req_id, event["req_id"])
+ 
  
  if __name__ == "__main__":
      unittest.main()

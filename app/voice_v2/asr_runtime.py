@@ -452,14 +452,23 @@ class ASRRuntime:
             latency_ms,
         )
 
-        req_id = state.req_id
-        if req_id is None:
-            req_id = f"dg-{uuid.uuid4().hex}"
+        ensure_session = getattr(self._engine, "_ensure_session", None)
+        engine_session = ensure_session(sid) if callable(ensure_session) else None
+        engine_req_id = None
+        if engine_session is not None:
+            candidate = getattr(engine_session, "req_id", None)
+            if isinstance(candidate, str) and candidate:
+                engine_req_id = candidate
+
+        if isinstance(engine_req_id, str) and engine_req_id:
+            req_id = engine_req_id
             state.req_id = req_id
-        session = getattr(self._engine, "_ensure_session", None)
-        if callable(session):
-            engine_session = session(sid)
-            if getattr(engine_session, "req_id", None) != req_id:
+        else:
+            req_id = state.req_id
+            if not isinstance(req_id, str) or not req_id:
+                req_id = f"dg-{uuid.uuid4().hex}"
+                state.req_id = req_id
+            if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
                 engine_session.req_id = req_id
 
         try:
@@ -504,13 +513,26 @@ class ASRRuntime:
             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
         latency_ms = int(metadata.get("latency_ms") or 0)
 
-        req_id = str(uuid.uuid4())
-        state.req_id = None
-
         ensure_session = getattr(self._engine, "_ensure_session", None)
-        if callable(ensure_session):
-            engine_session = ensure_session(sid)
-            engine_session.req_id = req_id
+        engine_session = ensure_session(sid) if callable(ensure_session) else None
+        engine_req_id = None
+        if engine_session is not None:
+            candidate = getattr(engine_session, "req_id", None)
+            if isinstance(candidate, str) and candidate:
+                engine_req_id = candidate
+
+        if isinstance(engine_req_id, str) and engine_req_id:
+            req_id = engine_req_id
+        elif isinstance(state.req_id, str) and state.req_id:
+            req_id = state.req_id
+            if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
+                engine_session.req_id = req_id
+        else:
+            req_id = f"req-{uuid.uuid4().hex}"
+            if engine_session is not None:
+                engine_session.req_id = req_id
+
+        state.req_id = None
 
         _log.debug(
             "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "

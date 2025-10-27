@@ -134,8 +134,7 @@ class TestVoiceTurnPipeline(unittest.TestCase):
             tts_ends,
         ):
             event = collection[0]
-            if "req_id" in event:
-                self.assertEqual(final_req_id, event["req_id"])
+            self.assertEqual(final_req_id, event["req_id"])
 
 
 if __name__ == "__main__":

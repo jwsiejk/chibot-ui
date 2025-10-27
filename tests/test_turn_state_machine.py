@@ -1,5 +1,6 @@
 import unittest
 
+from app.voice_v2 import EVT_ASR_FINAL
 from app.voice_v2.engine import EngineV2, EVT_TURN_BEGIN, EVT_TURN_END
 
 
@@ -74,6 +75,28 @@ class TurnStateMachineTests(unittest.TestCase):
         second_turn_id = begin_events[-1]["meta"]["turn_id"]
 
         self.assertNotEqual(first_turn_id, second_turn_id)
+
+    def test_stale_final_req_id_ignored(self) -> None:
+        self.engine.on_open(self.sid, {})
+        self.engine.on_audio(self.sid, b"abc", seq=1)
+
+        first_begin = self._turn_events(EVT_TURN_BEGIN)[0]
+        first_req_id = first_begin["req_id"]
+
+        self.engine.on_asr_final(self.sid, "hi", req_id=first_req_id)
+        self.engine.on_tts_start(self.sid, "utt-1")
+        self.engine.on_tts_end(self.sid, "utt-1")
+
+        first_final_count = len(self._turn_events(EVT_ASR_FINAL))
+
+        self.engine.on_audio(self.sid, b"def", seq=2)
+        current_req_id = self._turn_events(EVT_TURN_BEGIN)[-1]["req_id"]
+        self.assertNotEqual(first_req_id, current_req_id)
+
+        self.engine.on_asr_final(self.sid, "late final", req_id=first_req_id)
+
+        finals_after_stale = len(self._turn_events(EVT_ASR_FINAL))
+        self.assertEqual(first_final_count, finals_after_stale)
 
 
 if __name__ == "__main__":
