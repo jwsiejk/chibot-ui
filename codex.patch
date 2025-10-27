@@ -1,491 +1,143 @@
-diff --git a/tests/test_listen_handoff.py b/tests/test_listen_handoff.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..97fa6b1a8a4359661d7b4120de14b0a9e65230d1
---- /dev/null
-+++ b/tests/test_listen_handoff.py
-@@ -0,0 +1,277 @@
-+import asyncio
-+import json
-+import logging
-+import os
-+from typing import Any, Callable, Dict, List, Optional, Tuple
-+
-+os.environ.setdefault("SECRET_KEY", "test-secret")
-+
-+import pytest
-+
-+from app.ws import adapter as adapter_module
-+from app.ws.adapter import AdapterContext, ChatV2Adapter
-+from app.voice_v2 import EVT_ASR_READY, EVT_TTS_END, EVT_TTS_MASK, EVT_WS_JSON_SEND
-+
-+
-+class FakeBus:
-+    def __init__(self) -> None:
-+        self._counter = 0
-+        self._subscriptions: Dict[str, Tuple[str, Callable[[dict], None]]] = {}
-+        self._by_event: Dict[str, List[str]] = {}
-+        self.published: List[dict] = []
-+
-+    def subscribe(self, event_type: str, callback: Callable[[dict], None]) -> str:
-+        token = f"token-{self._counter}";
-+        self._counter += 1
-+        self._subscriptions[token] = (event_type, callback)
-+        self._by_event.setdefault(event_type, []).append(token)
-+        return token
-+
-+    def unsubscribe(self, token: str) -> None:
-+        event_type, _ = self._subscriptions.pop(token, (None, None))
-+        if not event_type:
-+            return
-+        tokens = self._by_event.get(event_type)
-+        if tokens and token in tokens:
-+            tokens.remove(token)
-+            if not tokens:
-+                self._by_event.pop(event_type, None)
-+
-+    def publish(self, event: dict) -> None:
-+        self.published.append(event)
-+        event_type = event.get("type")
-+        tokens = list(self._by_event.get(event_type, ()))
-+        tokens += list(self._by_event.get("*", ()))
-+        for token in tokens:
-+            _, callback = self._subscriptions.get(token, (None, None))
-+            if callback:
-+                callback(event)
-+
-+
-+class FakeASRRuntime:
-+    def __init__(self, bus: FakeBus) -> None:
-+        self.bus = bus
-+        self.prearm_calls: List[str] = []
-+        self.open_calls: List[Tuple[str, str]] = []
-+
-+    def prearm(self, sid: str) -> None:
-+        self.prearm_calls.append(sid)
-+
-+    async def open_if_needed(self, sid: str, *, req_id: str) -> None:
-+        self.open_calls.append((sid, req_id))
-+
-+
-+class FakeWebSocket:
-+    def __init__(self) -> None:
-+        self.sent: List[dict] = []
-+        self.text_frames: List[Dict[str, Any]] = []
-+        self.binary_frames: List[bytes] = []
-+
-+    async def send(self, message: dict) -> None:
-+        self.sent.append(message)
-+        if message.get("type") == "websocket.send":
-+            payload = message.get("text")
-+            if payload is not None:
-+                self.text_frames.append(json.loads(payload))
-+            chunk = message.get("bytes")
-+            if chunk is not None:
-+                self.binary_frames.append(chunk)
-+
-+    def frames_of_type(self, frame_type: str) -> List[Dict[str, Any]]:
-+        return [frame for frame in self.text_frames if frame.get("type") == frame_type]
-+
-+
-+async def wait_for(predicate: Callable[[], bool], timeout: float = 1.0) -> None:
-+    loop = asyncio.get_running_loop()
-+    deadline = loop.time() + timeout
-+    while not predicate():
-+        if loop.time() >= deadline:
-+            raise AssertionError("condition not met before timeout")
-+        await asyncio.sleep(0.01)
-+
-+
-+class ListenHarness:
-+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
-+        self.bus = FakeBus()
-+        monkeypatch.setattr(adapter_module, "bus", self.bus)
-+        self.adapter = ChatV2Adapter()
-+        self.runtime = FakeASRRuntime(self.bus)
-+        self.adapter.asr_runtime = self.runtime
-+        self.ctx = AdapterContext(sid="S1", headers={})
-+        self.ws = FakeWebSocket()
-+        self._started = False
-+        self._last_req_id: Optional[str] = None
-+
-+    async def start(self) -> None:
-+        if self._started:
-+            raise RuntimeError("harness already started")
-+        self._started = True
-+        self.adapter._start_asr_ready_tracker(self.ctx)
-+        self.adapter._start_outbound_bridge(self.ctx, self.ws.send)
-+
-+    async def stop(self) -> None:
-+        if not self._started:
-+            return
-+        await self.adapter._cleanup_outbound(self.ctx)
-+        self.adapter._stop_asr_ready_tracker(self.ctx)
-+        self._started = False
-+
-+    async def expect_policy(self, req_id: str) -> None:
-+        payload = {
-+            "type": "policy.interaction",
-+            "actions": ["assistant.await_user"],
-+            "req_id": req_id,
-+        }
-+        self.bus.publish({"type": EVT_WS_JSON_SEND, "sid": self.ctx.sid, "payload": payload})
-+        await wait_for(lambda: self.ctx.await_user_expected and self.ctx.await_user_req_id == req_id)
-+
-+    async def emit_tts_end(self, req_id: str) -> None:
-+        frame = {"type": "tts.end", "req_id": req_id}
-+        self.bus.publish({"type": EVT_WS_JSON_SEND, "sid": self.ctx.sid, "payload": frame})
-+        self.bus.publish({"type": EVT_TTS_END, "sid": self.ctx.sid, "req_id": req_id})
-+        await asyncio.sleep(0)
-+        self._last_req_id = req_id
-+
-+    async def set_mask(self, phase: str) -> None:
-+        self.bus.publish({"type": EVT_TTS_MASK, "sid": self.ctx.sid, "phase": phase})
-+        await wait_for(lambda: self.ctx.tts_mask_phase == phase)
-+
-+    async def publish_asr_ready(self, req_id: Optional[str] = None) -> None:
-+        payload = {"type": EVT_ASR_READY, "sid": self.ctx.sid}
-+        if req_id is not None:
-+            payload["req_id"] = req_id
-+        self.bus.publish(payload)
-+        await wait_for(lambda: self.ctx.asr_ready)
-+
-+    async def wait_for_listen_task(self) -> None:
-+        await wait_for(lambda: self.ctx.listen_handoff_task is None)
-+
-+    @property
-+    def last_req_id(self) -> Optional[str]:
-+        return self._last_req_id
-+
-+
-+def test_listen_handoff_basic_success(
-+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-+) -> None:
-+    async def _run() -> None:
-+        harness = ListenHarness(monkeypatch)
-+        await harness.start()
-+        caplog.set_level(logging.INFO)
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index e1798a05a74b87e09b0c78f8b9596b29517d0875..aaf0bd2cbeaef20e0f77cb68714b5bbbfb6edcb3 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -1,34 +1,33 @@
+ """chat.v2 WebSocket adapter for AskChip."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import contextlib
+-import inspect
+ import logging
+-import os
+ import time
++import sys, platform, socket, os, inspect
+ from dataclasses import dataclass, field
+ from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
+ 
+ import json
+ from urllib.parse import parse_qs
+ 
+ from app import config
+ from app.logging_setup import current_sid
+ from app.security.jwt_utils import verify_ws_token
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ASR_OPEN,
+     EVT_ASR_READY,
+     EVT_CHAT_USER,
+     EVT_CLIENT_MIC_OPEN,
+     EVT_HUD_STATE,
+     EVT_TTS_END,
+     EVT_TTS_MASK,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.ws.validator import validate_frame
+@@ -379,50 +378,102 @@ class ChatV2Adapter:
+             _log.warning(
+                 "evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs
+             )
+             await send({"type": "websocket.close", "code": 4401, "reason": reason})
+             return
+ 
+         sid = claims.get("sid")
+         sub = claims.get("sub")
+         aud = claims.get("aud")
+         if not sid or not sub or aud != CHAT_V2_SUBPROTOCOL:
+             reason = "jwt_claims_invalid"
+             _log.warning(
+                 "evt=ws_accept_reject code=4401 reason=%s path=%s", reason, path_qs
+             )
+             await send({"type": "websocket.close", "code": 4401, "reason": reason})
+             return
+ 
+         principal: Dict[str, Any] = dict(claims)
+         is_admin = bool(principal.get("is_admin"))
+ 
+         _log.info("evt=ws_accept_token_ok sid=%s", sid)
+ 
+         _log.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
+         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+ 
++        # ---- BEGIN RUNTIME BANNER ----
 +        try:
-+            await harness.expect_policy("r1")
-+            await harness.emit_tts_end("r1")
-+            await harness.set_mask("off")
-+            await wait_for(lambda: ("S1", "r1") in harness.runtime.open_calls)
-+            await harness.publish_asr_ready("r1")
-+            await harness.wait_for_listen_task()
-+            await wait_for(lambda: len(harness.ws.frames_of_type("asr.ready")) == 1)
-+            await wait_for(lambda: len(harness.ws.frames_of_type("input.start")) == 1)
++            adapter_file = __file__
++            engine_file = None
++            asr_file = None
++            if self.engine is not None:
++                eng_mod = sys.modules.get(self.engine.__class__.__module__)
++                engine_file = getattr(eng_mod, "__file__", None)
++            if getattr(self, "asr_runtime", None) is not None:
++                asr_mod = sys.modules.get(self.asr_runtime.__class__.__module__)
++                asr_file = getattr(asr_mod, "__file__", None)
 +
-+            frames = [
-+                frame
-+                for frame in harness.ws.text_frames
-+                if frame.get("type") in {"asr.ready", "input.start"}
-+            ]
-+            assert [frame.get("type") for frame in frames] == ["asr.ready", "input.start"]
-+            assert frames[0]["input"]["codec"] == "opus"
-+            assert frames[1]["capture"]["timeslice_ms"] == 250
-+            assert any(
-+                "evt=listen_handoff_ready" in record.message and "req_id=r1" in record.message
-+                for record in caplog.records
++            build_id = os.getenv("BUILD_ID", "") or os.getenv("SOURCE_VERSION", "") or "unknown"
++            host = socket.gethostname()
++            pid = os.getpid()
++            cwd = os.getcwd()
++
++            offered = scope.get("subprotocols", [])
++            selected = "chat.v2"
++
++            banner = {
++                "type": "server.banner",
++                "build_id": build_id,
++                "host": host,
++                "pid": pid,
++                "cwd": cwd,
++                "python": sys.version.split()[0],
++                "platform": platform.platform(),
++                "ws_path": scope.get("path"),
++                "subprotocols_offered": offered,
++                "subprotocol_selected": selected,
++                "adapter_file": adapter_file,
++                "engine_file": engine_file,
++                "asr_file": asr_file,
++            }
++
++            await send({"type": "websocket.send", "text": json.dumps(banner, separators=(",", ":"))})
++            _log.info(
++                "evt=server_banner build_id=%s host=%s pid=%d path=%s subproto=%s adapter=%s engine=%s asr=%s",
++                build_id,
++                host,
++                pid,
++                scope.get("path"),
++                selected,
++                adapter_file,
++                engine_file,
++                asr_file,
 +            )
-+        finally:
-+            await harness.stop()
++        except Exception:
++            _log.exception("evt=server_banner_emit_failed")
++        # ---- END RUNTIME BANNER ----
 +
-+    asyncio.run(_run())
-+
-+
-+def test_listen_handoff_duplicate_triggers_collapse(
-+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-+) -> None:
-+    async def _run() -> None:
-+        harness = ListenHarness(monkeypatch)
-+        await harness.start()
-+        caplog.set_level(logging.INFO)
-+        try:
-+            await harness.expect_policy("r1")
-+            await harness.emit_tts_end("r1")
-+            await harness.set_mask("off")
-+            await wait_for(lambda: ("S1", "r1") in harness.runtime.open_calls)
-+            await harness.publish_asr_ready("r1")
-+            await harness.wait_for_listen_task()
-+            await wait_for(lambda: len(harness.ws.frames_of_type("asr.ready")) == 1)
-+            await wait_for(lambda: len(harness.ws.frames_of_type("input.start")) == 1)
-+
-+            initial = [
-+                frame
-+                for frame in harness.ws.text_frames
-+                if frame.get("type") in {"asr.ready", "input.start"}
-+            ]
-+            assert len(initial) == 2
-+
-+            await harness.expect_policy("r1")
-+            await harness.emit_tts_end("r1")
-+            await harness.set_mask("off")
-+            await asyncio.sleep(0.05)
-+
-+            frames = [
-+                frame
-+                for frame in harness.ws.text_frames
-+                if frame.get("type") in {"asr.ready", "input.start"}
-+            ]
-+            assert len(frames) == 2
-+            assert any(
-+                "evt=listen_handoff_skip" in record.message and "req_id=r1" in record.message
-+                for record in caplog.records
-+            )
-+        finally:
-+            await harness.stop()
-+
-+    asyncio.run(_run())
-+
-+
-+def test_listen_handoff_new_turn_resets(
-+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-+) -> None:
-+    async def _run() -> None:
-+        harness = ListenHarness(monkeypatch)
-+        await harness.start()
-+        caplog.set_level(logging.INFO)
-+        try:
-+            await harness.expect_policy("r1")
-+            await harness.emit_tts_end("r1")
-+            await harness.set_mask("off")
-+            await wait_for(lambda: ("S1", "r1") in harness.runtime.open_calls)
-+            await harness.publish_asr_ready("r1")
-+            await harness.wait_for_listen_task()
-+            await wait_for(lambda: len(harness.ws.frames_of_type("input.start")) == 1)
-+
-+            await harness.expect_policy("r2")
-+            await harness.emit_tts_end("r2")
-+            await harness.set_mask("off")
-+            await wait_for(lambda: ("S1", "r2") in harness.runtime.open_calls)
-+            await harness.publish_asr_ready("r2")
-+            await harness.wait_for_listen_task()
-+            await wait_for(lambda: len(harness.ws.frames_of_type("input.start")) == 2)
-+
-+            frames = [
-+                frame
-+                for frame in harness.ws.text_frames
-+                if frame.get("type") in {"asr.ready", "input.start"}
-+            ]
-+            assert [frame.get("type") for frame in frames] == [
-+                "asr.ready",
-+                "input.start",
-+                "asr.ready",
-+                "input.start",
-+            ]
-+            assert harness.runtime.open_calls == [("S1", "r1"), ("S1", "r2")]
-+            assert any(
-+                "evt=listen_handoff_ready" in record.message and "req_id=r2" in record.message
-+                for record in caplog.records
-+            )
-+        finally:
-+            await harness.stop()
-+
-+    asyncio.run(_run())
-diff --git a/tests/test_mask_jitter_and_duplicates.py b/tests/test_mask_jitter_and_duplicates.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..3131c1192c6413d8fd8155614bd8a591cb6d818e
---- /dev/null
-+++ b/tests/test_mask_jitter_and_duplicates.py
-@@ -0,0 +1,47 @@
-+import asyncio
-+import logging
-+
-+import pytest
-+
-+from tests.test_listen_handoff import ListenHarness, wait_for
-+
-+
-+def test_mask_jitter_aborts_and_reschedules(
-+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-+) -> None:
-+    async def _run() -> None:
-+        harness = ListenHarness(monkeypatch)
-+        await harness.start()
-+        caplog.set_level(logging.INFO)
-+        try:
-+            await harness.expect_policy("r1")
-+            await harness.emit_tts_end("r1")
-+
-+            await harness.set_mask("on")
-+            await harness.set_mask("off")
-+            await wait_for(lambda: harness.ctx.listen_handoff_task is not None)
-+
-+            await harness.set_mask("on")
-+            await asyncio.sleep(0.05)
-+
-+            assert any(
-+                "evt=listen_handoff_aborted" in record.message and "reason=mask_on" in record.message
-+                for record in caplog.records
-+            )
-+
-+            await harness.set_mask("off")
-+            await harness.publish_asr_ready("r1")
-+            await harness.wait_for_listen_task()
-+            await wait_for(lambda: len(harness.ws.frames_of_type("asr.ready")) == 1)
-+            await wait_for(lambda: len(harness.ws.frames_of_type("input.start")) == 1)
-+
-+            frames = [
-+                frame
-+                for frame in harness.ws.text_frames
-+                if frame.get("type") in {"asr.ready", "input.start"}
-+            ]
-+            assert [frame.get("type") for frame in frames] == ["asr.ready", "input.start"]
-+        finally:
-+            await harness.stop()
-+
-+    asyncio.run(_run())
-diff --git a/tests/test_no_audio_watchdog.py b/tests/test_no_audio_watchdog.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..9b7868ff93f28ccc69bbf9c2d4f44f813860bb85
---- /dev/null
-+++ b/tests/test_no_audio_watchdog.py
-@@ -0,0 +1,149 @@
-+import asyncio
-+import logging
-+import os
-+from typing import Optional
-+
-+os.environ.setdefault("SECRET_KEY", "test-secret")
-+
-+import pytest
-+
-+from app import config
-+from app.ws import adapter as adapter_module
-+from app.voice_v2 import EVT_WS_JSON_SEND
-+
-+from tests.test_listen_handoff import ListenHarness, wait_for
-+
-+
-+def attach_no_audio_bridge(harness: ListenHarness) -> None:
-+    logger = logging.getLogger(adapter_module.__name__)
-+
-+    def _forward(event: dict) -> None:
-+        if event.get("type") != "EVT_DIAG_NO_AUDIO_FROM_CLIENT":
-+            return
-+        req_id: Optional[str] = harness.last_req_id
-+        logger.warning(
-+            "evt=listen_no_audio_watchdog diag=no_audio_after_listen sid=%s req_id=%s",
-+            harness.ctx.sid,
-+            req_id,
-+        )
-+        frame = {"type": "diag", "key": "no_audio"}
-+        if req_id:
-+            frame["req_id"] = req_id
-+        harness.bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.ctx.sid, "payload": frame})
-+
-+    harness.bus.subscribe("EVT_DIAG_NO_AUDIO_FROM_CLIENT", _forward)
-+
-+
-+def _trigger_no_audio(harness: ListenHarness, req_id: str) -> None:
-+    loop = asyncio.get_running_loop()
-+    key = harness.adapter._turn_key(harness.ctx, req_id)
-+    harness.ctx.diag_timer_key = key
-+    harness.ctx.tts_end_ts = adapter_module.time.monotonic() - 9.0
-+    harness.ctx.diag_audio_seen = False
-+    harness.adapter._emit_no_audio_diag(harness.ctx, loop, key)
-+
-+
-+def test_no_audio_watchdog_emits_diag(
-+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-+) -> None:
-+    async def _run() -> None:
-+        monkeypatch.setattr(config, "DIAG_AUDIO_GUARD", True)
-+        harness = ListenHarness(monkeypatch)
-+        await harness.start()
-+        attach_no_audio_bridge(harness)
-+        caplog.set_level(logging.INFO)
-+        try:
-+            await harness.expect_policy("r1")
-+            await harness.emit_tts_end("r1")
-+            await harness.set_mask("off")
-+            await wait_for(lambda: ("S1", "r1") in harness.runtime.open_calls)
-+            await harness.publish_asr_ready("r1")
-+            await harness.wait_for_listen_task()
-+
-+            _trigger_no_audio(harness, "r1")
-+            await asyncio.sleep(0.05)
-+
-+            diag_events = [
-+                evt for evt in harness.bus.published if evt.get("type") == "EVT_DIAG_NO_AUDIO_FROM_CLIENT"
-+            ]
-+            assert len(diag_events) == 1
-+
-+            assert any("diag=no_audio_after_listen" in record.message for record in caplog.records)
-+        finally:
-+            await harness.stop()
-+
-+    asyncio.run(_run())
-+
-+
-+def test_no_audio_watchdog_cancels_on_audio(
-+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-+) -> None:
-+    async def _run() -> None:
-+        monkeypatch.setattr(config, "DIAG_AUDIO_GUARD", True)
-+        harness = ListenHarness(monkeypatch)
-+        await harness.start()
-+        attach_no_audio_bridge(harness)
-+        caplog.set_level(logging.INFO)
-+        try:
-+            await harness.expect_policy("r1")
-+            await harness.emit_tts_end("r1")
-+            await harness.set_mask("off")
-+            await wait_for(lambda: ("S1", "r1") in harness.runtime.open_calls)
-+            await harness.publish_asr_ready("r1")
-+            await harness.wait_for_listen_task()
-+
-+            loop = asyncio.get_running_loop()
-+            key = harness.adapter._turn_key(harness.ctx, "r1")
-+            harness.ctx.diag_timer_key = key
-+            harness.ctx.tts_end_ts = adapter_module.time.monotonic() - 9.0
-+            harness.ctx.diag_audio_seen = True
-+            harness.adapter._emit_no_audio_diag(harness.ctx, loop, key)
-+            await asyncio.sleep(0.05)
-+
-+            diag_events = [
-+                evt for evt in harness.bus.published if evt.get("type") == "EVT_DIAG_NO_AUDIO_FROM_CLIENT"
-+            ]
-+            assert diag_events == []
-+            assert not any("diag=no_audio_after_listen" in record.message for record in caplog.records)
-+        finally:
-+            await harness.stop()
-+
-+    asyncio.run(_run())
-+
-+
-+def test_no_audio_watchdog_cleared_on_cleanup(
-+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-+) -> None:
-+    async def _run() -> None:
-+        monkeypatch.setattr(config, "DIAG_AUDIO_GUARD", True)
-+        harness = ListenHarness(monkeypatch)
-+        await harness.start()
-+        attach_no_audio_bridge(harness)
-+        caplog.set_level(logging.INFO)
-+        try:
-+            await harness.expect_policy("r1")
-+            await harness.emit_tts_end("r1")
-+            await harness.set_mask("off")
-+            await wait_for(lambda: ("S1", "r1") in harness.runtime.open_calls)
-+            await harness.publish_asr_ready("r1")
-+            await harness.wait_for_listen_task()
-+
-+            loop = asyncio.get_running_loop()
-+            key = harness.adapter._turn_key(harness.ctx, "r1")
-+            harness.ctx.diag_timer_key = key
-+            harness.ctx.tts_end_ts = adapter_module.time.monotonic() - 9.0
-+
-+            await harness.stop()
-+
-+            harness.adapter._emit_no_audio_diag(harness.ctx, loop, key)
-+            await asyncio.sleep(0.05)
-+
-+            diag_events = [
-+                evt for evt in harness.bus.published if evt.get("type") == "EVT_DIAG_NO_AUDIO_FROM_CLIENT"
-+            ]
-+            assert diag_events == []
-+            assert not any("diag=no_audio_after_listen" in record.message for record in caplog.records)
-+        finally:
-+            await harness.stop()
-+
-+    asyncio.run(_run())
+         now_ms = int(time.time() * 1000)
+         info_frame: Dict[str, Any] = {
+             "type": "info",
+             "protocol": CHAT_V2_SUBPROTOCOL,
+             "sid": sid,
+             "ts_ms": now_ms,
+             "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
+         }
+         info_frame["meta"] = {"sid": sid}
+         policy_snapshot = self._policy_snapshot()
+         if policy_snapshot:
+             info_frame["policy"] = policy_snapshot
+         await self._send_json(send, sid, info_frame)
+         _log.info("evt=ws_info_sent sid=%s", sid)
+ 
+         ctx = AdapterContext(
+             sid=sid,
+             headers=dict(headers),
+             principal=principal,
+             user_id=sub,
+             is_admin=is_admin,
+         )
+ 
+         token = current_sid.set(ctx.sid)
+         try:

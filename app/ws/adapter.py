@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
 import logging
-import os
 import time
+import sys, platform, socket, os, inspect
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, Literal, Optional, Protocol, runtime_checkable
 
@@ -400,6 +399,58 @@ class ChatV2Adapter:
 
         _log.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+
+        # ---- BEGIN RUNTIME BANNER ----
+        try:
+            adapter_file = __file__
+            engine_file = None
+            asr_file = None
+            if self.engine is not None:
+                eng_mod = sys.modules.get(self.engine.__class__.__module__)
+                engine_file = getattr(eng_mod, "__file__", None)
+            if getattr(self, "asr_runtime", None) is not None:
+                asr_mod = sys.modules.get(self.asr_runtime.__class__.__module__)
+                asr_file = getattr(asr_mod, "__file__", None)
+
+            build_id = os.getenv("BUILD_ID", "") or os.getenv("SOURCE_VERSION", "") or "unknown"
+            host = socket.gethostname()
+            pid = os.getpid()
+            cwd = os.getcwd()
+
+            offered = scope.get("subprotocols", [])
+            selected = "chat.v2"
+
+            banner = {
+                "type": "server.banner",
+                "build_id": build_id,
+                "host": host,
+                "pid": pid,
+                "cwd": cwd,
+                "python": sys.version.split()[0],
+                "platform": platform.platform(),
+                "ws_path": scope.get("path"),
+                "subprotocols_offered": offered,
+                "subprotocol_selected": selected,
+                "adapter_file": adapter_file,
+                "engine_file": engine_file,
+                "asr_file": asr_file,
+            }
+
+            await send({"type": "websocket.send", "text": json.dumps(banner, separators=(",", ":"))})
+            _log.info(
+                "evt=server_banner build_id=%s host=%s pid=%d path=%s subproto=%s adapter=%s engine=%s asr=%s",
+                build_id,
+                host,
+                pid,
+                scope.get("path"),
+                selected,
+                adapter_file,
+                engine_file,
+                asr_file,
+            )
+        except Exception:
+            _log.exception("evt=server_banner_emit_failed")
+        # ---- END RUNTIME BANNER ----
 
         now_ms = int(time.time() * 1000)
         info_frame: Dict[str, Any] = {
