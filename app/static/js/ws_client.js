@@ -12,7 +12,6 @@
     throw new Error("AppState store is required before loading WSClient");
   }
   const getAudioPlayer = () => window.AudioPlayer;
-  ensureClientBannerState();
 
   let socket = null;
   let heartbeatTimerId = null;
@@ -47,6 +46,9 @@
   let inputVendor = null;
   let hudListening = false;
   let clientBannerQueue = [];
+
+  // Initialize the client banner state only after related constants are defined.
+  ensureClientBannerState();
 
   function truncateBannerString(value, max) {
     const limit = typeof max === "number" ? max : CLIENT_BANNER_STRING_MAX;

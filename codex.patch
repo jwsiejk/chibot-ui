@@ -1,8 +1,33 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 4f8c93a9f246d298ea092e27ba707b7466c86775..55bbadbd1e897bc760ceab33e30afc53f282d7f9 100644
+index 55bbadbd1e897bc760ceab33e30afc53f282d7f9..ee65573ea4a559b62c45afe9573dfd609fade5cd 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -26,61 +26,62 @@
+@@ -1,75 +1,77 @@
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 15000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+ 
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading WSClient");
+   }
+   const getAudioPlayer = () => window.AudioPlayer;
+-  ensureClientBannerState();
+ 
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
+   let infoWatchdogTimerId = null;
+   let lastPingAt = null;
+   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
+   let autoResumeAttemptToken = null;
    let toastRoot = null;
    let lastTokenValue = null;
    let lastTokenMintedAt = null;
@@ -28,22 +53,21 @@ index 4f8c93a9f246d298ea092e27ba707b7466c86775..55bbadbd1e897bc760ceab33e30afc53
    let hudListening = false;
    let clientBannerQueue = [];
  
--  function truncateBannerString(value, max = CLIENT_BANNER_STRING_MAX) {
-+  function truncateBannerString(value, max) {
-+    const limit = typeof max === "number" ? max : CLIENT_BANNER_STRING_MAX;
++  // Initialize the client banner state only after related constants are defined.
++  ensureClientBannerState();
++
+   function truncateBannerString(value, max) {
+     const limit = typeof max === "number" ? max : CLIENT_BANNER_STRING_MAX;
      if (typeof value !== "string") {
        return undefined;
      }
--    if (!max || max <= 0) {
-+    if (!limit || limit <= 0) {
+     if (!limit || limit <= 0) {
        return "";
      }
--    if (value.length <= max) {
-+    if (value.length <= limit) {
+     if (value.length <= limit) {
        return value;
      }
--    return `${value.slice(0, max - 1)}…`;
-+    return `${value.slice(0, limit - 1)}…`;
+     return `${value.slice(0, limit - 1)}…`;
    }
  
    function sanitizeBannerNumber(value) {
@@ -57,15 +81,3 @@ index 4f8c93a9f246d298ea092e27ba707b7466c86775..55bbadbd1e897bc760ceab33e30afc53
    }
  
    function sanitizeBannerArray(array, depth) {
-     if (!Array.isArray(array)) {
-       return undefined;
-     }
-     const limit = 8;
-     const result = [];
-     for (let i = 0; i < array.length && result.length < limit; i += 1) {
-       const sanitized = sanitizeBannerValue(array[i], depth + 1);
-       if (sanitized !== undefined) {
-         result.push(sanitized);
-       }
-     }
-     return result;
