@@ -1714,29 +1714,23 @@ window.addEventListener('asr.ready', () => {
     }
   }
 });
-          }
-        } catch (err) {
-          console.error('AudioRecorder start on asr.ready failed', err);
-        }
-      }
-    });
 
-    window.addEventListener('assistant.suggestions', (event) => {
-      const detail = event && event.detail;
-      applySuggestionsFrame(detail);
-    });
+window.addEventListener('assistant.suggestions', (event) => {
+  const detail = event && event.detail;
+  applySuggestionsFrame(detail);
+});
 
-    
-    // Start mic immediately on ws.open as a safety net; send diag banner
-    window.addEventListener('ws.open', () => {
-      tryStartMic('ws.open');
-      try { WSClient && WSClient.send && WSClient.send({ type: 'client.banner', text: 'open-ok', sha: window.__BUILD_SHA__, ts: Date.now() }); } catch {}
-    });
+
+// Start mic immediately on ws.open as a safety net; send diag banner
+window.addEventListener('ws.open', () => {
+  tryStartMic('ws.open');
+  try { WSClient && WSClient.send && WSClient.send({ type: 'client.banner', text: 'open-ok', sha: window.__BUILD_SHA__, ts: Date.now() }); } catch {}
+});
 window.addEventListener('ws.close', () => {
-      stopMic('ws');
-      resetSuggestions();
-      DiagRecorder.stop('ws');
-    });
+  stopMic('ws');
+  resetSuggestions();
+  DiagRecorder.stop('ws');
+});
 
     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
     if (urlParams.get('wsSmoke') === '1') {

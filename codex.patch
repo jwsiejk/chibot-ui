@@ -1,83 +1,92 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 55bbadbd1e897bc760ceab33e30afc53f282d7f9..ee65573ea4a559b62c45afe9573dfd609fade5cd 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1,75 +1,77 @@
- (() => {
-   const HEARTBEAT_INTERVAL_MS = 15000;
-   const DEFAULT_CLOSE_REASON = "client_shutdown";
-   const SUBPROTOCOL = "chat.v2";
-   const INFO_DEADLINE_MS = 20000;
-   const TOKEN_EXPIRY_MS = 60 * 1000;
-   const TOAST_STYLE_ID = "wsclient-toast-styles";
-   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 64643bdfcbd51c7ef7b0d7c5e15544e6b898cbc6..83385cd41c814f052e4b60f6ae6c4f56860910e8 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -1692,73 +1692,67 @@ window.addEventListener('tts.end', () => {
+     }
+   };
  
-   const AppState = window.AppState;
-   if (!AppState) {
-     throw new Error("AppState store is required before loading WSClient");
+   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
+     setTimeout(release, POST_TTS_RELEASE_MS);
+   } else {
+     release();
    }
-   const getAudioPlayer = () => window.AudioPlayer;
--  ensureClientBannerState();
+ });
  
-   let socket = null;
-   let heartbeatTimerId = null;
-   let expectInfoFrame = true;
-   let infoWatchdogTimerId = null;
-   let lastPingAt = null;
-   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-   let rateLimitRetryTimerId = null;
-   let rateLimitRetryCount = 0;
-   let autoResumeAttemptToken = null;
-   let toastRoot = null;
-   let lastTokenValue = null;
-   let lastTokenMintedAt = null;
+ window.addEventListener('asr.ready', () => {
+   tryStartMic('asr.ready');
+   if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+     try {
+       const maybePromise = window.AudioRecorder.start();
+       if (maybePromise && typeof maybePromise.catch === 'function') {
+         maybePromise.catch((err) => {
+           console.error('AudioRecorder start on asr.ready failed', err);
+         });
+       }
+     } catch (err) {
+       console.error('AudioRecorder start on asr.ready threw', err);
+     }
+   }
+ });
+-          }
+-        } catch (err) {
+-          console.error('AudioRecorder start on asr.ready failed', err);
+-        }
+-      }
+-    });
  
-   const MEDIA_RECORDER_MIME_TYPE = "audio/webm;codecs=opus";
-   const DEFAULT_TIMESLICE_MS = 250;
-   const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
-   const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
-   const CLIENT_BANNER_TYPE = "client.banner";
-   const CLIENT_BANNER_MAX_HISTORY = 24;
-   const CLIENT_BANNER_MAX_QUEUE = 24;
-   const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
-   const CLIENT_BANNER_STRING_MAX = 240;
+-    window.addEventListener('assistant.suggestions', (event) => {
+-      const detail = event && event.detail;
+-      applySuggestionsFrame(detail);
+-    });
++window.addEventListener('assistant.suggestions', (event) => {
++  const detail = event && event.detail;
++  applySuggestionsFrame(detail);
++});
  
-   let micStream = null;
-   let micStreamPromise = null;
-   let mediaRecorderInstance = null;
-   let mediaRecorderHandlers = null;
-   let activeInputReqId = null;
-   let micOpenEmitted = false;
-   let inputDescriptor = null;
-   let inputVendor = null;
-   let hudListening = false;
-   let clientBannerQueue = [];
- 
-+  // Initialize the client banner state only after related constants are defined.
-+  ensureClientBannerState();
+-    
+-    // Start mic immediately on ws.open as a safety net; send diag banner
+-    window.addEventListener('ws.open', () => {
+-      tryStartMic('ws.open');
+-      try { WSClient && WSClient.send && WSClient.send({ type: 'client.banner', text: 'open-ok', sha: window.__BUILD_SHA__, ts: Date.now() }); } catch {}
+-    });
 +
-   function truncateBannerString(value, max) {
-     const limit = typeof max === "number" ? max : CLIENT_BANNER_STRING_MAX;
-     if (typeof value !== "string") {
-       return undefined;
-     }
-     if (!limit || limit <= 0) {
-       return "";
-     }
-     if (value.length <= limit) {
-       return value;
-     }
-     return `${value.slice(0, limit - 1)}…`;
-   }
++// Start mic immediately on ws.open as a safety net; send diag banner
++window.addEventListener('ws.open', () => {
++  tryStartMic('ws.open');
++  try { WSClient && WSClient.send && WSClient.send({ type: 'client.banner', text: 'open-ok', sha: window.__BUILD_SHA__, ts: Date.now() }); } catch {}
++});
+ window.addEventListener('ws.close', () => {
+-      stopMic('ws');
+-      resetSuggestions();
+-      DiagRecorder.stop('ws');
+-    });
++  stopMic('ws');
++  resetSuggestions();
++  DiagRecorder.stop('ws');
++});
  
-   function sanitizeBannerNumber(value) {
-     if (typeof value !== "number") {
-       return undefined;
-     }
-     if (!Number.isFinite(value)) {
-       return undefined;
-     }
-     return value;
-   }
+     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
+     if (urlParams.get('wsSmoke') === '1') {
+       const transitions = [];
+       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
  
-   function sanitizeBannerArray(array, depth) {
+       class MockSocket extends EventTarget {
+         constructor() {
+           super();
+           this.readyState = WebSocket.CONNECTING;
+           setTimeout(() => {
+             this.readyState = WebSocket.OPEN;
+             this.dispatchEvent(new Event('open'));
+           }, 0);
+         }
+         send(payload) {
+           this.lastSent = payload;
+         }
+         close(code = 1000, reason = '') {
+           this.readyState = WebSocket.CLOSED;
+           const ev = new Event('close');
+           ev.code = code;
+           ev.reason = reason;
+           ev.wasClean = true;
+           this.dispatchEvent(ev);
