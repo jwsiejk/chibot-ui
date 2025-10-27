@@ -66,19 +66,22 @@ READY = "Ready"
 LISTENING = "Listening"
 THINKING = "Thinking"
 RESPONDING = "Responding"
+CONFIRMING_BARGE = "ConfirmingBarge"
 
 _STATE_ORDER = {
     READY: 0,
     LISTENING: 1,
     THINKING: 2,
     RESPONDING: 3,
+    CONFIRMING_BARGE: 4,
 }
 
 _ALLOWED_TRANSITIONS = {
-    READY: {LISTENING},
+    READY: {LISTENING, RESPONDING},
     LISTENING: {THINKING},
     THINKING: {RESPONDING},
-    RESPONDING: {READY},
+    RESPONDING: {READY, CONFIRMING_BARGE},
+    CONFIRMING_BARGE: {READY, LISTENING},
 }
 
 _PCM_CODEC = "pcm_s16le"
@@ -148,6 +151,7 @@ class _TurnSession:
     greet_emitted: bool = False
     plan: Optional[Dict[str, Any]] = None
     suggestions_emitted: bool = False
+    turn_committed: bool = False
 
 
 class _NullExporter:
@@ -178,6 +182,7 @@ class EngineV2:
         self._gate = GateController(publish=self._publish_gate_event)
         self._sessions: Dict[str, _TurnSession] = {}
         self._barge_handles: Dict[str, object] = {}
+        self._barge_attempts: Dict[str, Dict[str, Any]] = {}
         self._aggregators: Dict[str, VADAggregator] = {}
         self._streaming = StreamingController()
         self._conversation_buffer = ConversationBuffer()
@@ -321,10 +326,27 @@ class EngineV2:
         if previous_state == RESPONDING:
             granted = barge_enabled
             reason = None if granted else "policy_disabled"
-            self._publish_barge(sid, "text", granted, reason)
+            self._publish_barge_phase(
+                sid,
+                "text",
+                "detected",
+                granted=granted,
+                reason=reason,
+            )
             if granted:
+                self._publish_barge_phase(
+                    sid, "text", "confirmed", granted=True
+                )
                 self.cancel_current_tts(sid, reason="canceled")
-            self._set_state(sid, READY, reason="text_barge_reset" if granted else "text_input_reset")
+            else:
+                self._publish_barge_phase(
+                    sid, "text", "rejected", granted=False, reason=reason
+                )
+            self._set_state(
+                sid,
+                READY,
+                reason="text_barge_reset" if granted else "text_input_reset",
+            )
             session = self._ensure_session(sid)
             previous_state = session.state
 
@@ -339,6 +361,9 @@ class EngineV2:
         session = self._ensure_session(sid)
         if session.state != LISTENING:
             return
+
+        self._commit_turn_start(sid, "text_input")
+        session = self._ensure_session(sid)
 
         session = self._ensure_session(sid)
         turn_id = session.turn_id or str(uuid.uuid4())
@@ -375,7 +400,7 @@ class EngineV2:
         self.cancel_current_tts(sid, reason="ended")
         self._streaming.close_session(sid)
         self._gate.clear_all(sid=sid)
-        self._cancel_barge_confirmation(sid)
+        self._cancel_barge_confirmation(sid, reject_reason="session_closed")
         self._aggregators.pop(sid, None)
         self._sessions.pop(sid, None)
         buffers = getattr(self._conversation_buffer, "_buffers", None)
@@ -474,6 +499,9 @@ class EngineV2:
                 "evt=asr_final_ignored state=%s", session.state, extra={"sid": sid}
             )
             return
+
+        self._commit_turn_start(sid, "asr_final")
+        session = self._ensure_session(sid)
 
         provided_req_id = req_id if isinstance(req_id, str) and req_id else None
 
@@ -601,6 +629,7 @@ class EngineV2:
         aggregator = self._aggregators.get(sid)
         if aggregator is not None:
             aggregator.feed_asr_evidence(req_id, confidence, partial_text)
+        self._commit_turn_start(sid, "asr_partial")
 
     def on_auto_barge_attempt(
         self, sid: str, source: str, *, reason: str | None = None
@@ -626,13 +655,24 @@ class EngineV2:
             granted = False
             deny_reason = deny_reason or "policy_disabled"
 
-        self._publish_barge(sid, source, granted, reason if granted else deny_reason)
+        self._publish_barge_phase(
+            sid,
+            source,
+            "detected",
+            granted=granted,
+            reason=reason if granted else deny_reason,
+        )
 
         if granted:
+            self._barge_attempts.pop(sid, None)
+            self._barge_attempts[sid] = {
+                "source": source,
+                "deny_reason": deny_reason,
+            }
             self.cancel_current_tts(sid, reason="canceled")
-            self._set_state(sid, READY, reason="auto_barge")
+            self._set_state(sid, CONFIRMING_BARGE, reason="auto_barge")
             session = self._ensure_session(sid)
-            if session.state == READY:
+            if session.state == CONFIRMING_BARGE:
                 self._schedule_barge_confirmation(sid)
             else:
                 _log.warning(
@@ -640,7 +680,11 @@ class EngineV2:
                     session.state,
                     extra={"sid": sid},
                 )
+                self._reject_auto_barge(sid, "ready_state_blocked")
         else:
+            self._publish_barge_phase(
+                sid, source, "rejected", granted=False, reason=deny_reason
+            )
             _log.info(
                 "evt=barge_auto_denied reason=%s source=%s",
                 deny_reason,
@@ -1014,15 +1058,27 @@ class EngineV2:
 
         session.suggestions_emitted = True
 
-    def _publish_barge(
-        self, sid: str, source: str, granted: bool, reason: str | None = None
+    def _publish_barge_phase(
+        self,
+        sid: str,
+        source: str,
+        phase: str,
+        *,
+        granted: bool,
+        reason: str | None = None,
     ) -> None:
-        """Publish EVT_BARGE_IN envelope with meta.barge.{source,granted,reason}."""
+        """Publish EVT_BARGE_IN with explicit lifecycle phases."""
 
         if source not in {"auto_vad", "asr_evidence", "text"}:
             return
 
-        meta: Dict[str, Any] = {"barge": {"source": source, "granted": granted}}
+        meta: Dict[str, Any] = {
+            "barge": {
+                "source": source,
+                "granted": bool(granted),
+                "phase": phase,
+            }
+        }
         if reason is not None:
             meta["barge"]["reason"] = reason
         event = self._envelope(sid, "EVT_BARGE_IN", {"meta": meta})
@@ -1032,7 +1088,7 @@ class EngineV2:
         """Transition to listening after a short delay for mask clearing."""
 
         async def _confirm() -> None:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.42)
             self._complete_auto_barge(sid)
 
         self._cancel_barge_confirmation(sid)
@@ -1046,24 +1102,52 @@ class EngineV2:
             task = loop.create_task(_confirm())
             self._barge_handles[sid] = task
         else:
-            timer = threading.Timer(0.5, self._complete_auto_barge, args=(sid,))
+            timer = threading.Timer(0.42, self._complete_auto_barge, args=(sid,))
             timer.daemon = True
             timer.start()
             self._barge_handles[sid] = timer
 
-    def _cancel_barge_confirmation(self, sid: str) -> None:
+    def _cancel_barge_confirmation(self, sid: str, *, reject_reason: str | None = None) -> None:
         handle = self._barge_handles.pop(sid, None)
         if handle is None:
+            handle_cancelled = False
+        else:
+            handle_cancelled = True
+            if isinstance(handle, asyncio.Task) and not handle.done():
+                handle.cancel()
+            elif isinstance(handle, threading.Timer):
+                handle.cancel()
+
+        if reject_reason is not None:
+            if handle_cancelled or sid in self._barge_attempts:
+                self._reject_auto_barge(sid, reject_reason)
+        elif handle is None:
             return
-        if isinstance(handle, asyncio.Task) and not handle.done():
-            handle.cancel()
-        elif isinstance(handle, threading.Timer):
-            handle.cancel()
 
     def _complete_auto_barge(self, sid: str) -> None:
         self._barge_handles.pop(sid, None)
+        attempt = self._barge_attempts.get(sid)
+        if attempt is None:
+            return
+
+        session = self._ensure_session(sid)
+        if session.state not in {READY, CONFIRMING_BARGE}:
+            self._reject_auto_barge(sid, "confirmation_state_changed")
+            return
+
+        self._barge_attempts.pop(sid, None)
+        source = str(attempt.get("source", "auto_vad"))
+        self._publish_barge_phase(sid, source, "confirmed", granted=True)
         self._set_state(sid, LISTENING, reason="auto_barge_confirmed")
         self._gate.set_reason("tts_active", False, sid=sid)
+        self._commit_turn_start(sid, "server_vad")
+
+    def _reject_auto_barge(self, sid: str, reason: str) -> None:
+        attempt = self._barge_attempts.pop(sid, None)
+        if attempt is None:
+            return
+        source = str(attempt.get("source", "auto_vad"))
+        self._publish_barge_phase(sid, source, "rejected", granted=False, reason=reason)
 
     async def _release_system_hold_after(self, sid: str, post_hold_ms: int) -> None:
         """Release the system_hold reason after the requested delay."""
@@ -1153,17 +1237,7 @@ class EngineV2:
             session.suggestions_emitted = False
             session.plan = None
             session.tts_mask_phase = "off"
-            begin_payload = {
-                "turn_id": session.turn_id,
-                "req_id": session.req_id,
-                "meta": {
-                    "turn_id": session.turn_id,
-                    "req_id": session.req_id,
-                    "state": LISTENING,
-                },
-            }
-            begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
-            self._publish(begin_event)
+            session.turn_committed = False
 
         if (
             new_state == READY
@@ -1210,6 +1284,7 @@ class EngineV2:
             session.plan_emitted = False
             session.suggestions_emitted = False
             session.plan = None
+            session.turn_committed = False
 
         session.state = new_state
 
@@ -1224,6 +1299,36 @@ class EngineV2:
         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
         self._publish(breadcrumb_event)
 
+    def _commit_turn_start(self, sid: str, source: str) -> None:
+        """Emit EVT_TURN_BEGIN once authoritative speech evidence arrives."""
+
+        session = self._sessions.get(sid)
+        if session is None or session.state != LISTENING:
+            return
+        if session.turn_committed:
+            return
+
+        turn_id = session.turn_id
+        req_id = session.req_id
+        if not isinstance(turn_id, str) or not turn_id:
+            return
+        if not isinstance(req_id, str) or not req_id:
+            return
+
+        session.turn_committed = True
+        if session.turn_started_ms is None:
+            session.turn_started_ms = _now_ms()
+
+        meta: Dict[str, Any] = {
+            "turn_id": turn_id,
+            "req_id": req_id,
+            "state": LISTENING,
+            "commit_source": source,
+        }
+        begin_payload = {"turn_id": turn_id, "req_id": req_id, "meta": meta}
+        begin_event = self._envelope(sid, EVT_TURN_BEGIN, begin_payload)
+        self._publish(begin_event)
+
     def turn_context(self, sid: str) -> Optional[Dict[str, str]]:
         """Return the active turn context for ``sid`` if a turn is in progress."""
 
@@ -1233,6 +1338,7 @@ class EngineV2:
             or session.turn_id is None
             or session.req_id is None
             or session.state == READY
+            or not session.turn_committed
         ):
             return None
 

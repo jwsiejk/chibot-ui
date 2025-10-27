@@ -79,6 +79,7 @@ class TurnStateMachineTests(unittest.TestCase):
     def test_stale_final_req_id_ignored(self) -> None:
         self.engine.on_open(self.sid, {})
         self.engine.on_audio(self.sid, b"abc", seq=1)
+        self.engine.on_asr_partial(self.sid, "req-1", 0.9, "hi")
 
         first_begin = self._turn_events(EVT_TURN_BEGIN)[0]
         first_req_id = first_begin["req_id"]
@@ -90,6 +91,7 @@ class TurnStateMachineTests(unittest.TestCase):
         first_final_count = len(self._turn_events(EVT_ASR_FINAL))
 
         self.engine.on_audio(self.sid, b"def", seq=2)
+        self.engine.on_asr_partial(self.sid, "req-2", 0.9, "again")
         current_req_id = self._turn_events(EVT_TURN_BEGIN)[-1]["req_id"]
         self.assertNotEqual(first_req_id, current_req_id)
 

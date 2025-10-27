@@ -22,12 +22,14 @@ class PerformanceSummaryTests(unittest.TestCase):
                 engine.on_open(sid, headers={})
 
                 engine.on_audio(sid, b"\x00\x00", 0)
+                self.assertIsNone(engine.turn_context(sid))
+
+                engine.on_asr_partial(sid, "req-a", 0.9, "he")
                 context = engine.turn_context(sid)
                 self.assertIsNotNone(context)
                 assert context is not None  # for type checkers
                 req_id = context["req_id"]
 
-                engine.on_asr_partial(sid, req_id, 0.9, "he")
                 engine.on_asr_final(sid, "hello there")
                 engine.on_tts_start(sid, "utt-1")
                 engine.on_tts_end(sid, "utt-1")

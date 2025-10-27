@@ -32,6 +32,7 @@ class TurnCorrelationTests(unittest.TestCase):
     def test_turn_context_tracks_req_and_turn(self) -> None:
         self.engine.on_open(self.sid, {})
         self.engine.on_audio(self.sid, b"abc", seq=1)
+        self.engine.on_asr_partial(self.sid, "req-1", 0.9, "hi")
 
         begin_events = self._events(EVT_TURN_BEGIN)
         self.assertEqual(1, len(begin_events))
@@ -68,6 +69,7 @@ class TurnCorrelationTests(unittest.TestCase):
 
         # First turn
         self.engine.on_audio(self.sid, b"abc", seq=1)
+        self.engine.on_asr_partial(self.sid, "req-1", 0.9, "hi")
         first_begin = self._events(EVT_TURN_BEGIN)[0]
         first_req_id = first_begin["req_id"]
         first_turn_id = first_begin["turn_id"]
@@ -80,6 +82,7 @@ class TurnCorrelationTests(unittest.TestCase):
 
         # Second turn
         self.engine.on_audio(self.sid, b"def", seq=1)
+        self.engine.on_asr_partial(self.sid, "req-2", 0.9, "hello")
         second_begin = self._events(EVT_TURN_BEGIN)[-1]
         second_req_id = second_begin["req_id"]
         second_turn_id = second_begin["turn_id"]
