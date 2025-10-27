@@ -1,40 +1,71 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index a867fd4c45c2b3ce3a9cd2ebafd51851e7a9f2b3..a3fff2cb0e368e9e99f02563fc0886afba85ed8b 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1,26 +1,35 @@
- (() => {
-+  try {
-+    const _el = document.currentScript || document.querySelector('script[src*="/static/js/app.js"]');
-+    const _build = _el ? new URL(_el.src, location.href).searchParams.get("v") : null;
-+    if (_build) {
-+      window.__BUILD_SHA__ = _build;
-+      console.log("AskChip build:", _build);
-+    }
-+  } catch (_) {}
-+
-   const STATIC_JS_BASE = (() => {
-     if (typeof document === "undefined") {
-       return "/static/js/";
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 4f8c93a9f246d298ea092e27ba707b7466c86775..55bbadbd1e897bc760ceab33e30afc53f282d7f9 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -26,61 +26,62 @@
+   let toastRoot = null;
+   let lastTokenValue = null;
+   let lastTokenMintedAt = null;
+ 
+   const MEDIA_RECORDER_MIME_TYPE = "audio/webm;codecs=opus";
+   const DEFAULT_TIMESLICE_MS = 250;
+   const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
+   const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
+   const CLIENT_BANNER_TYPE = "client.banner";
+   const CLIENT_BANNER_MAX_HISTORY = 24;
+   const CLIENT_BANNER_MAX_QUEUE = 24;
+   const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
+   const CLIENT_BANNER_STRING_MAX = 240;
+ 
+   let micStream = null;
+   let micStreamPromise = null;
+   let mediaRecorderInstance = null;
+   let mediaRecorderHandlers = null;
+   let activeInputReqId = null;
+   let micOpenEmitted = false;
+   let inputDescriptor = null;
+   let inputVendor = null;
+   let hudListening = false;
+   let clientBannerQueue = [];
+ 
+-  function truncateBannerString(value, max = CLIENT_BANNER_STRING_MAX) {
++  function truncateBannerString(value, max) {
++    const limit = typeof max === "number" ? max : CLIENT_BANNER_STRING_MAX;
+     if (typeof value !== "string") {
+       return undefined;
      }
- 
-     const script = document.currentScript || document.querySelector('script[src$="/static/js/app.js"]');
-     if (script && script.src) {
-       try {
-         const url = new URL(script.src, window.location.href);
-         return url.pathname.replace(/[^/]+$/, "");
-       } catch (err) {
-         console.warn("Failed to parse static script URL", err);
-       }
-     }
- 
-     return "/static/js/";
-   })();
- 
-   const VERSION_QUERY = (() => {
-     if (typeof document === "undefined") {
+-    if (!max || max <= 0) {
++    if (!limit || limit <= 0) {
        return "";
      }
-     try {
-       const current =
-         document.currentScript ||
+-    if (value.length <= max) {
++    if (value.length <= limit) {
+       return value;
+     }
+-    return `${value.slice(0, max - 1)}…`;
++    return `${value.slice(0, limit - 1)}…`;
+   }
+ 
+   function sanitizeBannerNumber(value) {
+     if (typeof value !== "number") {
+       return undefined;
+     }
+     if (!Number.isFinite(value)) {
+       return undefined;
+     }
+     return value;
+   }
+ 
+   function sanitizeBannerArray(array, depth) {
+     if (!Array.isArray(array)) {
+       return undefined;
+     }
+     const limit = 8;
+     const result = [];
+     for (let i = 0; i < array.length && result.length < limit; i += 1) {
+       const sanitized = sanitizeBannerValue(array[i], depth + 1);
+       if (sanitized !== undefined) {
+         result.push(sanitized);
+       }
+     }
+     return result;

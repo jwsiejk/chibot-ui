@@ -48,17 +48,18 @@
   let hudListening = false;
   let clientBannerQueue = [];
 
-  function truncateBannerString(value, max = CLIENT_BANNER_STRING_MAX) {
+  function truncateBannerString(value, max) {
+    const limit = typeof max === "number" ? max : CLIENT_BANNER_STRING_MAX;
     if (typeof value !== "string") {
       return undefined;
     }
-    if (!max || max <= 0) {
+    if (!limit || limit <= 0) {
       return "";
     }
-    if (value.length <= max) {
+    if (value.length <= limit) {
       return value;
     }
-    return `${value.slice(0, max - 1)}…`;
+    return `${value.slice(0, limit - 1)}…`;
   }
 
   function sanitizeBannerNumber(value) {
