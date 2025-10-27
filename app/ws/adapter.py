@@ -22,6 +22,7 @@ from app.voice_v2 import (
     EVT_ASR_OPEN,
     EVT_ASR_READY,
     EVT_CHAT_USER,
+    EVT_CLIENT_MIC_OPEN,
     EVT_HUD_STATE,
     EVT_WS_AUDIO_RECV,
     EVT_WS_AUDIO_SEND,
@@ -233,6 +234,11 @@ class AdapterContext:
     diag_timer: asyncio.TimerHandle | None = None
     await_user_expected: bool = False
     await_user_pending: bool = False
+    await_user_after_mask: bool = False
+    tts_mask_phase: str = "off"
+    mask_subscription_token: Optional[str] = None
+    hud_state: Optional[str] = None
+    client_mic_open: bool = False
 
 
 class ChatV2Adapter:
@@ -1005,24 +1011,33 @@ class ChatV2Adapter:
 
         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
 
+        def _complete_listen_handoff() -> None:
+            if not ctx.await_user_pending:
+                ctx.await_user_after_mask = False
+                return
+
+            ctx.await_user_pending = False
+            ctx.await_user_expected = False
+            ctx.await_user_after_mask = False
+            if ctx.outbox is None:
+                return
+
+            _enqueue({"type": "start_listening"})
+            self._emit_hud_state(ctx, "Listening")
+            self._emit_client_mic_open(ctx)
+
         def _handle_asr_open_event(event: dict) -> None:
             if event.get("sid") != ctx.sid:
                 return
 
             def _on_loop() -> None:
                 if not ctx.await_user_pending:
+                    ctx.await_user_after_mask = False
                     return
-                ctx.await_user_pending = False
-                ctx.await_user_expected = False
-                if ctx.outbox is None:
+                if ctx.tts_mask_phase != "off":
+                    ctx.await_user_after_mask = True
                     return
-                _enqueue({"type": "start_listening"})
-                try:
-                    asyncio.create_task(
-                        self._publish(EVT_HUD_STATE, ctx.sid, {"state": "Listening"})
-                    )
-                except RuntimeError:
-                    _log.warning("evt=ws_hud_state_publish_failed sid=%s", ctx.sid)
+                _complete_listen_handoff()
 
             try:
                 loop.call_soon_threadsafe(_on_loop)
@@ -1030,6 +1045,35 @@ class ChatV2Adapter:
                 pass
 
         ctx.asr_open_subscription_token = bus.subscribe(EVT_ASR_OPEN, _handle_asr_open_event)
+
+        def _handle_tts_mask_event(event: dict) -> None:
+            if event.get("sid") != ctx.sid:
+                return
+
+            raw_phase = event.get("phase")
+            if not isinstance(raw_phase, str):
+                return
+
+            stripped = raw_phase.strip()
+            normalized = stripped.lower()
+            phase_value = normalized or stripped or raw_phase
+
+            def _on_loop() -> None:
+                ctx.tts_mask_phase = phase_value
+                if ctx.tts_mask_phase != "off":
+                    ctx.await_user_after_mask = False
+                    ctx.client_mic_open = False
+                    ctx.hud_state = None
+                    return
+                if ctx.await_user_pending and ctx.await_user_after_mask:
+                    _complete_listen_handoff()
+
+            try:
+                loop.call_soon_threadsafe(_on_loop)
+            except RuntimeError:
+                pass
+
+        ctx.mask_subscription_token = bus.subscribe("EVT_TTS_MASK", _handle_tts_mask_event)
 
         def _handle_audio_event(event: dict) -> None:
             if event.get("sid") != ctx.sid:
@@ -1254,6 +1298,11 @@ class ChatV2Adapter:
         if audio_token:
             bus.unsubscribe(audio_token)
 
+        mask_token = ctx.mask_subscription_token
+        ctx.mask_subscription_token = None
+        if mask_token:
+            bus.unsubscribe(mask_token)
+
         task = ctx.outbound_task
         ctx.outbound_task = None
         if task:
@@ -1330,6 +1379,28 @@ class ChatV2Adapter:
         if timer is not None:
             timer.cancel()
 
+    def _emit_hud_state(self, ctx: AdapterContext, state: str) -> None:
+        if ctx.hud_state == state:
+            return
+
+        ctx.hud_state = state
+        try:
+            asyncio.create_task(self._publish(EVT_HUD_STATE, ctx.sid, {"state": state}))
+        except RuntimeError:
+            _log.warning("evt=ws_hud_state_publish_failed sid=%s", ctx.sid)
+
+    def _emit_client_mic_open(self, ctx: AdapterContext) -> None:
+        if ctx.client_mic_open:
+            return
+
+        ctx.client_mic_open = True
+        try:
+            asyncio.create_task(
+                self._publish(EVT_CLIENT_MIC_OPEN, ctx.sid, {"state": "open"})
+            )
+        except RuntimeError:
+            _log.warning("evt=ws_client_mic_publish_failed sid=%s", ctx.sid)
+
     def _initiate_listen_handoff(self, ctx: AdapterContext) -> None:
         if not ctx.await_user_expected or ctx.await_user_pending:
             return
@@ -1343,6 +1414,7 @@ class ChatV2Adapter:
             return
 
         ctx.await_user_pending = True
+        ctx.await_user_after_mask = False
         try:
             prearm(ctx.sid)
         except Exception:  # pragma: no cover - defensive logging
@@ -1355,6 +1427,7 @@ class ChatV2Adapter:
         if token:
             bus.unsubscribe(token)
         ctx.asr_ready = False
+        ctx.await_user_after_mask = False
 
         open_token = ctx.asr_open_subscription_token
         ctx.asr_open_subscription_token = None

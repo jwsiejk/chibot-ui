@@ -122,6 +122,7 @@ class _TurnSession:
     turn_id: Optional[str] = None
     turn_started_ms: Optional[int] = None
     tts_utt_id: Optional[str] = None
+    tts_mask_phase: str = "off"
     req_id: Optional[str] = None
     perf_first_partial_ms: Optional[int] = None
     perf_final_ms: Optional[int] = None
@@ -1039,6 +1040,9 @@ class EngineV2:
         if previous == new_state:
             return
 
+        if new_state == LISTENING:
+            self._publish_tts_mask(sid, "off")
+
         now_ms = _now_ms()
 
         if new_state == LISTENING:
@@ -1055,6 +1059,7 @@ class EngineV2:
             session.plan_emitted = False
             session.suggestions_emitted = False
             session.plan = None
+            session.tts_mask_phase = "off"
             begin_payload = {
                 "turn_id": session.turn_id,
                 "req_id": session.req_id,
@@ -1179,6 +1184,11 @@ class EngineV2:
         return voice_id, locale
 
     def _publish_tts_mask(self, sid: str, phase: str) -> None:
+        session = self._ensure_session(sid)
+        current = session.tts_mask_phase
+        if current == phase:
+            return
+        session.tts_mask_phase = phase
         mask_event = self._envelope(sid, "EVT_TTS_MASK", {"phase": phase})
         self._publish(mask_event)
 

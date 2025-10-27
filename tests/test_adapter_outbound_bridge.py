@@ -11,7 +11,13 @@ from typing import Any, Callable, Dict
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from app.telemetry import bus
-from app.voice_v2 import EVT_ASR_OPEN, EVT_HUD_STATE, EVT_WS_AUDIO_SEND, EVT_WS_JSON_SEND
+from app.voice_v2 import (
+    EVT_ASR_OPEN,
+    EVT_CLIENT_MIC_OPEN,
+    EVT_HUD_STATE,
+    EVT_WS_AUDIO_SEND,
+    EVT_WS_JSON_SEND,
+)
 from app.security.jwt_utils import mint_ws_token
 from app.ws.adapter import (
     CHAT_V2_SUBPROTOCOL,
@@ -184,6 +190,9 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     def test_start_listening_handoff_after_tts_end(self) -> None:
         asyncio.run(self._test_start_listening_handoff())
 
+    def test_listen_handoff_waits_for_mask_off(self) -> None:
+        asyncio.run(self._test_listen_handoff_waits_for_mask_off())
+
     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
         asyncio.run(self._test_audio_forwarding())
 
@@ -330,6 +339,90 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             self.assertEqual(hud_events[-1]["meta"].get("state"), "Listening")
         finally:
             bus.unsubscribe(token)
+            await harness.close()
+
+    async def _test_listen_handoff_waits_for_mask_off(self) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        runtime = _StubAsrRuntime()
+        adapter.asr_runtime = runtime
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+
+        sid = harness.sid
+        recorded: list[dict] = []
+        interesting = {"EVT_TTS_MASK", EVT_HUD_STATE, EVT_CLIENT_MIC_OPEN}
+
+        def _record(event: dict) -> None:
+            if event.get("sid") != sid:
+                return
+            if event.get("type") in interesting:
+                recorded.append(dict(event))
+
+        token_order = bus.subscribe("*", _record)
+        try:
+            policy_payload = {
+                "type": "policy.interaction",
+                "interaction_id": "turn-1",
+                "actions": ["assistant.say", "assistant.await_user"],
+            }
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
+            await asyncio.sleep(0.01)
+
+            bus.publish({"type": "EVT_TTS_MASK", "sid": sid, "phase": "engaged"})
+
+            tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
+
+            await harness.wait_for(lambda: bool(runtime.prearm_calls))
+            self.assertEqual(runtime.prearm_calls, [sid])
+
+            bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
+
+            await asyncio.sleep(0.05)
+            start_frames = [
+                frame for frame in harness.outbound_frames if frame.get("type") == "start_listening"
+            ]
+            self.assertFalse(start_frames)
+
+            bus.publish({"type": "EVT_TTS_MASK", "sid": sid, "phase": "off"})
+
+            frame = await harness.wait_for_outbound(
+                lambda data: data.get("type") == "start_listening"
+            )
+            self.assertEqual(frame, {"type": "start_listening"})
+
+            await harness.wait_for(
+                lambda: any(evt.get("type") == EVT_CLIENT_MIC_OPEN for evt in recorded)
+            )
+
+            mask_off_index = next(
+                idx
+                for idx, event in enumerate(recorded)
+                if event.get("type") == "EVT_TTS_MASK" and event.get("phase") == "off"
+            )
+            hud_index = next(
+                idx
+                for idx, event in enumerate(recorded)
+                if event.get("type") == EVT_HUD_STATE
+            )
+            mic_index = next(
+                idx
+                for idx, event in enumerate(recorded)
+                if event.get("type") == EVT_CLIENT_MIC_OPEN
+            )
+
+            hud_events = [evt for evt in recorded if evt.get("type") == EVT_HUD_STATE]
+            mic_events = [evt for evt in recorded if evt.get("type") == EVT_CLIENT_MIC_OPEN]
+
+            self.assertLess(mask_off_index, hud_index)
+            self.assertLess(hud_index, mic_index)
+            self.assertEqual(recorded[hud_index]["meta"].get("state"), "Listening")
+            self.assertEqual(recorded[mic_index]["meta"].get("state"), "open")
+            self.assertEqual(len(hud_events), 1)
+            self.assertEqual(len(mic_events), 1)
+        finally:
+            bus.unsubscribe(token_order)
             await harness.close()
 
     async def _test_audio_forwarding(self) -> None:

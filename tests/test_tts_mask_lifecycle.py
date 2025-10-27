@@ -1,6 +1,6 @@
 import unittest
 
-from app.voice_v2 import EVT_MIC_GATE
+from app.voice_v2 import EVT_MIC_GATE, EVT_TTS_END
 from app.voice_v2.engine import EngineV2
 
 
@@ -53,6 +53,71 @@ class TtsMaskLifecycleTests(unittest.TestCase):
         final_effective = final_gate_meta.get("effective", final_gate_meta["mask"])
         self.assertFalse(final_effective)
         self.assertFalse(final_gate_meta["reasons"]["tts_active"])
+
+    def test_tts_mask_not_republished_when_phase_unchanged(self) -> None:
+        bus = _FakeBus()
+        exporter = _FakeExporter()
+        engine = EngineV2(exporter, telemetry_bus=bus)
+
+        sid = "sid-dup"
+        utt_id = "utt-dup"
+
+        engine.on_tts_start(sid, utt_id)
+        engine.on_tts_end(sid, utt_id)
+
+        mask_events = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
+        self.assertEqual([evt["phase"] for evt in mask_events], ["engaged", "off"])
+
+        before_len = len(mask_events)
+        engine.on_tts_end(sid, utt_id)
+        mask_events_after = [evt for evt in bus.events if evt["type"] == "EVT_TTS_MASK"]
+        self.assertEqual(len(mask_events_after), before_len)
+        self.assertEqual([evt["phase"] for evt in mask_events_after], ["engaged", "off"])
+
+    def test_tts_end_emits_mask_after_end(self) -> None:
+        bus = _FakeBus()
+        exporter = _FakeExporter()
+        engine = EngineV2(exporter, telemetry_bus=bus)
+
+        sid = "sid-order"
+        utt_id = "utt-order"
+
+        engine.on_tts_start(sid, utt_id)
+        initial_len = len(bus.events)
+        engine.on_tts_end(sid, utt_id)
+
+        events_after = bus.events[initial_len:]
+        interesting = [
+            evt
+            for evt in events_after
+            if evt["type"] in {EVT_TTS_END, "EVT_TTS_MASK"}
+        ]
+        self.assertGreaterEqual(len(interesting), 2)
+        self.assertEqual(interesting[0]["type"], EVT_TTS_END)
+        self.assertEqual(interesting[1]["type"], "EVT_TTS_MASK")
+        self.assertEqual(interesting[1].get("phase"), "off")
+
+    def test_listening_transition_forces_mask_off(self) -> None:
+        bus = _FakeBus()
+        exporter = _FakeExporter()
+        engine = EngineV2(exporter, telemetry_bus=bus)
+
+        sid = "sid-listen"
+        utt_id = "utt-listen"
+
+        engine.on_tts_start(sid, utt_id)
+        engine.on_audio(sid, b"\x00\x00" * 2, seq=1)
+
+        off_index = None
+        turn_begin_index = None
+        for idx, event in enumerate(bus.events):
+            if event.get("type") == "EVT_TTS_MASK" and event.get("phase") == "off":
+                off_index = idx
+            if event.get("type") == "EVT_TURN_BEGIN" and turn_begin_index is None:
+                turn_begin_index = idx
+        self.assertIsNotNone(off_index)
+        self.assertIsNotNone(turn_begin_index)
+        self.assertLess(off_index, turn_begin_index)  # mask off precedes listening begin
 
 
 if __name__ == "__main__":
