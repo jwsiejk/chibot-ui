@@ -49,6 +49,7 @@ from app.voice_v2.vad import VADAggregator
 from app.voice_v2.planner import _MODE_CHIPS, plan_turn
 from app.voice_v2.persona import default_chips_for_mode, load_persona
 from app.voice_v2.streaming import StreamingController
+from app.voice_v2.rollup import TurnRollupAggregator
 
 
 _log = logging.getLogger(__name__)
@@ -192,6 +193,7 @@ class EngineV2:
         self._aggregators: Dict[str, VADAggregator] = {}
         self._streaming = StreamingController()
         self._conversation_buffer = ConversationBuffer()
+        self._turn_rollup = TurnRollupAggregator(self._bus)
         self._nlu = NLUAdapter()
         self._policy_decider = PolicyDecider()
         self._llm = LLMAdapter(telemetry_bus=self._bus, auto_publish=False)
@@ -423,6 +425,8 @@ class EngineV2:
         self._gate.clear_all(sid=sid)
         self._cancel_barge_confirmation(sid, reject_reason="session_closed")
         self._aggregators.pop(sid, None)
+        if hasattr(self, "_turn_rollup"):
+            self._turn_rollup.clear_session(sid)
         self._sessions.pop(sid, None)
         buffers = getattr(self._conversation_buffer, "_buffers", None)
         if isinstance(buffers, dict):
