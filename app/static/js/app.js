@@ -1,10 +1,15 @@
 (() => {
+  // Build stamp (diagnostic only). Prints the ?v= build id if present on this script.
   try {
-    const _el = document.currentScript || document.querySelector('script[src*="/static/js/app.js"]');
-    const _build = _el ? new URL(_el.src, location.href).searchParams.get("v") : null;
-    if (_build) {
-      window.__BUILD_SHA__ = _build;
-      console.log("AskChip build:", _build);
+    const el =
+      document.currentScript ||
+      document.querySelector('script[src*="/static/js/app.js"]');
+    const build = el ? new URL(el.src, location.href).searchParams.get('v') : null;
+    if (build) {
+      window.__BUILD_SHA__ = build;
+      console.log('AskChip build:', build);
+    } else {
+      console.log('AskChip build: (no v param on app.js)');
     }
   } catch (_) {}
 
