@@ -1,60 +1,8 @@
 diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 6c70558fa8ea9d4a739f212e02b2bb55e811dad1..9d8ad9603e9481befca368d284d26132c775678c 100644
+index 9d8ad9603e9481befca368d284d26132c775678c..964893f93b86a297124012a3206170c1c3af06e0 100644
 --- a/app/services/streaming_asr/deepgram_client.py
 +++ b/app/services/streaming_asr/deepgram_client.py
-@@ -1,42 +1,42 @@
- """Deepgram realtime streaming client."""
- from __future__ import annotations
- 
- import asyncio
- import inspect
- import json
- import logging
- import os
- import time
- import uuid
- from collections import deque
- from dataclasses import dataclass, field
- from typing import Callable, Deque, Dict, Tuple
- 
- import websockets
- from websockets.legacy.client import WebSocketClientProtocol
--from urllib.parse import urlsplit
-+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
- 
- _log = logging.getLogger(__name__)
- 
- _DEFAULT_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
- _DEFAULT_BUFFER_BYTES = 4 * 1024 * 1024
- 
- 
- def _resolve_headers_arg() -> str:
-     """Return the keyword argument used for headers in websockets.connect."""
- 
-     try:
-         params = inspect.signature(websockets.connect).parameters
-     except (TypeError, ValueError):  # pragma: no cover - defensive
-         return "extra_headers"
-     if "additional_headers" in params:
-         return "additional_headers"
-     return "extra_headers"
- 
- 
- _CONNECT_HEADERS_ARG = _resolve_headers_arg()
- 
- 
- @dataclass
- class _StreamState:
-     sid: str
-@@ -56,121 +56,143 @@ class _StreamState:
-     data_event: asyncio.Event = field(default_factory=asyncio.Event)
-     finalized: bool = False
-     next_seq_no: int = 1
-     last_send_ts: float = 0.0
-     first_audio_ts: float | None = None
-     current_utterance_id: str | None = None
- 
- 
+@@ -64,56 +64,56 @@ class _StreamState:
  class DeepgramClient:
      """Client wrapper responsible for maintaining Deepgram realtime streams."""
  
@@ -72,7 +20,7 @@ index 6c70558fa8ea9d4a739f212e02b2bb55e811dad1..9d8ad9603e9481befca368d284d26132
              self._max_buffer_bytes = _DEFAULT_BUFFER_BYTES
          self._streams: Dict[str, _StreamState] = {}
          self.idle_close_ms = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
-+        self._legacy_start_warning_logged = False
+         self._legacy_start_warning_logged = False
  
      # ------------------------------------------------------------------
      # Public API
@@ -80,16 +28,16 @@ index 6c70558fa8ea9d4a739f212e02b2bb55e811dad1..9d8ad9603e9481befca368d284d26132
      async def open_stream(
          self,
          sid: str,
--        content_type: str,
-+        content_type: str | None = None,
+-        content_type: str | None = None,
          on_partial: Callable[[str, Dict[str, object]], None],
          on_final: Callable[[str, Dict[str, object]], None],
          on_error: Callable[[str], None],
          *,
          stream_id: str,
++        content_type: str | None = None,
          on_close: Callable[[int | None, str | None], None] | None = None,
-+        encoding: str | None = None,
-+        sample_rate: int | None = None,
+         encoding: str | None = None,
+         sample_rate: int | None = None,
      ) -> str:
          if not isinstance(sid, str) or not sid:
              raise ValueError("sid must be a non-empty string")
@@ -98,165 +46,25 @@ index 6c70558fa8ea9d4a739f212e02b2bb55e811dad1..9d8ad9603e9481befca368d284d26132
          if not isinstance(stream_id, str) or not stream_id:
              raise ValueError("stream_id must be a non-empty string")
          loop = asyncio.get_running_loop()
-+        if (
-+            (content_type and content_type.strip())
-+            or (encoding and str(encoding).strip())
-+            or sample_rate is not None
-+        ) and not self._legacy_start_warning_logged:
-+            self._legacy_start_warning_logged = True
-+            _log.warning(
-+                "evt=dg_ws_ignored_legacy start_fields=['content_type','encoding','sample_rate']"
-+            )
+         if (
+             (content_type and content_type.strip())
+             or (encoding and str(encoding).strip())
+             or sample_rate is not None
+         ) and not self._legacy_start_warning_logged:
+             self._legacy_start_warning_logged = True
+             _log.warning(
+                 "evt=dg_ws_ignored_legacy start_fields=['content_type','encoding','sample_rate']"
+             )
          headers = {
              "Authorization": f"Token {self._api_key}",
--            "Content-Type": content_type,
          }
-+        url = self._build_listen_url()
+         url = self._build_listen_url()
          try:
-             connect_kwargs = {
-                 _CONNECT_HEADERS_ARG: headers,
-                 "max_size": None,
-                 "ping_interval": None,
-             }
-             websocket = await websockets.connect(
--                self._url,
-+                url,
-                 **connect_kwargs,
-             )
-         except Exception as exc:
-             _log.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
-             raise
- 
--        start_payload = {
--            "type": "StartRequest",
--            "metadata": {"content_type": content_type},
--        }
--        await websocket.send(json.dumps(start_payload, separators=(",", ":")))
-+        _log.info(
-+            "evt=dg_ws_open url=%s container=webm_opus start_payload=omitted",
-+            url,
-+        )
- 
-         state = _StreamState(
-             sid=sid,
-             websocket=websocket,
-             on_partial=on_partial,
-             on_final=on_final,
-             on_error=on_error,
-             on_close=on_close,
-             loop=loop,
-             stream_id=stream_id,
-         )
-         state.sender_task = loop.create_task(self._sender_loop(state), name=f"dg-send-{sid}")
-         state.receiver_task = loop.create_task(
-             self._receiver_loop(state), name=f"dg-recv-{sid}"
-         )
-         self._streams[sid] = state
-         loop.call_soon(
-             _log.info,
-             "evt=dg_stream_open sid=%s stream_id=%s url=%s",
-             sid,
-             stream_id,
--            self._url,
-+            url,
-         )
--        qs = urlsplit(self._url).query
-+        qs = urlsplit(url).query
-         return qs
- 
-+    def _build_listen_url(self) -> str:
-+        """Return the Deepgram listen URL with encoded query parameters."""
-+
-+        split = urlsplit(self._url)
-+        base_url = urlunsplit((split.scheme, split.netloc, split.path, "", ""))
-+        if not split.query:
-+            return base_url
-+        pairs = parse_qsl(split.query, keep_blank_values=True)
-+        query = urlencode(pairs, doseq=True)
-+        return f"{base_url}?{query}" if query else base_url
-+
-     def send_audio(self, sid: str, chunk: bytes) -> None:
-         state = self._streams.get(sid)
-         if state is None or state.closing:
-             return
-         if not isinstance(chunk, (bytes, bytearray, memoryview)):
-             raise TypeError("chunk must be bytes-like")
-         data = bytes(chunk)
-         if not data:
-             return
- 
-         now = time.monotonic()
-         if state.first_audio_ts is None:
-             state.first_audio_ts = now
-         seq_no = state.next_seq_no
-         state.next_seq_no += 1
-         state.chunks.append((seq_no, data, now))
-         state.buffered_bytes += len(data)
-         if state.buffered_bytes > self._max_buffer_bytes:
-             dropped = 0
-             while state.chunks and state.buffered_bytes > self._max_buffer_bytes:
-                 _, removed, _ = state.chunks.popleft()
-                 dropped += len(removed)
-                 state.buffered_bytes -= len(removed)
-             if dropped and not state.drop_logged:
-                 state.drop_logged = True
 diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index dda4620ac9a6334437325473eb4dfcb6ae9af8c7..0fc979f963aab23741f842fdeeabb41be8b36813 100644
+index 0fc979f963aab23741f842fdeeabb41be8b36813..40f7f630fc0b0f839f0692ed1f6b59ad11ef5a1f 100644
 --- a/app/voice_v2/asr_runtime.py
 +++ b/app/voice_v2/asr_runtime.py
-@@ -5,51 +5,50 @@ import asyncio
- import logging
- import time
- import uuid
- from collections import deque
- from dataclasses import dataclass, field
- from typing import Any, Callable, Deque, Dict, Optional
- 
- from app.config import (
-     ASR_BACKPRESSURE_THRESHOLD_BYTES,
-     ASR_IDLE_CLOSE_MS,
-     ASR_TRACE,
- )
- from app.telemetry import bus
- from app.voice_v2 import (
-     EVT_ASR_FINAL,
-     EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_ASR_READY,
-     EVT_WS_JSON_SEND,
- )
- from app.voice_v2.engine import EngineV2
- from app.services.streaming_asr.deepgram_client import DeepgramClient
- 
- _log = logging.getLogger(__name__)
- 
--_CONTENT_TYPE = "audio/webm;codecs=opus"
- _DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
- _PARTIAL_CONFIDENCE = 0.55
- _FINAL_CONFIDENCE = 0.9
- _DEFAULT_IDLE_CLOSE_MS = 4000
- _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
- _TRACE_ENABLED = bool(ASR_TRACE)
- _STREAM_OPEN_TIMEOUT_S = 5.0
- _NO_AUDIO_TIMEOUT_S = 9.0
- _LISTENING_STATE = "Listening"
- _READY_STATES = {"Ready", "Idle"}
- 
- 
- @dataclass
- class _SessionState:
-     """Track per-session streaming state."""
- 
-     sid: str
-     pending: Deque[bytes] = field(default_factory=deque)
-     buffered_bytes: int = 0
-     req_id: Optional[str] = None
-     stream_open_task: Optional[asyncio.Task[None]] = None
-     stream_open: bool = False
-     last_audio_ts: float = 0.0
-     idle_handle: asyncio.TimerHandle | None = None
-     stream_id: Optional[str] = None
-@@ -365,103 +364,116 @@ class ASRRuntime:
+@@ -364,51 +364,50 @@ class ASRRuntime:
  
      def _ensure_stream(self, sid: str, state: _SessionState) -> None:
          loop = self._ensure_loop()
@@ -282,8 +90,7 @@ index dda4620ac9a6334437325473eb4dfcb6ae9af8c7..0fc979f963aab23741f842fdeeabb41b
                  qs = await asyncio.wait_for(
                      self._client.open_stream(
                          sid,
--                        _CONTENT_TYPE,
-+                        None,
+-                        None,
                          on_partial=self._make_partial_cb(sid),
                          on_final=self._make_final_cb(sid),
                          on_error=self._make_error_cb(sid),
@@ -309,73 +116,3 @@ index dda4620ac9a6334437325473eb4dfcb6ae9af8c7..0fc979f963aab23741f842fdeeabb41b
                  return
  
              state.stream_open = True
-             open_event = {"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram"}
-             if stream_id:
-                 open_event["stream_id"] = stream_id
-             self._bus.publish(open_event)
-             _log.info(
-                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
--
-                 sid,
--                _CONTENT_TYPE,
-+                "(not set)",
-                 qs or "",
-             )
--            self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
--            _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
-+            ready_kwargs = {"sid": sid, "vendor": "deepgram"}
-+            if stream_id:
-+                ready_kwargs["stream_id"] = stream_id
-+            emit = getattr(self._bus, "emit", None)
-+            if callable(emit):
-+                try:
-+                    emit(EVT_ASR_READY, **ready_kwargs)
-+                except TypeError:
-+                    emit(EVT_ASR_READY, ready_kwargs)
-+            ready_event = {"type": EVT_ASR_READY, **ready_kwargs}
-+            self._bus.publish(ready_event)
-+            _log.info(
-+                "evt=asr_ready sid=%s vendor=deepgram stream_id=%s",
-+                sid,
-+                stream_id or "",
-+            )
- 
-             input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
-             asr_ready_frame = {
-                 "type": "asr.ready",
-                 "vendor": "deepgram",
-                 "input": input_desc,
-             }
-             self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
-             if stream_id:
-                 _log.info(
-                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
-                     sid,
-                     stream_id,
--                    _CONTENT_TYPE,
-+                    "(not set)",
-                     int(self._idle_close_ms),
-                 )
-             pre_chunks_sent = state.chunks_sent
-             while state.pending:
-                 chunk = state.pending.popleft()
-                 chunk_len = len(chunk)
-                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
-                 self._forward_chunk(sid, state, chunk)
-             if state.chunks_sent == pre_chunks_sent:
-                 self._start_ready_watchdog(sid, state)
-             else:
-                 self._cancel_ready_watchdog(state)
-             state.stream_open_task = None
-             self._reset_idle_timer(sid, state)
- 
-         def _on_done(_task: asyncio.Task[None]) -> None:
-             if state.stream_open_task is _task:
-                 state.stream_open_task = None
- 
-         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
-         state.stream_open_task.add_done_callback(_on_done)
- 
-     def _forward_chunk(self, sid: str, state: _SessionState, chunk: bytes) -> None:
-         if not chunk:
-             return

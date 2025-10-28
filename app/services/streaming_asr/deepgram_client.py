@@ -86,12 +86,12 @@ class DeepgramClient:
     async def open_stream(
         self,
         sid: str,
-        content_type: str | None = None,
         on_partial: Callable[[str, Dict[str, object]], None],
         on_final: Callable[[str, Dict[str, object]], None],
         on_error: Callable[[str], None],
         *,
         stream_id: str,
+        content_type: str | None = None,
         on_close: Callable[[int | None, str | None], None] | None = None,
         encoding: str | None = None,
         sample_rate: int | None = None,

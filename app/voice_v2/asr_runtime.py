@@ -386,7 +386,6 @@ class ASRRuntime:
                 qs = await asyncio.wait_for(
                     self._client.open_stream(
                         sid,
-                        None,
                         on_partial=self._make_partial_cb(sid),
                         on_final=self._make_final_cb(sid),
                         on_error=self._make_error_cb(sid),
