@@ -1294,6 +1294,17 @@
       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
       return;
     }
+    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+      const chunk = data instanceof ArrayBuffer
+        ? data
+        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      const audioPlayer = getAudioPlayer();
+      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+        audioPlayer.enqueueChunk(chunk);
+      }
+      window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
+      return;
+    }
     console.warn("Unknown WS frame type", data);
   }
 

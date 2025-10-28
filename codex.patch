@@ -1,122 +1,66 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 233a8e86b33ed80d8cd21c8ef35dc6e9db76fe83..5297fb5da43ea8c815541a7a6481854938aa6ff8 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1,40 +1,59 @@
- (() => {
-   // Build stamp (diagnostic only). Prints the ?v= build id if present on this script.
-   try {
-     const el =
-       document.currentScript ||
-       document.querySelector('script[src*="/static/js/app.js"]');
-     const build = el ? new URL(el.src, location.href).searchParams.get('v') : null;
-     if (build) {
-       window.__BUILD_SHA__ = build;
-       console.log('AskChip build:', build);
-     } else {
-       console.log('AskChip build: (no v param on app.js)');
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 0d9d4b7ae62e51e025086ac5d4387f0dd46c5aa2..93281bda2738d486c48aaa4e14ff7f5670b9e40f 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1272,50 +1272,61 @@
+     } else if (frame.type === "chat.history") {
+       handleChatHistoryFrame(frame);
      }
-   } catch (_) {}
+     dispatchFrame(frame);
+   }
  
-+  (function wrapDiag() {
-+    const ctr = (window.__WS_DIAG__ = window.__WS_DIAG__ || { types: {} });
-+    function maybeWrap() {
-+      if (!window.WSClient || typeof WSClient.send !== 'function' || WSClient.__wrapped_send__) return;
-+      const orig = WSClient.send.bind(WSClient);
-+      WSClient.send = function (frame) {
-+        try {
-+          const t = frame && frame.type;
-+          if (t) ctr.types[t] = (ctr.types[t] || 0) + 1;
-+        } catch {}
-+        return orig(frame);
-+      };
-+      WSClient.__wrapped_send__ = true;
-+    }
-+
-+    maybeWrap();
-+    window.addEventListener('ws.open', maybeWrap);
-+  })();
-+
-   const STATIC_JS_BASE = (() => {
-     if (typeof document === "undefined") {
-       return "/static/js/";
-     }
- 
-     const script = document.currentScript || document.querySelector('script[src$="/static/js/app.js"]');
-     if (script && script.src) {
+   function parseFrame(event) {
+     const { data } = event;
+     if (typeof data === "string") {
        try {
-         const url = new URL(script.src, window.location.href);
-         return url.pathname.replace(/[^/]+$/, "");
+         const frame = JSON.parse(data);
+         handleMessageFrame(frame);
        } catch (err) {
-         console.warn("Failed to parse static script URL", err);
+         console.error("Failed to parse WS frame", err, data);
        }
+       return;
      }
- 
-     return "/static/js/";
-   })();
- 
-   const VERSION_QUERY = (() => {
-     if (typeof document === "undefined") {
-       return "";
-     }
-     try {
-       const current =
-         document.currentScript ||
-@@ -2026,56 +2045,51 @@ window.addEventListener('asr.ready', () => {
-   }
-   if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-     try {
-       const maybePromise = window.AudioRecorder.start();
-       if (maybePromise && typeof maybePromise.catch === 'function') {
-         maybePromise.catch((err) => {
-           console.error('AudioRecorder start on asr.ready failed', err);
-         });
+     if (data instanceof Blob) {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(data);
        }
-     } catch (err) {
-       console.error('AudioRecorder start on asr.ready threw', err);
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+       return;
      }
++    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
++      const chunk = data instanceof ArrayBuffer
++        ? data
++        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
++      const audioPlayer = getAudioPlayer();
++      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
++        audioPlayer.enqueueChunk(chunk);
++      }
++      window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
++      return;
++    }
+     console.warn("Unknown WS frame type", data);
    }
- });
  
- window.addEventListener('assistant.suggestions', (event) => {
-   const detail = event && event.detail;
-   applySuggestionsFrame(detail);
- });
- 
- 
- // Start mic immediately on ws.open as a safety net; send diag banner
- window.addEventListener('ws.open', () => {
-   tryStartMic('ws.open');
-   try {
--    if (WSClient && WSClient.send) {
--      WSClient.send({
--        type: 'client.banner',
--        event: { label: 'open-ok', ts_ms: Date.now() },
--        info: { build: window.__BUILD_SHA__ ?? null, page: location.pathname }
--      });
-+    if (WSClient && typeof WSClient.send === 'function') {
-       WSClient.send({
-         type: 'client.banner',
-         event: { label: 'ws.open', ts_ms: Date.now() },
-         info: { build: window.__BUILD_SHA__ ?? null }
-       });
-     }
-   } catch {}
- });
- window.addEventListener('ws.close', () => {
-   stopMic('ws');
-   resetSuggestions();
-   DiagRecorder.stop('ws');
- });
- 
-     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
-     if (urlParams.get('wsSmoke') === '1') {
-       const transitions = [];
-       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
- 
-       class MockSocket extends EventTarget {
-         constructor() {
-           super();
-           this.readyState = WebSocket.CONNECTING;
-           setTimeout(() => {
-             this.readyState = WebSocket.OPEN;
+   function attachSocket(ws) {
+     ws.__intentionalClose = false;
+     const handlers = {
+       open: () => {
+         updateState({ websocket: ws });
+       },
+       message: parseFrame,
+       error: (event) => {
+         console.error("WebSocket error", event);
+         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
+       },
+       close: (event) => {
+         const expected = ws.__intentionalClose === true;
+         if (socket === ws) {
+           socket = null;
+           expectInfoFrame = true;
+           clearInfoWatchdog();
+         }
+         clearHeartbeat();
+         updateState({ websocket: null });
+         let resumed = false;
+         if (!expected) {
