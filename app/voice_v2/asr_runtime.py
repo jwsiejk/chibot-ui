@@ -7,7 +7,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Deque, Dict, Optional
+from typing import Any, Callable, Deque, Dict, Optional
 
 from app.config import (
     ASR_BACKPRESSURE_THRESHOLD_BYTES,
@@ -80,7 +80,13 @@ class _SessionState:
 class ASRRuntime:
     """Bridge websocket audio to Deepgram realtime transcription."""
 
-    def __init__(self, engine: EngineV2, client: DeepgramClient) -> None:
+    def __init__(
+        self,
+        engine: EngineV2,
+        client: DeepgramClient,
+        *,
+        telemetry_bus: Any | None = None,
+    ) -> None:
         if engine is None:
             raise ValueError("engine must be provided")
         if client is None:
@@ -88,6 +94,7 @@ class ASRRuntime:
 
         self._engine = engine
         self._client = client
+        self._bus = telemetry_bus or bus
         self._configure_client()
         self._sessions: Dict[str, _SessionState] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -101,6 +108,11 @@ class ASRRuntime:
             self._idle_close_ms = int(configured_idle)
         if self._idle_close_ms < 0:
             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
+
+    def set_bus(self, telemetry_bus: Any | None) -> None:
+        if telemetry_bus is None:
+            return
+        self._bus = telemetry_bus
 
     def _configure_client(self) -> None:
         """Force the Deepgram client to use the containerized listen URL."""
@@ -404,7 +416,7 @@ class ASRRuntime:
             open_event = {"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram"}
             if stream_id:
                 open_event["stream_id"] = stream_id
-            bus.publish(open_event)
+            self._bus.publish(open_event)
             _log.info(
                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
 
@@ -412,7 +424,7 @@ class ASRRuntime:
                 _CONTENT_TYPE,
                 qs or "",
             )
-            bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+            self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
             _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
 
             input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
@@ -421,7 +433,7 @@ class ASRRuntime:
                 "vendor": "deepgram",
                 "input": input_desc,
             }
-            bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
+            self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
             if stream_id:
                 _log.info(
                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
@@ -567,7 +579,7 @@ class ASRRuntime:
             "confidence": _PARTIAL_CONFIDENCE,
             "vendor": "deepgram",
         }
-        bus.publish(event)
+        self._bus.publish(event)
 
     def _on_final(
         self, sid: str, text: str, metadata: Dict[str, object] | None = None
@@ -641,7 +653,7 @@ class ASRRuntime:
             "confidence": _FINAL_CONFIDENCE,
             "vendor": "deepgram",
         }
-        bus.publish(event)
+        self._bus.publish(event)
         state.finals_delivered += 1
         self._log_utterance(state, stream_id, req_id, metadata, text)
 
@@ -686,7 +698,7 @@ class ASRRuntime:
             state.ready_armed_at = 0.0
             if armed_at and state.last_audio_ts <= armed_at:
                 _log.warning("evt=asr_no_audio_timeout sid=%s", sid)
-                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+                self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
                 _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
                 input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
                 asr_ready_frame = {
@@ -694,7 +706,7 @@ class ASRRuntime:
                     "vendor": "deepgram",
                     "input": input_desc,
                 }
-                bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
+                self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
 
         state.ready_armed_at = time.monotonic()
         state.ready_watchdog = loop.call_later(_NO_AUDIO_TIMEOUT_S, _fire)

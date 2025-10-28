@@ -45,6 +45,7 @@ except Exception:  # pragma: no cover - fallback when uvicorn missing
 CHAT_V2_SUBPROTOCOL = "chat.v2"
 TEXT_FRAME_LIMIT_BYTES = 64 * 1024
 BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ALLOW_AUDIO_WITHOUT_ASR = os.getenv("ALLOW_AUDIO_WITHOUT_ASR", "0") == "1"
 PING_MIN_INTERVAL_MS = 500
 RATE_LIMIT_CAPACITY = 25
 RATE_LIMIT_WINDOW_SECONDS = 2.0
@@ -231,6 +232,7 @@ class AdapterContext:
     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
     asr_ready: bool = False
     asr_subscription_token: Optional[str] = None
+    asr_subscription_bus: Optional[Any] = None
     asr_open_subscription_token: Optional[str] = None
     server_keepalive_task: asyncio.Task[None] | None = None
     last_policy_interaction: Optional[Dict[str, Any]] = None
@@ -519,7 +521,11 @@ class ChatV2Adapter:
                     api_key = getattr(config, "DEEPGRAM_API_KEY", "")
                     if engine is not None and api_key:
                         client = DeepgramClient(api_key=api_key)
-                        self.asr_runtime = ASRRuntime(engine=engine, client=client)
+                        self.asr_runtime = ASRRuntime(
+                            engine=engine,
+                            client=client,
+                            telemetry_bus=bus,
+                        )
                     else:
                         _log.warning(
                             "evt=ws_asr_runtime_unavailable sid=%s has_engine=%s has_api_key=%s",
@@ -531,6 +537,13 @@ class ChatV2Adapter:
                     _log.exception("evt=ws_asr_runtime_attach_failed sid=%s", ctx.sid)
 
             asr_runtime = getattr(self, "asr_runtime", None)
+            if asr_runtime is not None and hasattr(asr_runtime, "set_bus"):
+                try:
+                    asr_runtime.set_bus(bus)
+                except Exception:  # pragma: no cover - defensive logging
+                    _log.exception("evt=ws_asr_set_bus_failed sid=%s", ctx.sid)
+
+            _log.info("evt=ws_open sid=%s", ctx.sid)
             runtime_name = type(asr_runtime).__name__ if asr_runtime is not None else "None"
             _log.info("evt=ws_open sid=%s asr_runtime=%s", ctx.sid, runtime_name)
             if asr_runtime is not None:
@@ -538,7 +551,7 @@ class ChatV2Adapter:
                     asr_runtime.on_ws_open(ctx.sid)
                 except Exception:  # pragma: no cover - defensive logging
                     _log.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
-            self._start_asr_ready_tracker(ctx)
+            self._start_asr_ready_tracker(ctx, bus)
             self._start_outbound_bridge(ctx, send)
             self._start_server_keepalive(ctx, send)
 
@@ -965,19 +978,22 @@ class ChatV2Adapter:
             return self._HandleResult(False, 1009, "frame_too_large")
 
         if not ctx.asr_ready:
-            meta = {
-                "byte_count": byte_count,
-                "error": "audio_not_expected",
-                "ws": {"dir": "in", "size": byte_count},
-            }
-            await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-            await self._send_error(
-                send,
-                ctx.sid,
-                "audio_not_expected",
-                "asr not ready",
-            )
-            return self._HandleResult(False, 1003, "audio_not_expected")
+            if ALLOW_AUDIO_WITHOUT_ASR:
+                _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
+            else:
+                meta = {
+                    "byte_count": byte_count,
+                    "error": "audio_not_expected",
+                    "ws": {"dir": "in", "size": byte_count},
+                }
+                await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "audio_not_expected",
+                    "asr not ready",
+                )
+                return self._HandleResult(False, 1003, "audio_not_expected")
 
         if not ctx.accepting_audio:
             ctx.audio_violation_count += 1
@@ -1541,14 +1557,33 @@ class ChatV2Adapter:
         if telemetry_bus is None:
             telemetry_bus = bus
 
+        ctx.asr_subscription_bus = telemetry_bus
         _log.info("evt=asr_ready_tracker_start sid=%s", ctx.sid)
+
+        loop = asyncio.get_running_loop()
 
         def _handle(event: dict) -> None:
             if event.get("type") != EVT_ASR_READY:
                 return
             if event.get("sid") != ctx.sid:
                 return
-            ctx.asr_ready = True
+
+            def _mark_ready() -> None:
+                if ctx.asr_ready:
+                    return
+                ctx.asr_ready = True
+                frame: Dict[str, Any] = {"type": "asr.ready"}
+                vendor = event.get("vendor")
+                if isinstance(vendor, str) and vendor:
+                    frame["vendor"] = vendor
+                telemetry_bus.publish(
+                    {"type": EVT_WS_JSON_SEND, "sid": ctx.sid, "frame": frame}
+                )
+
+            try:
+                loop.call_soon_threadsafe(_mark_ready)
+            except RuntimeError:
+                _mark_ready()
 
         ctx.asr_subscription_token = telemetry_bus.subscribe(EVT_ASR_READY, _handle)
 
@@ -2125,8 +2160,10 @@ class ChatV2Adapter:
     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
         token = ctx.asr_subscription_token
         ctx.asr_subscription_token = None
+        telemetry_bus = ctx.asr_subscription_bus or bus
+        ctx.asr_subscription_bus = None
         if token:
-            bus.unsubscribe(token)
+            telemetry_bus.unsubscribe(token)
         ctx.asr_ready = False
         ctx.await_user_after_mask = False
 
