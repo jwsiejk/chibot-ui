@@ -151,12 +151,12 @@ class ASRRuntime:
             )
 
         def _emit_log(self, payload: Mapping[str, Any]) -> None:
-        event = dict(payload or {})
-        event.setdefault("type", "EVT_LOG")
-        try:
-            self._bus.publish(event)
-        except Exception:  # pragma: no cover - defensive
-            _log.debug("evt=asr_emit_log_failed payload=%s", event, exc_info=True)
+            event = dict(payload or {})
+            event.setdefault("type", "EVT_LOG")
+            try:
+                self._bus.publish(event)
+            except Exception:  # pragma: no cover - defensive
+                _log.debug("evt=asr_emit_log_failed payload=%s", event, exc_info=True)
 
     def _input_descriptor_from_policy(
         self, policy_snapshot: Mapping[str, Any] | Any | None

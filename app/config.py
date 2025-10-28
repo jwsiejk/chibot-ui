@@ -52,6 +52,30 @@ _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
 _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
 _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
 
+_ALLOWED_ASR_INPUTS = {"webm_opus", "pcm_16k"}
+_CAPTURE_TIMESLICE_MIN_MS = 20
+
+_DEFAULT_POLICY_MEDIA = {
+    "asr_input": "webm_opus",
+    "asr_rate_hz": 48000,
+    "asr_channels": 1,
+    "fallbacks_allowed": False,
+}
+
+_DEFAULT_POLICY_CAPTURE = {
+    "start_on_asr_ready": True,
+    "start_on_turn_ready": True,
+    "timeslice_ms": 200,
+    "mask_during_tts": True,
+}
+
+POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
+POLICY_CAPTURE: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_CAPTURE)
+POLICY_OVERRIDES: MutableMapping[str, Any] = {
+    "media": dict(POLICY_MEDIA),
+    "capture": dict(POLICY_CAPTURE),
+}
+
 
 def _normalize_key(key: str) -> str:
     return key.strip().lower()
@@ -167,6 +191,84 @@ def _coerce_db_mapping(
         return dict(base_default)
 
     return dict(base_default)
+
+
+def _sanitize_media_policy(
+    value: Mapping[str, Any] | None,
+    *,
+    source: str,
+    raw: Any,
+) -> Mapping[str, Any]:
+    sanitized = dict(_DEFAULT_POLICY_MEDIA)
+    if not isinstance(value, Mapping):
+        return sanitized
+
+    asr_input_value = value.get("asr_input")
+    if isinstance(asr_input_value, str):
+        candidate = asr_input_value.strip()
+        if candidate in _ALLOWED_ASR_INPUTS:
+            sanitized["asr_input"] = candidate
+        else:
+            _log.warning(
+                "evt=admin_settings_invalid_policy_media key=asr_input value=%s source=%s",
+                candidate,
+                source,
+                extra={"component": "admin.settings", "raw": raw},
+            )
+
+    fallbacks_value = value.get("fallbacks_allowed")
+    try:
+        sanitized["fallbacks_allowed"] = _coerce_db_bool(
+            fallbacks_value, sanitized["fallbacks_allowed"]
+        )
+    except ValueError:
+        _log.warning(
+            "evt=admin_settings_invalid_policy_media key=fallbacks_allowed source=%s",
+            source,
+            extra={"component": "admin.settings", "raw": raw},
+        )
+
+    rate_value = value.get("asr_rate_hz")
+    sanitized["asr_rate_hz"] = _coerce_db_int(
+        rate_value, sanitized["asr_rate_hz"], minimum=1
+    )
+
+    channels_value = value.get("asr_channels")
+    sanitized["asr_channels"] = _coerce_db_int(
+        channels_value, sanitized["asr_channels"], minimum=1
+    )
+
+    return sanitized
+
+
+def _sanitize_capture_policy(
+    value: Mapping[str, Any] | None,
+    *,
+    source: str,
+    raw: Any,
+) -> Mapping[str, Any]:
+    sanitized = dict(_DEFAULT_POLICY_CAPTURE)
+    if not isinstance(value, Mapping):
+        return sanitized
+
+    for key in ("start_on_asr_ready", "start_on_turn_ready", "mask_during_tts"):
+        try:
+            sanitized[key] = _coerce_db_bool(value.get(key), sanitized[key])
+        except ValueError:
+            _log.warning(
+                "evt=admin_settings_invalid_policy_capture key=%s source=%s",
+                key,
+                source,
+                extra={"component": "admin.settings", "raw": raw},
+            )
+
+    sanitized["timeslice_ms"] = _coerce_db_int(
+        value.get("timeslice_ms"),
+        sanitized["timeslice_ms"],
+        minimum=_CAPTURE_TIMESLICE_MIN_MS,
+    )
+
+    return sanitized
 
 
 def _get_cached_admin_setting(key: str) -> Optional[Any]:
@@ -301,17 +403,45 @@ def reload_runtime_flags() -> None:
         "diag_chunk_sample_n", default=10, minimum=1
     )
 
+    policy_media_raw, media_source, media_raw = _resolve_mapping_setting(
+        "policy_media", default=_DEFAULT_POLICY_MEDIA
+    )
+    policy_media = _sanitize_media_policy(
+        policy_media_raw, source=media_source, raw=media_raw
+    )
+
+    policy_capture_raw, capture_source, capture_raw = _resolve_mapping_setting(
+        "policy_capture", default=_DEFAULT_POLICY_CAPTURE
+    )
+    policy_capture = _sanitize_capture_policy(
+        policy_capture_raw, source=capture_source, raw=capture_raw
+    )
+
     guardrails_value = dict(audio_guardrails)
     flags = {
         "DIAG_CLIENT_HUD": diag_client_hud,
         "AUDIO_GUARDRAILS": guardrails_value,
         "DIAG_AUDIO_GUARD": diag_audio_guard,
         "DIAG_CHUNK_SAMPLE_N": diag_chunk_sample_n,
+        "POLICY_MEDIA": dict(policy_media),
+        "POLICY_CAPTURE": dict(policy_capture),
     }
     with _ADMIN_SETTINGS_LOCK:
         _RUNTIME_FLAGS.clear()
         _RUNTIME_FLAGS.update(flags)
     globals().update(flags)
+
+    POLICY_MEDIA.clear()
+    POLICY_MEDIA.update(policy_media)
+
+    POLICY_CAPTURE.clear()
+    POLICY_CAPTURE.update(policy_capture)
+
+    POLICY_OVERRIDES.clear()
+    POLICY_OVERRIDES.update({
+        "media": dict(POLICY_MEDIA),
+        "capture": dict(POLICY_CAPTURE),
+    })
 
     log_snapshot = [
         {"key": "DIAG_CLIENT_HUD", "value": diag_client_hud, "source": hud_source},
@@ -325,6 +455,16 @@ def reload_runtime_flags() -> None:
             "key": "DIAG_CHUNK_SAMPLE_N",
             "value": diag_chunk_sample_n,
             "source": chunk_source,
+        },
+        {
+            "key": "POLICY_MEDIA",
+            "value": dict(policy_media),
+            "source": media_source,
+        },
+        {
+            "key": "POLICY_CAPTURE",
+            "value": dict(policy_capture),
+            "source": capture_source,
         },
     ]
     _log.info(
@@ -369,6 +509,9 @@ __all__ = [
     "DIAG_AUDIO_GUARD",
     "DIAG_CHUNK_SAMPLE_N",
     "DIAG_CLIENT_HUD",
+    "POLICY_MEDIA",
+    "POLICY_CAPTURE",
+    "POLICY_OVERRIDES",
     "bool_env_or_db",
     "get_admin_setting_raw",
     "get_client_config_snapshot",

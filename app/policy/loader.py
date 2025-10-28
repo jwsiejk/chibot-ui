@@ -4,6 +4,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Mapping, Sequence
 
+from app import config
+
 InteractionPolicySnapshot = Dict[str, Any]
 
 _ASSISTANT_TURN_SEQUENCE_KEY = "assistant_turn_sequence"
@@ -73,6 +75,11 @@ def load_interaction_policy(
     """
 
     policy: InteractionPolicySnapshot = deepcopy(_DEFAULT_INTERACTION_POLICY)
+
+    base_overrides = getattr(config, "POLICY_OVERRIDES", None)
+    if isinstance(base_overrides, Mapping):
+        for key, value in base_overrides.items():
+            policy[key] = deepcopy(value)
 
     if overrides:
         for key, value in overrides.items():

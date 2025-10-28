@@ -13,6 +13,8 @@ _log = logging.getLogger(__name__)
 _DEFAULT_SETTINGS: Dict[str, Any] = {"authentication": "none"}
 _CHUNK_SAMPLE_MIN = 1
 _CHUNK_SAMPLE_MAX = 100
+_POLICY_MEDIA_ALLOWED_INPUTS = {"webm_opus", "pcm_16k"}
+_POLICY_CAPTURE_MIN_TIMESLICE = 20
 
 
 async def handle_admin_settings(scope: dict, receive) -> "Response":
@@ -54,7 +56,7 @@ async def handle_admin_settings(scope: dict, receive) -> "Response":
         return _respond_settings(method)
 
     errors: Dict[str, str] = {}
-    normalized: Dict[str, Optional[str]] = {}
+    normalized: Dict[str, Any] = {}
     for key, value in updates.items():
         try:
             normalized[key] = _normalize_setting(key, value)
@@ -86,13 +88,85 @@ def _extract_updates(payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(settings, Mapping):
         return None
     updates: Dict[str, Any] = {}
-    for key in ("diag_client_hud", "diag_audio_guard", "diag_chunk_sample_n"):
+    for key in (
+        "diag_client_hud",
+        "diag_audio_guard",
+        "diag_chunk_sample_n",
+        "policy_media",
+        "policy_capture",
+    ):
         if key in settings:
             updates[key] = settings[key]
     return updates
 
 
-def _normalize_setting(key: str, value: Any) -> Optional[str]:
+def _normalize_policy_media(value: Any) -> Dict[str, Any]:
+    current = dict(config.POLICY_MEDIA)
+    if value is None:
+        raise ValueError("expected_object")
+    if isinstance(value, str):
+        candidate = value.strip()
+        if candidate not in _POLICY_MEDIA_ALLOWED_INPUTS:
+            raise ValueError("invalid_asr_input")
+        current["asr_input"] = candidate
+        return current
+    if not isinstance(value, Mapping):
+        raise ValueError("expected_object")
+
+    if "asr_input" in value:
+        candidate_raw = value.get("asr_input")
+        if not isinstance(candidate_raw, str):
+            raise ValueError("invalid_asr_input")
+        candidate = candidate_raw.strip()
+        if candidate not in _POLICY_MEDIA_ALLOWED_INPUTS:
+            raise ValueError("invalid_asr_input")
+        current["asr_input"] = candidate
+
+    if "fallbacks_allowed" in value:
+        current["fallbacks_allowed"] = _coerce_bool(
+            value.get("fallbacks_allowed"),
+        )
+
+    if "asr_rate_hz" in value:
+        current["asr_rate_hz"] = _coerce_int(
+            value.get("asr_rate_hz"), minimum=1, maximum=192000
+        )
+
+    if "asr_channels" in value:
+        current["asr_channels"] = _coerce_int(
+            value.get("asr_channels"), minimum=1, maximum=16
+        )
+
+    return current
+
+
+def _normalize_policy_capture(value: Any) -> Dict[str, Any]:
+    current = dict(config.POLICY_CAPTURE)
+    if value is None:
+        raise ValueError("expected_object")
+    if not isinstance(value, Mapping):
+        raise ValueError("expected_object")
+
+    if "start_on_asr_ready" in value:
+        current["start_on_asr_ready"] = _coerce_bool(value.get("start_on_asr_ready"))
+
+    if "start_on_turn_ready" in value:
+        current["start_on_turn_ready"] = _coerce_bool(value.get("start_on_turn_ready"))
+
+    if "mask_during_tts" in value:
+        current["mask_during_tts"] = _coerce_bool(value.get("mask_during_tts"))
+
+    if "timeslice_ms" in value:
+        current["timeslice_ms"] = _coerce_int(
+            value.get("timeslice_ms"),
+            minimum=_POLICY_CAPTURE_MIN_TIMESLICE,
+            maximum=600000,
+        )
+
+    return current
+
+
+def _normalize_setting(key: str, value: Any) -> Optional[Any]:
     if value is None:
         return None
     if key == "diag_client_hud" or key == "diag_audio_guard":
@@ -101,6 +175,10 @@ def _normalize_setting(key: str, value: Any) -> Optional[str]:
     if key == "diag_chunk_sample_n":
         coerced = _coerce_int(value, minimum=_CHUNK_SAMPLE_MIN, maximum=_CHUNK_SAMPLE_MAX)
         return str(coerced)
+    if key == "policy_media":
+        return _normalize_policy_media(value)
+    if key == "policy_capture":
+        return _normalize_policy_capture(value)
     raise ValueError("unsupported_setting")
 
 
@@ -152,6 +230,8 @@ def _current_settings() -> Dict[str, Any]:
             "diag_client_hud": bool(config.DIAG_CLIENT_HUD),
             "diag_audio_guard": bool(config.DIAG_AUDIO_GUARD),
             "diag_chunk_sample_n": int(config.DIAG_CHUNK_SAMPLE_N),
+            "policy_media": dict(config.POLICY_MEDIA),
+            "policy_capture": dict(config.POLICY_CAPTURE),
         }
     )
     return settings

@@ -15,6 +15,9 @@ class ConfigAdminSettingsTest(unittest.TestCase):
             "DIAG_AUDIO_GUARD": config.DIAG_AUDIO_GUARD,
             "DIAG_CHUNK_SAMPLE_N": config.DIAG_CHUNK_SAMPLE_N,
             "AUDIO_GUARDRAILS": dict(config.AUDIO_GUARDRAILS),
+            "POLICY_MEDIA": dict(config.POLICY_MEDIA),
+            "POLICY_CAPTURE": dict(config.POLICY_CAPTURE),
+            "POLICY_OVERRIDES": dict(config.POLICY_OVERRIDES),
         }
         self.addCleanup(self._restore_config_state)
 
@@ -32,6 +35,9 @@ class ConfigAdminSettingsTest(unittest.TestCase):
         config.DIAG_AUDIO_GUARD = self._orig_flags["DIAG_AUDIO_GUARD"]
         config.DIAG_CHUNK_SAMPLE_N = self._orig_flags["DIAG_CHUNK_SAMPLE_N"]
         config.AUDIO_GUARDRAILS = dict(self._orig_flags["AUDIO_GUARDRAILS"])
+        config.POLICY_MEDIA = dict(self._orig_flags["POLICY_MEDIA"])
+        config.POLICY_CAPTURE = dict(self._orig_flags["POLICY_CAPTURE"])
+        config.POLICY_OVERRIDES = dict(self._orig_flags["POLICY_OVERRIDES"])
         for key, value in self._orig_runtime.items():
             setattr(config, key, value)
 
