@@ -397,10 +397,11 @@ class ASRRuntime:
         duration_ms = int(
             max(0.0, (time.monotonic() - state.opened_at_monotonic) * 1000)
         )
-        _log.info(
+        msg = (
             "evt=asr_rollup sid=%s stream_id=%s opened_at_ms=%d last_audio_ts_ms=%d "
             "chunks_sent=%d bytes_sent=%d partials=%d finals=%d finals_delivered=%d "
-            "dropped=%d duration_ms=%d",
+            "dropped=%d duration_ms=%d"
+        ) % (
             state.sid,
             stream_id,
             state.opened_at_ms,
@@ -412,6 +413,17 @@ class ASRRuntime:
             state.finals_delivered,
             state.dropped_chunks,
             duration_ms,
+        )
+        _log.info(msg)
+        self._emit_log(
+            {
+                "type": "EVT_LOG",
+                "logger": "app.voice_v2.asr_runtime",
+                "level": "INFO",
+                "sid": state.sid,
+                "stream_id": stream_id,
+                "msg": msg,
+            }
         )
 
     def _log_utterance(
@@ -445,7 +457,19 @@ class ASRRuntime:
         if isinstance(e2e_latency, (int, float)):
             log_template += " e2e_latency_ms=%d"
             log_args.append(int(e2e_latency))
-        _log.info(log_template, *log_args)
+        msg = log_template % tuple(log_args)
+        _log.info(msg)
+        self._emit_log(
+            {
+                "type": "EVT_LOG",
+                "logger": "app.voice_v2.asr_runtime",
+                "level": "INFO",
+                "sid": state.sid,
+                "stream_id": stream_id,
+                "req_id": req_id,
+                "msg": msg,
+            }
+        )
 
     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
         loop = self._ensure_loop()

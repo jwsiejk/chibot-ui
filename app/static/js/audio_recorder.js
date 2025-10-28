@@ -31,10 +31,94 @@
     setPolicy(policyObj) {
       this._policy = policyObj || {};
       this._log?.info?.("rec_policy_loaded", this._policy);
+      const media = this.policy().media || {};
+      const capture = this.policy().capture || {};
+      this._sendDiagEvent(
+        "rec_policy_loaded",
+        { media, capture },
+        { level: "info", message: "rec_policy_loaded" }
+      );
     }
 
     policy() {
       return this._policy || {};
+    }
+
+    _diagEnabled() {
+      const cfg = window && window.__CFG__;
+      if (!cfg || typeof cfg !== "object") {
+        return false;
+      }
+      return Boolean(cfg.DIAG_CLIENT_HUD);
+    }
+
+    _cloneDiagDetail(detail) {
+      if (detail === undefined) {
+        return undefined;
+      }
+      if (detail === null) {
+        return null;
+      }
+      const type = typeof detail;
+      if (type === "string" || type === "number" || type === "boolean") {
+        return detail;
+      }
+      if (type === "object") {
+        try {
+          return JSON.parse(JSON.stringify(detail));
+        } catch (err) {
+          return undefined;
+        }
+      }
+      return undefined;
+    }
+
+    _sendDiagEvent(eventName, detail, options = {}) {
+      if (!this._diagEnabled()) {
+        return;
+      }
+      const ws = this._getWsClient();
+      if (!ws || typeof ws.send !== "function") {
+        return;
+      }
+      const frame = {
+        type: "client.diag",
+        event:
+          typeof eventName === "string" && eventName
+            ? eventName.slice(0, 64)
+            : "recorder",
+        ts: Date.now()
+      };
+      const level =
+        options && typeof options.level === "string"
+          ? options.level.trim()
+          : "";
+      if (level) {
+        frame.level = level.slice(0, 16);
+      }
+      const message =
+        options && typeof options.message === "string"
+          ? options.message.trim()
+          : "";
+      if (message) {
+        frame.message = message.slice(0, 256);
+      }
+      const badge =
+        options && typeof options.badge === "string"
+          ? options.badge.trim()
+          : "";
+      if (badge) {
+        frame.badge = badge.slice(0, 64);
+      }
+      const data = this._cloneDiagDetail(detail);
+      if (data !== undefined) {
+        frame.data = data;
+      }
+      try {
+        ws.send(frame);
+      } catch (err) {
+        this._log?.warn?.("rec=diag_send_failed %o", err);
+      }
     }
 
     async start() {
@@ -203,6 +287,15 @@
           return false;
         }
         this._log?.info?.("rec=webm_opus_started timeslice_ms=%d", slice);
+        this._sendDiagEvent(
+          "rec=webm_opus_started",
+          { timeslice_ms: slice },
+          {
+            level: "info",
+            message: `rec=webm_opus_started timeslice_ms=${slice}`,
+            badge: "mic:rec"
+          }
+        );
         return true;
       }
 
@@ -235,6 +328,11 @@
         this._micChunksSent += 1;
       } catch (err) {
         this._log?.warn?.("rec=webm_chunk_send_failed %o", err);
+        this._sendDiagEvent(
+          "evt=mic_chunk_send_failed",
+          err && err.message ? { message: String(err.message).slice(0, 128) } : null,
+          { level: "warning", message: "evt=mic_chunk_send_failed" }
+        );
       }
     }
 

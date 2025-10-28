@@ -4,10 +4,29 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+from app.logging_setup import current_sid
+from app.telemetry import bus
+
 _ALLOWED_AUDIO_FORMATS = {"opus", "pcm"}
 
 
 _logger = logging.getLogger(__name__)
+
+
+def _emit_validator_log(level: str, msg: str) -> None:
+    event = {
+        "type": "EVT_LOG",
+        "logger": "app.ws.validator",
+        "level": level,
+        "msg": msg,
+    }
+    sid = current_sid.get()
+    if isinstance(sid, str) and sid:
+        event["sid"] = sid
+    try:
+        bus.publish(event)
+    except Exception:  # pragma: no cover - defensive
+        _logger.debug("evt=validator_emit_log_failed", exc_info=True)
 
 try:  # pragma: no cover - policy model optional in tests
     from app.policy.model import Policy  # type: ignore
@@ -84,39 +103,45 @@ def validate_audio_header_against_policy(
     asr_input = get_value("asr_input")
     if asr_input == "webm_opus":
         if fmt != "opus":
-            return "policy_violation: expected format=opus"
+            msg = "policy_violation: expected format=opus"
+            _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
+            return msg
         expected_rate = get_value("asr_rate_hz")
         if _is_int(expected_rate) and rate is not None and rate != expected_rate:
-            _logger.warning(
-                "evt=audio_header_rate_mismatch expected=%s got=%s",
-                expected_rate,
-                rate,
+            msg = (
+                "evt=audio_header_rate_mismatch expected=%s got=%s"
+                % (expected_rate, rate)
             )
+            _logger.warning(msg)
+            _emit_validator_log("WARNING", msg)
         expected_channels = get_value("asr_channels")
         if _is_int(expected_channels) and channels is not None and channels != expected_channels:
-            _logger.warning(
-                "evt=audio_header_channels_mismatch expected=%s got=%s",
-                expected_channels,
-                channels,
+            msg = (
+                "evt=audio_header_channels_mismatch expected=%s got=%s"
+                % (expected_channels, channels)
             )
+            _logger.warning(msg)
+            _emit_validator_log("WARNING", msg)
     elif asr_input == "pcm_16k":
         if fmt != "pcm":
-            return "policy_violation: expected format=pcm"
+            msg = "policy_violation: expected format=pcm"
+            _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
+            return msg
         if rate is not None and rate != 16000:
-            _logger.warning(
-                "evt=audio_header_rate_mismatch expected=16000 got=%s", rate
-            )
+            msg = f"evt=audio_header_rate_mismatch expected=16000 got={rate}"
+            _logger.warning(msg)
+            _emit_validator_log("WARNING", msg)
         if channels is not None and channels != 1:
-            _logger.warning(
-                "evt=audio_header_channels_mismatch expected=1 got=%s",
-                channels,
-            )
+            msg = f"evt=audio_header_channels_mismatch expected=1 got={channels}"
+            _logger.warning(msg)
+            _emit_validator_log("WARNING", msg)
     else:
-        return (
-            f"policy_violation: unsupported media.asr_input={asr_input}"
-            if asr_input
-            else "policy_violation: unsupported media.asr_input"
-        )
+        if asr_input:
+            detail = f"policy_violation: unsupported media.asr_input={asr_input}"
+        else:
+            detail = "policy_violation: unsupported media.asr_input"
+        _emit_validator_log("WARNING", f"evt=policy_violation detail={detail}")
+        return detail
 
     return None
 
