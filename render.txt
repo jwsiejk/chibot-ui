@@ -1,174 +1,135 @@
-170.85.75.32:0 - "GET /admin/logs HTTP/1.1" 200
-170.85.75.32:0 - "GET /admin/ui/config_panel.js?v=3bd8b1151a768832e1f4c195c0cf2194e6514eeb HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/admin_logs.js?v=3bd8b1151a768832e1f4c195c0cf2194e6514eeb HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/sessions HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/favicon.ico?v=3bd8b1151a768832e1f4c195c0cf2194e6514eeb HTTP/1.1" 200
+0.85.75.32:0 - "GET /static/js/admin_logs.js?v=ea88c613b90c8952f275f0e708cca14c9544d17a HTTP/1.1" 200
+
+170.85.75.32:0 - "GET /admin/ui/config_panel.js?v=ea88c613b90c8952f275f0e708cca14c9544d17a HTTP/1.1" 200
 170.85.75.32:0 - "GET /api/v1/admin/settings HTTP/1.1" 200
-10.225.27.46:58500 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:33204 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /static/favicon.ico?v=ea88c613b90c8952f275f0e708cca14c9544d17a HTTP/1.1" 200
+10.225.25.218:58918 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.218:58916 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/sessions HTTP/1.1" 200
+10.225.25.218:58930 - "GET /api/v1/health HTTP/1.1" 200
 170.85.75.32:0 - "GET /api/v1/admin/flow/sessions?open=1 HTTP/1.1" 200
-10.225.27.46:33220 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:33216 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:49368 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:49376 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.218:59874 - "GET /api/v1/health HTTP/1.1" 200
 170.85.75.32:0 - "GET /api/v1/auth/me HTTP/1.1" 200
-INFO:app.security.jwt_utils:evt=ws_jwt_mint sid=3d67037e9a4d48cfa79dc60b8567fb92 ttl=60
-INFO:app.auth.http_handlers:evt=ws_token_mint sid=3d67037e9a4d48cfa79dc60b8567fb92 ttl=60
+INFO:app.security.jwt_utils:evt=ws_jwt_mint sid=fef197cd89b5404ba0b8f54ee016d54f ttl=60
+INFO:app.auth.http_handlers:evt=ws_token_mint sid=fef197cd89b5404ba0b8f54ee016d54f ttl=60
 170.85.75.32:0 - "POST /api/v1/auth/ws-token HTTP/1.1" 200
-INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjNkNjcwMzdlOWE0ZDQ4Y2ZhNzlkYzYwYjg1NjdmYjkyIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTYyMzgwOSwiZXhwIjoxNzYxNjIzODY5LCJqdGkiOiIxOGQ1OWExYS1iNjI3LTQzNDMtOTEyMS02ZWVhNmRiZGQ3YzAiLCJpc19hZG1pbiI6dHJ1ZX0.97SVKppyxg87yz4TWXyP1_PhnMaFQDJvnUUZ-_eVAmA'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjNkNjcwMzdlOWE0ZDQ4Y2ZhNzlkYzYwYjg1NjdmYjkyIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTYyMzgwOSwiZXhwIjoxNzYxNjIzODY5LCJqdGkiOiIxOGQ1OWExYS1iNjI3LTQzNDMtOTEyMS02ZWVhNmRiZGQ3YzAiLCJpc19hZG1pbiI6dHJ1ZX0.97SVKppyxg87yz4TWXyP1_PhnMaFQDJvnUUZ-_eVAmA' root_path=
+INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZlZjE5N2NkODliNTQwNGJhMGI4ZjU0ZWUwMTZkNTRmIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTYzMDY5OCwiZXhwIjoxNzYxNjMwNzU4LCJqdGkiOiJlZWM2ZTE0MS1lZTM3LTQyN2UtYTA1ZS02OTk0MDc1MWYwYjEiLCJpc19hZG1pbiI6dHJ1ZX0.Nu4vtaQZI7wGZU7Jm8zIBnaXV9GwBOph94sayfqrsng'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZlZjE5N2NkODliNTQwNGJhMGI4ZjU0ZWUwMTZkNTRmIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTYzMDY5OCwiZXhwIjoxNzYxNjMwNzU4LCJqdGkiOiJlZWM2ZTE0MS1lZTM3LTQyN2UtYTA1ZS02OTk0MDc1MWYwYjEiLCJpc19hZG1pbiI6dHJ1ZX0.Nu4vtaQZI7wGZU7Jm8zIBnaXV9GwBOph94sayfqrsng' root_path=
 INFO:app.voice_v2.tts_runtime:evt=tts_provider_ready provider=elevenlabs
-INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjNkNjcwMzdlOWE0ZDQ4Y2ZhNzlkYzYwYjg1NjdmYjkyIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTYyMzgwOSwiZXhwIjoxNzYxNjIzODY5LCJqdGkiOiIxOGQ1OWExYS1iNjI3LTQzNDMtOTEyMS02ZWVhNmRiZGQ3YzAiLCJpc19hZG1pbiI6dHJ1ZX0.97SVKppyxg87yz4TWXyP1_PhnMaFQDJvnUUZ-_eVAmA'] need='chat.v2'
-INFO:app.ws.adapter:evt=ws_accept_token_ok sid=3d67037e9a4d48cfa79dc60b8567fb92
+INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZlZjE5N2NkODliNTQwNGJhMGI4ZjU0ZWUwMTZkNTRmIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTYzMDY5OCwiZXhwIjoxNzYxNjMwNzU4LCJqdGkiOiJlZWM2ZTE0MS1lZTM3LTQyN2UtYTA1ZS02OTk0MDc1MWYwYjEiLCJpc19hZG1pbiI6dHJ1ZX0.Nu4vtaQZI7wGZU7Jm8zIBnaXV9GwBOph94sayfqrsng'] need='chat.v2'
+INFO:app.ws.adapter:evt=ws_accept_token_ok sid=fef197cd89b5404ba0b8f54ee016d54f
 INFO:app.ws.adapter:evt=ws_accept subprotocol='chat.v2'
-[2025-10-28 03:56:50 +0000] [58] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjNkNjcwMzdlOWE0ZDQ4Y2ZhNzlkYzYwYjg1NjdmYjkyIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTYyMzgwOSwiZXhwIjoxNzYxNjIzODY5LCJqdGkiOiIxOGQ1OWExYS1iNjI3LTQzNDMtOTEyMS02ZWVhNmRiZGQ3YzAiLCJpc19hZG1pbiI6dHJ1ZX0.97SVKppyxg87yz4TWXyP1_PhnMaFQDJvnUUZ-_eVAmA" [accepted]
-[2025-10-28 03:56:50 +0000] [58] [INFO] connection open
-INFO:app.ws.adapter:evt=server_banner build_id=unknown host=srv-d26hqi3e5dus73b43g10-hibernate-65c75bfb77-9f66z pid=58 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py asr=/opt/render/project/src/app/voice_v2/asr_runtime.py
-INFO:app.ws.adapter:evt=ws_info_sent sid=3d67037e9a4d48cfa79dc60b8567fb92
-INFO:app.ws.adapter:evt=ws_open sid=3d67037e9a4d48cfa79dc60b8567fb92
-INFO:app.ws.adapter:evt=ws_open sid=3d67037e9a4d48cfa79dc60b8567fb92 asr_runtime=ASRRuntime
-INFO:app.voice_v2.asr_runtime:evt=asr_on_ws_open sid=3d67037e9a4d48cfa79dc60b8567fb92
-INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=3d67037e9a4d48cfa79dc60b8567fb92
-INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=3d67037e9a4d48cfa79dc60b8567fb92
+[2025-10-28 05:51:38 +0000] [59] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZlZjE5N2NkODliNTQwNGJhMGI4ZjU0ZWUwMTZkNTRmIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTYzMDY5OCwiZXhwIjoxNzYxNjMwNzU4LCJqdGkiOiJlZWM2ZTE0MS1lZTM3LTQyN2UtYTA1ZS02OTk0MDc1MWYwYjEiLCJpc19hZG1pbiI6dHJ1ZX0.Nu4vtaQZI7wGZU7Jm8zIBnaXV9GwBOph94sayfqrsng" [accepted]
+[2025-10-28 05:51:38 +0000] [59] [INFO] connection open
+INFO:app.ws.adapter:evt=server_banner build_id=unknown host=srv-d26hqi3e5dus73b43g10-hibernate-5476dd8c95-x8w5g pid=59 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py asr=/opt/render/project/src/app/voice_v2/asr_runtime.py
+INFO:app.ws.adapter:evt=ws_info_sent sid=fef197cd89b5404ba0b8f54ee016d54f
+INFO:app.ws.adapter:evt=ws_open sid=fef197cd89b5404ba0b8f54ee016d54f
+INFO:app.ws.adapter:evt=ws_open sid=fef197cd89b5404ba0b8f54ee016d54f asr_runtime=ASRRuntime
+INFO:app.voice_v2.asr_runtime:evt=asr_on_ws_open sid=fef197cd89b5404ba0b8f54ee016d54f
+INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=fef197cd89b5404ba0b8f54ee016d54f
+INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=fef197cd89b5404ba0b8f54ee016d54f
 DEBUG:websockets.client:= connection is CONNECTING
-DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=3d67037e9a4d48cfa79dc60b8567fb92 purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
+10.225.25.218:59878 - "GET /api/v1/health HTTP/1.1" 200
+DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=fef197cd89b5404ba0b8f54ee016d54f purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
 DEBUG:asyncio:Using selector: EpollSelector
-10.225.27.46:40596 - "GET /api/v1/health HTTP/1.1" 200
-DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-4db35695-023d-4efe-8963-aa5e18f86bc1', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
+DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-7885a18f-a383-478b-afff-1d1d6e2f1244', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
 DEBUG:openai._base_client:Sending HTTP Request: POST https://api.openai.com/v1/chat/completions
 DEBUG:httpcore.connection:connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=5.0 socket_options=None
-DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x789742cc9a90>
-DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7897464385f0> server_hostname='api.openai.com' timeout=5.0
-DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7897430af890>
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7424816a8050>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x74248488b410> server_hostname='api.openai.com' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x74248172b890>
 DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_headers.complete
 DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_body.complete
 DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
-DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Tue, 28 Oct 2025 03:56:55 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'601'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'759'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199891'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'32ms'), (b'x-request-id', b'req_a7642f52aec5443682a211bfa97d543f'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=lwytQUKt.Kmt34VBmHfMQcxmdvDTtDwvMYror5HsiDA-1761623815-1.0.1.1-3S_ZogkYIAvRbQBHYVgnsRvvgzqqlod8Idit7LGIbM7tm4iKwzcd_.1wp2BNsX.hAwcPruD52PE51c4sPypJ6L9jyDMDKH3qM4pbsHNT1dk; path=/; expires=Tue, 28-Oct-25 04:26:55 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=UShFYLghLGbrgasEGguiYXX7V8RvBWY7snNymJsF9oo-1761623815794-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'9957818b8e330630-IAD'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Tue, 28 Oct 2025 05:51:42 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'711'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'1111'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199892'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'32ms'), (b'x-request-id', b'req_97ef7e86d23f4f489d223e0ba48ab23e'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=zCC_7QxkrrxqQoJ.NauB9O8cHvioRMr9YjkQb98A1kM-1761630702-1.0.1.1-aMRQMCHboCR2wKhvJp.2BwjIPwIb5i.Di6CFtnkx9sWiXD62GPNxVNpa351gphbghm_jTXAHVAE_7GtxbwjDcfCXJFZsn0u1_y_7JJqVJ6A; path=/; expires=Tue, 28-Oct-25 06:21:42 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=sZURLUZCFfLfA9JVeKfCK8vsCrO3wSytkS7wIWjGzSk-1761630702779-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'995829aa8c8e6f9d-IAD'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
 INFO:httpx:HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
 DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:receive_response_body.complete
 DEBUG:httpcore.http11:response_closed.started
 DEBUG:httpcore.http11:response_closed.complete
-DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Tue, 28 Oct 2025 03:56:55 GMT'), ('content-type', 'application/json'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-e0uazp84dxwznca9mgbvta53'), ('openai-processing-ms', '601'), ('openai-project', 'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '759'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '200000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '199891'), ('x-ratelimit-reset-requests', '8.64s'), ('x-ratelimit-reset-tokens', '32ms'), ('x-request-id', 'req_a7642f52aec5443682a211bfa97d543f'), ('x-openai-proxy-wasm', 'v0.1'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=lwytQUKt.Kmt34VBmHfMQcxmdvDTtDwvMYror5HsiDA-1761623815-1.0.1.1-3S_ZogkYIAvRbQBHYVgnsRvvgzqqlod8Idit7LGIbM7tm4iKwzcd_.1wp2BNsX.hAwcPruD52PE51c4sPypJ6L9jyDMDKH3qM4pbsHNT1dk; path=/; expires=Tue, 28-Oct-25 04:26:55 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=UShFYLghLGbrgasEGguiYXX7V8RvBWY7snNymJsF9oo-1761623815794-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '9957818b8e330630-IAD'), ('content-encoding', 'gzip'), ('alt-svc', 'h3=":443"; ma=86400')])
-DEBUG:openai._base_client:request_id: req_a7642f52aec5443682a211bfa97d543f
-DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=3d67037e9a4d48cfa79dc60b8567fb92 purpose=greet latency_ms=5350 model=gpt-4o-mini
-ERROR:app.voice_v2.asr_runtime:evt=asr_open_failed sid=3d67037e9a4d48cfa79dc60b8567fb92 vendor=deepgram
+DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Tue, 28 Oct 2025 05:51:42 GMT'), ('content-type', 'application/json'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-e0uazp84dxwznca9mgbvta53'), ('openai-processing-ms', '711'), ('openai-project', 'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '1111'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '200000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '199892'), ('x-ratelimit-reset-requests', '8.64s'), ('x-ratelimit-reset-tokens', '32ms'), ('x-request-id', 'req_97ef7e86d23f4f489d223e0ba48ab23e'), ('x-openai-proxy-wasm', 'v0.1'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=zCC_7QxkrrxqQoJ.NauB9O8cHvioRMr9YjkQb98A1kM-1761630702-1.0.1.1-aMRQMCHboCR2wKhvJp.2BwjIPwIb5i.Di6CFtnkx9sWiXD62GPNxVNpa351gphbghm_jTXAHVAE_7GtxbwjDcfCXJFZsn0u1_y_7JJqVJ6A; path=/; expires=Tue, 28-Oct-25 06:21:42 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=sZURLUZCFfLfA9JVeKfCK8vsCrO3wSytkS7wIWjGzSk-1761630702779-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '995829aa8c8e6f9d-IAD'), ('content-encoding', 'gzip'), ('alt-svc', 'h3=":443"; ma=86400')])
+DEBUG:openai._base_client:request_id: req_97ef7e86d23f4f489d223e0ba48ab23e
+DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=fef197cd89b5404ba0b8f54ee016d54f purpose=greet latency_ms=3515 model=gpt-4o-mini
 DEBUG:httpcore.connection:connect_tcp.started host='api.elevenlabs.io' port=443 local_address=None timeout=5.0 socket_options=None
-INFO:app.ws.adapter:evt=ws_client_mic_open sid=3d67037e9a4d48cfa79dc60b8567fb92 vendor= ts=1761623810124
-INFO:app.ws.adapter:evt=ws_client_log sid=3d67037e9a4d48cfa79dc60b8567fb92 label=client_ready_handshake outcome=sent attempts=1
-DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x78974246ead0>
-DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7897430c0cb0> server_hostname='api.elevenlabs.io' timeout=5.0
-DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x78974318eea0>
+INFO:app.ws.adapter:evt=ws_client_mic_open sid=fef197cd89b5404ba0b8f54ee016d54f vendor= ts=1761630698870
+INFO:app.ws.adapter:evt=ws_client_log sid=fef197cd89b5404ba0b8f54ee016d54f label=client_ready_handshake outcome=sent attempts=1
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x742481679e50>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x742484889370> server_hostname='api.elevenlabs.io' timeout=5.0
+170.85.75.32:0 - "GET /api/v1/admin/flow/sessions?open=1 HTTP/1.1" 200
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7424844ce8b0>
 DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_headers.complete
 DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_body.complete
 DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
-170.85.75.32:0 - "GET /api/v1/admin/flow/sessions?open=1 HTTP/1.1" 200
-DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Tue, 28 Oct 2025 03:56:55 GMT'), (b'server', b'uvicorn'), (b'request-id', b'RrY9Hp2jA3UYv8SQWt1r'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'1E9qUCp5cDnhjzvIvW0K'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'50'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'7935d32f03cbb6bdb5e8d19303464149'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
+DEBUG:websockets.client:> GET /v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en HTTP/1.1
+DEBUG:websockets.client:> Host: api.deepgram.com
+DEBUG:websockets.client:> Upgrade: websocket
+DEBUG:websockets.client:> Connection: Upgrade
+DEBUG:websockets.client:> Sec-WebSocket-Key: SzgwcWNMOQhS6vhNeIibBg==
+DEBUG:websockets.client:> Sec-WebSocket-Version: 13
+DEBUG:websockets.client:> Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+DEBUG:websockets.client:> Authorization: Token 38cfc39f41c64153aee87d5db20289dcbe400f62
+DEBUG:websockets.client:> User-Agent: Python/3.13 websockets/15.0.1
+DEBUG:websockets.client:< HTTP/1.1 101 Switching Protocols
+DEBUG:websockets.client:< connection: upgrade
+DEBUG:websockets.client:< upgrade: websocket
+DEBUG:websockets.client:< sec-websocket-accept: 17YonQh2Ym5ZljvpKSq2dLHTFH8=
+DEBUG:websockets.client:< dg-project-id: 52f81254-537a-4ef1-b723-d1f10f7e3efa
+DEBUG:websockets.client:< vary: origin, access-control-request-method, access-control-request-headers
+DEBUG:websockets.client:< access-control-allow-credentials: true
+DEBUG:websockets.client:< access-control-expose-headers: dg-model-name,dg-model-uuid,dg-char-count,dg-request-id,dg-project-id,dg-error
+DEBUG:websockets.client:< dg-request-id: b5a79694-412a-4106-ad9d-23c0e85ffedb
+DEBUG:websockets.client:< date: Tue, 28 Oct 2025 05:51:42 GMT
+DEBUG:websockets.client:= connection is OPEN
+INFO:app.services.streaming_asr.deepgram_client:evt=dg_ws_open container=webm_opus start_payload=omitted url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
+INFO:app.voice_v2.asr_runtime:evt=asr_session_open sid=fef197cd89b5404ba0b8f54ee016d54f content_type=(not set) qs=model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
+INFO:app.voice_v2.asr_runtime:evt=asr_ready sid=fef197cd89b5404ba0b8f54ee016d54f vendor=deepgram stream_id=dg-stream-f7e33aa8996942ca836d698819e8dde1
+INFO:app.voice_v2.asr_runtime:evt=asr_session_open sid=fef197cd89b5404ba0b8f54ee016d54f stream_id=dg-stream-f7e33aa8996942ca836d698819e8dde1 content_type="(not set)" idle_close_ms=4000
+INFO:app.services.streaming_asr.deepgram_client:evt=dg_stream_open sid=fef197cd89b5404ba0b8f54ee016d54f stream_id=dg-stream-f7e33aa8996942ca836d698819e8dde1 url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Tue, 28 Oct 2025 05:51:42 GMT'), (b'server', b'uvicorn'), (b'request-id', b'E1XscysNlK85WHvBaHp6'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'fhsxXaPdwRPI6QJnaKG2'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'54'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'10a64e199337d368d8b25eb969023be4'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
 INFO:httpx:HTTP Request: POST https://api.elevenlabs.io/v1/text-to-speech/MIAWBMadvHL0ek6oJEXD/stream?optimize_streaming_latency=4&output_format=pcm_16000 "HTTP/1.1 200 OK"
 INFO:app.services.tts.elevenlabs_client:evt=tts_provider_stream_opened provider=elevenlabs content_type=audio/pcm url_qs=optimize_streaming_latency=4&output_format=pcm_16000
-INFO:app.voice_v2.tts_runtime:evt=tts_start sid=3d67037e9a4d48cfa79dc60b8567fb92 utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=50
+INFO:app.voice_v2.tts_runtime:evt=tts_start sid=fef197cd89b5404ba0b8f54ee016d54f utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=54
 DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=3d67037e9a4d48cfa79dc60b8567fb92 utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=fef197cd89b5404ba0b8f54ee016d54f utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
+10.225.25.218:59390 - "GET /api/v1/health HTTP/1.1" 200
 DEBUG:httpcore.http11:receive_response_body.complete
 DEBUG:httpcore.http11:response_closed.started
 DEBUG:httpcore.http11:response_closed.complete
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=3d67037e9a4d48cfa79dc60b8567fb92 utt_id=utt-00001 chunks=95 bytes=120578 total_bytes=121858
-INFO:app.voice_v2.tts_runtime:evt=tts_end sid=3d67037e9a4d48cfa79dc60b8567fb92 utt_id=utt-00001 total_bytes=121858 duration_ms=352
-170.85.75.32:0 - "GET /favicon.ico HTTP/1.1" 200
-10.225.27.46:40600 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/live?sid=3d67037e9a4d48cfa79dc60b8567fb92 HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=3d67037e9a4d48cfa79dc60b8567fb92&limit=200 HTTP/1.1" 200
-10.225.27.46:49812 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=3d67037e9a4d48cfa79dc60b8567fb92&since_ms=1761623817551&limit=200 HTTP/1.1" 200
-10.225.27.46:49822 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:49830 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=3d67037e9a4d48cfa79dc60b8567fb92&since_ms=1761623817551&limit=200 HTTP/1.1" 200
-[2025-10-28 03:57:10 +0000] [58] [DEBUG] % sending keepalive ping
-[2025-10-28 03:57:10 +0000] [58] [DEBUG] % received keepalive pong
-10.225.27.46:36736 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=3d67037e9a4d48cfa79dc60b8567fb92&since_ms=1761623817551&limit=200 HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=3d67037e9a4d48cfa79dc60b8567fb92&since_ms=1761623831101&limit=200 HTTP/1.1" 200
-10.225.27.46:36752 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=3d67037e9a4d48cfa79dc60b8567fb92&since_ms=1761623831101&limit=200 HTTP/1.1" 200
-[2025-10-28 03:57:22 +0000] [58] [DEBUG] = connection is CLOSED
-[2025-10-28 03:57:22 +0000] [58] [INFO] connection closed
-INFO:app.voice_v2.asr_runtime:evt=asr_rollup sid=3d67037e9a4d48cfa79dc60b8567fb92 stream_id=dg-stream-a4f959a6cbbe49f0bd25dbd166dbde96 opened_at_ms=1761623810242 last_audio_ts_ms=1761623810242 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=31956
-10.225.27.46:51010 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=3d67037e9a4d48cfa79dc60b8567fb92&since_ms=1761623831101&limit=200 HTTP/1.1" 200
-10.225.27.46:51024 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:50640 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:50644 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:50656 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:39290 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:39298 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:37968 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:37972 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:58742 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:58750 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:58764 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:33504 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:33518 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:40450 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:40452 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:47948 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:47960 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:47976 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:59654 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:59656 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:39224 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:39232 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:51796 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:51810 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:51820 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:55432 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:55446 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:52532 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:52534 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:38588 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:38598 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:38600 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:53260 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:53262 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:37756 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:37762 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:49114 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:49138 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:49128 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:45390 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:45392 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:40532 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:40534 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:34196 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:34210 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:34212 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:40390 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:40394 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:37866 - "GET /api/v1/health HTTP/1.1" 200
-==> Detected service running on port 10000
-==> Docs on specifying a port: https://render.com/docs/web-services#port-binding
-10.225.27.46:37872 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:41842 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:41860 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:41858 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:37138 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:37148 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:54746 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:54758 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:40724 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:40736 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:40734 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:48788 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:48794 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:54434 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:54440 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:44252 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:44254 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:44256 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:38336 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:38350 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:43954 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:43964 - "GET /api/v1/health HTTP/1.1" 200
-10.225.27.46:41018 - "GET /api/v1/health HTTP/1.1" 200
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=fef197cd89b5404ba0b8f54ee016d54f utt_id=utt-00001 chunks=110 bytes=139898 total_bytes=141178
+INFO:app.voice_v2.tts_runtime:evt=tts_end sid=fef197cd89b5404ba0b8f54ee016d54f utt_id=utt-00001 total_bytes=141178 duration_ms=412
+170.85.75.32:0 - "GET /api/v1/admin/flow/live?sid=fef197cd89b5404ba0b8f54ee016d54f HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=fef197cd89b5404ba0b8f54ee016d54f&limit=200 HTTP/1.1" 200
+INFO:app.voice_v2.asr_runtime:evt=asr_idle_close sid=fef197cd89b5404ba0b8f54ee016d54f stream_id=dg-stream-f7e33aa8996942ca836d698819e8dde1 idle_ms=8292
+DEBUG:websockets.client:> CLOSE 1000 (OK) [2 bytes]
+DEBUG:websockets.client:= connection is CLOSING
+DEBUG:websockets.client:< CLOSE 1000 (OK) [2 bytes]
+DEBUG:websockets.client:< EOF
+DEBUG:websockets.client:> EOF
+DEBUG:websockets.client:= connection is CLOSED
+DEBUG:websockets.client:x closing TCP connection
+INFO:app.services.streaming_asr.deepgram_client:evt=dg_stream_closed sid=fef197cd89b5404ba0b8f54ee016d54f stream_id=dg-stream-f7e33aa8996942ca836d698819e8dde1 code=1000 reason=""
+10.225.25.218:59404 - "GET /api/v1/health HTTP/1.1" 200
+WARNING:app.voice_v2.asr_runtime:evt=asr_no_audio_timeout sid=fef197cd89b5404ba0b8f54ee016d54f
+INFO:app.voice_v2.asr_runtime:evt=asr_ready_published sid=fef197cd89b5404ba0b8f54ee016d54f vendor=deepgram
+10.225.25.218:47330 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.218:47332 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=fef197cd89b5404ba0b8f54ee016d54f&since_ms=1761630704297&limit=200 HTTP/1.1" 200
+[2025-10-28 05:51:58 +0000] [59] [DEBUG] % sending keepalive ping
+[2025-10-28 05:51:59 +0000] [59] [DEBUG] % received keepalive pong
+10.225.25.218:47346 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=fef197cd89b5404ba0b8f54ee016d54f&since_ms=1761630712287&limit=200 HTTP/1.1" 200
+[2025-10-28 05:52:02 +0000] [59] [DEBUG] = connection is CLOSED
+[2025-10-28 05:52:02 +0000] [59] [INFO] connection closed
+INFO:app.voice_v2.asr_runtime:evt=asr_rollup sid=fef197cd89b5404ba0b8f54ee016d54f stream_id=dg-stream-f7e33aa8996942ca836d698819e8dde1 opened_at_ms=1761630698987 last_audio_ts_ms=1761630698987 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=23961
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=fef197cd89b5404ba0b8f54ee016d54f&since_ms=1761630718030&limit=200 HTTP/1.1" 200
+10.225.25.218:52154 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=fef197cd89b5404ba0b8f54ee016d54f&since_ms=1761630722950&limit=200 HTTP/1.1" 200
+10.225.25.218:52160 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=fef197cd89b5404ba0b8f54ee016d54f&since_ms=1761630722950&limit=200 HTTP/1.1" 200
+10.225.25.218:56334 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=fef197cd89b5404ba0b8f54ee016d54f&since_ms=1761630722950&limit=200 HTTP/1.1" 200
+10.225.25.218:56350 - "GET /api/v1/health HTTP/1.1" 200
+10.225.25.218:47666 - "GET /api/v1/health HTTP/1.1" 200

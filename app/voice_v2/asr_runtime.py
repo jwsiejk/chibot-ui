@@ -14,6 +14,7 @@ from app.config import (
     ASR_IDLE_CLOSE_MS,
     ASR_TRACE,
 )
+from app.policy.model import Policy
 from app.telemetry import bus
 from app.voice_v2 import (
     EVT_ASR_FINAL,
@@ -97,6 +98,7 @@ class ASRRuntime:
         self._configure_client()
         self._sessions: Dict[str, _SessionState] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
+        self.policy = Policy()
         configured_idle = ASR_IDLE_CLOSE_MS
         if not isinstance(configured_idle, (int, float)):
             configured_idle = _DEFAULT_IDLE_CLOSE_MS
@@ -272,6 +274,16 @@ class ASRRuntime:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _emit_log(self, payload: Dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        event = dict(payload)
+        event.setdefault("type", "EVT_LOG")
+        try:
+            self._bus.publish(event)
+        except Exception:  # pragma: no cover - defensive
+            _log.exception("evt=asr_emit_log_failed")
+
     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
         loop = self._loop
         if loop is not None:
@@ -417,6 +429,32 @@ class ASRRuntime:
                 return
 
             state.stream_open = True
+            mp = getattr(self.policy, "media", None)
+            cp = getattr(self.policy, "capture", None)
+            if mp is not None and cp is not None:
+                self._emit_log(
+                    {
+                        "type": "EVT_LOG",
+                        "logger": "app.voice_v2.asr_runtime",
+                        "level": "INFO",
+                        "sid": sid,
+                        "msg": (
+                            "evt=asr_policy input=%s rate_hz=%s ch=%s fallbacks=%s "
+                            "start_on_asr_ready=%s start_on_turn_ready=%s timeslice_ms=%s "
+                            "mask_during_tts=%s"
+                        )
+                        % (
+                            getattr(mp, "asr_input", ""),
+                            getattr(mp, "asr_rate_hz", ""),
+                            getattr(mp, "asr_channels", ""),
+                            getattr(mp, "fallbacks_allowed", ""),
+                            getattr(cp, "start_on_asr_ready", ""),
+                            getattr(cp, "start_on_turn_ready", ""),
+                            getattr(cp, "timeslice_ms", ""),
+                            getattr(cp, "mask_during_tts", ""),
+                        ),
+                    }
+                )
             open_event = {"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram"}
             if stream_id:
                 open_event["stream_id"] = stream_id
