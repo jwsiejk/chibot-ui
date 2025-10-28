@@ -709,6 +709,7 @@
     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
     const AppState = window.AppState;
     const WSClient = window.WSClient;
+    const audioRecorder = window.AudioRecorder || null;
 
     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
     let pendingClientReady = null;
@@ -1058,7 +1059,7 @@
     const textChatForm = document.getElementById('textChatForm');
     const textChatInput = document.getElementById('textChatInput');
     
-    // === Added: chat submit wiring + fallback PCM16 streamer and mic helpers ===
+    // Chat submit wiring
     // Send typed chat to the server using chat.user frames
     if (textChatForm) {
       textChatForm.addEventListener('submit', (e) => {
@@ -1073,145 +1074,6 @@
         }
       });
     }
-    
-    // Fallback PCM16 mono @16kHz streamer, used only if AudioRecorder is absent or fails
-    const FallbackPCMStreamer = (() => {
-      const TARGET_RATE = 16000;
-      let ctx = null, source = null, processor = null, gain = null, stream = null, running = false, headerSent = false;
-      function downsampleFloat32(input, inRate, outRate) {
-        if (outRate === inRate) return input;
-        const ratio = inRate / outRate;
-        const newLen = Math.floor(input.length / ratio);
-        const result = new Float32Array(newLen);
-        let i = 0, j = 0;
-        while (i < newLen) {
-          const start = Math.floor(j);
-          const end = Math.min(Math.floor(j + ratio), input.length);
-          let sum = 0, count = 0;
-          for (let k = start; k < end; k++) { sum += input[k]; count++; }
-          result[i++] = count ? (sum / count) : 0;
-          j += ratio;
-        }
-        return result;
-      }
-      function floatTo16BitPCM(float32) {
-        const out = new Int16Array(float32.length);
-        for (let i = 0; i < float32.length; i++) {
-          const s = Math.max(-1, Math.min(1, float32[i]));
-          const sample = s < 0 ? s * 0x8000 : s * 0x7fff;
-          out[i] = Math.round(sample);
-        }
-        return out;
-      }
-      function ensureHeader() {
-        if (headerSent) return true;
-        const WSClient = window.WSClient;
-        if (!WSClient || typeof WSClient.send !== 'function' || typeof WSClient.isConnected !== 'function' || !WSClient.isConnected()) {
-          return false;
-        }
-        try {
-          WSClient.send({
-            type: 'audio.header',
-            format: 'pcm',
-            sample_rate: TARGET_RATE,
-            channels: 1,
-            seq_start: 0
-          });
-          headerSent = true;
-          return true;
-        } catch (err) {
-          console.error('FallbackPCM header send failed', err);
-          return false;
-        }
-      }
-      async function start() {
-        if (running) return true;
-        const ws = WSClient && WSClient.socket;
-        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        } catch (err) {
-          console.error('FallbackPCM getUserMedia failed', err);
-          return false;
-        }
-        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-        ctx = new AudioContextCtor({ sampleRate: TARGET_RATE });
-        try { await ctx.resume(); } catch {}
-        source = ctx.createMediaStreamSource(stream);
-        processor = ctx.createScriptProcessor(4096, 1, 1);
-        gain = ctx.createGain();
-        gain.gain.value = 0;
-        source.connect(processor);
-        processor.connect(gain);
-        gain.connect(ctx.destination);
-        ensureHeader();
-        running = true;
-        processor.onaudioprocess = (ev) => {
-          if (!running) return;
-          try {
-            if (!headerSent) ensureHeader();
-            const input = ev.inputBuffer.getChannelData(0);
-            const fsIn = ctx.sampleRate || 48000;
-            const f32 = downsampleFloat32(input, fsIn, TARGET_RATE);
-            const i16 = floatTo16BitPCM(f32);
-            const sent = WSClient && typeof WSClient.sendBinary === 'function'
-              ? WSClient.sendBinary(i16.buffer, { dropIfBusy: true })
-              : false;
-            if (!sent) {
-              console.warn('fallback pcm failed to send chunk');
-            }
-          } catch (err) {
-            console.warn('fallback pcm process error', err);
-          }
-        };
-        return true;
-      }
-      function stop() {
-        if (!running) return;
-        try { if (processor) processor.disconnect(); } catch {}
-        try { if (gain) gain.disconnect(); } catch {}
-        try { if (source) source.disconnect(); } catch {}
-        if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch {} }
-        if (ctx) { try { ctx.close(); } catch {} }
-        stream = source = processor = gain = ctx = null;
-        headerSent = false;
-        running = false;
-      }
-      function markAsrReady() {
-        headerSent = false;
-        if (running) {
-          ensureHeader();
-        }
-      }
-      return { start, stop, isRunning: () => running, markAsrReady };
-    })();
-
-    let __MIC_RUNNING__ = false;
-    async function tryStartMic(trigger) {
-      const ws = WSClient && WSClient.socket;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      if (__MIC_RUNNING__) return;
-      if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-        try {
-          await window.AudioRecorder.start();
-          __MIC_RUNNING__ = true;
-          return;
-        } catch (err) {
-          console.warn('AudioRecorder.start failed; falling back', err);
-        }
-      }
-      if (trigger !== 'asr.ready') {
-        return;
-      }
-      const ok = await FallbackPCMStreamer.start();
-      if (ok) __MIC_RUNNING__ = true;
-    }
-    function stopMic(reason) {
-      __MIC_RUNNING__ = false;
-      try { if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') window.AudioRecorder.stop(); } catch {}
-      try { FallbackPCMStreamer.stop(); } catch {}
-    }
-    // === end additions ===
     
 
     const voiceState = { voiceId: null, locale: null };
@@ -1670,9 +1532,9 @@
       if (typeof AppState.clearResume === 'function') {
         AppState.clearResume();
       }
-      if (window.AudioRecorder) {
+      if (audioRecorder && typeof audioRecorder.stop === 'function') {
         try {
-          window.AudioRecorder.stop();
+          audioRecorder.stop();
         } catch (err) {
           console.warn('Failed to stop audio recorder', err);
         }
@@ -1952,9 +1814,8 @@
       if (becameConnected) {
         Waveform.start();
 
-        tryStartMic('connected');
-        if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-          window.AudioRecorder.start()
+        if (audioRecorder && typeof audioRecorder.start === 'function') {
+          audioRecorder.start()
             .catch((err) => {
               console.error('AudioRecorder start error', err);
             });
@@ -1965,10 +1826,9 @@
       } else if (becameDisconnected) {
         Waveform.stop();
 
-        stopMic('disconnect');
-        if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') {
+        if (audioRecorder && typeof audioRecorder.stop === 'function') {
           try {
-            window.AudioRecorder.stop();
+            audioRecorder.stop();
           } catch (err) {
             console.warn('AudioRecorder stop error', err);
           }
@@ -1986,6 +1846,26 @@ window.addEventListener('tts.start', (event) => {
   const detail = event && event.detail;
   if (detail) {
     updateVoiceState(extractVoiceLocale(detail));
+  }
+  if (audioRecorder && typeof audioRecorder.handleTtsStart === 'function') {
+    try {
+      audioRecorder.handleTtsStart();
+    } catch (err) {
+      console.warn('AudioRecorder handleTtsStart failed', err);
+    }
+  }
+});
+
+window.addEventListener('policy.snapshot', (event) => {
+  if (!audioRecorder || typeof audioRecorder.setPolicy !== 'function') {
+    return;
+  }
+  const frame = event && event.detail;
+  try {
+    const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
+    audioRecorder.setPolicy(policy);
+  } catch (err) {
+    console.warn('AudioRecorder setPolicy failed', err);
   }
 });
 
@@ -2005,12 +1885,16 @@ window.addEventListener('turn.state', (event) => {
 
   DiagRecorder.maybeStart('turn');
 
-  try {
-    if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-      window.AudioRecorder.start();
+  const capturePolicy = audioRecorder && typeof audioRecorder.policy === 'function'
+    ? (audioRecorder.policy() || {})
+    : {};
+  const captureCfg = capturePolicy.capture || {};
+  if ((captureCfg.start_on_turn_ready) !== false && audioRecorder && typeof audioRecorder.startMicCaptureIfIdle === 'function') {
+    try {
+      audioRecorder.startMicCaptureIfIdle();
+    } catch (err) {
+      console.error('AudioRecorder startMicCaptureIfIdle on turn.ready failed:', err);
     }
-  } catch (err) {
-    console.error('AudioRecorder start on turn.ready failed:', err);
   }
 });
 
@@ -2018,12 +1902,12 @@ window.addEventListener('turn.state', (event) => {
 window.addEventListener('tts.end', () => {
   const release = () => {
     DiagRecorder.maybeStart('ready');
-    try {
-      if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-        window.AudioRecorder.start();
+    if (audioRecorder && typeof audioRecorder.handleTtsEnd === 'function') {
+      try {
+        audioRecorder.handleTtsEnd();
+      } catch (err) {
+        console.warn('AudioRecorder handleTtsEnd failed', err);
       }
-    } catch (err) {
-      console.error('AudioRecorder start after tts.end failed:', err);
     }
   };
 
@@ -2035,24 +1919,20 @@ window.addEventListener('tts.end', () => {
 });
 
 window.addEventListener('asr.ready', () => {
-  tryStartMic('asr.ready');
-  try {
-    if (FallbackPCMStreamer && typeof FallbackPCMStreamer.markAsrReady === 'function') {
-      FallbackPCMStreamer.markAsrReady();
-    }
-  } catch (err) {
-    console.warn('FallbackPCMStreamer markAsrReady failed', err);
-  }
-  if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+  const capturePolicy = audioRecorder && typeof audioRecorder.policy === 'function'
+    ? (audioRecorder.policy() || {})
+    : {};
+  const captureCfg = capturePolicy.capture || {};
+  if ((captureCfg.start_on_asr_ready) !== false && audioRecorder && typeof audioRecorder.startMicCaptureIfIdle === 'function') {
     try {
-      const maybePromise = window.AudioRecorder.start();
-      if (maybePromise && typeof maybePromise.catch === 'function') {
-        maybePromise.catch((err) => {
-          console.error('AudioRecorder start on asr.ready failed', err);
+      const maybe = audioRecorder.startMicCaptureIfIdle();
+      if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
+        maybe.catch((err) => {
+          console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
         });
       }
     } catch (err) {
-      console.error('AudioRecorder start on asr.ready threw', err);
+      console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
     }
   }
 });
@@ -2065,7 +1945,9 @@ window.addEventListener('assistant.suggestions', (event) => {
 
 // Start mic immediately on ws.open as a safety net; send diag banner
 window.addEventListener('ws.open', () => {
-  tryStartMic('ws.open');
+  if (audioRecorder && typeof audioRecorder.start === 'function') {
+    audioRecorder.start().catch(() => {});
+  }
   try {
     if (WSClient && typeof WSClient.send === 'function') {
       WSClient.send({
@@ -2077,7 +1959,6 @@ window.addEventListener('ws.open', () => {
   } catch {}
 });
 window.addEventListener('ws.close', () => {
-  stopMic('ws');
   resetSuggestions();
   DiagRecorder.stop('ws');
 });

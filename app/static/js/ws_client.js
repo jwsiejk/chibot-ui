@@ -627,7 +627,12 @@
     socket.send(payload);
   }
 
-  function sendBinary(payload, { dropIfBusy = false } = {}) {
+  function sendBinary(payload, opts = {}) {
+    const options = opts && typeof opts === "object" ? { ...opts } : {};
+    if (options.lane === "mic") {
+      options.dropIfBusy = false;
+    }
+    const dropIfBusy = Boolean(options.dropIfBusy);
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       console.warn("WSClient.sendBinary called without an open socket");
       return false;
