@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -19,6 +20,21 @@ _log = logging.getLogger(__name__)
 
 _DEFAULT_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
 _DEFAULT_BUFFER_BYTES = 4 * 1024 * 1024
+
+
+def _resolve_headers_arg() -> str:
+    """Return the keyword argument used for headers in websockets.connect."""
+
+    try:
+        params = inspect.signature(websockets.connect).parameters
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return "extra_headers"
+    if "additional_headers" in params:
+        return "additional_headers"
+    return "extra_headers"
+
+
+_CONNECT_HEADERS_ARG = _resolve_headers_arg()
 
 
 @dataclass
@@ -89,11 +105,14 @@ class DeepgramClient:
             "Content-Type": content_type,
         }
         try:
+            connect_kwargs = {
+                _CONNECT_HEADERS_ARG: headers,
+                "max_size": None,
+                "ping_interval": None,
+            }
             websocket = await websockets.connect(
                 self._url,
-                extra_headers=headers,
-                max_size=None,
-                ping_interval=None,
+                **connect_kwargs,
             )
         except Exception as exc:
             _log.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
