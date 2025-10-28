@@ -7,7 +7,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Deque, Dict, Optional
+from typing import Any, Callable, Deque, Dict, Mapping, Optional
 
 from app.config import (
     ASR_BACKPRESSURE_THRESHOLD_BYTES,
@@ -39,7 +39,22 @@ _NO_AUDIO_TIMEOUT_S = 9.0
 _LISTENING_STATE = "Listening"
 _READY_STATES = {"Ready", "Idle"}
 
+def _default_input_descriptor() -> Dict[str, Any]:
+    return {
+        "container": "webm",
+        "codec": "opus",
+        "rate_hz": 48000,
+        "channels": 1,
+    }
 
+
+def _pcm_input_descriptor() -> Dict[str, Any]:
+    return {
+        "container": "raw",
+        "codec": "pcm_s16le",
+        "rate_hz": 16000,
+        "channels": 1,
+    }
 @dataclass
 class _SessionState:
     """Track per-session streaming state."""
@@ -67,6 +82,7 @@ class _SessionState:
     ready_watchdog: asyncio.TimerHandle | None = None
     ready_armed_at: float = 0.0
     prearm_requested: bool = False
+    input_desc: Dict[str, Any] = field(default_factory=_default_input_descriptor)    
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -133,6 +149,63 @@ class ASRRuntime:
             _log.debug(
                 "evt=asr_runtime_listen_url_set url=%s", target_url
             )
+
+        def _emit_log(self, payload: Mapping[str, Any]) -> None:
+        event = dict(payload or {})
+        event.setdefault("type", "EVT_LOG")
+        try:
+            self._bus.publish(event)
+        except Exception:  # pragma: no cover - defensive
+            _log.debug("evt=asr_emit_log_failed payload=%s", event, exc_info=True)
+
+    def _input_descriptor_from_policy(
+        self, policy_snapshot: Mapping[str, Any] | Any | None
+    ) -> Dict[str, Any]:
+        if policy_snapshot is None:
+            return _default_input_descriptor()
+
+        media: Mapping[str, Any] | Any | None
+        if isinstance(policy_snapshot, Mapping):
+            media = policy_snapshot.get("media")
+        else:
+            media = getattr(policy_snapshot, "media", None)
+
+        if media is None:
+            return _default_input_descriptor()
+
+        if isinstance(media, Mapping):
+            get_value = media.get
+        else:
+            get_value = lambda key, default=None: getattr(media, key, default)
+
+        asr_input = get_value("asr_input")
+        if asr_input == "webm_opus":
+            rate = get_value("asr_rate_hz", 48000)
+            channels = get_value("asr_channels", 1)
+            rate_value = rate if isinstance(rate, int) and rate > 0 else 48000
+            channels_value = (
+                channels if isinstance(channels, int) and channels > 0 else 1
+            )
+            return {
+                "container": "webm",
+                "codec": "opus",
+                "rate_hz": rate_value,
+                "channels": channels_value,
+            }
+
+        if asr_input == "pcm_16k":
+            return _pcm_input_descriptor()
+
+        if asr_input:
+            self._emit_log(
+                {
+                    "type": "EVT_LOG",
+                    "level": "ERROR",
+                    "msg": f"evt=asr_policy_invalid input={asr_input}",
+                }
+            )
+
+        return _default_input_descriptor()
 
     # ------------------------------------------------------------------
     # Websocket hooks
@@ -400,6 +473,8 @@ class ASRRuntime:
                     policy_snapshot = getattr(self._engine, "policy_snapshot", None)
                 except Exception:  # pragma: no cover - defensive
                     policy_snapshot = None
+                input_desc = self._input_descriptor_from_policy(policy_snapshot)
+                state.input_desc = input_desc                    
                 qs = await asyncio.wait_for(
                     self._client.open_stream(
                         sid,
@@ -487,11 +562,10 @@ class ASRRuntime:
                 stream_id_value,
             )
 
-            input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
             asr_ready_frame = {
                 "type": "asr.ready",
                 "vendor": "deepgram",
-                "input": input_desc,
+                "input": dict(state.input_desc),
             }
             self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
             if stream_id:
@@ -760,11 +834,10 @@ class ASRRuntime:
                 _log.warning("evt=asr_no_audio_timeout sid=%s", sid)
                 self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
                 _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
-                input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
                 asr_ready_frame = {
                     "type": "asr.ready",
                     "vendor": "deepgram",
-                    "input": input_desc,
+                    "input": dict(state.input_desc),
                 }
                 self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
 
