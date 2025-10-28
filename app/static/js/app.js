@@ -205,18 +205,34 @@
     return toDiagString(detail);
   }
 
-  function sendDiagHudEvent(eventName, detail, options = {}) {
-    if (!diagHudEnabled()) {
-      return;
+  function getWsClient() {
+    if (typeof window === "undefined") {
+      return null;
     }
-    const wsClient = typeof window !== "undefined" ? window.WSClient : null;
+    return window.WSClient || null;
+  }
+
+  function wsClientIsConnected(wsClient) {
     if (!wsClient || typeof wsClient.send !== "function") {
+      return false;
+    }
+    try {
+      if (typeof wsClient.isConnected === "function") {
+        return Boolean(wsClient.isConnected());
+      }
+    } catch (err) {
+      // Ignore connectivity helper failures and fall back to socket state checks.
+    }
+    const socket = wsClient.socket;
+    return Boolean(socket && socket.readyState === WebSocket.OPEN);
+  }
+
+  function sendDiagHudEvent(eventName, detail, options = {}) {
+    if (!diagHudEnabled()) {      
       return;
     }
-    const isConnected = typeof wsClient.isConnected === "function"
-      ? wsClient.isConnected()
-      : wsClient.socket && wsClient.socket.readyState === WebSocket.OPEN;
-    if (!isConnected) {
+    const wsClient = getWsClient();
+    if (!wsClientIsConnected(wsClient)) {
       return;
     }
     const frame = {
@@ -249,6 +265,29 @@
       console.warn("Failed to send diag HUD event", err);
     }
   }
+
+  function sendClientLog(label, detail) {
+    const wsClient = getWsClient();
+    if (!wsClientIsConnected(wsClient)) {
+      return false;
+    }
+    const frame = {
+      type: "client.log",
+      label: typeof label === "string" && label ? label.slice(0, 64) : "event",
+      ts: Date.now(),
+    };
+    const normalizedDetail = cloneDiagDetail(detail);
+    if (normalizedDetail !== undefined) {
+      frame.detail = normalizedDetail;
+    }
+    try {
+      wsClient.send(frame);
+      return true;
+    } catch (err) {
+      console.warn("Failed to send client.log event", err);
+      return false;
+    }
+  }  
 
   function diagChunkSampleN() {
     if (typeof window === "undefined") {
@@ -655,24 +694,149 @@
     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
     let pendingClientReady = null;
     let clientReadyTimerId = null;
+    let clientReadyStats = null;
+    const deferredClientLogs = [];
+
+    function startClientReadyTracking(detail) {
+      clientReadyStats = {
+        detail,
+        attempts: 0,
+        events: [],
+        startedAt: Date.now(),
+      };
+      recordClientReadyEvent('enqueue', {
+        vendor: detail && detail.vendor ? detail.vendor : undefined,
+        micTs: detail && typeof detail.ts === 'number' ? detail.ts : undefined,
+      });
+    }
+
+    function recordClientReadyEvent(kind, meta) {
+      if (!clientReadyStats) {
+        return;
+      }
+      const entry = {
+        kind: typeof kind === 'string' && kind ? kind.slice(0, 32) : 'event',
+        ts: Date.now(),
+      };
+      if (meta && typeof meta === 'object') {
+        const sanitized = {};
+        const keys = Object.keys(meta);
+        for (let i = 0; i < keys.length && i < 8; i += 1) {
+          const key = keys[i];
+          if (!key) continue;
+          const value = meta[key];
+          if (value === undefined || value === null) continue;
+          const shortKey = key.slice(0, 32);
+          if (typeof value === 'number') {
+            if (Number.isFinite(value)) {
+              sanitized[shortKey] = value;
+            }
+          } else if (typeof value === 'string') {
+            sanitized[shortKey] = value.slice(0, 96);
+          } else if (typeof value === 'boolean') {
+            sanitized[shortKey] = value;
+          }
+        }
+        if (Object.keys(sanitized).length) {
+          entry.meta = sanitized;
+        }
+      }
+      clientReadyStats.events.push(entry);
+      if (clientReadyStats.events.length > 12) {
+        clientReadyStats.events.splice(0, clientReadyStats.events.length - 12);
+      }
+    }
+
+    function enqueueDeferredClientLog(label, detail) {
+      deferredClientLogs.push({ label, detail });
+      if (deferredClientLogs.length > 20) {
+        deferredClientLogs.splice(0, deferredClientLogs.length - 20);
+      }
+    }
+
+    function flushDeferredClientLogs() {
+      if (!deferredClientLogs.length) {
+        return;
+      }
+      let remaining = deferredClientLogs.length;
+      while (remaining > 0 && deferredClientLogs.length) {
+        const entry = deferredClientLogs.shift();
+        remaining -= 1;
+        if (!entry) {
+          continue;
+        }
+        if (!sendClientLog(entry.label, entry.detail)) {
+          deferredClientLogs.unshift(entry);
+          break;
+        }
+      }
+    }
+
+    function maybeLogClientReadyOutcome(outcome, extraMeta) {
+      if (!clientReadyStats) {
+        return;
+      }
+      const summary = {
+        outcome: typeof outcome === 'string' && outcome ? outcome.slice(0, 32) : 'unknown',
+        attempts: clientReadyStats.attempts,
+        startedMs: clientReadyStats.startedAt,
+      };
+      if (typeof clientReadyStats.startedAt === 'number') {
+        const elapsed = Date.now() - clientReadyStats.startedAt;
+        if (Number.isFinite(elapsed)) {
+          summary.durationMs = Math.max(0, elapsed);
+        }
+      }
+      if (clientReadyStats.detail && typeof clientReadyStats.detail.ts === 'number') {
+        summary.micTs = clientReadyStats.detail.ts;
+      }
+      if (clientReadyStats.detail && clientReadyStats.detail.vendor) {
+        summary.vendor = clientReadyStats.detail.vendor.slice(0, 64);
+      }
+      if (clientReadyStats.events.length) {
+        summary.events = clientReadyStats.events.slice(-12);
+      }
+      const extraDetail = cloneDiagDetail(extraMeta);
+      if (extraDetail !== undefined) {
+        summary.extra = extraDetail;
+      }
+      const wsClient = getWsClient();
+      const socket = wsClient && wsClient.socket;
+      if (socket && typeof socket.readyState === 'number') {
+        summary.readyState = socket.readyState;
+      }
+      if (!sendClientLog('client_ready_handshake', summary)) {
+        enqueueDeferredClientLog('client_ready_handshake', summary);
+      } else {
+        flushDeferredClientLogs();
+      }
+      clientReadyStats = null;
+    }
 
     function normalizeMicOpenDetail(detail) {
       const rawTs = detail ? detail.ts : null;
       const tsNumber = Number(rawTs);
       const tsValue = Number.isFinite(tsNumber) ? tsNumber : Date.now();
       const vendorValue = detail && typeof detail.vendor === 'string' ? detail.vendor.trim() : '';
-      const vendor = vendorValue ? vendorValue : null;
+      const vendor = vendorValue ? vendorValue.slice(0, 64) : null;
       return { ts: tsValue, vendor };
     }
 
     function trySendClientReady(detail) {
       if (!detail) return false;
-      const wsClient = window.WSClient;
+      const wsClient = getWsClient();
       if (!wsClient || typeof wsClient.send !== 'function') {
+        recordClientReadyEvent('wsclient_missing');
         return false;
       }
       const socket = wsClient.socket;
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
+      const readyState = socket && typeof socket.readyState === 'number' ? socket.readyState : -1;
+      if (clientReadyStats) {
+        clientReadyStats.attempts += 1;
+        recordClientReadyEvent('attempt', { readyState });
+      }
+      if (!socket || readyState !== WebSocket.OPEN) {
+        recordClientReadyEvent('socket_not_open', { readyState });
         return false;
       }
       const payload = {
@@ -687,8 +851,13 @@
       }
       try {
         wsClient.send(payload);
+        recordClientReadyEvent('sent', { readyState });
         return true;
       } catch (err) {
+        recordClientReadyEvent('send_error', {
+          readyState,
+          message: err && err.message ? String(err.message).slice(0, 120) : 'send_failed'
+        });
         console.warn('client.ready send failed', err);
         return false;
       }
@@ -702,15 +871,39 @@
       if (trySendClientReady(pendingClientReady)) {
         pendingClientReady = null;
         clientReadyTimerId = null;
+        maybeLogClientReadyOutcome('sent');
         return;
       }
+      recordClientReadyEvent('retry_wait', { delayMs: 200 });
       clientReadyTimerId = window.setTimeout(flushPendingClientReady, 200);
     }
 
     function enqueueClientReady(detail) {
-      pendingClientReady = normalizeMicOpenDetail(detail);
-      if (!pendingClientReady) {
+      const normalized = normalizeMicOpenDetail(detail);
+      if (!normalized) {
         return;
+      }
+      const detailChanged =
+        !!clientReadyStats &&
+        (clientReadyStats.detail.ts !== normalized.ts || clientReadyStats.detail.vendor !== normalized.vendor);
+      if (detailChanged) {
+        const replacementMeta = {
+          reason: 'detail_changed',
+          prevTs: clientReadyStats.detail && typeof clientReadyStats.detail.ts === 'number'
+            ? clientReadyStats.detail.ts
+            : undefined,
+          prevVendor: clientReadyStats.detail && clientReadyStats.detail.vendor
+            ? clientReadyStats.detail.vendor.slice(0, 64)
+            : undefined,
+        };
+        recordClientReadyEvent('detail_replaced', replacementMeta);
+        maybeLogClientReadyOutcome('replaced', replacementMeta);
+      }
+      pendingClientReady = normalized;
+      if (!clientReadyStats) {
+        startClientReadyTracking(normalized);
+      } else {
+        recordClientReadyEvent('enqueue_duplicate');
       }
       if (clientReadyTimerId !== null) {
         return;
@@ -723,12 +916,21 @@
     });
 
     window.addEventListener('ws.close', () => {
+      if (clientReadyStats && pendingClientReady) {
+        recordClientReadyEvent('socket_closed', { reason: 'ws.close' });
+        maybeLogClientReadyOutcome('socket_closed', { reason: 'ws.close' });
+      }
       pendingClientReady = null;
       if (clientReadyTimerId !== null) {
         clearTimeout(clientReadyTimerId);
         clientReadyTimerId = null;
       }
     });
+
+    window.addEventListener('ws.open', () => {
+      flushDeferredClientLogs();
+    });
+    
     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
       try {
         window.PolicyBadges.init();
