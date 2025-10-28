@@ -14,7 +14,7 @@ from typing import Callable, Deque, Dict, Tuple
 
 import websockets
 from websockets.legacy.client import WebSocketClientProtocol
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _log = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ class DeepgramClient:
             self._max_buffer_bytes = _DEFAULT_BUFFER_BYTES
         self._streams: Dict[str, _StreamState] = {}
         self.idle_close_ms = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
+        self._legacy_start_warning_logged = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -85,13 +86,15 @@ class DeepgramClient:
     async def open_stream(
         self,
         sid: str,
-        content_type: str,
+        content_type: str | None = None,
         on_partial: Callable[[str, Dict[str, object]], None],
         on_final: Callable[[str, Dict[str, object]], None],
         on_error: Callable[[str], None],
         *,
         stream_id: str,
         on_close: Callable[[int | None, str | None], None] | None = None,
+        encoding: str | None = None,
+        sample_rate: int | None = None,
     ) -> str:
         if not isinstance(sid, str) or not sid:
             raise ValueError("sid must be a non-empty string")
@@ -100,10 +103,19 @@ class DeepgramClient:
         if not isinstance(stream_id, str) or not stream_id:
             raise ValueError("stream_id must be a non-empty string")
         loop = asyncio.get_running_loop()
+        if (
+            (content_type and content_type.strip())
+            or (encoding and str(encoding).strip())
+            or sample_rate is not None
+        ) and not self._legacy_start_warning_logged:
+            self._legacy_start_warning_logged = True
+            _log.warning(
+                "evt=dg_ws_ignored_legacy start_fields=['content_type','encoding','sample_rate']"
+            )
         headers = {
             "Authorization": f"Token {self._api_key}",
-            "Content-Type": content_type,
         }
+        url = self._build_listen_url()
         try:
             connect_kwargs = {
                 _CONNECT_HEADERS_ARG: headers,
@@ -111,18 +123,17 @@ class DeepgramClient:
                 "ping_interval": None,
             }
             websocket = await websockets.connect(
-                self._url,
+                url,
                 **connect_kwargs,
             )
         except Exception as exc:
             _log.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
             raise
 
-        start_payload = {
-            "type": "StartRequest",
-            "metadata": {"content_type": content_type},
-        }
-        await websocket.send(json.dumps(start_payload, separators=(",", ":")))
+        _log.info(
+            "evt=dg_ws_open url=%s container=webm_opus start_payload=omitted",
+            url,
+        )
 
         state = _StreamState(
             sid=sid,
@@ -144,10 +155,21 @@ class DeepgramClient:
             "evt=dg_stream_open sid=%s stream_id=%s url=%s",
             sid,
             stream_id,
-            self._url,
+            url,
         )
-        qs = urlsplit(self._url).query
+        qs = urlsplit(url).query
         return qs
+
+    def _build_listen_url(self) -> str:
+        """Return the Deepgram listen URL with encoded query parameters."""
+
+        split = urlsplit(self._url)
+        base_url = urlunsplit((split.scheme, split.netloc, split.path, "", ""))
+        if not split.query:
+            return base_url
+        pairs = parse_qsl(split.query, keep_blank_values=True)
+        query = urlencode(pairs, doseq=True)
+        return f"{base_url}?{query}" if query else base_url
 
     def send_audio(self, sid: str, chunk: bytes) -> None:
         state = self._streams.get(sid)

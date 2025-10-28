@@ -27,7 +27,6 @@ from app.services.streaming_asr.deepgram_client import DeepgramClient
 
 _log = logging.getLogger(__name__)
 
-_CONTENT_TYPE = "audio/webm;codecs=opus"
 _DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
 _PARTIAL_CONFIDENCE = 0.55
 _FINAL_CONFIDENCE = 0.9
@@ -387,7 +386,7 @@ class ASRRuntime:
                 qs = await asyncio.wait_for(
                     self._client.open_stream(
                         sid,
-                        _CONTENT_TYPE,
+                        None,
                         on_partial=self._make_partial_cb(sid),
                         on_final=self._make_final_cb(sid),
                         on_error=self._make_error_cb(sid),
@@ -419,13 +418,26 @@ class ASRRuntime:
             self._bus.publish(open_event)
             _log.info(
                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
-
                 sid,
-                _CONTENT_TYPE,
+                "(not set)",
                 qs or "",
             )
-            self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
-            _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
+            ready_kwargs = {"sid": sid, "vendor": "deepgram"}
+            if stream_id:
+                ready_kwargs["stream_id"] = stream_id
+            emit = getattr(self._bus, "emit", None)
+            if callable(emit):
+                try:
+                    emit(EVT_ASR_READY, **ready_kwargs)
+                except TypeError:
+                    emit(EVT_ASR_READY, ready_kwargs)
+            ready_event = {"type": EVT_ASR_READY, **ready_kwargs}
+            self._bus.publish(ready_event)
+            _log.info(
+                "evt=asr_ready sid=%s vendor=deepgram stream_id=%s",
+                sid,
+                stream_id or "",
+            )
 
             input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
             asr_ready_frame = {
@@ -439,7 +451,7 @@ class ASRRuntime:
                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
                     sid,
                     stream_id,
-                    _CONTENT_TYPE,
+                    "(not set)",
                     int(self._idle_close_ms),
                 )
             pre_chunks_sent = state.chunks_sent
