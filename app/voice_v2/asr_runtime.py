@@ -14,30 +14,8 @@ from app.config import (
     ASR_IDLE_CLOSE_MS,
     ASR_TRACE,
 )
-
-_log = logging.getLogger(__name__)
-
-_STREAM_OPEN_TIMEOUT_S = 15  # or your existing value
-
-def _safe_url(url: str | None) -> str:
-    if not url:
-        return ""
-    try:
-        from urllib.parse import urlparse, urlunparse
-        u = urlparse(url)
-        # strip query to avoid leaking keys; keep scheme/host/path
-        return urlunparse((u.scheme, u.netloc, u.path, "", "", ""))
-    except Exception:
-        return ""
-
-class ASRRuntime:
-
-from app.config import (
-    ASR_BACKPRESSURE_THRESHOLD_BYTES,
-    ASR_IDLE_CLOSE_MS,
-    ASR_TRACE,
-)
 from app.policy.model import Policy
+from app.services.streaming_asr.deepgram_client import DeepgramClient
 from app.telemetry import bus
 from app.voice_v2 import (
     EVT_ASR_FINAL,
@@ -47,7 +25,6 @@ from app.voice_v2 import (
     EVT_WS_JSON_SEND,
 )
 from app.voice_v2.engine import EngineV2
-from app.services.streaming_asr.deepgram_client import DeepgramClient
 
 _log = logging.getLogger(__name__)
 
@@ -61,6 +38,20 @@ _STREAM_OPEN_TIMEOUT_S = 5.0
 _NO_AUDIO_TIMEOUT_S = 9.0
 _LISTENING_STATE = "Listening"
 _READY_STATES = {"Ready", "Idle"}
+
+
+def _safe_url(url: str | None) -> str:
+    if not url:
+        return ""
+    try:
+        from urllib.parse import urlparse, urlunparse
+
+        u = urlparse(url)
+        # strip query to avoid leaking keys; keep scheme/host/path
+        return urlunparse((u.scheme, u.netloc, u.path, "", "", ""))
+    except Exception:
+        return ""
+
 
 def _default_input_descriptor() -> Dict[str, Any]:
     return {
@@ -78,6 +69,8 @@ def _pcm_input_descriptor() -> Dict[str, Any]:
         "rate_hz": 16000,
         "channels": 1,
     }
+
+
 @dataclass
 class _SessionState:
     """Track per-session streaming state."""
@@ -514,7 +507,7 @@ class ASRRuntime:
                     policy_snapshot = None
                 input_desc = self._input_descriptor_from_policy(policy_snapshot)
                 state.input_desc = input_desc 
-                open_timeout = max(5.0, float(globals().get("_STREAM_OPEN_TIMEOUT_S", 15)))
+                open_timeout = max(5.0, float(_STREAM_OPEN_TIMEOUT_S))
                 qs = await asyncio.wait_for(
                     self._client.open_stream(
                         sid,
@@ -531,15 +524,24 @@ class ASRRuntime:
                 raise
             except asyncio.TimeoutError:
                 last_url = getattr(self._client, "debug_last_url", None)
-                self._emit_log({
-                    "type": "EVT_LOG",
-                    "logger": "app.voice_v2.asr_runtime",
-                    "level": "ERROR",
-                    "sid": sid,
-                    "msg": f"evt=asr_open_failed_timeout sid={sid} vendor=deepgram url={_safe_url(last_url)} timeout_s={open_timeout}",
-                })
-                _log.error("evt=asr_open_failed_timeout sid=%s vendor=deepgram url=%s timeout_s=%s",
-                           sid, _safe_url(last_url), open_timeout)
+                self._emit_log(
+                    {
+                        "type": "EVT_LOG",
+                        "logger": "app.voice_v2.asr_runtime",
+                        "level": "ERROR",
+                        "sid": sid,
+                        "msg": (
+                            "evt=asr_open_failed_timeout sid=%s vendor=deepgram url=%s timeout_s=%s"
+                        )
+                        % (sid, _safe_url(last_url), open_timeout),
+                    }
+                )
+                _log.error(
+                    "evt=asr_open_failed_timeout sid=%s vendor=deepgram url=%s timeout_s=%s",
+                    sid,
+                    _safe_url(last_url),
+                    open_timeout,
+                )
                 state.stream_id = None
                 state.stream_open = False
                 state.stream_open_task = None
@@ -549,16 +551,46 @@ class ASRRuntime:
                 return
             except Exception as e:  # pragma: no cover - defensive
                 # Surface DG status/close code & reason if the client exposes them
-                code   = getattr(e, "status", None) or getattr(e, "code", None)
-                reason = getattr(e, "reason", None) or getattr(e, "message", None) or type(e).__name_
-                last_url   = getattr(self._client, "debug_last_url", None)
+                code = getattr(e, "status", None) or getattr(e, "code", None)
+                reason = (
+                    getattr(e, "reason", None)
+                    or getattr(e, "message", None)
+                    or type(e).__name__
+                )
+                last_url = getattr(self._client, "debug_last_url", None)
                 last_error = getattr(self._client, "last_error", None)
-                self._emit_log({
-                    "type": "EVT_LOG",
-                    "type": "EVT_LOG",
-                    
-                _log.exception("evt=asr_stream_open_failed sid=%s", sid)
+                self._emit_log(
+                    {
+                        "type": "EVT_LOG",
+                        "logger": "app.voice_v2.asr_runtime",
+                        "level": "ERROR",
+                        "sid": sid,
+                        "msg": (
+                            "evt=asr_stream_open_failed sid=%s vendor=deepgram code=%s reason=%s url=%s last_error=%s"
+                        )
+                        % (
+                            sid,
+                            code if code is not None else "",
+                            reason or "",
+                            _safe_url(last_url),
+                            last_error if last_error is not None else "",
+                        ),
+                    }
+                )
+                _log.exception(
+                    "evt=asr_stream_open_failed sid=%s code=%s reason=%s url=%s last_error=%s",
+                    sid,
+                    code,
+                    reason,
+                    _safe_url(last_url),
+                    last_error,
+                )
+                state.stream_open = False
                 state.stream_id = None
+                state.stream_open_task = None
+                loop = self._ensure_loop()
+                if loop is not None:
+                    loop.call_later(0.5, self._ensure_stream, sid, state)
                 return
 
             state.stream_open = True

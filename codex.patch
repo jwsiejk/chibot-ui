@@ -1,63 +1,280 @@
 diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index aaf939a8e630d7506e569c55bad073817b5c93b7..8653002e3002901e04cb30dec346e8f03a80f6e2 100644
+index 7c65d581e7b36b486c33c061b3781b9909e7c161..54d4b9fb7f7d305fea2222e96e0c107fae4a9574 100644
 --- a/app/voice_v2/asr_runtime.py
 +++ b/app/voice_v2/asr_runtime.py
-@@ -128,58 +128,50 @@ class ASRRuntime:
+@@ -1,105 +1,98 @@
+ """Deepgram-backed ASR runtime for the voice v2 engine."""
+ from __future__ import annotations
  
-     def set_bus(self, telemetry_bus: Any | None) -> None:
-         if telemetry_bus is None:
-             return
-         self._bus = telemetry_bus
+ import asyncio
+ import logging
+ import time
+ import uuid
+ from collections import deque
+ from dataclasses import dataclass, field
+ from typing import Any, Callable, Deque, Dict, Mapping, Optional
  
-     def _configure_client(self) -> None:
-         """Force the Deepgram client to use the containerized listen URL."""
- 
-         target_url = _DG_LISTEN_URL
-         current_url = getattr(self._client, "_url", None)
-         if current_url == target_url:
-             return
-         try:
-             setattr(self._client, "_url", target_url)
-         except Exception:  # pragma: no cover - defensive
-             _log.debug(
-                 "evt=asr_runtime_set_listen_url_failed target_url=%s", target_url,
-                 exc_info=True,
-             )
-         else:
-             _log.debug(
-                 "evt=asr_runtime_listen_url_set url=%s", target_url
-             )
- 
--        def _emit_log(self, payload: Mapping[str, Any]) -> None:
--            event = dict(payload or {})
--            event.setdefault("type", "EVT_LOG")
--            try:
--                self._bus.publish(event)
--            except Exception:  # pragma: no cover - defensive
--                _log.debug("evt=asr_emit_log_failed payload=%s", event, exc_info=True)
+-from app.config import (
+-    ASR_BACKPRESSURE_THRESHOLD_BYTES,
+-    ASR_IDLE_CLOSE_MS,
+-    ASR_TRACE,
+-)
 -
-     def _input_descriptor_from_policy(
-         self, policy_snapshot: Mapping[str, Any] | Any | None
-     ) -> Dict[str, Any]:
-         if policy_snapshot is None:
-             return _default_input_descriptor()
+-_log = logging.getLogger(__name__)
+-
+-_STREAM_OPEN_TIMEOUT_S = 15  # or your existing value
+-
+-def _safe_url(url: str | None) -> str:
+-    if not url:
+-        return ""
+-    try:
+-        from urllib.parse import urlparse, urlunparse
+-        u = urlparse(url)
+-        # strip query to avoid leaking keys; keep scheme/host/path
+-        return urlunparse((u.scheme, u.netloc, u.path, "", "", ""))
+-    except Exception:
+-        return ""
+-
+-class ASRRuntime:
+-
+ from app.config import (
+     ASR_BACKPRESSURE_THRESHOLD_BYTES,
+     ASR_IDLE_CLOSE_MS,
+     ASR_TRACE,
+ )
+ from app.policy.model import Policy
++from app.services.streaming_asr.deepgram_client import DeepgramClient
+ from app.telemetry import bus
+ from app.voice_v2 import (
+     EVT_ASR_FINAL,
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
+     EVT_WS_JSON_SEND,
+ )
+ from app.voice_v2.engine import EngineV2
+-from app.services.streaming_asr.deepgram_client import DeepgramClient
  
-         media: Mapping[str, Any] | Any | None
-         if isinstance(policy_snapshot, Mapping):
-             media = policy_snapshot.get("media")
-         else:
-             media = getattr(policy_snapshot, "media", None)
+ _log = logging.getLogger(__name__)
  
-         if media is None:
-             return _default_input_descriptor()
+ _DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
+ _PARTIAL_CONFIDENCE = 0.55
+ _FINAL_CONFIDENCE = 0.9
+ _DEFAULT_IDLE_CLOSE_MS = 4000
+ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+ _TRACE_ENABLED = bool(ASR_TRACE)
+ _STREAM_OPEN_TIMEOUT_S = 5.0
+ _NO_AUDIO_TIMEOUT_S = 9.0
+ _LISTENING_STATE = "Listening"
+ _READY_STATES = {"Ready", "Idle"}
  
-         if isinstance(media, Mapping):
-             get_value = media.get
-         else:
-             get_value = lambda key, default=None: getattr(media, key, default)
++
++def _safe_url(url: str | None) -> str:
++    if not url:
++        return ""
++    try:
++        from urllib.parse import urlparse, urlunparse
++
++        u = urlparse(url)
++        # strip query to avoid leaking keys; keep scheme/host/path
++        return urlunparse((u.scheme, u.netloc, u.path, "", "", ""))
++    except Exception:
++        return ""
++
++
+ def _default_input_descriptor() -> Dict[str, Any]:
+     return {
+         "container": "webm",
+         "codec": "opus",
+         "rate_hz": 48000,
+         "channels": 1,
+     }
  
-         asr_input = get_value("asr_input")
-         if asr_input == "webm_opus":
-             rate = get_value("asr_rate_hz", 48000)
-             channels = get_value("asr_channels", 1)
-             rate_value = rate if isinstance(rate, int) and rate > 0 else 48000
+ 
+ def _pcm_input_descriptor() -> Dict[str, Any]:
+     return {
+         "container": "raw",
+         "codec": "pcm_s16le",
+         "rate_hz": 16000,
+         "channels": 1,
+     }
++
++
+ @dataclass
+ class _SessionState:
+     """Track per-session streaming state."""
+ 
+     sid: str
+     pending: Deque[bytes] = field(default_factory=deque)
+     buffered_bytes: int = 0
+     req_id: Optional[str] = None
+     stream_open_task: Optional[asyncio.Task[None]] = None
+     stream_open: bool = False
+     last_audio_ts: float = 0.0
+     idle_handle: asyncio.TimerHandle | None = None
+     stream_id: Optional[str] = None
+     close_reason: Optional[str] = None
+     opened_at_ms: int = 0
+     opened_at_monotonic: float = 0.0
+     last_audio_ts_ms: int = 0
+     chunks_sent: int = 0
+     bytes_sent: int = 0
+     dg_msgs_partial: int = 0
+     dg_msgs_final: int = 0
+     finals_delivered: int = 0
+     dropped_chunks: int = 0
+     last_stream_id: Optional[str] = None
+     ready_watchdog: asyncio.TimerHandle | None = None
+@@ -492,95 +485,134 @@ class ASRRuntime:
+             _log.warning("evt=asr_no_loop sid=%s", sid)
+             return
+         if state.stream_open:
+             return
+         if not state.pending and not state.prearm_requested:
+             return
+         task = state.stream_open_task
+         if task is not None and not task.done():
+             return
+ 
+         async def _open() -> None:
+             if state.stream_id is None:
+                 state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
+             stream_id = state.stream_id
+             state.last_stream_id = stream_id
+             state.close_reason = None
+             state.prearm_requested = False
+             try:
+                 policy_snapshot = None
+                 try:
+                     policy_snapshot = getattr(self._engine, "policy_snapshot", None)
+                 except Exception:  # pragma: no cover - defensive
+                     policy_snapshot = None
+                 input_desc = self._input_descriptor_from_policy(policy_snapshot)
+                 state.input_desc = input_desc 
+-                open_timeout = max(5.0, float(globals().get("_STREAM_OPEN_TIMEOUT_S", 15)))
++                open_timeout = max(5.0, float(_STREAM_OPEN_TIMEOUT_S))
+                 qs = await asyncio.wait_for(
+                     self._client.open_stream(
+                         sid,
+                         on_partial=self._make_partial_cb(sid),
+                         on_final=self._make_final_cb(sid),
+                         on_error=self._make_error_cb(sid),
+                         stream_id=stream_id,
+                         on_close=self._make_close_cb(sid, state),
+                         policy=policy_snapshot,
+                     ),
+                     timeout=open_timeout,
+                 )
+             except asyncio.CancelledError:
+                 raise
+             except asyncio.TimeoutError:
+                 last_url = getattr(self._client, "debug_last_url", None)
+-                self._emit_log({
+-                    "type": "EVT_LOG",
+-                    "logger": "app.voice_v2.asr_runtime",
+-                    "level": "ERROR",
+-                    "sid": sid,
+-                    "msg": f"evt=asr_open_failed_timeout sid={sid} vendor=deepgram url={_safe_url(last_url)} timeout_s={open_timeout}",
+-                })
+-                _log.error("evt=asr_open_failed_timeout sid=%s vendor=deepgram url=%s timeout_s=%s",
+-                           sid, _safe_url(last_url), open_timeout)
++                self._emit_log(
++                    {
++                        "type": "EVT_LOG",
++                        "logger": "app.voice_v2.asr_runtime",
++                        "level": "ERROR",
++                        "sid": sid,
++                        "msg": (
++                            "evt=asr_open_failed_timeout sid=%s vendor=deepgram url=%s timeout_s=%s"
++                        )
++                        % (sid, _safe_url(last_url), open_timeout),
++                    }
++                )
++                _log.error(
++                    "evt=asr_open_failed_timeout sid=%s vendor=deepgram url=%s timeout_s=%s",
++                    sid,
++                    _safe_url(last_url),
++                    open_timeout,
++                )
+                 state.stream_id = None
+                 state.stream_open = False
+                 state.stream_open_task = None
+                 loop = self._ensure_loop()
+                 if loop is not None:
+                     loop.call_later(0.1, self._ensure_stream, sid, state)
+                 return
+             except Exception as e:  # pragma: no cover - defensive
+                 # Surface DG status/close code & reason if the client exposes them
+-                code   = getattr(e, "status", None) or getattr(e, "code", None)
+-                reason = getattr(e, "reason", None) or getattr(e, "message", None) or type(e).__name_
+-                last_url   = getattr(self._client, "debug_last_url", None)
++                code = getattr(e, "status", None) or getattr(e, "code", None)
++                reason = (
++                    getattr(e, "reason", None)
++                    or getattr(e, "message", None)
++                    or type(e).__name__
++                )
++                last_url = getattr(self._client, "debug_last_url", None)
+                 last_error = getattr(self._client, "last_error", None)
+-                self._emit_log({
+-                    "type": "EVT_LOG",
+-                    "type": "EVT_LOG",
+-                    
+-                _log.exception("evt=asr_stream_open_failed sid=%s", sid)
++                self._emit_log(
++                    {
++                        "type": "EVT_LOG",
++                        "logger": "app.voice_v2.asr_runtime",
++                        "level": "ERROR",
++                        "sid": sid,
++                        "msg": (
++                            "evt=asr_stream_open_failed sid=%s vendor=deepgram code=%s reason=%s url=%s last_error=%s"
++                        )
++                        % (
++                            sid,
++                            code if code is not None else "",
++                            reason or "",
++                            _safe_url(last_url),
++                            last_error if last_error is not None else "",
++                        ),
++                    }
++                )
++                _log.exception(
++                    "evt=asr_stream_open_failed sid=%s code=%s reason=%s url=%s last_error=%s",
++                    sid,
++                    code,
++                    reason,
++                    _safe_url(last_url),
++                    last_error,
++                )
++                state.stream_open = False
+                 state.stream_id = None
++                state.stream_open_task = None
++                loop = self._ensure_loop()
++                if loop is not None:
++                    loop.call_later(0.5, self._ensure_stream, sid, state)
+                 return
+ 
+             state.stream_open = True
+             mp = getattr(self.policy, "media", None)
+             cp = getattr(self.policy, "capture", None)
+             if mp is not None and cp is not None:
+                 self._emit_log(
+                     {
+                         "type": "EVT_LOG",
+                         "logger": "app.voice_v2.asr_runtime",
+                         "level": "INFO",
+                         "sid": sid,
+                         "msg": (
+                             "evt=asr_policy input=%s rate_hz=%s ch=%s fallbacks=%s "
+                             "start_on_asr_ready=%s start_on_turn_ready=%s timeslice_ms=%s "
+                             "mask_during_tts=%s"
+                         )
+                         % (
+                             getattr(mp, "asr_input", ""),
+                             getattr(mp, "asr_rate_hz", ""),
+                             getattr(mp, "asr_channels", ""),
+                             getattr(mp, "fallbacks_allowed", ""),
+                             getattr(cp, "start_on_asr_ready", ""),
+                             getattr(cp, "start_on_turn_ready", ""),
+                             getattr(cp, "timeslice_ms", ""),
