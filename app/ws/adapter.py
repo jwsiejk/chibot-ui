@@ -8,7 +8,7 @@ import math
 import time
 import sys, platform, socket, os, inspect
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Optional, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
 
 import json
 from urllib.parse import parse_qs
@@ -27,6 +27,7 @@ from app.voice_v2 import (
     EVT_HUD_STATE,
     EVT_TTS_END,
     EVT_TTS_MASK,
+    EVT_CLIENT_LOG,
     EVT_WS_AUDIO_RECV,
     EVT_WS_AUDIO_SEND,
     EVT_WS_JSON_RECV,
@@ -836,6 +837,43 @@ class ChatV2Adapter:
                         opened_ts=ts_value,
                     )
                     ctx.mic_nudge_sent = False
+
+        if frame_type == "client.log":
+            sanitized_log = self._sanitize_client_log(frame)
+            if sanitized_log:
+                meta["client_log"] = {
+                    key: value
+                    for key, value in sanitized_log.items()
+                    if key != "detail"
+                }
+                detail_payload = sanitized_log.get("detail")
+                outcome = None
+                attempts = None
+                if isinstance(detail_payload, Mapping):
+                    outcome = detail_payload.get("outcome")
+                    attempts = detail_payload.get("attempts")
+                _log.info(
+                    "evt=ws_client_log sid=%s label=%s outcome=%s attempts=%s",
+                    ctx.sid,
+                    sanitized_log.get("label"),
+                    outcome,
+                    attempts,
+                )
+                bus.publish(
+                    {
+                        "type": EVT_CLIENT_LOG,
+                        "sid": ctx.sid,
+                        "who": "client",
+                        "source": "client_log",
+                        "meta": sanitized_log,
+                    }
+                )
+            else:
+                _log.info(
+                    "evt=ws_client_log sid=%s label=%s detail=empty",
+                    ctx.sid,
+                    frame.get("label"),
+                )
 
         if frame_type == "client.banner":
             sanitized_info = self._sanitize_client_banner_info(frame.get("info"))
@@ -1655,6 +1693,44 @@ class ChatV2Adapter:
         return normalized
 
     @staticmethod
+    def _sanitize_client_log(payload: Any) -> Dict[str, Any]:
+        if not isinstance(payload, Mapping):
+            return {}
+
+        sanitized: Dict[str, Any] = {}
+
+        label = payload.get("label")
+        if isinstance(label, str) and label.strip():
+            sanitized["label"] = label.strip()[:64]
+
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip():
+            sanitized["message"] = message.strip()[:256]
+
+        client_ts = payload.get("ts") or payload.get("client_ts")
+        if isinstance(client_ts, (int, float)) and math.isfinite(client_ts):
+            sanitized["client_ts_ms"] = int(client_ts)
+
+        detail = payload.get("detail")
+        if detail is not None:
+            try:
+                sanitized["detail"] = bus.redact_payload(detail)
+            except Exception:
+                try:
+                    sanitized["detail"] = bus.redact_payload(str(detail))
+                except Exception:
+                    sanitized["detail"] = str(detail)
+
+        extra = payload.get("extra")
+        if extra is not None:
+            try:
+                sanitized["extra"] = bus.redact_payload(extra)
+            except Exception:
+                sanitized["extra"] = str(extra)
+
+        return sanitized
+
+    @staticmethod
     def _sanitize_policy_interaction(frame: Dict[str, Any]) -> Dict[str, Any]:
         sanitized = {key: value for key, value in frame.items() if key != "policy"}
         if "policy" in frame:
@@ -1905,6 +1981,12 @@ class ChatV2Adapter:
             payload["vendor"] = vendor[:64]
         if isinstance(opened_ts, int):
             payload["ts"] = opened_ts
+        _log.info(
+            "evt=ws_client_mic_open sid=%s vendor=%s ts=%s",
+            ctx.sid,
+            payload.get("vendor") or "",
+            payload.get("ts"),
+        )
         try:
             asyncio.create_task(
                 self._publish(EVT_CLIENT_MIC_OPEN, ctx.sid, payload)
@@ -1937,6 +2019,11 @@ class ChatV2Adapter:
             self._handle_mic_open_timeout(ctx)
 
         try:
+            _log.info(
+                "evt=ws_mic_guard_arm sid=%s timeout_s=%.2f",
+                ctx.sid,
+                _MIC_OPEN_TIMEOUT_SECONDS,
+            )
             ctx.mic_open_timer = loop.call_later(_MIC_OPEN_TIMEOUT_SECONDS, _fire)
         except RuntimeError:
             ctx.mic_open_timer = None
@@ -1949,9 +2036,11 @@ class ChatV2Adapter:
 
         ctx.mic_nudge_sent = True
         _log.warning(
-            "evt=ws_mic_open_timeout sid=%s timeout_s=%.2f",
+            "evt=ws_mic_open_timeout sid=%s timeout_s=%.2f mic_open=%s nudged=%s",
             ctx.sid,
             _MIC_OPEN_TIMEOUT_SECONDS,
+            ctx.client_mic_open,
+            ctx.mic_nudge_sent,
         )
         try:
             asyncio.create_task(
@@ -1976,6 +2065,7 @@ class ChatV2Adapter:
         timer = ctx.mic_open_timer
         ctx.mic_open_timer = None
         if timer is not None:
+            _log.info("evt=ws_mic_guard_cancel sid=%s", ctx.sid)
             timer.cancel()
 
     def _initiate_listen_handoff(self, ctx: AdapterContext, req_id: str) -> bool:
