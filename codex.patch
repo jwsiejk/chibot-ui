@@ -1,372 +1,133 @@
-diff --git a/app/policy/model.py b/app/policy/model.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..f3ef3987e314f2a43b2c7fafe022fe034dc68554
---- /dev/null
-+++ b/app/policy/model.py
-@@ -0,0 +1,37 @@
-+"""Dataclasses describing the runtime policy configuration."""
-+from __future__ import annotations
-+
-+from dataclasses import dataclass, field
-+from typing import Any, Dict
-+
-+
-+@dataclass
-+class MediaPolicy:
-+    """Describe how audio should be transported to the ASR provider."""
-+
-+    asr_input: str = "webm_opus"
-+    asr_rate_hz: int = 48000
-+    asr_channels: int = 1
-+    fallbacks_allowed: bool = False
-+
-+
-+@dataclass
-+class CapturePolicy:
-+    """Describe how microphone capture should behave client-side."""
-+
-+    start_on_asr_ready: bool = True
-+    start_on_turn_ready: bool = True
-+    timeslice_ms: int = 200
-+    mask_during_tts: bool = True
-+
-+
-+@dataclass
-+class Policy:
-+    """Container for policy knobs exposed to the runtime."""
-+
-+    interaction: Dict[str, Any] = field(default_factory=dict)
-+    media: MediaPolicy = field(default_factory=MediaPolicy)
-+    capture: CapturePolicy = field(default_factory=CapturePolicy)
-+
-+
-+__all__ = ["MediaPolicy", "CapturePolicy", "Policy"]
-diff --git a/app/policy/snapshot.py b/app/policy/snapshot.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..a580d388332324c9b1fca73eeb46bf4e7ef80f3a
---- /dev/null
-+++ b/app/policy/snapshot.py
-@@ -0,0 +1,86 @@
-+"""Helpers for rendering policy dataclasses into runtime snapshots."""
-+from __future__ import annotations
-+
-+from dataclasses import asdict, is_dataclass
-+from typing import Any, Dict, Mapping
-+
-+from app.policy.model import CapturePolicy, MediaPolicy
-+
-+
-+def _as_mapping(value: Any) -> Dict[str, Any]:
-+    if isinstance(value, Mapping):
-+        return dict(value)
-+    return {}
-+
-+
-+def existing_policy_to_snapshot(policy: Any) -> Dict[str, Any]:
-+    """Return the snapshot produced by legacy policy structures."""
-+
-+    if policy is None:
-+        return {}
-+
-+    if isinstance(policy, Mapping):
-+        return dict(policy)
-+
-+    interaction = getattr(policy, "interaction", None)
-+    if isinstance(interaction, Mapping):
-+        return dict(interaction)
-+
-+    snapshot_factory = getattr(policy, "to_snapshot", None)
-+    if callable(snapshot_factory):
-+        try:
-+            candidate = snapshot_factory()
-+        except Exception:  # pragma: no cover - defensive
-+            candidate = None
-+        if isinstance(candidate, Mapping):
-+            return dict(candidate)
-+
-+    if is_dataclass(policy):
-+        result = {}
-+        for field_info in getattr(policy, "__dataclass_fields__", {}).values():
-+            name = field_info.name
-+            if name in {"media", "capture"}:
-+                continue
-+            result[name] = getattr(policy, name)
-+        return _as_mapping(result)
-+
-+    return {}
-+
-+
-+def _ensure_media(policy: Any) -> MediaPolicy:
-+    media = getattr(policy, "media", None)
-+    if isinstance(media, MediaPolicy):
-+        return media
-+    if is_dataclass(media):
-+        return MediaPolicy(**asdict(media))  # type: ignore[arg-type]
-+    if isinstance(media, Mapping):
-+        return MediaPolicy(**media)  # type: ignore[arg-type]
-+    return MediaPolicy()
-+
-+
-+def _ensure_capture(policy: Any) -> CapturePolicy:
-+    capture = getattr(policy, "capture", None)
-+    if isinstance(capture, CapturePolicy):
-+        return capture
-+    if is_dataclass(capture):
-+        return CapturePolicy(**asdict(capture))  # type: ignore[arg-type]
-+    if isinstance(capture, Mapping):
-+        return CapturePolicy(**capture)  # type: ignore[arg-type]
-+    return CapturePolicy()
-+
-+
-+def policy_to_snapshot(policy: Any) -> Dict[str, Any]:
-+    """Render a policy object into the runtime snapshot structure."""
-+
-+    snapshot = existing_policy_to_snapshot(policy)
-+
-+    media_policy = _ensure_media(policy)
-+    capture_policy = _ensure_capture(policy)
-+
-+    snapshot["media"] = asdict(media_policy)
-+    snapshot["capture"] = asdict(capture_policy)
-+
-+    return snapshot
-+
-+
-+__all__ = ["policy_to_snapshot", "existing_policy_to_snapshot"]
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index b0fa9f7b599fcc647f04172627d596f4872f9a42..1f90a6d610703e94b8932728119f83540c394ff6 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -1,41 +1,42 @@
- """Deepgram-backed ASR runtime for the voice v2 engine."""
+diff --git a/app/ws/validator.py b/app/ws/validator.py
+index eef9c778bce8df0418a0656c72bf390e6fe0e041..32cd401e5c41006d6197e2e6b0e93d30b0f5a20f 100644
+--- a/app/ws/validator.py
++++ b/app/ws/validator.py
+@@ -1,52 +1,124 @@
+ """Minimal schema validation for chat.v2 frames."""
  from __future__ import annotations
  
- import asyncio
- import logging
- import time
- import uuid
- from collections import deque
- from dataclasses import dataclass, field
- from typing import Any, Callable, Deque, Dict, Optional
+-from typing import Tuple
++import logging
++from typing import Any, Dict, Mapping, Optional, Tuple
  
- from app.config import (
-     ASR_BACKPRESSURE_THRESHOLD_BYTES,
-     ASR_IDLE_CLOSE_MS,
-     ASR_TRACE,
- )
-+from app.policy.model import Policy
- from app.telemetry import bus
- from app.voice_v2 import (
-     EVT_ASR_FINAL,
-     EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_ASR_READY,
-     EVT_WS_JSON_SEND,
- )
- from app.voice_v2.engine import EngineV2
- from app.services.streaming_asr.deepgram_client import DeepgramClient
- 
- _log = logging.getLogger(__name__)
- 
- _DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
- _PARTIAL_CONFIDENCE = 0.55
- _FINAL_CONFIDENCE = 0.9
- _DEFAULT_IDLE_CLOSE_MS = 4000
- _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
- _TRACE_ENABLED = bool(ASR_TRACE)
- _STREAM_OPEN_TIMEOUT_S = 5.0
- _NO_AUDIO_TIMEOUT_S = 9.0
- _LISTENING_STATE = "Listening"
- _READY_STATES = {"Ready", "Idle"}
+ _ALLOWED_AUDIO_FORMATS = {"opus", "pcm"}
  
  
-@@ -75,50 +76,51 @@ class _SessionState:
-         self.last_audio_ts = now_monotonic
-         self.last_audio_ts_ms = int(now_wall * 1000)
- 
- 
- class ASRRuntime:
-     """Bridge websocket audio to Deepgram realtime transcription."""
- 
-     def __init__(
-         self,
-         engine: EngineV2,
-         client: DeepgramClient,
-         *,
-         telemetry_bus: Any | None = None,
-     ) -> None:
-         if engine is None:
-             raise ValueError("engine must be provided")
-         if client is None:
-             raise ValueError("client must be provided")
- 
-         self._engine = engine
-         self._client = client
-         self._bus = telemetry_bus or bus
-         self._configure_client()
-         self._sessions: Dict[str, _SessionState] = {}
-         self._loop: asyncio.AbstractEventLoop | None = None
-+        self.policy = Policy()
-         configured_idle = ASR_IDLE_CLOSE_MS
-         if not isinstance(configured_idle, (int, float)):
-             configured_idle = _DEFAULT_IDLE_CLOSE_MS
-         client_idle = getattr(client, "idle_close_ms", None)
-         if isinstance(client_idle, (int, float)) and client_idle >= 0:
-             self._idle_close_ms = int(client_idle)
-         else:
-             self._idle_close_ms = int(configured_idle)
-         if self._idle_close_ms < 0:
-             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
- 
-     def set_bus(self, telemetry_bus: Any | None) -> None:
-         if telemetry_bus is None:
-             return
-         self._bus = telemetry_bus
- 
-     def _configure_client(self) -> None:
-         """Force the Deepgram client to use the containerized listen URL."""
- 
-         target_url = _DG_LISTEN_URL
-         current_url = getattr(self._client, "_url", None)
-         if current_url == target_url:
-             return
-         try:
-             setattr(self._client, "_url", target_url)
-@@ -250,50 +252,60 @@ class ASRRuntime:
-         self._ensure_stream(sid, state)
- 
-         deadline = time.monotonic() + max(0.0, _STREAM_OPEN_TIMEOUT_S)
-         while not state.stream_open:
-             task = state.stream_open_task
-             now = time.monotonic()
-             if task is None or task.done():
-                 if now >= deadline:
-                     break
-                 self._ensure_stream(sid, state)
-                 await asyncio.sleep(0.01)
-                 continue
-             remaining = deadline - now
-             if remaining <= 0:
-                 break
-             try:
-                 await asyncio.wait_for(task, timeout=remaining)
-             except asyncio.TimeoutError:
-                 break
-             except asyncio.CancelledError:
-                 raise
- 
-     # ------------------------------------------------------------------
-     # Internal helpers
-     # ------------------------------------------------------------------
-+    def _emit_log(self, payload: Dict[str, Any]) -> None:
-+        if not isinstance(payload, dict):
-+            return
-+        event = dict(payload)
-+        event.setdefault("type", "EVT_LOG")
-+        try:
-+            self._bus.publish(event)
-+        except Exception:  # pragma: no cover - defensive
-+            _log.exception("evt=asr_emit_log_failed")
++_logger = logging.getLogger(__name__)
 +
-     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
-         loop = self._loop
-         if loop is not None:
-             return loop
-         try:
-             loop = asyncio.get_running_loop()
-         except RuntimeError:
-             loop = None
-         self._loop = loop
-         return loop
++try:  # pragma: no cover - policy model optional in tests
++    from app.policy.model import Policy  # type: ignore
++except Exception:  # pragma: no cover - fallback when model absent
++    Policy = Any  # type: ignore  # noqa: N816 - mimic type alias
++
++
+ def _is_int(value: object) -> bool:
+     """Return True if value is an int but not a bool."""
+     return isinstance(value, int) and not isinstance(value, bool)
  
-     def _apply_backpressure(self, sid: str, state: _SessionState) -> None:
-         if _BACKPRESSURE_THRESHOLD <= 0:
-             return
-         if state.buffered_bytes <= _BACKPRESSURE_THRESHOLD:
-             return
  
-         dropped_chunks = 0
-         while state.pending and state.buffered_bytes > _BACKPRESSURE_THRESHOLD:
-             removed = state.pending.popleft()
-             state.buffered_bytes = max(0, state.buffered_bytes - len(removed))
-             dropped_chunks += 1
+ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
+     """Validate a decoded JSON frame.
  
-         if dropped_chunks:
-             state.dropped_chunks += dropped_chunks
-@@ -395,50 +407,76 @@ class ASRRuntime:
-                         on_final=self._make_final_cb(sid),
-                         on_error=self._make_error_cb(sid),
-                         stream_id=stream_id,
-                         on_close=self._make_close_cb(sid, state),
-                         policy=policy_snapshot,
-                     ),
-                     timeout=_STREAM_OPEN_TIMEOUT_S,
-                 )
-             except asyncio.CancelledError:
-                 raise
-             except asyncio.TimeoutError:
-                 _log.error("evt=asr_open_failed sid=%s vendor=deepgram", sid)
-                 state.stream_id = None
-                 state.stream_open = False
-                 state.stream_open_task = None
-                 loop = self._ensure_loop()
-                 if loop is not None:
-                     loop.call_later(0.1, self._ensure_stream, sid, state)
-                 return
-             except Exception:  # pragma: no cover - defensive
-                 _log.exception("evt=asr_stream_open_failed sid=%s", sid)
-                 state.stream_id = None
-                 return
+     Parameters
+     ----------
+     frame:
+         JSON object parsed from the WebSocket text frame.
  
-             state.stream_open = True
-+            mp = getattr(self.policy, "media", None)
-+            cp = getattr(self.policy, "capture", None)
-+            if mp is not None and cp is not None:
-+                self._emit_log(
-+                    {
-+                        "type": "EVT_LOG",
-+                        "logger": "app.voice_v2.asr_runtime",
-+                        "level": "INFO",
-+                        "sid": sid,
-+                        "msg": (
-+                            "evt=asr_policy input=%s rate_hz=%s ch=%s fallbacks=%s "
-+                            "start_on_asr_ready=%s start_on_turn_ready=%s timeslice_ms=%s "
-+                            "mask_during_tts=%s"
-+                        )
-+                        % (
-+                            getattr(mp, "asr_input", ""),
-+                            getattr(mp, "asr_rate_hz", ""),
-+                            getattr(mp, "asr_channels", ""),
-+                            getattr(mp, "fallbacks_allowed", ""),
-+                            getattr(cp, "start_on_asr_ready", ""),
-+                            getattr(cp, "start_on_turn_ready", ""),
-+                            getattr(cp, "timeslice_ms", ""),
-+                            getattr(cp, "mask_during_tts", ""),
-+                        ),
-+                    }
-+                )
-             open_event = {"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram"}
-             if stream_id:
-                 open_event["stream_id"] = stream_id
-             self._bus.publish(open_event)
-             _log.info(
-                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
-                 sid,
-                 "(not set)",
-                 qs or "",
-             )
-             stream_id_value = stream_id if isinstance(stream_id, str) and stream_id else ""
-             if not stream_id_value and isinstance(state.stream_id, str) and state.stream_id:
-                 stream_id_value = state.stream_id
-             ready_kwargs = {
-                 "sid": sid,
-                 "vendor": "deepgram",
-                 "stream_id": stream_id_value,
-             }
-             emit = getattr(self._bus, "emit", None)
-             if callable(emit):
-                 try:
-                     emit(EVT_ASR_READY, **ready_kwargs)
-                 except TypeError:
-                     emit(EVT_ASR_READY, ready_kwargs)
-             ready_event = {"type": EVT_ASR_READY, **ready_kwargs}
+     Returns
+     -------
+     (ok, hint):
+         ok is ``True`` when the frame passes validation. hint contains a
+         human-readable detail when validation fails.
+     """
+ 
+     if not isinstance(frame, dict):
+         return False, "Frame must be a JSON object"
+ 
+     frame_type = frame.get("type")
+     if not isinstance(frame_type, str):
+         return False, "Frame requires a string 'type' field"
+ 
+     if frame_type == "audio.header":
+         fmt = frame.get("format")
+         if fmt not in _ALLOWED_AUDIO_FORMATS:
+             return False, "audio.header requires format 'opus' or 'pcm'"
+ 
+         sample_rate = frame.get("sample_rate")
+-        if not _is_int(sample_rate):
++        if sample_rate is not None and not _is_int(sample_rate):
+             return False, "audio.header requires integer sample_rate"
+ 
+         channels = frame.get("channels")
+-        if not _is_int(channels):
++        if channels is not None and not _is_int(channels):
+             return False, "audio.header requires integer channels"
+ 
+     return True, None
+ 
+ 
+-__all__ = ["validate_frame"]
++def validate_audio_header_against_policy(
++    header: Dict[str, Any], policy: Policy | Mapping[str, Any] | None
++) -> Optional[str]:
++    fmt = header.get("format")
++    rate = header.get("sample_rate")
++    channels = header.get("channels")
++
++    if policy is None:
++        return None
++
++    if isinstance(policy, Mapping):
++        media = policy.get("media")
++    else:
++        media = getattr(policy, "media", None)
++
++    if media is None:
++        return None
++
++    if isinstance(media, Mapping):
++        get_value = media.get
++    else:
++        get_value = lambda key, default=None: getattr(media, key, default)
++
++    asr_input = get_value("asr_input")
++    if asr_input == "webm_opus":
++        if fmt != "opus":
++            return "policy_violation: expected format=opus"
++        expected_rate = get_value("asr_rate_hz")
++        if _is_int(expected_rate) and rate is not None and rate != expected_rate:
++            _logger.warning(
++                "evt=audio_header_rate_mismatch expected=%s got=%s",
++                expected_rate,
++                rate,
++            )
++        expected_channels = get_value("asr_channels")
++        if _is_int(expected_channels) and channels is not None and channels != expected_channels:
++            _logger.warning(
++                "evt=audio_header_channels_mismatch expected=%s got=%s",
++                expected_channels,
++                channels,
++            )
++    elif asr_input == "pcm_16k":
++        if fmt != "pcm":
++            return "policy_violation: expected format=pcm"
++        if rate is not None and rate != 16000:
++            _logger.warning(
++                "evt=audio_header_rate_mismatch expected=16000 got=%s", rate
++            )
++        if channels is not None and channels != 1:
++            _logger.warning(
++                "evt=audio_header_channels_mismatch expected=1 got=%s",
++                channels,
++            )
++    else:
++        return (
++            f"policy_violation: unsupported media.asr_input={asr_input}"
++            if asr_input
++            else "policy_violation: unsupported media.asr_input"
++        )
++
++    return None
++
++
++__all__ = ["validate_frame", "validate_audio_header_against_policy"]

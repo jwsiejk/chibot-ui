@@ -1,9 +1,18 @@
 """Minimal schema validation for chat.v2 frames."""
 from __future__ import annotations
 
-from typing import Tuple
+import logging
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 _ALLOWED_AUDIO_FORMATS = {"opus", "pcm"}
+
+
+_logger = logging.getLogger(__name__)
+
+try:  # pragma: no cover - policy model optional in tests
+    from app.policy.model import Policy  # type: ignore
+except Exception:  # pragma: no cover - fallback when model absent
+    Policy = Any  # type: ignore  # noqa: N816 - mimic type alias
 
 
 def _is_int(value: object) -> bool:
@@ -39,14 +48,77 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
             return False, "audio.header requires format 'opus' or 'pcm'"
 
         sample_rate = frame.get("sample_rate")
-        if not _is_int(sample_rate):
+        if sample_rate is not None and not _is_int(sample_rate):
             return False, "audio.header requires integer sample_rate"
 
         channels = frame.get("channels")
-        if not _is_int(channels):
+        if channels is not None and not _is_int(channels):
             return False, "audio.header requires integer channels"
 
     return True, None
 
 
-__all__ = ["validate_frame"]
+def validate_audio_header_against_policy(
+    header: Dict[str, Any], policy: Policy | Mapping[str, Any] | None
+) -> Optional[str]:
+    fmt = header.get("format")
+    rate = header.get("sample_rate")
+    channels = header.get("channels")
+
+    if policy is None:
+        return None
+
+    if isinstance(policy, Mapping):
+        media = policy.get("media")
+    else:
+        media = getattr(policy, "media", None)
+
+    if media is None:
+        return None
+
+    if isinstance(media, Mapping):
+        get_value = media.get
+    else:
+        get_value = lambda key, default=None: getattr(media, key, default)
+
+    asr_input = get_value("asr_input")
+    if asr_input == "webm_opus":
+        if fmt != "opus":
+            return "policy_violation: expected format=opus"
+        expected_rate = get_value("asr_rate_hz")
+        if _is_int(expected_rate) and rate is not None and rate != expected_rate:
+            _logger.warning(
+                "evt=audio_header_rate_mismatch expected=%s got=%s",
+                expected_rate,
+                rate,
+            )
+        expected_channels = get_value("asr_channels")
+        if _is_int(expected_channels) and channels is not None and channels != expected_channels:
+            _logger.warning(
+                "evt=audio_header_channels_mismatch expected=%s got=%s",
+                expected_channels,
+                channels,
+            )
+    elif asr_input == "pcm_16k":
+        if fmt != "pcm":
+            return "policy_violation: expected format=pcm"
+        if rate is not None and rate != 16000:
+            _logger.warning(
+                "evt=audio_header_rate_mismatch expected=16000 got=%s", rate
+            )
+        if channels is not None and channels != 1:
+            _logger.warning(
+                "evt=audio_header_channels_mismatch expected=1 got=%s",
+                channels,
+            )
+    else:
+        return (
+            f"policy_violation: unsupported media.asr_input={asr_input}"
+            if asr_input
+            else "policy_violation: unsupported media.asr_input"
+        )
+
+    return None
+
+
+__all__ = ["validate_frame", "validate_audio_header_against_policy"]

@@ -34,7 +34,7 @@ from app.voice_v2 import (
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
 )
-from app.ws.validator import validate_frame
+from app.ws.validator import validate_audio_header_against_policy, validate_frame
 
 try:  # pragma: no cover - uvicorn is an optional dependency in tests
     from uvicorn.protocols.utils import ClientDisconnected
@@ -239,6 +239,7 @@ class AdapterContext:
     asr_open_subscription_token: Optional[str] = None
     server_keepalive_task: asyncio.Task[None] | None = None
     last_policy_interaction: Optional[Dict[str, Any]] = None
+    policy_snapshot: Optional[Dict[str, Any]] = None
     partial_seq: int = 0
     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
     send_lock: asyncio.Lock | None = None
@@ -495,6 +496,7 @@ class ChatV2Adapter:
             user_id=sub,
             is_admin=is_admin,
         )
+        ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
 
         token = current_sid.set(ctx.sid)
         try:
@@ -855,6 +857,13 @@ class ChatV2Adapter:
                     "duplicate or conflicting audio.header",
                 )
                 return self._HandleResult(True)
+            err = validate_audio_header_against_policy(frame, ctx.policy_snapshot)
+            if err:
+                meta["error"] = "policy_violation"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                _log.warning("evt=policy_violation sid=%s err=%s", ctx.sid, err)
+                await self._send_json(send, ctx.sid, {"type": "error", "error": err})
+                return self._HandleResult(False, 4400, "policy_violation")
             ctx.audio_profile = profile
             if seq_start is not None:
                 ctx.audio_seq = max(0, seq_start)
@@ -1686,6 +1695,9 @@ class ChatV2Adapter:
                 meta = dict(source_meta)
             meta["sid"] = ctx.sid
             normalized["meta"] = meta
+            policy_payload = normalized.get("policy")
+            if isinstance(policy_payload, dict):
+                ctx.policy_snapshot = policy_payload
         return normalized
 
     @staticmethod
@@ -2254,6 +2266,16 @@ class ChatV2Adapter:
         for key in _POLICY_STABLE_KEYS:
             if key in snapshot:
                 stable[key] = snapshot[key]
+        media = snapshot.get("media")
+        if isinstance(media, dict):
+            stable["media"] = {
+                key: media[key]
+                for key in ("asr_input", "asr_rate_hz", "asr_channels")
+                if key in media
+            }
+        capture = snapshot.get("capture")
+        if isinstance(capture, dict):
+            stable["capture"] = dict(capture)
         return stable
 
     @staticmethod
