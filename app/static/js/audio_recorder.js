@@ -1,4 +1,5 @@
 (() => {
+  // Minimal, policy-first, Opus-only mic recorder
   const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
   const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
   const OPUS_MIME = "audio/webm;codecs=opus";
@@ -24,124 +25,104 @@
       this._micChunksSent = 0;
       this._micOpenEmitted = false;
       this._format = null;
+      this._wsClient = null; // preferred explicit binding
       this._log = window.console || {};
       this._hud = window?.DiagHUD || window?.DiagHud || null;
     }
 
+    /* ---------------- Policy ---------------- */
+
     setPolicy(policyObj) {
       this._policy = policyObj || {};
       this._log?.info?.("rec_policy_loaded", this._policy);
-      const media = this.policy().media || {};
-      const capture = this.policy().capture || {};
-      this._sendDiagEvent(
-        "rec_policy_loaded",
-        { media, capture },
-        { level: "info", message: "rec_policy_loaded" }
-      );
+      // DIAG (if HUD enabled)
+      this._sendDiag("rec_policy_loaded", {
+        media: this.policy().media || {},
+        capture: this.policy().capture || {}
+      }, "info");
     }
 
-    policy() {
-      return this._policy || {};
+    policy() { return this._policy || {}; }
+
+    /* ---------------- WebSocket binding & selection ---------------- */
+
+    // Allow app code to explicitly inject the chat WS (best)
+    setWsClient(ws) { this._wsClient = ws || null; }
+
+    // Find the right WS: prefer injected; else ChatWSClient; else WSClient.
+    // If multiple exist, prefer one whose protocol indicates chat (e.g., 'chat.v2').
+    _pickGlobalWs() {
+      const candidates = [];
+      if (this._wsClient) candidates.push(this._wsClient);
+      if (window.ChatWSClient) candidates.push(window.ChatWSClient);
+      if (window.WSClient) candidates.push(window.WSClient);
+
+      // de-dup
+      const uniq = [];
+      const seen = new Set();
+      for (const c of candidates) {
+        if (!c) continue;
+        const key = (c === Object(c)) ? (c.__id || c) : c;
+        if (!seen.has(key)) { uniq.push(c); seen.add(key); }
+      }
+      if (uniq.length === 0) return null;
+
+      // prefer chat protocol
+      const withProto = uniq.find(c => {
+        try { return (c.protocol === "chat.v2") || (c.getProtocol && c.getProtocol() === "chat.v2"); }
+        catch { return false; }
+      });
+      return withProto || uniq[0];
     }
+
+    _getWsClient() {
+      const ws = this._pickGlobalWs();
+      if (!ws) return null;
+      if (typeof ws.isConnected === "function" && !ws.isConnected()) return null;
+      if (typeof ws.sendBinary !== "function") return null; // audio frames
+      if (typeof ws.send !== "function") return null;       // audio.header / diag
+      return ws;
+    }
+
+    /* ---------------- DIAG helpers ---------------- */
 
     _diagEnabled() {
       const cfg = window && window.__CFG__;
-      if (!cfg || typeof cfg !== "object") {
-        return false;
-      }
-      return Boolean(cfg.DIAG_CLIENT_HUD);
+      return !!(cfg && cfg.DIAG_CLIENT_HUD);
     }
 
-    _cloneDiagDetail(detail) {
-      if (detail === undefined) {
-        return undefined;
-      }
-      if (detail === null) {
-        return null;
-      }
-      const type = typeof detail;
-      if (type === "string" || type === "number" || type === "boolean") {
-        return detail;
-      }
-      if (type === "object") {
-        try {
-          return JSON.parse(JSON.stringify(detail));
-        } catch (err) {
-          return undefined;
-        }
-      }
-      return undefined;
-    }
-
-    _sendDiagEvent(eventName, detail, options = {}) {
-      if (!this._diagEnabled()) {
-        return;
-      }
+    _sendDiag(event, data, level = "info") {
+      if (!this._diagEnabled()) return;
       const ws = this._getWsClient();
-      if (!ws) {
-        return;
-      }
+      if (!ws) return;
       const frame = {
         type: "client.diag",
-        event:
-          typeof eventName === "string" && eventName
-            ? eventName.slice(0, 64)
-            : "recorder",
-        ts: Date.now()
+        event: String(event || "recorder").slice(0, 64),
+        ts: Date.now(),
+        level: String(level || "info").slice(0, 16),
+        data
       };
-      const level =
-        options && typeof options.level === "string"
-          ? options.level.trim()
-          : "";
-      if (level) {
-        frame.level = level.slice(0, 16);
-      }
-      const message =
-        options && typeof options.message === "string"
-          ? options.message.trim()
-          : "";
-      if (message) {
-        frame.message = message.slice(0, 256);
-      }
-      const badge =
-        options && typeof options.badge === "string"
-          ? options.badge.trim()
-          : "";
-      if (badge) {
-        frame.badge = badge.slice(0, 64);
-      }
-      const data = this._cloneDiagDetail(detail);
-      if (data !== undefined) {
-        frame.data = data;
-      }
-      try {
-        ws.send(frame);
-      } catch (err) {
+      try { ws.send(frame); } catch (err) {
         this._log?.warn?.("rec=diag_send_failed %o", err);
       }
     }
+
+    /* ---------------- Public lifecycle ---------------- */
 
     async start() {
       if (this._state === "error") {
         throw new Error("AudioRecorder unavailable");
       }
-      if (this._stream) {
-        return this._stream;
-      }
+      if (this._stream) return this._stream;
+
       if (!navigator?.mediaDevices?.getUserMedia) {
         this._state = "error";
-        const err = new Error("Media capture not supported");
         this._log?.error?.("rec=getusermedia_unsupported");
-        throw err;
+        throw new Error("Media capture not supported");
       }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: false
-          }
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false }
         });
         this._stream = stream;
         this._state = "idle";
@@ -156,67 +137,47 @@
     stop() {
       this._teardownRecorder();
       if (this._stream) {
-        try {
-          for (const track of this._stream.getTracks()) {
-            track.stop();
-          }
-        } catch (err) {
-          this._log?.warn?.("rec=stop_tracks_failed %o", err);
-        }
+        try { for (const t of this._stream.getTracks()) t.stop(); } catch {}
         this._stream = null;
       }
       this._mask = false;
       this._format = null;
-      this._state = this._state === "error" ? "error" : "idle";
+      this._state = (this._state === "error") ? "error" : "idle";
       this._micOpenEmitted = false;
       this._emitHudState("Idle");
     }
 
-    handleWsClose() {
-      this.stop();
-    }
+    handleWsClose() { this.stop(); }
+    startListening() { return this.startMicCaptureIfIdle(); }
+    handleStartListening() { return this.startMicCaptureIfIdle(); }
 
-    startListening() {
-      return this.startMicCaptureIfIdle();
-    }
-
-    handleStartListening() {
-      return this.startMicCaptureIfIdle();
-    }
+    /* ---------------- Core: idempotent starter ---------------- */
 
     async startMicCaptureIfIdle() {
-      if (this._state === "error") {
-        return false;
-      }
+      if (this._state === "error") return false;
+
       if (!this._stream) {
-        try {
-          await this.start();
-        } catch (err) {
-          return false;
-        }
+        try { await this.start(); } catch { return false; }
       }
-      if (!this._stream) {
-        return false;
-      }
-      if (this._rec && this._rec.state === "recording") {
-        return true;
-      }
+      if (!this._stream) return false;
+
+      if (this._rec && this._rec.state === "recording") return true;
+
       const ok = this._setupRecorderFromPolicy();
-      if (!ok) {
-        return false;
-      }
+      if (!ok) return false;
+
       this._emitMicOpen();
       this._emitHudState("Listening");
       this._state = "recording";
       return true;
     }
 
+    /* ---------------- TTS mask ---------------- */
+
     handleTtsStart() {
       if ((this.policy().capture || {}).mask_during_tts) {
         this._mask = true;
-        try {
-          this._rec?.pause?.();
-        } catch (err) {
+        try { this._rec?.pause?.(); } catch (err) {
           this._log?.warn?.("rec=pause_failed %o", err);
         }
       }
@@ -225,132 +186,100 @@
     handleTtsEnd() {
       this._mask = false;
       if (this._rec?.state === "paused") {
-        try {
-          this._rec.resume();
-        } catch (err) {
+        try { this._rec.resume(); } catch (err) {
           this._log?.warn?.("rec=resume_failed %o", err);
         }
       }
     }
 
+    /* ---------------- Recorder setup (Opus-only) ---------------- */
+
     _setupRecorderFromPolicy() {
-      if (!this._stream) {
-        return false;
-      }
+      if (!this._stream) return false;
       const mp = this.policy().media || {};
       const cp = this.policy().capture || {};
       const supported = !!(window.MediaRecorder && MediaRecorder.isTypeSupported(OPUS_MIME));
 
-      if (mp.asr_input === "webm_opus") {
-        if (!supported) {
-          this._log?.error?.("rec=webm_opus_unsupported no_pcm_fallback=true");
-          this._hud?.banner?.(
-            "This browser does not support WebM/Opus. Voice capture disabled.",
-            "error"
-          );
-          this._state = "error";
-          return false;
-        }
-        try {
-          this._rec = new MediaRecorder(this._stream, { mimeType: OPUS_MIME });
-        } catch (err) {
-          this._log?.error?.("rec=media_recorder_ctor_failed %o", err);
-          this._hud?.banner?.("Failed to start mic recorder.", "error");
-          this._state = "error";
-          return false;
-        }
-
-        this._rec.ondataavailable = (event) => {
-          this._onWebmData(event);
-        };
-        this._rec.onerror = (event) => {
-          this._log?.error?.("rec=media_recorder_error %o", event);
-        };
-        this._rec.onstop = () => {
-          this._rec = null;
-          this._state = "idle";
-        };
-
-        const slice = Math.max(
-          MIN_TIMESLICE_MS,
-          Number(cp.timeslice_ms ?? DEFAULT_TIMESLICE_MS) || DEFAULT_TIMESLICE_MS
-        );
-        this._micChunksSent = 0;
-        this._headerSent = false;
-        const sampleRate = Number(mp.asr_rate_hz) || 48000;
-        const channels = Number(mp.asr_channels) || 1;
-        this._format = { format: "opus", sample_rate: sampleRate, channels };
-        this._sendAudioHeader(this._format);
-        try {
-          this._rec.start(slice);
-        } catch (err) {
-          this._log?.error?.("rec=media_recorder_start_failed %o", err);
-          this._hud?.banner?.("Failed to start mic recorder.", "error");
-          this._state = "error";
-          return false;
-        }
-        this._log?.info?.("rec=webm_opus_started timeslice_ms=%d", slice);
-        this._sendDiagEvent(
-          "rec=webm_opus_started",
-          { timeslice_ms: slice },
-          {
-            level: "info",
-            message: `rec=webm_opus_started timeslice_ms=${slice}`,
-            badge: "mic:rec"
-          }
-        );
-        return true;
+      if (mp.asr_input !== "webm_opus") {
+        this._log?.error?.("rec=policy_media_unsupported input=%s", mp.asr_input);
+        this._hud?.banner?.("Voice capture policy not supported on this client.", "error");
+        this._state = "error";
+        return false;
+      }
+      if (!supported) {
+        this._log?.error?.("rec=webm_opus_unsupported no_pcm_fallback=true");
+        this._hud?.banner?.("This browser does not support WebM/Opus. Voice capture disabled.", "error");
+        this._state = "error";
+        return false;
       }
 
-      this._log?.error?.("rec=policy_media_unsupported input=%s", mp.asr_input);
-      this._hud?.banner?.(
-        "Voice capture policy not supported on this client.",
-        "error"
-      );
-      this._state = "error";
-      return false;
+      try {
+        this._rec = new MediaRecorder(this._stream, { mimeType: OPUS_MIME });
+      } catch (err) {
+        this._log?.error?.("rec=media_recorder_ctor_failed %o", err);
+        this._hud?.banner?.("Failed to start mic recorder.", "error");
+        this._state = "error";
+        return false;
+      }
+
+      // One-time header BEFORE first chunk
+      const sampleRate = Number(mp.asr_rate_hz) || 48000;
+      const channels = Number(mp.asr_channels) || 1;
+      this._format = { format: "opus", sample_rate: sampleRate, channels };
+      this._sendAudioHeader(this._format); // idempotent via _headerSent
+
+      // Wire events & start with timeslice (CRITICAL)
+      const slice = Math.max(MIN_TIMESLICE_MS, Number(cp.timeslice_ms ?? DEFAULT_TIMESLICE_MS) || DEFAULT_TIMESLICE_MS);
+      this._micChunksSent = 0;
+      this._rec.ondataavailable = (e) => this._onWebmData(e);
+      this._rec.onerror = (ev) => this._log?.error?.("rec=media_recorder_error %o", ev);
+      this._rec.onstop  = () => { this._rec = null; if (this._state !== "error") this._state = "idle"; };
+
+      try {
+        this._rec.start(slice);
+      } catch (err) {
+        this._log?.error?.("rec=media_recorder_start_failed %o", err);
+        this._hud?.banner?.("Failed to start mic recorder.", "error");
+        this._state = "error";
+        return false;
+      }
+
+      this._log?.info?.("rec=webm_opus_started timeslice_ms=%d", slice);
+      this._sendDiag("rec=webm_opus_started", { timeslice_ms: slice }, "info");
+      return true;
     }
 
     async _onWebmData(event) {
-      if (!event?.data || event.data.size === 0) {
-        return;
-      }
-      if (this._mask) {
-        return;
-      }
+      if (!event?.data || event.data.size === 0) return;
+      if (this._mask) return;
       const ws = this._getWsClient();
-      if (!ws) {
-        return;
-      }
-      // Ensure header precedes first chunk (idempotent)
+      if (!ws) return;
+
+      // Ensure header precedes first chunk (belt & suspenders)
       if (!this._headerSent && this._format) {
         this._sendAudioHeader(this._format);
-        if (!this._headerSent) {
-          return;
-        }
+        if (!this._headerSent) return; // still couldn't send; drop this chunk
       }
+
       try {
         const buffer = await event.data.arrayBuffer();
         ws.sendBinary(new Uint8Array(buffer), { lane: "mic", dropIfBusy: false });
         this._micChunksSent += 1;
+        if (this._micChunksSent % 20 === 0) {
+          this._sendDiag("mic_progress", { chunks: this._micChunksSent }, "debug");
+        }
       } catch (err) {
         this._log?.warn?.("rec=webm_chunk_send_failed %o", err);
-        this._sendDiagEvent(
-          "evt=mic_chunk_send_failed",
+        this._sendDiag("evt=mic_chunk_send_failed",
           err && err.message ? { message: String(err.message).slice(0, 128) } : null,
-          { level: "warning", message: "evt=mic_chunk_send_failed" }
-        );
+          "warning");
       }
     }
 
     _sendAudioHeader(info) {
-      if (!info) {
-        return;
-      }
+      if (!info || this._headerSent) return;
       const ws = this._getWsClient();
-      if (!ws) {
-        return;
-      }
+      if (!ws) return;
       const frame = {
         type: "audio.header",
         format: info.format,
@@ -366,27 +295,14 @@
       }
     }
 
-    _getWsClient() {
-      // Require both sendBinary (for audio) and send (for JSON frames like audio.header/diag)
-      const ws = window.WSClient;
-      if (!ws) return null;
-      if (typeof ws.isConnected === "function" && !ws.isConnected()) return null;
-      if (typeof ws.sendBinary !== "function") return null;
-      if (typeof ws.send !== "function") return null;
-      return ws;
-    }
+    /* ---------------- UI signals ---------------- */
 
     _emitMicOpen() {
-      if (this._micOpenEmitted) {
-        return;
-      }
+      if (this._micOpenEmitted) return;
       this._micOpenEmitted = true;
-      const detail = {
-        type: CLIENT_MIC_OPEN_EVENT,
-        ts: Date.now(),
-        vendor: "webm_opus"
-      };
-      emitCustomEvent(CLIENT_MIC_OPEN_EVENT, detail);
+      emitCustomEvent(CLIENT_MIC_OPEN_EVENT, {
+        type: CLIENT_MIC_OPEN_EVENT, ts: Date.now(), vendor: "webm_opus"
+      });
     }
 
     _emitHudState(state) {
@@ -396,15 +312,11 @@
       });
     }
 
+    /* ---------------- Teardown ---------------- */
+
     _teardownRecorder() {
       if (this._rec) {
-        try {
-          if (this._rec.state !== "inactive") {
-            this._rec.stop();
-          }
-        } catch (err) {
-          this._log?.warn?.("rec=media_recorder_stop_failed %o", err);
-        }
+        try { if (this._rec.state !== "inactive") this._rec.stop(); } catch {}
         this._rec.ondataavailable = null;
         this._rec.onerror = null;
         this._rec.onstop = null;
@@ -418,13 +330,13 @@
 
   const recorder = new AudioRecorder();
 
+  // Stop mic if WS closes
   window.addEventListener("ws.close", () => {
-    try {
-      recorder.handleWsClose();
-    } catch (err) {
+    try { recorder.handleWsClose(); } catch (err) {
       console.warn("AudioRecorder ws.close handler failed", err);
     }
   });
 
+  // Expose in global namespace
   window.AudioRecorder = recorder;
 })();
