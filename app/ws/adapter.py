@@ -217,6 +217,8 @@ class AdapterContext:
     audio_highest_seq: int = -1
     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
     audio_window: int = AUDIO_SEQ_WINDOW
+    audio_chunks_recv: int = 0
+    audio_bytes_recv: int = 0
     last_pong_sent_ms: int = 0
     ip: Optional[str] = None
     sid_bucket: Optional[TokenBucket] = None
@@ -1022,6 +1024,16 @@ class ChatV2Adapter:
             ctx.diag_audio_seen = True
             self._cancel_diag_timer(ctx)
             bus.publish({"type": "EVT_DIAG_FIRST_AUDIO_FRAME", "sid": ctx.sid})
+
+        ctx.audio_chunks_recv += 1
+        ctx.audio_bytes_recv += byte_count
+        if ctx.audio_chunks_recv % 10 == 0:
+            _log.info(
+                "evt=ws_audio_ingress sid=%s chunks=%d bytes=%d",
+                ctx.sid,
+                ctx.audio_chunks_recv,
+                ctx.audio_bytes_recv,
+            )
 
         await self._ingest_audio_chunk(ctx, bytes(data), seq)
         return self._HandleResult(True)

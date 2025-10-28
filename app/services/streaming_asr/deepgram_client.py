@@ -10,7 +10,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Deque, Dict, Tuple
+from typing import Any, Callable, Deque, Dict, Mapping, Tuple
 
 import websockets
 from websockets.legacy.client import WebSocketClientProtocol
@@ -95,6 +95,7 @@ class DeepgramClient:
         on_close: Callable[[int | None, str | None], None] | None = None,
         encoding: str | None = None,
         sample_rate: int | None = None,
+        policy: Mapping[str, Any] | None = None,
     ) -> str:
         if not isinstance(sid, str) or not sid:
             raise ValueError("sid must be a non-empty string")
@@ -115,7 +116,7 @@ class DeepgramClient:
         headers = {
             "Authorization": f"Token {self._api_key}",
         }
-        url = self._build_listen_url()
+        url = self._build_listen_url(policy)
         try:
             connect_kwargs = {
                 _CONNECT_HEADERS_ARG: headers,
@@ -131,7 +132,7 @@ class DeepgramClient:
             raise
 
         _log.info(
-            "evt=dg_ws_open url=%s container=webm_opus start_payload=omitted",
+            "evt=dg_ws_open container=webm_opus start_payload=omitted url=%s",
             url,
         )
 
@@ -160,15 +161,106 @@ class DeepgramClient:
         qs = urlsplit(url).query
         return qs
 
-    def _build_listen_url(self) -> str:
+    def _build_listen_url(self, policy: Mapping[str, Any] | None = None) -> str:
         """Return the Deepgram listen URL with encoded query parameters."""
 
         split = urlsplit(self._url)
         base_url = urlunsplit((split.scheme, split.netloc, split.path, "", ""))
-        if not split.query:
-            return base_url
-        pairs = parse_qsl(split.query, keep_blank_values=True)
-        query = urlencode(pairs, doseq=True)
+        base_params: Dict[str, str] = {}
+        if split.query:
+            base_params = dict(parse_qsl(split.query, keep_blank_values=True))
+
+        params: Dict[str, str] = dict(base_params)
+
+        def _lookup(path: tuple[str, ...]) -> Any:
+            current: Any = policy
+            for key in path:
+                if not isinstance(current, Mapping):
+                    return None
+                current = current.get(key)
+            return current
+
+        def _coerce_bool(value: Any) -> bool | None:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"true", "1", "yes", "on"}:
+                    return True
+                if normalized in {"false", "0", "no", "off"}:
+                    return False
+                return None
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return bool(value)
+            return None
+
+        def _coerce_int(value: Any) -> int | None:
+            if isinstance(value, bool):
+                return int(value)
+            if isinstance(value, int):
+                return int(value)
+            if isinstance(value, float):
+                try:
+                    return int(value)
+                except (OverflowError, ValueError):
+                    return None
+            if isinstance(value, str):
+                stripped = value.strip()
+                if not stripped:
+                    return None
+                try:
+                    return int(stripped)
+                except ValueError:
+                    return None
+            return None
+
+        def _choose_str(key: str, path: tuple[str, ...], default: str) -> str:
+            candidate = _lookup(path)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+            fallback = base_params.get(key)
+            if isinstance(fallback, str) and fallback.strip():
+                return fallback.strip()
+            return default
+
+        def _choose_bool(key: str, path: tuple[str, ...], default: str) -> str:
+            default_bool = default.lower() == "true"
+            candidate_bool = _coerce_bool(_lookup(path))
+            if candidate_bool is None:
+                candidate_bool = _coerce_bool(base_params.get(key))
+            final_bool = default_bool if candidate_bool is None else candidate_bool
+            return "true" if final_bool else "false"
+
+        def _choose_int_str(key: str, path: tuple[str, ...], default: str) -> str:
+            candidate_int = _coerce_int(_lookup(path))
+            if candidate_int is None:
+                candidate_int = _coerce_int(base_params.get(key))
+            if candidate_int is None:
+                candidate_int = _coerce_int(default)
+            if candidate_int is None:
+                candidate_int = int(default)
+            return str(int(candidate_int))
+
+        params["model"] = _choose_str(
+            "model", ("vendor", "asr", "deepgram", "model"), "nova-2"
+        )
+        params["smart_format"] = _choose_bool(
+            "smart_format", ("vendor", "asr", "deepgram", "smart_format"), "true"
+        )
+        params["interim_results"] = _choose_bool(
+            "interim_results",
+            ("vendor", "asr", "deepgram", "interim_results"),
+            "true",
+        )
+        params["vad_events"] = _choose_bool(
+            "vad_events", ("vendor", "asr", "deepgram", "vad_events"), "true"
+        )
+        params["utterance_end_ms"] = _choose_int_str(
+            "utterance_end_ms", ("vendor", "asr", "deepgram", "utterance_end_ms"), "1200"
+        )
+        params["language"] = _choose_str("language", ("input", "language"), "en")
+
+        query = urlencode(params)
         return f"{base_url}?{query}" if query else base_url
 
     def send_audio(self, sid: str, chunk: bytes) -> None:

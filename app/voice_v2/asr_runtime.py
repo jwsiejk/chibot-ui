@@ -383,6 +383,11 @@ class ASRRuntime:
             state.close_reason = None
             state.prearm_requested = False
             try:
+                policy_snapshot = None
+                try:
+                    policy_snapshot = getattr(self._engine, "policy_snapshot", None)
+                except Exception:  # pragma: no cover - defensive
+                    policy_snapshot = None
                 qs = await asyncio.wait_for(
                     self._client.open_stream(
                         sid,
@@ -391,6 +396,7 @@ class ASRRuntime:
                         on_error=self._make_error_cb(sid),
                         stream_id=stream_id,
                         on_close=self._make_close_cb(sid, state),
+                        policy=policy_snapshot,
                     ),
                     timeout=_STREAM_OPEN_TIMEOUT_S,
                 )
@@ -421,9 +427,14 @@ class ASRRuntime:
                 "(not set)",
                 qs or "",
             )
-            ready_kwargs = {"sid": sid, "vendor": "deepgram"}
-            if stream_id:
-                ready_kwargs["stream_id"] = stream_id
+            stream_id_value = stream_id if isinstance(stream_id, str) and stream_id else ""
+            if not stream_id_value and isinstance(state.stream_id, str) and state.stream_id:
+                stream_id_value = state.stream_id
+            ready_kwargs = {
+                "sid": sid,
+                "vendor": "deepgram",
+                "stream_id": stream_id_value,
+            }
             emit = getattr(self._bus, "emit", None)
             if callable(emit):
                 try:
@@ -435,7 +446,7 @@ class ASRRuntime:
             _log.info(
                 "evt=asr_ready sid=%s vendor=deepgram stream_id=%s",
                 sid,
-                stream_id or "",
+                stream_id_value,
             )
 
             input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
