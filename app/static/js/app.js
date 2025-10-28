@@ -1058,14 +1058,7 @@
     // Fallback PCM16 mono @16kHz streamer, used only if AudioRecorder is absent or fails
     const FallbackPCMStreamer = (() => {
       const TARGET_RATE = 16000;
-      let ctx = null, source = null, processor = null, gain = null, stream = null, running = false;
-      function base64FromArrayBuffer(ab) {
-        const bytes = new Uint8Array(ab);
-        let binary = '';
-        const len = bytes.length;
-        for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
-        return btoa(binary);
-      }
+      let ctx = null, source = null, processor = null, gain = null, stream = null, running = false, headerSent = false;
       function downsampleFloat32(input, inRate, outRate) {
         if (outRate === inRate) return input;
         const ratio = inRate / outRate;
@@ -1086,9 +1079,31 @@
         const out = new Int16Array(float32.length);
         for (let i = 0; i < float32.length; i++) {
           const s = Math.max(-1, Math.min(1, float32[i]));
-          out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          const sample = s < 0 ? s * 0x8000 : s * 0x7fff;
+          out[i] = Math.round(sample);
         }
         return out;
+      }
+      function ensureHeader() {
+        if (headerSent) return true;
+        const WSClient = window.WSClient;
+        if (!WSClient || typeof WSClient.send !== 'function' || typeof WSClient.isConnected !== 'function' || !WSClient.isConnected()) {
+          return false;
+        }
+        try {
+          WSClient.send({
+            type: 'audio.header',
+            format: 'pcm',
+            sample_rate: TARGET_RATE,
+            channels: 1,
+            seq_start: 0
+          });
+          headerSent = true;
+          return true;
+        } catch (err) {
+          console.error('FallbackPCM header send failed', err);
+          return false;
+        }
       }
       async function start() {
         if (running) return true;
@@ -1100,43 +1115,58 @@
           console.error('FallbackPCM getUserMedia failed', err);
           return false;
         }
-        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+        ctx = new AudioContextCtor({ sampleRate: TARGET_RATE });
         try { await ctx.resume(); } catch {}
         source = ctx.createMediaStreamSource(stream);
         processor = ctx.createScriptProcessor(4096, 1, 1);
-        gain = ctx.createGain(); gain.gain.value = 0;
-        source.connect(processor); processor.connect(gain); gain.connect(ctx.destination);
-        // announce start
-        try { WSClient.send({ type: 'audio.start', audio: { codec: 'pcm_s16le', rate_hz: TARGET_RATE, channels: 1 } }); } catch {}
+        gain = ctx.createGain();
+        gain.gain.value = 0;
+        source.connect(processor);
+        processor.connect(gain);
+        gain.connect(ctx.destination);
+        ensureHeader();
+        running = true;
         processor.onaudioprocess = (ev) => {
+          if (!running) return;
           try {
+            if (!headerSent) ensureHeader();
             const input = ev.inputBuffer.getChannelData(0);
             const fsIn = ctx.sampleRate || 48000;
             const f32 = downsampleFloat32(input, fsIn, TARGET_RATE);
             const i16 = floatTo16BitPCM(f32);
-            const b64 = base64FromArrayBuffer(i16.buffer);
-            WSClient.send({ type: 'audio.chunk', audio: { data: b64, encoding: 'base64' } });
+            const sent = WSClient && typeof WSClient.sendBinary === 'function'
+              ? WSClient.sendBinary(i16.buffer, { dropIfBusy: true })
+              : false;
+            if (!sent) {
+              console.warn('fallback pcm failed to send chunk');
+            }
           } catch (err) {
             console.warn('fallback pcm process error', err);
           }
         };
-        running = true;
         return true;
       }
       function stop() {
         if (!running) return;
-        try { WSClient.send({ type: 'audio.end' }); } catch {}
         try { if (processor) processor.disconnect(); } catch {}
         try { if (gain) gain.disconnect(); } catch {}
         try { if (source) source.disconnect(); } catch {}
-        if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
+        if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch {} }
         if (ctx) { try { ctx.close(); } catch {} }
         stream = source = processor = gain = ctx = null;
+        headerSent = false;
         running = false;
       }
-      return { start, stop, isRunning: () => running };
+      function markAsrReady() {
+        headerSent = false;
+        if (running) {
+          ensureHeader();
+        }
+      }
+      return { start, stop, isRunning: () => running, markAsrReady };
     })();
-    
+
     let __MIC_RUNNING__ = false;
     async function tryStartMic(trigger) {
       const ws = WSClient && WSClient.socket;
@@ -1150,6 +1180,9 @@
         } catch (err) {
           console.warn('AudioRecorder.start failed; falling back', err);
         }
+      }
+      if (trigger !== 'asr.ready') {
+        return;
       }
       const ok = await FallbackPCMStreamer.start();
       if (ok) __MIC_RUNNING__ = true;
@@ -1984,6 +2017,13 @@ window.addEventListener('tts.end', () => {
 
 window.addEventListener('asr.ready', () => {
   tryStartMic('asr.ready');
+  try {
+    if (FallbackPCMStreamer && typeof FallbackPCMStreamer.markAsrReady === 'function') {
+      FallbackPCMStreamer.markAsrReady();
+    }
+  } catch (err) {
+    console.warn('FallbackPCMStreamer markAsrReady failed', err);
+  }
   if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
     try {
       const maybePromise = window.AudioRecorder.start();

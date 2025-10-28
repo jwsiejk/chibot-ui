@@ -1449,6 +1449,11 @@
     const ws = transportFactory(wsUrl, wsProtocols);
     ws.__accessTokenInfo = tokenInfo;
     ws.__handshakeToastShown = false;
+    try {
+      ws.binaryType = "arraybuffer";
+    } catch (err) {
+      console.warn("Failed to set WebSocket binaryType", err);
+    }
 
     ws.onopen = () => {
       // Lightweight breadcrumb; keep as console.log

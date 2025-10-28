@@ -114,6 +114,7 @@
     _pendingDescriptor: null,
     _vendor: null,
     _asrReady: false,
+    _headerSent: false,
     _mask: { active: false, holdMs: 0, timerId: null },
     _listening: false,
     _micOpenEmitted: false,
@@ -173,12 +174,14 @@
       this._pendingDescriptor = null;
       this._vendor = null;
       this._asrReady = false;
+      this._headerSent = false;
       this._setMask(false);
       this._setListening(false, { resetMicEvent: true });
     },
 
     _teardownEncoder() {
       this._asrReady = false;
+      this._headerSent = false;
       if (this._mediaRecorder) {
         try {
           if (this._mediaRecorder.state !== "inactive") {
@@ -323,6 +326,7 @@
         rate_hz: Number(descriptor.rate_hz) || 0,
         channels: Number(descriptor.channels) || 1
       };
+      this._headerSent = false;
       this._pendingDescriptor = { vendor, descriptor: normalized };
       try {
         await this.start();
@@ -342,6 +346,7 @@
       this._teardownEncoder();
       this._vendor = vendor;
       this._descriptor = descriptor;
+      this._sendAudioHeader(descriptor);
       if (descriptor.container === "webm" && descriptor.codec === "opus" && descriptor.rate_hz === 48000 && descriptor.channels === 1) {
         this._setupWebmRecorder();
       } else if (descriptor.container === "raw" && descriptor.codec === "pcm_s16le" && descriptor.rate_hz === 16000 && descriptor.channels === 1) {
@@ -350,6 +355,36 @@
         console.error("Unsupported ASR descriptor", descriptor);
       }
       this._maybeActivateCapture();
+    },
+
+    _sendAudioHeader(descriptor) {
+      if (!descriptor || this._headerSent) return;
+      const WSClient = window.WSClient;
+      if (!WSClient || typeof WSClient.send !== "function" || typeof WSClient.isConnected !== "function" || !WSClient.isConnected()) {
+        return;
+      }
+      let format = null;
+      if (descriptor.container === "webm" && descriptor.codec === "opus") {
+        format = "opus";
+      } else if (descriptor.container === "raw" && descriptor.codec === "pcm_s16le") {
+        format = "pcm";
+      }
+      if (!format) {
+        return;
+      }
+      const frame = {
+        type: "audio.header",
+        format,
+        sample_rate: descriptor.rate_hz,
+        channels: descriptor.channels,
+        seq_start: 0
+      };
+      try {
+        WSClient.send(frame);
+        this._headerSent = true;
+      } catch (err) {
+        console.error("Failed to send audio.header", err);
+      }
     },
 
     _setupWebmRecorder() {
@@ -507,6 +542,7 @@
       this._descriptor = null;
       this._pendingDescriptor = null;
       this._vendor = null;
+      this._headerSent = false;
       this._setMask(false);
       this._setListening(false, { resetMicEvent: true });
     }
