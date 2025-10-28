@@ -606,7 +606,7 @@ class ASRRuntime:
                         "msg": (
                             "evt=asr_policy input=%s rate_hz=%s ch=%s fallbacks=%s "
                             "start_on_asr_ready=%s start_on_turn_ready=%s timeslice_ms=%s "
-                            "mask_during_tts=%s"
+                            "mask_during_tts=%s mask_keepalive_enable=%s mask_keepalive_ms=%s"
                         )
                         % (
                             getattr(mp, "asr_input", ""),
@@ -617,6 +617,8 @@ class ASRRuntime:
                             getattr(cp, "start_on_turn_ready", ""),
                             getattr(cp, "timeslice_ms", ""),
                             getattr(cp, "mask_during_tts", ""),
+                            getattr(cp, "mask_keepalive_enable", ""),
+                            getattr(cp, "mask_keepalive_ms", ""),
                         ),
                     }
                 )

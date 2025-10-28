@@ -23,6 +23,8 @@ class CapturePolicy:
     start_on_turn_ready: bool = True
     timeslice_ms: int = 200
     mask_during_tts: bool = True
+    mask_keepalive_enable: bool = True
+    mask_keepalive_ms: int = 5000
 
 
 @dataclass
