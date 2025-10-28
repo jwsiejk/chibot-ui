@@ -510,7 +510,29 @@ class ChatV2Adapter:
                 )
 
             self._contexts[ctx.sid] = ctx
+            if getattr(self, "asr_runtime", None) is None:
+                try:
+                    from app.voice_v2.asr_runtime import ASRRuntime
+                    from app.services.streaming_asr.deepgram_client import DeepgramClient
+
+                    engine = getattr(self, "engine", None)
+                    api_key = getattr(config, "DEEPGRAM_API_KEY", "")
+                    if engine is not None and api_key:
+                        client = DeepgramClient(api_key=api_key)
+                        self.asr_runtime = ASRRuntime(engine=engine, client=client)
+                    else:
+                        _log.warning(
+                            "evt=ws_asr_runtime_unavailable sid=%s has_engine=%s has_api_key=%s",
+                            ctx.sid,
+                            bool(engine),
+                            bool(api_key),
+                        )
+                except Exception:  # pragma: no cover - defensive logging
+                    _log.exception("evt=ws_asr_runtime_attach_failed sid=%s", ctx.sid)
+
             asr_runtime = getattr(self, "asr_runtime", None)
+            runtime_name = type(asr_runtime).__name__ if asr_runtime is not None else "None"
+            _log.info("evt=ws_open sid=%s asr_runtime=%s", ctx.sid, runtime_name)
             if asr_runtime is not None:
                 try:
                     asr_runtime.on_ws_open(ctx.sid)
@@ -1510,9 +1532,16 @@ class ChatV2Adapter:
             prepared["partial_seq"] = ctx.partial_seq
         return prepared
 
-    def _start_asr_ready_tracker(self, ctx: AdapterContext) -> None:
+    def _start_asr_ready_tracker(
+        self, ctx: AdapterContext, telemetry_bus: Optional[Any] = None
+    ) -> None:
         if ctx.asr_subscription_token is not None:
             return
+
+        if telemetry_bus is None:
+            telemetry_bus = bus
+
+        _log.info("evt=asr_ready_tracker_start sid=%s", ctx.sid)
 
         def _handle(event: dict) -> None:
             if event.get("type") != EVT_ASR_READY:
@@ -1521,7 +1550,7 @@ class ChatV2Adapter:
                 return
             ctx.asr_ready = True
 
-        ctx.asr_subscription_token = bus.subscribe(EVT_ASR_READY, _handle)
+        ctx.asr_subscription_token = telemetry_bus.subscribe(EVT_ASR_READY, _handle)
 
     def _extract_outbound_payload(
         self, ctx: AdapterContext, event: dict

@@ -126,7 +126,14 @@ class ASRRuntime:
     # ------------------------------------------------------------------
     def on_ws_open(self, sid: str) -> None:
         self._ensure_loop()
-        self._sessions[sid] = _SessionState(sid=sid)
+        state = self._sessions.get(sid)
+        if state is None:
+            state = _SessionState(sid=sid)
+            self._sessions[sid] = state
+        _log.info("evt=asr_on_ws_open sid=%s", sid)
+        if not state.stream_open:
+            state.prearm_requested = True
+            self._ensure_stream(sid, state)
 
     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
         if not isinstance(chunk, (bytes, bytearray, memoryview)):
@@ -406,6 +413,7 @@ class ASRRuntime:
                 qs or "",
             )
             bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+            _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
 
             input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
             asr_ready_frame = {
@@ -679,6 +687,7 @@ class ASRRuntime:
             if armed_at and state.last_audio_ts <= armed_at:
                 _log.warning("evt=asr_no_audio_timeout sid=%s", sid)
                 bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+                _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
                 input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
                 asr_ready_frame = {
                     "type": "asr.ready",

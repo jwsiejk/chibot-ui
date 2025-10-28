@@ -1,66 +1,318 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 0d9d4b7ae62e51e025086ac5d4387f0dd46c5aa2..93281bda2738d486c48aaa4e14ff7f5670b9e40f 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1272,50 +1272,61 @@
-     } else if (frame.type === "chat.history") {
-       handleChatHistoryFrame(frame);
-     }
-     dispatchFrame(frame);
-   }
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 5d7b7869243426fb49c8636150e64715658ff77d..c450a9e5a303f2b2fb38a09337dc1c2d84f75891 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -104,51 +104,58 @@ class ASRRuntime:
  
-   function parseFrame(event) {
-     const { data } = event;
-     if (typeof data === "string") {
-       try {
-         const frame = JSON.parse(data);
-         handleMessageFrame(frame);
-       } catch (err) {
-         console.error("Failed to parse WS frame", err, data);
-       }
-       return;
-     }
-     if (data instanceof Blob) {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(data);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-       return;
-     }
-+    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-+      const chunk = data instanceof ArrayBuffer
-+        ? data
-+        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-+      const audioPlayer = getAudioPlayer();
-+      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-+        audioPlayer.enqueueChunk(chunk);
-+      }
-+      window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
-+      return;
-+    }
-     console.warn("Unknown WS frame type", data);
-   }
+     def _configure_client(self) -> None:
+         """Force the Deepgram client to use the containerized listen URL."""
  
-   function attachSocket(ws) {
-     ws.__intentionalClose = false;
-     const handlers = {
-       open: () => {
-         updateState({ websocket: ws });
-       },
-       message: parseFrame,
-       error: (event) => {
-         console.error("WebSocket error", event);
-         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
-       },
-       close: (event) => {
-         const expected = ws.__intentionalClose === true;
-         if (socket === ws) {
-           socket = null;
-           expectInfoFrame = true;
-           clearInfoWatchdog();
-         }
-         clearHeartbeat();
-         updateState({ websocket: null });
-         let resumed = false;
-         if (!expected) {
+         target_url = _DG_LISTEN_URL
+         current_url = getattr(self._client, "_url", None)
+         if current_url == target_url:
+             return
+         try:
+             setattr(self._client, "_url", target_url)
+         except Exception:  # pragma: no cover - defensive
+             _log.debug(
+                 "evt=asr_runtime_set_listen_url_failed target_url=%s", target_url,
+                 exc_info=True,
+             )
+         else:
+             _log.debug(
+                 "evt=asr_runtime_listen_url_set url=%s", target_url
+             )
+ 
+     # ------------------------------------------------------------------
+     # Websocket hooks
+     # ------------------------------------------------------------------
+     def on_ws_open(self, sid: str) -> None:
+         self._ensure_loop()
+-        self._sessions[sid] = _SessionState(sid=sid)
++        state = self._sessions.get(sid)
++        if state is None:
++            state = _SessionState(sid=sid)
++            self._sessions[sid] = state
++        _log.info("evt=asr_on_ws_open sid=%s", sid)
++        if not state.stream_open:
++            state.prearm_requested = True
++            self._ensure_stream(sid, state)
+ 
+     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
+         if not isinstance(chunk, (bytes, bytearray, memoryview)):
+             raise TypeError("chunk must be bytes-like")
+         data = bytes(chunk)
+         if not data:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+ 
+         now_monotonic = time.monotonic()
+         state.last_audio_ts = now_monotonic
+         state.last_audio_ts_ms = int(time.time() * 1000)
+         if state.ready_watchdog is not None and state.ready_armed_at:
+             self._cancel_ready_watchdog(state)
+         chunk_len = len(data)
+ 
+         if state.stream_id is None:
+             state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
+             state.last_stream_id = state.stream_id
+ 
+         if not state.stream_open:
+@@ -384,50 +391,51 @@ class ASRRuntime:
+                 state.stream_id = None
+                 state.stream_open = False
+                 state.stream_open_task = None
+                 loop = self._ensure_loop()
+                 if loop is not None:
+                     loop.call_later(0.1, self._ensure_stream, sid, state)
+                 return
+             except Exception:  # pragma: no cover - defensive
+                 _log.exception("evt=asr_stream_open_failed sid=%s", sid)
+                 state.stream_id = None
+                 return
+ 
+             state.stream_open = True
+             open_event = {"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram"}
+             if stream_id:
+                 open_event["stream_id"] = stream_id
+             bus.publish(open_event)
+             _log.info(
+                 "evt=asr_session_open sid=%s content_type=%s qs=%s",
+ 
+                 sid,
+                 _CONTENT_TYPE,
+                 qs or "",
+             )
+             bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
++            _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
+ 
+             input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
+             asr_ready_frame = {
+                 "type": "asr.ready",
+                 "vendor": "deepgram",
+                 "input": input_desc,
+             }
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
+             if stream_id:
+                 _log.info(
+                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
+                     sid,
+                     stream_id,
+                     _CONTENT_TYPE,
+                     int(self._idle_close_ms),
+                 )
+             pre_chunks_sent = state.chunks_sent
+             while state.pending:
+                 chunk = state.pending.popleft()
+                 chunk_len = len(chunk)
+                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
+                 self._forward_chunk(sid, state, chunk)
+             if state.chunks_sent == pre_chunks_sent:
+                 self._start_ready_watchdog(sid, state)
+             else:
+@@ -657,50 +665,51 @@ class ASRRuntime:
+         handle = state.idle_handle
+         if handle is not None:
+             handle.cancel()
+             state.idle_handle = None
+ 
+     def _cancel_ready_watchdog(self, state: _SessionState) -> None:
+         handle = state.ready_watchdog
+         if handle is not None:
+             handle.cancel()
+         state.ready_watchdog = None
+         state.ready_armed_at = 0.0
+ 
+     def _start_ready_watchdog(self, sid: str, state: _SessionState) -> None:
+         loop = self._ensure_loop()
+         if loop is None:
+             return
+         self._cancel_ready_watchdog(state)
+ 
+         def _fire() -> None:
+             state.ready_watchdog = None
+             armed_at = state.ready_armed_at
+             state.ready_armed_at = 0.0
+             if armed_at and state.last_audio_ts <= armed_at:
+                 _log.warning("evt=asr_no_audio_timeout sid=%s", sid)
+                 bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
++                _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
+                 input_desc = {"container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1}
+                 asr_ready_frame = {
+                     "type": "asr.ready",
+                     "vendor": "deepgram",
+                     "input": input_desc,
+                 }
+                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
+ 
+         state.ready_armed_at = time.monotonic()
+         state.ready_watchdog = loop.call_later(_NO_AUDIO_TIMEOUT_S, _fire)
+ 
+     def _reset_idle_timer(self, sid: str, state: _SessionState) -> None:
+         threshold_ms = self._idle_close_ms
+         if threshold_ms <= 0:
+             return
+         loop = self._ensure_loop()
+         if loop is None:
+             return
+         self._cancel_idle_timer(state)
+ 
+         delay = threshold_ms / 1000.0
+ 
+         def _fire() -> None:
+             state.idle_handle = None
+             self._handle_idle_timeout(sid, state)
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 6ef5ef580e4e80613521d49ea3caf5934972ccb7..229696adfc66383ce56a77987d635e66fbeaf851 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -488,51 +488,73 @@ class ChatV2Adapter:
+             headers=dict(headers),
+             principal=principal,
+             user_id=sub,
+             is_admin=is_admin,
+         )
+ 
+         token = current_sid.set(ctx.sid)
+         try:
+             if not (
+                 inspect.iscoroutinefunction(self._on_open_and_greet)
+                 and inspect.iscoroutinefunction(self._invoke_engine)
+             ):
+                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
+                 raise RuntimeError("WebSocket async contract violation")
+ 
+             ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+             client = scope.get("client")
+             ctx.ip = client[0] if isinstance(client, tuple) and client else None
+             if ctx.ip:
+                 ctx.ip_bucket = self._ip_buckets.setdefault(
+                     ctx.ip,
+                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+                 )
+ 
+             self._contexts[ctx.sid] = ctx
++            if getattr(self, "asr_runtime", None) is None:
++                try:
++                    from app.voice_v2.asr_runtime import ASRRuntime
++                    from app.services.streaming_asr.deepgram_client import DeepgramClient
++
++                    engine = getattr(self, "engine", None)
++                    api_key = getattr(config, "DEEPGRAM_API_KEY", "")
++                    if engine is not None and api_key:
++                        client = DeepgramClient(api_key=api_key)
++                        self.asr_runtime = ASRRuntime(engine=engine, client=client)
++                    else:
++                        _log.warning(
++                            "evt=ws_asr_runtime_unavailable sid=%s has_engine=%s has_api_key=%s",
++                            ctx.sid,
++                            bool(engine),
++                            bool(api_key),
++                        )
++                except Exception:  # pragma: no cover - defensive logging
++                    _log.exception("evt=ws_asr_runtime_attach_failed sid=%s", ctx.sid)
++
+             asr_runtime = getattr(self, "asr_runtime", None)
++            runtime_name = type(asr_runtime).__name__ if asr_runtime is not None else "None"
++            _log.info("evt=ws_open sid=%s asr_runtime=%s", ctx.sid, runtime_name)
+             if asr_runtime is not None:
+                 try:
+                     asr_runtime.on_ws_open(ctx.sid)
+                 except Exception:  # pragma: no cover - defensive logging
+                     _log.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
+             self._start_asr_ready_tracker(ctx)
+             self._start_outbound_bridge(ctx, send)
+             self._start_server_keepalive(ctx, send)
+ 
+             if self.exporter:
+                 self.exporter.begin(ctx.sid)
+ 
+             await self._on_open_and_greet(ctx)
+ 
+             close_code = 1000
+             close_reason: Optional[str] = None
+ 
+             try:
+                 while True:
+                     message = await receive()
+                     msg_type = message.get("type")
+ 
+                     if msg_type == "websocket.receive":
+                         if message.get("text") is not None:
+                             result = await self._handle_text(message["text"], ctx, send)
+@@ -1488,62 +1510,69 @@ class ChatV2Adapter:
+         loop: asyncio.AbstractEventLoop,
+         payload: Dict[str, Any],
+         enqueue: Callable[[Dict[str, Any]], None],
+     ) -> None:
+         def _emit(frame: Dict[str, Any]) -> None:
+             prepared = self._prepare_partial_frame(ctx, frame)
+             enqueue(prepared)
+ 
+         ctx.partial_coalescer.offer(
+             payload,
+             now_ms=self._now_ms(),
+             loop=loop,
+             emit=_emit,
+         )
+ 
+     def _prepare_partial_frame(self, ctx: AdapterContext, payload: Dict[str, Any]) -> Dict[str, Any]:
+         prepared = dict(payload)
+         seq_value = prepared.get("partial_seq")
+         if isinstance(seq_value, int) and seq_value > ctx.partial_seq:
+             ctx.partial_seq = seq_value
+         else:
+             ctx.partial_seq += 1
+             prepared["partial_seq"] = ctx.partial_seq
+         return prepared
+ 
+-    def _start_asr_ready_tracker(self, ctx: AdapterContext) -> None:
++    def _start_asr_ready_tracker(
++        self, ctx: AdapterContext, telemetry_bus: Optional[Any] = None
++    ) -> None:
+         if ctx.asr_subscription_token is not None:
+             return
+ 
++        if telemetry_bus is None:
++            telemetry_bus = bus
++
++        _log.info("evt=asr_ready_tracker_start sid=%s", ctx.sid)
++
+         def _handle(event: dict) -> None:
+             if event.get("type") != EVT_ASR_READY:
+                 return
+             if event.get("sid") != ctx.sid:
+                 return
+             ctx.asr_ready = True
+ 
+-        ctx.asr_subscription_token = bus.subscribe(EVT_ASR_READY, _handle)
++        ctx.asr_subscription_token = telemetry_bus.subscribe(EVT_ASR_READY, _handle)
+ 
+     def _extract_outbound_payload(
+         self, ctx: AdapterContext, event: dict
+     ) -> Optional[Dict[str, Any]]:
+         payload = self._coerce_payload(event.get("payload"))
+         if payload is None:
+             payload = self._coerce_payload(event.get("frame"))
+ 
+         if payload is None:
+             meta = event.get("meta")
+             if isinstance(meta, dict):
+                 ws_meta = meta.get("ws")
+                 if isinstance(ws_meta, dict):
+                     payload = self._coerce_payload(ws_meta.get("frame"))
+                     if payload is None:
+                         payload = self._coerce_payload(ws_meta.get("preview"))
+ 
+         if payload is None:
+             return None
+ 
+         frame_type = payload.get("type") if isinstance(payload, dict) else None
+         if frame_type == "policy.interaction" and isinstance(payload, dict):
+             prev_req_id = ctx.await_user_req_id
+             prev_key = self._turn_key(ctx, prev_req_id)
+             ctx.await_user_expected = self._policy_requests_listen(payload)
