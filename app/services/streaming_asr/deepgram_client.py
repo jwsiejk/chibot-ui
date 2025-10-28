@@ -16,6 +16,8 @@ import websockets
 from websockets.legacy.client import WebSocketClientProtocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from app.config import ASR_IDLE_CLOSE_MS
+
 _log = logging.getLogger(__name__)
 
 _DEFAULT_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
@@ -77,7 +79,7 @@ class DeepgramClient:
         if self._max_buffer_bytes <= 0:
             self._max_buffer_bytes = _DEFAULT_BUFFER_BYTES
         self._streams: Dict[str, _StreamState] = {}
-        self.idle_close_ms = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
+        self.idle_close_ms = ASR_IDLE_CLOSE_MS
         self._legacy_start_warning_logged = False
 
     # ------------------------------------------------------------------
@@ -121,7 +123,8 @@ class DeepgramClient:
             connect_kwargs = {
                 _CONNECT_HEADERS_ARG: headers,
                 "max_size": None,
-                "ping_interval": None,
+                "ping_interval": 15,
+                "ping_timeout": 10,
             }
             websocket = await websockets.connect(
                 url,

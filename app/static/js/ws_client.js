@@ -1,5 +1,5 @@
 (() => {
-  const HEARTBEAT_INTERVAL_MS = 15000;
+  const HEARTBEAT_INTERVAL_MS = 20000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";
   const SUBPROTOCOL = "chat.v2";
   const INFO_DEADLINE_MS = 20000;
@@ -661,7 +661,7 @@
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     lastPingAt = Date.now();
     updateState({ lastPingAt });
-    sendJson({ type: "ping" });
+    sendJson({ type: "client.ping", ts: lastPingAt });
   }
 
   function startHeartbeat() {
@@ -1112,13 +1112,21 @@
       infoFrame: frame,
       resumeError: null
     });
-    startHeartbeat();
     flushClientBannerQueue();
   }
 
-  function handlePongFrame() {
-    if (typeof lastPingAt === "number") {
-      const latency = Math.max(0, Date.now() - lastPingAt);
+  function handlePongFrame(frame) {
+    const now = Date.now();
+    let reference = null;
+    if (frame && typeof frame.echo === "number") {
+      reference = frame.echo;
+    } else if (frame && typeof frame.t === "number") {
+      reference = frame.t;
+    } else if (typeof lastPingAt === "number") {
+      reference = lastPingAt;
+    }
+    if (typeof reference === "number") {
+      const latency = Math.max(0, now - reference);
       updateState({ latencyMs: latency });
     }
   }
@@ -1181,6 +1189,15 @@
       return;
     }
 
+    if (frame.type === "server.ping") {
+      const response = { type: "client.pong", ts: Date.now() };
+      if (typeof frame.ts === "number") {
+        response.echo = frame.ts;
+      }
+      sendJson(response);
+      return;
+    }
+
     if (frame.type === "ping") {
       sendJson({ type: "pong", t: Date.now() });
       return;
@@ -1213,8 +1230,10 @@
       }
     } else if (frame.type === "info") {
       handleInfoFrame(frame);
+    } else if (frame.type === "server.pong") {
+      handlePongFrame(frame);
     } else if (frame.type === "pong") {
-      handlePongFrame();
+      handlePongFrame(frame);
     } else if (frame.type === "error") {
       handleErrorFrame(frame);
     } else if (frame.type === "tts.start") {
@@ -1318,6 +1337,7 @@
     const handlers = {
       open: () => {
         updateState({ websocket: ws });
+        startHeartbeat();
       },
       message: parseFrame,
       error: (event) => {

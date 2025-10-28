@@ -58,7 +58,8 @@ AUDIO_SEQ_WINDOW = 8
 QUEUE_ON_THRESHOLD = 12
 QUEUE_OFF_THRESHOLD = 6
 
-_DEFAULT_WS_PING_INTERVAL_MS = 25_000
+_DEFAULT_WS_PING_INTERVAL_MS = 20_000
+_HEARTBEAT_TIMEOUT_MS = 30_000
 
 EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
 EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
@@ -220,6 +221,9 @@ class AdapterContext:
     audio_chunks_recv: int = 0
     audio_bytes_recv: int = 0
     last_pong_sent_ms: int = 0
+    last_client_activity_ms: int = 0
+    last_client_pong_ms: int = 0
+    last_server_ping_ms: int = 0
     ip: Optional[str] = None
     sid_bucket: Optional[TokenBucket] = None
     ip_bucket: Optional[TokenBucket] = None
@@ -497,6 +501,7 @@ class ChatV2Adapter:
             is_admin=is_admin,
         )
         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
+        ctx.last_client_activity_ms = now_ms
 
         token = current_sid.set(ctx.sid)
         try:
@@ -730,10 +735,27 @@ class ChatV2Adapter:
 
         frame_type = raw_type
         meta["frame_type"] = frame_type
+        now_ms = int(time.time() * 1000)
+        ctx.last_client_activity_ms = now_ms
+
+        if frame_type == "client.ping":
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+            if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
+                ctx.last_pong_sent_ms = now_ms
+                client_ts = frame.get("ts")
+                payload = {"type": "server.pong", "ts": now_ms}
+                if isinstance(client_ts, int):
+                    payload["echo"] = client_ts
+                await self._send_json(send, ctx.sid, payload)
+            return self._HandleResult(True)
+
+        if frame_type == "client.pong":
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+            ctx.last_client_pong_ms = now_ms
+            return self._HandleResult(True)
 
         if frame_type == "ping":
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-            now_ms = int(time.time() * 1000)
             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
                 ctx.last_pong_sent_ms = now_ms
                 reply_ts = frame.get("t")
@@ -971,6 +993,7 @@ class ChatV2Adapter:
         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
     ) -> _HandleResult:
         byte_count = len(data)
+        ctx.last_client_activity_ms = int(time.time() * 1000)
 
         limited = await self._check_rate_limit(ctx, send)
         if limited is not None:
@@ -1203,10 +1226,27 @@ class ChatV2Adapter:
             try:
                 while True:
                     await asyncio.sleep(interval)
+                    now_ms = int(time.time() * 1000)
+                    last_activity = ctx.last_client_activity_ms or 0
+                    if last_activity and now_ms - last_activity >= _HEARTBEAT_TIMEOUT_MS:
+                        _log.warning(
+                            "evt=ws_heartbeat_missed sid=%s last_client_ms=%s",
+                            ctx.sid,
+                            last_activity,
+                        )
+                        await send(
+                            {
+                                "type": "websocket.close",
+                                "code": 1001,
+                                "reason": "heartbeat_timeout",
+                            }
+                        )
+                        return
                     payload = json.dumps(
-                        {"type": "keepalive", "ts": int(time.time() * 1000)},
+                        {"type": "server.ping", "ts": now_ms},
                         separators=(",", ":"),
                     )
+                    ctx.last_server_ping_ms = now_ms
                     await send({"type": "websocket.send", "text": payload})
             except asyncio.CancelledError:
                 raise

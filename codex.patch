@@ -1,188 +1,873 @@
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index e6889ade376f697837844f0d12da37c20e43c9bb..f1f5503eb3189c32fd4c1842fc7df31f0bb547ad 100644
---- a/app/static/js/audio_recorder.js
-+++ b/app/static/js/audio_recorder.js
-@@ -6,50 +6,51 @@
-   const MIN_TIMESLICE_MS = 20;
-   const DEFAULT_TIMESLICE_MS = 200;
+diff --git a/app/config.py b/app/config.py
+index 1207caa7a40db7be0b72e31fb44a4d0d2f4f45b4..590e649af4090b6e47b8bcde86410d04a3cb6b00 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -12,51 +12,51 @@ try:
+     from dotenv import load_dotenv  # type: ignore
+ except ImportError:  # pragma: no cover - optional dependency
+     load_dotenv = None
+ else:  # pragma: no branch
+     load_dotenv(dotenv_path=".env", override=False)
  
-   function emitCustomEvent(type, detail) {
+ 
+ def env_bool(name: str, default: bool = False) -> bool:
+     """Return an environment variable parsed as a boolean."""
+ 
+     value = os.getenv(name)
+     if value is None:
+         return bool(default)
+     value = value.strip().lower()
+     if value in {"1", "true", "t", "yes", "y", "on"}:
+         return True
+     if value in {"0", "false", "f", "no", "n", "off"}:
+         return False
+     return bool(default)
+ 
+ 
+ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+ ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
+     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
+ )
+-ASR_IDLE_CLOSE_MS = int(os.getenv("ASR_IDLE_CLOSE_MS", "15000"))
++ASR_IDLE_CLOSE_MS = 15000
+ ASR_TRACE = env_bool("ASR_TRACE", False)
+ 
+ 
+ def get_env(name: str, default=None):
+     """Retrieve an environment variable with an optional default."""
+ 
+     value = os.getenv(name)
+     return value if value is not None else default
+ 
+ 
+ _log = logging.getLogger(__name__)
+ 
+ _ADMIN_SETTINGS_LOCK = threading.RLock()
+ _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
+ _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
+ _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
+ 
+ _ALLOWED_ASR_INPUTS = {"webm_opus", "pcm_16k"}
+ _CAPTURE_TIMESLICE_MIN_MS = 20
+ 
+ _DEFAULT_POLICY_MEDIA = {
+     "asr_input": "webm_opus",
+     "asr_rate_hz": 48000,
+     "asr_channels": 1,
+     "fallbacks_allowed": False,
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index d7fb1b2788ccc514ae2e694e6b94767e0647f0ff..e987975b136ec28c0bca9702afa34e5bca78c7a1 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -1,43 +1,45 @@
+ """Deepgram realtime streaming client."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import inspect
+ import json
+ import logging
+ import os
+ import time
+ import uuid
+ from collections import deque
+ from dataclasses import dataclass, field
+ from typing import Any, Callable, Deque, Dict, Mapping, Tuple
+ 
+ import websockets
+ from websockets.legacy.client import WebSocketClientProtocol
+ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+ 
++from app.config import ASR_IDLE_CLOSE_MS
++
+ _log = logging.getLogger(__name__)
+ 
+ _DEFAULT_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
+ _DEFAULT_BUFFER_BYTES = 4 * 1024 * 1024
+ 
+ 
+ def _resolve_headers_arg() -> str:
+     """Return the keyword argument used for headers in websockets.connect."""
+ 
+     try:
+         params = inspect.signature(websockets.connect).parameters
+     except (TypeError, ValueError):  # pragma: no cover - defensive
+         return "extra_headers"
+     if "additional_headers" in params:
+         return "additional_headers"
+     return "extra_headers"
+ 
+ 
+ _CONNECT_HEADERS_ARG = _resolve_headers_arg()
+ 
+ 
+ @dataclass
+ class _StreamState:
+     sid: str
+     stream_id: str
+@@ -55,95 +57,96 @@ class _StreamState:
+     receiver_task: asyncio.Task[None] | None = None
+     data_event: asyncio.Event = field(default_factory=asyncio.Event)
+     finalized: bool = False
+     next_seq_no: int = 1
+     last_send_ts: float = 0.0
+     first_audio_ts: float | None = None
+     current_utterance_id: str | None = None
+ 
+ 
+ class DeepgramClient:
+     """Client wrapper responsible for maintaining Deepgram realtime streams."""
+ 
+     def __init__(
+         self,
+         *,
+         api_key: str | None = None,
+         url: str | None = None,
+         max_buffer_bytes: int | None = None,
+     ) -> None:
+         self._api_key = (api_key or os.getenv("DEEPGRAM_API_KEY")) or ""
+         self._url = url or os.getenv("DEEPGRAM_LISTEN_URL", _DEFAULT_LISTEN_URL)
+         self._max_buffer_bytes = max_buffer_bytes or _DEFAULT_BUFFER_BYTES
+         if self._max_buffer_bytes <= 0:
+             self._max_buffer_bytes = _DEFAULT_BUFFER_BYTES
+         self._streams: Dict[str, _StreamState] = {}
+-        self.idle_close_ms = int(os.getenv("ASR_IDLE_CLOSE_MS", "4000"))
++        self.idle_close_ms = ASR_IDLE_CLOSE_MS
+         self._legacy_start_warning_logged = False
+ 
+     # ------------------------------------------------------------------
+     # Public API
+     # ------------------------------------------------------------------
+     async def open_stream(
+         self,
+         sid: str,
+         on_partial: Callable[[str, Dict[str, object]], None],
+         on_final: Callable[[str, Dict[str, object]], None],
+         on_error: Callable[[str], None],
+         *,
+         stream_id: str,
+         content_type: str | None = None,
+         on_close: Callable[[int | None, str | None], None] | None = None,
+         encoding: str | None = None,
+         sample_rate: int | None = None,
+         policy: Mapping[str, Any] | None = None,
+     ) -> str:
+         if not isinstance(sid, str) or not sid:
+             raise ValueError("sid must be a non-empty string")
+         if sid in self._streams:
+             return ""
+         if not isinstance(stream_id, str) or not stream_id:
+             raise ValueError("stream_id must be a non-empty string")
+         loop = asyncio.get_running_loop()
+         if (
+             (content_type and content_type.strip())
+             or (encoding and str(encoding).strip())
+             or sample_rate is not None
+         ) and not self._legacy_start_warning_logged:
+             self._legacy_start_warning_logged = True
+             _log.warning(
+                 "evt=dg_ws_ignored_legacy start_fields=['content_type','encoding','sample_rate']"
+             )
+         headers = {
+             "Authorization": f"Token {self._api_key}",
+         }
+         url = self._build_listen_url(policy)
+         try:
+             connect_kwargs = {
+                 _CONNECT_HEADERS_ARG: headers,
+                 "max_size": None,
+-                "ping_interval": None,
++                "ping_interval": 15,
++                "ping_timeout": 10,
+             }
+             websocket = await websockets.connect(
+                 url,
+                 **connect_kwargs,
+             )
+         except Exception as exc:
+             _log.exception("evt=deepgram_connect_failed sid=%s err=%s", sid, exc)
+             raise
+ 
+         _log.info(
+             "evt=dg_ws_open container=webm_opus start_payload=omitted url=%s",
+             url,
+         )
+ 
+         state = _StreamState(
+             sid=sid,
+             websocket=websocket,
+             on_partial=on_partial,
+             on_final=on_final,
+             on_error=on_error,
+             on_close=on_close,
+             loop=loop,
+             stream_id=stream_id,
+         )
+         state.sender_task = loop.create_task(self._sender_loop(state), name=f"dg-send-{sid}")
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 42a66df0802b25ccf7bc2173f320ae0424c0c653..2c2612b98c4f111f659492378d7370f4d8ebaba4 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,27 +1,27 @@
+ (() => {
+-  const HEARTBEAT_INTERVAL_MS = 15000;
++  const HEARTBEAT_INTERVAL_MS = 20000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+ 
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading WSClient");
+   }
+   const getAudioPlayer = () => window.AudioPlayer;
+ 
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
+   let infoWatchdogTimerId = null;
+   let lastPingAt = null;
+   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
+   let autoResumeAttemptToken = null;
+   let toastRoot = null;
+   let lastTokenValue = null;
+   let lastTokenMintedAt = null;
+@@ -639,51 +639,51 @@
+     }
+     if (dropIfBusy && socket.bufferedAmount > 512 * 1024) {
+       return false;
+     }
      try {
-       window.dispatchEvent(new CustomEvent(type, { detail }));
+       socket.send(payload);
+       return true;
      } catch (err) {
-       console.warn("AudioRecorder event dispatch failed", type, err);
+       console.error("WSClient sendBinary error", err);
+       return false;
      }
    }
  
-   class AudioRecorder {
-     constructor() {
-       this._policy = {};
-       this._stream = null;
-       this._rec = null;
-       this._state = "idle";
-       this._mask = false;
-       this._headerSent = false;
-       this._micChunksSent = 0;
-       this._micOpenEmitted = false;
-       this._format = null;
-       this._wsClient = null; // preferred explicit binding
-       this._log = window.console || {};
-       this._hud = window?.DiagHUD || window?.DiagHud || null;
-+      this._lastMaskChunkAt = 0; // ms timestamp of last keepalive chunk while masked
+   function sendJson(frame) {
+     try {
+       sendRaw(JSON.stringify(frame));
+     } catch (err) {
+       console.error("WSClient sendJson error", err);
      }
+   }
  
-     /* ---------------- Policy ---------------- */
+   function sendPing() {
+     if (!socket || socket.readyState !== WebSocket.OPEN) return;
+     lastPingAt = Date.now();
+     updateState({ lastPingAt });
+-    sendJson({ type: "ping" });
++    sendJson({ type: "client.ping", ts: lastPingAt });
+   }
  
-     setPolicy(policyObj) {
-       this._policy = policyObj || {};
-       this._log?.info?.("rec_policy_loaded", this._policy);
-       // DIAG (if HUD enabled)
-       this._sendDiag("rec_policy_loaded", {
-         media: this.policy().media || {},
-         capture: this.policy().capture || {}
-       }, "info");
+   function startHeartbeat() {
+     clearHeartbeat();
+     sendPing();
+     heartbeatTimerId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
+     updateState({ heartbeatTimerId });
+   }
+ 
+   function attemptAutoResume() {
+     const resume = getResumeState();
+     if (!resume) {
+       return false;
      }
- 
-     policy() { return this._policy || {}; }
- 
-     /* ---------------- WebSocket binding & selection ---------------- */
- 
-     // Allow app code to explicitly inject the chat WS (best)
-     setWsClient(ws) { this._wsClient = ws || null; }
- 
-     // Find the right WS: prefer injected; else ChatWSClient; else WSClient.
-     // If multiple exist, prefer one whose protocol indicates chat (e.g., 'chat.v2').
-     _pickGlobalWs() {
-       const candidates = [];
-@@ -155,63 +156,58 @@
- 
-     async startMicCaptureIfIdle() {
-       if (this._state === "error") return false;
- 
-       if (!this._stream) {
-         try { await this.start(); } catch { return false; }
-       }
-       if (!this._stream) return false;
- 
-       if (this._rec && this._rec.state === "recording") return true;
- 
-       const ok = this._setupRecorderFromPolicy();
-       if (!ok) return false;
- 
-       this._emitMicOpen();
-       this._emitHudState("Listening");
-       this._state = "recording";
-       return true;
+     if (Date.now() >= resume.expiresAt) {
+       clearResumeState();
+       updateState({ resumeError: "invalid" });
+       recordClientBannerEvent("ws.auto_resume.expired", { expires_at_ms: resume.expiresAt });
+       return false;
      }
- 
-     /* ---------------- TTS mask ---------------- */
- 
-     handleTtsStart() {
-       if ((this.policy().capture || {}).mask_during_tts) {
-         this._mask = true;
--        try { this._rec?.pause?.(); } catch (err) {
--          this._log?.warn?.("rec=pause_failed %o", err);
--        }
-+        this._lastMaskChunkAt = 0;
-+        // DO NOT pause() here; recorder must keep running to generate keepalive chunks.
-       }
+     const state = AppState.getState();
+     if (autoResumeAttemptToken === resume.token) {
+       return false;
      }
- 
-     handleTtsEnd() {
-       this._mask = false;
--      if (this._rec?.state === "paused") {
--        try { this._rec.resume(); } catch (err) {
--          this._log?.warn?.("rec=resume_failed %o", err);
--        }
--      }
-+      if (this._rec?.state === "paused") { try { this._rec.resume(); } catch {} }
+     autoResumeAttemptToken = resume.token;
+@@ -1090,57 +1090,65 @@
+       console.error("Invalid info frame", frame);
+       close("bad_info_frame");
+       return;
      }
- 
-     /* ---------------- Recorder setup (Opus-only) ---------------- */
- 
-     _setupRecorderFromPolicy() {
-       if (!this._stream) return false;
-       const mp = this.policy().media || {};
-       const cp = this.policy().capture || {};
-       const supported = !!(window.MediaRecorder && MediaRecorder.isTypeSupported(OPUS_MIME));
- 
-       if (mp.asr_input !== "webm_opus") {
-         this._log?.error?.("rec=policy_media_unsupported input=%s", mp.asr_input);
-         this._hud?.banner?.("Voice capture policy not supported on this client.", "error");
-         this._state = "error";
-         return false;
-       }
-       if (!supported) {
-         this._log?.error?.("rec=webm_opus_unsupported no_pcm_fallback=true");
-         this._hud?.banner?.("This browser does not support WebM/Opus. Voice capture disabled.", "error");
-         this._state = "error";
-         return false;
-       }
- 
-       try {
-         this._rec = new MediaRecorder(this._stream, { mimeType: OPUS_MIME });
-@@ -229,51 +225,63 @@
-       this._sendAudioHeader(this._format); // idempotent via _headerSent
- 
-       // Wire events & start with timeslice (CRITICAL)
-       const slice = Math.max(MIN_TIMESLICE_MS, Number(cp.timeslice_ms ?? DEFAULT_TIMESLICE_MS) || DEFAULT_TIMESLICE_MS);
-       this._micChunksSent = 0;
-       this._rec.ondataavailable = (e) => this._onWebmData(e);
-       this._rec.onerror = (ev) => this._log?.error?.("rec=media_recorder_error %o", ev);
-       this._rec.onstop  = () => { this._rec = null; if (this._state !== "error") this._state = "idle"; };
- 
-       try {
-         this._rec.start(slice);
-       } catch (err) {
-         this._log?.error?.("rec=media_recorder_start_failed %o", err);
-         this._hud?.banner?.("Failed to start mic recorder.", "error");
-         this._state = "error";
-         return false;
-       }
- 
-       this._log?.info?.("rec=webm_opus_started timeslice_ms=%d", slice);
-       this._sendDiag("rec=webm_opus_started", { timeslice_ms: slice }, "info");
-       return true;
+     expectInfoFrame = false;
+     clearInfoWatchdog();
+     resetRateLimitRecovery();
+     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
+     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
+     if (resumeToken && resumeTtlMs) {
+       assignResume(resumeToken, resumeTtlMs);
+     } else {
+       clearResumeState();
      }
+     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
+     const audioPlayer = getAudioPlayer();
+     if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+       audioPlayer.setDescriptor(descriptor);
+     }
+     updateState({
+       connectionState: "connected",
+       sid: meta.sid,
+       infoFrame: frame,
+       resumeError: null
+     });
+-    startHeartbeat();
+     flushClientBannerQueue();
+   }
  
-     async _onWebmData(event) {
-       if (!event?.data || event.data.size === 0) return;
--      if (this._mask) return;
-+      if (this._mask) {
-+        const cap = this.policy().capture || {};
-+        if (cap.mask_keepalive_enable) {
-+          const now = Date.now();
-+          const interval = Math.max(1000, Number(cap.mask_keepalive_ms ?? 5000));
-+          if (now - this._lastMaskChunkAt < interval) {
-+            return; // drop most masked chunks
-+          }
-+          this._lastMaskChunkAt = now; // allow this one keepalive chunk to pass
-+        } else {
-+          return; // fully drop during mask if keepalive disabled
-+        }
-+      }
-       const ws = this._getWsClient();
-       if (!ws) return;
+-  function handlePongFrame() {
+-    if (typeof lastPingAt === "number") {
+-      const latency = Math.max(0, Date.now() - lastPingAt);
++  function handlePongFrame(frame) {
++    const now = Date.now();
++    let reference = null;
++    if (frame && typeof frame.echo === "number") {
++      reference = frame.echo;
++    } else if (frame && typeof frame.t === "number") {
++      reference = frame.t;
++    } else if (typeof lastPingAt === "number") {
++      reference = lastPingAt;
++    }
++    if (typeof reference === "number") {
++      const latency = Math.max(0, now - reference);
+       updateState({ latencyMs: latency });
+     }
+   }
  
-       // Ensure header precedes first chunk (belt & suspenders)
-       if (!this._headerSent && this._format) {
-         this._sendAudioHeader(this._format);
-         if (!this._headerSent) return; // still couldn't send; drop this chunk
-       }
- 
-       try {
-         const buffer = await event.data.arrayBuffer();
-         ws.sendBinary(new Uint8Array(buffer), { lane: "mic", dropIfBusy: false });
-         this._micChunksSent += 1;
-         if (this._micChunksSent % 20 === 0) {
-           this._sendDiag("mic_progress", { chunks: this._micChunksSent }, "debug");
+   function handleChatHistoryFrame(frame) {
+     const view = window.TranscriptView;
+     const messages = Array.isArray(frame.messages) ? frame.messages : [];
+     if (view && typeof view.handleChatMessage === "function" && messages.length) {
+       for (const message of messages) {
+         try {
+           view.handleChatMessage(message);
+         } catch (err) {
+           console.warn("TranscriptView chat history handler error", err);
+           break;
          }
-       } catch (err) {
-         this._log?.warn?.("rec=webm_chunk_send_failed %o", err);
-         this._sendDiag("evt=mic_chunk_send_failed",
-           err && err.message ? { message: String(err.message).slice(0, 128) } : null,
-           "warning");
        }
      }
+   }
  
-     _sendAudioHeader(info) {
+   function handleErrorFrame(frame) {
+     console.error("WS error frame", frame);
+     const errorMeta = {};
+     if (frame && typeof frame.code === "string") {
+       errorMeta.code = truncateBannerString(frame.code, 64);
+     }
+@@ -1159,84 +1167,95 @@
+       clearResumeState();
+       updateState({ resumeError: "invalid" });
+     }
+     if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+       try {
+         window.WSErrorUI.handleFrame(frame, {
+           scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
+         });
+       } catch (err) {
+         console.warn("Error handler threw", err);
+       }
+     }
+     if (isResumeInvalid) {
+       close("resume_invalid");
+     }
+   }
+ 
+   function handleMessageFrame(frame) {
+     if (frame.type === "keepalive") {
+       // Some transports may emit a keepalive frame before the info frame has
+       // been sent. Treat it as a no-op and continue waiting for the info
+       // frame so we do not close the connection prematurely.
+       return;
+     }
+ 
++    if (frame.type === "server.ping") {
++      const response = { type: "client.pong", ts: Date.now() };
++      if (typeof frame.ts === "number") {
++        response.echo = frame.ts;
++      }
++      sendJson(response);
++      return;
++    }
++
+     if (frame.type === "ping") {
+       sendJson({ type: "pong", t: Date.now() });
+       return;
+     }
+ 
+     if (frame.type === "policy.interaction") {
+       const sanitized = sanitizePolicyFrame(frame);
+       dispatchFrame(sanitized);
+       return;
+     }
+ 
+     if (frame.type === "server.banner") {
+       handleServerBannerFrame(frame);
+       return;
+     }
+ 
+     if (expectInfoFrame) {
+       if (frame.type === "chat.history") {
+         handleChatHistoryFrame(frame);
+       } else if (frame.type === "error") {
+         handleErrorFrame(frame);
+         return;
+       } else if (frame.type !== "info") {
+         console.error("Expected info frame first, received", frame.type);
+         close("bad_info_sequence");
+         return;
+       }
+       if (frame.type === "info") {
+         handleInfoFrame(frame);
+       }
+     } else if (frame.type === "info") {
+       handleInfoFrame(frame);
++    } else if (frame.type === "server.pong") {
++      handlePongFrame(frame);
+     } else if (frame.type === "pong") {
+-      handlePongFrame();
++      handlePongFrame(frame);
+     } else if (frame.type === "error") {
+       handleErrorFrame(frame);
+     } else if (frame.type === "tts.start") {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+         audioPlayer.handleTtsStart(frame);
+       }
+     } else if (frame.type === "tts.end") {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+     } else if (frame.type === "start_listening") {
+       const recorder = window.AudioRecorder;
+       if (recorder) {
+         const handler = typeof recorder.startListening === "function"
+           ? recorder.startListening
+           : (typeof recorder.handleStartListening === "function" ? recorder.handleStartListening : null);
+         if (handler) {
+           try {
+             handler.call(recorder, frame);
+           } catch (err) {
+             console.warn("AudioRecorder start_listening handler error", err);
+           }
+         }
+@@ -1296,50 +1315,51 @@
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(data);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+       return;
+     }
+     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+       const chunk = data instanceof ArrayBuffer
+         ? data
+         : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(chunk);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
+       return;
+     }
+     console.warn("Unknown WS frame type", data);
+   }
+ 
+   function attachSocket(ws) {
+     ws.__intentionalClose = false;
+     const handlers = {
+       open: () => {
+         updateState({ websocket: ws });
++        startHeartbeat();
+       },
+       message: parseFrame,
+       error: (event) => {
+         console.error("WebSocket error", event);
+         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
+       },
+       close: (event) => {
+         const expected = ws.__intentionalClose === true;
+         if (socket === ws) {
+           socket = null;
+           expectInfoFrame = true;
+           clearInfoWatchdog();
+         }
+         clearHeartbeat();
+         updateState({ websocket: null });
+         let resumed = false;
+         if (!expected) {
+           resumed = attemptAutoResume();
+         }
+         if (!resumed) {
+           updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+         }
+         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
+       }
+     };
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 51263d7e5679c9b8f5ff5d9f8b4954c8aec0810f..681a3f09269cde9bfcf063395d8c62f53e71fbd6 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -36,51 +36,52 @@ from app.voice_v2 import (
+ )
+ from app.ws.validator import validate_audio_header_against_policy, validate_frame
+ 
+ try:  # pragma: no cover - uvicorn is an optional dependency in tests
+     from uvicorn.protocols.utils import ClientDisconnected
+ except Exception:  # pragma: no cover - fallback when uvicorn missing
+     class ClientDisconnected(Exception):  # type: ignore[no-redef]
+         """Fallback placeholder when uvicorn is unavailable."""
+ 
+ 
+ CHAT_V2_SUBPROTOCOL = "chat.v2"
+ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
+ BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ ALLOW_AUDIO_WITHOUT_ASR = os.getenv("ALLOW_AUDIO_WITHOUT_ASR", "0") == "1"
+ PING_MIN_INTERVAL_MS = 500
+ RATE_LIMIT_CAPACITY = 25
+ RATE_LIMIT_WINDOW_SECONDS = 2.0
+ RATE_LIMIT_CLOSE_CODE = 1013
+ _AUDIO_VIOLATION_LIMIT = 3
+ 
+ AUDIO_SEQ_WINDOW = 8
+ 
+ QUEUE_ON_THRESHOLD = 12
+ QUEUE_OFF_THRESHOLD = 6
+ 
+-_DEFAULT_WS_PING_INTERVAL_MS = 25_000
++_DEFAULT_WS_PING_INTERVAL_MS = 20_000
++_HEARTBEAT_TIMEOUT_MS = 30_000
+ 
+ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
+ 
+ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
+ 
+ EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
+ 
+ _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
+ _MIC_OPEN_TIMEOUT_SECONDS = 2.5
+ 
+ _OUTBOUND_ALLOWED_TYPES = {
+     "policy.interaction",
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
+     "asr.partial",
+     "asr.final",
+     "error",
+     "chat.message",
+     "chat.history",
+     "dialog.plan",
+     "hud.nudge",
+ }
+@@ -198,50 +199,53 @@ class EngineHooks(Protocol):
+ 
+     def on_audio(self, sid: str, chunk: bytes, seq: int) -> Any:  # pragma: no cover - signature stub
+         """Handle a binary audio chunk from the client."""
+ 
+     def on_close(self, sid: str, code: int, reason: Optional[str]) -> Any:  # pragma: no cover - signature stub
+         """Handle the WebSocket closing."""
+ 
+ 
+ @dataclass
+ class AdapterContext:
+     """Per-connection state."""
+ 
+     sid: str
+     headers: Dict[str, str]
+     user_id: Optional[str] = None
+     is_admin: bool = False
+     principal: Dict[str, Any] = field(default_factory=dict)
+     audio_seq: int = 0
+     audio_expected_seq: int = 0
+     audio_highest_seq: int = -1
+     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
+     audio_window: int = AUDIO_SEQ_WINDOW
+     audio_chunks_recv: int = 0
+     audio_bytes_recv: int = 0
+     last_pong_sent_ms: int = 0
++    last_client_activity_ms: int = 0
++    last_client_pong_ms: int = 0
++    last_server_ping_ms: int = 0
+     ip: Optional[str] = None
+     sid_bucket: Optional[TokenBucket] = None
+     ip_bucket: Optional[TokenBucket] = None
+     audio_profile: Optional[Dict[str, Any]] = None
+     accepting_audio: bool = True
+     audio_violation_count: int = 0
+     outbound_queue_depth: int = 0
+     backpressure_state: Literal["off", "on"] = "off"
+     outbox: asyncio.Queue[Dict[str, Any]] | None = None
+     outbound_task: asyncio.Task[None] | None = None
+     subscription_token: Optional[str] = None
+     audio_subscription_token: Optional[str] = None
+     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+     asr_ready: bool = False
+     asr_subscription_token: Optional[str] = None
+     asr_subscription_bus: Optional[Any] = None
+     asr_open_subscription_token: Optional[str] = None
+     server_keepalive_task: asyncio.Task[None] | None = None
+     last_policy_interaction: Optional[Dict[str, Any]] = None
+     policy_snapshot: Optional[Dict[str, Any]] = None
+     partial_seq: int = 0
+     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+     send_lock: asyncio.Lock | None = None
+     tts_end_ts: Optional[float] = None
+     diag_audio_seen: bool = False
+@@ -475,50 +479,51 @@ class ChatV2Adapter:
+         # ---- END RUNTIME BANNER ----
+ 
+         now_ms = int(time.time() * 1000)
+         info_frame: Dict[str, Any] = {
+             "type": "info",
+             "protocol": CHAT_V2_SUBPROTOCOL,
+             "sid": sid,
+             "ts_ms": now_ms,
+             "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
+         }
+         info_frame["meta"] = {"sid": sid}
+         policy_snapshot = self._policy_snapshot()
+         if policy_snapshot:
+             info_frame["policy"] = policy_snapshot
+         await self._send_json(send, sid, info_frame)
+         _log.info("evt=ws_info_sent sid=%s", sid)
+ 
+         ctx = AdapterContext(
+             sid=sid,
+             headers=dict(headers),
+             principal=principal,
+             user_id=sub,
+             is_admin=is_admin,
+         )
+         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
++        ctx.last_client_activity_ms = now_ms
+ 
+         token = current_sid.set(ctx.sid)
+         try:
+             if not (
+                 inspect.iscoroutinefunction(self._on_open_and_greet)
+                 and inspect.iscoroutinefunction(self._invoke_engine)
+             ):
+                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
+                 raise RuntimeError("WebSocket async contract violation")
+ 
+             ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+             client = scope.get("client")
+             ctx.ip = client[0] if isinstance(client, tuple) and client else None
+             if ctx.ip:
+                 ctx.ip_bucket = self._ip_buckets.setdefault(
+                     ctx.ip,
+                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+                 )
+ 
+             self._contexts[ctx.sid] = ctx
+             if getattr(self, "asr_runtime", None) is None:
+                 try:
+                     from app.voice_v2.asr_runtime import ASRRuntime
+                     from app.services.streaming_asr.deepgram_client import DeepgramClient
+ 
+@@ -708,54 +713,71 @@ class ChatV2Adapter:
+             return self._HandleResult(False, 1009, "frame_too_large")
+ 
+         try:
+             frame = json.loads(payload_bytes.decode("utf-8"))
+         except json.JSONDecodeError as exc:
+             meta["error"] = "bad_json"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
+             return self._HandleResult(True)
+ 
+         if not isinstance(frame, dict):
+             meta["error"] = "schema_invalid"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
+             return self._HandleResult(True)
+ 
+         raw_type = frame.get("type")
+         if not isinstance(raw_type, str):
+             meta["error"] = "schema_invalid"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
+             return self._HandleResult(True)
+ 
+         frame_type = raw_type
+         meta["frame_type"] = frame_type
++        now_ms = int(time.time() * 1000)
++        ctx.last_client_activity_ms = now_ms
++
++        if frame_type == "client.ping":
++            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
++            if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
++                ctx.last_pong_sent_ms = now_ms
++                client_ts = frame.get("ts")
++                payload = {"type": "server.pong", "ts": now_ms}
++                if isinstance(client_ts, int):
++                    payload["echo"] = client_ts
++                await self._send_json(send, ctx.sid, payload)
++            return self._HandleResult(True)
++
++        if frame_type == "client.pong":
++            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
++            ctx.last_client_pong_ms = now_ms
++            return self._HandleResult(True)
+ 
+         if frame_type == "ping":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+-            now_ms = int(time.time() * 1000)
+             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
+                 ctx.last_pong_sent_ms = now_ms
+                 reply_ts = frame.get("t")
+                 if not isinstance(reply_ts, int):
+                     reply_ts = now_ms
+                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
+             return self._HandleResult(True)
+ 
+         if frame_type == "chat.user":
+             text = frame.get("text")
+             if not isinstance(text, str):
+                 meta["error"] = "schema_invalid"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                 await self._send_error(
+                     send,
+                     ctx.sid,
+                     "schema_invalid",
+                     "chat.user requires a string text field",
+                 )
+                 return self._HandleResult(False, 1003, "schema_invalid")
+ 
+             try:
+                 text_bytes = text.encode("utf-8")
+             except UnicodeEncodeError:
+                 meta["error"] = "bad_utf8"
+@@ -949,50 +971,51 @@ class ChatV2Adapter:
+             }
+             event_meta = sanitized_event.get("meta")
+             if event_meta:
+                 log_meta["event_meta"] = event_meta
+             if ctx.client_banner_info:
+                 log_meta["info"] = ctx.client_banner_info
+             meta["client_banner"] = {"label": sanitized_event.get("label")}
+             bus.publish(
+                 {
+                     "type": EVT_CLIENT_BANNER,
+                     "sid": ctx.sid,
+                     "who": "client",
+                     "source": "ws_client",
+                     "meta": log_meta,
+                 }
+             )
+ 
+         await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+         await self._invoke_engine("on_json", ctx.sid, frame)
+         return self._HandleResult(True)
+ 
+     async def _handle_binary(
+         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> _HandleResult:
+         byte_count = len(data)
++        ctx.last_client_activity_ms = int(time.time() * 1000)
+ 
+         limited = await self._check_rate_limit(ctx, send)
+         if limited is not None:
+             return limited
+ 
+         if byte_count > self.binary_limit_bytes:
+             await self._publish(
+                 EVT_WS_AUDIO_RECV,
+                 ctx.sid,
+                 {
+                     "byte_count": byte_count,
+                     "error": "frame_too_large",
+                     "ws": {"dir": "in", "size": byte_count},
+                 },
+             )
+             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
+             return self._HandleResult(False, 1009, "frame_too_large")
+ 
+         if not ctx.asr_ready:
+             if ALLOW_AUDIO_WITHOUT_ASR:
+                 _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
+             else:
+                 meta = {
+                     "byte_count": byte_count,
+                     "error": "audio_not_expected",
+@@ -1181,54 +1204,71 @@ class ChatV2Adapter:
+         }
+         preview = self._make_preview_from_bytes(payload_bytes)
+         if preview is not None:
+             meta["ws"]["preview"] = preview
+         await self._publish(EVT_WS_JSON_SEND, sid, meta)
+ 
+     async def _send_error(
+         self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
+     ) -> None:
+         payload = {"type": "error", "code": code, "detail": detail}
+         await self._send_json(send, sid, payload)
+ 
+     def _start_server_keepalive(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> None:
+         if self._ping_interval_ms <= 0 or ctx.server_keepalive_task is not None:
+             return
+ 
+         async def _run() -> None:
+             interval = self._ping_interval_ms / 1000.0
+             if interval <= 0:
+                 return
+             try:
+                 while True:
+                     await asyncio.sleep(interval)
++                    now_ms = int(time.time() * 1000)
++                    last_activity = ctx.last_client_activity_ms or 0
++                    if last_activity and now_ms - last_activity >= _HEARTBEAT_TIMEOUT_MS:
++                        _log.warning(
++                            "evt=ws_heartbeat_missed sid=%s last_client_ms=%s",
++                            ctx.sid,
++                            last_activity,
++                        )
++                        await send(
++                            {
++                                "type": "websocket.close",
++                                "code": 1001,
++                                "reason": "heartbeat_timeout",
++                            }
++                        )
++                        return
+                     payload = json.dumps(
+-                        {"type": "keepalive", "ts": int(time.time() * 1000)},
++                        {"type": "server.ping", "ts": now_ms},
+                         separators=(",", ":"),
+                     )
++                    ctx.last_server_ping_ms = now_ms
+                     await send({"type": "websocket.send", "text": payload})
+             except asyncio.CancelledError:
+                 raise
+             except Exception:  # pragma: no cover - defensive
+                 _log.exception("evt=ws_keepalive_failed sid=%s", ctx.sid)
+             finally:
+                 ctx.server_keepalive_task = None
+ 
+         ctx.server_keepalive_task = asyncio.create_task(_run())
+ 
+     async def _stop_server_keepalive(self, ctx: AdapterContext) -> None:
+         task = ctx.server_keepalive_task
+         ctx.server_keepalive_task = None
+         if task is None:
+             return
+         task.cancel()
+         with contextlib.suppress(asyncio.CancelledError):
+             await task
+ 
+     def _start_outbound_bridge(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> None:
+         loop = asyncio.get_running_loop()
+         ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
+ 
