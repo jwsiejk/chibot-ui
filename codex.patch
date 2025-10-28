@@ -1,238 +1,69 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index c531c48df44cb6f2d005a36b68096470cc681c63..233a8e86b33ed80d8cd21c8ef35dc6e9db76fe83 100644
+index 233a8e86b33ed80d8cd21c8ef35dc6e9db76fe83..5297fb5da43ea8c815541a7a6481854938aa6ff8 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -1036,143 +1036,176 @@
-     const latencyHint = document.getElementById('latencyHint');
-     const voiceLabel = document.getElementById('voiceLabel');
-     const localeLabel = document.getElementById('localeLabel');
-     const textChatForm = document.getElementById('textChatForm');
-     const textChatInput = document.getElementById('textChatInput');
-     
-     // === Added: chat submit wiring + fallback PCM16 streamer and mic helpers ===
-     // Send typed chat to the server using chat.user frames
-     if (textChatForm) {
-       textChatForm.addEventListener('submit', (e) => {
-         e.preventDefault();
-         const text = (textChatInput && textChatInput.value || '').trim();
-         if (!text) return;
-         try {
-           WSClient && WSClient.send && WSClient.send({ type: 'chat.user', text });
-           textChatInput.value = '';
-         } catch (err) {
-           console.error('chat.user send failed', err);
-         }
-       });
+@@ -1,40 +1,59 @@
+ (() => {
+   // Build stamp (diagnostic only). Prints the ?v= build id if present on this script.
+   try {
+     const el =
+       document.currentScript ||
+       document.querySelector('script[src*="/static/js/app.js"]');
+     const build = el ? new URL(el.src, location.href).searchParams.get('v') : null;
+     if (build) {
+       window.__BUILD_SHA__ = build;
+       console.log('AskChip build:', build);
+     } else {
+       console.log('AskChip build: (no v param on app.js)');
      }
-     
-     // Fallback PCM16 mono @16kHz streamer, used only if AudioRecorder is absent or fails
-     const FallbackPCMStreamer = (() => {
-       const TARGET_RATE = 16000;
--      let ctx = null, source = null, processor = null, gain = null, stream = null, running = false;
--      function base64FromArrayBuffer(ab) {
--        const bytes = new Uint8Array(ab);
--        let binary = '';
--        const len = bytes.length;
--        for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
--        return btoa(binary);
--      }
-+      let ctx = null, source = null, processor = null, gain = null, stream = null, running = false, headerSent = false;
-       function downsampleFloat32(input, inRate, outRate) {
-         if (outRate === inRate) return input;
-         const ratio = inRate / outRate;
-         const newLen = Math.floor(input.length / ratio);
-         const result = new Float32Array(newLen);
-         let i = 0, j = 0;
-         while (i < newLen) {
-           const start = Math.floor(j);
-           const end = Math.min(Math.floor(j + ratio), input.length);
-           let sum = 0, count = 0;
-           for (let k = start; k < end; k++) { sum += input[k]; count++; }
-           result[i++] = count ? (sum / count) : 0;
-           j += ratio;
-         }
-         return result;
-       }
-       function floatTo16BitPCM(float32) {
-         const out = new Int16Array(float32.length);
-         for (let i = 0; i < float32.length; i++) {
-           const s = Math.max(-1, Math.min(1, float32[i]));
--          out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-+          const sample = s < 0 ? s * 0x8000 : s * 0x7fff;
-+          out[i] = Math.round(sample);
-         }
-         return out;
-       }
-+      function ensureHeader() {
-+        if (headerSent) return true;
-+        const WSClient = window.WSClient;
-+        if (!WSClient || typeof WSClient.send !== 'function' || typeof WSClient.isConnected !== 'function' || !WSClient.isConnected()) {
-+          return false;
-+        }
+   } catch (_) {}
+ 
++  (function wrapDiag() {
++    const ctr = (window.__WS_DIAG__ = window.__WS_DIAG__ || { types: {} });
++    function maybeWrap() {
++      if (!window.WSClient || typeof WSClient.send !== 'function' || WSClient.__wrapped_send__) return;
++      const orig = WSClient.send.bind(WSClient);
++      WSClient.send = function (frame) {
 +        try {
-+          WSClient.send({
-+            type: 'audio.header',
-+            format: 'pcm',
-+            sample_rate: TARGET_RATE,
-+            channels: 1,
-+            seq_start: 0
-+          });
-+          headerSent = true;
-+          return true;
-+        } catch (err) {
-+          console.error('FallbackPCM header send failed', err);
-+          return false;
-+        }
-+      }
-       async function start() {
-         if (running) return true;
-         const ws = WSClient && WSClient.socket;
-         if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-         try {
-           stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-         } catch (err) {
-           console.error('FallbackPCM getUserMedia failed', err);
-           return false;
-         }
--        ctx = new (window.AudioContext || window.webkitAudioContext)();
-+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-+        ctx = new AudioContextCtor({ sampleRate: TARGET_RATE });
-         try { await ctx.resume(); } catch {}
-         source = ctx.createMediaStreamSource(stream);
-         processor = ctx.createScriptProcessor(4096, 1, 1);
--        gain = ctx.createGain(); gain.gain.value = 0;
--        source.connect(processor); processor.connect(gain); gain.connect(ctx.destination);
--        // announce start
--        try { WSClient.send({ type: 'audio.start', audio: { codec: 'pcm_s16le', rate_hz: TARGET_RATE, channels: 1 } }); } catch {}
-+        gain = ctx.createGain();
-+        gain.gain.value = 0;
-+        source.connect(processor);
-+        processor.connect(gain);
-+        gain.connect(ctx.destination);
-+        ensureHeader();
-+        running = true;
-         processor.onaudioprocess = (ev) => {
-+          if (!running) return;
-           try {
-+            if (!headerSent) ensureHeader();
-             const input = ev.inputBuffer.getChannelData(0);
-             const fsIn = ctx.sampleRate || 48000;
-             const f32 = downsampleFloat32(input, fsIn, TARGET_RATE);
-             const i16 = floatTo16BitPCM(f32);
--            const b64 = base64FromArrayBuffer(i16.buffer);
--            WSClient.send({ type: 'audio.chunk', audio: { data: b64, encoding: 'base64' } });
-+            const sent = WSClient && typeof WSClient.sendBinary === 'function'
-+              ? WSClient.sendBinary(i16.buffer, { dropIfBusy: true })
-+              : false;
-+            if (!sent) {
-+              console.warn('fallback pcm failed to send chunk');
-+            }
-           } catch (err) {
-             console.warn('fallback pcm process error', err);
-           }
-         };
--        running = true;
-         return true;
-       }
-       function stop() {
-         if (!running) return;
--        try { WSClient.send({ type: 'audio.end' }); } catch {}
-         try { if (processor) processor.disconnect(); } catch {}
-         try { if (gain) gain.disconnect(); } catch {}
-         try { if (source) source.disconnect(); } catch {}
--        if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
-+        if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch {} }
-         if (ctx) { try { ctx.close(); } catch {} }
-         stream = source = processor = gain = ctx = null;
-+        headerSent = false;
-         running = false;
-       }
--      return { start, stop, isRunning: () => running };
-+      function markAsrReady() {
-+        headerSent = false;
-+        if (running) {
-+          ensureHeader();
-+        }
-+      }
-+      return { start, stop, isRunning: () => running, markAsrReady };
-     })();
--    
-+
-     let __MIC_RUNNING__ = false;
-     async function tryStartMic(trigger) {
-       const ws = WSClient && WSClient.socket;
-       if (!ws || ws.readyState !== WebSocket.OPEN) return;
-       if (__MIC_RUNNING__) return;
-       if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-         try {
-           await window.AudioRecorder.start();
-           __MIC_RUNNING__ = true;
-           return;
-         } catch (err) {
-           console.warn('AudioRecorder.start failed; falling back', err);
-         }
-       }
-+      if (trigger !== 'asr.ready') {
-+        return;
-+      }
-       const ok = await FallbackPCMStreamer.start();
-       if (ok) __MIC_RUNNING__ = true;
-     }
-     function stopMic(reason) {
-       __MIC_RUNNING__ = false;
-       try { if (window.AudioRecorder && typeof window.AudioRecorder.stop === 'function') window.AudioRecorder.stop(); } catch {}
-       try { FallbackPCMStreamer.stop(); } catch {}
-     }
-     // === end additions ===
-     
- 
-     const voiceState = { voiceId: null, locale: null };
- 
-     const modeSuggestionsEl = document.getElementById('modeSuggestions');
-     const modeSuggestionsLabelEl = document.getElementById('modeSuggestionsLabel');
-     const modeSuggestionsChipsEl = document.getElementById('modeSuggestionsChips');
-     const modeSuggestionsState = { mode: null, items: [] };
- 
-     function formatModeLabel(value) {
-       if (typeof value !== 'string') return '';
-       const normalized = value.trim().replace(/[_\s]+/g, ' ');
-       if (!normalized) return '';
-       return normalized.charAt(0).toUpperCase() + normalized.slice(1);
-     }
- 
-@@ -1962,50 +1995,57 @@ window.addEventListener('turn.state', (event) => {
-   }
- });
- 
- // Assistant TTS finished → open mic after optional delay
- window.addEventListener('tts.end', () => {
-   const release = () => {
-     DiagRecorder.maybeStart('ready');
-     try {
-       if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
-         window.AudioRecorder.start();
-       }
-     } catch (err) {
-       console.error('AudioRecorder start after tts.end failed:', err);
-     }
-   };
- 
-   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
-     setTimeout(release, POST_TTS_RELEASE_MS);
-   } else {
-     release();
-   }
- });
- 
- window.addEventListener('asr.ready', () => {
-   tryStartMic('asr.ready');
-+  try {
-+    if (FallbackPCMStreamer && typeof FallbackPCMStreamer.markAsrReady === 'function') {
-+      FallbackPCMStreamer.markAsrReady();
++          const t = frame && frame.type;
++          if (t) ctr.types[t] = (ctr.types[t] || 0) + 1;
++        } catch {}
++        return orig(frame);
++      };
++      WSClient.__wrapped_send__ = true;
 +    }
-+  } catch (err) {
-+    console.warn('FallbackPCMStreamer markAsrReady failed', err);
-+  }
++
++    maybeWrap();
++    window.addEventListener('ws.open', maybeWrap);
++  })();
++
+   const STATIC_JS_BASE = (() => {
+     if (typeof document === "undefined") {
+       return "/static/js/";
+     }
+ 
+     const script = document.currentScript || document.querySelector('script[src$="/static/js/app.js"]');
+     if (script && script.src) {
+       try {
+         const url = new URL(script.src, window.location.href);
+         return url.pathname.replace(/[^/]+$/, "");
+       } catch (err) {
+         console.warn("Failed to parse static script URL", err);
+       }
+     }
+ 
+     return "/static/js/";
+   })();
+ 
+   const VERSION_QUERY = (() => {
+     if (typeof document === "undefined") {
+       return "";
+     }
+     try {
+       const current =
+         document.currentScript ||
+@@ -2026,56 +2045,51 @@ window.addEventListener('asr.ready', () => {
+   }
    if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
      try {
        const maybePromise = window.AudioRecorder.start();
@@ -257,338 +88,35 @@ index c531c48df44cb6f2d005a36b68096470cc681c63..233a8e86b33ed80d8cd21c8ef35dc6e9
  window.addEventListener('ws.open', () => {
    tryStartMic('ws.open');
    try {
-     if (WSClient && WSClient.send) {
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index 50f901ef8a4c5007c2748544c5de17d9b71d0b50..a608bd7ae9997bba051fe936ed9e7f667e99ea1d 100644
---- a/app/static/js/audio_recorder.js
-+++ b/app/static/js/audio_recorder.js
-@@ -92,50 +92,51 @@
- 
-   const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
-   const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
- 
-   function emitCustomEvent(type, detail) {
-     try {
-       window.dispatchEvent(new CustomEvent(type, { detail }));
-     } catch (err) {
-       console.warn("AudioRecorder event dispatch failed", type, err);
+-    if (WSClient && WSClient.send) {
+-      WSClient.send({
+-        type: 'client.banner',
+-        event: { label: 'open-ok', ts_ms: Date.now() },
+-        info: { build: window.__BUILD_SHA__ ?? null, page: location.pathname }
+-      });
++    if (WSClient && typeof WSClient.send === 'function') {
+       WSClient.send({
+         type: 'client.banner',
+         event: { label: 'ws.open', ts_ms: Date.now() },
+         info: { build: window.__BUILD_SHA__ ?? null }
+       });
      }
-   }
+   } catch {}
+ });
+ window.addEventListener('ws.close', () => {
+   stopMic('ws');
+   resetSuggestions();
+   DiagRecorder.stop('ws');
+ });
  
-   const recorder = {
-     _stream: null,
-     _startPromise: null,
-     _mediaRecorder: null,
-     _audioCtx: null,
-     _sourceNode: null,
-     _processorNode: null,
-     _muteNode: null,
-     _downsampler: null,
-     _descriptor: null,
-     _pendingDescriptor: null,
-     _vendor: null,
-     _asrReady: false,
-+    _headerSent: false,
-     _mask: { active: false, holdMs: 0, timerId: null },
-     _listening: false,
-     _micOpenEmitted: false,
-     _bargeInEnabled: true,
+     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
+     if (urlParams.get('wsSmoke') === '1') {
+       const transitions = [];
+       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
  
-     async start() {
-       if (this._stream) {
-         this._setListening(true);
-         this._maybeActivateCapture();
-         return this._stream;
-       }
-       if (this._startPromise) return this._startPromise;
-       const request = navigator.mediaDevices
-         .getUserMedia({
-           audio: {
-             channelCount: 1,
-             echoCancellation: true,
-             noiseSuppression: true,
-             autoGainControl: false
-           }
-         })
-         .then((stream) => {
-           this._stream = stream;
-           if (this._pendingDescriptor) {
-             this._activateDescriptor(this._pendingDescriptor);
-@@ -151,56 +152,58 @@
-         })
-         .finally(() => {
-           this._startPromise = null;
-         });
-       this._startPromise = request;
-       return request;
-     },
- 
-     stop() {
-       this._teardownEncoder();
-       if (this._stream) {
-         const tracks = this._stream.getTracks();
-         tracks.forEach((track) => {
-           try {
-             track.stop();
-           } catch (err) {
-             console.warn("Failed to stop track", err);
-           }
-         });
-         this._stream = null;
-       }
-       this._descriptor = null;
-       this._pendingDescriptor = null;
-       this._vendor = null;
-       this._asrReady = false;
-+      this._headerSent = false;
-       this._setMask(false);
-       this._setListening(false, { resetMicEvent: true });
-     },
- 
-     _teardownEncoder() {
-       this._asrReady = false;
-+      this._headerSent = false;
-       if (this._mediaRecorder) {
-         try {
-           if (this._mediaRecorder.state !== "inactive") {
-             this._mediaRecorder.stop();
-           }
-         } catch (err) {
-           console.warn("MediaRecorder stop error", err);
-         }
-         this._mediaRecorder.removeEventListener("dataavailable", this._handleWebmData);
-         this._mediaRecorder.removeEventListener("error", this._handleRecorderError);
-         this._mediaRecorder = null;
-         this._handleWebmData = null;
-         this._handleRecorderError = null;
-       }
-       if (this._processorNode) {
-         try {
-           this._processorNode.disconnect();
-         } catch (err) {
-           console.warn("Processor disconnect error", err);
-         }
-         this._processorNode.onaudioprocess = null;
-         this._processorNode = null;
-       }
-       if (this._muteNode) {
-         try {
-@@ -301,79 +304,111 @@
-         this._mask.timerId = null;
-       }
-       if (delayMs > 0) {
-         this._mask.timerId = setTimeout(() => {
-           this._mask.timerId = null;
-           this._setMask(false);
-         }, delayMs);
-       } else {
-         this._setMask(false);
-       }
-     },
- 
-     async handleAsrReady(frame) {
-       const descriptor = frame && frame.input;
-       const vendor = frame && frame.vendor;
-       if (!descriptor || !vendor) {
-         console.warn("Invalid asr.ready frame", frame);
-         return;
-       }
-       const normalized = {
-         container: String(descriptor.container || "").toLowerCase(),
-         codec: String(descriptor.codec || "").toLowerCase(),
-         rate_hz: Number(descriptor.rate_hz) || 0,
-         channels: Number(descriptor.channels) || 1
-       };
-+      this._headerSent = false;
-       this._pendingDescriptor = { vendor, descriptor: normalized };
-       try {
-         await this.start();
-       } catch (err) {
-         console.error("AudioRecorder start failed for asr.ready", err);
-         return;
-       }
-       if (this._pendingDescriptor) {
-         this._activateDescriptor(this._pendingDescriptor);
-         this._pendingDescriptor = null;
-       }
-     },
- 
-     _activateDescriptor(spec) {
-       if (!spec || !this._stream) return;
-       const { vendor, descriptor } = spec;
-       this._teardownEncoder();
-       this._vendor = vendor;
-       this._descriptor = descriptor;
-+      this._sendAudioHeader(descriptor);
-       if (descriptor.container === "webm" && descriptor.codec === "opus" && descriptor.rate_hz === 48000 && descriptor.channels === 1) {
-         this._setupWebmRecorder();
-       } else if (descriptor.container === "raw" && descriptor.codec === "pcm_s16le" && descriptor.rate_hz === 16000 && descriptor.channels === 1) {
-         this._setupPcmRecorder();
-       } else {
-         console.error("Unsupported ASR descriptor", descriptor);
-       }
-       this._maybeActivateCapture();
-     },
- 
-+    _sendAudioHeader(descriptor) {
-+      if (!descriptor || this._headerSent) return;
-+      const WSClient = window.WSClient;
-+      if (!WSClient || typeof WSClient.send !== "function" || typeof WSClient.isConnected !== "function" || !WSClient.isConnected()) {
-+        return;
-+      }
-+      let format = null;
-+      if (descriptor.container === "webm" && descriptor.codec === "opus") {
-+        format = "opus";
-+      } else if (descriptor.container === "raw" && descriptor.codec === "pcm_s16le") {
-+        format = "pcm";
-+      }
-+      if (!format) {
-+        return;
-+      }
-+      const frame = {
-+        type: "audio.header",
-+        format,
-+        sample_rate: descriptor.rate_hz,
-+        channels: descriptor.channels,
-+        seq_start: 0
-+      };
-+      try {
-+        WSClient.send(frame);
-+        this._headerSent = true;
-+      } catch (err) {
-+        console.error("Failed to send audio.header", err);
-+      }
-+    },
-+
-     _setupWebmRecorder() {
-       if (typeof MediaRecorder === "undefined") {
-         console.error("MediaRecorder not supported in this browser");
-         return;
-       }
-       const mimeType = "audio/webm;codecs=opus";
-       if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(mimeType)) {
-         console.error("MediaRecorder does not support", mimeType);
-         return;
-       }
-       try {
-         const recorder = new MediaRecorder(this._stream, { mimeType });
-         this._handleWebmData = (event) => {
-           const chunk = event.data;
-           if (!chunk || !chunk.size) return;
-           if (!this._canSend()) return;
-           this._sendChunk(chunk);
-         };
-         this._handleRecorderError = (event) => {
-           console.error("MediaRecorder error", event);
-         };
-         recorder.addEventListener("dataavailable", this._handleWebmData);
-         recorder.addEventListener("error", this._handleRecorderError);
-         this._mediaRecorder = recorder;
-         this._asrReady = true;
-@@ -485,45 +520,46 @@
-       this._scheduleMaskRelease(hold);
-     },
- 
-     async startListening() {
-       try {
-         await this.start();
-       } catch (err) {
-         console.error("AudioRecorder start_listening start failed", err);
-         return;
-       }
-       this._asrReady = true;
-       this._setMask(false);
-       this._setListening(true);
-     },
- 
-     async handleStartListening(frame) {
-       return this.startListening(frame);
-     },
- 
-     handleWsClose() {
-       this._teardownEncoder();
-       this._asrReady = false;
-       this._descriptor = null;
-       this._pendingDescriptor = null;
-       this._vendor = null;
-+      this._headerSent = false;
-       this._setMask(false);
-       this._setListening(false, { resetMicEvent: true });
-     }
-   };
- 
-   window.addEventListener("policy.interaction", (event) => {
-     recorder.handlePolicy(event && event.detail);
-   });
-   window.addEventListener("tts.start", (event) => {
-     recorder.handleTtsStart(event && event.detail);
-   });
-   window.addEventListener("tts.end", () => {
-     recorder.handleTtsEnd();
-   });
-   window.addEventListener("ws.close", () => {
-     recorder.handleWsClose();
-   });
- 
-   window.AudioRecorder = recorder;
- })();
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index ee65573ea4a559b62c45afe9573dfd609fade5cd..0d9d4b7ae62e51e025086ac5d4387f0dd46c5aa2 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1427,50 +1427,55 @@
- 
-     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
-     const bannerProtocols = Array.isArray(wsProtocols)
-       ? wsProtocols
-         .filter((proto) => typeof proto === "string" && proto)
-         .map((proto) => truncateBannerString(proto, 48))
-         .slice(0, 4)
-       : (typeof wsProtocols === "string" && wsProtocols ? truncateBannerString(wsProtocols, 48) : undefined);
-     recordClientBannerEvent("ws.open.request", {
-       resume: isResuming,
-       skip_rate_limit_cancel: Boolean(skipRateLimitCancel),
-       has_access_token: hasAccessToken,
-       url: bannerUrlMeta,
-       protocols: bannerProtocols,
-     });
-     console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
-     const logPayload = Array.isArray(wsProtocols)
-       ? { url: wsUrl, protocols: wsProtocols }
-       : { url: wsUrl, subprotocol: wsProtocols };
-     console.log("WS opening", logPayload);
- 
-     const tokenInfo = trackTokenFromUrl(wsUrl);
-     const ws = transportFactory(wsUrl, wsProtocols);
-     ws.__accessTokenInfo = tokenInfo;
-     ws.__handshakeToastShown = false;
-+    try {
-+      ws.binaryType = "arraybuffer";
-+    } catch (err) {
-+      console.warn("Failed to set WebSocket binaryType", err);
-+    }
- 
-     ws.onopen = () => {
-       // Lightweight breadcrumb; keep as console.log
-       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
-       recordClientBannerEvent("ws.socket.open", {
-         protocol: truncateBannerString(ws.protocol || (typeof wsProtocols === "string" ? wsProtocols : ""), 48),
-       });
-       flushClientBannerQueue();
-     };
- 
-     ws.onerror = (e) => {
-       console.error("WebSocket error", e, { readyState: ws.readyState });
-       maybeShowHandshakeToast(ws, null);
-       recordClientBannerEvent("ws.socket.error", {
-         ready_state: ws.readyState,
-       });
-     };
- 
-     ws.onclose = (e) => {
-       console.error("WebSocket closed", {
-         code: e.code,
-         reason: e.reason,
-         wasClean: e.wasClean,
-         readyState: ws.readyState,
-       });
+       class MockSocket extends EventTarget {
+         constructor() {
+           super();
+           this.readyState = WebSocket.CONNECTING;
+           setTimeout(() => {
+             this.readyState = WebSocket.OPEN;

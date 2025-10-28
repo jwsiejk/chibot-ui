@@ -13,6 +13,25 @@
     }
   } catch (_) {}
 
+  (function wrapDiag() {
+    const ctr = (window.__WS_DIAG__ = window.__WS_DIAG__ || { types: {} });
+    function maybeWrap() {
+      if (!window.WSClient || typeof WSClient.send !== 'function' || WSClient.__wrapped_send__) return;
+      const orig = WSClient.send.bind(WSClient);
+      WSClient.send = function (frame) {
+        try {
+          const t = frame && frame.type;
+          if (t) ctr.types[t] = (ctr.types[t] || 0) + 1;
+        } catch {}
+        return orig(frame);
+      };
+      WSClient.__wrapped_send__ = true;
+    }
+
+    maybeWrap();
+    window.addEventListener('ws.open', maybeWrap);
+  })();
+
   const STATIC_JS_BASE = (() => {
     if (typeof document === "undefined") {
       return "/static/js/";
@@ -2048,12 +2067,7 @@ window.addEventListener('assistant.suggestions', (event) => {
 window.addEventListener('ws.open', () => {
   tryStartMic('ws.open');
   try {
-    if (WSClient && WSClient.send) {
-      WSClient.send({
-        type: 'client.banner',
-        event: { label: 'open-ok', ts_ms: Date.now() },
-        info: { build: window.__BUILD_SHA__ ?? null, page: location.pathname }
-      });
+    if (WSClient && typeof WSClient.send === 'function') {
       WSClient.send({
         type: 'client.banner',
         event: { label: 'ws.open', ts_ms: Date.now() },
