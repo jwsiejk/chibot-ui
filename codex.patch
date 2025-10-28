@@ -1,56 +1,135 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 01d8b879d29c44a8beb91cf3f225d114ff3ae7d7..6ef5ef580e4e80613521d49ea3caf5934972ccb7 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -73,50 +73,51 @@ _OUTBOUND_ALLOWED_TYPES = {
-     "info",
-     "tts.start",
-     "tts.end",
-     "asr.ready",
-     "asr.partial",
-     "asr.final",
-     "error",
-     "chat.message",
-     "chat.history",
-     "dialog.plan",
-     "hud.nudge",
- }
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index cf31d5bd8d682ada8f15c74376bb6dd730764063..c531c48df44cb6f2d005a36b68096470cc681c63 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -1018,61 +1018,61 @@
+     document.getElementById('logoutItem').addEventListener('click', () => {
+       alert("Logging out… (placeholder)"); closeMenu();
+     });    
  
- _OUTBOX_MAXSIZE = 256
+     // --- Chat toggle ---
+     const openChatBtn = document.getElementById('openChatBtn');
+     const chatPanel = document.querySelector('.chat');
+     openChatBtn.addEventListener('click', () => {
+       const hidden = chatPanel.classList.toggle('hidden');
+       openChatBtn.setAttribute('aria-pressed', String(!hidden));
+     });
  
- _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
+     // --- Start/End button wiring ---
+     const startBtn = document.getElementById('startBtn');
+     const endBtn = document.getElementById('endBtn');
+     const sidText = document.getElementById('sid-text');
+     const connLabel = document.getElementById('connLabel');
+     const statusDot = document.querySelector('.status-dot');
+     const latencyHint = document.getElementById('latencyHint');
+     const voiceLabel = document.getElementById('voiceLabel');
+     const localeLabel = document.getElementById('localeLabel');
+     const textChatForm = document.getElementById('textChatForm');
+     const textChatInput = document.getElementById('textChatInput');
+     
+     // === Added: chat submit wiring + fallback PCM16 streamer and mic helpers ===
+-    // Send typed chat to the server using chat.message frames
++    // Send typed chat to the server using chat.user frames
+     if (textChatForm) {
+       textChatForm.addEventListener('submit', (e) => {
+         e.preventDefault();
+         const text = (textChatInput && textChatInput.value || '').trim();
+         if (!text) return;
+         try {
+-          WSClient && WSClient.send && WSClient.send({ type: 'chat.message', role: 'user', text });
++          WSClient && WSClient.send && WSClient.send({ type: 'chat.user', text });
+           textChatInput.value = '';
+         } catch (err) {
+-          console.error('chat.message send failed', err);
++          console.error('chat.user send failed', err);
+         }
+       });
+     }
+     
+     // Fallback PCM16 mono @16kHz streamer, used only if AudioRecorder is absent or fails
+     const FallbackPCMStreamer = (() => {
+       const TARGET_RATE = 16000;
+       let ctx = null, source = null, processor = null, gain = null, stream = null, running = false;
+       function base64FromArrayBuffer(ab) {
+         const bytes = new Uint8Array(ab);
+         let binary = '';
+         const len = bytes.length;
+         for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+         return btoa(binary);
+       }
+       function downsampleFloat32(input, inRate, outRate) {
+         if (outRate === inRate) return input;
+         const ratio = inRate / outRate;
+         const newLen = Math.floor(input.length / ratio);
+         const result = new Float32Array(newLen);
+         let i = 0, j = 0;
+         while (i < newLen) {
+           const start = Math.floor(j);
+           const end = Math.min(Math.floor(j + ratio), input.length);
+           let sum = 0, count = 0;
+@@ -1985,51 +1985,64 @@ window.addEventListener('tts.end', () => {
+ window.addEventListener('asr.ready', () => {
+   tryStartMic('asr.ready');
+   if (window.AudioRecorder && typeof window.AudioRecorder.start === 'function') {
+     try {
+       const maybePromise = window.AudioRecorder.start();
+       if (maybePromise && typeof maybePromise.catch === 'function') {
+         maybePromise.catch((err) => {
+           console.error('AudioRecorder start on asr.ready failed', err);
+         });
+       }
+     } catch (err) {
+       console.error('AudioRecorder start on asr.ready threw', err);
+     }
+   }
+ });
  
- _log = logging.getLogger(__name__)
- 
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
-     "chat.user",
-     "client.diag",
-+    "client.log",
-     "client.banner",
- }
+ window.addEventListener('assistant.suggestions', (event) => {
+   const detail = event && event.detail;
+   applySuggestionsFrame(detail);
+ });
  
  
- class TokenBucket:
-     """Simple in-memory token bucket."""
+ // Start mic immediately on ws.open as a safety net; send diag banner
+ window.addEventListener('ws.open', () => {
+   tryStartMic('ws.open');
+-  try { WSClient && WSClient.send && WSClient.send({ type: 'client.banner', text: 'open-ok', sha: window.__BUILD_SHA__, ts: Date.now() }); } catch {}
++  try {
++    if (WSClient && WSClient.send) {
++      WSClient.send({
++        type: 'client.banner',
++        event: { label: 'open-ok', ts_ms: Date.now() },
++        info: { build: window.__BUILD_SHA__ ?? null, page: location.pathname }
++      });
++      WSClient.send({
++        type: 'client.banner',
++        event: { label: 'ws.open', ts_ms: Date.now() },
++        info: { build: window.__BUILD_SHA__ ?? null }
++      });
++    }
++  } catch {}
+ });
+ window.addEventListener('ws.close', () => {
+   stopMic('ws');
+   resetSuggestions();
+   DiagRecorder.stop('ws');
+ });
  
-     def __init__(self, capacity: int, refill_seconds: float) -> None:
-         self.capacity = capacity
-         self.tokens = float(capacity)
-         self.refill_seconds = refill_seconds
-         self.last_refill = time.monotonic()
+     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
+     if (urlParams.get('wsSmoke') === '1') {
+       const transitions = [];
+       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
  
-     def consume(self, count: int, now: Optional[float] = None) -> bool:
-         if now is None:
-             now = time.monotonic()
-         elapsed = max(0.0, now - self.last_refill)
-         if elapsed > 0:
-             refill = (self.capacity / self.refill_seconds) * elapsed
-             if refill > 0:
-                 self.tokens = min(self.capacity, self.tokens + refill)
-                 self.last_refill = now
-         if self.tokens < count:
-             return False
-         self.tokens -= count
+       class MockSocket extends EventTarget {
+         constructor() {
+           super();
+           this.readyState = WebSocket.CONNECTING;
+           setTimeout(() => {
+             this.readyState = WebSocket.OPEN;
+             this.dispatchEvent(new Event('open'));
+           }, 0);
+         }
+         send(payload) {
+           this.lastSent = payload;
+         }
+         close(code = 1000, reason = '') {

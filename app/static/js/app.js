@@ -1040,17 +1040,17 @@
     const textChatInput = document.getElementById('textChatInput');
     
     // === Added: chat submit wiring + fallback PCM16 streamer and mic helpers ===
-    // Send typed chat to the server using chat.message frames
+    // Send typed chat to the server using chat.user frames
     if (textChatForm) {
       textChatForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const text = (textChatInput && textChatInput.value || '').trim();
         if (!text) return;
         try {
-          WSClient && WSClient.send && WSClient.send({ type: 'chat.message', role: 'user', text });
+          WSClient && WSClient.send && WSClient.send({ type: 'chat.user', text });
           textChatInput.value = '';
         } catch (err) {
-          console.error('chat.message send failed', err);
+          console.error('chat.user send failed', err);
         }
       });
     }
@@ -2007,7 +2007,20 @@ window.addEventListener('assistant.suggestions', (event) => {
 // Start mic immediately on ws.open as a safety net; send diag banner
 window.addEventListener('ws.open', () => {
   tryStartMic('ws.open');
-  try { WSClient && WSClient.send && WSClient.send({ type: 'client.banner', text: 'open-ok', sha: window.__BUILD_SHA__, ts: Date.now() }); } catch {}
+  try {
+    if (WSClient && WSClient.send) {
+      WSClient.send({
+        type: 'client.banner',
+        event: { label: 'open-ok', ts_ms: Date.now() },
+        info: { build: window.__BUILD_SHA__ ?? null, page: location.pathname }
+      });
+      WSClient.send({
+        type: 'client.banner',
+        event: { label: 'ws.open', ts_ms: Date.now() },
+        info: { build: window.__BUILD_SHA__ ?? null }
+      });
+    }
+  } catch {}
 });
 window.addEventListener('ws.close', () => {
   stopMic('ws');
