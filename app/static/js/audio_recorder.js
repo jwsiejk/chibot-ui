@@ -28,6 +28,7 @@
       this._wsClient = null; // preferred explicit binding
       this._log = window.console || {};
       this._hud = window?.DiagHUD || window?.DiagHud || null;
+      this._lastMaskChunkAt = 0; // ms timestamp of last keepalive chunk while masked
     }
 
     /* ---------------- Policy ---------------- */
@@ -177,19 +178,14 @@
     handleTtsStart() {
       if ((this.policy().capture || {}).mask_during_tts) {
         this._mask = true;
-        try { this._rec?.pause?.(); } catch (err) {
-          this._log?.warn?.("rec=pause_failed %o", err);
-        }
+        this._lastMaskChunkAt = 0;
+        // DO NOT pause() here; recorder must keep running to generate keepalive chunks.
       }
     }
 
     handleTtsEnd() {
       this._mask = false;
-      if (this._rec?.state === "paused") {
-        try { this._rec.resume(); } catch (err) {
-          this._log?.warn?.("rec=resume_failed %o", err);
-        }
-      }
+      if (this._rec?.state === "paused") { try { this._rec.resume(); } catch {} }
     }
 
     /* ---------------- Recorder setup (Opus-only) ---------------- */
@@ -251,7 +247,19 @@
 
     async _onWebmData(event) {
       if (!event?.data || event.data.size === 0) return;
-      if (this._mask) return;
+      if (this._mask) {
+        const cap = this.policy().capture || {};
+        if (cap.mask_keepalive_enable) {
+          const now = Date.now();
+          const interval = Math.max(1000, Number(cap.mask_keepalive_ms ?? 5000));
+          if (now - this._lastMaskChunkAt < interval) {
+            return; // drop most masked chunks
+          }
+          this._lastMaskChunkAt = now; // allow this one keepalive chunk to pass
+        } else {
+          return; // fully drop during mask if keepalive disabled
+        }
+      }
       const ws = this._getWsClient();
       if (!ws) return;
 
