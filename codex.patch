@@ -1,375 +1,56 @@
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index bdfd39000d2a464de69146742c66348a35123e9a..01d8b879d29c44a8beb91cf3f225d114ff3ae7d7 100644
+index 01d8b879d29c44a8beb91cf3f225d114ff3ae7d7..6ef5ef580e4e80613521d49ea3caf5934972ccb7 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -1,54 +1,55 @@
- """chat.v2 WebSocket adapter for AskChip."""
- from __future__ import annotations
+@@ -73,50 +73,51 @@ _OUTBOUND_ALLOWED_TYPES = {
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
+     "asr.partial",
+     "asr.final",
+     "error",
+     "chat.message",
+     "chat.history",
+     "dialog.plan",
+     "hud.nudge",
+ }
  
- import asyncio
- import contextlib
- import logging
- import math
- import time
- import sys, platform, socket, os, inspect
- from dataclasses import dataclass, field
--from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Optional, Protocol, runtime_checkable
-+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
+ _OUTBOX_MAXSIZE = 256
  
- import json
- from urllib.parse import parse_qs
+ _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
  
- from app import config
- from app.logging_setup import current_sid
- from app.security.jwt_utils import verify_ws_token
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ASR_OPEN,
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_CLIENT_BANNER,
-     EVT_CLIENT_MIC_OPEN,
-     EVT_HUD_STATE,
-     EVT_TTS_END,
-     EVT_TTS_MASK,
-+    EVT_CLIENT_LOG,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_frame
+ _log = logging.getLogger(__name__)
  
- try:  # pragma: no cover - uvicorn is an optional dependency in tests
-     from uvicorn.protocols.utils import ClientDisconnected
- except Exception:  # pragma: no cover - fallback when uvicorn missing
-     class ClientDisconnected(Exception):  # type: ignore[no-redef]
-         """Fallback placeholder when uvicorn is unavailable."""
+ _ALLOWED_TEXT_FRAME_TYPES = {
+     "client.ready",
+     "audio.header",
+     "admin.toggle",
+     "chat.user",
+     "client.diag",
++    "client.log",
+     "client.banner",
+ }
  
  
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
- RATE_LIMIT_WINDOW_SECONDS = 2.0
- RATE_LIMIT_CLOSE_CODE = 1013
- _AUDIO_VIOLATION_LIMIT = 3
+ class TokenBucket:
+     """Simple in-memory token bucket."""
  
- AUDIO_SEQ_WINDOW = 8
+     def __init__(self, capacity: int, refill_seconds: float) -> None:
+         self.capacity = capacity
+         self.tokens = float(capacity)
+         self.refill_seconds = refill_seconds
+         self.last_refill = time.monotonic()
  
-@@ -815,50 +816,87 @@ class ChatV2Adapter:
-                     "duplicate or conflicting audio.header",
-                 )
-                 return self._HandleResult(True)
-             ctx.audio_profile = profile
-             if seq_start is not None:
-                 ctx.audio_seq = max(0, seq_start)
-                 ctx.audio_expected_seq = ctx.audio_seq
-                 ctx.audio_highest_seq = ctx.audio_seq - 1
-                 ctx.audio_buffer.clear()
- 
-         if frame_type == "client.ready":
-             mic_info = frame.get("mic")
-             if isinstance(mic_info, dict):
-                 state = mic_info.get("state")
-                 if isinstance(state, str) and state.lower() == "open":
-                     vendor = mic_info.get("vendor")
-                     opened_ts = mic_info.get("ts")
-                     ts_value = opened_ts if isinstance(opened_ts, int) else None
-                     self._emit_client_mic_open(
-                         ctx,
-                         vendor=vendor if isinstance(vendor, str) else None,
-                         opened_ts=ts_value,
-                     )
-                     ctx.mic_nudge_sent = False
- 
-+        if frame_type == "client.log":
-+            sanitized_log = self._sanitize_client_log(frame)
-+            if sanitized_log:
-+                meta["client_log"] = {
-+                    key: value
-+                    for key, value in sanitized_log.items()
-+                    if key != "detail"
-+                }
-+                detail_payload = sanitized_log.get("detail")
-+                outcome = None
-+                attempts = None
-+                if isinstance(detail_payload, Mapping):
-+                    outcome = detail_payload.get("outcome")
-+                    attempts = detail_payload.get("attempts")
-+                _log.info(
-+                    "evt=ws_client_log sid=%s label=%s outcome=%s attempts=%s",
-+                    ctx.sid,
-+                    sanitized_log.get("label"),
-+                    outcome,
-+                    attempts,
-+                )
-+                bus.publish(
-+                    {
-+                        "type": EVT_CLIENT_LOG,
-+                        "sid": ctx.sid,
-+                        "who": "client",
-+                        "source": "client_log",
-+                        "meta": sanitized_log,
-+                    }
-+                )
-+            else:
-+                _log.info(
-+                    "evt=ws_client_log sid=%s label=%s detail=empty",
-+                    ctx.sid,
-+                    frame.get("label"),
-+                )
-+
-         if frame_type == "client.banner":
-             sanitized_info = self._sanitize_client_banner_info(frame.get("info"))
-             if sanitized_info:
-                 ctx.client_banner_info = sanitized_info
-             elif ctx.client_banner_info is None:
-                 ctx.client_banner_info = {}
-             sanitized_event = self._sanitize_client_banner_event(frame.get("event"))
-             if sanitized_event is None:
-                 meta["error"] = "schema_invalid"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "client.banner event requires a label",
-                 )
-                 return self._HandleResult(True)
-             ctx.client_banner_events.append(dict(sanitized_event))
-             if len(ctx.client_banner_events) > 64:
-                 del ctx.client_banner_events[: len(ctx.client_banner_events) - 64]
-             log_meta: Dict[str, Any] = {
-                 "label": sanitized_event.get("label"),
-                 "client_ts_ms": sanitized_event.get("ts_ms"),
-             }
-             event_meta = sanitized_event.get("meta")
-@@ -1632,50 +1670,88 @@ class ChatV2Adapter:
-         if not isinstance(payload, dict):
-             return None
-         label = payload.get("label") or payload.get("event") or payload.get("reason")
-         if not isinstance(label, str) or not label.strip():
-             return None
-         normalized: Dict[str, Any] = {
-             "label": ChatV2Adapter._truncate_banner_string(label.strip(), 64)
-         }
-         ts_value = payload.get("ts_ms")
-         if isinstance(ts_value, (int, float)) and math.isfinite(ts_value):
-             normalized["ts_ms"] = int(ts_value)
-         else:
-             alt_ts = payload.get("ts")
-             if isinstance(alt_ts, (int, float)) and math.isfinite(alt_ts):
-                 normalized["ts_ms"] = int(alt_ts)
-         meta_payload = payload.get("meta")
-         sanitized_meta = ChatV2Adapter._sanitize_banner_value(meta_payload)
-         if isinstance(sanitized_meta, dict) and sanitized_meta:
-             normalized["meta"] = sanitized_meta
-         elif isinstance(sanitized_meta, list) and sanitized_meta:
-             normalized["meta"] = sanitized_meta
-         if "ts_ms" not in normalized:
-             normalized["ts_ms"] = int(time.time() * 1000)
-         return normalized
- 
-+    @staticmethod
-+    def _sanitize_client_log(payload: Any) -> Dict[str, Any]:
-+        if not isinstance(payload, Mapping):
-+            return {}
-+
-+        sanitized: Dict[str, Any] = {}
-+
-+        label = payload.get("label")
-+        if isinstance(label, str) and label.strip():
-+            sanitized["label"] = label.strip()[:64]
-+
-+        message = payload.get("message")
-+        if isinstance(message, str) and message.strip():
-+            sanitized["message"] = message.strip()[:256]
-+
-+        client_ts = payload.get("ts") or payload.get("client_ts")
-+        if isinstance(client_ts, (int, float)) and math.isfinite(client_ts):
-+            sanitized["client_ts_ms"] = int(client_ts)
-+
-+        detail = payload.get("detail")
-+        if detail is not None:
-+            try:
-+                sanitized["detail"] = bus.redact_payload(detail)
-+            except Exception:
-+                try:
-+                    sanitized["detail"] = bus.redact_payload(str(detail))
-+                except Exception:
-+                    sanitized["detail"] = str(detail)
-+
-+        extra = payload.get("extra")
-+        if extra is not None:
-+            try:
-+                sanitized["extra"] = bus.redact_payload(extra)
-+            except Exception:
-+                sanitized["extra"] = str(extra)
-+
-+        return sanitized
-+
-     @staticmethod
-     def _sanitize_policy_interaction(frame: Dict[str, Any]) -> Dict[str, Any]:
-         sanitized = {key: value for key, value in frame.items() if key != "policy"}
-         if "policy" in frame:
-             policy = frame.get("policy")
-             if isinstance(policy, dict):
-                 sanitized_policy = {
-                     key: policy[key]
-                     for key in _POLICY_STABLE_KEYS
-                     if key in policy
-                 }
-             else:
-                 sanitized_policy = {}
-             sanitized["policy"] = sanitized_policy
-         return sanitized
- 
-     @staticmethod
-     def _policy_requests_listen(frame: Dict[str, Any]) -> bool:
-         actions = frame.get("actions") if isinstance(frame, dict) else None
-         if isinstance(actions, list):
-             for action in actions:
-                 if isinstance(action, str) and action.strip() == "assistant.await_user":
-                     return True
-         return False
- 
-@@ -1883,121 +1959,135 @@ class ChatV2Adapter:
-             return
- 
-         ctx.hud_state = state
-         try:
-             asyncio.create_task(self._publish(EVT_HUD_STATE, ctx.sid, {"state": state}))
-         except RuntimeError:
-             _log.warning("evt=ws_hud_state_publish_failed sid=%s", ctx.sid)
- 
-     def _emit_client_mic_open(
-         self,
-         ctx: AdapterContext,
-         *,
-         vendor: Optional[str] = None,
-         opened_ts: Optional[int] = None,
-     ) -> None:
-         if ctx.client_mic_open:
-             return
- 
-         self._cancel_mic_open_timer(ctx)
-         ctx.client_mic_open = True
-         payload: Dict[str, object] = {"state": "open"}
-         if isinstance(vendor, str) and vendor:
-             payload["vendor"] = vendor[:64]
-         if isinstance(opened_ts, int):
-             payload["ts"] = opened_ts
-+        _log.info(
-+            "evt=ws_client_mic_open sid=%s vendor=%s ts=%s",
-+            ctx.sid,
-+            payload.get("vendor") or "",
-+            payload.get("ts"),
-+        )
-         try:
-             asyncio.create_task(
-                 self._publish(EVT_CLIENT_MIC_OPEN, ctx.sid, payload)
-             )
-         except RuntimeError:
-             _log.warning("evt=ws_client_mic_publish_failed sid=%s", ctx.sid)
- 
-     def _handle_client_audio_activity(self, ctx: AdapterContext) -> None:
-         if ctx.client_mic_open:
-             return
- 
-         was_nudged = ctx.mic_nudge_sent
-         ctx.mic_nudge_sent = False
-         self._cancel_mic_open_timer(ctx)
-         if was_nudged:
-             _log.info("evt=ws_mic_open_recovered sid=%s", ctx.sid)
-         self._emit_client_mic_open(ctx)
- 
-     def _schedule_mic_open_guard(
-         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
-     ) -> None:
-         if _MIC_OPEN_TIMEOUT_SECONDS <= 0:
-             return
-         if ctx.client_mic_open:
-             return
-         self._cancel_mic_open_timer(ctx)
- 
-         def _fire() -> None:
-             ctx.mic_open_timer = None
-             self._handle_mic_open_timeout(ctx)
- 
-         try:
-+            _log.info(
-+                "evt=ws_mic_guard_arm sid=%s timeout_s=%.2f",
-+                ctx.sid,
-+                _MIC_OPEN_TIMEOUT_SECONDS,
-+            )
-             ctx.mic_open_timer = loop.call_later(_MIC_OPEN_TIMEOUT_SECONDS, _fire)
-         except RuntimeError:
-             ctx.mic_open_timer = None
- 
-     def _handle_mic_open_timeout(self, ctx: AdapterContext) -> None:
-         if ctx.client_mic_open:
-             return
-         if ctx.mic_nudge_sent:
-             return
- 
-         ctx.mic_nudge_sent = True
-         _log.warning(
--            "evt=ws_mic_open_timeout sid=%s timeout_s=%.2f",
-+            "evt=ws_mic_open_timeout sid=%s timeout_s=%.2f mic_open=%s nudged=%s",
-             ctx.sid,
-             _MIC_OPEN_TIMEOUT_SECONDS,
-+            ctx.client_mic_open,
-+            ctx.mic_nudge_sent,
-         )
-         try:
-             asyncio.create_task(
-                 self._publish(
-                     "EVT_MIC_OPEN_TIMEOUT",
-                     ctx.sid,
-                     {"timeout_s": _MIC_OPEN_TIMEOUT_SECONDS},
-                 )
-             )
-         except RuntimeError:
-             pass
-         if ctx.outbox is not None:
-             nudge_frame = {
-                 "type": "hud.nudge",
-                 "code": "mic_permissions",
-                 "reason": "mic_open_timeout",
-             }
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": ctx.sid, "payload": nudge_frame})
- 
-     @staticmethod
-     def _cancel_mic_open_timer(ctx: AdapterContext) -> None:
-         timer = ctx.mic_open_timer
-         ctx.mic_open_timer = None
-         if timer is not None:
-+            _log.info("evt=ws_mic_guard_cancel sid=%s", ctx.sid)
-             timer.cancel()
- 
-     def _initiate_listen_handoff(self, ctx: AdapterContext, req_id: str) -> bool:
-         if not ctx.await_user_expected or ctx.await_user_pending:
+     def consume(self, count: int, now: Optional[float] = None) -> bool:
+         if now is None:
+             now = time.monotonic()
+         elapsed = max(0.0, now - self.last_refill)
+         if elapsed > 0:
+             refill = (self.capacity / self.refill_seconds) * elapsed
+             if refill > 0:
+                 self.tokens = min(self.capacity, self.tokens + refill)
+                 self.last_refill = now
+         if self.tokens < count:
              return False
- 
-         runtime = getattr(self, "asr_runtime", None)
-         if runtime is None:
-             return False
- 
-         prearm = getattr(runtime, "prearm", None)
-         if not callable(prearm):
-             return False
- 
-         key = self._turn_key(ctx, req_id)
-         self._set_pending_for_key(ctx, key)
-         self._clear_after_mask_for_key(ctx, key)
-         try:
-             prearm(ctx.sid)
-         except Exception:  # pragma: no cover - defensive logging
-             self._clear_pending_for_key(ctx, key)
-             _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
-             return False
- 
-         return True
+         self.tokens -= count

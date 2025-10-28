@@ -95,6 +95,7 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "admin.toggle",
     "chat.user",
     "client.diag",
+    "client.log",
     "client.banner",
 }
 
