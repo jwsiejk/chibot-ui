@@ -1,6 +1,7 @@
 """chat.v2 WebSocket adapter for AskChip."""
 from __future__ import annotations
 
+import os
 import asyncio
 import contextlib
 import logging
