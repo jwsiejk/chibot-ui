@@ -78,7 +78,7 @@
         return;
       }
       const ws = this._getWsClient();
-      if (!ws || typeof ws.send !== "function") {
+      if (!ws) {
         return;
       }
       const frame = {
@@ -271,7 +271,10 @@
           this._state = "idle";
         };
 
-        const slice = Math.max(MIN_TIMESLICE_MS, Number(cp.timeslice_ms ?? DEFAULT_TIMESLICE_MS) || DEFAULT_TIMESLICE_MS);
+        const slice = Math.max(
+          MIN_TIMESLICE_MS,
+          Number(cp.timeslice_ms ?? DEFAULT_TIMESLICE_MS) || DEFAULT_TIMESLICE_MS
+        );
         this._micChunksSent = 0;
         this._headerSent = false;
         const sampleRate = Number(mp.asr_rate_hz) || 48000;
@@ -300,7 +303,10 @@
       }
 
       this._log?.error?.("rec=policy_media_unsupported input=%s", mp.asr_input);
-      this._hud?.banner?.("Voice capture policy not supported on this client.", "error");
+      this._hud?.banner?.(
+        "Voice capture policy not supported on this client.",
+        "error"
+      );
       this._state = "error";
       return false;
     }
@@ -316,6 +322,7 @@
       if (!ws) {
         return;
       }
+      // Ensure header precedes first chunk (idempotent)
       if (!this._headerSent && this._format) {
         this._sendAudioHeader(this._format);
         if (!this._headerSent) {
@@ -341,7 +348,7 @@
         return;
       }
       const ws = this._getWsClient();
-      if (!ws || typeof ws.send !== "function") {
+      if (!ws) {
         return;
       }
       const frame = {
@@ -360,13 +367,12 @@
     }
 
     _getWsClient() {
+      // Require both sendBinary (for audio) and send (for JSON frames like audio.header/diag)
       const ws = window.WSClient;
-      if (!ws || typeof ws.sendBinary !== "function") {
-        return null;
-      }
-      if (typeof ws.isConnected === "function" && !ws.isConnected()) {
-        return null;
-      }
+      if (!ws) return null;
+      if (typeof ws.isConnected === "function" && !ws.isConnected()) return null;
+      if (typeof ws.sendBinary !== "function") return null;
+      if (typeof ws.send !== "function") return null;
       return ws;
     }
 
