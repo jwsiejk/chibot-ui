@@ -385,6 +385,11 @@ class DeepgramClient:
                 self._handle_message(state, payload)
         except asyncio.CancelledError:
             raise
+        except websockets.exceptions.ConnectionClosedOK:
+            # Normal connection shutdown from the server. websockets raises
+            # ConnectionClosedOK to terminate the async iterator, but this
+            # should not be treated as an error.
+            _log.debug("evt=deepgram_recv_closed_ok sid=%s", state.sid)
         except Exception as exc:  # pragma: no cover - defensive
             _log.exception("evt=deepgram_recv_failed sid=%s err=%s", state.sid, exc)
             state.on_error(str(exc))
