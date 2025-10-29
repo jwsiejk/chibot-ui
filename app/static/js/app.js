@@ -719,6 +719,13 @@
       micPermissionGranted: false,
     };
 
+    const micSessionTelemetry = {
+      micOpenLogged: false,
+      firstChunkLogged: false,
+      recBadgeLogged: false,
+    };
+    let micPermissionTelemetryLogged = false;
+
     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
     let pendingClientReady = null;
     let clientReadyTimerId = null;
@@ -841,6 +848,69 @@
       }
     }
 
+    function resetMicSessionTelemetry() {
+      micSessionTelemetry.micOpenLogged = false;
+      micSessionTelemetry.firstChunkLogged = false;
+      micSessionTelemetry.recBadgeLogged = false;
+    }
+
+    function noteRecordingBadgeOn(source) {
+      if (micSessionTelemetry.recBadgeLogged) {
+        return;
+      }
+      micSessionTelemetry.recBadgeLogged = true;
+      const detail = { event: 'ui_rec_badge_on' };
+      if (source) {
+        detail.source = String(source).slice(0, 32);
+      }
+      logClient('evt=ui_rec_badge_on', detail);
+    }
+
+    function updateRecordingState(active, source) {
+      const previous = runtimeState.isRecording;
+      const next = !!active;
+      runtimeState.isRecording = next;
+      if (next) {
+        if (!previous) {
+          resetMicSessionTelemetry();
+          noteRecordingBadgeOn(source);
+        }
+      } else if (previous) {
+        resetMicSessionTelemetry();
+      }
+      return next;
+    }
+
+    function noteMicOpen(source) {
+      if (micSessionTelemetry.micOpenLogged) {
+        return;
+      }
+      micSessionTelemetry.micOpenLogged = true;
+      const detail = { event: 'mic_open' };
+      if (source) {
+        detail.source = String(source).slice(0, 32);
+      }
+      logClient('evt=mic_open', detail);
+    }
+
+    function setMicPermissionGranted(granted, source) {
+      const next = !!granted;
+      runtimeState.micPermissionGranted = next;
+      if (next) {
+        if (!micPermissionTelemetryLogged) {
+          micPermissionTelemetryLogged = true;
+          const detail = { event: 'mic_perm_granted' };
+          if (source) {
+            detail.source = String(source).slice(0, 32);
+          }
+          logClient('evt=mic_perm_granted', detail);
+        }
+      } else {
+        micPermissionTelemetryLogged = false;
+      }
+      return next;
+    }
+
     function startMicCapture() {
       if (!audioRecorder || typeof audioRecorder.startMicCaptureIfIdle !== 'function') {
         return Promise.reject(new Error('startMicCapture_unavailable'));
@@ -854,15 +924,32 @@
       if (outcome && typeof outcome.then === 'function') {
         return outcome.then((value) => {
           if (value) {
-            runtimeState.micPermissionGranted = true;
+            setMicPermissionGranted(true, 'startMicCapture');
           }
           return value;
         });
       }
       if (outcome) {
-        runtimeState.micPermissionGranted = true;
+        setMicPermissionGranted(true, 'startMicCapture');
       }
       return Promise.resolve(outcome);
+    }
+
+    if (audioRecorder && typeof audioRecorder._onWebmData === 'function') {
+      const originalOnWebmData = audioRecorder._onWebmData.bind(audioRecorder);
+      audioRecorder._onWebmData = function patchedOnWebmData(event) {
+        if (!micSessionTelemetry.firstChunkLogged) {
+          const size = event && event.data && typeof event.data.size === 'number'
+            ? event.data.size
+            : 0;
+          if (size > 0) {
+            micSessionTelemetry.firstChunkLogged = true;
+            const detail = { event: 'mic_first_chunk', bytes: size };
+            logClient(`evt=mic_first_chunk bytes=${size}`, detail);
+          }
+        }
+        return originalOnWebmData(event);
+      };
     }
 
     function maybeAutoStartCapture(trigger, reason) {
@@ -895,8 +982,8 @@
             });
             return;
           }
-          runtimeState.isRecording = true;
-          logClient('evt=mic_open', { event: 'mic_open' });
+          updateRecordingState(true, 'auto_start_capture');
+          noteMicOpen('auto_start_capture');
         })
         .catch((err) => {
           const errText = safeErr(err);
@@ -1047,18 +1134,19 @@
     }
 
     window.addEventListener(CLIENT_MIC_OPEN_EVENT, (event) => {
-      runtimeState.micPermissionGranted = true;
-      runtimeState.isRecording = true;
+      setMicPermissionGranted(true, 'mic_open_event');
+      updateRecordingState(true, 'mic_open_event');
+      noteMicOpen('mic_open_event');
       enqueueClientReady(event && event.detail);
     });
 
     window.addEventListener('input.start', () => {
-      runtimeState.isRecording = true;
-      runtimeState.micPermissionGranted = true;
+      updateRecordingState(true, 'input.start');
+      setMicPermissionGranted(true, 'input.start');
     });
 
     window.addEventListener('input.stop', () => {
-      runtimeState.isRecording = false;
+      updateRecordingState(false, 'input.stop');
     });
 
     window.addEventListener('ws.close', () => {
@@ -1073,14 +1161,15 @@
       }
       runtimeState.asrReady = false;
       runtimeState.turnState = null;
-      runtimeState.isRecording = false;
+      updateRecordingState(false, 'ws.close');
+      setMicPermissionGranted(false, 'ws.close');
       runtimeState.policy = null;
     });
 
     window.addEventListener('ws.open', () => {
       runtimeState.asrReady = false;
       runtimeState.turnState = null;
-      runtimeState.isRecording = false;
+      updateRecordingState(false, 'ws.open');
       runtimeState.policy = null;
       flushDeferredClientLogs();
     });
@@ -1673,7 +1762,7 @@
           console.warn('Failed to stop audio recorder', err);
         }
       }
-      runtimeState.isRecording = false;
+      updateRecordingState(false, 'end_button');
       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
         window.AudioPlayer.interrupt();
       }
@@ -1937,7 +2026,7 @@
       if (state.connectionState === 'disconnected') {
         resetVoiceState();
         resetSuggestions();
-        runtimeState.isRecording = false;
+        updateRecordingState(false, 'appstate.disconnect');
         runtimeState.turnState = null;
         runtimeState.asrReady = false;
         runtimeState.policy = null;
@@ -1966,11 +2055,11 @@
         if (audioRecorder && typeof audioRecorder.start === 'function') {
           audioRecorder.start()
             .then(() => {
-              runtimeState.micPermissionGranted = true;
+              setMicPermissionGranted(true, 'recorder.start');
             })
             .catch((err) => {
               console.error('AudioRecorder start error', err);
-              runtimeState.micPermissionGranted = false;
+              setMicPermissionGranted(false, 'recorder.start_error');
             });
         }
         if (pendingClientReady && clientReadyTimerId === null) {
@@ -1986,7 +2075,7 @@
             console.warn('AudioRecorder stop error', err);
           }
         }
-        runtimeState.isRecording = false;
+        updateRecordingState(false, 'appstate.disconnect');
         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
           window.AudioPlayer.interrupt();
         }
@@ -2203,10 +2292,10 @@ window.addEventListener('ws.open', () => {
   if (audioRecorder && typeof audioRecorder.start === 'function') {
     audioRecorder.start()
       .then(() => {
-        runtimeState.micPermissionGranted = true;
+        setMicPermissionGranted(true, 'ws.open_start');
       })
       .catch(() => {
-        runtimeState.micPermissionGranted = false;
+        setMicPermissionGranted(false, 'ws.open_start_error');
       });
   }
   try {

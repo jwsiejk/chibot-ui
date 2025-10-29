@@ -115,6 +115,10 @@ class _SessionState:
     prearm_requested: bool = False
     input_desc: Dict[str, Any] = field(default_factory=_default_input_descriptor)
     unavailable_emitted: bool = False
+    first_chunk_seen: bool = False
+    rollup_window_start: float = 0.0
+    rollup_chunks: int = 0
+    rollup_bytes: int = 0
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -274,6 +278,34 @@ class ASRRuntime:
         if state.ready_watchdog is not None and state.ready_armed_at:
             self._cancel_ready_watchdog(state)
         chunk_len = len(data)
+
+        if not state.first_chunk_seen:
+            state.first_chunk_seen = True
+            state.rollup_window_start = now_monotonic
+            state.rollup_chunks = 0
+            state.rollup_bytes = 0
+            _log.info(
+                "evt=audio_first_chunk sid=%s bytes=%d codec=webm_opus",
+                sid,
+                chunk_len,
+            )
+        if not state.rollup_window_start:
+            state.rollup_window_start = now_monotonic
+        state.rollup_chunks += 1
+        state.rollup_bytes += chunk_len
+        if (
+            state.rollup_window_start
+            and now_monotonic - state.rollup_window_start >= 1.0
+        ):
+            _log.debug(
+                "evt=audio_rollup sid=%s chunks=%d bytes=%d window_ms=1000",
+                sid,
+                state.rollup_chunks,
+                state.rollup_bytes,
+            )
+            state.rollup_window_start = now_monotonic
+            state.rollup_chunks = 0
+            state.rollup_bytes = 0
 
         if state.stream_id is None:
             state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
@@ -663,6 +695,10 @@ class ASRRuntime:
                 return
 
             state.stream_open = True
+            state.first_chunk_seen = False
+            state.rollup_window_start = 0.0
+            state.rollup_chunks = 0
+            state.rollup_bytes = 0
             state.unavailable_emitted = False
             mp = getattr(self.policy, "media", None)
             cp = getattr(self.policy, "capture", None)
@@ -846,7 +882,16 @@ class ASRRuntime:
             state.stream_id = stream_id
         state.last_stream_id = stream_id
         state.dg_msgs_partial += 1
-        len_chars = int(metadata.get("len_chars") or len(text))
+        raw_len = metadata.get("len_chars")
+        len_chars = len(text)
+        if raw_len:
+            try:
+                candidate_len = int(raw_len)
+            except (TypeError, ValueError):
+                candidate_len = None
+            if candidate_len is not None and candidate_len >= 0:
+                len_chars = candidate_len
+        _log.info("evt=asr_interim sid=%s len_chars=%d", sid, len_chars)
         utterance_id = metadata.get("utterance_id")
         if not utterance_id:
             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
@@ -917,7 +962,16 @@ class ASRRuntime:
             state.stream_id = stream_id
         state.last_stream_id = stream_id
         state.dg_msgs_final += 1
-        len_chars = int(metadata.get("len_chars") or len(text))
+        raw_len = metadata.get("len_chars")
+        len_chars = len(text)
+        if raw_len:
+            try:
+                candidate_len = int(raw_len)
+            except (TypeError, ValueError):
+                candidate_len = None
+            if candidate_len is not None and candidate_len >= 0:
+                len_chars = candidate_len
+        _log.info("evt=asr_final sid=%s len_chars=%d", sid, len_chars)
         utterance_id = metadata.get("utterance_id")
         if not utterance_id:
             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
