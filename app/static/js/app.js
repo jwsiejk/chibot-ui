@@ -711,6 +711,14 @@
     const WSClient = window.WSClient;
     const audioRecorder = window.AudioRecorder || null;
 
+    const runtimeState = {
+      policy: null,
+      turnState: null,
+      asrReady: false,
+      isRecording: false,
+      micPermissionGranted: false,
+    };
+
     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
     let pendingClientReady = null;
     let clientReadyTimerId = null;
@@ -790,6 +798,113 @@
           break;
         }
       }
+    }
+
+    function safeErr(err) {
+      if (err == null) {
+        return 'unknown';
+      }
+      if (typeof err === 'string') {
+        return err.slice(0, 160);
+      }
+      if (typeof err === 'object' && typeof err.message === 'string' && err.message) {
+        return err.message.slice(0, 160);
+      }
+      try {
+        const serialized = JSON.stringify(err);
+        if (typeof serialized === 'string' && serialized) {
+          return serialized.slice(0, 160);
+        }
+      } catch (_) {}
+      try {
+        return String(err).slice(0, 160);
+      } catch (_) {
+        return 'error';
+      }
+    }
+
+    function logClient(message, detail) {
+      const text = typeof message === 'string'
+        ? message
+        : (message == null ? '' : String(message));
+      if (text) {
+        try {
+          console.log(text);
+        } catch (_) {}
+      }
+      const payload = detail && typeof detail === 'object' ? { ...detail } : {};
+      if (text && !payload.message) {
+        payload.message = text.slice(0, 256);
+      }
+      if (!sendClientLog('client.mic', payload)) {
+        enqueueDeferredClientLog('client.mic', payload);
+      }
+    }
+
+    function startMicCapture() {
+      if (!audioRecorder || typeof audioRecorder.startMicCaptureIfIdle !== 'function') {
+        return Promise.reject(new Error('startMicCapture_unavailable'));
+      }
+      let outcome;
+      try {
+        outcome = audioRecorder.startMicCaptureIfIdle();
+      } catch (err) {
+        return Promise.reject(err);
+      }
+      if (outcome && typeof outcome.then === 'function') {
+        return outcome.then((value) => {
+          if (value) {
+            runtimeState.micPermissionGranted = true;
+          }
+          return value;
+        });
+      }
+      if (outcome) {
+        runtimeState.micPermissionGranted = true;
+      }
+      return Promise.resolve(outcome);
+    }
+
+    function maybeAutoStartCapture(trigger, reason) {
+      const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
+      if (runtimeState.isRecording) {
+        return;
+      }
+      if (!(capturePolicy.start_on_asr_ready || capturePolicy.start_on_turn_ready)) {
+        return;
+      }
+      if (!runtimeState.micPermissionGranted) {
+        return;
+      }
+      if (!(runtimeState.asrReady && runtimeState.turnState === 'Ready')) {
+        return;
+      }
+      const triggerLabel = trigger ? String(trigger) : 'unknown';
+      const reasonLabel = reason ? String(reason) : 'unknown';
+      logClient(`evt=mic_arm trigger=${triggerLabel} reason=${reasonLabel}`, {
+        event: 'mic_arm',
+        trigger: triggerLabel,
+        reason: reasonLabel,
+      });
+      startMicCapture()
+        .then((started) => {
+          if (!started) {
+            logClient('evt=mic_open_failed err=mic_not_started', {
+              event: 'mic_open_failed',
+              error: 'mic_not_started',
+            });
+            return;
+          }
+          runtimeState.isRecording = true;
+          logClient('evt=mic_open', { event: 'mic_open' });
+        })
+        .catch((err) => {
+          const errText = safeErr(err);
+          logClient(`evt=mic_open_failed err=${errText}`, {
+            event: 'mic_open_failed',
+            error: errText,
+          });
+        });
     }
 
     function maybeLogClientReadyOutcome(outcome, extraMeta) {
@@ -932,7 +1047,18 @@
     }
 
     window.addEventListener(CLIENT_MIC_OPEN_EVENT, (event) => {
+      runtimeState.micPermissionGranted = true;
+      runtimeState.isRecording = true;
       enqueueClientReady(event && event.detail);
+    });
+
+    window.addEventListener('input.start', () => {
+      runtimeState.isRecording = true;
+      runtimeState.micPermissionGranted = true;
+    });
+
+    window.addEventListener('input.stop', () => {
+      runtimeState.isRecording = false;
     });
 
     window.addEventListener('ws.close', () => {
@@ -945,9 +1071,17 @@
         clearTimeout(clientReadyTimerId);
         clientReadyTimerId = null;
       }
+      runtimeState.asrReady = false;
+      runtimeState.turnState = null;
+      runtimeState.isRecording = false;
+      runtimeState.policy = null;
     });
 
     window.addEventListener('ws.open', () => {
+      runtimeState.asrReady = false;
+      runtimeState.turnState = null;
+      runtimeState.isRecording = false;
+      runtimeState.policy = null;
       flushDeferredClientLogs();
     });
     
@@ -1539,6 +1673,7 @@
           console.warn('Failed to stop audio recorder', err);
         }
       }
+      runtimeState.isRecording = false;
       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
         window.AudioPlayer.interrupt();
       }
@@ -1802,8 +1937,22 @@
       if (state.connectionState === 'disconnected') {
         resetVoiceState();
         resetSuggestions();
+        runtimeState.isRecording = false;
+        runtimeState.turnState = null;
+        runtimeState.asrReady = false;
+        runtimeState.policy = null;
       } else if (state.infoFrame) {
         updateVoiceState(extractVoiceLocale(state.infoFrame));
+        try {
+          const framePolicy = state.infoFrame && typeof state.infoFrame === 'object'
+            ? state.infoFrame.policy
+            : null;
+          if (framePolicy && typeof framePolicy === 'object') {
+            runtimeState.policy = framePolicy;
+          }
+        } catch (err) {
+          console.warn('Failed to update policy from info frame', err);
+        }
       }
       const prevConnectionState = previousConnectionState;
       const nextConnectionState = state.connectionState;
@@ -1816,8 +1965,12 @@
 
         if (audioRecorder && typeof audioRecorder.start === 'function') {
           audioRecorder.start()
+            .then(() => {
+              runtimeState.micPermissionGranted = true;
+            })
             .catch((err) => {
               console.error('AudioRecorder start error', err);
+              runtimeState.micPermissionGranted = false;
             });
         }
         if (pendingClientReady && clientReadyTimerId === null) {
@@ -1833,6 +1986,7 @@
             console.warn('AudioRecorder stop error', err);
           }
         }
+        runtimeState.isRecording = false;
         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
           window.AudioPlayer.interrupt();
         }
@@ -1893,13 +2047,13 @@ window.addEventListener('tts.start', (event) => {
 });
 
 window.addEventListener('policy.snapshot', (event) => {
-  if (!audioRecorder || typeof audioRecorder.setPolicy !== 'function') {
-    return;
-  }
   const frame = event && event.detail;
   try {
     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
-    audioRecorder.setPolicy(policy);
+    runtimeState.policy = policy && typeof policy === 'object' ? policy : null;
+    if (audioRecorder && typeof audioRecorder.setPolicy === 'function') {
+      audioRecorder.setPolicy(policy);
+    }
   } catch (err) {
     console.warn('AudioRecorder setPolicy failed', err);
   }
@@ -1908,10 +2062,11 @@ window.addEventListener('policy.snapshot', (event) => {
 // Turn becomes Ready → hand control to user
 window.addEventListener('turn.state', (event) => {
   const frame = (event && event.detail) || {};
-  const state = typeof frame.state === 'string'
+  const nextState = typeof frame.state === 'string'
     ? frame.state
     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
-  if (state !== 'Ready') return;
+  runtimeState.turnState = typeof nextState === 'string' ? nextState : null;
+  if (runtimeState.turnState !== 'Ready') return;
 
   // Optional: why we became ready (e.g., 'tts')
   const reason = typeof frame.reason === 'string'
@@ -1920,6 +2075,7 @@ window.addEventListener('turn.state', (event) => {
   void reason; // not strictly needed, but kept for clarity
 
   DiagRecorder.maybeStart('turn');
+  maybeAutoStartCapture('turn_ready', 'tts_end');
 
   console.info('ui: turn=Ready → startMicCaptureIfIdle()');
   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
@@ -1957,6 +2113,7 @@ window.addEventListener('tts.end', () => {
 });
 
 window.addEventListener('asr.unavailable', (event) => {
+  runtimeState.asrReady = false;
   const detail = event && typeof event === 'object' ? event.detail : undefined;
   let reason = null;
   if (detail && typeof detail === 'object') {
@@ -1997,6 +2154,8 @@ window.addEventListener('asr.unavailable', (event) => {
 });
 
 window.addEventListener('asr.ready', (event) => {
+  runtimeState.asrReady = true;
+  maybeAutoStartCapture('asr_ready', 'policy');
   if (diagHudEnabled()) {
     console.info('diag=asr_ready');
     setBadge('asr:ready');
@@ -2042,7 +2201,13 @@ window.addEventListener('assistant.suggestions', (event) => {
 // Start mic immediately on ws.open as a safety net; send diag banner
 window.addEventListener('ws.open', () => {
   if (audioRecorder && typeof audioRecorder.start === 'function') {
-    audioRecorder.start().catch(() => {});
+    audioRecorder.start()
+      .then(() => {
+        runtimeState.micPermissionGranted = true;
+      })
+      .catch(() => {
+        runtimeState.micPermissionGranted = false;
+      });
   }
   try {
     if (WSClient && typeof WSClient.send === 'function') {
