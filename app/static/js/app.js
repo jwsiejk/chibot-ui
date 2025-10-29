@@ -1842,6 +1842,42 @@
 
     const POST_TTS_RELEASE_MS = 150;
 
+    let asrRetry = { tries: 0, timer: null };
+
+    function scheduleAsrRearm() {
+      if (typeof window === 'undefined') {
+        return;
+      }
+      if (asrRetry && typeof asrRetry === 'object') {
+        clearTimeout(asrRetry.timer);
+      }
+      const tries = asrRetry && typeof asrRetry.tries === 'number' ? asrRetry.tries : 0;
+      const exponent = Math.min(5, tries);
+      const delay = Math.min(30000, 1000 * Math.pow(2, exponent));
+      if (asrRetry && typeof asrRetry === 'object') {
+        asrRetry.tries = tries + 1;
+      }
+      const timer = setTimeout(() => {
+        try {
+          const payload = { type: 'asr.rearm.request' };
+          const client = window.WSClient;
+          if (client && typeof client.send === 'function') {
+            client.send(payload);
+            return;
+          }
+          const ws = window.WS;
+          if (ws && typeof ws.send === 'function') {
+            ws.send(payload);
+          }
+        } catch (err) {
+          console.warn('Failed to send asr.rearm.request', err);
+        }
+      }, delay);
+      if (asrRetry && typeof asrRetry === 'object') {
+        asrRetry.timer = timer;
+      }
+    }
+
 window.addEventListener('tts.start', (event) => {
   const detail = event && event.detail;
   if (detail) {
@@ -1920,8 +1956,28 @@ window.addEventListener('tts.end', () => {
   }
 });
 
+window.addEventListener('asr.unavailable', () => {
+  try {
+    scheduleAsrRearm();
+  } catch (err) {
+    console.warn('scheduleAsrRearm failed after asr.unavailable', err);
+  }
+});
+
 window.addEventListener('asr.ready', () => {
   console.info('ui: asr.ready → startMicCaptureIfIdle()');
+  if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
+    try {
+      window.ChatView?.showSystemFromChip?.(
+        "Voice is back. You can speak again when you’re ready."
+      );
+    } catch (err) {
+      console.warn('Failed to show voice restoration message', err);
+    }
+    asrRetry.tries = 0;
+    clearTimeout(asrRetry.timer);
+    asrRetry.timer = null;
+  }
   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
     try {
       const maybe = window.AudioRecorder.startMicCaptureIfIdle();

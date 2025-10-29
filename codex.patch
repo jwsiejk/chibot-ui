@@ -1,387 +1,357 @@
-diff --git a/app/static/css/styles.css b/app/static/css/styles.css
-index 32a4b418bc6208e708ed5665c29f80702f5de28d..5733dfa202d38f740f927a410bf05aea39a2a810 100644
---- a/app/static/css/styles.css
-+++ b/app/static/css/styles.css
-@@ -211,50 +211,53 @@ body{
- .chat{
-   display:flex; flex-direction:column; gap:0;
-   border:1px solid var(--border); border-radius:16px;
-   background:linear-gradient(180deg, #0e1422, #0b101b);
-   overflow:hidden;
- }
- .chat-header{
-   padding:14px 16px; border-bottom:1px solid var(--border);
-   background:rgba(255,255,255,.02);
- }
- .chat-header h2{margin:0; font-size:14px; letter-spacing:.3px; color:#b9c8e6}
- .messages{
-   padding:16px; display:flex; flex-direction:column; gap:12px; overflow:auto; min-height:180px;
- }
- .msg{display:flex; flex-direction:column; gap:6px}
- .msg .bubble{
-   max-width: 100%;
-   background: var(--elev);
-   border:1px solid var(--border);
-   padding:12px 14px; border-radius:14px;
-   box-shadow: 0 2px 10px rgba(0,0,0,.25) inset;
- }
- .msg.assistant .bubble{background:linear-gradient(180deg, #10192b, #0b1321)}
- .msg.user .bubble{background:linear-gradient(180deg, #101f2b, #0b1921)}
- .msg .meta{font-size:12px;color:var(--muted)}
-+.msg.system .bubble{background:linear-gradient(180deg, #101c2d, #0c1423);border:1px solid rgba(92,130,194,0.35);color:#d7e6ff}
-+.msg.system.chip-system .bubble{background:linear-gradient(180deg, #122a41, #0d1e31);border-color:rgba(120,166,255,0.45);box-shadow:0 6px 18px rgba(5,24,54,0.45)}
-+.msg.system .meta{color:rgba(215,230,255,0.72)}
- 
- /* Toolbar */
- .toolbar{
-   position:sticky; bottom:0; z-index:10;
-   display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
-   gap:12px; padding:12px 16px; border-top:1px solid var(--border);
-   background: linear-gradient(180deg, rgba(8,12,20,.6), rgba(8,12,20,.9));
-   backdrop-filter:saturate(140%) blur(6px);
- }
- .toolbar-center{display:flex; gap:10px; justify-content:center}
- .pill{
-   display:inline-flex; align-items:center; gap:8px;
-   border-radius:999px; padding:10px 16px;
-   font-weight:700; letter-spacing:.3px; border:1px solid transparent;
-   background:var(--glass); color:var(--text); cursor:pointer;
-   transition: transform .04s ease, background .2s ease, border-color .2s ease, box-shadow .2s ease;
-   box-shadow: 0 6px 16px rgba(0,0,0,.25);
- }
- .pill:active{transform:translateY(1px)}
- .pill:focus-visible{
-   outline:2px solid rgba(91,157,255,.8);
-   outline-offset:3px;
- }
- .pill.start{background:linear-gradient(135deg, #1bd8a8, #1fbf7b); color:#04110c}
- .pill.end{background:linear-gradient(135deg, #ff6b81, #ff3b55); color:#190307}
-diff --git a/app/static/js/transcript_view.js b/app/static/js/transcript_view.js
-index 3ff77869fa9b4949a9dc195953ceb7411f91921e..73d66416be6b96e04868e846cfdae84efeadecdd 100644
---- a/app/static/js/transcript_view.js
-+++ b/app/static/js/transcript_view.js
-@@ -1,105 +1,108 @@
- (() => {
-   const view = {
-     handlePartial: () => {},
-     handleFinal: () => {},
-     handleChatMessage: () => {},
-     addUserMessage: () => {},
--    reset: () => {}
-+    reset: () => {},
-+    showSystemFromChip: () => {}
-   };
- 
-   function init() {
-     const container = document.getElementById("messages");
-     if (!container) {
-       console.warn("TranscriptView: messages container not found");
-       return;
-     }
-     const form = document.getElementById("textChatForm");
-     const input = document.getElementById("textChatInput");
- 
-     const PARTIAL_THROTTLE_MS = 50;
- 
-     let partialNode = null;
-     let pendingPartial = null;
-     let partialTimer = null;
-     let lastPartialSeq = null;
-     let lastPartialReqId = null;
-     let lastPartialRenderAt = 0;
-     let bargeInEnabled = true;
-     const messageNodesById = new Map();
-     const messageNodesByClientId = new Map();
-     const messageNodesByReqId = new Map();
- 
-     function setNodeRole(node, role) {
-       if (!node) return;
-       const wrapper = node;
-       if (!(wrapper instanceof HTMLElement)) return;
-       wrapper.dataset.role = role;
--      wrapper.classList.remove("assistant", "user");
--      if (role === "assistant" || role === "user") {
-+      wrapper.classList.remove("assistant", "user", "system");
-+      if (role === "assistant" || role === "user" || role === "system") {
-         wrapper.classList.add(role);
-       }
-     }
- 
-     function scrollToBottom() {
-       try {
-         container.scrollTop = container.scrollHeight;
-       } catch (err) {
-         console.warn("TranscriptView: failed to scroll", err);
-       }
-     }
- 
-     function ensureParagraph(node) {
-       if (!node) return null;
-       const bubble = node.querySelector(".bubble");
-       if (!bubble) return null;
-       let paragraph = bubble.querySelector("p");
-       if (!paragraph) {
-         paragraph = document.createElement("p");
-         bubble.appendChild(paragraph);
-       }
-       return paragraph;
-     }
- 
-     function setNodeText(node, text) {
-       const paragraph = ensureParagraph(node);
-       if (!paragraph) return;
-       const safe = typeof text === "string" && text.length ? text : "\u00a0";
-       paragraph.textContent = safe;
-     }
- 
-     function updateMeta(node, role, { partial = false, pending = false } = {}) {
-       const meta = node.querySelector(".meta");
-       if (!meta) return;
-       if (role === "user") {
-         if (partial) {
-           meta.textContent = "you · speaking…";
-         } else if (pending) {
-           meta.textContent = "you · sending…";
-         } else {
-           meta.textContent = "you · just now";
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 44a78ca65d82cced8c975ce5b08aaa62282bc6bd..9cf7bd6be185a1b6a886bbaef24b3d39baf1d526 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -1820,50 +1820,86 @@
+               console.error('AudioRecorder start error', err);
+             });
          }
-+      } else if (role === "system") {
-+        meta.textContent = "Chip · just now";
-       } else if (partial) {
-         meta.textContent = "assistant · transcribing…";
-       } else {
-         meta.textContent = "assistant · just now";
-       }
-     }
+         if (pendingClientReady && clientReadyTimerId === null) {
+           flushPendingClientReady();
+         }
+       } else if (becameDisconnected) {
+         Waveform.stop();
  
-     function createMessage(role, text, { partial = false } = {}) {
-       const wrapper = document.createElement("div");
-       wrapper.className = `msg ${role}${partial ? " partial" : ""}`;
-       if (partial) {
-         wrapper.dataset.partial = "true";
-       }
-       setNodeRole(wrapper, role);
-       const bubble = document.createElement("div");
-       bubble.className = "bubble";
-       const paragraph = document.createElement("p");
-       bubble.appendChild(paragraph);
-       wrapper.appendChild(bubble);
-       const meta = document.createElement("div");
-       meta.className = "meta";
-       wrapper.appendChild(meta);
-       setNodeText(wrapper, text);
-       updateMeta(wrapper, role, { partial });
-       return wrapper;
-@@ -314,51 +317,56 @@
-           new CustomEvent("engine.mode", { detail: { mode: "Listening", source: "text_barge" } })
-         );
-       } catch (err) {
-         console.warn("TranscriptView: failed to emit engine.mode", err);
-       }
-     }
- 
-     function handleSubmit(event) {
-       event.preventDefault();
-       if (!input) return;
-       const raw = input.value || "";
-       const trimmed = raw.trim();
-       if (!trimmed) return;
-       input.value = "";
-       const clientMsgId = generateClientMsgId();
-       addUserMessage(trimmed, { clientMsgId, pending: true });
-       sendChatPayload(trimmed, clientMsgId);
-       maybeInterruptForBarge();
-       input.focus();
-     }
- 
-     function handleChatMessage(frame) {
-       if (!frame || typeof frame !== "object") return;
-       const text = typeof frame.text === "string" ? frame.text.trim() : "";
-       if (!text) return;
--      const role = frame.role === "assistant" ? "assistant" : "user";
-+      let role = "assistant";
-+      if (frame.role === "user") {
-+        role = "user";
-+      } else if (frame.role === "system") {
-+        role = "system";
-+      }
-       const messageId = typeof frame.id === "string" ? frame.id : null;
-       const clientMsgId = typeof frame.client_msg_id === "string" ? frame.client_msg_id : null;
-       const reqId = typeof frame.req_id === "string" ? frame.req_id : null;
- 
-       let node = null;
- 
-       if (messageId && messageNodesById.has(messageId)) {
-         node = messageNodesById.get(messageId);
-       }
-       if (!node && clientMsgId && messageNodesByClientId.has(clientMsgId)) {
-         node = messageNodesByClientId.get(clientMsgId);
-       }
-       if (!node && role === "user" && reqId && messageNodesByReqId.has(reqId)) {
-         const entry = messageNodesByReqId.get(reqId);
-         if (entry && entry.node) {
-           if (!entry.role || entry.role === role) {
-             node = entry.node;
+         if (audioRecorder && typeof audioRecorder.stop === 'function') {
+           try {
+             audioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
            }
          }
+         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+           window.AudioPlayer.interrupt();
+         }
        }
- 
-       if (!node) {
-         node = createMessage(role, text);
-         container.appendChild(node);
-       } else {
-@@ -374,58 +382,71 @@
-         messageNodesById.set(messageId, node);
-         node.dataset.messageId = messageId;
-       } else {
-         delete node.dataset.messageId;
-       }
- 
-       if (clientMsgId) {
-         messageNodesByClientId.set(clientMsgId, node);
-         node.dataset.clientMsgId = clientMsgId;
-       } else {
-         delete node.dataset.clientMsgId;
-       }
- 
-       if (reqId && role === "user") {
-         messageNodesByReqId.set(reqId, { node, role });
-         node.dataset.reqId = reqId;
-       } else if (reqId) {
-         node.dataset.reqId = reqId;
-       } else {
-         delete node.dataset.reqId;
-       }
- 
-       scrollToBottom();
-     }
- 
-+    function showSystemFromChip(text) {
-+      const message = typeof text === "string" ? text.trim() : "";
-+      if (!message) {
-+        return;
-+      }
-+      const node = createMessage("system", message);
-+      node.classList.add("chip-system");
-+      node.dataset.from = "Chip";
-+      container.appendChild(node);
-+      scrollToBottom();
-+    }
-+
-     function handlePolicyInteraction(event) {
-       const detail = event && event.detail;
-       const policy = detail && detail.policy;
-       if (policy && typeof policy.barge_in_enabled === "boolean") {
-         bargeInEnabled = policy.barge_in_enabled;
-       }
-     }
- 
-     if (form && input) {
-       form.addEventListener("submit", handleSubmit);
-     }
- 
-     window.addEventListener("policy.interaction", handlePolicyInteraction);
-     window.addEventListener("ws.close", () => {
-       bargeInEnabled = true;
-       clearPartial({ removeNode: true });
+       updateResumeBanner(state);
      });
  
-     view.handlePartial = handlePartial;
-     view.handleFinal = handleFinal;
-     view.handleChatMessage = handleChatMessage;
-     view.addUserMessage = addUserMessage;
-     view.reset = () => clearPartial({ removeNode: true });
-+    view.showSystemFromChip = showSystemFromChip;
-   }
+     const POST_TTS_RELEASE_MS = 150;
  
-   window.TranscriptView = view;
- 
-   if (document.readyState === "loading") {
-     document.addEventListener("DOMContentLoaded", init);
-   } else {
-     init();
++    let asrRetry = { tries: 0, timer: null };
++
++    function scheduleAsrRearm() {
++      if (typeof window === 'undefined') {
++        return;
++      }
++      if (asrRetry && typeof asrRetry === 'object') {
++        clearTimeout(asrRetry.timer);
++      }
++      const tries = asrRetry && typeof asrRetry.tries === 'number' ? asrRetry.tries : 0;
++      const exponent = Math.min(5, tries);
++      const delay = Math.min(30000, 1000 * Math.pow(2, exponent));
++      if (asrRetry && typeof asrRetry === 'object') {
++        asrRetry.tries = tries + 1;
++      }
++      const timer = setTimeout(() => {
++        try {
++          const payload = { type: 'asr.rearm.request' };
++          const client = window.WSClient;
++          if (client && typeof client.send === 'function') {
++            client.send(payload);
++            return;
++          }
++          const ws = window.WS;
++          if (ws && typeof ws.send === 'function') {
++            ws.send(payload);
++          }
++        } catch (err) {
++          console.warn('Failed to send asr.rearm.request', err);
++        }
++      }, delay);
++      if (asrRetry && typeof asrRetry === 'object') {
++        asrRetry.timer = timer;
++      }
++    }
++
+ window.addEventListener('tts.start', (event) => {
+   const detail = event && event.detail;
+   if (detail) {
+     updateVoiceState(extractVoiceLocale(detail));
    }
- })();
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index a41385ba40e750bd9b4e6aa27c63fc631672d062..ce921ae251dd313e9588fef0e36bac3a1f4d5cc3 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1286,50 +1286,78 @@
-       }
-     } else if (frame.type === "input.start") {
-       handleInputStartFrame(frame);
-     } else if (frame.type === "input.stop") {
-       handleInputStopFrame();
-     } else if (frame.type === "asr.ready") {
-       handleAsrReadyFrame(frame);
-     } else if (frame.type === "asr.partial") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handlePartial === "function") {
-         try {
-           view.handlePartial(frame);
-         } catch (err) {
-           console.warn("TranscriptView partial handler error", err);
-         }
-       }
-     } else if (frame.type === "asr.final") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleFinal === "function") {
-         try {
-           view.handleFinal(frame);
-         } catch (err) {
-           console.warn("TranscriptView final handler error", err);
-         }
-       }
-+    } else if (frame.type === "asr.unavailable") {
-+      const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
-+      const details = frame && typeof frame.details === "string"
-+        ? frame.details
-+        : (frame && typeof frame.detail === "string" ? frame.detail : "");
-+      console.warn("asr.unavailable", reason, details);
-+      try {
-+        const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
-+        hud?.setState?.("Chat");
-+      } catch (err) {
-+        console.warn("Failed to update HUD state after asr.unavailable", err);
-+      }
-+      try {
-+        const view = window.TranscriptView;
-+        view?.showSystemFromChip?.(
-+          "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
-+        );
-+      } catch (err) {
-+        console.warn("Failed to render Chip system message after asr.unavailable", err);
-+      }
-+      try {
-+        window?.Banner?.show?.(
-+          "Voice temporarily unavailable. You can continue via chat.",
-+          { level: "warning", ttlMs: 10000 }
-+        );
-+      } catch (err) {
-+        console.warn("Failed to show voice unavailable banner", err);
-+      }
-     } else if (frame.type === "chat.message") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleChatMessage === "function") {
-         try {
-           view.handleChatMessage(frame);
-         } catch (err) {
-           console.warn("TranscriptView chat handler error", err);
-         }
-       }
-     } else if (frame.type === "chat.history") {
-       handleChatHistoryFrame(frame);
+   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
+     try {
+       window.AudioRecorder.handleTtsStart();
+     } catch (err) {
+       console.warn('AudioRecorder handleTtsStart failed', err);
      }
-     dispatchFrame(frame);
    }
+ });
  
-   function parseFrame(event) {
-     const { data } = event;
-     if (typeof data === "string") {
+ window.addEventListener('policy.snapshot', (event) => {
+   if (!audioRecorder || typeof audioRecorder.setPolicy !== 'function') {
+     return;
+   }
+   const frame = event && event.detail;
+   try {
+     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
+     audioRecorder.setPolicy(policy);
+   } catch (err) {
+     console.warn('AudioRecorder setPolicy failed', err);
+   }
+@@ -1898,52 +1934,72 @@ window.addEventListener('turn.state', (event) => {
+       console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready threw', err);
+     }
+   }
+ });
+ 
+ // Assistant TTS finished → open mic after optional delay
+ window.addEventListener('tts.end', () => {
+   const release = () => {
+     DiagRecorder.maybeStart('ready');
+     if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
        try {
-         const frame = JSON.parse(data);
-         if (frame && frame.type === "server.ping") {
-           send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
-           return;
-         }
-         handleMessageFrame(frame);
+         window.AudioRecorder.handleTtsEnd();
+       } catch (err) {
+         console.warn('AudioRecorder handleTtsEnd failed', err);
+       }
+     }
+   };
+ 
+   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
+     setTimeout(release, POST_TTS_RELEASE_MS);
+   } else {
+     release();
+   }
+ });
+ 
++window.addEventListener('asr.unavailable', () => {
++  try {
++    scheduleAsrRearm();
++  } catch (err) {
++    console.warn('scheduleAsrRearm failed after asr.unavailable', err);
++  }
++});
++
+ window.addEventListener('asr.ready', () => {
+   console.info('ui: asr.ready → startMicCaptureIfIdle()');
++  if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
++    try {
++      window.ChatView?.showSystemFromChip?.(
++        "Voice is back. You can speak again when you’re ready."
++      );
++    } catch (err) {
++      console.warn('Failed to show voice restoration message', err);
++    }
++    asrRetry.tries = 0;
++    clearTimeout(asrRetry.timer);
++    asrRetry.timer = null;
++  }
+   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
+     try {
+       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
+       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
+         maybe.catch((err) => {
+           console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
+         });
+       }
+     } catch (err) {
+       console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
+     }
+   }
+ });
+ 
+ window.addEventListener('assistant.suggestions', (event) => {
+   const detail = event && event.detail;
+   applySuggestionsFrame(detail);
+ });
+ 
+ 
+ // Start mic immediately on ws.open as a safety net; send diag banner
+ window.addEventListener('ws.open', () => {
+   if (audioRecorder && typeof audioRecorder.start === 'function') {
+     audioRecorder.start().catch(() => {});
+   }
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 7c6a06ce961ec936291086142317d598bef88b7b..715bffa6bd8983347e469563b47331b6d2f69abe 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -1,49 +1,50 @@
+ """Deepgram-backed ASR runtime for the voice v2 engine."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import logging
+ import time
+ import uuid
+ from collections import deque
+ from dataclasses import dataclass, field
+ from typing import Any, Callable, Deque, Dict, Mapping, Optional
+ 
+ from app.config import (
+     ASR_BACKPRESSURE_THRESHOLD_BYTES,
+     ASR_IDLE_CLOSE_MS,
+     ASR_TRACE,
+ )
+ from app.policy.model import Policy
+ from app.services.streaming_asr.deepgram_client import DeepgramClient
+ from app.telemetry import bus
+ from app.voice_v2 import (
+     EVT_ASR_FINAL,
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
++    EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.voice_v2.engine import EngineV2
+ 
+ _log = logging.getLogger(__name__)
+ 
+ _DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
+ _PARTIAL_CONFIDENCE = 0.55
+ _FINAL_CONFIDENCE = 0.9
+ _DEFAULT_IDLE_CLOSE_MS = 4000
+ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+ _TRACE_ENABLED = bool(ASR_TRACE)
+ _STREAM_OPEN_TIMEOUT_S = 5.0
+ _NO_AUDIO_TIMEOUT_S = 9.0
+ _LISTENING_STATE = "Listening"
+ _READY_STATES = {"Ready", "Idle"}
+ 
+ 
+ def _safe_url(url: str | None) -> str:
+     if not url:
+         return ""
+     try:
+         from urllib.parse import urlparse, urlunparse
+ 
+         u = urlparse(url)
+@@ -120,50 +121,59 @@ class ASRRuntime:
+         *,
+         telemetry_bus: Any | None = None,
+     ) -> None:
+         if engine is None:
+             raise ValueError("engine must be provided")
+         if client is None:
+             raise ValueError("client must be provided")
+ 
+         self._engine = engine
+         self._client = client
+         self._bus = telemetry_bus or bus
+         self._configure_client()
+         self._sessions: Dict[str, _SessionState] = {}
+         self._loop: asyncio.AbstractEventLoop | None = None
+         self.policy = Policy()
+         configured_idle = ASR_IDLE_CLOSE_MS
+         if not isinstance(configured_idle, (int, float)):
+             configured_idle = _DEFAULT_IDLE_CLOSE_MS
+         client_idle = getattr(client, "idle_close_ms", None)
+         if isinstance(client_idle, (int, float)) and client_idle >= 0:
+             self._idle_close_ms = int(client_idle)
+         else:
+             self._idle_close_ms = int(configured_idle)
+         if self._idle_close_ms < 0:
+             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
++        self._ws_json_subscription = None
++        subscribe = getattr(self._bus, "subscribe", None)
++        if callable(subscribe):
++            try:
++                self._ws_json_subscription = subscribe(
++                    EVT_WS_JSON_RECV, self._handle_ws_json_event
++                )
++            except Exception:  # pragma: no cover - defensive logging
++                _log.exception("evt=asr_runtime_subscribe_failed")
+ 
+     def set_bus(self, telemetry_bus: Any | None) -> None:
+         if telemetry_bus is None:
+             return
+         self._bus = telemetry_bus
+ 
+     def _configure_client(self) -> None:
+         """Force the Deepgram client to use the containerized listen URL."""
+ 
+         target_url = _DG_LISTEN_URL
+         current_url = getattr(self._client, "_url", None)
+         if current_url == target_url:
+             return
+         try:
+             setattr(self._client, "_url", target_url)
+         except Exception:  # pragma: no cover - defensive
+             _log.debug(
+                 "evt=asr_runtime_set_listen_url_failed target_url=%s", target_url,
+                 exc_info=True,
+             )
+         else:
+             _log.debug(
+                 "evt=asr_runtime_listen_url_set url=%s", target_url
+             )
+ 
+@@ -336,50 +346,77 @@ class ASRRuntime:
+         self._ensure_stream(sid, state)
+ 
+         deadline = time.monotonic() + max(0.0, _STREAM_OPEN_TIMEOUT_S)
+         while not state.stream_open:
+             task = state.stream_open_task
+             now = time.monotonic()
+             if task is None or task.done():
+                 if now >= deadline:
+                     break
+                 self._ensure_stream(sid, state)
+                 await asyncio.sleep(0.01)
+                 continue
+             remaining = deadline - now
+             if remaining <= 0:
+                 break
+             try:
+                 await asyncio.wait_for(task, timeout=remaining)
+             except asyncio.TimeoutError:
+                 break
+             except asyncio.CancelledError:
+                 raise
+ 
+     # ------------------------------------------------------------------
+     # Internal helpers
+     # ------------------------------------------------------------------
++
++    def _handle_ws_json_event(self, event: Mapping[str, Any]) -> None:
++        if not isinstance(event, Mapping):
++            return
++        if event.get("type") != EVT_WS_JSON_RECV:
++            return
++        sid = event.get("sid")
++        if not isinstance(sid, str) or not sid:
++            return
++        state = self._sessions.get(sid)
++        if state is None:
++            return
++        payload = event.get("payload")
++        meta: Mapping[str, Any] | None = None
++        if isinstance(payload, Mapping):
++            candidate = payload.get("meta")
++            if isinstance(candidate, Mapping):
++                meta = candidate
++        frame_type = meta.get("frame_type") if meta is not None else None
++        if frame_type != "asr.rearm.request":
++            return
++        if state.stream_open:
++            return
++        try:
++            self.prearm(sid)
++        except Exception:  # pragma: no cover - defensive logging
++            _log.exception("evt=asr_runtime_rearm_failed sid=%s", sid)
+     def _emit_log(self, payload: Dict[str, Any]) -> None:
+         if not isinstance(payload, dict):
+             return
+         event = dict(payload)
+         event.setdefault("type", "EVT_LOG")
+         try:
+             self._bus.publish(event)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_emit_log_failed")
+ 
+     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
+         loop = self._loop
+         if loop is not None:
+             return loop
+         try:
+             loop = asyncio.get_running_loop()
+         except RuntimeError:
+             loop = None
+         self._loop = loop
+         return loop
+ 
+     def _apply_backpressure(self, sid: str, state: _SessionState) -> None:
+         if _BACKPRESSURE_THRESHOLD <= 0:
+             return
+         if state.buffered_bytes <= _BACKPRESSURE_THRESHOLD:

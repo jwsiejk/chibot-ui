@@ -22,6 +22,7 @@ from app.voice_v2 import (
     EVT_ASR_OPEN,
     EVT_ASR_PARTIAL,
     EVT_ASR_READY,
+    EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
 )
 from app.voice_v2.engine import EngineV2
@@ -142,6 +143,15 @@ class ASRRuntime:
             self._idle_close_ms = int(configured_idle)
         if self._idle_close_ms < 0:
             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
+        self._ws_json_subscription = None
+        subscribe = getattr(self._bus, "subscribe", None)
+        if callable(subscribe):
+            try:
+                self._ws_json_subscription = subscribe(
+                    EVT_WS_JSON_RECV, self._handle_ws_json_event
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                _log.exception("evt=asr_runtime_subscribe_failed")
 
     def set_bus(self, telemetry_bus: Any | None) -> None:
         if telemetry_bus is None:
@@ -358,6 +368,33 @@ class ASRRuntime:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _handle_ws_json_event(self, event: Mapping[str, Any]) -> None:
+        if not isinstance(event, Mapping):
+            return
+        if event.get("type") != EVT_WS_JSON_RECV:
+            return
+        sid = event.get("sid")
+        if not isinstance(sid, str) or not sid:
+            return
+        state = self._sessions.get(sid)
+        if state is None:
+            return
+        payload = event.get("payload")
+        meta: Mapping[str, Any] | None = None
+        if isinstance(payload, Mapping):
+            candidate = payload.get("meta")
+            if isinstance(candidate, Mapping):
+                meta = candidate
+        frame_type = meta.get("frame_type") if meta is not None else None
+        if frame_type != "asr.rearm.request":
+            return
+        if state.stream_open:
+            return
+        try:
+            self.prearm(sid)
+        except Exception:  # pragma: no cover - defensive logging
+            _log.exception("evt=asr_runtime_rearm_failed sid=%s", sid)
     def _emit_log(self, payload: Dict[str, Any]) -> None:
         if not isinstance(payload, dict):
             return
