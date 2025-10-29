@@ -1,524 +1,310 @@
-diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
-index 4639708a1491e71ea08e90d8967e435c3946e0b2..d5336f92114cad4e36b795ccb871e043dd493601 100644
---- a/app/voice_v2/__init__.py
-+++ b/app/voice_v2/__init__.py
-@@ -19,64 +19,66 @@ EVT_TURN_END = "EVT_TURN_END"
- EVT_TURN_ROLLUP = "EVT_TURN_ROLLUP"
- EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index c5de8fea366ea41084d41d6f50ef114e0579409e..0764246b17555dc698fd2d29d6652327638f4a1c 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,34 +1,36 @@
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 20000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
  
- EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
- EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
- 
- EVT_MIC_GATE = "EVT_MIC_GATE"
- EVT_BARGE_DETECTED = "EVT_BARGE_DETECTED"
- EVT_BARGE_CONFIRMED = "EVT_BARGE_CONFIRMED"
- EVT_BARGE_REJECTED = "EVT_BARGE_REJECTED"
- EVT_ACTION_SAY_END = "EVT_ACTION_SAY_END"
- 
- EVT_ASR_READY = "EVT_ASR_READY"
- EVT_ASR_OPEN = "EVT_ASR_OPEN"
- EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
- EVT_ASR_FINAL = "EVT_ASR_FINAL"
- EVT_NLU = "EVT_NLU"
- EVT_NLG = "EVT_NLG"
- EVT_LLM_RESPONSE_START = "EVT_LLM_RESPONSE_START"
- EVT_LLM_RESPONSE_END = "EVT_LLM_RESPONSE_END"
- EVT_DIALOG_PLAN = "EVT_DIALOG_PLAN"
- EVT_HUD_STATE = "EVT_HUD_STATE"
- EVT_CLIENT_MIC_OPEN = "EVT_CLIENT_MIC_OPEN"
- EVT_CLIENT_BANNER = "EVT_CLIENT_BANNER"
- EVT_CLIENT_LOG = "EVT_CLIENT_LOG"
-+EVT_CLIENT_AUTOSTART = "EVT_CLIENT_AUTOSTART"
- 
- __all__ = [
-     "EVT_WS_OPEN",
-     "EVT_WS_CLOSE",
-     "EVT_WS_JSON_RECV",
-     "EVT_WS_JSON_SEND",
-     "EVT_SESSION_STEP",
-     "EVT_WS_AUDIO_RECV",
-     "EVT_WS_AUDIO_SEND",
-     "EVT_CHAT_USER",
-     "EVT_TTS_START",
-     "EVT_TTS_END",
-     "EVT_TTS_MASK",
-     "EVT_TURN_STATE",
-     "EVT_TURN_BEGIN",
-     "EVT_TURN_END",
-     "EVT_TURN_ROLLUP",
-     "EVT_PERF_SUMMARY",
-     "EVT_POLICY_APPLIED",
-     "EVT_ACWR_RECOMPUTE",
-     "EVT_MIC_GATE",
-     "EVT_BARGE_DETECTED",
-     "EVT_BARGE_CONFIRMED",
-     "EVT_BARGE_REJECTED",
-     "EVT_ACTION_SAY_END",
-     "EVT_ASR_READY",
-     "EVT_ASR_OPEN",
-     "EVT_ASR_PARTIAL",
-     "EVT_ASR_FINAL",
-     "EVT_NLU",
-     "EVT_NLG",
-     "EVT_LLM_RESPONSE_START",
-     "EVT_LLM_RESPONSE_END",
-     "EVT_DIALOG_PLAN",
-     "EVT_HUD_STATE",
-     "EVT_CLIENT_MIC_OPEN",
-     "EVT_CLIENT_BANNER",
-     "EVT_CLIENT_LOG",
-+    "EVT_CLIENT_AUTOSTART",
- ]
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 5e42da43cc852e7497a9abd77ba5f94aa1611de0..a84859680fff648a30585118937a66bf5e53b37f 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -2,50 +2,51 @@
- from __future__ import annotations
- 
- import os
- import asyncio
- import contextlib
- import logging
- import math
- import time
- import sys, platform, socket, os, inspect
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
- 
- import json
- from urllib.parse import parse_qs
- 
- from app import config
- from app.logging_setup import current_sid
- from app.security.jwt_utils import verify_ws_token
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ASR_OPEN,
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_CLIENT_BANNER,
-+    EVT_CLIENT_AUTOSTART,
-     EVT_CLIENT_MIC_OPEN,
-     EVT_HUD_STATE,
-     EVT_SESSION_STEP,
-     EVT_TTS_END,
-     EVT_TTS_MASK,
-     EVT_CLIENT_LOG,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_audio_header_against_policy, validate_frame
- 
- try:  # pragma: no cover - uvicorn is an optional dependency in tests
-     from uvicorn.protocols.utils import ClientDisconnected
- except Exception:  # pragma: no cover - fallback when uvicorn missing
-     class ClientDisconnected(Exception):  # type: ignore[no-redef]
-         """Fallback placeholder when uvicorn is unavailable."""
- 
- 
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- ALLOW_AUDIO_WITHOUT_ASR = os.getenv("ALLOW_AUDIO_WITHOUT_ASR", "0") == "1"
- PING_MIN_INTERVAL_MS = 500
-@@ -79,60 +80,75 @@ _OUTBOUND_ALLOWED_TYPES = {
-     "tts.end",
-     "asr.ready",
-     "asr.partial",
-     "asr.final",
-     "asr.unavailable",
-     "error",
-     "chat.message",
-     "chat.history",
-     "dialog.plan",
-     "hud.nudge",
- }
- 
- _OUTBOX_MAXSIZE = 256
- 
- _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
- 
- _log = logging.getLogger(__name__)
- 
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
-     "chat.user",
-     "client.diag",
-     "client.log",
-+    "client.autostart",
-     "client.telemetry",
-     "client.banner",
-     "asr.rearm.request",
- }
- 
- _CLIENT_TELEMETRY_ALLOWED_EVENTS = {
-     "EVT_RECORDER_STARTED",
-     "EVT_AUDIO_CHUNK_SENT_CLIENT",
- }
- 
-+_CLIENT_AUTOSTART_ALLOWED_EVENTS = {
-+    "attempt",
-+    "armed",
-+    "blocked",
-+    "cta_click",
-+    "cta_shown",
-+    "error",
-+    "gesture",
-+    "max_attempts",
-+    "recording_started",
-+    "recording_stopped",
-+    "rejected",
-+}
++  const USE_AUDIORECORDER = typeof window !== "undefined" && !!window.AudioRecorder;
 +
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading WSClient");
+   }
+   const P0 = AppState.policy || {};
+   AppState.policy = {
+     ...P0,
+     auto_record_after_greet: P0.auto_record_after_greet ?? true,
+     require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? true,
+     tts_gate_enabled: P0.tts_gate_enabled ?? true,
+     autostart_retry_on: Array.isArray(P0.autostart_retry_on)
+       ? P0.autostart_retry_on.slice()
+       : ["asrReady", "ttsEnded", "turnState:Ready"],
+     autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
+       ? P0.autostart_backoff_ms.slice()
+       : [0, 300, 1000],
+     autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts) ? P0.autostart_max_attempts : 5,
+     show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
+       ? P0.show_tap_to_speak_cta_after_ms
+       : 2000,
+     reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
+   };
  
- class TokenBucket:
-     """Simple in-memory token bucket."""
+   const appStateEventEmitter = createEventEmitter();
+   if (typeof AppState.on !== "function") {
+@@ -71,50 +73,51 @@
+   let autoResumeAttemptToken = null;
+   let toastRoot = null;
+   let lastTokenValue = null;
+   let lastTokenMintedAt = null;
  
-     def __init__(self, capacity: int, refill_seconds: float) -> None:
-         self.capacity = capacity
-         self.tokens = float(capacity)
-         self.refill_seconds = refill_seconds
-         self.last_refill = time.monotonic()
+   const MEDIA_RECORDER_MIME_TYPE = "audio/webm;codecs=opus";
+   const DEFAULT_TIMESLICE_MS = 250;
+   const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
+   const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
+   const CLIENT_BANNER_TYPE = "client.banner";
+   const CLIENT_BANNER_MAX_HISTORY = 24;
+   const CLIENT_BANNER_MAX_QUEUE = 24;
+   const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
+   const CLIENT_BANNER_STRING_MAX = 240;
  
-     def consume(self, count: int, now: Optional[float] = None) -> bool:
-         if now is None:
-             now = time.monotonic()
-         elapsed = max(0.0, now - self.last_refill)
-         if elapsed > 0:
-             refill = (self.capacity / self.refill_seconds) * elapsed
-             if refill > 0:
-                 self.tokens = min(self.capacity, self.tokens + refill)
-                 self.last_refill = now
-         if self.tokens < count:
-             return False
-         self.tokens -= count
-         return True
+   let micStream = null;
+   let micStreamPromise = null;
+   let mediaRecorderInstance = null;
+   let mediaRecorderHandlers = null;
+   let activeInputReqId = null;
+   let micOpenEmitted = false;
+   let inputDescriptor = null;
+   let inputVendor = null;
+   let hudListening = false;
+   let clientBannerQueue = [];
++  let legacyStartListeningArmed = false;
  
+   // Initialize the client banner state only after related constants are defined.
+   ensureClientBannerState();
  
-@@ -1112,50 +1128,91 @@ class ChatV2Adapter:
-                 )
-                 return self._HandleResult(True)
-             ctx.client_banner_events.append(dict(sanitized_event))
-             if len(ctx.client_banner_events) > 64:
-                 del ctx.client_banner_events[: len(ctx.client_banner_events) - 64]
-             log_meta: Dict[str, Any] = {
-                 "label": sanitized_event.get("label"),
-                 "client_ts_ms": sanitized_event.get("ts_ms"),
-             }
-             event_meta = sanitized_event.get("meta")
-             if event_meta:
-                 log_meta["event_meta"] = event_meta
-             if ctx.client_banner_info:
-                 log_meta["info"] = ctx.client_banner_info
-             meta["client_banner"] = {"label": sanitized_event.get("label")}
-             bus.publish(
-                 {
-                     "type": EVT_CLIENT_BANNER,
-                     "sid": ctx.sid,
-                     "who": "client",
-                     "source": "ws_client",
-                     "meta": log_meta,
-                 }
-             )
+   const TAP_TO_SPEAK_CTA_ID = "wsclient-tap-to-speak-cta";
+   const TAP_TO_SPEAK_CTA_CLASS = "wsclient-tap-to-speak-cta";
+   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
+   const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture", "cta", "cta_click"]);
  
-+        if frame_type == "client.autostart":
-+            event_name = frame.get("event")
-+            if not isinstance(event_name, str) or not event_name.strip():
-+                meta["error"] = "schema_invalid"
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._send_error(
-+                    send,
-+                    ctx.sid,
-+                    "schema_invalid",
-+                    "client.autostart requires an event label",
-+                )
-+                return self._HandleResult(True)
-+
-+            normalized_event = event_name.strip()
-+            if normalized_event not in _CLIENT_AUTOSTART_ALLOWED_EVENTS:
-+                meta["error"] = "schema_invalid"
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._send_error(
-+                    send,
-+                    ctx.sid,
-+                    "schema_invalid",
-+                    "client.autostart event must be a supported value",
-+                )
-+                return self._HandleResult(True)
-+
-+            sanitized_meta = self._sanitize_autostart_meta(frame.get("meta"))
-+            event_payload: Dict[str, Any] = {"event": normalized_event}
-+            if sanitized_meta:
-+                event_payload["meta"] = sanitized_meta
-+            meta["client_autostart"] = dict(event_payload)
-+            bus.publish(
-+                {
-+                    "schema_version": "1",
-+                    "type": EVT_CLIENT_AUTOSTART,
-+                    "sid": ctx.sid,
-+                    "who": "client",
-+                    "source": "ws_client",
-+                    "meta": event_payload,
-+                }
-+            )
-+
-         if frame_type == "client.telemetry":
-             event_name = frame.get("event")
-             if event_name not in _CLIENT_TELEMETRY_ALLOWED_EVENTS:
-                 meta["error"] = "schema_invalid"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "client.telemetry event must be a supported value",
-                 )
-                 return self._HandleResult(True)
+   let gestureListenerCleanup = null;
  
-             frame_sid = frame.get("sid")
-             if frame_sid is not None and not isinstance(frame_sid, str):
-                 meta["error"] = "schema_invalid"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "client.telemetry sid must be a string if provided",
-                 )
-                 return self._HandleResult(True)
+   function createEventEmitter() {
+     const registry = new Map();
+     return {
+       on(event, handler) {
+         if (typeof event !== "string" || !event || typeof handler !== "function") {
+           return () => {};
+         }
+         let listeners = registry.get(event);
+         if (!listeners) {
+           listeners = new Set();
+           registry.set(event, listeners);
+         }
+         listeners.add(handler);
+         return () => {
+@@ -1464,96 +1467,103 @@
+       inputVendor = frame && typeof frame.vendor === "string" && frame.vendor ? frame.vendor : null;
+       micOpenEmitted = false;
+       AppState.asrReady = false;
+       updateState({ asrReady: false });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("asrReady", { ready: false });
+       }
+       return;
+     }
+     inputDescriptor = {
+       container: typeof descriptor.container === "string" ? descriptor.container.toLowerCase() : "",
+       codec: typeof descriptor.codec === "string" ? descriptor.codec.toLowerCase() : "",
+       rate_hz: Number(descriptor.rate_hz) || null,
+       channels: Number(descriptor.channels) || null
+     };
+     inputVendor = frame && typeof frame.vendor === "string" && frame.vendor ? frame.vendor : null;
+     micOpenEmitted = false;
+     AppState.asrReady = true;
+     updateState({ asrReady: true });
+     if (typeof AppState.emit === "function") {
+       AppState.emit("asrReady", { ready: true });
+     }
+   }
  
-@@ -2139,50 +2196,81 @@ class ChatV2Adapter:
-             sanitized["message"] = message.strip()[:256]
+   function stopInputCapture(options = {}) {
++    legacyStartListeningArmed = false;
++    if (USE_AUDIORECORDER) {
++      return;
++    }
+     activeInputReqId = null;
+     micOpenEmitted = false;
+     const recorder = mediaRecorderInstance;
+     const handlers = mediaRecorderHandlers;
+     mediaRecorderInstance = null;
+     mediaRecorderHandlers = null;
+     if (typeof window !== "undefined") {
+       window.__mediaRecorder = null;
+     }
+     if (recorder) {
+       if (handlers) {
+         if (handlers.data) {
+           recorder.removeEventListener("dataavailable", handlers.data);
+         }
+         if (handlers.error) {
+           recorder.removeEventListener("error", handlers.error);
+         }
+         if (handlers.stop) {
+           recorder.removeEventListener("stop", handlers.stop);
+         }
+       }
+       try {
+         if (recorder.state !== "inactive") {
+           recorder.stop();
+         }
+       } catch (err) {
+         console.warn("Failed to stop MediaRecorder", err);
+       }
+     }
+     if (!options || options.resetStream !== false) {
+       micStreamPromise = null;
+       stopMicStream();
+     }
+     AppState.recorder = { active: false };
+     updateState({ recorder: { active: false } });
+     if (typeof AppState.emit === "function") {
+       const stopReason = options && typeof options.reason === "string" ? options.reason : null;
+       AppState.emit("recordingStopped", { reason: stopReason });
+     }
+     sendAutostartTelemetry("recording_stopped", {
+       reason: options && typeof options.reason === "string" ? options.reason : undefined,
+     });
+     updateHudListening(false);
+   }
  
-         client_ts = payload.get("ts") or payload.get("client_ts")
-         if isinstance(client_ts, (int, float)) and math.isfinite(client_ts):
-             sanitized["client_ts_ms"] = int(client_ts)
- 
-         detail = payload.get("detail")
-         if detail is not None:
-             try:
-                 sanitized["detail"] = bus.redact_payload(detail)
-             except Exception:
-                 try:
-                     sanitized["detail"] = bus.redact_payload(str(detail))
-                 except Exception:
-                     sanitized["detail"] = str(detail)
- 
-         extra = payload.get("extra")
-         if extra is not None:
-             try:
-                 sanitized["extra"] = bus.redact_payload(extra)
-             except Exception:
-                 sanitized["extra"] = str(extra)
- 
-         return sanitized
- 
-+    @staticmethod
-+    def _sanitize_autostart_meta(raw_meta: Any) -> Dict[str, Any]:
-+        if not isinstance(raw_meta, Mapping):
-+            return {}
-+
-+        sanitized: Dict[str, Any] = {}
-+        count = 0
-+        for key, value in raw_meta.items():
-+            if count >= 8:
-+                break
-+            if not isinstance(key, str):
-+                continue
-+            trimmed_key = key.strip()
-+            if not trimmed_key:
-+                continue
-+            truncated_key = trimmed_key[:48]
-+            if isinstance(value, str):
-+                trimmed_value = value.strip()
-+                if not trimmed_value:
-+                    continue
-+                sanitized[truncated_key] = trimmed_value[:120]
-+            elif isinstance(value, bool):
-+                sanitized[truncated_key] = value
-+            elif isinstance(value, (int, float)) and math.isfinite(value):
-+                sanitized[truncated_key] = value
-+            else:
-+                continue
-+            count += 1
-+
-+        return sanitized
-+
-     @staticmethod
-     def _sanitize_policy_interaction(frame: Dict[str, Any]) -> Dict[str, Any]:
-         sanitized = {key: value for key, value in frame.items() if key != "policy"}
-         if "policy" in frame:
-             policy = frame.get("policy")
-             if isinstance(policy, dict):
-                 sanitized_policy = {
-                     key: policy[key]
-                     for key in _POLICY_STABLE_KEYS
-                     if key in policy
-                 }
-             else:
-                 sanitized_policy = {}
-             sanitized["policy"] = sanitized_policy
-         return sanitized
- 
-     @staticmethod
-     def _policy_requests_listen(frame: Dict[str, Any]) -> bool:
-         actions = frame.get("actions") if isinstance(frame, dict) else None
-         if isinstance(actions, list):
-             for action in actions:
-                 if isinstance(action, str) and action.strip() == "assistant.await_user":
-                     return True
-         return False
- 
-diff --git a/tests/test_ws_json_contract.py b/tests/test_ws_json_contract.py
-index 76e5e1503525a2013c546e9e45b04994d213ab0c..a915ed09ece0331b81356315b4bfd61232fd708b 100644
---- a/tests/test_ws_json_contract.py
-+++ b/tests/test_ws_json_contract.py
-@@ -1,36 +1,36 @@
- """Tests for chat.v2 JSON contract handshakes and diagnostics."""
- from __future__ import annotations
- 
- import asyncio
- import json
- import unittest
- import uuid
- from typing import Any, Callable, Dict, List
- 
- from app.telemetry import bus
--from app.voice_v2 import EVT_CLIENT_BANNER, EVT_WS_JSON_RECV
-+from app.voice_v2 import EVT_CLIENT_AUTOSTART, EVT_CLIENT_BANNER, EVT_WS_JSON_RECV
- from app.security.jwt_utils import mint_ws_token
- from app.ws.adapter import (
-     CHAT_V2_SUBPROTOCOL,
-     EVT_BACKPRESSURE_OFF,
-     EVT_BACKPRESSURE_ON,
-     QUEUE_OFF_THRESHOLD,
-     QUEUE_ON_THRESHOLD,
-     ChatV2Adapter,
- )
- 
- 
- class RecordingEngine:
-     """Minimal engine stub that records the opened session identifier."""
- 
-     def __init__(self) -> None:
-         self.open_sid: str | None = None
- 
-     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
-         self.open_sid = sid
- 
- 
- class TestWebSocketJsonContract(unittest.TestCase):
-     """Integration tests covering JSON contract behavior."""
- 
-     def setUp(self) -> None:
-@@ -136,50 +136,104 @@ class TestWebSocketJsonContract(unittest.TestCase):
-         ]
- 
-         received: list[dict] = []
-         token = bus.subscribe(EVT_WS_JSON_RECV, received.append)
-         try:
-             sent = self._drive(adapter, events)
-         finally:
-             bus.unsubscribe(token)
- 
-         accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-         self.assertEqual(len(accepts), 1)
- 
-         send_payloads = [
-             json.loads(msg["text"])
-             for msg in sent
-             if msg.get("type") == "websocket.send" and msg.get("text") is not None
-         ]
-         error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
-         self.assertEqual(error_payloads, [])
- 
-         self.assertTrue(
-             any(event.get("meta", {}).get("frame_type") == "asr.rearm.request" for event in received),
-             "Expected EVT_WS_JSON_RECV event for asr.rearm.request frame",
-         )
- 
-+    def test_client_autostart_frame_is_allowed(self) -> None:
-+        adapter = ChatV2Adapter()
-+        long_reason = "x" * 160
-+        frame = {
-+            "type": "client.autostart",
-+            "event": "blocked",
-+            "meta": {
-+                "trigger": "boot",
-+                "reason": long_reason,
-+                "attempt": 3,
-+                "active": True,
-+                "ignore": {"bad": "value"},
-+                "empty": " ",
-+            },
+   async function startInputCapture(frame) {
++    if (USE_AUDIORECORDER) {
++      return;
++    }
+     if (typeof MediaRecorder === "undefined") {
+       console.error("MediaRecorder is not supported in this browser");
+       return;
+     }
+     if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(MEDIA_RECORDER_MIME_TYPE)) {
+       console.error("MediaRecorder does not support", MEDIA_RECORDER_MIME_TYPE);
+       return;
+     }
+     if (!inputDescriptor || inputDescriptor.container !== "webm" || inputDescriptor.codec !== "opus") {
+       console.error("Unsupported or missing ASR descriptor", inputDescriptor);
+       return;
+     }
+     const reqId = frame && typeof frame.req_id === "string" && frame.req_id ? frame.req_id : null;
+     if (
+       reqId &&
+       activeInputReqId &&
+       mediaRecorderInstance &&
+       mediaRecorderInstance.state !== "inactive" &&
+       reqId === activeInputReqId
+     ) {
+       console.log("Duplicate input.start for req_id", reqId);
+       return;
+     }
+     if (mediaRecorderInstance) {
+       stopInputCapture({ resetStream: false });
+@@ -1895,66 +1905,102 @@
+       handlePongFrame(frame);
+     } else if (frame.type === "error") {
+       handleErrorFrame(frame);
+     } else if (frame.type === "tts.start") {
+       AppState.ttsActive = true;
+       updateState({ ttsActive: true });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: true });
+       }
+       hideTapToSpeakCTA();
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+         audioPlayer.handleTtsStart(frame);
+       }
+     } else if (frame.type === "tts.end") {
+       AppState.ttsActive = false;
+       updateState({ ttsActive: false });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: false });
+       }
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+     } else if (frame.type === "start_listening") {
+-      const recorder = window.AudioRecorder;
+-      if (recorder) {
+-        const handler = typeof recorder.startListening === "function"
+-          ? recorder.startListening
+-          : (typeof recorder.handleStartListening === "function" ? recorder.handleStartListening : null);
+-        if (handler) {
+-          try {
+-            handler.call(recorder, frame);
+-          } catch (err) {
+-            console.warn("AudioRecorder start_listening handler error", err);
++      if (USE_AUDIORECORDER) {
++        const recorder = window.AudioRecorder;
++        if (recorder) {
++          const handler = typeof recorder.startListening === "function"
++            ? recorder.startListening
++            : (typeof recorder.handleStartListening === "function" ? recorder.handleStartListening : null);
++          if (handler) {
++            try {
++              handler.call(recorder, frame && frame.policy);
++            } catch (err) {
++              console.warn("AudioRecorder start_listening handler error", err);
++            }
+           }
+         }
++      } else {
++        legacyStartListeningArmed = true;
++        handleInputStartFrame(frame);
++      }
++    } else if (frame.type === "stop_listening") {
++      if (USE_AUDIORECORDER) {
++        const recorder = window.AudioRecorder;
++        if (recorder) {
++          const handler = typeof recorder.stopListening === "function"
++            ? recorder.stopListening
++            : (typeof recorder.handleStopListening === "function" ? recorder.handleStopListening : (typeof recorder.stop === "function" ? recorder.stop : null));
++          if (handler) {
++            try {
++              handler.call(recorder, frame);
++            } catch (err) {
++              console.warn("AudioRecorder stop_listening handler error", err);
++            }
++          }
 +        }
-+        events = [
-+            {"type": "websocket.connect"},
-+            {"type": "websocket.receive", "text": json.dumps(frame)},
-+            {"type": "websocket.disconnect", "code": 1000},
-+        ]
-+
-+        recorded: list[dict] = []
-+        token = bus.subscribe(EVT_CLIENT_AUTOSTART, recorded.append)
-+        try:
-+            sent = self._drive(adapter, events)
-+        finally:
-+            bus.unsubscribe(token)
-+
-+        accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-+        self.assertEqual(len(accepts), 1)
-+
-+        send_payloads = [
-+            json.loads(msg["text"])
-+            for msg in sent
-+            if msg.get("type") == "websocket.send" and msg.get("text") is not None
-+        ]
-+        error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
-+        self.assertEqual(error_payloads, [])
-+
-+        self.assertEqual(len(recorded), 1)
-+        event = recorded[0]
-+        self.assertEqual(event["type"], EVT_CLIENT_AUTOSTART)
-+        event_meta = event.get("meta", {})
-+        self.assertEqual(event_meta.get("event"), "blocked")
-+        sanitized_meta = event_meta.get("meta", {})
-+        self.assertIn("trigger", sanitized_meta)
-+        self.assertEqual(sanitized_meta["trigger"], "boot")
-+        self.assertIn("reason", sanitized_meta)
-+        self.assertEqual(len(sanitized_meta["reason"]), 120)
-+        self.assertEqual(sanitized_meta["attempt"], 3)
-+        self.assertTrue(sanitized_meta["active"])
-+        self.assertNotIn("ignore", sanitized_meta)
-+        self.assertNotIn("empty", sanitized_meta)
-+
-     def test_backpressure_events_toggle_on_thresholds(self) -> None:
-         adapter = ChatV2Adapter()
-         engine = RecordingEngine()
-         adapter.engine = engine
- 
-         received: List[dict] = []
-         token_on = bus.subscribe(EVT_BACKPRESSURE_ON, lambda event: received.append(event))
-         token_off = bus.subscribe(EVT_BACKPRESSURE_OFF, lambda event: received.append(event))
-         try:
-             asyncio.run(self._exercise_backpressure(adapter, engine))
-         finally:
-             bus.unsubscribe(token_on)
-             bus.unsubscribe(token_off)
- 
-         self.assertEqual([event["type"] for event in received], [EVT_BACKPRESSURE_ON, EVT_BACKPRESSURE_OFF])
-         self.assertEqual(received[0]["meta"]["queue_depth"], QUEUE_ON_THRESHOLD + 1)
-         self.assertEqual(received[0]["meta"]["state"], "on")
-         self.assertEqual(received[1]["meta"]["queue_depth"], QUEUE_OFF_THRESHOLD - 1)
-         self.assertEqual(received[1]["meta"]["state"], "off")
- 
-     async def _exercise_backpressure(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
-         scope = self._make_scope()
-         queue: asyncio.Queue[dict] = asyncio.Queue()
-         sent: List[dict] = []
- 
++      } else {
++        legacyStartListeningArmed = false;
++        handleInputStopFrame();
+       }
+     } else if (frame.type === "input.start") {
++      if (USE_AUDIORECORDER) {
++        return;
++      }
++      if (legacyStartListeningArmed && mediaRecorderInstance) {
++        legacyStartListeningArmed = false;
++        return;
++      }
++      legacyStartListeningArmed = false;
+       handleInputStartFrame(frame);
+     } else if (frame.type === "input.stop") {
++      if (USE_AUDIORECORDER) {
++        return;
++      }
++      legacyStartListeningArmed = false;
+       handleInputStopFrame();
+     } else if (frame.type === "asr.ready") {
+       handleAsrReadyFrame(frame);
+     } else if (frame.type === "asr.partial") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handlePartial === "function") {
+         try {
+           view.handlePartial(frame);
+         } catch (err) {
+           console.warn("TranscriptView partial handler error", err);
+         }
+       }
+     } else if (frame.type === "asr.final") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleFinal === "function") {
+         try {
+           view.handleFinal(frame);
+         } catch (err) {
+           console.warn("TranscriptView final handler error", err);
+         }
+       }
+     } else if (frame.type === "asr.unavailable") {
+       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
+       const details = frame && typeof frame.details === "string"
+         ? frame.details

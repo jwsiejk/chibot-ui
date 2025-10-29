@@ -7,6 +7,8 @@
   const TOAST_STYLE_ID = "wsclient-toast-styles";
   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
 
+  const USE_AUDIORECORDER = typeof window !== "undefined" && !!window.AudioRecorder;
+
   const AppState = window.AppState;
   if (!AppState) {
     throw new Error("AppState store is required before loading WSClient");
@@ -93,6 +95,7 @@
   let inputVendor = null;
   let hudListening = false;
   let clientBannerQueue = [];
+  let legacyStartListeningArmed = false;
 
   // Initialize the client banner state only after related constants are defined.
   ensureClientBannerState();
@@ -1486,6 +1489,10 @@
   }
 
   function stopInputCapture(options = {}) {
+    legacyStartListeningArmed = false;
+    if (USE_AUDIORECORDER) {
+      return;
+    }
     activeInputReqId = null;
     micOpenEmitted = false;
     const recorder = mediaRecorderInstance;
@@ -1532,6 +1539,9 @@
   }
 
   async function startInputCapture(frame) {
+    if (USE_AUDIORECORDER) {
+      return;
+    }
     if (typeof MediaRecorder === "undefined") {
       console.error("MediaRecorder is not supported in this browser");
       return;
@@ -1917,22 +1927,58 @@
         audioPlayer.handleTtsEnd(frame);
       }
     } else if (frame.type === "start_listening") {
-      const recorder = window.AudioRecorder;
-      if (recorder) {
-        const handler = typeof recorder.startListening === "function"
-          ? recorder.startListening
-          : (typeof recorder.handleStartListening === "function" ? recorder.handleStartListening : null);
-        if (handler) {
-          try {
-            handler.call(recorder, frame);
-          } catch (err) {
-            console.warn("AudioRecorder start_listening handler error", err);
+      if (USE_AUDIORECORDER) {
+        const recorder = window.AudioRecorder;
+        if (recorder) {
+          const handler = typeof recorder.startListening === "function"
+            ? recorder.startListening
+            : (typeof recorder.handleStartListening === "function" ? recorder.handleStartListening : null);
+          if (handler) {
+            try {
+              handler.call(recorder, frame && frame.policy);
+            } catch (err) {
+              console.warn("AudioRecorder start_listening handler error", err);
+            }
           }
         }
+      } else {
+        legacyStartListeningArmed = true;
+        handleInputStartFrame(frame);
+      }
+    } else if (frame.type === "stop_listening") {
+      if (USE_AUDIORECORDER) {
+        const recorder = window.AudioRecorder;
+        if (recorder) {
+          const handler = typeof recorder.stopListening === "function"
+            ? recorder.stopListening
+            : (typeof recorder.handleStopListening === "function" ? recorder.handleStopListening : (typeof recorder.stop === "function" ? recorder.stop : null));
+          if (handler) {
+            try {
+              handler.call(recorder, frame);
+            } catch (err) {
+              console.warn("AudioRecorder stop_listening handler error", err);
+            }
+          }
+        }
+      } else {
+        legacyStartListeningArmed = false;
+        handleInputStopFrame();
       }
     } else if (frame.type === "input.start") {
+      if (USE_AUDIORECORDER) {
+        return;
+      }
+      if (legacyStartListeningArmed && mediaRecorderInstance) {
+        legacyStartListeningArmed = false;
+        return;
+      }
+      legacyStartListeningArmed = false;
       handleInputStartFrame(frame);
     } else if (frame.type === "input.stop") {
+      if (USE_AUDIORECORDER) {
+        return;
+      }
+      legacyStartListeningArmed = false;
       handleInputStopFrame();
     } else if (frame.type === "asr.ready") {
       handleAsrReadyFrame(frame);
