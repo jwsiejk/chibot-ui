@@ -1391,9 +1391,10 @@
   function attachSocket(ws) {
     ws.__intentionalClose = false;
     const handlers = {
-      open: () => {
+      open: (event) => {
         updateState({ websocket: ws });
         startHeartbeat();
+        window.dispatchEvent(new CustomEvent("ws.open", { detail: event }));
       },
       message: parseFrame,
       error: (event) => {
