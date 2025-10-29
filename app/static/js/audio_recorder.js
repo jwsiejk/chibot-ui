@@ -28,7 +28,7 @@
       this._wsClient = null; // preferred explicit binding
       this._log = window.console || {};
       this._hud = window?.DiagHUD || window?.DiagHud || null;
-      this._lastMaskChunkAt = 0; // ms timestamp of last keepalive chunk while masked
+      this._lastMaskChunkAt = 0; // ms timestamp for last masked keepalive
     }
 
     /* ---------------- Policy ---------------- */
@@ -249,16 +249,12 @@
       if (!event?.data || event.data.size === 0) return;
       if (this._mask) {
         const cap = this.policy().capture || {};
-        if (cap.mask_keepalive_enable) {
-          const now = Date.now();
-          const interval = Math.max(1000, Number(cap.mask_keepalive_ms ?? 5000));
-          if (now - this._lastMaskChunkAt < interval) {
-            return; // drop most masked chunks
-          }
-          this._lastMaskChunkAt = now; // allow this one keepalive chunk to pass
-        } else {
-          return; // fully drop during mask if keepalive disabled
+        const interval = Math.max(1000, Number(cap.mask_keepalive_ms ?? 5000));
+        const now = Date.now();
+        if (!cap.mask_keepalive_enable || (now - this._lastMaskChunkAt) < interval) {
+          return; // drop most chunks while masked
         }
+        this._lastMaskChunkAt = now; // allow this keepalive chunk through
       }
       const ws = this._getWsClient();
       if (!ws) return;
@@ -272,7 +268,7 @@
       try {
         const buffer = await event.data.arrayBuffer();
         ws.sendBinary(new Uint8Array(buffer), { lane: "mic", dropIfBusy: false });
-        this._micChunksSent += 1;
+        this._micChunksSent = (this._micChunksSent || 0) + 1;
         if (this._micChunksSent % 20 === 0) {
           this._sendDiag("mic_progress", { chunks: this._micChunksSent }, "debug");
         }

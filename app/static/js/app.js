@@ -1847,9 +1847,10 @@ window.addEventListener('tts.start', (event) => {
   if (detail) {
     updateVoiceState(extractVoiceLocale(detail));
   }
-  if (audioRecorder && typeof audioRecorder.handleTtsStart === 'function') {
+  const recorder = window.AudioRecorder || audioRecorder;
+  if (recorder && typeof recorder.handleTtsStart === 'function') {
     try {
-      audioRecorder.handleTtsStart();
+      recorder.handleTtsStart();
     } catch (err) {
       console.warn('AudioRecorder handleTtsStart failed', err);
     }
@@ -1885,15 +1886,18 @@ window.addEventListener('turn.state', (event) => {
 
   DiagRecorder.maybeStart('turn');
 
-  const capturePolicy = audioRecorder && typeof audioRecorder.policy === 'function'
-    ? (audioRecorder.policy() || {})
-    : {};
-  const captureCfg = capturePolicy.capture || {};
-  if ((captureCfg.start_on_turn_ready) !== false && audioRecorder && typeof audioRecorder.startMicCaptureIfIdle === 'function') {
+  console.info('ui: turn=Ready → startMicCaptureIfIdle()');
+  const recorder = window.AudioRecorder || audioRecorder;
+  if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
     try {
-      audioRecorder.startMicCaptureIfIdle();
+      const maybe = recorder.startMicCaptureIfIdle();
+      if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
+        maybe.catch((err) => {
+          console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready failed', err);
+        });
+      }
     } catch (err) {
-      console.error('AudioRecorder startMicCaptureIfIdle on turn.ready failed:', err);
+      console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready threw', err);
     }
   }
 });
@@ -1902,9 +1906,10 @@ window.addEventListener('turn.state', (event) => {
 window.addEventListener('tts.end', () => {
   const release = () => {
     DiagRecorder.maybeStart('ready');
-    if (audioRecorder && typeof audioRecorder.handleTtsEnd === 'function') {
+    const recorder = window.AudioRecorder || audioRecorder;
+    if (recorder && typeof recorder.handleTtsEnd === 'function') {
       try {
-        audioRecorder.handleTtsEnd();
+        recorder.handleTtsEnd();
       } catch (err) {
         console.warn('AudioRecorder handleTtsEnd failed', err);
       }
@@ -1919,13 +1924,11 @@ window.addEventListener('tts.end', () => {
 });
 
 window.addEventListener('asr.ready', () => {
-  const capturePolicy = audioRecorder && typeof audioRecorder.policy === 'function'
-    ? (audioRecorder.policy() || {})
-    : {};
-  const captureCfg = capturePolicy.capture || {};
-  if ((captureCfg.start_on_asr_ready) !== false && audioRecorder && typeof audioRecorder.startMicCaptureIfIdle === 'function') {
+  console.info('ui: asr.ready → startMicCaptureIfIdle()');
+  const recorder = window.AudioRecorder || audioRecorder;
+  if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
     try {
-      const maybe = audioRecorder.startMicCaptureIfIdle();
+      const maybe = recorder.startMicCaptureIfIdle();
       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
         maybe.catch((err) => {
           console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
