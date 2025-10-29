@@ -1,181 +1,83 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 5075dd77795e0e0d8b4fd66d1c237f4571a7b974..4602f43a0c90a236499e2590c8db6690d25396cf 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -79,50 +79,51 @@ _OUTBOUND_ALLOWED_TYPES = {
-     "asr.ready",
-     "asr.partial",
-     "asr.final",
-     "asr.unavailable",
-     "error",
-     "chat.message",
-     "chat.history",
-     "dialog.plan",
-     "hud.nudge",
- }
- 
- _OUTBOX_MAXSIZE = 256
- 
- _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
- 
- _log = logging.getLogger(__name__)
- 
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
-     "chat.user",
-     "client.diag",
-     "client.log",
-     "client.banner",
-+    "asr.rearm.request",
- }
- 
- 
- class TokenBucket:
-     """Simple in-memory token bucket."""
- 
-     def __init__(self, capacity: int, refill_seconds: float) -> None:
-         self.capacity = capacity
-         self.tokens = float(capacity)
-         self.refill_seconds = refill_seconds
-         self.last_refill = time.monotonic()
- 
-     def consume(self, count: int, now: Optional[float] = None) -> bool:
-         if now is None:
-             now = time.monotonic()
-         elapsed = max(0.0, now - self.last_refill)
-         if elapsed > 0:
-             refill = (self.capacity / self.refill_seconds) * elapsed
-             if refill > 0:
-                 self.tokens = min(self.capacity, self.tokens + refill)
-                 self.last_refill = now
-         if self.tokens < count:
-             return False
-         self.tokens -= count
-         return True
-diff --git a/tests/test_ws_json_contract.py b/tests/test_ws_json_contract.py
-index 4bbcce2a901fea8cf82df2693dae759b65c65419..76e5e1503525a2013c546e9e45b04994d213ab0c 100644
---- a/tests/test_ws_json_contract.py
-+++ b/tests/test_ws_json_contract.py
-@@ -1,36 +1,36 @@
- """Tests for chat.v2 JSON contract handshakes and diagnostics."""
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 4d9f2d3ccf492d2a3cc6c3dc8c3d8078875b6473..8dd66368064711efd37482d3169045a788ebad34 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -1,63 +1,77 @@
+ """Deepgram-backed ASR runtime for the voice v2 engine."""
  from __future__ import annotations
  
  import asyncio
- import json
- import unittest
+ import logging
++import os
+ import time
  import uuid
- from typing import Any, Callable, Dict, List
+ from collections import deque
+ from dataclasses import dataclass, field
+ from typing import Any, Callable, Deque, Dict, Mapping, Optional
  
- from app.telemetry import bus
--from app.voice_v2 import EVT_CLIENT_BANNER
-+from app.voice_v2 import EVT_CLIENT_BANNER, EVT_WS_JSON_RECV
- from app.security.jwt_utils import mint_ws_token
- from app.ws.adapter import (
-     CHAT_V2_SUBPROTOCOL,
-     EVT_BACKPRESSURE_OFF,
-     EVT_BACKPRESSURE_ON,
-     QUEUE_OFF_THRESHOLD,
-     QUEUE_ON_THRESHOLD,
-     ChatV2Adapter,
+ from app.config import (
+     ASR_BACKPRESSURE_THRESHOLD_BYTES,
+     ASR_IDLE_CLOSE_MS,
+     ASR_TRACE,
  )
+ from app.policy.model import Policy
+ from app.services.streaming_asr.deepgram_client import DeepgramClient
+ from app.telemetry import bus
+ from app.voice_v2 import (
+     EVT_ASR_FINAL,
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.voice_v2.engine import EngineV2
  
+ _log = logging.getLogger(__name__)
  
- class RecordingEngine:
-     """Minimal engine stub that records the opened session identifier."""
- 
-     def __init__(self) -> None:
-         self.open_sid: str | None = None
- 
-     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
-         self.open_sid = sid
- 
- 
- class TestWebSocketJsonContract(unittest.TestCase):
-     """Integration tests covering JSON contract behavior."""
- 
-     def setUp(self) -> None:
-@@ -104,50 +104,82 @@ class TestWebSocketJsonContract(unittest.TestCase):
-         adapter = ChatV2Adapter()
-         frame = {"type": "client.foo", "payload": "ignored"}
-         events = [
-             {"type": "websocket.connect"},
-             {"type": "websocket.receive", "text": json.dumps(frame)},
-             {"type": "websocket.disconnect", "code": 1000},
-         ]
- 
-         sent = self._drive(adapter, events)
-         accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-         self.assertEqual(len(accepts), 1)
- 
-         send_payloads = [
-             json.loads(msg["text"])
-             for msg in sent
-             if msg.get("type") == "websocket.send" and msg.get("text") is not None
-         ]
-         error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
-         self.assertEqual(len(error_payloads), 1)
-         payload = error_payloads[0]
-         self.assertEqual(
-             payload,
-             {"type": "error", "code": "unknown_type", "detail": "client.foo"},
-         )
- 
-+    def test_asr_rearm_request_frame_is_allowed(self) -> None:
-+        adapter = ChatV2Adapter()
-+        frame = {"type": "asr.rearm.request"}
-+        events = [
-+            {"type": "websocket.connect"},
-+            {"type": "websocket.receive", "text": json.dumps(frame)},
-+            {"type": "websocket.disconnect", "code": 1000},
-+        ]
+ _DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
+ _PARTIAL_CONFIDENCE = 0.55
+ _FINAL_CONFIDENCE = 0.9
+ _DEFAULT_IDLE_CLOSE_MS = 4000
+ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+ _TRACE_ENABLED = bool(ASR_TRACE)
+-_STREAM_OPEN_TIMEOUT_S = 5.0
++def _resolve_stream_open_timeout(default: float = 10.0) -> float:
++    raw = os.getenv("DG_STREAM_OPEN_TIMEOUT_S")
++    if raw is None:
++        return default
++    try:
++        timeout = float(raw)
++    except (TypeError, ValueError):
++        return default
++    if timeout <= 0:
++        return default
++    return timeout
 +
-+        received: list[dict] = []
-+        token = bus.subscribe(EVT_WS_JSON_RECV, received.append)
-+        try:
-+            sent = self._drive(adapter, events)
-+        finally:
-+            bus.unsubscribe(token)
 +
-+        accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-+        self.assertEqual(len(accepts), 1)
-+
-+        send_payloads = [
-+            json.loads(msg["text"])
-+            for msg in sent
-+            if msg.get("type") == "websocket.send" and msg.get("text") is not None
-+        ]
-+        error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
-+        self.assertEqual(error_payloads, [])
-+
-+        self.assertTrue(
-+            any(event.get("meta", {}).get("frame_type") == "asr.rearm.request" for event in received),
-+            "Expected EVT_WS_JSON_RECV event for asr.rearm.request frame",
-+        )
-+
-     def test_backpressure_events_toggle_on_thresholds(self) -> None:
-         adapter = ChatV2Adapter()
-         engine = RecordingEngine()
-         adapter.engine = engine
++_STREAM_OPEN_TIMEOUT_S = _resolve_stream_open_timeout()
+ _NO_AUDIO_TIMEOUT_S = 9.0
+ _LISTENING_STATE = "Listening"
+ _READY_STATES = {"Ready", "Idle"}
  
-         received: List[dict] = []
-         token_on = bus.subscribe(EVT_BACKPRESSURE_ON, lambda event: received.append(event))
-         token_off = bus.subscribe(EVT_BACKPRESSURE_OFF, lambda event: received.append(event))
-         try:
-             asyncio.run(self._exercise_backpressure(adapter, engine))
-         finally:
-             bus.unsubscribe(token_on)
-             bus.unsubscribe(token_off)
  
-         self.assertEqual([event["type"] for event in received], [EVT_BACKPRESSURE_ON, EVT_BACKPRESSURE_OFF])
-         self.assertEqual(received[0]["meta"]["queue_depth"], QUEUE_ON_THRESHOLD + 1)
-         self.assertEqual(received[0]["meta"]["state"], "on")
-         self.assertEqual(received[1]["meta"]["queue_depth"], QUEUE_OFF_THRESHOLD - 1)
-         self.assertEqual(received[1]["meta"]["state"], "off")
+ def _safe_url(url: str | None) -> str:
+     if not url:
+         return ""
+     try:
+         from urllib.parse import urlparse, urlunparse
  
-     async def _exercise_backpressure(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
-         scope = self._make_scope()
-         queue: asyncio.Queue[dict] = asyncio.Queue()
-         sent: List[dict] = []
+         u = urlparse(url)
+         # strip query to avoid leaking keys; keep scheme/host/path
+         return urlunparse((u.scheme, u.netloc, u.path, "", "", ""))
+     except Exception:
+         return ""
  
+ 
+ def _default_input_descriptor() -> Dict[str, Any]:
+     return {
+         "container": "webm",
+         "codec": "opus",
+         "rate_hz": 48000,
+         "channels": 1,
+     }

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from collections import deque
@@ -35,7 +36,20 @@ _FINAL_CONFIDENCE = 0.9
 _DEFAULT_IDLE_CLOSE_MS = 4000
 _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
 _TRACE_ENABLED = bool(ASR_TRACE)
-_STREAM_OPEN_TIMEOUT_S = 5.0
+def _resolve_stream_open_timeout(default: float = 10.0) -> float:
+    raw = os.getenv("DG_STREAM_OPEN_TIMEOUT_S")
+    if raw is None:
+        return default
+    try:
+        timeout = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if timeout <= 0:
+        return default
+    return timeout
+
+
+_STREAM_OPEN_TIMEOUT_S = _resolve_stream_open_timeout()
 _NO_AUDIO_TIMEOUT_S = 9.0
 _LISTENING_STATE = "Listening"
 _READY_STATES = {"Ready", "Idle"}
