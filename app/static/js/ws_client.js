@@ -11,6 +11,40 @@
   if (!AppState) {
     throw new Error("AppState store is required before loading WSClient");
   }
+  const P0 = AppState.policy || {};
+  AppState.policy = {
+    ...P0,
+    auto_record_after_greet: P0.auto_record_after_greet ?? true,
+    require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? true,
+    tts_gate_enabled: P0.tts_gate_enabled ?? true,
+    autostart_retry_on: Array.isArray(P0.autostart_retry_on)
+      ? P0.autostart_retry_on.slice()
+      : ["asrReady", "ttsEnded", "turnState:Ready"],
+    autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
+      ? P0.autostart_backoff_ms.slice()
+      : [0, 300, 1000],
+    autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts) ? P0.autostart_max_attempts : 5,
+    show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
+      ? P0.show_tap_to_speak_cta_after_ms
+      : 2000,
+    reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
+  };
+
+  const appStateEventEmitter = createEventEmitter();
+  if (typeof AppState.on !== "function") {
+    AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
+  }
+  if (typeof AppState.emit !== "function") {
+    AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
+  }
+
+  let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
+  let autostartAttempts = 0;
+  let autostartTimer = null;
+  let tapToSpeakCTA = null;
+  let tapToSpeakReason = null;
+  let ctaTimer = null;
+
   const WSClient = window.WSClient = window.WSClient || {};
   WSClient._ws = WSClient._ws || null;
   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
@@ -62,6 +96,550 @@
 
   // Initialize the client banner state only after related constants are defined.
   ensureClientBannerState();
+
+  const TAP_TO_SPEAK_CTA_ID = "wsclient-tap-to-speak-cta";
+  const TAP_TO_SPEAK_CTA_CLASS = "wsclient-tap-to-speak-cta";
+  const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
+  const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture", "cta", "cta_click"]);
+
+  let gestureListenerCleanup = null;
+
+  function createEventEmitter() {
+    const registry = new Map();
+    return {
+      on(event, handler) {
+        if (typeof event !== "string" || !event || typeof handler !== "function") {
+          return () => {};
+        }
+        let listeners = registry.get(event);
+        if (!listeners) {
+          listeners = new Set();
+          registry.set(event, listeners);
+        }
+        listeners.add(handler);
+        return () => {
+          listeners.delete(handler);
+        };
+      },
+      emit(event, detail) {
+        if (typeof event !== "string" || !event) {
+          return;
+        }
+        const listeners = registry.get(event);
+        if (!listeners || !listeners.size) {
+          return;
+        }
+        listeners.forEach((listener) => {
+          if (typeof listener !== "function") {
+            return;
+          }
+          try {
+            listener(detail);
+          } catch (err) {
+            console.warn("AppState listener error", err);
+          }
+        });
+      }
+    };
+  }
+
+  function ensureInitialAutostartState() {
+    if (!AppState || typeof AppState.getState !== "function") {
+      return;
+    }
+    const snapshot = AppState.getState();
+    const patch = {};
+    if (typeof snapshot.policy === "undefined") {
+      patch.policy = AppState.policy;
+    }
+    if (typeof snapshot.asrReady === "undefined") {
+      patch.asrReady = false;
+    }
+    if (typeof snapshot.ttsActive === "undefined") {
+      patch.ttsActive = false;
+    }
+    if (typeof snapshot.turnState === "undefined") {
+      patch.turnState = null;
+    }
+    if (typeof snapshot.recorder === "undefined") {
+      patch.recorder = { active: false };
+    }
+    if (Object.keys(patch).length) {
+      updateState(patch);
+    }
+    AppState.asrReady = Boolean(snapshot.asrReady);
+    AppState.ttsActive = Boolean(snapshot.ttsActive);
+    AppState.turnState = typeof snapshot.turnState === "string" ? snapshot.turnState : null;
+    AppState.recorder = snapshot.recorder && typeof snapshot.recorder === "object"
+      ? { active: Boolean(snapshot.recorder.active) }
+      : { active: false };
+  }
+
+  function attachUserGestureListeners() {
+    if (userGestureSatisfied || typeof window === "undefined") {
+      return;
+    }
+    if (gestureListenerCleanup) {
+      return;
+    }
+    const listeners = [];
+    const handler = (event) => {
+      const reason = event && typeof event.type === "string" ? event.type : "gesture";
+      markUserGestureSatisfied(reason);
+      maybeAutoStart("gesture");
+    };
+    USER_GESTURE_EVENTS.forEach((eventName) => {
+      try {
+        window.addEventListener(eventName, handler, { passive: true });
+        listeners.push({ eventName, handler });
+      } catch (err) {
+        console.warn("Failed to attach gesture listener", eventName, err);
+      }
+    });
+    gestureListenerCleanup = () => {
+      if (typeof window === "undefined") {
+        return;
+      }
+      listeners.forEach((entry) => {
+        window.removeEventListener(entry.eventName, entry.handler);
+      });
+      gestureListenerCleanup = null;
+    };
+  }
+
+  function markUserGestureSatisfied(reason) {
+    if (userGestureSatisfied) {
+      return;
+    }
+    userGestureSatisfied = true;
+    if (typeof gestureListenerCleanup === "function") {
+      gestureListenerCleanup();
+    }
+    sendAutostartTelemetry("gesture", { reason });
+  }
+
+  function canAutoRecord(state) {
+    if (!state?.policy?.auto_record_after_greet) return false;
+    if (state.policy.tts_gate_enabled && state.ttsActive) return false;
+    return state.asrReady === true && state.turnState === "Ready" && !state.recorder?.active;
+  }
+
+  function reasonFromState(state) {
+    if (!userGestureSatisfied && state?.policy?.require_user_gesture_first_visit) return "needs_user_gesture";
+    if (!state?.policy?.auto_record_after_greet) return "policy_disabled";
+    if (state.policy.tts_gate_enabled && state.ttsActive) return "tts_active";
+    if (!state.asrReady) return "asr_not_ready";
+    if (state.turnState !== "Ready") return "turn_not_ready";
+    if (state.recorder?.active) return "already_active";
+    return null;
+  }
+
+  function shouldAttemptForTrigger(trigger, policy) {
+    if (!trigger) {
+      return true;
+    }
+    if (AUTOSTART_TRIGGERS_ALWAYS.has(trigger)) {
+      return true;
+    }
+    const retries = Array.isArray(policy?.autostart_retry_on) ? policy.autostart_retry_on : [];
+    if (!retries.length) {
+      return true;
+    }
+    return retries.includes(trigger);
+  }
+
+  function getAutostartSnapshot() {
+    const state = typeof AppState.getState === "function" ? AppState.getState() : {};
+    const policy = AppState.policy || state.policy || {};
+    const recorderState = state && state.recorder && typeof state.recorder === "object"
+      ? { active: Boolean(state.recorder.active) }
+      : (AppState.recorder && typeof AppState.recorder === "object"
+        ? { active: Boolean(AppState.recorder.active) }
+        : { active: Boolean(mediaRecorderInstance && mediaRecorderInstance.state && mediaRecorderInstance.state !== "inactive") });
+    const ttsActive = typeof state.ttsActive === "boolean" ? state.ttsActive : Boolean(AppState.ttsActive);
+    const turnState = typeof state.turnState === "string"
+      ? state.turnState
+      : (typeof AppState.turnState === "string" ? AppState.turnState : null);
+    const asrReady = typeof state.asrReady === "boolean" ? state.asrReady : Boolean(AppState.asrReady);
+    return {
+      ...state,
+      policy,
+      recorder: recorderState,
+      ttsActive,
+      turnState,
+      asrReady,
+    };
+  }
+
+  function sanitizeAutostartMeta(meta) {
+    if (!meta || typeof meta !== "object") {
+      return undefined;
+    }
+    const cleaned = {};
+    const keys = Object.keys(meta);
+    for (let i = 0; i < keys.length && i < 8; i += 1) {
+      const key = keys[i];
+      if (!key) continue;
+      const value = meta[key];
+      if (value === undefined) continue;
+      if (typeof value === "string") {
+        cleaned[key.slice(0, 48)] = truncateBannerString(value, 120);
+      } else if (typeof value === "number") {
+        if (Number.isFinite(value)) {
+          cleaned[key.slice(0, 48)] = value;
+        }
+      } else if (typeof value === "boolean") {
+        cleaned[key.slice(0, 48)] = value;
+      }
+    }
+    return Object.keys(cleaned).length ? cleaned : undefined;
+  }
+
+  function sendAutostartTelemetry(event, meta) {
+    if (typeof event !== "string" || !event) {
+      return;
+    }
+    const payload = { type: "client.autostart", event };
+    const sanitizedMeta = sanitizeAutostartMeta(meta);
+    if (sanitizedMeta) {
+      payload.meta = sanitizedMeta;
+    }
+    try {
+      sendJson(payload);
+    } catch (err) {
+      console.warn("Failed to send autostart telemetry", err);
+    }
+  }
+
+  function ensureTapToSpeakCTA() {
+    if (typeof document === "undefined") {
+      return null;
+    }
+    if (tapToSpeakCTA && tapToSpeakCTA.isConnected) {
+      return tapToSpeakCTA;
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.id = TAP_TO_SPEAK_CTA_ID;
+    button.className = TAP_TO_SPEAK_CTA_CLASS;
+    button.textContent = "Tap to speak";
+    button.style.display = "none";
+    button.style.position = "fixed";
+    button.style.bottom = "24px";
+    button.style.right = "24px";
+    button.style.zIndex = "4010";
+    button.style.padding = "10px 18px";
+    button.style.borderRadius = "999px";
+    button.style.border = "none";
+    button.style.background = "rgba(15,23,42,0.88)";
+    button.style.color = "#fff";
+    button.style.fontFamily = "inherit";
+    button.style.fontSize = "0.85rem";
+    button.style.fontWeight = "600";
+    button.style.boxShadow = "0 12px 30px rgba(15,23,42,0.28)";
+    button.style.cursor = "pointer";
+    button.style.pointerEvents = "auto";
+    button.addEventListener("click", () => {
+      sendAutostartTelemetry("cta_click", { reason: tapToSpeakReason || null });
+      markUserGestureSatisfied("cta_click");
+      hideTapToSpeakCTA();
+      try {
+        const result = invokeStartRecording("cta");
+        if (result && typeof result.then === "function") {
+          result
+            .then((value) => {
+              if (value) {
+                sendAutostartTelemetry("armed", { trigger: "cta" });
+              } else {
+                sendAutostartTelemetry("rejected", { trigger: "cta" });
+              }
+            })
+            .catch((err) => {
+              console.warn("Tap to speak CTA rejected", err);
+              sendAutostartTelemetry("error", { trigger: "cta", message: getErrorMessage(err) });
+            });
+        } else if (result) {
+          sendAutostartTelemetry("armed", { trigger: "cta" });
+        } else {
+          sendAutostartTelemetry("rejected", { trigger: "cta" });
+        }
+      } catch (err) {
+        console.warn("Tap to speak CTA start failed", err);
+        sendAutostartTelemetry("error", { trigger: "cta", message: getErrorMessage(err) });
+      }
+    });
+    document.body.appendChild(button);
+    tapToSpeakCTA = button;
+    return tapToSpeakCTA;
+  }
+
+  function showTapToSpeakCTA(reason) {
+    const button = ensureTapToSpeakCTA();
+    if (!button) {
+      return;
+    }
+    tapToSpeakReason = reason || null;
+    if (tapToSpeakReason) {
+      button.setAttribute("data-reason", tapToSpeakReason);
+    } else {
+      button.removeAttribute("data-reason");
+    }
+    button.style.display = "inline-flex";
+    button.style.alignItems = "center";
+    button.style.justifyContent = "center";
+    sendAutostartTelemetry("cta_shown", { reason: tapToSpeakReason || null });
+  }
+
+  function hideTapToSpeakCTA() {
+    tapToSpeakReason = null;
+    if (ctaTimer) {
+      clearTimeout(ctaTimer);
+      ctaTimer = null;
+    }
+    if (tapToSpeakCTA) {
+      tapToSpeakCTA.style.display = "none";
+    }
+  }
+
+  function scheduleTapToSpeakCTA(policy, reason) {
+    if (reason === "already_active" || reason === "policy_disabled" || reason === "tts_active") {
+      hideTapToSpeakCTA();
+      return;
+    }
+    const delay = Number(policy?.show_tap_to_speak_cta_after_ms);
+    if (!Number.isFinite(delay) || delay < 0) {
+      return;
+    }
+    if (ctaTimer) {
+      clearTimeout(ctaTimer);
+      ctaTimer = null;
+    }
+    ctaTimer = setTimeout(() => {
+      const latest = getAutostartSnapshot();
+      if (latest.recorder?.active) {
+        return;
+      }
+      if (!reasonFromState(latest)) {
+        return;
+      }
+      showTapToSpeakCTA(reason);
+    }, delay);
+  }
+
+  function invokeStartRecording(trigger) {
+    let handler = null;
+    if (typeof window !== "undefined" && typeof window.startRecording === "function") {
+      handler = window.startRecording;
+    } else if (typeof startRecording === "function") {
+      handler = startRecording;
+    }
+    if (handler) {
+      const context = typeof window !== "undefined" ? window : null;
+      return handler.call(context, { trigger });
+    }
+    const recorder = typeof window !== "undefined" ? window.AudioRecorder : null;
+    if (recorder && typeof recorder.startMicCaptureIfIdle === "function") {
+      return recorder.startMicCaptureIfIdle();
+    }
+    throw new Error("startRecording_unavailable");
+  }
+
+  function maybeAutoStart(trigger) {
+    const snapshot = getAutostartSnapshot();
+    const policy = snapshot.policy || {};
+    const reason = reasonFromState(snapshot);
+    if (reason) {
+      sendAutostartTelemetry("blocked", { trigger, reason });
+      scheduleTapToSpeakCTA(policy, reason);
+      return false;
+    }
+    hideTapToSpeakCTA();
+    if (!shouldAttemptForTrigger(trigger, policy)) {
+      return false;
+    }
+    if (!canAutoRecord(snapshot)) {
+      return false;
+    }
+    const maxAttempts = Number.isFinite(policy.autostart_max_attempts) ? policy.autostart_max_attempts : 5;
+    if (autostartAttempts >= Math.max(0, maxAttempts)) {
+      sendAutostartTelemetry("max_attempts", { trigger });
+      scheduleTapToSpeakCTA(policy, "max_attempts");
+      return false;
+    }
+    const delays = Array.isArray(policy.autostart_backoff_ms) && policy.autostart_backoff_ms.length
+      ? policy.autostart_backoff_ms
+      : [0];
+    const delayIndex = Math.min(autostartAttempts, delays.length - 1);
+    const delay = Number(delays[delayIndex]) || 0;
+    const execute = () => {
+      autostartTimer = null;
+      autostartAttempts += 1;
+      sendAutostartTelemetry("attempt", { trigger, attempt: autostartAttempts });
+      let result;
+      try {
+        result = invokeStartRecording(trigger || "auto");
+      } catch (err) {
+        console.warn("Auto startRecording failed", err);
+        sendAutostartTelemetry("error", { trigger, message: getErrorMessage(err) });
+        scheduleTapToSpeakCTA(policy, "invoke_error");
+        return;
+      }
+      const onFulfilled = (value) => {
+        if (!value) {
+          sendAutostartTelemetry("rejected", { trigger });
+          scheduleTapToSpeakCTA(policy, "not_started");
+          return;
+        }
+        sendAutostartTelemetry("armed", { trigger });
+        hideTapToSpeakCTA();
+      };
+      const onRejected = (err) => {
+        console.warn("Auto startRecording promise rejected", err);
+        sendAutostartTelemetry("error", { trigger, message: getErrorMessage(err) });
+        scheduleTapToSpeakCTA(policy, "promise_reject");
+      };
+      if (result && typeof result.then === "function") {
+        result.then(onFulfilled, onRejected);
+      } else {
+        onFulfilled(result);
+      }
+    };
+    if (autostartTimer) {
+      clearTimeout(autostartTimer);
+      autostartTimer = null;
+    }
+    if (delay > 0) {
+      autostartTimer = setTimeout(execute, delay);
+    } else {
+      execute();
+    }
+    return true;
+  }
+
+  function installAutostartRechecks() {
+    if (!AppState) {
+      return;
+    }
+    if (typeof AppState.subscribe === "function") {
+      let previous = typeof AppState.getState === "function" ? AppState.getState() : {};
+      AppState.subscribe((next) => {
+        const events = [];
+        const prevAsr = Boolean(previous.asrReady);
+        const nextAsr = Boolean(next.asrReady);
+        if (nextAsr && nextAsr !== prevAsr) {
+          events.push("asrReady");
+        }
+        if (!nextAsr && prevAsr) {
+          autostartAttempts = 0;
+        }
+        const prevTts = Boolean(previous.ttsActive);
+        const nextTts = Boolean(next.ttsActive);
+        if (nextTts !== prevTts) {
+          events.push(nextTts ? "ttsActive" : "ttsEnded");
+        }
+        const prevTurn = typeof previous.turnState === "string" ? previous.turnState : null;
+        const nextTurn = typeof next.turnState === "string" ? next.turnState : null;
+        if (nextTurn !== prevTurn) {
+          if (nextTurn === "Ready") {
+            autostartAttempts = 0;
+            events.push("turnState:Ready");
+          } else if (prevTurn === "Ready") {
+            autostartAttempts = 0;
+          }
+        }
+        previous = {
+          ...previous,
+          asrReady: next.asrReady,
+          ttsActive: next.ttsActive,
+          turnState: next.turnState,
+          recorder: next.recorder,
+        };
+        events.forEach((eventName) => maybeAutoStart(eventName));
+        if (next.recorder && next.recorder.active) {
+          hideTapToSpeakCTA();
+        }
+      });
+    } else {
+      const watch = (keys, fn) => {
+        let prevSnapshot = {};
+        setInterval(() => {
+          const snapshot = getAutostartSnapshot();
+          let changed = false;
+          const changedKeys = [];
+          keys.forEach((key) => {
+            if (prevSnapshot[key] !== snapshot[key]) {
+              changed = true;
+              changedKeys.push(key);
+            }
+          });
+          if (changed) {
+            prevSnapshot = {
+              asrReady: snapshot.asrReady,
+              ttsActive: snapshot.ttsActive,
+              turnState: snapshot.turnState,
+            };
+            fn(changedKeys, snapshot);
+          }
+        }, 100);
+      };
+      watch(["asrReady", "ttsActive", "turnState"], (changedKeys, snapshot) => {
+        changedKeys.forEach((key) => {
+          if (key === "asrReady" && snapshot.asrReady) {
+            maybeAutoStart("asrReady");
+          } else if (key === "ttsActive" && !snapshot.ttsActive) {
+            maybeAutoStart("ttsEnded");
+          } else if (key === "turnState" && snapshot.turnState === "Ready") {
+            autostartAttempts = 0;
+            maybeAutoStart("turnState:Ready");
+          }
+        });
+      });
+    }
+
+    AppState.on?.("turnReset", () => {
+      autostartAttempts = 0;
+      hideTapToSpeakCTA();
+    });
+
+    AppState.on?.("recordingStarted", () => {
+      hideTapToSpeakCTA();
+    });
+
+    maybeAutoStart("boot");
+  }
+
+  function handleTurnStateEvent(event) {
+    const detail = event && typeof event === "object" ? event.detail : null;
+    const stateValue = detail && typeof detail === "object" && typeof detail.state === "string"
+      ? detail.state
+      : (detail && detail.meta && typeof detail.meta.state === "string" ? detail.meta.state : null);
+    const normalized = typeof stateValue === "string" ? stateValue : null;
+    const reasonValue = detail && typeof detail === "object" && typeof detail.reason === "string"
+      ? detail.reason
+      : (detail && detail.meta && typeof detail.meta.reason === "string" ? detail.meta.reason : null);
+    AppState.turnState = normalized;
+    updateState({ turnState: normalized });
+    if (normalized === "Ready") {
+      autostartAttempts = 0;
+      if (typeof AppState.emit === "function") {
+        AppState.emit("turnReset", { state: normalized, reason: reasonValue || null });
+      }
+    }
+  }
+
+  ensureInitialAutostartState();
+  attachUserGestureListeners();
+  if (typeof window !== "undefined") {
+    try {
+      if (!window.__wsClientTurnStateListenerInstalled) {
+        window.addEventListener("turn.state", handleTurnStateEvent);
+        window.__wsClientTurnStateListenerInstalled = true;
+      }
+    } catch (err) {
+      console.warn("Failed to bind turn.state listener", err);
+    }
+  }
+  installAutostartRechecks();
 
   function truncateBannerString(value, max) {
     const limit = typeof max === "number" ? max : CLIENT_BANNER_STRING_MAX;
@@ -885,6 +1463,11 @@
       inputDescriptor = null;
       inputVendor = frame && typeof frame.vendor === "string" && frame.vendor ? frame.vendor : null;
       micOpenEmitted = false;
+      AppState.asrReady = false;
+      updateState({ asrReady: false });
+      if (typeof AppState.emit === "function") {
+        AppState.emit("asrReady", { ready: false });
+      }
       return;
     }
     inputDescriptor = {
@@ -895,6 +1478,11 @@
     };
     inputVendor = frame && typeof frame.vendor === "string" && frame.vendor ? frame.vendor : null;
     micOpenEmitted = false;
+    AppState.asrReady = true;
+    updateState({ asrReady: true });
+    if (typeof AppState.emit === "function") {
+      AppState.emit("asrReady", { ready: true });
+    }
   }
 
   function stopInputCapture(options = {}) {
@@ -931,6 +1519,15 @@
       micStreamPromise = null;
       stopMicStream();
     }
+    AppState.recorder = { active: false };
+    updateState({ recorder: { active: false } });
+    if (typeof AppState.emit === "function") {
+      const stopReason = options && typeof options.reason === "string" ? options.reason : null;
+      AppState.emit("recordingStopped", { reason: stopReason });
+    }
+    sendAutostartTelemetry("recording_stopped", {
+      reason: options && typeof options.reason === "string" ? options.reason : undefined,
+    });
     updateHudListening(false);
   }
 
@@ -1035,6 +1632,13 @@
     try {
       recorder.start(timesliceMs);
       emitClientMicOpenIfNeeded();
+      AppState.recorder = { active: true };
+      updateState({ recorder: { active: true } });
+      if (typeof AppState.emit === "function") {
+        AppState.emit("recordingStarted", { reqId });
+      }
+      sendAutostartTelemetry("recording_started", { reqId });
+      hideTapToSpeakCTA();
     } catch (err) {
       console.error("MediaRecorder start failed", err);
       stopInputCapture();
@@ -1249,7 +1853,18 @@
 
     if (frame.type === "policy.interaction") {
       const sanitized = sanitizePolicyFrame(frame);
+      if (sanitized && sanitized.policy && typeof sanitized.policy === "object") {
+        const mergedPolicy = { ...AppState.policy, ...sanitized.policy };
+        AppState.policy = mergedPolicy;
+        sanitized.policy = mergedPolicy;
+        updateState({ policy: mergedPolicy });
+        if (!userGestureSatisfied && !mergedPolicy.require_user_gesture_first_visit) {
+          markUserGestureSatisfied("policy_update");
+        }
+        attachUserGestureListeners();
+      }
       dispatchFrame(sanitized);
+      maybeAutoStart("policy");
       return;
     }
 
@@ -1281,11 +1896,22 @@
     } else if (frame.type === "error") {
       handleErrorFrame(frame);
     } else if (frame.type === "tts.start") {
+      AppState.ttsActive = true;
+      updateState({ ttsActive: true });
+      if (typeof AppState.emit === "function") {
+        AppState.emit("ttsActive", { active: true });
+      }
+      hideTapToSpeakCTA();
       const audioPlayer = getAudioPlayer();
       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
         audioPlayer.handleTtsStart(frame);
       }
     } else if (frame.type === "tts.end") {
+      AppState.ttsActive = false;
+      updateState({ ttsActive: false });
+      if (typeof AppState.emit === "function") {
+        AppState.emit("ttsActive", { active: false });
+      }
       const audioPlayer = getAudioPlayer();
       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
         audioPlayer.handleTtsEnd(frame);
@@ -1334,6 +1960,11 @@
         ? frame.details
         : (frame && typeof frame.detail === "string" ? frame.detail : "");
       console.warn("asr.unavailable", reason, details);
+      AppState.asrReady = false;
+      updateState({ asrReady: false });
+      if (typeof AppState.emit === "function") {
+        AppState.emit("asrReady", { ready: false, reason });
+      }
       try {
         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
         hud?.setState?.("Chat");
