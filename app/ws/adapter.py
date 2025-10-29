@@ -26,6 +26,7 @@ from app.voice_v2 import (
     EVT_CLIENT_BANNER,
     EVT_CLIENT_MIC_OPEN,
     EVT_HUD_STATE,
+    EVT_SESSION_STEP,
     EVT_TTS_END,
     EVT_TTS_MASK,
     EVT_CLIENT_LOG,
@@ -424,10 +425,26 @@ class ChatV2Adapter:
         principal: Dict[str, Any] = dict(claims)
         is_admin = bool(principal.get("is_admin"))
 
+        self._emit_session_step(
+            sid,
+            "ws.token.validated",
+            summary="Validated WebSocket token",
+            meta={"sub": sub, "is_admin": is_admin},
+            source="ws.accept",
+        )
+
         _log.info("evt=ws_accept_token_ok sid=%s", sid)
 
         _log.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
         await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+
+        self._emit_session_step(
+            sid,
+            "ws.accepted",
+            summary="Accepted WebSocket upgrade",
+            meta={"subprotocol": CHAT_V2_SUBPROTOCOL},
+            source="ws.accept",
+        )
 
         # ---- BEGIN RUNTIME BANNER ----
         try:
@@ -477,6 +494,17 @@ class ChatV2Adapter:
                 engine_file,
                 asr_file,
             )
+            self._emit_session_step(
+                sid,
+                "ws.banner_sent",
+                summary="Sent server banner",
+                meta={
+                    "build_id": build_id,
+                    "host": host,
+                    "pid": pid,
+                    "subprotocol": selected,
+                },
+            )
         except Exception:
             _log.exception("evt=server_banner_emit_failed")
         # ---- END RUNTIME BANNER ----
@@ -495,6 +523,12 @@ class ChatV2Adapter:
             info_frame["policy"] = policy_snapshot
         await self._send_json(send, sid, info_frame)
         _log.info("evt=ws_info_sent sid=%s", sid)
+        self._emit_session_step(
+            sid,
+            "ws.info_sent",
+            summary="Sent info frame",
+            meta={"has_policy": bool(policy_snapshot)},
+        )
 
         ctx = AdapterContext(
             sid=sid,
@@ -570,6 +604,12 @@ class ChatV2Adapter:
 
             if self.exporter:
                 self.exporter.begin(ctx.sid)
+                self._emit_session_step(
+                    ctx.sid,
+                    "session.export_started",
+                    summary="Started session export",
+                    source="ws.exporter",
+                )
 
             await self._on_open_and_greet(ctx)
 
@@ -630,7 +670,21 @@ class ChatV2Adapter:
                 await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
                 if self.exporter:
                     self.exporter.end(ctx.sid, {"close_code": close_code})
+                    self._emit_session_step(
+                        ctx.sid,
+                        "session.export_completed",
+                        summary="Completed session export",
+                        meta={"close_code": close_code, "close_reason": close_reason},
+                        source="ws.exporter",
+                    )
                 self._contexts.pop(ctx.sid, None)
+                self._emit_session_step(
+                    ctx.sid,
+                    "ws.closed",
+                    summary="WebSocket session closed",
+                    meta={"close_code": close_code, "close_reason": close_reason},
+                    source="ws.close",
+                )
         finally:
             current_sid.reset(token)
 
@@ -895,6 +949,23 @@ class ChatV2Adapter:
                 ctx.audio_expected_seq = ctx.audio_seq
                 ctx.audio_highest_seq = ctx.audio_seq - 1
                 ctx.audio_buffer.clear()
+            audio_meta = {
+                key: value
+                for key, value in (
+                    ("format", profile.get("format")),
+                    ("sample_rate", profile.get("sample_rate")),
+                    ("channels", profile.get("channels")),
+                    ("seq_start", profile.get("seq_start")),
+                )
+                if value is not None
+            }
+            self._emit_session_step(
+                ctx.sid,
+                "audio.header.accepted",
+                summary="Accepted audio header",
+                meta=audio_meta,
+                source="ws.audio",
+            )
 
         if frame_type == "client.ready":
             mic_info = frame.get("mic")
@@ -910,6 +981,28 @@ class ChatV2Adapter:
                         opened_ts=ts_value,
                     )
                     ctx.mic_nudge_sent = False
+                ready_meta = {
+                    key: value
+                    for key, value in (
+                        ("state", state if isinstance(state, str) else None),
+                        (
+                            "vendor",
+                            mic_info.get("vendor")
+                            if isinstance(mic_info.get("vendor"), str)
+                            else None,
+                        ),
+                    )
+                    if value is not None
+                }
+            else:
+                ready_meta = {}
+            self._emit_session_step(
+                ctx.sid,
+                "client.ready",
+                summary="Client reported ready",
+                meta=ready_meta,
+                source="ws.client",
+            )
 
         if frame_type == "client.log":
             sanitized_log = self._sanitize_client_log(frame)
@@ -1171,6 +1264,14 @@ class ChatV2Adapter:
             "ws": {"dir": "in", "size": byte_count},
         }
         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+        if ctx.audio_chunks_recv == 1:
+            self._emit_session_step(
+                ctx.sid,
+                "audio.stream_started",
+                summary="Received first audio chunk",
+                meta={"byte_count": byte_count},
+                source="ws.audio",
+            )
         self._handle_client_audio_activity(ctx)
         asr_runtime = getattr(self, "asr_runtime", None)
         if asr_runtime is not None:
@@ -1661,6 +1762,12 @@ class ChatV2Adapter:
 
         ctx.asr_subscription_bus = telemetry_bus
         _log.info("evt=asr_ready_tracker_start sid=%s", ctx.sid)
+        self._emit_session_step(
+            ctx.sid,
+            "asr.ready_tracker_started",
+            summary="Subscribed to ASR ready events",
+            source="ws.asr",
+        )
 
         loop = asyncio.get_running_loop()
 
@@ -2308,6 +2415,32 @@ class ChatV2Adapter:
         }
         bus.publish(event)
 
+    def _emit_session_step(
+        self,
+        sid: str,
+        step: str,
+        *,
+        summary: Optional[str] = None,
+        meta: Optional[Mapping[str, Any]] = None,
+        source: str = "ws_server",
+        who: str = "server",
+    ) -> None:
+        payload: Dict[str, Any] = {
+            "type": EVT_SESSION_STEP,
+            "sid": sid,
+            "who": who,
+            "source": source,
+            "meta": {"step": step},
+        }
+        if meta:
+            try:
+                payload["meta"].update(meta)
+            except Exception:
+                payload["meta"]["detail"] = repr(meta)
+        if summary:
+            payload["summary"] = summary
+        bus.publish(payload)
+
     async def _invoke_engine(self, hook: str, *args: Any) -> None:
         if not self.engine:
             return
@@ -2329,6 +2462,12 @@ class ChatV2Adapter:
     ) -> None:
         try:
             _log.info("evt=ws_open_and_greet_start sid=%s", ctx.sid)
+            self._emit_session_step(
+                ctx.sid,
+                "ws.open_and_greet",
+                summary="Invoking engine open + greet",
+                source="ws.engine",
+            )
             await self._invoke_engine("on_open", ctx.sid, ctx.headers)
             await self._invoke_engine("start_greet", ctx.sid)
         except Exception:  # pragma: no cover - defensive logging

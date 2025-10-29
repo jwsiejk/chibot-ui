@@ -14,6 +14,8 @@ import json
 import secrets
 
 from app.db.neon import get_user, profile_complete, upsert_user
+from app.telemetry import bus
+from app.voice_v2 import EVT_SESSION_STEP
 
 try:  # pragma: no cover - optional dependency wiring
     from app.security.jwt_utils import mint_ws_token as _mint_ws_token_impl
@@ -244,6 +246,29 @@ async def post_ws_token(scope: Mapping[str, Any], receive) -> "Response":
     _log.info("evt=ws_token_mint sid=%s ttl=60", sid)
 
     ttl_ms = 60 * 1000
+
+    meta: dict[str, object] = {
+        "step": "ws_token.minted",
+        "ttl_ms": ttl_ms,
+        "is_admin": bool(is_admin),
+    }
+    if user_identifier:
+        meta["user_id"] = user_identifier
+    user_email = _user_email(user)
+    if user_email:
+        meta["user_email"] = user_email
+
+    bus.publish(
+        {
+            "type": EVT_SESSION_STEP,
+            "sid": sid,
+            "who": "server",
+            "source": "auth.ws_token",
+            "summary": "Minted WebSocket token",
+            "meta": meta,
+        }
+    )
+
     return json_response(access_token=token, sid=sid, ttl_ms=ttl_ms)
 
 
