@@ -1956,7 +1956,39 @@ window.addEventListener('tts.end', () => {
   }
 });
 
-window.addEventListener('asr.unavailable', () => {
+window.addEventListener('asr.unavailable', (event) => {
+  const detail = event && typeof event === 'object' ? event.detail : undefined;
+  let reason = null;
+  if (detail && typeof detail === 'object') {
+    if (typeof detail.reason === 'string') {
+      reason = detail.reason;
+    } else if (typeof detail.details === 'string') {
+      reason = detail.details;
+    } else if (typeof detail.detail === 'string') {
+      reason = detail.detail;
+    } else if (detail.detail && typeof detail.detail === 'object') {
+      const nested = detail.detail;
+      if (typeof nested.reason === 'string') {
+        reason = nested.reason;
+      } else if (typeof nested.details === 'string') {
+        reason = nested.details;
+      }
+    }
+  }
+  if (diagHudEnabled()) {
+    const reasonText = reason ? String(reason).slice(0, 120) : '';
+    console.warn('diag=asr_unavailable', reasonText);
+    setBadge('asr:down');
+    sendDiagHudEvent(
+      'EVT_CLIENT_ASR_UNAVAILABLE',
+      reasonText ? { reason: reasonText } : undefined,
+      {
+        level: 'warn',
+        badge: 'asr:down',
+        message: reasonText ? `diag=asr_unavailable ${reasonText}` : 'diag=asr_unavailable',
+      }
+    );
+  }
   try {
     scheduleAsrRearm();
   } catch (err) {
@@ -1964,7 +1996,16 @@ window.addEventListener('asr.unavailable', () => {
   }
 });
 
-window.addEventListener('asr.ready', () => {
+window.addEventListener('asr.ready', (event) => {
+  if (diagHudEnabled()) {
+    console.info('diag=asr_ready');
+    setBadge('asr:ready');
+    sendDiagHudEvent(
+      'EVT_CLIENT_ASR_READY',
+      event && typeof event === 'object' ? event.detail : undefined,
+      { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
+    );
+  }
   console.info('ui: asr.ready → startMicCaptureIfIdle()');
   if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
     try {

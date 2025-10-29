@@ -709,6 +709,7 @@ class ASRRuntime:
                 sid,
                 stream_id_value,
             )
+            self._log_asr_rearmed(sid, state)
 
             asr_ready_frame = {
                 "type": "asr.ready",
@@ -998,6 +999,8 @@ class ASRRuntime:
             return
 
         details_value = details if isinstance(details, str) else str(details)
+        if len(details_value) > 160:
+            details_value = f"{details_value[:157]}..."
         payload = {
             "type": "asr.unavailable",
             "sid": sid,
@@ -1024,6 +1027,25 @@ class ASRRuntime:
 
         if state is not None:
             state.unavailable_emitted = True
+
+    def _log_asr_rearmed(self, sid: str, state: _SessionState | None = None) -> None:
+        if not isinstance(sid, str) or not sid:
+            return
+        if state is None:
+            state = self._sessions.get(sid)
+        if state is None or not state.unavailable_emitted:
+            return
+
+        self._emit_log(
+            {
+                "type": "EVT_LOG",
+                "logger": "app.voice_v2.asr_runtime",
+                "level": "INFO",
+                "sid": sid,
+                "msg": f"evt=asr_rearmed sid={sid}",
+            }
+        )
+        state.unavailable_emitted = False
 
     def _cancel_idle_timer(self, state: _SessionState) -> None:
         handle = state.idle_handle
@@ -1059,6 +1081,7 @@ class ASRRuntime:
                 )
                 self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
                 _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
+                self._log_asr_rearmed(sid, state)
                 asr_ready_frame = {
                     "type": "asr.ready",
                     "vendor": "deepgram",
