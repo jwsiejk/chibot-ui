@@ -61,6 +61,7 @@ class _StreamState:
     last_send_ts: float = 0.0
     first_audio_ts: float | None = None
     current_utterance_id: str | None = None
+    keepalive_task: asyncio.Task[None] | None = None
 
 
 class DeepgramClient:
@@ -81,10 +82,56 @@ class DeepgramClient:
         self._streams: Dict[str, _StreamState] = {}
         self.idle_close_ms = ASR_IDLE_CLOSE_MS
         self._legacy_start_warning_logged = False
+        self._keepalive_interval = self._resolve_keepalive_interval()
+        self._keepalive_payload = json.dumps({"type": "KeepAlive"})
+        self._keepalive_state: _StreamState | None = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+    async def connect(self, websocket: Any) -> None:
+        """Attach to an existing websocket and start keepalive handling."""
+
+        if websocket is None:
+            raise ValueError("websocket must not be None")
+
+        if self._keepalive_state is not None:
+            await self.close()
+
+        loop = asyncio.get_running_loop()
+        state = _StreamState(
+            sid=f"dg-keepalive-{uuid.uuid4().hex}",
+            stream_id="keepalive",
+            websocket=websocket,
+            on_partial=lambda *_args, **_kwargs: None,
+            on_final=lambda *_args, **_kwargs: None,
+            on_error=lambda *_args, **_kwargs: None,
+            on_close=None,
+            loop=loop,
+        )
+        self._keepalive_state = state
+        self._start_keepalive(state)
+
+    async def close(self) -> None:
+        """Close the keepalive websocket used by the adapter stub."""
+
+        state = self._keepalive_state
+        if state is None:
+            return
+
+        self._keepalive_state = None
+        state.closing = True
+        self._cancel_keepalive(state)
+
+        close_method = getattr(state.websocket, "close", None)
+        if callable(close_method):
+            try:
+                result = close_method()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:  # pragma: no cover - defensive
+                _log.debug("evt=deepgram_keepalive_close_failed", exc_info=True)
+
     async def open_stream(
         self,
         sid: str,
@@ -154,6 +201,7 @@ class DeepgramClient:
             self._receiver_loop(state), name=f"dg-recv-{sid}"
         )
         self._streams[sid] = state
+        self._start_keepalive(state)
         loop.call_soon(
             _log.info,
             "evt=dg_stream_open sid=%s stream_id=%s url=%s",
@@ -301,6 +349,7 @@ class DeepgramClient:
         if state is None:
             return
         state.closing = True
+        self._cancel_keepalive(state)
         state.data_event.set()
         if state.receiver_task is not None:
             state.receiver_task.cancel()
@@ -311,6 +360,90 @@ class DeepgramClient:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _resolve_keepalive_interval() -> float:
+        raw = os.getenv("DG_KEEPALIVE_INTERVAL_S")
+        if raw is None:
+            return 5.0
+        try:
+            interval = float(raw)
+        except (TypeError, ValueError):
+            return 5.0
+        if interval <= 0:
+            return 0.0
+        return interval
+
+    def _start_keepalive(self, state: _StreamState) -> None:
+        if self._keepalive_interval <= 0:
+            return
+        if state.keepalive_task is not None and not state.keepalive_task.done():
+            return
+        try:
+            loop = state.loop
+        except Exception:  # pragma: no cover - defensive
+            return
+        state.keepalive_task = loop.create_task(
+            self._keepalive_loop(state, self._keepalive_interval),
+            name=f"dg-keepalive-{state.sid}",
+        )
+
+    def _cancel_keepalive(self, state: _StreamState) -> None:
+        task = state.keepalive_task
+        if task is None:
+            return
+        state.keepalive_task = None
+        self._safe_cancel(task)
+
+    async def _keepalive_loop(self, state: _StreamState, interval: float) -> None:
+        try:
+            while not state.closing:
+                await asyncio.sleep(interval)
+                if state.closing:
+                    break
+                try:
+                    await state.websocket.send(self._keepalive_payload)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # pragma: no cover - defensive
+                    _log.debug(
+                        "evt=dg_keepalive_send_failed sid=%s stream_id=%s",
+                        state.sid,
+                        state.stream_id,
+                        exc_info=True,
+                    )
+                    return
+                _log.debug(
+                    "evt=dg_keepalive_sent sid=%s stream_id=%s interval_s=%.3f",
+                    state.sid,
+                    state.stream_id,
+                    interval,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - defensive
+            _log.exception("evt=dg_keepalive_loop_failed sid=%s", state.sid)
+
+    @staticmethod
+    def _safe_cancel(task: asyncio.Task[Any]) -> None:
+        if task.done():
+            try:
+                task.result()
+            except Exception:  # pragma: no cover - defensive
+                pass
+            return
+
+        task.cancel()
+
+        def _finalize(t: asyncio.Task[Any]) -> None:
+            try:
+                t.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # pragma: no cover - defensive
+                _log.debug("evt=dg_task_finalize_error", exc_info=True)
+
+        task.add_done_callback(_finalize)
+
     async def _sender_loop(self, state: _StreamState) -> None:
         try:
             while True:
@@ -407,6 +540,7 @@ class DeepgramClient:
         if state.finalized:
             return
         state.finalized = True
+        self._cancel_keepalive(state)
         try:
             await state.websocket.wait_closed()
         except Exception:  # pragma: no cover - defensive
