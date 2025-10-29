@@ -98,10 +98,22 @@
   }
 
   function finalizeUtterance() {
+    const completedUtt = pendingDrainUttId || currentUtteranceId || null;
     pendingDrainUttId = null;
     currentUtteranceId = null;
     audioStartReported = false;
     AppState.setState({ tAudioStartMs: null, ttsUttId: null });
+    if (typeof window !== "undefined") {
+      try {
+        window.dispatchEvent(
+          new CustomEvent("local_audio.ended", {
+            detail: completedUtt ? { uttId: completedUtt } : { uttId: null }
+          })
+        );
+      } catch (err) {
+        console.warn("AudioPlayer local_audio.ended dispatch failed", err);
+      }
+    }
   }
 
   function interrupt({ preserveState = false } = {}) {

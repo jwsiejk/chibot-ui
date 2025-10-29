@@ -198,6 +198,9 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     def test_client_ready_mic_open_confirms_listen(self) -> None:
         asyncio.run(self._test_client_ready_mic_open())
 
+    def test_emits_await_user_after_tts_end(self) -> None:
+        asyncio.run(self._test_emits_await_user_after_tts_end())
+
     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
         asyncio.run(self._test_audio_forwarding())
 
@@ -377,6 +380,40 @@ class TestAdapterOutboundBridge(unittest.TestCase):
         finally:
             bus.unsubscribe(token)
             await harness.close()
+
+    async def _test_emits_await_user_after_tts_end(self) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+
+        sid = harness.sid
+        policy_payload = {
+            "type": "policy.interaction",
+            "interaction_id": "turn-1",
+            "actions": ["assistant.say", "assistant.await_user"],
+        }
+
+        with self.assertLogs("app.ws.adapter", level="INFO") as logs:
+            bus.publish(
+                {"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload}
+            )
+            await asyncio.sleep(0.01)
+
+            tts_end_payload = {"type": "tts.end", "utt_id": "utt-1", "req_id": "turn-1"}
+            bus.publish(
+                {"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload}
+            )
+
+            frame = await harness.wait_for_outbound(
+                lambda data: data.get("type") == "assistant.await_user"
+            )
+
+        self.assertEqual(frame.get("type"), "assistant.await_user")
+        self.assertEqual(frame.get("reason"), "tts_end")
+        self.assertEqual(frame.get("req_id"), "turn-1")
+        combined_logs = "\n".join(logs.output)
+        self.assertIn("evt=await_user_emit", combined_logs)
 
     async def _test_listen_handoff_waits_for_mask_off(self) -> None:
         engine = RecordingEngine()

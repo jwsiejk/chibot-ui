@@ -717,6 +717,7 @@
       asrReady: false,
       isRecording: false,
       micPermissionGranted: false,
+      audioPlaybackIdle: true,
     };
 
     const micSessionTelemetry = {
@@ -952,22 +953,87 @@
       };
     }
 
+    function logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, extra) {
+      const parts = [
+        `asrReady=${gates.asrReady}`,
+        `turnState=${gates.turnState === null ? 'null' : gates.turnState}`,
+        `micPerm=${gates.micPerm}`,
+        `recording=${gates.recording}`,
+      ];
+      const detail = {
+        event: 'maybe_autostart_blocked',
+        trigger: triggerLabel,
+        reason: reasonLabel,
+        gates: {
+          asrReady: gates.asrReady,
+          turnState: gates.turnState,
+          micPerm: gates.micPerm,
+          recording: gates.recording,
+        },
+      };
+      if (extra && typeof extra === 'object') {
+        const keys = Object.keys(extra);
+        if (keys.length) {
+          detail.extra = {};
+          for (let i = 0; i < keys.length && i < 8; i += 1) {
+            const key = keys[i];
+            if (!key) continue;
+            detail.extra[key.slice(0, 32)] = extra[key];
+          }
+        }
+      }
+      logClient(`evt=maybe_autostart_blocked gates={${parts.join(' ')}}`, detail);
+    }
+
     function maybeAutoStartCapture(trigger, reason) {
       const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
-      if (runtimeState.isRecording) {
+      const wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
+      const wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
+      if (!(wantsAsrReady || wantsTurnReady)) {
         return;
       }
-      if (!(capturePolicy.start_on_asr_ready || capturePolicy.start_on_turn_ready)) {
+
+      const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+      const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+      const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+        ? runtimeState.turnState.slice(0, 32)
+        : null;
+      const gates = {
+        asrReady: Boolean(runtimeState.asrReady),
+        turnState: rawTurnState,
+        micPerm: Boolean(runtimeState.micPermissionGranted),
+        recording: Boolean(runtimeState.isRecording),
+      };
+
+      if (runtimeState.isRecording) {
+        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+          blockedBy: 'recording',
+          audioIdle: runtimeState.audioPlaybackIdle,
+        });
         return;
       }
       if (!runtimeState.micPermissionGranted) {
+        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+          blockedBy: 'mic_permission',
+          audioIdle: runtimeState.audioPlaybackIdle,
+        });
         return;
       }
-      if (!(runtimeState.asrReady && runtimeState.turnState === 'Ready')) {
+      if (!runtimeState.asrReady) {
+        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+          blockedBy: 'asr_ready',
+          audioIdle: runtimeState.audioPlaybackIdle,
+        });
         return;
       }
-      const triggerLabel = trigger ? String(trigger) : 'unknown';
-      const reasonLabel = reason ? String(reason) : 'unknown';
+      if (wantsTurnReady && !runtimeState.audioPlaybackIdle) {
+        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+          blockedBy: 'audio_playback',
+          audioIdle: runtimeState.audioPlaybackIdle,
+        });
+        return;
+      }
+
       logClient(`evt=mic_arm trigger=${triggerLabel} reason=${reasonLabel}`, {
         event: 'mic_arm',
         trigger: triggerLabel,
@@ -2030,6 +2096,7 @@
         runtimeState.turnState = null;
         runtimeState.asrReady = false;
         runtimeState.policy = null;
+        runtimeState.audioPlaybackIdle = true;
       } else if (state.infoFrame) {
         updateVoiceState(extractVoiceLocale(state.infoFrame));
         try {
@@ -2127,6 +2194,7 @@ window.addEventListener('tts.start', (event) => {
   if (detail) {
     updateVoiceState(extractVoiceLocale(detail));
   }
+  runtimeState.audioPlaybackIdle = false;
   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
     try {
       window.AudioRecorder.handleTtsStart();
@@ -2164,6 +2232,7 @@ window.addEventListener('turn.state', (event) => {
     : (frame.meta && typeof frame.meta.reason === 'string' ? frame.meta.reason : null);
   void reason; // not strictly needed, but kept for clarity
 
+  runtimeState.audioPlaybackIdle = true;
   DiagRecorder.maybeStart('turn');
   maybeAutoStartCapture('turn_ready', 'tts_end');
 
@@ -2200,6 +2269,20 @@ window.addEventListener('tts.end', () => {
   } else {
     release();
   }
+});
+
+window.addEventListener('local_audio.ended', (event) => {
+  runtimeState.audioPlaybackIdle = true;
+  const detail = event && event.detail;
+  const trigger = detail && detail.uttId === null ? 'local_audio_end_unknown' : 'local_audio_end';
+  maybeAutoStartCapture(trigger, 'tts_end');
+});
+
+window.addEventListener('assistant.await_user', (event) => {
+  runtimeState.audioPlaybackIdle = true;
+  const frame = event && event.detail;
+  const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
+  maybeAutoStartCapture('await_user', reason);
 });
 
 window.addEventListener('asr.unavailable', (event) => {

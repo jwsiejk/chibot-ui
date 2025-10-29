@@ -349,9 +349,6 @@ class ChatV2Adapter:
         capture = policy.get("capture") if isinstance(policy, dict) else None
         start_on_ready = bool(capture.get("start_on_turn_ready")) if isinstance(capture, dict) else False
         sid = getattr(ctx, "sid", "")
-        if not start_on_ready:
-            _log.debug("evt=await_user_skip sid=%s", sid)
-            return
         if not getattr(ctx, "await_user_expected", False):
             return
         if getattr(ctx, "await_user_cue_emitted", False):
@@ -359,7 +356,14 @@ class ChatV2Adapter:
         outbox = getattr(ctx, "outbox", None)
         if outbox is None:
             return
-        payload = {"type": "assistant.await_user", "reason": "tts_end", "ts": self._now_ms()}
+        payload: Dict[str, Any] = {
+            "type": "assistant.await_user",
+            "reason": "tts_end",
+            "ts": self._now_ms(),
+        }
+        req_value = getattr(ctx, "await_user_req_id", None)
+        if isinstance(req_value, str) and req_value:
+            payload["req_id"] = req_value
         try:
             outbox.put_nowait(payload)
         except asyncio.QueueFull:
@@ -376,8 +380,15 @@ class ChatV2Adapter:
                 pass
             return
         ctx.await_user_cue_emitted = True
-        _log.info("evt=turn_listen_cue sid=%s reason=tts_end policy_start=true", sid)
-        _log.info("evt=await_user_emit sid=%s", sid)
+        _log.info(
+            "evt=turn_listen_cue sid=%s reason=tts_end policy_start=%s",
+            sid,
+            "true" if start_on_ready else "false",
+        )
+        if isinstance(req_value, str) and req_value:
+            _log.info("evt=await_user_emit sid=%s req_id=%s", sid, req_value)
+        else:
+            _log.info("evt=await_user_emit sid=%s", sid)
 
     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
         if scope.get("type") != "websocket":
@@ -1522,6 +1533,16 @@ class ChatV2Adapter:
                 frame_type = payload.get("type")
                 if frame_type == "tts.end":
                     self._handle_tts_end_diag(ctx, loop, payload)
+                    req_val = payload.get("req_id") if isinstance(payload, dict) else None
+                    req_value = req_val if isinstance(req_val, str) and req_val else None
+                    if req_value:
+                        ctx.last_tts_end_req_id = req_value
+                        ctx.await_user_req_id = req_value
+                    elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
+                        ctx.last_tts_end_req_id = ctx.await_user_req_id
+                    policy = self._policy_snapshot()
+                    self._maybe_emit_await_user(ctx, policy)
+                    _schedule_listen_handoff(req_value)
                 _enqueue(payload)
 
             try:
@@ -1564,18 +1585,19 @@ class ChatV2Adapter:
                 self._clear_pending_for_key(ctx, key)
                 return
             open_if_needed = getattr(runtime, "open_if_needed", None)
-            if not callable(open_if_needed):
-                self._clear_pending_for_key(ctx, key)
-                return
-            try:
-                await open_if_needed(ctx.sid, req_id=req_id)
-            except asyncio.CancelledError:
-                self._clear_pending_for_key(ctx, key)
-                raise
-            except Exception:  # pragma: no cover - defensive logging
-                self._clear_pending_for_key(ctx, key)
-                _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
-                return
+            should_wait_for_ready = True
+            if callable(open_if_needed):
+                try:
+                    await open_if_needed(ctx.sid, req_id=req_id)
+                except asyncio.CancelledError:
+                    self._clear_pending_for_key(ctx, key)
+                    raise
+                except Exception:  # pragma: no cover - defensive logging
+                    self._clear_pending_for_key(ctx, key)
+                    _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
+                    return
+            else:
+                should_wait_for_ready = False
 
             if ctx.tts_mask_phase != "off":
                 self._set_after_mask_for_key(ctx, key)
@@ -1587,23 +1609,22 @@ class ChatV2Adapter:
                 )
                 return
 
-            deadline = time.monotonic() + 1.0
-            while not ctx.asr_ready and time.monotonic() < deadline:
-                if ctx.tts_mask_phase != "off":
-                    self._set_after_mask_for_key(ctx, key)
-                    self._clear_pending_for_key(ctx, key)
-                    _log.info(
-                        "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
-                        ctx.sid,
-                        req_id,
-                    )
-                    return
-                await asyncio.sleep(0.01)
+            if should_wait_for_ready:
+                deadline = time.monotonic() + 1.0
+                while not ctx.asr_ready and time.monotonic() < deadline:
+                    if ctx.tts_mask_phase != "off":
+                        self._set_after_mask_for_key(ctx, key)
+                        self._clear_pending_for_key(ctx, key)
+                        _log.info(
+                            "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
+                            ctx.sid,
+                            req_id,
+                        )
+                        return
+                    await asyncio.sleep(0.01)
 
-            if not ctx.asr_ready:
-                self._clear_pending_for_key(ctx, key)
-                _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
-                return
+                if not ctx.asr_ready:
+                    _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
 
             if ctx.outbox is None:
                 self._clear_pending_for_key(ctx, key)
@@ -1642,6 +1663,7 @@ class ChatV2Adapter:
 
             _enqueue(ready_frame)
             _enqueue(input_start)
+            _enqueue({"type": "start_listening"})
 
             if key is not None:
                 ctx.listen_handoff_done.add(key)
@@ -1684,9 +1706,6 @@ class ChatV2Adapter:
                             candidate,
                         )
                         return
-                    if ctx.tts_mask_phase != "off":
-                        self._set_after_mask_for_key(ctx, key)
-                        return
                     if ctx.outbox is None:
                         return
                     existing = ctx.listen_handoff_task
@@ -1696,6 +1715,9 @@ class ChatV2Adapter:
                         initiated = self._initiate_listen_handoff(ctx, candidate)
                         if not initiated:
                             return
+                    if ctx.tts_mask_phase != "off":
+                        self._set_after_mask_for_key(ctx, key)
+                        return
                     self._clear_after_mask_for_key(ctx, key)
 
                     async def _run() -> None:
@@ -1744,6 +1766,10 @@ class ChatV2Adapter:
                 if req_value:
                     ctx.last_tts_end_req_id = req_value
                     ctx.await_user_req_id = req_value
+                elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
+                    ctx.last_tts_end_req_id = ctx.await_user_req_id
+                policy = self._policy_snapshot()
+                self._maybe_emit_await_user(ctx, policy)
                 _schedule_listen_handoff(req_value)
 
             try:
@@ -1942,6 +1968,12 @@ class ChatV2Adapter:
             ctx.await_user_expected = self._policy_requests_listen(payload)
             req_id_value = payload.get("req_id") if isinstance(payload, dict) else None
             new_req_id = req_id_value if isinstance(req_id_value, str) and req_id_value else None
+            if new_req_id is None and isinstance(payload, dict):
+                interaction_id = payload.get("interaction_id")
+                if isinstance(interaction_id, str):
+                    trimmed = interaction_id.strip()
+                    if trimmed:
+                        new_req_id = trimmed
             ctx.await_user_req_id = new_req_id
             ctx.await_user_cue_emitted = False
             new_key = self._turn_key(ctx, new_req_id)

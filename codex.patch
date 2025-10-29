@@ -1,12 +1,223 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index e1c22ce303d4d4cf3291a89c5ec485387c1dbe91..9c0446d44b3f115cb2bb139ecaf0c3407d79c5b5 100644
+index 9c0446d44b3f115cb2bb139ecaf0c3407d79c5b5..192d4bbefa47bc53ff1a80a3fab504671f3a54a3 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -2029,50 +2029,51 @@
+@@ -695,50 +695,51 @@
+       await loadScript("policy_badges.js");
+     }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+     if (!window.WSErrorUI) {
+       await loadScript("errors.js");
+     }
+   }
+ 
+   async function init() {
+     await bootstrapClientConfig();
+     await ensureRuntimeModules();
+ 
+     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
+     const audioRecorder = window.AudioRecorder || null;
+ 
+     const runtimeState = {
+       policy: null,
+       turnState: null,
+       asrReady: false,
+       isRecording: false,
+       micPermissionGranted: false,
++      audioPlaybackIdle: true,
+     };
+ 
+     const micSessionTelemetry = {
+       micOpenLogged: false,
+       firstChunkLogged: false,
+       recBadgeLogged: false,
+     };
+     let micPermissionTelemetryLogged = false;
+ 
+     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
+     let pendingClientReady = null;
+     let clientReadyTimerId = null;
+     let clientReadyStats = null;
+     const deferredClientLogs = [];
+ 
+     function startClientReadyTracking(detail) {
+       clientReadyStats = {
+         detail,
+         attempts: 0,
+         events: [],
+         startedAt: Date.now(),
+       };
+       recordClientReadyEvent('enqueue', {
+         vendor: detail && detail.vendor ? detail.vendor : undefined,
+         micTs: detail && typeof detail.ts === 'number' ? detail.ts : undefined,
+@@ -930,66 +931,131 @@
+         });
+       }
+       if (outcome) {
+         setMicPermissionGranted(true, 'startMicCapture');
+       }
+       return Promise.resolve(outcome);
+     }
+ 
+     if (audioRecorder && typeof audioRecorder._onWebmData === 'function') {
+       const originalOnWebmData = audioRecorder._onWebmData.bind(audioRecorder);
+       audioRecorder._onWebmData = function patchedOnWebmData(event) {
+         if (!micSessionTelemetry.firstChunkLogged) {
+           const size = event && event.data && typeof event.data.size === 'number'
+             ? event.data.size
+             : 0;
+           if (size > 0) {
+             micSessionTelemetry.firstChunkLogged = true;
+             const detail = { event: 'mic_first_chunk', bytes: size };
+             logClient(`evt=mic_first_chunk bytes=${size}`, detail);
+           }
+         }
+         return originalOnWebmData(event);
+       };
+     }
+ 
++    function logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, extra) {
++      const parts = [
++        `asrReady=${gates.asrReady}`,
++        `turnState=${gates.turnState === null ? 'null' : gates.turnState}`,
++        `micPerm=${gates.micPerm}`,
++        `recording=${gates.recording}`,
++      ];
++      const detail = {
++        event: 'maybe_autostart_blocked',
++        trigger: triggerLabel,
++        reason: reasonLabel,
++        gates: {
++          asrReady: gates.asrReady,
++          turnState: gates.turnState,
++          micPerm: gates.micPerm,
++          recording: gates.recording,
++        },
++      };
++      if (extra && typeof extra === 'object') {
++        const keys = Object.keys(extra);
++        if (keys.length) {
++          detail.extra = {};
++          for (let i = 0; i < keys.length && i < 8; i += 1) {
++            const key = keys[i];
++            if (!key) continue;
++            detail.extra[key.slice(0, 32)] = extra[key];
++          }
++        }
++      }
++      logClient(`evt=maybe_autostart_blocked gates={${parts.join(' ')}}`, detail);
++    }
++
+     function maybeAutoStartCapture(trigger, reason) {
+       const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
+-      if (runtimeState.isRecording) {
++      const wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
++      const wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
++      if (!(wantsAsrReady || wantsTurnReady)) {
+         return;
+       }
+-      if (!(capturePolicy.start_on_asr_ready || capturePolicy.start_on_turn_ready)) {
++
++      const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
++      const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
++      const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
++        ? runtimeState.turnState.slice(0, 32)
++        : null;
++      const gates = {
++        asrReady: Boolean(runtimeState.asrReady),
++        turnState: rawTurnState,
++        micPerm: Boolean(runtimeState.micPermissionGranted),
++        recording: Boolean(runtimeState.isRecording),
++      };
++
++      if (runtimeState.isRecording) {
++        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
++          blockedBy: 'recording',
++          audioIdle: runtimeState.audioPlaybackIdle,
++        });
+         return;
+       }
+       if (!runtimeState.micPermissionGranted) {
++        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
++          blockedBy: 'mic_permission',
++          audioIdle: runtimeState.audioPlaybackIdle,
++        });
+         return;
+       }
+-      if (!(runtimeState.asrReady && runtimeState.turnState === 'Ready')) {
++      if (!runtimeState.asrReady) {
++        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
++          blockedBy: 'asr_ready',
++          audioIdle: runtimeState.audioPlaybackIdle,
++        });
+         return;
+       }
+-      const triggerLabel = trigger ? String(trigger) : 'unknown';
+-      const reasonLabel = reason ? String(reason) : 'unknown';
++      if (wantsTurnReady && !runtimeState.audioPlaybackIdle) {
++        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
++          blockedBy: 'audio_playback',
++          audioIdle: runtimeState.audioPlaybackIdle,
++        });
++        return;
++      }
++
+       logClient(`evt=mic_arm trigger=${triggerLabel} reason=${reasonLabel}`, {
+         event: 'mic_arm',
+         trigger: triggerLabel,
+         reason: reasonLabel,
+       });
+       startMicCapture()
+         .then((started) => {
+           if (!started) {
+             logClient('evt=mic_open_failed err=mic_not_started', {
+               event: 'mic_open_failed',
+               error: 'mic_not_started',
+             });
+             return;
+           }
+           updateRecordingState(true, 'auto_start_capture');
+           noteMicOpen('auto_start_capture');
+         })
+         .catch((err) => {
+           const errText = safeErr(err);
+           logClient(`evt=mic_open_failed err=${errText}`, {
+             event: 'mic_open_failed',
+             error: errText,
+           });
+         });
+     }
+@@ -2008,50 +2074,51 @@
+ 
+     let previousConnectionState = AppState.getState().connectionState;
+     AppState.subscribe((state) => {
+       sidText.textContent = state.sid || '—';
+       let label = 'Disconnected';
+       if (state.connectionState === 'connected') label = 'Connected';
+       else if (state.connectionState === 'connecting') label = 'Connecting…';
+       else if (state.connectionState === 'resuming') label = 'Resuming…';
+       connLabel.textContent = label;
+       const active = state.connectionState !== 'disconnected';
+       statusDot.classList.toggle('on', active);
+       startBtn.disabled = active;
+       endBtn.disabled = !active;
+       if (state.latencyMs != null) {
+         latencyHint.textContent = `Latency: ${Math.round(state.latencyMs)} ms`;
+       } else {
+         latencyHint.textContent = 'Latency: —';
+       }
+       if (state.connectionState === 'disconnected') {
+         resetVoiceState();
+         resetSuggestions();
          updateRecordingState(false, 'appstate.disconnect');
          runtimeState.turnState = null;
          runtimeState.asrReady = false;
          runtimeState.policy = null;
++        runtimeState.audioPlaybackIdle = true;
        } else if (state.infoFrame) {
          updateVoiceState(extractVoiceLocale(state.infoFrame));
          try {
@@ -28,29 +239,840 @@ index e1c22ce303d4d4cf3291a89c5ec485387c1dbe91..9c0446d44b3f115cb2bb139ecaf0c340
  
        if (becameConnected) {
          Waveform.start();
-+        flushDeferredClientLogs();
+         flushDeferredClientLogs();
  
          if (audioRecorder && typeof audioRecorder.start === 'function') {
            audioRecorder.start()
-             .then(() => {
-               setMicPermissionGranted(true, 'recorder.start');
-             })
-             .catch((err) => {
-               console.error('AudioRecorder start error', err);
-               setMicPermissionGranted(false, 'recorder.start_error');
-             });
-         }
-         if (pendingClientReady && clientReadyTimerId === null) {
-           flushPendingClientReady();
-         }
-       } else if (becameDisconnected) {
-         Waveform.stop();
- 
-         if (audioRecorder && typeof audioRecorder.stop === 'function') {
-           try {
-             audioRecorder.stop();
-           } catch (err) {
-             console.warn('AudioRecorder stop error', err);
+@@ -2105,125 +2172,141 @@
+         try {
+           const payload = { type: 'asr.rearm.request' };
+           const client = window.WSClient;
+           if (client && typeof client.send === 'function') {
+             client.send(payload);
+             return;
            }
+           const ws = window.WS;
+           if (ws && typeof ws.send === 'function') {
+             ws.send(payload);
+           }
+         } catch (err) {
+           console.warn('Failed to send asr.rearm.request', err);
          }
-         updateRecordingState(false, 'appstate.disconnect');
+       }, delay);
+       if (asrRetry && typeof asrRetry === 'object') {
+         asrRetry.timer = timer;
+       }
+     }
+ 
+ window.addEventListener('tts.start', (event) => {
+   const detail = event && event.detail;
+   if (detail) {
+     updateVoiceState(extractVoiceLocale(detail));
+   }
++  runtimeState.audioPlaybackIdle = false;
+   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
+     try {
+       window.AudioRecorder.handleTtsStart();
+     } catch (err) {
+       console.warn('AudioRecorder handleTtsStart failed', err);
+     }
+   }
+ });
+ 
+ window.addEventListener('policy.snapshot', (event) => {
+   const frame = event && event.detail;
+   try {
+     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
+     runtimeState.policy = policy && typeof policy === 'object' ? policy : null;
+     if (audioRecorder && typeof audioRecorder.setPolicy === 'function') {
+       audioRecorder.setPolicy(policy);
+     }
+   } catch (err) {
+     console.warn('AudioRecorder setPolicy failed', err);
+   }
+ });
+ 
+ // Turn becomes Ready → hand control to user
+ window.addEventListener('turn.state', (event) => {
+   const frame = (event && event.detail) || {};
+   const nextState = typeof frame.state === 'string'
+     ? frame.state
+     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
+   runtimeState.turnState = typeof nextState === 'string' ? nextState : null;
+   if (runtimeState.turnState !== 'Ready') return;
+ 
+   // Optional: why we became ready (e.g., 'tts')
+   const reason = typeof frame.reason === 'string'
+     ? frame.reason
+     : (frame.meta && typeof frame.meta.reason === 'string' ? frame.meta.reason : null);
+   void reason; // not strictly needed, but kept for clarity
+ 
++  runtimeState.audioPlaybackIdle = true;
+   DiagRecorder.maybeStart('turn');
+   maybeAutoStartCapture('turn_ready', 'tts_end');
+ 
+   console.info('ui: turn=Ready → startMicCaptureIfIdle()');
+   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
+     try {
+       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
+       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
+         maybe.catch((err) => {
+           console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready failed', err);
+         });
+       }
+     } catch (err) {
+       console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready threw', err);
+     }
+   }
+ });
+ 
+ // Assistant TTS finished → open mic after optional delay
+ window.addEventListener('tts.end', () => {
+   const release = () => {
+     DiagRecorder.maybeStart('ready');
+     if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
+       try {
+         window.AudioRecorder.handleTtsEnd();
+       } catch (err) {
+         console.warn('AudioRecorder handleTtsEnd failed', err);
+       }
+     }
+   };
+ 
+   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
+     setTimeout(release, POST_TTS_RELEASE_MS);
+   } else {
+     release();
+   }
+ });
+ 
++window.addEventListener('local_audio.ended', (event) => {
++  runtimeState.audioPlaybackIdle = true;
++  const detail = event && event.detail;
++  const trigger = detail && detail.uttId === null ? 'local_audio_end_unknown' : 'local_audio_end';
++  maybeAutoStartCapture(trigger, 'tts_end');
++});
++
++window.addEventListener('assistant.await_user', (event) => {
++  runtimeState.audioPlaybackIdle = true;
++  const frame = event && event.detail;
++  const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
++  maybeAutoStartCapture('await_user', reason);
++});
++
+ window.addEventListener('asr.unavailable', (event) => {
+   runtimeState.asrReady = false;
+   const detail = event && typeof event === 'object' ? event.detail : undefined;
+   let reason = null;
+   if (detail && typeof detail === 'object') {
+     if (typeof detail.reason === 'string') {
+       reason = detail.reason;
+     } else if (typeof detail.details === 'string') {
+       reason = detail.details;
+     } else if (typeof detail.detail === 'string') {
+       reason = detail.detail;
+     } else if (detail.detail && typeof detail.detail === 'object') {
+       const nested = detail.detail;
+       if (typeof nested.reason === 'string') {
+         reason = nested.reason;
+       } else if (typeof nested.details === 'string') {
+         reason = nested.details;
+       }
+     }
+   }
+   if (diagHudEnabled()) {
+     const reasonText = reason ? String(reason).slice(0, 120) : '';
+     console.warn('diag=asr_unavailable', reasonText);
+     setBadge('asr:down');
+     sendDiagHudEvent(
+diff --git a/app/static/js/audio_player.js b/app/static/js/audio_player.js
+index e35c5a5b64fcd6680d7ff72ea31ee28b7812392a..199a58e85948a81916ed6ee3d68b9d5222e4eecc 100644
+--- a/app/static/js/audio_player.js
++++ b/app/static/js/audio_player.js
+@@ -76,54 +76,66 @@
+         return ttsMeta.utt_id;
+       }
+     }
+     return null;
+   }
+ 
+   function extractReason(payload) {
+     if (!payload || typeof payload !== "object") return null;
+     if (typeof payload.reason === "string" && payload.reason) {
+       return payload.reason;
+     }
+     const meta = payload.meta;
+     if (meta && typeof meta === "object") {
+       if (typeof meta.reason === "string" && meta.reason) {
+         return meta.reason;
+       }
+       const ttsMeta = meta.tts;
+       if (ttsMeta && typeof ttsMeta === "object" && typeof ttsMeta.reason === "string" && ttsMeta.reason) {
+         return ttsMeta.reason;
+       }
+     }
+     return null;
+   }
+ 
+   function finalizeUtterance() {
++    const completedUtt = pendingDrainUttId || currentUtteranceId || null;
+     pendingDrainUttId = null;
+     currentUtteranceId = null;
+     audioStartReported = false;
+     AppState.setState({ tAudioStartMs: null, ttsUttId: null });
++    if (typeof window !== "undefined") {
++      try {
++        window.dispatchEvent(
++          new CustomEvent("local_audio.ended", {
++            detail: completedUtt ? { uttId: completedUtt } : { uttId: null }
++          })
++        );
++      } catch (err) {
++        console.warn("AudioPlayer local_audio.ended dispatch failed", err);
++      }
++    }
+   }
+ 
+   function interrupt({ preserveState = false } = {}) {
+     flushToken += 1;
+     decodeChain = Promise.resolve();
+     const ctx = audioContext;
+     ACTIVE_SOURCES.forEach((source) => {
+       try {
+         source.stop();
+       } catch (err) {
+         // no-op
+       }
+       try {
+         source.disconnect();
+       } catch (err) {
+         // no-op
+       }
+     });
+     ACTIVE_SOURCES.clear();
+     if (ctx) {
+       nextStartTime = ctx.currentTime;
+     } else {
+       nextStartTime = 0;
+     }
+     pendingDrainUttId = null;
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 09fd401bace0e77c87ec3fdfd5dec3df8f29cb92..5e42da43cc852e7497a9abd77ba5f94aa1611de0 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -327,79 +327,90 @@ class ChatV2Adapter:
+                 ctx.await_user_pending = False
+             return
+         if ctx.await_user_pending_key == key:
+             ctx.await_user_pending = False
+             ctx.await_user_pending_key = None
+ 
+     @staticmethod
+     def _set_after_mask_for_key(ctx: AdapterContext, key: Optional[str]) -> None:
+         ctx.await_user_after_mask = True
+         ctx.await_user_after_mask_key = key
+ 
+     @staticmethod
+     def _clear_after_mask_for_key(ctx: AdapterContext, key: Optional[str]) -> None:
+         if key is None:
+             if ctx.await_user_after_mask_key is None:
+                 ctx.await_user_after_mask = False
+             return
+         if ctx.await_user_after_mask_key == key:
+             ctx.await_user_after_mask = False
+             ctx.await_user_after_mask_key = None
+ 
+     def _maybe_emit_await_user(self, ctx: Any, policy: Dict[str, Any]) -> None:
+         capture = policy.get("capture") if isinstance(policy, dict) else None
+         start_on_ready = bool(capture.get("start_on_turn_ready")) if isinstance(capture, dict) else False
+         sid = getattr(ctx, "sid", "")
+-        if not start_on_ready:
+-            _log.debug("evt=await_user_skip sid=%s", sid)
+-            return
+         if not getattr(ctx, "await_user_expected", False):
+             return
+         if getattr(ctx, "await_user_cue_emitted", False):
+             return
+         outbox = getattr(ctx, "outbox", None)
+         if outbox is None:
+             return
+-        payload = {"type": "assistant.await_user", "reason": "tts_end", "ts": self._now_ms()}
++        payload: Dict[str, Any] = {
++            "type": "assistant.await_user",
++            "reason": "tts_end",
++            "ts": self._now_ms(),
++        }
++        req_value = getattr(ctx, "await_user_req_id", None)
++        if isinstance(req_value, str) and req_value:
++            payload["req_id"] = req_value
+         try:
+             outbox.put_nowait(payload)
+         except asyncio.QueueFull:
+             now = outbox.qsize()
+             try:
+                 asyncio.create_task(
+                     self._publish(
+                         EVT_WS_OUTBOX_DROP,
+                         sid,
+                         {"sid": sid, "dropped": 1, "now": now},
+                     )
+                 )
+             except RuntimeError:
+                 pass
+             return
+         ctx.await_user_cue_emitted = True
+-        _log.info("evt=turn_listen_cue sid=%s reason=tts_end policy_start=true", sid)
+-        _log.info("evt=await_user_emit sid=%s", sid)
++        _log.info(
++            "evt=turn_listen_cue sid=%s reason=tts_end policy_start=%s",
++            sid,
++            "true" if start_on_ready else "false",
++        )
++        if isinstance(req_value, str) and req_value:
++            _log.info("evt=await_user_emit sid=%s req_id=%s", sid, req_value)
++        else:
++            _log.info("evt=await_user_emit sid=%s", sid)
+ 
+     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+         if scope.get("type") != "websocket":
+             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
+ 
+         connect_event = await receive()
+         if connect_event.get("type") != "websocket.connect":
+             return
+ 
+         raw_path = scope.get("raw_path")
+         if isinstance(raw_path, bytes):
+             try:
+                 path = raw_path.decode("utf-8")
+             except UnicodeDecodeError:  # pragma: no cover - defensive fallback
+                 path = raw_path.decode("latin-1", errors="ignore")
+         else:
+             path = scope.get("path", "")
+ 
+         query_bytes = scope.get("query_string") or b""
+         try:
+             query_string = query_bytes.decode("utf-8")
+         except UnicodeDecodeError:  # pragma: no cover - defensive fallback
+             query_string = query_bytes.decode("latin-1", errors="ignore")
+         path_qs = path
+         if query_string:
+@@ -1500,272 +1511,287 @@ class ChatV2Adapter:
+                 except RuntimeError:
+                     pass
+ 
+         def _enqueue(payload: Dict[str, Any]) -> None:
+             if payload.get("type") == "asr.partial":
+                 self._offer_partial_frame(
+                     ctx,
+                     loop,
+                     payload,
+                     lambda frame: _queue_payload(frame, clone=False),
+                 )
+                 return
+             _queue_payload(payload)
+ 
+         def _handle_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+             payload = self._extract_outbound_payload(ctx, event)
+             if payload is None:
+                 return
+ 
+             def _on_loop() -> None:
+                 frame_type = payload.get("type")
+                 if frame_type == "tts.end":
+                     self._handle_tts_end_diag(ctx, loop, payload)
++                    req_val = payload.get("req_id") if isinstance(payload, dict) else None
++                    req_value = req_val if isinstance(req_val, str) and req_val else None
++                    if req_value:
++                        ctx.last_tts_end_req_id = req_value
++                        ctx.await_user_req_id = req_value
++                    elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
++                        ctx.last_tts_end_req_id = ctx.await_user_req_id
++                    policy = self._policy_snapshot()
++                    self._maybe_emit_await_user(ctx, policy)
++                    _schedule_listen_handoff(req_value)
+                 _enqueue(payload)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
+ 
+         def _handle_asr_unavailable_event(event: dict) -> None:
+             if event.get("type") != "asr.unavailable":
+                 return
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+ 
+             def _on_loop() -> None:
+                 ctx.asr_ready = False
+                 payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
+                 reason = event.get("reason")
+                 if isinstance(reason, str) and reason:
+                     payload["reason"] = reason
+                 details = event.get("details")
+                 if details is not None:
+                     payload["details"] = details if isinstance(details, str) else str(details)
+                 _enqueue(payload)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.asr_unavailable_subscription_token = bus.subscribe(
+             "asr.unavailable", _handle_asr_unavailable_event
+         )
+ 
+         async def _perform_listen_handoff(req_id: str) -> None:
+             key = self._turn_key(ctx, req_id)
+             runtime = getattr(self, "asr_runtime", None)
+             if runtime is None:
+                 self._clear_pending_for_key(ctx, key)
+                 return
+             open_if_needed = getattr(runtime, "open_if_needed", None)
+-            if not callable(open_if_needed):
+-                self._clear_pending_for_key(ctx, key)
+-                return
+-            try:
+-                await open_if_needed(ctx.sid, req_id=req_id)
+-            except asyncio.CancelledError:
+-                self._clear_pending_for_key(ctx, key)
+-                raise
+-            except Exception:  # pragma: no cover - defensive logging
+-                self._clear_pending_for_key(ctx, key)
+-                _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
+-                return
++            should_wait_for_ready = True
++            if callable(open_if_needed):
++                try:
++                    await open_if_needed(ctx.sid, req_id=req_id)
++                except asyncio.CancelledError:
++                    self._clear_pending_for_key(ctx, key)
++                    raise
++                except Exception:  # pragma: no cover - defensive logging
++                    self._clear_pending_for_key(ctx, key)
++                    _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
++                    return
++            else:
++                should_wait_for_ready = False
+ 
+             if ctx.tts_mask_phase != "off":
+                 self._set_after_mask_for_key(ctx, key)
+                 self._clear_pending_for_key(ctx, key)
+                 _log.info(
+                     "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
+                     ctx.sid,
+                     req_id,
+                 )
+                 return
+ 
+-            deadline = time.monotonic() + 1.0
+-            while not ctx.asr_ready and time.monotonic() < deadline:
+-                if ctx.tts_mask_phase != "off":
+-                    self._set_after_mask_for_key(ctx, key)
+-                    self._clear_pending_for_key(ctx, key)
+-                    _log.info(
+-                        "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
+-                        ctx.sid,
+-                        req_id,
+-                    )
+-                    return
+-                await asyncio.sleep(0.01)
++            if should_wait_for_ready:
++                deadline = time.monotonic() + 1.0
++                while not ctx.asr_ready and time.monotonic() < deadline:
++                    if ctx.tts_mask_phase != "off":
++                        self._set_after_mask_for_key(ctx, key)
++                        self._clear_pending_for_key(ctx, key)
++                        _log.info(
++                            "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
++                            ctx.sid,
++                            req_id,
++                        )
++                        return
++                    await asyncio.sleep(0.01)
+ 
+-            if not ctx.asr_ready:
+-                self._clear_pending_for_key(ctx, key)
+-                _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
+-                return
++                if not ctx.asr_ready:
++                    _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
+ 
+             if ctx.outbox is None:
+                 self._clear_pending_for_key(ctx, key)
+                 return
+ 
+             if ctx.tts_mask_phase != "off":
+                 self._set_after_mask_for_key(ctx, key)
+                 self._clear_pending_for_key(ctx, key)
+                 _log.info(
+                     "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
+                     ctx.sid,
+                     req_id,
+                 )
+                 return
+ 
+             ready_frame = {
+                 "type": "asr.ready",
+                 "input": {
+                     "container": "webm",
+                     "codec": "opus",
+                     "rate_hz": 48000,
+                     "channels": 1,
+                     "mime": "audio/webm;codecs=opus",
+                 },
+             }
+             input_start = {
+                 "type": "input.start",
+                 "capture": {
+                     "container": "webm",
+                     "codec": "opus",
+                     "mime": "audio/webm;codecs=opus",
+                     "timeslice_ms": 250,
+                     "manual_gate": False,
+                 },
+             }
+ 
+             _enqueue(ready_frame)
+             _enqueue(input_start)
++            _enqueue({"type": "start_listening"})
+ 
+             if key is not None:
+                 ctx.listen_handoff_done.add(key)
+             self._clear_pending_for_key(ctx, key)
+             self._clear_after_mask_for_key(ctx, key)
+             current_key = self._turn_key(ctx, ctx.await_user_req_id)
+             if current_key == key:
+                 ctx.await_user_expected = False
+                 ctx.await_user_req_id = None
+             if ctx.last_tts_end_req_id == req_id:
+                 ctx.last_tts_end_req_id = None
+             ctx.client_mic_open = False
+             ctx.mic_nudge_sent = False
+ 
+             self._emit_hud_state(ctx, "Listening")
+             self._schedule_mic_open_guard(ctx, loop)
+             _log.info(
+                 "evt=listen_handoff_ready sid=%s req_id=%s input=webm/opus rate=48000 ch=1",
+                 ctx.sid,
+                 req_id,
+             )
+ 
+         def _schedule_listen_handoff(trigger_req_id: Optional[str]) -> None:
+             async def _attempt() -> None:
+                 async with ctx.listen_lock:
+                     if not ctx.await_user_expected:
+                         return
+                     candidate = trigger_req_id if isinstance(trigger_req_id, str) and trigger_req_id else ctx.await_user_req_id
+                     if not isinstance(candidate, str) or not candidate:
+                         return
+                     if ctx.last_tts_end_req_id != candidate:
+                         return
+                     key = self._turn_key(ctx, candidate)
+                     if key is None:
+                         return
+                     if key in ctx.listen_handoff_done:
+                         _log.info(
+                             "evt=listen_handoff_skip already_done sid=%s req_id=%s",
+                             ctx.sid,
+                             candidate,
+                         )
+                         return
+-                    if ctx.tts_mask_phase != "off":
+-                        self._set_after_mask_for_key(ctx, key)
+-                        return
+                     if ctx.outbox is None:
+                         return
+                     existing = ctx.listen_handoff_task
+                     if existing is not None and not existing.done():
+                         return
+                     if not ctx.await_user_pending or ctx.await_user_pending_key != key:
+                         initiated = self._initiate_listen_handoff(ctx, candidate)
+                         if not initiated:
+                             return
++                    if ctx.tts_mask_phase != "off":
++                        self._set_after_mask_for_key(ctx, key)
++                        return
+                     self._clear_after_mask_for_key(ctx, key)
+ 
+                     async def _run() -> None:
+                         try:
+                             await _perform_listen_handoff(candidate)
+                         finally:
+                             if ctx.listen_handoff_task_key == key:
+                                 ctx.listen_handoff_task = None
+                                 ctx.listen_handoff_task_key = None
+ 
+                     ctx.listen_handoff_task = asyncio.create_task(_run())
+                     ctx.listen_handoff_task_key = key
+                     _log.info(
+                         "evt=listen_handoff_scheduled sid=%s req_id=%s",
+                         ctx.sid,
+                         candidate,
+                     )
+ 
+             try:
+                 loop.create_task(_attempt())
+             except RuntimeError:
+                 pass
+ 
+         def _handle_asr_open_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+ 
+             def _on_loop() -> None:
+                 if ctx.await_user_pending:
+                     _schedule_listen_handoff(None)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.asr_open_subscription_token = bus.subscribe(EVT_ASR_OPEN, _handle_asr_open_event)
+ 
+         def _handle_tts_end_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+             req_id = event.get("req_id")
+             req_value = req_id if isinstance(req_id, str) and req_id else None
+ 
+             def _on_loop() -> None:
+                 if req_value:
+                     ctx.last_tts_end_req_id = req_value
+                     ctx.await_user_req_id = req_value
++                elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
++                    ctx.last_tts_end_req_id = ctx.await_user_req_id
++                policy = self._policy_snapshot()
++                self._maybe_emit_await_user(ctx, policy)
+                 _schedule_listen_handoff(req_value)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.tts_end_subscription_token = bus.subscribe(EVT_TTS_END, _handle_tts_end_event)
+ 
+         def _handle_tts_mask_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+ 
+             raw_phase = event.get("phase")
+             if not isinstance(raw_phase, str):
+                 return
+ 
+             stripped = raw_phase.strip()
+             normalized = stripped.lower()
+             phase_value = normalized or stripped or raw_phase
+ 
+             def _on_loop() -> None:
+                 ctx.tts_mask_phase = phase_value
+                 if ctx.tts_mask_phase != "off":
+                     ctx.await_user_after_mask = False
+@@ -1920,50 +1946,56 @@ class ChatV2Adapter:
+         self, ctx: AdapterContext, event: dict
+     ) -> Optional[Dict[str, Any]]:
+         payload = self._coerce_payload(event.get("payload"))
+         if payload is None:
+             payload = self._coerce_payload(event.get("frame"))
+ 
+         if payload is None:
+             meta = event.get("meta")
+             if isinstance(meta, dict):
+                 ws_meta = meta.get("ws")
+                 if isinstance(ws_meta, dict):
+                     payload = self._coerce_payload(ws_meta.get("frame"))
+                     if payload is None:
+                         payload = self._coerce_payload(ws_meta.get("preview"))
+ 
+         if payload is None:
+             return None
+ 
+         frame_type = payload.get("type") if isinstance(payload, dict) else None
+         if frame_type == "policy.interaction" and isinstance(payload, dict):
+             prev_req_id = ctx.await_user_req_id
+             prev_key = self._turn_key(ctx, prev_req_id)
+             ctx.await_user_expected = self._policy_requests_listen(payload)
+             req_id_value = payload.get("req_id") if isinstance(payload, dict) else None
+             new_req_id = req_id_value if isinstance(req_id_value, str) and req_id_value else None
++            if new_req_id is None and isinstance(payload, dict):
++                interaction_id = payload.get("interaction_id")
++                if isinstance(interaction_id, str):
++                    trimmed = interaction_id.strip()
++                    if trimmed:
++                        new_req_id = trimmed
+             ctx.await_user_req_id = new_req_id
+             ctx.await_user_cue_emitted = False
+             new_key = self._turn_key(ctx, new_req_id)
+             if prev_key is not None and prev_key != new_key:
+                 task = ctx.listen_handoff_task
+                 if (
+                     task is not None
+                     and not task.done()
+                     and ctx.listen_handoff_task_key == prev_key
+                 ):
+                     task.cancel()
+ 
+                     def _suppress_cancel(done: asyncio.Task[None]) -> None:
+                         try:
+                             done.result()
+                         except asyncio.CancelledError:
+                             pass
+                         except Exception:  # pragma: no cover - defensive logging
+                             _log.exception(
+                                 "evt=listen_handoff_cancel_error sid=%s", ctx.sid
+                             )
+ 
+                     task.add_done_callback(_suppress_cancel)
+                     ctx.listen_handoff_task = None
+                     ctx.listen_handoff_task_key = None
+diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
+index 5a3181ad1a812afc58e47da5b5efefaf1569db5e..5a20130b1307a0e24b390137c57607f4cf486e4e 100644
+--- a/tests/test_adapter_outbound_bridge.py
++++ b/tests/test_adapter_outbound_bridge.py
+@@ -176,50 +176,53 @@ class TestAdapterOutboundBridge(unittest.TestCase):
+         )
+ 
+     def test_sid_isolation_drops_other_sessions(self) -> None:
+         asyncio.run(self._test_sid_isolation())
+ 
+     def test_chat_message_dropped_for_other_sessions(self) -> None:
+         asyncio.run(
+             self._test_payload_other_sid_drop({"type": "chat.message", "message_id": "ignored"})
+         )
+ 
+     def test_allow_list_blocks_unknown_types(self) -> None:
+         asyncio.run(self._test_allow_list())
+ 
+     def test_backpressure_reports_drops(self) -> None:
+         asyncio.run(self._test_backpressure())
+ 
+     def test_start_listening_handoff_after_tts_end(self) -> None:
+         asyncio.run(self._test_start_listening_handoff())
+ 
+     def test_listen_handoff_waits_for_mask_off(self) -> None:
+         asyncio.run(self._test_listen_handoff_waits_for_mask_off())
+ 
+     def test_client_ready_mic_open_confirms_listen(self) -> None:
+         asyncio.run(self._test_client_ready_mic_open())
+ 
++    def test_emits_await_user_after_tts_end(self) -> None:
++        asyncio.run(self._test_emits_await_user_after_tts_end())
++
+     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
+         asyncio.run(self._test_audio_forwarding())
+ 
+     def test_mic_open_timeout_triggers_nudge(self) -> None:
+         asyncio.run(self._test_mic_open_timeout_nudge())
+ 
+     async def _test_happy_path(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+             payload = {"type": "policy.interaction", "interaction_id": "abc123"}
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+ 
+             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction")
+             self.assertEqual(frame, payload)
+ 
+             frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
+             self.assertEqual(len(frames), 1)
+         finally:
+             await harness.close()
+ 
+     async def _test_payload_forwarded(self, payload: Dict[str, Any]) -> None:
+         engine = RecordingEngine()
+@@ -356,50 +359,84 @@ class TestAdapterOutboundBridge(unittest.TestCase):
+             await harness.wait_for(lambda: bool(hud_events))
+             self.assertEqual(hud_events[-1]["meta"].get("state"), "Listening")
+         finally:
+             bus.unsubscribe(token)
+             bus.unsubscribe(mic_token)
+             await harness.close()
+ 
+     async def _test_client_ready_mic_open(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         mic_events: list[dict] = []
+         token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
+         try:
+             payload = {"type": "client.ready", "mic": {"state": "open", "vendor": "browser", "ts": 12345}}
+             await harness._inbound.put({"type": "websocket.receive", "text": json.dumps(payload)})
+             await harness.wait_for(lambda: bool(mic_events))
+             self.assertEqual(mic_events[-1]["meta"].get("state"), "open")
+             self.assertEqual(mic_events[-1]["meta"].get("vendor"), "browser")
+             self.assertEqual(mic_events[-1]["meta"].get("ts"), 12345)
+         finally:
+             bus.unsubscribe(token)
+             await harness.close()
+ 
++    async def _test_emits_await_user_after_tts_end(self) -> None:
++        engine = RecordingEngine()
++        adapter = ChatV2Adapter(engine=engine)
++        harness = OutboundHarness(adapter, engine)
++        await harness.start()
++
++        sid = harness.sid
++        policy_payload = {
++            "type": "policy.interaction",
++            "interaction_id": "turn-1",
++            "actions": ["assistant.say", "assistant.await_user"],
++        }
++
++        with self.assertLogs("app.ws.adapter", level="INFO") as logs:
++            bus.publish(
++                {"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload}
++            )
++            await asyncio.sleep(0.01)
++
++            tts_end_payload = {"type": "tts.end", "utt_id": "utt-1", "req_id": "turn-1"}
++            bus.publish(
++                {"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload}
++            )
++
++            frame = await harness.wait_for_outbound(
++                lambda data: data.get("type") == "assistant.await_user"
++            )
++
++        self.assertEqual(frame.get("type"), "assistant.await_user")
++        self.assertEqual(frame.get("reason"), "tts_end")
++        self.assertEqual(frame.get("req_id"), "turn-1")
++        combined_logs = "\n".join(logs.output)
++        self.assertIn("evt=await_user_emit", combined_logs)
++
+     async def _test_listen_handoff_waits_for_mask_off(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         runtime = _StubAsrRuntime()
+         adapter.asr_runtime = runtime
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+ 
+         sid = harness.sid
+         recorded: list[dict] = []
+         interesting = {EVT_TTS_MASK, EVT_HUD_STATE, EVT_CLIENT_MIC_OPEN}
+ 
+         def _record(event: dict) -> None:
+             if event.get("sid") != sid:
+                 return
+             if event.get("type") in interesting:
+                 recorded.append(dict(event))
+ 
+         token_order = bus.subscribe("*", _record)
+         try:
+             policy_payload = {
+                 "type": "policy.interaction",
+                 "interaction_id": "turn-1",
+                 "actions": ["assistant.say", "assistant.await_user"],
+             }
