@@ -34,10 +34,10 @@ sid prefix
  Only open Refresh
 Showing 1 session.
 Session	Status	Started	Updated	Events	 
-ffbc73acc4084582bc94a1c7877ff7be	Open	2025-10-29T04:54:48.675Z	2025-10-29T04:54:48.675Z	179	Pick
+f6cdb7fc8ab2494299df43563b2a0f3c	Open	2025-10-29T07:07:40.664Z	2025-10-29T07:07:40.664Z	69	Pick
 Session ID
-ffbc73acc4084582bc94a1c7877ff7be
-Live Tail
+f6cdb7fc8ab2494299df43563b2a0f3c
+Stop Live
 Load History
 Download Zip
 Event types
@@ -50,6 +50,8 @@ Turn end
 User chat
 
 JSON send
+
+Session steps
 
 JSON recv
 
@@ -71,21 +73,49 @@ Diag: HUD
 Live
 History
 Live stream
-Live stream stopped.
+Polling for new events…
+{
+  "type": "EVT_SESSION_STEP",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "who": "server",
+  "source": "ws.exporter",
+  "meta": {
+    "step": "session.export_started"
+  },
+  "summary": "Started session export",
+  "schema_version": "1",
+  "ts_ms": 1761721660664,
+  "level": "debug"
+}
+
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713688.6756082,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721660.6651158,
   "logger": "app.ws.adapter",
   "level": "INFO",
-  "msg": "evt=ws_open_and_greet_start sid=ffbc73acc4084582bc94a1c7877ff7be",
+  "msg": "evt=ws_open_and_greet_start sid=f6cdb7fc8ab2494299df43563b2a0f3c",
   "schema_version": "1",
-  "ts_ms": 1761713688675
+  "ts_ms": 1761721660665
+}
+
+{
+  "type": "EVT_SESSION_STEP",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "who": "server",
+  "source": "ws.engine",
+  "meta": {
+    "step": "ws.open_and_greet"
+  },
+  "summary": "Invoking engine open + greet",
+  "schema_version": "1",
+  "ts_ms": 1761721660665,
+  "level": "debug"
 }
 
 {
   "type": "EVT_WS_OPEN",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "headers": {
       "host": "chibot-ui.onrender.com",
@@ -96,18 +126,18 @@ Live stream stopped.
       "cdn-loop": "cloudflare; loops=1",
       "cf-connecting-ip": "170.85.75.32",
       "cf-ipcountry": "US",
-      "cf-ray": "996013b9eb93557d-EWR",
+      "cf-ray": "9960d65adfad8c6c-EWR",
       "cf-visitor": "{\"scheme\":\"https\"}",
       "connection": "Upgrade",
       "cookie": "***@purestorage.com|qwlEWYW3Exk0EptuOu3i2Ux8Kf9GEVfKRnspFLGkocY; askchip_csrf=NCp_jFAudDlCZ0fpzstVJJw951IU6dM4P98XFJhvlF4",
       "origin": "https://chibot-ui.onrender.com",
       "pragma": "no-cache",
-      "render-cf-start-time-msec": "629",
-      "render-cf-start-time-sec": "1761713688",
+      "render-cf-start-time-msec": "620",
+      "render-cf-start-time-sec": "1761721660",
       "render-proxy-ttl": "4",
-      "rndr-id": "852552e9-5930-4165",
-      "sec-websocket-key": "Sls1HPd++AiZNMHbv1O1FA==",
-      "sec-websocket-protocol": "chat.v2,…c0qzH-nM",
+      "rndr-id": "0df0f87b-7e17-4141",
+      "sec-websocket-key": "9rszXYFOrEldB+1TVHAilg==",
+      "sec-websocket-protocol": "chat.v2,…SrHl2U_c",
       "sec-websocket-version": "13",
       "true-client-ip": "170.85.75.32",
       "upgrade": "websocket",
@@ -118,7 +148,7 @@ Live stream stopped.
     },
     "dir": "in"
   },
-  "ts_ms": 1761713688676,
+  "ts_ms": 1761721660666,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -127,7 +157,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "ws": {
       "dir": "out",
@@ -204,7 +234,7 @@ Live stream stopped.
       }
     }
   },
-  "ts_ms": 1761713688677,
+  "ts_ms": 1761721660667,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -213,13 +243,25 @@ Live stream stopped.
 
 {
   "type": "EVT_POLICY_APPLIED",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "policy": {
       "diff": {
-        "auto_commit_when_ready": [
+        "media": [
           null,
-          true
+          {
+            "asr_input": "webm_opus",
+            "asr_rate_hz": 48000,
+            "asr_channels": 1,
+            "fallbacks_allowed": false
+          }
+        ],
+        "voice": [
+          null,
+          {
+            "voice_id": "alloy-en-US-001",
+            "locale": "en-US"
+          }
         ],
         "mode": [
           null,
@@ -228,6 +270,19 @@ Live stream stopped.
         "barge_in_enabled": [
           null,
           true
+        ],
+        "actions": [
+          null,
+          {
+            "allowed": [
+              "answer"
+            ],
+            "surface_via_suggestions": true,
+            "assistant_turn_sequence": [
+              "assistant.say",
+              "assistant.await_user"
+            ]
+          }
         ],
         "telemetry": [
           null,
@@ -257,53 +312,13 @@ Live stream stopped.
             }
           }
         ],
-        "greet": [
+        "auto_commit_when_ready": [
           null,
-          {
-            "enabled": true,
-            "mode": "persona",
-            "post_hold_ms": 200
-          }
-        ],
-        "voice": [
-          null,
-          {
-            "voice_id": "alloy-en-US-001",
-            "locale": "en-US"
-          }
-        ],
-        "actions": [
-          null,
-          {
-            "allowed": [
-              "answer"
-            ],
-            "surface_via_suggestions": true,
-            "assistant_turn_sequence": [
-              "assistant.say",
-              "assistant.await_user"
-            ]
-          }
-        ],
-        "suggestions": [
-          null,
-          {
-            "on_connect": true,
-            "count": 3
-          }
+          true
         ],
         "allow_auto_vad": [
           null,
           true
-        ],
-        "media": [
-          null,
-          {
-            "asr_input": "webm_opus",
-            "asr_rate_hz": 48000,
-            "asr_channels": 1,
-            "fallbacks_allowed": false
-          }
         ],
         "capture": [
           null,
@@ -313,11 +328,26 @@ Live stream stopped.
             "timeslice_ms": 200,
             "mask_during_tts": true
           }
+        ],
+        "greet": [
+          null,
+          {
+            "enabled": true,
+            "mode": "persona",
+            "post_hold_ms": 200
+          }
+        ],
+        "suggestions": [
+          null,
+          {
+            "on_connect": true,
+            "count": 3
+          }
         ]
       }
     }
   },
-  "ts_ms": 1761713688678,
+  "ts_ms": 1761721660668,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -326,13 +356,13 @@ Live stream stopped.
 
 {
   "type": "EVT_ACWR_RECOMPUTE",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "policy_acwr": true,
     "admin_enabled": null,
     "effective": true
   },
-  "ts_ms": 1761713688679,
+  "ts_ms": 1761721660668,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -341,7 +371,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "ws": {
       "dir": "out",
@@ -373,7 +403,7 @@ Live stream stopped.
     "voice_id": "alloy-en-US-001",
     "locale": "en-US",
     "meta": {
-      "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+      "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
       "audio": {
         "codec": "pcm_s16le",
         "rate_hz": 16000,
@@ -381,7 +411,7 @@ Live stream stopped.
       }
     }
   },
-  "ts_ms": 1761713688679,
+  "ts_ms": 1761721660669,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -390,24 +420,24 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713688.6806147,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721660.670407,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "= connection is CONNECTING",
   "schema_version": "1",
-  "ts_ms": 1761713688680
+  "ts_ms": 1761721660670
 }
 
 {
   "type": "EVT_POLICY_DECISION",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "rule": "session_open.greet",
   "actions": [
     "assistant.say",
     "assistant.await_user"
   ],
-  "ts_ms": 1761713688842,
+  "ts_ms": 1761721660756,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -416,19 +446,19 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713688.842663,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721660.842247,
   "logger": "app.voice_v2.engine",
   "level": "DEBUG",
-  "msg": "evt=greet_llm_request sid=ffbc73acc4084582bc94a1c7877ff7be purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}",
+  "msg": "evt=greet_llm_request sid=f6cdb7fc8ab2494299df43563b2a0f3c purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}",
   "schema_version": "1",
-  "ts_ms": 1761713688842
+  "ts_ms": 1761721660842
 }
 
 {
   "type": "EVT_LLM_RESPONSE_START",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "req_id": "req-918d16515b954ff490423d03793733d6",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "req_id": "req-42c782ab5d6f455b8e259d5926468aa5",
   "purpose": "greet",
   "model": "gpt-4o-mini",
   "temp": 0.4,
@@ -438,7 +468,7 @@ Live stream stopped.
     "developer": 1,
     "user": 1
   },
-  "ts_ms": 1761713688843,
+  "ts_ms": 1761721660843,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -447,12 +477,12 @@ Live stream stopped.
 
 {
   "type": "EVT_LLM_RESPONSE_END",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "req_id": "req-918d16515b954ff490423d03793733d6",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "req_id": "req-42c782ab5d6f455b8e259d5926468aa5",
   "purpose": "greet",
-  "latency_ms": 1234,
+  "latency_ms": 1816,
   "model": "gpt-4o-mini",
-  "ts_ms": 1761713690078,
+  "ts_ms": 1761721662660,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -461,25 +491,25 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.0794852,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.660567,
   "logger": "app.voice_v2.engine",
   "level": "DEBUG",
-  "msg": "evt=greet_llm_complete sid=ffbc73acc4084582bc94a1c7877ff7be purpose=greet latency_ms=1234 model=gpt-4o-mini",
+  "msg": "evt=greet_llm_complete sid=f6cdb7fc8ab2494299df43563b2a0f3c purpose=greet latency_ms=1816 model=gpt-4o-mini",
   "schema_version": "1",
-  "ts_ms": 1761713690079
+  "ts_ms": 1761721662660
 }
 
 {
   "type": "EVT_NLG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "req_id": "req-918d16515b954ff490423d03793733d6",
-  "text": "Welcome! Excited to explore Pure Storage together!",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "req_id": "req-42c782ab5d6f455b8e259d5926468aa5",
+  "text": "Welcome! Let’s explore Pure Storage together.",
   "meta": {
     "reason": "greet",
     "post_hold_ms": 200
   },
-  "ts_ms": 1761713690080,
+  "ts_ms": 1761721662661,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -488,25 +518,25 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "ws": {
       "dir": "out",
-      "size": 282,
-      "preview": "{\"type\":…3690080}"
+      "size": 279,
+      "preview": "{\"type\":…1662661}"
     }
   },
   "frame": {
     "type": "chat.message",
-    "id": "8e1929b3-cd16-44f1-ab04-9248ceab2b23",
+    "id": "cec2f697-6015-432b-bb20-e8ac1129aa3e",
     "role": "assistant",
-    "text": "Welcome! Excited to explore Pure Storage together!",
+    "text": "Welcome! Let’s explore Pure Storage together.",
     "origin": "voice",
-    "turn_id": "0a1e25cc-7f53-41ac-9aa5-0bd3b9701f61",
-    "req_id": "req-918d16515b954ff490423d03793733d6",
-    "ts_ms": 1761713690080
+    "turn_id": "891ccafb-5691-4483-8494-7e160e957d3e",
+    "req_id": "req-42c782ab5d6f455b8e259d5926468aa5",
+    "ts_ms": 1761721662661
   },
-  "ts_ms": 1761713690080,
+  "ts_ms": 1761721662661,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -515,7 +545,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "ws": {
       "dir": "out",
@@ -525,7 +555,7 @@ Live stream stopped.
   },
   "frame": {
     "type": "assistant.suggestions",
-    "ts_ms": 1761713690081,
+    "ts_ms": 1761721662662,
     "items": [
       {
         "label": "Set your objective",
@@ -545,7 +575,7 @@ Live stream stopped.
     ],
     "mode": "greet"
   },
-  "ts_ms": 1761713690081,
+  "ts_ms": 1761721662662,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -554,45 +584,45 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.083099,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.664315,
   "logger": "httpcore.connection",
   "level": "DEBUG",
   "msg": "close.started",
   "schema_version": "1",
-  "ts_ms": 1761713690083
+  "ts_ms": 1761721662664
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.0840387,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.6653104,
   "logger": "httpcore.connection",
   "level": "DEBUG",
   "msg": "close.complete",
   "schema_version": "1",
-  "ts_ms": 1761713690084
+  "ts_ms": 1761721662665
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.0848112,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.6661563,
   "logger": "httpcore.connection",
   "level": "DEBUG",
   "msg": "connect_tcp.started host='api.elevenlabs.io' port=443 local_address=None timeout=5.0 socket_options=None",
   "schema_version": "1",
-  "ts_ms": 1761713690084
+  "ts_ms": 1761721662666
 }
 
 {
   "type": "EVT_CLIENT_BANNER",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "client",
   "source": "ws_client",
   "meta": {
     "label": "ws.socket.close",
-    "client_ts_ms": 1761713658162,
+    "client_ts_ms": 1761721654309,
     "event_meta": {
       "code": 1000,
       "reason": "",
@@ -616,7 +646,7 @@ Live stream stopped.
       "online": true,
       "connection": {
         "effective_type": "4g",
-        "downlink": 9.95,
+        "downlink": 10,
         "rtt": 50
       },
       "screen": {
@@ -626,7 +656,7 @@ Live stream stopped.
         "avail_height": 920
       },
       "viewport": {
-        "width": 982,
+        "width": 1536,
         "height": 799
       },
       "device_pixel_ratio": 1.25,
@@ -634,41 +664,41 @@ Live stream stopped.
     }
   },
   "schema_version": "1",
-  "ts_ms": 1761713690085,
+  "ts_ms": 1761721662666,
   "level": "debug"
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "ws_server",
   "meta": {
-    "byte_count": 866,
+    "byte_count": 865,
     "frame_type": "client.banner",
     "ws": {
       "dir": "in",
-      "size": 866,
+      "size": 865,
       "preview": "{\"type\":…37.36\",…"
     },
     "client_banner": {
       "label": "ws.socket.close"
     }
   },
-  "ts_ms": 1761713690086,
+  "ts_ms": 1761721662667,
   "level": "debug"
 }
 
 {
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "dir": "in",
     "frame_type": "client.banner",
-    "byte_count": 866
+    "byte_count": 865
   },
-  "ts_ms": 1761713690087,
+  "ts_ms": 1761721662668,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -677,12 +707,12 @@ Live stream stopped.
 
 {
   "type": "EVT_CLIENT_BANNER",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "client",
   "source": "ws_client",
   "meta": {
     "label": "ws.open.request",
-    "client_ts_ms": 1761713688418,
+    "client_ts_ms": 1761721660345,
     "event_meta": {
       "resume": false,
       "skip_rate_limit_cancel": false,
@@ -713,7 +743,7 @@ Live stream stopped.
       "online": true,
       "connection": {
         "effective_type": "4g",
-        "downlink": 9.95,
+        "downlink": 10,
         "rtt": 50
       },
       "screen": {
@@ -723,7 +753,7 @@ Live stream stopped.
         "avail_height": 920
       },
       "viewport": {
-        "width": 982,
+        "width": 1536,
         "height": 799
       },
       "device_pixel_ratio": 1.25,
@@ -731,41 +761,41 @@ Live stream stopped.
     }
   },
   "schema_version": "1",
-  "ts_ms": 1761713690087,
+  "ts_ms": 1761721662668,
   "level": "debug"
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "ws_server",
   "meta": {
-    "byte_count": 1029,
+    "byte_count": 1028,
     "frame_type": "client.banner",
     "ws": {
       "dir": "in",
-      "size": 1029,
+      "size": 1028,
       "preview": "{\"type\":…37.36\",…"
     },
     "client_banner": {
       "label": "ws.open.request"
     }
   },
-  "ts_ms": 1761713690088,
+  "ts_ms": 1761721662669,
   "level": "debug"
 }
 
 {
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "dir": "in",
     "frame_type": "client.banner",
-    "byte_count": 1029
+    "byte_count": 1028
   },
-  "ts_ms": 1761713690089,
+  "ts_ms": 1761721662670,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -774,12 +804,12 @@ Live stream stopped.
 
 {
   "type": "EVT_CLIENT_BANNER",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "client",
   "source": "ws_client",
   "meta": {
     "label": "ws.socket.open",
-    "client_ts_ms": 1761713688595,
+    "client_ts_ms": 1761721660517,
     "event_meta": {
       "protocol": "chat.v2"
     },
@@ -800,7 +830,7 @@ Live stream stopped.
       "online": true,
       "connection": {
         "effective_type": "4g",
-        "downlink": 9.95,
+        "downlink": 10,
         "rtt": 50
       },
       "screen": {
@@ -810,7 +840,7 @@ Live stream stopped.
         "avail_height": 920
       },
       "viewport": {
-        "width": 982,
+        "width": 1536,
         "height": 799
       },
       "device_pixel_ratio": 1.25,
@@ -818,41 +848,41 @@ Live stream stopped.
     }
   },
   "schema_version": "1",
-  "ts_ms": 1761713690089,
+  "ts_ms": 1761721662670,
   "level": "debug"
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "ws_server",
   "meta": {
-    "byte_count": 829,
+    "byte_count": 828,
     "frame_type": "client.banner",
     "ws": {
       "dir": "in",
-      "size": 829,
+      "size": 828,
       "preview": "{\"type\":…37.36\",…"
     },
     "client_banner": {
       "label": "ws.socket.open"
     }
   },
-  "ts_ms": 1761713690090,
+  "ts_ms": 1761721662671,
   "level": "debug"
 }
 
 {
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "dir": "in",
     "frame_type": "client.banner",
-    "byte_count": 829
+    "byte_count": 828
   },
-  "ts_ms": 1761713690091,
+  "ts_ms": 1761721662672,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -861,378 +891,378 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.096781,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.6766691,
   "logger": "httpcore.connection",
   "level": "DEBUG",
-  "msg": "connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x75cacc69e690>",
+  "msg": "connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x738e2d339260>",
   "schema_version": "1",
-  "ts_ms": 1761713690096
+  "ts_ms": 1761721662676
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.0973089,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.6771042,
   "logger": "httpcore.connection",
   "level": "DEBUG",
-  "msg": "start_tls.started ssl_context=<ssl.SSLContext object at 0x75cad0bfbad0> server_hostname='api.elevenlabs.io' timeout=5.0",
+  "msg": "start_tls.started ssl_context=<ssl.SSLContext object at 0x738e301cd520> server_hostname='api.elevenlabs.io' timeout=5.0",
   "schema_version": "1",
-  "ts_ms": 1761713690097
+  "ts_ms": 1761721662677
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.139187,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.7431903,
   "logger": "httpcore.connection",
   "level": "DEBUG",
-  "msg": "start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x75cacc69f350>",
+  "msg": "start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x738e2d339590>",
   "schema_version": "1",
-  "ts_ms": 1761713690139
+  "ts_ms": 1761721662743
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.1399994,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.7439852,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "send_request_headers.started request=<Request [b'POST']>",
   "schema_version": "1",
-  "ts_ms": 1761713690140
+  "ts_ms": 1761721662743
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.1409745,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.7451286,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "send_request_headers.complete",
   "schema_version": "1",
-  "ts_ms": 1761713690140
+  "ts_ms": 1761721662745
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.14143,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.7455268,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "send_request_body.started request=<Request [b'POST']>",
   "schema_version": "1",
-  "ts_ms": 1761713690141
+  "ts_ms": 1761721662745
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.1424515,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.7465625,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "send_request_body.complete",
   "schema_version": "1",
-  "ts_ms": 1761713690142
+  "ts_ms": 1761721662746
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.1428351,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.7470784,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "receive_response_headers.started request=<Request [b'POST']>",
   "schema_version": "1",
-  "ts_ms": 1761713690142
+  "ts_ms": 1761721662747
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.231136,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.8144588,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> GET /v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en HTTP/1.1",
   "schema_version": "1",
-  "ts_ms": 1761713690231
+  "ts_ms": 1761721662814
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.232044,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.8150713,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> Host: api.deepgram.com",
   "schema_version": "1",
-  "ts_ms": 1761713690232
+  "ts_ms": 1761721662815
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.232834,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.816009,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> Upgrade: websocket",
   "schema_version": "1",
-  "ts_ms": 1761713690232
+  "ts_ms": 1761721662816
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.2353942,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.816473,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> Connection: Upgrade",
   "schema_version": "1",
-  "ts_ms": 1761713690235
+  "ts_ms": 1761721662816
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.2358375,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.8173869,
   "logger": "websockets.client",
   "level": "DEBUG",
-  "msg": "> Sec-WebSocket-Key: OFI531fbih1VaMip8gUtwg==",
+  "msg": "> Sec-WebSocket-Key: 0iIvSugRFamEzBPL+IAzVw==",
   "schema_version": "1",
-  "ts_ms": 1761713690235
+  "ts_ms": 1761721662817
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.236839,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.8179114,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> Sec-WebSocket-Version: 13",
   "schema_version": "1",
-  "ts_ms": 1761713690236
+  "ts_ms": 1761721662817
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.2373643,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.818877,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits",
   "schema_version": "1",
-  "ts_ms": 1761713690237
+  "ts_ms": 1761721662818
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.2382805,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.8192863,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> Authorization: Token 38cfc39f41c64153aee87d5db20289dcbe400f62",
   "schema_version": "1",
-  "ts_ms": 1761713690238
+  "ts_ms": 1761721662819
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.2387886,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.8202093,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> User-Agent: Python/3.13 websockets/15.0.1",
   "schema_version": "1",
-  "ts_ms": 1761713690238
+  "ts_ms": 1761721662820
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.318098,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.8989768,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "< HTTP/1.1 101 Switching Protocols",
   "schema_version": "1",
-  "ts_ms": 1761713690318
+  "ts_ms": 1761721662898
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3188267,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.8995738,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "< connection: upgrade",
   "schema_version": "1",
-  "ts_ms": 1761713690318
+  "ts_ms": 1761721662899
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3197105,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9005592,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "< upgrade: websocket",
   "schema_version": "1",
-  "ts_ms": 1761713690319
+  "ts_ms": 1761721662900
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3201675,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9019945,
   "logger": "websockets.client",
   "level": "DEBUG",
-  "msg": "< sec-websocket-accept: N6PTPN2R+KZ51aTrMyJtQJfEhSM=",
+  "msg": "< sec-websocket-accept: sdvDY2qb+d69MByuqxcPUI4yazM=",
   "schema_version": "1",
-  "ts_ms": 1761713690320
+  "ts_ms": 1761721662902
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.321111,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9028468,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "< dg-project-id: 52f81254-537a-4ef1-b723-d1f10f7e3efa",
   "schema_version": "1",
-  "ts_ms": 1761713690321
+  "ts_ms": 1761721662902
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3215742,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9034479,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "< vary: origin, access-control-request-method, access-control-request-headers",
   "schema_version": "1",
-  "ts_ms": 1761713690321
+  "ts_ms": 1761721662903
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3224938,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9042797,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "< access-control-allow-credentials: true",
   "schema_version": "1",
-  "ts_ms": 1761713690322
+  "ts_ms": 1761721662904
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.322982,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9048016,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "< access-control-expose-headers: dg-model-name,dg-model-uuid,dg-char-count,dg-request-id,dg-project-id,dg-error",
   "schema_version": "1",
-  "ts_ms": 1761713690322
+  "ts_ms": 1761721662904
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3238804,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9057212,
   "logger": "websockets.client",
   "level": "DEBUG",
-  "msg": "< dg-request-id: f46ed1d6-1596-4977-b6f5-af95f36d0027",
+  "msg": "< dg-request-id: 19de6e4d-5ebb-4f32-a695-a0edd68673f9",
   "schema_version": "1",
-  "ts_ms": 1761713690323
+  "ts_ms": 1761721662905
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3244052,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9061744,
   "logger": "websockets.client",
   "level": "DEBUG",
-  "msg": "< date: Wed, 29 Oct 2025 04:54:50 GMT",
+  "msg": "< date: Wed, 29 Oct 2025 07:07:42 GMT",
   "schema_version": "1",
-  "ts_ms": 1761713690324
+  "ts_ms": 1761721662906
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3254046,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9071188,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "= connection is OPEN",
   "schema_version": "1",
-  "ts_ms": 1761713690325
+  "ts_ms": 1761721662907
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3259952,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9077137,
   "logger": "app.services.streaming_asr.deepgram_client",
   "level": "INFO",
   "msg": "evt=dg_ws_open container=webm_opus start_payload=omitted url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en",
   "schema_version": "1",
-  "ts_ms": 1761713690326
+  "ts_ms": 1761721662907
 }
 
 {
   "type": "EVT_LOG",
   "logger": "app.voice_v2.asr_runtime",
   "level": "INFO",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "msg": "evt=asr_policy input=webm_opus rate_hz=48000 ch=1 fallbacks=False start_on_asr_ready=True start_on_turn_ready=True timeslice_ms=200 mask_during_tts=True mask_keepalive_enable=True mask_keepalive_ms=5000",
   "schema_version": "1",
-  "ts_ms": 1761713690326
+  "ts_ms": 1761721662908
 }
 
 {
   "type": "EVT_ASR_OPEN",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "vendor": "deepgram",
-  "stream_id": "dg-stream-424f7d6614194cb38ea9953d6319e364",
+  "stream_id": "dg-stream-c89d75754e1843b99d78ad788889213b",
   "schema_version": "1",
-  "ts_ms": 1761713690327,
+  "ts_ms": 1761721662909,
   "level": "debug"
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.328226,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.909993,
   "logger": "app.voice_v2.asr_runtime",
   "level": "INFO",
-  "msg": "evt=asr_session_open sid=ffbc73acc4084582bc94a1c7877ff7be content_type=(not set) qs=model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en",
+  "msg": "evt=asr_session_open sid=f6cdb7fc8ab2494299df43563b2a0f3c content_type=(not set) qs=model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en",
   "schema_version": "1",
-  "ts_ms": 1761713690328
+  "ts_ms": 1761721662909
 }
 
 {
   "type": "EVT_ASR_READY",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "vendor": "deepgram",
-  "stream_id": "dg-stream-424f7d6614194cb38ea9953d6319e364",
+  "stream_id": "dg-stream-c89d75754e1843b99d78ad788889213b",
   "schema_version": "1",
-  "ts_ms": 1761713690328,
+  "ts_ms": 1761721662910,
   "level": "debug"
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3296301,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9113312,
   "logger": "app.voice_v2.asr_runtime",
   "level": "INFO",
-  "msg": "evt=asr_ready sid=ffbc73acc4084582bc94a1c7877ff7be vendor=deepgram stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364",
+  "msg": "evt=asr_ready sid=f6cdb7fc8ab2494299df43563b2a0f3c vendor=deepgram stream_id=dg-stream-c89d75754e1843b99d78ad788889213b",
   "schema_version": "1",
-  "ts_ms": 1761713690329
+  "ts_ms": 1761721662911
 }
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "frame": {
     "type": "asr.ready",
     "vendor": "deepgram",
@@ -1244,97 +1274,97 @@ Live stream stopped.
     }
   },
   "schema_version": "1",
-  "ts_ms": 1761713690330,
+  "ts_ms": 1761721662911,
   "level": "debug"
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.330973,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9127724,
   "logger": "app.voice_v2.asr_runtime",
   "level": "INFO",
-  "msg": "evt=asr_session_open sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 content_type=\"(not set)\" idle_close_ms=15000",
+  "msg": "evt=asr_session_open sid=f6cdb7fc8ab2494299df43563b2a0f3c stream_id=dg-stream-c89d75754e1843b99d78ad788889213b content_type=\"(not set)\" idle_close_ms=15000",
   "schema_version": "1",
-  "ts_ms": 1761713690330
+  "ts_ms": 1761721662912
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.331716,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9134512,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> TEXT '{\"type\": \"KeepAlive\"}' [21 bytes]",
   "schema_version": "1",
-  "ts_ms": 1761713690331
+  "ts_ms": 1761721662913
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.3324544,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9142818,
   "logger": "app.services.streaming_asr.deepgram_client",
   "level": "DEBUG",
-  "msg": "evt=dg_keepalive_sent sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 interval_s=0.000",
+  "msg": "evt=dg_keepalive_sent sid=f6cdb7fc8ab2494299df43563b2a0f3c stream_id=dg-stream-c89d75754e1843b99d78ad788889213b interval_s=0.000",
   "schema_version": "1",
-  "ts_ms": 1761713690332
+  "ts_ms": 1761721662914
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.333142,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721662.9148903,
   "logger": "app.services.streaming_asr.deepgram_client",
   "level": "INFO",
-  "msg": "evt=dg_stream_open sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en",
+  "msg": "evt=dg_stream_open sid=f6cdb7fc8ab2494299df43563b2a0f3c stream_id=dg-stream-c89d75754e1843b99d78ad788889213b url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en",
   "schema_version": "1",
-  "ts_ms": 1761713690333
+  "ts_ms": 1761721662914
 }
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "frame": {
     "type": "asr.ready",
     "vendor": "deepgram"
   },
   "schema_version": "1",
-  "ts_ms": 1761713690333,
+  "ts_ms": 1761721662915,
   "level": "debug"
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.827912,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.5753467,
   "logger": "httpcore.http11",
   "level": "DEBUG",
-  "msg": "receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Wed, 29 Oct 2025 04:54:49 GMT'), (b'server', b'uvicorn'), (b'request-id', b'hEknKiRTAZ97fHDKuYIc'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'Q6eHKDLQh6FjsOTltDB3'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'50'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'2802c68270edc49e8b1b8415e8d9b3b4'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])",
+  "msg": "receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Wed, 29 Oct 2025 07:07:42 GMT'), (b'server', b'uvicorn'), (b'request-id', b'215B43tZEciwkxxtwGzn'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'FO2bLSGvOQqzevWsrkin'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'45'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'88edc1867b597343a594727f9ea4dffd'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])",
   "schema_version": "1",
-  "ts_ms": 1761713690827
+  "ts_ms": 1761721665575
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.8292909,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.576373,
   "logger": "httpx",
   "level": "INFO",
   "msg": "HTTP Request: POST https://api.elevenlabs.io/v1/text-to-speech/MIAWBMadvHL0ek6oJEXD/stream?optimize_streaming_latency=4&output_format=pcm_16000 \"HTTP/1.1 200 OK\"",
   "schema_version": "1",
-  "ts_ms": 1761713690829
+  "ts_ms": 1761721665576
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.8306265,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.5771704,
   "logger": "app.services.tts.elevenlabs_client",
   "level": "INFO",
   "msg": "evt=tts_provider_stream_opened provider=elevenlabs content_type=audio/pcm url_qs=optimize_streaming_latency=4&output_format=pcm_16000",
   "schema_version": "1",
-  "ts_ms": 1761713690830
+  "ts_ms": 1761721665577
 }
 
 {
@@ -1358,18 +1388,18 @@ Live stream stopped.
       "locale": "en-US"
     }
   },
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "voice_engine",
   "schema_version": "1",
-  "ts_ms": 1761713690831
+  "ts_ms": 1761721665577
 }
 
 {
   "type": "EVT_TTS_MASK",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "phase": "on",
-  "ts_ms": 1761713690832,
+  "ts_ms": 1761721665578,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1378,7 +1408,7 @@ Live stream stopped.
 
 {
   "type": "EVT_TTS_START",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "tts": {
       "utt_id": "utt-00001",
@@ -1387,7 +1417,7 @@ Live stream stopped.
     "voice_id": "alloy-en-US-001",
     "locale": "en-US"
   },
-  "ts_ms": 1761713690832,
+  "ts_ms": 1761721665578,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1396,12 +1426,12 @@ Live stream stopped.
 
 {
   "type": "EVT_TURN_STATE",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "state": "Responding",
     "reason": "tts_start"
   },
-  "ts_ms": 1761713690833,
+  "ts_ms": 1761721665579,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1410,29 +1440,29 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.834464,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.5802174,
   "logger": "app.voice_v2.tts_runtime",
   "level": "INFO",
-  "msg": "evt=tts_start sid=ffbc73acc4084582bc94a1c7877ff7be utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=50",
+  "msg": "evt=tts_start sid=f6cdb7fc8ab2494299df43563b2a0f3c utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=45",
   "schema_version": "1",
-  "ts_ms": 1761713690834
+  "ts_ms": 1761721665580
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.8355398,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.5808733,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "receive_response_body.started request=<Request [b'POST']>",
   "schema_version": "1",
-  "ts_ms": 1761713690835
+  "ts_ms": 1761721665580
 }
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1445,7 +1475,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690838,
+  "ts_ms": 1761721665606,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1457,18 +1487,18 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713690.8391902,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.607377,
   "logger": "app.voice_v2.tts_runtime",
   "level": "DEBUG",
-  "msg": "evt=tts_chunk sid=ffbc73acc4084582bc94a1c7877ff7be utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280",
+  "msg": "evt=tts_chunk sid=f6cdb7fc8ab2494299df43563b2a0f3c utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280",
   "schema_version": "1",
-  "ts_ms": 1761713690839
+  "ts_ms": 1761721665607
 }
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1481,7 +1511,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690840,
+  "ts_ms": 1761721665608,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1493,7 +1523,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1506,7 +1536,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690840,
+  "ts_ms": 1761721665610,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1518,7 +1548,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1531,7 +1561,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690841,
+  "ts_ms": 1761721665610,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1543,7 +1573,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1556,7 +1586,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690841,
+  "ts_ms": 1761721665611,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1568,7 +1598,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1581,7 +1611,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690842,
+  "ts_ms": 1761721665611,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1593,7 +1623,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1606,7 +1636,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690849,
+  "ts_ms": 1761721665612,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1618,7 +1648,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1631,7 +1661,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690850,
+  "ts_ms": 1761721665613,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1643,7 +1673,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1656,7 +1686,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690850,
+  "ts_ms": 1761721665614,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1668,7 +1698,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1681,7 +1711,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690851,
+  "ts_ms": 1761721665614,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1693,7 +1723,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1706,7 +1736,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690851,
+  "ts_ms": 1761721665615,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1718,7 +1748,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1731,7 +1761,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690852,
+  "ts_ms": 1761721665615,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1743,7 +1773,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1756,7 +1786,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690933,
+  "ts_ms": 1761721665616,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1768,7 +1798,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1781,7 +1811,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690933,
+  "ts_ms": 1761721665617,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1793,7 +1823,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1806,7 +1836,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690934,
+  "ts_ms": 1761721665618,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1818,7 +1848,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1831,7 +1861,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690935,
+  "ts_ms": 1761721665642,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1843,7 +1873,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1856,7 +1886,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690936,
+  "ts_ms": 1761721665643,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1868,7 +1898,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1881,7 +1911,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690936,
+  "ts_ms": 1761721665644,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1893,7 +1923,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1906,7 +1936,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690937,
+  "ts_ms": 1761721665644,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1918,7 +1948,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1931,7 +1961,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690937,
+  "ts_ms": 1761721665645,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1943,7 +1973,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1956,7 +1986,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690938,
+  "ts_ms": 1761721665645,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1968,7 +1998,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -1981,7 +2011,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690942,
+  "ts_ms": 1761721665646,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -1993,7 +2023,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2006,7 +2036,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690942,
+  "ts_ms": 1761721665647,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2018,7 +2048,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2031,7 +2061,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690943,
+  "ts_ms": 1761721665648,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2043,7 +2073,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2056,7 +2086,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690943,
+  "ts_ms": 1761721665648,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2068,7 +2098,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2081,7 +2111,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690944,
+  "ts_ms": 1761721665649,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2093,7 +2123,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2106,7 +2136,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690945,
+  "ts_ms": 1761721665649,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2118,7 +2148,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2131,7 +2161,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690946,
+  "ts_ms": 1761721665650,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2143,7 +2173,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2156,7 +2186,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690946,
+  "ts_ms": 1761721665651,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2168,7 +2198,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2181,7 +2211,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690947,
+  "ts_ms": 1761721665651,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2193,7 +2223,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2206,7 +2236,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690947,
+  "ts_ms": 1761721665652,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2218,7 +2248,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2231,7 +2261,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690948,
+  "ts_ms": 1761721665653,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2243,7 +2273,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2256,7 +2286,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690949,
+  "ts_ms": 1761721665653,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2268,7 +2298,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2281,7 +2311,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690950,
+  "ts_ms": 1761721665657,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2293,7 +2323,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2306,7 +2336,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690950,
+  "ts_ms": 1761721665657,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2318,7 +2348,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2331,7 +2361,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690951,
+  "ts_ms": 1761721665659,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2343,7 +2373,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2356,7 +2386,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690951,
+  "ts_ms": 1761721665660,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2368,7 +2398,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2381,7 +2411,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690952,
+  "ts_ms": 1761721665661,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2393,7 +2423,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2406,7 +2436,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690952,
+  "ts_ms": 1761721665661,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2418,7 +2448,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2431,7 +2461,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690953,
+  "ts_ms": 1761721665662,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2443,7 +2473,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2456,7 +2486,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690954,
+  "ts_ms": 1761721665662,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2468,7 +2498,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2481,7 +2511,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690955,
+  "ts_ms": 1761721665663,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2493,7 +2523,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2506,7 +2536,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690955,
+  "ts_ms": 1761721665664,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2518,7 +2548,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2531,7 +2561,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690956,
+  "ts_ms": 1761721665665,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2543,7 +2573,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2556,7 +2586,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713690956,
+  "ts_ms": 1761721665742,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2568,7 +2598,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2581,7 +2611,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691033,
+  "ts_ms": 1761721665743,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2593,7 +2623,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2606,7 +2636,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691033,
+  "ts_ms": 1761721665744,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2618,7 +2648,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2631,7 +2661,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691034,
+  "ts_ms": 1761721665744,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2643,7 +2673,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2656,7 +2686,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691035,
+  "ts_ms": 1761721665748,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2668,7 +2698,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2681,7 +2711,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691036,
+  "ts_ms": 1761721665748,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2693,7 +2723,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2706,7 +2736,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691036,
+  "ts_ms": 1761721665749,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2718,7 +2748,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2731,7 +2761,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691037,
+  "ts_ms": 1761721665750,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2743,7 +2773,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2756,7 +2786,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691037,
+  "ts_ms": 1761721665750,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2768,7 +2798,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2781,7 +2811,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691038,
+  "ts_ms": 1761721665751,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2793,7 +2823,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2806,7 +2836,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691038,
+  "ts_ms": 1761721665752,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2818,7 +2848,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2831,7 +2861,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691039,
+  "ts_ms": 1761721665752,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2843,7 +2873,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2856,7 +2886,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691040,
+  "ts_ms": 1761721665753,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2868,7 +2898,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2881,7 +2911,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691041,
+  "ts_ms": 1761721665753,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2893,7 +2923,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2906,7 +2936,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691041,
+  "ts_ms": 1761721665754,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2918,7 +2948,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2931,7 +2961,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691042,
+  "ts_ms": 1761721665755,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2943,7 +2973,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2956,7 +2986,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691042,
+  "ts_ms": 1761721665756,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2968,7 +2998,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -2981,7 +3011,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691043,
+  "ts_ms": 1761721665756,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -2993,7 +3023,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3006,7 +3036,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691043,
+  "ts_ms": 1761721665841,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3018,7 +3048,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3031,7 +3061,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691044,
+  "ts_ms": 1761721665842,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3043,7 +3073,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3056,7 +3086,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691045,
+  "ts_ms": 1761721665843,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3067,8 +3097,30 @@ Live stream stopped.
 }
 
 {
+  "type": "EVT_LOG",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.8453176,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "receive_response_body.complete",
+  "schema_version": "1",
+  "ts_ms": 1761721665845
+}
+
+{
+  "type": "EVT_LOG",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.8457894,
+  "logger": "httpcore.http11",
+  "level": "DEBUG",
+  "msg": "response_closed.started",
+  "schema_version": "1",
+  "ts_ms": 1761721665845
+}
+
+{
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3081,7 +3133,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691046,
+  "ts_ms": 1761721665848,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3092,30 +3144,8 @@ Live stream stopped.
 }
 
 {
-  "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713691.0486853,
-  "logger": "httpcore.http11",
-  "level": "DEBUG",
-  "msg": "receive_response_body.complete",
-  "schema_version": "1",
-  "ts_ms": 1761713691048
-}
-
-{
-  "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713691.049133,
-  "logger": "httpcore.http11",
-  "level": "DEBUG",
-  "msg": "response_closed.started",
-  "schema_version": "1",
-  "ts_ms": 1761713691049
-}
-
-{
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3128,7 +3158,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691052,
+  "ts_ms": 1761721665848,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3140,7 +3170,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3153,7 +3183,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691052,
+  "ts_ms": 1761721665849,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3165,7 +3195,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3178,7 +3208,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691133,
+  "ts_ms": 1761721665849,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3190,7 +3220,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3203,7 +3233,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691133,
+  "ts_ms": 1761721665850,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3215,7 +3245,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3228,7 +3258,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691134,
+  "ts_ms": 1761721665851,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3240,7 +3270,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3253,7 +3283,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691135,
+  "ts_ms": 1761721665851,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3265,7 +3295,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3278,7 +3308,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691136,
+  "ts_ms": 1761721665852,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3290,7 +3320,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3303,7 +3333,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691136,
+  "ts_ms": 1761721665853,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3315,7 +3345,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3328,7 +3358,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691137,
+  "ts_ms": 1761721665853,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3340,7 +3370,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3353,7 +3383,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691137,
+  "ts_ms": 1761721665854,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3365,7 +3395,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3378,7 +3408,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691138,
+  "ts_ms": 1761721665855,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3390,7 +3420,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3403,7 +3433,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691139,
+  "ts_ms": 1761721665856,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3415,7 +3445,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3428,7 +3458,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691140,
+  "ts_ms": 1761721665856,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3440,7 +3470,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3453,7 +3483,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691140,
+  "ts_ms": 1761721665857,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3465,7 +3495,7 @@ Live stream stopped.
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "byte_count": 1280,
     "audio": {
@@ -3478,7 +3508,7 @@ Live stream stopped.
       "size": 1280
     }
   },
-  "ts_ms": 1761713691141,
+  "ts_ms": 1761721665857,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3489,246 +3519,21 @@ Live stream stopped.
 }
 
 {
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761713691141,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 104960
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761713691142,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 106240
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761713691142,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 107520
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761713691143,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 108800
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761713691144,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 110080
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761713691144,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 111360
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761713691145,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 112640
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761713691145,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 113920
-}
-
-{
-  "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "meta": {
-    "byte_count": 1280,
-    "audio": {
-      "codec": "pcm_s16le",
-      "rate_hz": 16000,
-      "channels": 1
-    },
-    "ws": {
-      "dir": "out",
-      "size": 1280
-    }
-  },
-  "ts_ms": 1761713691146,
-  "who": "server",
-  "source": "voice_engine",
-  "level": "debug",
-  "schema_version": "1",
-  "utt_id": "utt-00001",
-  "bytes": 1280,
-  "total_bytes": 115200
-}
-
-{
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713691.1474085,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.8586612,
   "logger": "httpcore.http11",
   "level": "DEBUG",
   "msg": "response_closed.complete",
   "schema_version": "1",
-  "ts_ms": 1761713691147
+  "ts_ms": 1761721665858
 }
 
 {
   "type": "EVT_WS_AUDIO_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
-    "byte_count": 714,
+    "byte_count": 346,
     "audio": {
       "codec": "pcm_s16le",
       "rate_hz": 16000,
@@ -3736,52 +3541,52 @@ Live stream stopped.
     },
     "ws": {
       "dir": "out",
-      "size": 714
+      "size": 346
     }
   },
-  "ts_ms": 1761713691153,
+  "ts_ms": 1761721665859,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
   "schema_version": "1",
   "utt_id": "utt-00001",
-  "bytes": 714,
-  "total_bytes": 115914
+  "bytes": 346,
+  "total_bytes": 104026
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713691.1538634,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.9417686,
   "logger": "app.voice_v2.tts_runtime",
   "level": "DEBUG",
-  "msg": "evt=tts_chunk sid=ffbc73acc4084582bc94a1c7877ff7be utt_id=utt-00001 chunks=90 bytes=114634 total_bytes=115914",
+  "msg": "evt=tts_chunk sid=f6cdb7fc8ab2494299df43563b2a0f3c utt_id=utt-00001 chunks=81 bytes=102746 total_bytes=104026",
   "schema_version": "1",
-  "ts_ms": 1761713691153
+  "ts_ms": 1761721665941
 }
 
 {
   "type": "EVT_TTS_END",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "tts": {
       "utt_id": "utt-00001"
     }
   },
-  "ts_ms": 1761713691233,
+  "ts_ms": 1761721665942,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
   "schema_version": "1",
-  "total_bytes": 115914,
+  "total_bytes": 104026,
   "utt_id": "utt-00001"
 }
 
 {
   "type": "EVT_TTS_MASK",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "phase": "off",
-  "ts_ms": 1761713691233,
+  "ts_ms": 1761721665943,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3806,11 +3611,11 @@ Live stream stopped.
       }
     }
   },
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "voice_engine",
   "schema_version": "1",
-  "ts_ms": 1761713691234
+  "ts_ms": 1761721665943
 }
 
 {
@@ -3832,22 +3637,22 @@ Live stream stopped.
       }
     }
   },
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "voice_engine",
   "schema_version": "1",
-  "ts_ms": 1761713691235
+  "ts_ms": 1761721665944
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713691.2361767,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721665.9450948,
   "logger": "app.voice_v2.tts_runtime",
   "level": "INFO",
-  "msg": "evt=tts_end sid=ffbc73acc4084582bc94a1c7877ff7be utt_id=utt-00001 total_bytes=115914 duration_ms=401",
+  "msg": "evt=tts_end sid=f6cdb7fc8ab2494299df43563b2a0f3c utt_id=utt-00001 total_bytes=104026 duration_ms=364",
   "schema_version": "1",
-  "ts_ms": 1761713691236
+  "ts_ms": 1761721665945
 }
 
 {
@@ -3865,21 +3670,21 @@ Live stream stopped.
       }
     }
   },
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "voice_engine",
   "schema_version": "1",
-  "ts_ms": 1761713691438
+  "ts_ms": 1761721666147
 }
 
 {
   "type": "EVT_TURN_STATE",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "state": "Ready",
     "reason": "tts_end"
   },
-  "ts_ms": 1761713691439,
+  "ts_ms": 1761721666148,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -3888,44 +3693,44 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713695.3335485,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721667.9150195,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> TEXT '{\"type\": \"KeepAlive\"}' [21 bytes]",
   "schema_version": "1",
-  "ts_ms": 1761713695333
+  "ts_ms": 1761721667915
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713695.3343499,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721667.9158573,
   "logger": "app.services.streaming_asr.deepgram_client",
   "level": "DEBUG",
-  "msg": "evt=dg_keepalive_sent sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 interval_s=5.000",
+  "msg": "evt=dg_keepalive_sent sid=f6cdb7fc8ab2494299df43563b2a0f3c stream_id=dg-stream-c89d75754e1843b99d78ad788889213b interval_s=5.000",
   "schema_version": "1",
-  "ts_ms": 1761713695334
+  "ts_ms": 1761721667915
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713699.3321435,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721671.9174323,
   "logger": "app.voice_v2.asr_runtime",
   "level": "WARNING",
-  "msg": "evt=asr_no_audio_timeout sid=ffbc73acc4084582bc94a1c7877ff7be",
+  "msg": "evt=asr_no_audio_timeout sid=f6cdb7fc8ab2494299df43563b2a0f3c",
   "schema_version": "1",
-  "ts_ms": 1761713699332
+  "ts_ms": 1761721671917
 }
 
 {
   "type": "asr.unavailable",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "reason": "no_audio_timeout",
   "details": "no audio received for 9s",
   "schema_version": "1",
-  "ts_ms": 1761713699332,
+  "ts_ms": 1761721671918,
   "level": "debug"
 }
 
@@ -3933,45 +3738,45 @@ Live stream stopped.
   "type": "EVT_LOG",
   "logger": "app.voice_v2.asr_runtime",
   "level": "WARNING",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "msg": "evt=asr_unavailable sid=ffbc73acc4084582bc94a1c7877ff7be reason=no_audio_timeout details=no audio received for 9s",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "msg": "evt=asr_unavailable sid=f6cdb7fc8ab2494299df43563b2a0f3c reason=no_audio_timeout details=no audio received for 9s",
   "schema_version": "1",
-  "ts_ms": 1761713699333
+  "ts_ms": 1761721671919
 }
 
 {
   "type": "EVT_ASR_READY",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "vendor": "deepgram",
   "schema_version": "1",
-  "ts_ms": 1761713699333,
+  "ts_ms": 1761721671919,
   "level": "debug"
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713699.3347929,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721671.921787,
   "logger": "app.voice_v2.asr_runtime",
   "level": "INFO",
-  "msg": "evt=asr_ready_published sid=ffbc73acc4084582bc94a1c7877ff7be vendor=deepgram",
+  "msg": "evt=asr_ready_published sid=f6cdb7fc8ab2494299df43563b2a0f3c vendor=deepgram",
   "schema_version": "1",
-  "ts_ms": 1761713699334
+  "ts_ms": 1761721671921
 }
 
 {
   "type": "EVT_LOG",
   "logger": "app.voice_v2.asr_runtime",
   "level": "INFO",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "msg": "evt=asr_rearmed sid=ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "msg": "evt=asr_rearmed sid=f6cdb7fc8ab2494299df43563b2a0f3c",
   "schema_version": "1",
-  "ts_ms": 1761713699335
+  "ts_ms": 1761721671923
 }
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "frame": {
     "type": "asr.ready",
     "vendor": "deepgram",
@@ -3983,26 +3788,26 @@ Live stream stopped.
     }
   },
   "schema_version": "1",
-  "ts_ms": 1761713699336,
+  "ts_ms": 1761721671924,
   "level": "debug"
 }
 
 {
   "type": "EVT_WS_JSON_SEND",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "frame": {
     "type": "asr.ready",
     "vendor": "deepgram"
   },
   "schema_version": "1",
-  "ts_ms": 1761713699336,
+  "ts_ms": 1761721671925,
   "level": "debug"
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "ws_server",
   "meta": {
@@ -4014,19 +3819,19 @@ Live stream stopped.
       "preview": "{\"type\":…_timeou…"
     }
   },
-  "ts_ms": 1761713699369,
+  "ts_ms": 1761721671955,
   "level": "debug"
 }
 
 {
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "dir": "in",
     "frame_type": "client.diag",
     "byte_count": 199
   },
-  "ts_ms": 1761713699369,
+  "ts_ms": 1761721671956,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -4035,18 +3840,18 @@ Live stream stopped.
 
 {
   "type": "EVT_DIAG_HUD",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "dir": "in",
     "event": "EVT_CLIENT_ASR_UNAVAILABLE",
     "message": "diag=asr_unavailable no_audio_timeout",
     "badge": "asr:down",
-    "client_ts": 1761713699258,
+    "client_ts": 1761721671780,
     "data": {
       "reason": "no_audio_timeout"
     }
   },
-  "ts_ms": 1761713699370,
+  "ts_ms": 1761721671957,
   "who": "client",
   "source": "client_hud",
   "level": "warn",
@@ -4055,30 +3860,30 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713700.335311,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721672.9174228,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> TEXT '{\"type\": \"KeepAlive\"}' [21 bytes]",
   "schema_version": "1",
-  "ts_ms": 1761713700335
+  "ts_ms": 1761721672917
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713700.336134,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721672.9181952,
   "logger": "app.services.streaming_asr.deepgram_client",
   "level": "DEBUG",
-  "msg": "evt=dg_keepalive_sent sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 interval_s=5.000",
+  "msg": "evt=dg_keepalive_sent sid=f6cdb7fc8ab2494299df43563b2a0f3c stream_id=dg-stream-c89d75754e1843b99d78ad788889213b interval_s=5.000",
   "schema_version": "1",
-  "ts_ms": 1761713700336
+  "ts_ms": 1761721672918
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "ws_server",
   "meta": {
@@ -4090,19 +3895,19 @@ Live stream stopped.
       "preview": "{\"type\":\"asr.rearm.request\"}"
     }
   },
-  "ts_ms": 1761713701375,
+  "ts_ms": 1761721673961,
   "level": "debug"
 }
 
 {
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "dir": "in",
     "frame_type": "asr.rearm.request",
     "byte_count": 28
   },
-  "ts_ms": 1761713701375,
+  "ts_ms": 1761721673962,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -4111,111 +3916,168 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713705.3319314,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721677.913797,
   "logger": "app.voice_v2.asr_runtime",
   "level": "INFO",
-  "msg": "evt=asr_idle_close sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 idle_ms=16656",
+  "msg": "evt=asr_idle_close sid=f6cdb7fc8ab2494299df43563b2a0f3c stream_id=dg-stream-c89d75754e1843b99d78ad788889213b idle_ms=17249",
   "schema_version": "1",
-  "ts_ms": 1761713705331
+  "ts_ms": 1761721677913
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713705.333093,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721677.9146657,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> CLOSE 1000 (OK) [2 bytes]",
   "schema_version": "1",
-  "ts_ms": 1761713705333
+  "ts_ms": 1761721677914
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713705.3338127,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721677.9153664,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "= connection is CLOSING",
   "schema_version": "1",
-  "ts_ms": 1761713705333
+  "ts_ms": 1761721677915
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713705.4045203,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721677.985746,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "< CLOSE 1000 (OK) [2 bytes]",
   "schema_version": "1",
-  "ts_ms": 1761713705404
+  "ts_ms": 1761721677985
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713705.4058652,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721677.9865263,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "< EOF",
   "schema_version": "1",
-  "ts_ms": 1761713705405
+  "ts_ms": 1761721677986
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713705.4066644,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721677.9873335,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "> EOF",
   "schema_version": "1",
-  "ts_ms": 1761713705406
+  "ts_ms": 1761721677987
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713705.4072144,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721677.9880338,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "= connection is CLOSED",
   "schema_version": "1",
-  "ts_ms": 1761713705407
+  "ts_ms": 1761721677988
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713705.408163,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721677.9888325,
   "logger": "websockets.client",
   "level": "DEBUG",
   "msg": "x closing TCP connection",
   "schema_version": "1",
-  "ts_ms": 1761713705408
+  "ts_ms": 1761721677988
 }
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713705.408801,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721677.9897704,
   "logger": "app.services.streaming_asr.deepgram_client",
   "level": "INFO",
-  "msg": "evt=dg_stream_closed sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 code=1000 reason=\"\"",
+  "msg": "evt=dg_stream_closed sid=f6cdb7fc8ab2494299df43563b2a0f3c stream_id=dg-stream-c89d75754e1843b99d78ad788889213b code=1000 reason=\"\"",
   "schema_version": "1",
-  "ts_ms": 1761713705408
+  "ts_ms": 1761721677989
+}
+
+{
+  "schema_version": "1",
+  "type": "EVT_WS_JSON_RECV",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "who": "server",
+  "source": "ws_server",
+  "meta": {
+    "byte_count": 41,
+    "frame_type": "client.ping",
+    "ws": {
+      "dir": "in",
+      "size": 41,
+      "preview": "{\"type\":\"client.ping\",\"ts\":1761721680518}"
+    }
+  },
+  "ts_ms": 1761721680694,
+  "level": "debug"
+}
+
+{
+  "schema_version": "1",
+  "type": "EVT_WS_JSON_SEND",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "who": "server",
+  "source": "ws_server",
+  "meta": {
+    "byte_count": 62,
+    "frame_type": "server.pong",
+    "ws": {
+      "dir": "out",
+      "size": 62,
+      "preview": "{\"type\":\"server.pong\",\"ts\":1761721680694,\"echo\":1761721680518}"
+    }
+  },
+  "ts_ms": 1761721680694,
+  "level": "debug"
+}
+
+{
+  "schema_version": "1",
+  "type": "EVT_WS_JSON_RECV",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "who": "server",
+  "source": "ws_server",
+  "meta": {
+    "byte_count": 62,
+    "frame_type": "client.pong",
+    "ws": {
+      "dir": "in",
+      "size": 62,
+      "preview": "{\"type\":\"client.pong\",\"ts\":1761721680609,\"echo\":1761721680757}"
+    }
+  },
+  "ts_ms": 1761721680784,
+  "level": "debug"
 }
 
 {
   "type": "EVT_CLIENT_BANNER",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "client",
   "source": "ws_client",
   "meta": {
     "label": "ws.close.request",
-    "client_ts_ms": 1761713707788,
+    "client_ts_ms": 1761721682929,
     "event_meta": {
       "reason": "user_requested"
     },
@@ -4236,7 +4098,7 @@ Live stream stopped.
       "online": true,
       "connection": {
         "effective_type": "4g",
-        "downlink": 9.95,
+        "downlink": 10,
         "rtt": 50
       },
       "screen": {
@@ -4246,7 +4108,7 @@ Live stream stopped.
         "avail_height": 920
       },
       "viewport": {
-        "width": 982,
+        "width": 1536,
         "height": 799
       },
       "device_pixel_ratio": 1.25,
@@ -4254,41 +4116,41 @@ Live stream stopped.
     }
   },
   "schema_version": "1",
-  "ts_ms": 1761713707900,
+  "ts_ms": 1761721683105,
   "level": "debug"
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "ws_server",
   "meta": {
-    "byte_count": 836,
+    "byte_count": 835,
     "frame_type": "client.banner",
     "ws": {
       "dir": "in",
-      "size": 836,
+      "size": 835,
       "preview": "{\"type\":…37.36\",…"
     },
     "client_banner": {
       "label": "ws.close.request"
     }
   },
-  "ts_ms": 1761713707900,
+  "ts_ms": 1761721683106,
   "level": "debug"
 }
 
 {
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "dir": "in",
     "frame_type": "client.banner",
-    "byte_count": 836
+    "byte_count": 835
   },
-  "ts_ms": 1761713707901,
+  "ts_ms": 1761721683107,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -4297,12 +4159,12 @@ Live stream stopped.
 
 {
   "type": "EVT_CLIENT_BANNER",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "client",
   "source": "ws_client",
   "meta": {
     "label": "ws.cleanup",
-    "client_ts_ms": 1761713707788,
+    "client_ts_ms": 1761721682930,
     "event_meta": {
       "reason": "user_requested"
     },
@@ -4323,7 +4185,7 @@ Live stream stopped.
       "online": true,
       "connection": {
         "effective_type": "4g",
-        "downlink": 9.95,
+        "downlink": 10,
         "rtt": 50
       },
       "screen": {
@@ -4333,7 +4195,7 @@ Live stream stopped.
         "avail_height": 920
       },
       "viewport": {
-        "width": 982,
+        "width": 1536,
         "height": 799
       },
       "device_pixel_ratio": 1.25,
@@ -4341,41 +4203,41 @@ Live stream stopped.
     }
   },
   "schema_version": "1",
-  "ts_ms": 1761713707902,
+  "ts_ms": 1761721683108,
   "level": "debug"
 }
 
 {
   "schema_version": "1",
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "who": "server",
   "source": "ws_server",
   "meta": {
-    "byte_count": 830,
+    "byte_count": 829,
     "frame_type": "client.banner",
     "ws": {
       "dir": "in",
-      "size": 830,
+      "size": 829,
       "preview": "{\"type\":…37.36\",…"
     },
     "client_banner": {
       "label": "ws.cleanup"
     }
   },
-  "ts_ms": 1761713707902,
+  "ts_ms": 1761721683109,
   "level": "debug"
 }
 
 {
   "type": "EVT_WS_JSON_RECV",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "dir": "in",
     "frame_type": "client.banner",
-    "byte_count": 830
+    "byte_count": 829
   },
-  "ts_ms": 1761713707903,
+  "ts_ms": 1761721683110,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",
@@ -4384,34 +4246,34 @@ Live stream stopped.
 
 {
   "type": "EVT_LOG",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "ts": 1761713707.9049585,
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "ts": 1761721683.111817,
   "logger": "app.voice_v2.asr_runtime",
   "level": "INFO",
-  "msg": "evt=asr_rollup sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 opened_at_ms=1761713688674 last_audio_ts_ms=1761713688674 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=19230",
+  "msg": "evt=asr_rollup sid=f6cdb7fc8ab2494299df43563b2a0f3c stream_id=dg-stream-c89d75754e1843b99d78ad788889213b opened_at_ms=1761721660663 last_audio_ts_ms=1761721660663 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=22447",
   "schema_version": "1",
-  "ts_ms": 1761713707904
+  "ts_ms": 1761721683111
 }
 
 {
   "type": "EVT_LOG",
   "logger": "app.voice_v2.asr_runtime",
   "level": "INFO",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
-  "stream_id": "dg-stream-424f7d6614194cb38ea9953d6319e364",
-  "msg": "evt=asr_rollup sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 opened_at_ms=1761713688674 last_audio_ts_ms=1761713688674 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=19230",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
+  "stream_id": "dg-stream-c89d75754e1843b99d78ad788889213b",
+  "msg": "evt=asr_rollup sid=f6cdb7fc8ab2494299df43563b2a0f3c stream_id=dg-stream-c89d75754e1843b99d78ad788889213b opened_at_ms=1761721660663 last_audio_ts_ms=1761721660663 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=22447",
   "schema_version": "1",
-  "ts_ms": 1761713707905
+  "ts_ms": 1761721683112
 }
 
 {
   "type": "EVT_WS_CLOSE",
-  "sid": "ffbc73acc4084582bc94a1c7877ff7be",
+  "sid": "f6cdb7fc8ab2494299df43563b2a0f3c",
   "meta": {
     "code": 1000,
     "reason": "user_requested"
   },
-  "ts_ms": 1761713707906,
+  "ts_ms": 1761721683113,
   "who": "server",
   "source": "voice_engine",
   "level": "debug",

@@ -1,46 +1,36 @@
+diff --git a/app/telemetry/session_steps.py b/app/telemetry/session_steps.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..55d83a0f6655cc88f2824ccdcdb427208b9d8c54
+--- /dev/null
++++ b/app/telemetry/session_steps.py
+@@ -0,0 +1,18 @@
++"""Helpers for publishing session step telemetry events."""
++
++from __future__ import annotations
++
++from typing import Any, MutableMapping
++
++from app.telemetry import bus as telemetry_bus
++
++
++def emit_session_step(
++    payload: MutableMapping[str, Any], *, telemetry_bus=telemetry_bus
++) -> None:
++    """Publish a session-step telemetry event ensuring schema metadata."""
++
++    if "schema_version" not in payload:
++        payload["schema_version"] = "1"
++    telemetry_bus.publish(payload)
++
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 63a9ebdd45b5dc8eb4be1caa9ff9ac7193cc69f1..b453d32ae22d1f103c70ec402d4706a27126daea 100644
+index b453d32ae22d1f103c70ec402d4706a27126daea..056a84c80a44ba262e323b02f3c5c5f4f243533f 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -2383,50 +2383,63 @@ class ChatV2Adapter:
-             telemetry_bus.unsubscribe(token)
-         ctx.asr_ready = False
-         ctx.await_user_after_mask = False
- 
-         open_token = ctx.asr_open_subscription_token
-         ctx.asr_open_subscription_token = None
-         if open_token:
-             bus.unsubscribe(open_token)
-         
-     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
-         """Record the estimated outbound queue depth and emit diagnostics if needed."""
- 
-         ctx = self._contexts.get(sid)
-         if ctx is None:
+@@ -2417,50 +2417,51 @@ class ChatV2Adapter:
+             }
+             bus.publish(event)
              return
  
-         if not isinstance(queued, int):
-             try:
-                 queued = int(queued)
-             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
-                 raise TypeError("queued must be an integer") from exc
- 
-         await self._update_backpressure(ctx, max(0, queued))
- 
-     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
-+        # Special handling: session-step telemetry
-+        if event_type == EVT_SESSION_STEP:
-+            event = {
-+                "schema_version": "1",
-+                "type": EVT_SESSION_STEP,   # normalize type explicitly
-+                "sid": sid,
-+                "who": "server",
-+                "source": "ws_server",
-+                "meta": dict(meta),
-+            }
-+            bus.publish(event)
-+            return
-+
          event = {
              "schema_version": "1",
              "type": event_type,
@@ -62,7 +52,29 @@ index 63a9ebdd45b5dc8eb4be1caa9ff9ac7193cc69f1..b453d32ae22d1f103c70ec402d4706a2
          who: str = "server",
      ) -> None:
          payload: Dict[str, Any] = {
++            "schema_version": "1",
              "type": EVT_SESSION_STEP,
              "sid": sid,
              "who": who,
              "source": source,
+             "meta": {"step": step},
+         }
+         if meta:
+             try:
+                 payload["meta"].update(meta)
+             except Exception:
+                 payload["meta"]["detail"] = repr(meta)
+         if summary:
+             payload["summary"] = summary
+         bus.publish(payload)
+ 
+     async def _invoke_engine(self, hook: str, *args: Any) -> None:
+         if not self.engine:
+             return
+         handler = getattr(self.engine, hook, None)
+         if handler is None:
+             return
+         try:
+             result = handler(*args)
+             if inspect.isawaitable(result):
+                 await result

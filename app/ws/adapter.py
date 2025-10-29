@@ -2439,6 +2439,7 @@ class ChatV2Adapter:
         who: str = "server",
     ) -> None:
         payload: Dict[str, Any] = {
+            "schema_version": "1",
             "type": EVT_SESSION_STEP,
             "sid": sid,
             "who": who,

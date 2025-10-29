@@ -1,155 +1,47 @@
-70.85.75.32:0 - "POST /api/v1/auth/ws-token HTTP/1.1" 200
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] = connection is CONNECTING
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < GET /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZmYmM3M2FjYzQwODQ1ODJiYzk0YTFjNzg3N2ZmN2JlIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTcxMzY4OCwiZXhwIjoxNzYxNzEzNzQ4LCJqdGkiOiI3MDM2NDZhNi0zM2UwLTQ2NjItODZkNC01MDg3ZWJjMzgzMjUiLCJpc19hZG1pbiI6dHJ1ZX0.5-04AY2cxMzasrCEkh2SnCvaGIQHI6-yOYAc0qzH-nM HTTP/1.1
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < host: chibot-ui.onrender.com
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < accept-encoding: gzip, br
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < accept-language: en-US,en;q=0.9
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < cache-control: no-cache
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < cdn-loop: cloudflare; loops=1
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < cf-connecting-ip: 170.85.75.32
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < cf-ipcountry: US
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < cf-ray: 996013b9eb93557d-EWR
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < cf-visitor: {"scheme":"https"}
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < connection: Upgrade
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < cookie: askchip_session=jwsiejk@purestorage.com|qwlEWYW3Exk0EptuOu3i2Ux8Kf9GEVfKRnspFLGkocY; askchip_csrf=NCp_jFAudDlCZ0fpzstVJJw951IU6dM4P98XFJhvlF4
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < origin: https://chibot-ui.onrender.com
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < pragma: no-cache
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < render-cf-start-time-msec: 629
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < render-cf-start-time-sec: 1761713688
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < render-proxy-ttl: 4
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < rndr-id: 852552e9-5930-4165
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < sec-websocket-key: Sls1HPd++AiZNMHbv1O1FA==
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < sec-websocket-protocol: chat.v2, jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZmYmM3M2FjYzQwODQ1ODJiYzk0YTFjNzg3N2ZmN2JlIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTcxMzY4OCwiZXhwIjoxNzYxNzEzNzQ4LCJqdGkiOiI3MDM2NDZhNi0zM2UwLTQ2NjItODZkNC01MDg3ZWJjMzgzMjUiLCJpc19hZG1pbiI6dHJ1ZX0.5-04AY2cxMzasrCEkh2SnCvaGIQHI6-yOYAc0qzH-nM
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < sec-websocket-version: 13
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < true-client-ip: 170.85.75.32
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < upgrade: websocket
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < x-forwarded-for: 170.85.75.32, 10.16.8.129
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < x-forwarded-proto: https
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < x-render-as-num: 22616
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] < x-render-threat-score: 0
-INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZmYmM3M2FjYzQwODQ1ODJiYzk0YTFjNzg3N2ZmN2JlIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTcxMzY4OCwiZXhwIjoxNzYxNzEzNzQ4LCJqdGkiOiI3MDM2NDZhNi0zM2UwLTQ2NjItODZkNC01MDg3ZWJjMzgzMjUiLCJpc19hZG1pbiI6dHJ1ZX0.5-04AY2cxMzasrCEkh2SnCvaGIQHI6-yOYAc0qzH-nM'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZmYmM3M2FjYzQwODQ1ODJiYzk0YTFjNzg3N2ZmN2JlIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTcxMzY4OCwiZXhwIjoxNzYxNzEzNzQ4LCJqdGkiOiI3MDM2NDZhNi0zM2UwLTQ2NjItODZkNC01MDg3ZWJjMzgzMjUiLCJpc19hZG1pbiI6dHJ1ZX0.5-04AY2cxMzasrCEkh2SnCvaGIQHI6-yOYAc0qzH-nM' root_path=
-INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZmYmM3M2FjYzQwODQ1ODJiYzk0YTFjNzg3N2ZmN2JlIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTcxMzY4OCwiZXhwIjoxNzYxNzEzNzQ4LCJqdGkiOiI3MDM2NDZhNi0zM2UwLTQ2NjItODZkNC01MDg3ZWJjMzgzMjUiLCJpc19hZG1pbiI6dHJ1ZX0.5-04AY2cxMzasrCEkh2SnCvaGIQHI6-yOYAc0qzH-nM'] need='chat.v2'
-INFO:app.ws.adapter:evt=ws_accept_token_ok sid=ffbc73acc4084582bc94a1c7877ff7be
+INFO:app.auth.http_handlers:evt=ws_token_mint sid=b70179370b934e49a9b77ad359152f39 ttl=60
+170.85.75.32:0 - "POST /api/v1/auth/ws-token HTTP/1.1" 200
+INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImI3MDE3OTM3MGI5MzRlNDlhOWI3N2FkMzU5MTUyZjM5IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTcyMTUzMSwiZXhwIjoxNzYxNzIxNTkxLCJqdGkiOiI5NThjMTE5NC01YjNjLTQyMzUtYmNmZS1iNzhjZTg1OTlmMmUiLCJpc19hZG1pbiI6dHJ1ZX0.VLtY7HEenuBWZMN9KO0EsdClbXaIuf7Y1ZlThZ97TBY'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImI3MDE3OTM3MGI5MzRlNDlhOWI3N2FkMzU5MTUyZjM5IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTcyMTUzMSwiZXhwIjoxNzYxNzIxNTkxLCJqdGkiOiI5NThjMTE5NC01YjNjLTQyMzUtYmNmZS1iNzhjZTg1OTlmMmUiLCJpc19hZG1pbiI6dHJ1ZX0.VLtY7HEenuBWZMN9KO0EsdClbXaIuf7Y1ZlThZ97TBY' root_path=
+INFO:app.voice_v2.tts_runtime:evt=tts_provider_ready provider=elevenlabs
+INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImI3MDE3OTM3MGI5MzRlNDlhOWI3N2FkMzU5MTUyZjM5IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTcyMTUzMSwiZXhwIjoxNzYxNzIxNTkxLCJqdGkiOiI5NThjMTE5NC01YjNjLTQyMzUtYmNmZS1iNzhjZTg1OTlmMmUiLCJpc19hZG1pbiI6dHJ1ZX0.VLtY7HEenuBWZMN9KO0EsdClbXaIuf7Y1ZlThZ97TBY'] need='chat.v2'
+INFO:app.ws.adapter:evt=ws_accept_token_ok sid=b70179370b934e49a9b77ad359152f39
 INFO:app.ws.adapter:evt=ws_accept subprotocol='chat.v2'
-[2025-10-29 04:54:48 +0000] [58] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZmYmM3M2FjYzQwODQ1ODJiYzk0YTFjNzg3N2ZmN2JlIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTcxMzY4OCwiZXhwIjoxNzYxNzEzNzQ4LCJqdGkiOiI3MDM2NDZhNi0zM2UwLTQ2NjItODZkNC01MDg3ZWJjMzgzMjUiLCJpc19hZG1pbiI6dHJ1ZX0.5-04AY2cxMzasrCEkh2SnCvaGIQHI6-yOYAc0qzH-nM" [accepted]
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] > HTTP/1.1 101 Switching Protocols
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] > Upgrade: websocket
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] > Connection: Upgrade
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] > Sec-WebSocket-Accept: PpwOgVKUyEaWGvWT9RKBr55CfdA=
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] > Sec-WebSocket-Protocol: chat.v2
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] > date: Wed, 29 Oct 2025 04:54:48 GMT
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] > server: uvicorn
-[2025-10-29 04:54:48 +0000] [58] [INFO] connection open
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] = connection is OPEN
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] > TEXT '{"type":"server.banner","build_id":"unknown","h...ice_v2/asr_runtime.py"}' [834 bytes]
-INFO:app.ws.adapter:evt=server_banner build_id=unknown host=srv-d26hqi3e5dus73b43g10-hibernate-994b65d75-cnw2p pid=58 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py asr=/opt/render/project/src/app/voice_v2/asr_runtime.py
-[2025-10-29 04:54:48 +0000] [58] [DEBUG] > TEXT '{"type":"info","protocol":"chat.v2","sid":"ffbc...4582bc94a1c7877ff7be"}}' [203 bytes]
-INFO:app.ws.adapter:evt=ws_info_sent sid=ffbc73acc4084582bc94a1c7877ff7be
-INFO:app.ws.adapter:evt=ws_open sid=ffbc73acc4084582bc94a1c7877ff7be
-INFO:app.ws.adapter:evt=ws_open sid=ffbc73acc4084582bc94a1c7877ff7be asr_runtime=ASRRuntime
-INFO:app.voice_v2.asr_runtime:evt=asr_on_ws_open sid=ffbc73acc4084582bc94a1c7877ff7be
-INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=ffbc73acc4084582bc94a1c7877ff7be
-INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=ffbc73acc4084582bc94a1c7877ff7be
+[2025-10-29 07:05:32 +0000] [58] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImI3MDE3OTM3MGI5MzRlNDlhOWI3N2FkMzU5MTUyZjM5IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTcyMTUzMSwiZXhwIjoxNzYxNzIxNTkxLCJqdGkiOiI5NThjMTE5NC01YjNjLTQyMzUtYmNmZS1iNzhjZTg1OTlmMmUiLCJpc19hZG1pbiI6dHJ1ZX0.VLtY7HEenuBWZMN9KO0EsdClbXaIuf7Y1ZlThZ97TBY" [accepted]
+[2025-10-29 07:05:32 +0000] [58] [INFO] connection open
+INFO:app.ws.adapter:evt=server_banner build_id=unknown host=srv-d26hqi3e5dus73b43g10-hibernate-8d6988cd7-l9x6k pid=58 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py asr=/opt/render/project/src/app/voice_v2/asr_runtime.py
+INFO:app.ws.adapter:evt=ws_info_sent sid=b70179370b934e49a9b77ad359152f39
+INFO:app.ws.adapter:evt=ws_open sid=b70179370b934e49a9b77ad359152f39
+INFO:app.ws.adapter:evt=ws_open sid=b70179370b934e49a9b77ad359152f39 asr_runtime=ASRRuntime
+INFO:app.voice_v2.asr_runtime:evt=asr_on_ws_open sid=b70179370b934e49a9b77ad359152f39
+INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=b70179370b934e49a9b77ad359152f39
+INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=b70179370b934e49a9b77ad359152f39
 DEBUG:websockets.client:= connection is CONNECTING
-DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=ffbc73acc4084582bc94a1c7877ff7be purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
+DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=b70179370b934e49a9b77ad359152f39 purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
 DEBUG:asyncio:Using selector: EpollSelector
-DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-3b4bc73f-d60e-4eef-9903-d94ba172fd0d', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
-DEBUG:openai._base_client:Sending HTTP Request: POST https://api.openai.com/v1/chat/completions
-DEBUG:httpcore.connection:close.started
-DEBUG:httpcore.connection:close.failed exception=RuntimeError('Event loop is closed')
-DEBUG:openai._base_client:Encountered Exception
-Traceback (most recent call last):
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/openai/_base_client.py", line 1529, in request
-    response = await self._client.send(
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-    ...<3 lines>...
-    )
-    ^
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1629, in send
-    response = await self._send_handling_auth(
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ...<4 lines>...
-    )
-    ^
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
-    response = await self._send_handling_redirects(
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ...<3 lines>...
-    )
-    ^
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
-    response = await self._send_single_request(request)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1730, in _send_single_request
-    response = await transport.handle_async_request(request)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
-    resp = await self._pool.handle_async_request(req)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request
-    raise exc from None
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 229, in handle_async_request
-    await self._close_connections(closing)
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
-    await connection.aclose()
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
-    await self._connection.aclose()
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
-    await self._network_stream.aclose()
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
-    await self._stream.aclose()
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 234, in aclose
-    await self.transport_stream.aclose()
-  File "/opt/render/project/src/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1323, in aclose
-    self._transport.close()
-    ~~~~~~~~~~~~~~~~~~~~~^^
-  File "/opt/render/project/python/Python-3.13.4/lib/python3.13/asyncio/selector_events.py", line 1205, in close
-    super().close()
-    ~~~~~~~~~~~~~^^
-  File "/opt/render/project/python/Python-3.13.4/lib/python3.13/asyncio/selector_events.py", line 865, in close
-    self._loop.call_soon(self._call_connection_lost, None)
-    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/render/project/python/Python-3.13.4/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
-    self._check_closed()
-    ~~~~~~~~~~~~~~~~~~^^
-  File "/opt/render/project/python/Python-3.13.4/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
-    raise RuntimeError('Event loop is closed')
-RuntimeError: Event loop is closed
-DEBUG:openai._base_client:2 retries left
-INFO:openai._base_client:Retrying request to /chat/completions in 0.425289 seconds
-DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-3b4bc73f-d60e-4eef-9903-d94ba172fd0d', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
+10.225.27.112:50926 - "GET /api/v1/health HTTP/1.1" 200
+DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-9b238e84-5071-46f6-a69c-67ac53b1fab7', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
 DEBUG:openai._base_client:Sending HTTP Request: POST https://api.openai.com/v1/chat/completions
 DEBUG:httpcore.connection:connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=5.0 socket_options=None
-DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x75cacc568fc0>
-DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x75cacff496d0> server_hostname='api.openai.com' timeout=5.0
-DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x75cacf5f68d0>
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x738e2d349a90>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x738e3028f920> server_hostname='api.openai.com' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x738e2d42f9d0>
 DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_headers.complete
 DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_body.complete
 DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
-DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Wed, 29 Oct 2025 04:54:50 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'435'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'606'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199892'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'32ms'), (b'x-request-id', b'req_10111bdbcb394508b7f97a31832e5fc2'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Server', b'cloudflare'), (b'CF-RAY', b'996013bebb6c58ae-IAD'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Wed, 29 Oct 2025 07:05:35 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'490'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'668'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199892'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'32ms'), (b'x-request-id', b'req_e07c6d201f4c4337bd7480012a93fed0'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=74qo.EPiajGvVLydxje8xwvv45buKENr1aoNWEwrB1k-1761721535-1.0.1.1-erc2mCthgMt8QjVj2.CSYtSEwqA5MmauLX7hmc0Rn.QqIe.5rmRlrxr20uVbYZmizQrgA.uyyO1BZwvjtaA_b6GB3noWCLouCIxRaPtkAHY; path=/; expires=Wed, 29-Oct-25 07:35:35 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=W7JTUvvbey5OY8Efo1ULfEg4SI7l2TA1MUYQz3BiR5Y-1761721535474-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'9960d345ded7e62d-IAD'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
 INFO:httpx:HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
 DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:receive_response_body.complete
 DEBUG:httpcore.http11:response_closed.started
 DEBUG:httpcore.http11:response_closed.complete
-DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers({'date': 'Wed, 29 Oct 2025 04:54:50 GMT', 'content-type': 'application/json', 'transfer-encoding': 'chunked', 'connection': 'keep-alive', 'access-control-expose-headers': 'X-Request-ID', 'openai-organization': 'user-e0uazp84dxwznca9mgbvta53', 'openai-processing-ms': '435', 'openai-project': 'proj_M1Sc50SAoXNxy2SfkuHvvrH1', 'openai-version': '2020-10-01', 'x-envoy-upstream-service-time': '606', 'x-ratelimit-limit-requests': '10000', 'x-ratelimit-limit-tokens': '200000', 'x-ratelimit-remaining-requests': '9999', 'x-ratelimit-remaining-tokens': '199892', 'x-ratelimit-reset-requests': '8.64s', 'x-ratelimit-reset-tokens': '32ms', 'x-request-id': 'req_10111bdbcb394508b7f97a31832e5fc2', 'x-openai-proxy-wasm': 'v0.1', 'cf-cache-status': 'DYNAMIC', 'strict-transport-security': 'max-age=31536000; includeSubDomains; preload', 'x-content-type-options': 'nosniff', 'server': 'cloudflare', 'cf-ray': '996013bebb6c58ae-IAD', 'content-encoding': 'gzip', 'alt-svc': 'h3=":443"; ma=86400'})
-DEBUG:openai._base_client:request_id: req_10111bdbcb394508b7f97a31832e5fc2
-DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=ffbc73acc4084582bc94a1c7877ff7be purpose=greet latency_ms=1234 model=gpt-4o-mini
-[2025-10-29 04:54:50 +0000] [58] [DEBUG] > TEXT '{"type":"policy.interaction","policy":{"mode":"...arge_in_enabled":true}}' [100 bytes]
-[2025-10-29 04:54:50 +0000] [58] [DEBUG] > TEXT '{"type":"info","audio":{"codec":"pcm_s16le","ra...":16000,"channels":1}}}' [359 bytes]
-DEBUG:httpcore.connection:close.started
-[2025-10-29 04:54:50 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M...true,"ready_state":3}}}' [866 bytes]
-[2025-10-29 04:54:50 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M...I6IkpXVCJ9.eyJzdW…"]}}}' [1029 bytes]
-[2025-10-29 04:54:50 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M..."protocol":"chat.v2"}}}' [829 bytes]
-DEBUG:httpcore.connection:close.complete
-[2025-10-29 04:54:50 +0000] [58] [DEBUG] > TEXT '{"type":"chat.message","id":"8e1929b3-cd16-44f1...,"ts_ms":1761713690080}' [282 bytes]
+DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Wed, 29 Oct 2025 07:05:35 GMT'), ('content-type', 'application/json'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-e0uazp84dxwznca9mgbvta53'), ('openai-processing-ms', '490'), ('openai-project', 'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '668'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '200000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '199892'), ('x-ratelimit-reset-requests', '8.64s'), ('x-ratelimit-reset-tokens', '32ms'), ('x-request-id', 'req_e07c6d201f4c4337bd7480012a93fed0'), ('x-openai-proxy-wasm', 'v0.1'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=74qo.EPiajGvVLydxje8xwvv45buKENr1aoNWEwrB1k-1761721535-1.0.1.1-erc2mCthgMt8QjVj2.CSYtSEwqA5MmauLX7hmc0Rn.QqIe.5rmRlrxr20uVbYZmizQrgA.uyyO1BZwvjtaA_b6GB3noWCLouCIxRaPtkAHY; path=/; expires=Wed, 29-Oct-25 07:35:35 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=W7JTUvvbey5OY8Efo1ULfEg4SI7l2TA1MUYQz3BiR5Y-1761721535474-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '9960d345ded7e62d-IAD'), ('content-encoding', 'gzip'), ('alt-svc', 'h3=":443"; ma=86400')])
+DEBUG:openai._base_client:request_id: req_e07c6d201f4c4337bd7480012a93fed0
+DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=b70179370b934e49a9b77ad359152f39 purpose=greet latency_ms=2733 model=gpt-4o-mini
 DEBUG:httpcore.connection:connect_tcp.started host='api.elevenlabs.io' port=443 local_address=None timeout=5.0 socket_options=None
-DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x75cacc69e690>
-DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x75cad0bfbad0> server_hostname='api.elevenlabs.io' timeout=5.0
-DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x75cacc69f350>
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x738e2d36e0d0>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x738e301cd520> server_hostname='api.elevenlabs.io' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x738e301b42b0>
 DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_headers.complete
 DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
@@ -159,7 +51,7 @@ DEBUG:websockets.client:> GET /v1/listen?model=nova-2&smart_format=true&interim_
 DEBUG:websockets.client:> Host: api.deepgram.com
 DEBUG:websockets.client:> Upgrade: websocket
 DEBUG:websockets.client:> Connection: Upgrade
-DEBUG:websockets.client:> Sec-WebSocket-Key: OFI531fbih1VaMip8gUtwg==
+DEBUG:websockets.client:> Sec-WebSocket-Key: 4wkD+8zEPfs5t7u+Bse7Og==
 DEBUG:websockets.client:> Sec-WebSocket-Version: 13
 DEBUG:websockets.client:> Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
 DEBUG:websockets.client:> Authorization: Token 38cfc39f41c64153aee87d5db20289dcbe400f62
@@ -167,141 +59,43 @@ DEBUG:websockets.client:> User-Agent: Python/3.13 websockets/15.0.1
 DEBUG:websockets.client:< HTTP/1.1 101 Switching Protocols
 DEBUG:websockets.client:< connection: upgrade
 DEBUG:websockets.client:< upgrade: websocket
-DEBUG:websockets.client:< sec-websocket-accept: N6PTPN2R+KZ51aTrMyJtQJfEhSM=
+DEBUG:websockets.client:< sec-websocket-accept: GCUslmtKVm4EAqGTK7S5w/Fyfw0=
 DEBUG:websockets.client:< dg-project-id: 52f81254-537a-4ef1-b723-d1f10f7e3efa
 DEBUG:websockets.client:< vary: origin, access-control-request-method, access-control-request-headers
 DEBUG:websockets.client:< access-control-allow-credentials: true
 DEBUG:websockets.client:< access-control-expose-headers: dg-model-name,dg-model-uuid,dg-char-count,dg-request-id,dg-project-id,dg-error
-DEBUG:websockets.client:< dg-request-id: f46ed1d6-1596-4977-b6f5-af95f36d0027
-DEBUG:websockets.client:< date: Wed, 29 Oct 2025 04:54:50 GMT
+DEBUG:websockets.client:< dg-request-id: 55b9eb14-a301-44b6-b982-2697467feab1
+DEBUG:websockets.client:< date: Wed, 29 Oct 2025 07:05:35 GMT
 DEBUG:websockets.client:= connection is OPEN
 INFO:app.services.streaming_asr.deepgram_client:evt=dg_ws_open container=webm_opus start_payload=omitted url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
-INFO:app.voice_v2.asr_runtime:evt=asr_session_open sid=ffbc73acc4084582bc94a1c7877ff7be content_type=(not set) qs=model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
-INFO:app.voice_v2.asr_runtime:evt=asr_ready sid=ffbc73acc4084582bc94a1c7877ff7be vendor=deepgram stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364
-INFO:app.voice_v2.asr_runtime:evt=asr_session_open sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 content_type="(not set)" idle_close_ms=15000
+INFO:app.voice_v2.asr_runtime:evt=asr_session_open sid=b70179370b934e49a9b77ad359152f39 content_type=(not set) qs=model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
+INFO:app.voice_v2.asr_runtime:evt=asr_ready sid=b70179370b934e49a9b77ad359152f39 vendor=deepgram stream_id=dg-stream-7ab85c36acdb435590cd3b196e3edeef
+INFO:app.voice_v2.asr_runtime:evt=asr_session_open sid=b70179370b934e49a9b77ad359152f39 stream_id=dg-stream-7ab85c36acdb435590cd3b196e3edeef content_type="(not set)" idle_close_ms=15000
 DEBUG:websockets.client:> TEXT '{"type": "KeepAlive"}' [21 bytes]
-DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 interval_s=0.000
-INFO:app.services.streaming_asr.deepgram_client:evt=dg_stream_open sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
-DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Wed, 29 Oct 2025 04:54:49 GMT'), (b'server', b'uvicorn'), (b'request-id', b'hEknKiRTAZ97fHDKuYIc'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'Q6eHKDLQh6FjsOTltDB3'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'50'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'2802c68270edc49e8b1b8415e8d9b3b4'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
+DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=b70179370b934e49a9b77ad359152f39 stream_id=dg-stream-7ab85c36acdb435590cd3b196e3edeef interval_s=0.000
+INFO:app.services.streaming_asr.deepgram_client:evt=dg_stream_open sid=b70179370b934e49a9b77ad359152f39 stream_id=dg-stream-7ab85c36acdb435590cd3b196e3edeef url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Wed, 29 Oct 2025 07:05:35 GMT'), (b'server', b'uvicorn'), (b'request-id', b'6kRBLzcNEMX5NjYaK8A3'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'jlVPP2h5i1kVKx4ENnL0'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'50'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'3f564b9921ea03719e97b8d2b7e4c87c'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
 INFO:httpx:HTTP Request: POST https://api.elevenlabs.io/v1/text-to-speech/MIAWBMadvHL0ek6oJEXD/stream?optimize_streaming_latency=4&output_format=pcm_16000 "HTTP/1.1 200 OK"
 INFO:app.services.tts.elevenlabs_client:evt=tts_provider_stream_opened provider=elevenlabs content_type=audio/pcm url_qs=optimize_streaming_latency=4&output_format=pcm_16000
-INFO:app.voice_v2.tts_runtime:evt=tts_start sid=ffbc73acc4084582bc94a1c7877ff7be utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=50
+INFO:app.voice_v2.tts_runtime:evt=tts_start sid=b70179370b934e49a9b77ad359152f39 utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=50
 DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=ffbc73acc4084582bc94a1c7877ff7be utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=b70179370b934e49a9b77ad359152f39 utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
 DEBUG:httpcore.http11:receive_response_body.complete
 DEBUG:httpcore.http11:response_closed.started
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY ed ff 01 00 f8 ff f3 ff f0 ff e5 ff e2 ff e5 ff ... 64 00 6a 00 46 00 f5 ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 9c ff 5e ff 47 ff ac ff 75 00 b6 01 8a 02 d4 02 ... 8d 01 25 03 a8 0a b2 15 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 86 1c ec 1a 94 12 a2 08 ba fe ba f2 19 e8 b3 e0 ... 56 fb 99 f6 61 fb c4 02 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY b6 08 00 0b c8 08 b4 02 f9 fd a0 fc c0 00 1a 05 ... 34 25 e6 18 28 06 b4 ed [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 95 d6 6e cd 0e de dc 03 1c 2b 9e 40 c4 3c 43 22 ... 7f d6 5a ef 10 0e a3 26 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 1e 30 87 2a 39 1a d2 02 24 ea 20 d7 9a ce 0d d2 ... fe f0 c7 e6 9b e1 98 e1 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 87 e8 1b f7 51 08 eb 14 3d 1a 8f 1a cb 18 48 13 ... 4e 00 2c 00 16 00 0e 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 0c 00 18 00 32 00 4e 00 5f 00 63 00 5a 00 4a 00 ... fc ff fc ff fd ff fe ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY ff ff 00 00 02 00 03 00 03 00 03 00 02 00 01 00 ... 0b ff 26 ff eb ff 64 01 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 36 02 93 01 e0 ff 39 fe 6e fd cf fd d1 fe 3c 00 ... 0d 11 5d 07 0e fb c8 f2 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 35 ef bd ef b2 f3 2d fa 58 00 57 02 ce 03 5c 06 ... 1e 17 32 14 a9 08 c9 fb [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 53 f2 05 ed 67 e9 59 e8 0e ec ed f2 1c fb f4 02 ... 89 05 04 04 d7 01 da fe [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY e6 fb 71 fa 56 fa 45 fb 78 fc 9b fd c2 ff 3c 02 ... 8d 02 a0 02 9f 02 7c 02 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 12 03 fc 03 34 04 5b 03 75 01 ac ff 06 fe 00 fd ... e9 f8 76 f9 21 fb d7 fc [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY f9 fd a0 fe da fe ff fe 33 ff 53 ff 43 ff c7 fe ... 3d f3 59 f8 df fe aa 06 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY ec 0c 76 0f 0a 0b 15 00 b3 f4 75 ef 61 f5 b9 01 ... 1e fe 36 09 bc 08 76 ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY f0 f7 4c f6 7f f8 55 fc 2c 02 7c 06 91 05 df ff ... 0a 00 fb ff ef ff e7 ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY e1 ff d9 ff cd ff bf ff b5 ff b2 ff b2 ff b2 ff ... 10 00 fc 00 1f 01 f5 fe [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 00 fe 82 ff 2b 01 f6 00 94 00 ee ff 94 ff 54 00 ... 97 ff a8 00 1d 01 de fe [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY e8 ff cf ff dd ff 13 01 3a 00 11 00 c1 ff 2b 00 ... 14 ff ba ff d0 00 ff ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 10 ff b2 ff 1e 00 39 00 42 00 b7 ff 63 00 ab 00 ... 08 02 79 0b 77 0c 0a 05 [1280 bytes]
 DEBUG:httpcore.http11:response_closed.complete
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 81 fb 8b f5 1c f3 94 f2 9b f4 18 fa 22 01 82 05 ... d3 1f 92 1b df 0c f4 fa [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY eb eb 18 e4 3d e7 1f f6 12 0b 9e 1c 74 23 a4 1d ... 06 ff f7 fd 73 fd 83 fc [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY ac fb 3c fb 9e fb 7e fd 2b 01 e9 05 14 0a 5a 0d ... 8a f2 bd f9 f4 06 6b 11 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 8f 0f 77 01 65 f2 b3 ee a7 f8 ec 07 66 12 6f 14 ... 48 00 36 02 8e 02 aa 01 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 19 01 74 01 7f 01 ce ff eb fc 39 fb 80 fc d7 ff ... a7 02 0d 03 1f 02 1f 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY b9 ff d0 02 90 07 98 09 73 06 39 00 78 fc 06 00 ... 5f 00 31 00 12 00 07 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 11 00 24 00 30 00 30 00 1e 00 04 00 ef ff f1 ff ... 11 00 16 00 1c 00 21 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 26 00 2b 00 30 00 35 00 37 00 3a 00 3b 00 3b 00 ... 4b ff cb ff 52 ff 51 01 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 79 01 8a 00 0c ff df fe b1 00 29 00 9d ff b6 00 ... 0f 02 58 ff 51 ff a0 01 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY e9 04 5e 07 ea 06 fa 02 96 fd 6e f9 f0 f7 22 f8 ... fb 0e a7 0d da 09 21 04 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY e9 fd 3e f9 e7 f8 9e fc a0 01 1a 05 9d 05 53 05 ... 78 fe a5 03 1c 0b 7c 0e [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 89 09 73 fd 6a f3 48 ed 38 ed 77 f0 44 f8 6f 00 ... e6 f8 a7 fa 5f fd 6d 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY a2 02 cf 03 c7 02 8c 00 12 00 85 01 0d 04 f9 04 ... cc 00 1e 01 70 01 a4 01 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY af 01 85 01 50 01 31 01 34 01 49 01 57 01 56 01 ... a7 01 4a 00 0f fe 65 ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY b6 00 fb ff be fe 23 00 68 02 f2 00 3f fe 22 fe ... 59 00 e0 ff c4 ff 6c 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY c8 01 a0 01 e7 ff 39 fe 0c fe 07 ff 1e 01 09 01 ... 08 00 05 00 06 00 04 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 05 00 05 00 03 00 05 00 04 00 05 00 03 00 05 00 ... 22 00 0f 00 03 00 fc ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 00 00 06 00 07 00 fd ff f2 ff e9 ff e8 ff f7 ff ... 87 f7 9c f8 da f9 e6 fb [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 2b fe 42 00 98 02 36 05 78 06 b7 04 58 00 06 fb ... 46 e2 4f e1 67 e6 f4 ea [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 2b ec 75 ee 29 f7 29 05 03 11 4f 14 d0 0f 2e 09 ... 8e 04 92 fb 84 f3 1e ed [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 15 e8 5a e5 c6 e6 0f ed 3b f6 eb ff c1 08 f3 10 ... 48 e9 9d e2 a8 e1 1d e4 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY e9 e7 7e ed 34 f6 ca 01 db 0c 85 13 95 14 f1 10 ... b9 e6 16 d7 c2 d4 75 df [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY b4 f0 c5 03 14 15 96 23 55 2c 3a 2d a5 27 69 1e ... c5 24 05 19 c5 06 73 f3 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY b2 e4 70 de 3c e0 b6 e8 2d f6 a6 05 79 12 84 18 ... e5 ff d1 fe f8 fd a2 fd [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY d4 fd 69 fe 30 ff 3d 00 49 01 17 02 6a 02 20 02 ... e8 ff ea ff ee ff f4 ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY fb ff 03 00 0e 00 18 00 22 00 2a 00 30 00 31 00 ... 05 00 05 00 05 00 04 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 04 00 05 00 04 00 05 00 05 00 05 00 05 00 05 00 ... 9b 00 90 00 51 00 50 ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 55 ff 34 00 f9 00 b0 00 13 00 46 00 d0 00 bb 01 ... fb ff a1 ff 65 ff 9e ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY f7 ff 6a 00 ca 00 92 01 a9 01 51 00 53 fe 66 fd ... 3e 0b 43 02 ee f5 01 ee [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 2b f3 45 03 ad 0f 90 0c 7d fb 01 eb 7c e6 aa ed ... e9 f6 f2 ee b5 eb 0f f0 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 1d fb 96 06 68 0c e4 0b bc 07 7d 03 49 03 68 09 ... 99 17 74 07 39 fa 02 f4 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 1a f6 2c ff 4a 0b ae 13 ce 13 b5 09 11 f8 a5 e4 ... eb 12 38 1f 68 23 75 1e [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY a6 11 60 00 60 f0 7c e7 f8 e8 d7 f4 a9 09 d9 22 ... 8f d3 cc cf 8b d8 da ea [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY d7 01 fc 17 f4 27 cd 2d b7 28 c4 19 03 05 2c f0 ... 55 29 65 2c d1 23 9a 11 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 60 fa ce e4 48 d7 ef d5 6e e0 3f f2 c9 05 18 15 ... 34 f8 dc f7 0c fa f1 ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY c7 07 29 0d c7 0c 08 06 5a fb da ef 7c e6 ae e2 ... f6 03 94 05 5c 06 7e 06 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 76 05 34 04 b4 01 26 00 c8 ff 69 00 85 01 fc 01 ... 63 00 7f fd e1 ff 9a ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY a4 01 95 00 c0 fe 2e 00 c9 ff 9f 00 ff fe b0 ff ... 78 ff 9f 00 4f ff 00 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY ef ff 98 00 e6 ff 04 ff 73 00 b2 00 44 01 a9 ff ... fd ff 00 00 04 00 fb ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 04 00 fb ff 02 00 fc ff 01 00 01 00 01 00 ff ff ... f3 ff e9 ff dc ff ce ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY e7 ff 40 00 76 00 31 00 b0 ff 54 ff f3 ff b7 00 ... c0 ff 09 fe 0c ff 6e 01 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 7f 03 23 04 15 03 ba 00 22 ff 5b 01 9f 09 a3 15 ... f9 f2 37 00 93 0b 76 12 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 16 15 68 14 d1 10 8f 09 0c fe e6 ef 49 e3 76 dc ... e5 e3 ac f0 ac fd 32 09 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY c8 11 06 17 3f 18 58 15 47 0e 1a 03 ae f5 a2 e9 ... 3d d9 21 e0 33 ed 52 fe [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY d6 10 65 20 c9 28 2f 28 3c 1f 0f 10 79 fe ce ed ... 9e 08 a6 0b b1 10 ef 12 [1280 bytes]
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=ffbc73acc4084582bc94a1c7877ff7be utt_id=utt-00001 chunks=90 bytes=114634 total_bytes=115914
-INFO:app.voice_v2.tts_runtime:evt=tts_end sid=ffbc73acc4084582bc94a1c7877ff7be utt_id=utt-00001 total_bytes=115914 duration_ms=401
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 29 12 b8 0c a4 01 fd f2 ad e4 64 db 82 da 8a e3 ... c4 21 35 0b 7d f0 30 db [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 80 d1 38 d6 7c e7 9f fe 35 14 80 22 ce 25 79 1d ... 72 eb 93 f4 3a 02 4d 0e [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY b8 14 45 14 b2 0e 27 07 02 00 2a fa 68 f6 cd f5 ... 45 08 9a 01 1f fb 07 f9 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY a8 fd b4 06 9c 0e f3 10 f2 0c 31 04 4e fa 45 f4 ... 28 fe 5b fe 65 00 b1 01 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY e6 00 76 ff 87 ff fe 00 c5 01 a0 00 0e ff 2a ff ... 1e 00 24 00 fe ff d9 ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY c8 ff c5 ff bf ff c9 ff e8 ff 0a 00 16 00 ea ff ... db 00 4b ff 2b 00 a7 ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY be ff b5 00 e8 ff 84 00 22 ff 9f ff e2 fe af ff ... ae 00 e7 ff 87 ff d0 ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 90 00 54 00 70 ff 78 ff 40 00 2b 00 50 00 f5 ff ... fe ff fd ff fc ff fc ff [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY fd ff fe ff fe ff fe ff fe ff fe ff ff ff fe ff ... 7a ff dd ff db ff 5b 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY b0 00 b9 00 76 00 38 00 b4 ff 40 00 5b 00 2b 00 ... 79 ff ad fe cd fa 5f f7 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY e6 f7 ee fc 40 03 9c 06 ce 05 c3 02 57 00 0b 00 ... 10 00 17 00 12 00 0b 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 10 00 26 00 4b 00 72 00 85 00 87 00 83 00 8f 00 ... 13 00 0e 00 0b 00 0b 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 0e 00 12 00 12 00 0c 00 0a 00 0b 00 0f 00 12 00 ... 40 ff 63 01 8f 01 3c 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY d4 fe a2 fe a3 00 9e 06 39 0d ab 0c a1 02 c5 fa ... 2c 15 f3 13 97 09 64 fd [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 70 f6 b6 f6 74 fd b8 08 06 12 81 10 e3 03 89 f5 ... 90 e3 de e4 4c f3 a5 03 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 35 0f c6 10 27 04 b6 f0 48 e6 fe e8 c5 f0 b4 f7 ... 87 f7 c1 e9 ae e4 d2 eb [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 0d fe e5 11 32 1c ce 1b b5 13 a6 05 e5 f8 fd f3 ... cb 09 2a 09 6f 06 cc 02 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY b4 ff cb fe fe ff cc 01 f6 02 0a 03 e9 01 06 00 ... 94 ff b7 ff 0e 00 7a 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY af 00 87 00 39 00 d1 ff d6 ff fe 00 34 02 6e 02 ... 06 ff 20 fe 36 fe e7 fe [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY c8 ff 9d 00 37 01 56 01 dd 00 5b 00 01 00 33 00 ... 5d 00 9c ff 9b fe 97 fd [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY d0 fd bc ff f3 03 39 09 05 0c ae 09 fa 01 0b f8 ... 74 fe c1 fe 7a ff 70 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 42 01 b7 01 b9 01 4b 01 b7 00 3c 00 1f 00 58 00 ... 04 00 03 00 02 00 01 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 00 00 00 00 01 00 01 00 01 00 02 00 01 00 01 00 ... ff ff 00 00 ff ff 01 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 01 00 00 00 ff ff ff ff 00 00 01 00 02 00 02 00 ... 02 00 02 00 02 00 04 00 [1280 bytes]
-[2025-10-29 04:54:51 +0000] [58] [DEBUG] > BINARY 05 00 06 00 06 00 04 00 03 00 02 00 05 00 07 00 ... fa ff f9 ff f8 ff f7 ff [714 bytes]
-10.225.25.234:45312 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/sessions?open=1 HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/live?sid=ffbc73acc4084582bc94a1c7877ff7be HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=ffbc73acc4084582bc94a1c7877ff7be&limit=200 HTTP/1.1" 200
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=b70179370b934e49a9b77ad359152f39 utt_id=utt-00001 chunks=83 bytes=105718 total_bytes=106998
+INFO:app.voice_v2.tts_runtime:evt=tts_end sid=b70179370b934e49a9b77ad359152f39 utt_id=utt-00001 total_bytes=106998 duration_ms=276
+10.225.27.112:50940 - "GET /api/v1/health HTTP/1.1" 200
 DEBUG:websockets.client:> TEXT '{"type": "KeepAlive"}' [21 bytes]
-DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 interval_s=5.000
-10.225.25.234:45328 - "GET /api/v1/health HTTP/1.1" 200
-WARNING:app.voice_v2.asr_runtime:evt=asr_no_audio_timeout sid=ffbc73acc4084582bc94a1c7877ff7be
-INFO:app.voice_v2.asr_runtime:evt=asr_ready_published sid=ffbc73acc4084582bc94a1c7877ff7be vendor=deepgram
-[2025-10-29 04:54:59 +0000] [58] [DEBUG] > TEXT '{"type":"asr.unavailable","sid":"ffbc73acc40845...audio received for 9s"}' [132 bytes]
-[2025-10-29 04:54:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.diag","event":"EVT_CLIENT_ASR_U...n":"no_audio_timeout"}}' [199 bytes]
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=ffbc73acc4084582bc94a1c7877ff7be&since_ms=1761713691440&limit=200 HTTP/1.1" 200
+DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=b70179370b934e49a9b77ad359152f39 stream_id=dg-stream-7ab85c36acdb435590cd3b196e3edeef interval_s=5.000
+10.225.27.112:49978 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.112:49980 - "GET /api/v1/health HTTP/1.1" 200
+WARNING:app.voice_v2.asr_runtime:evt=asr_no_audio_timeout sid=b70179370b934e49a9b77ad359152f39
+INFO:app.voice_v2.asr_runtime:evt=asr_ready_published sid=b70179370b934e49a9b77ad359152f39 vendor=deepgram
 DEBUG:websockets.client:> TEXT '{"type": "KeepAlive"}' [21 bytes]
-DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 interval_s=5.000
-[2025-10-29 04:55:01 +0000] [58] [DEBUG] < TEXT '{"type":"asr.rearm.request"}' [28 bytes]
-10.225.25.234:49674 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=ffbc73acc4084582bc94a1c7877ff7be&since_ms=1761713699371&limit=200 HTTP/1.1" 200
-INFO:app.voice_v2.asr_runtime:evt=asr_idle_close sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 idle_ms=16656
+DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=b70179370b934e49a9b77ad359152f39 stream_id=dg-stream-7ab85c36acdb435590cd3b196e3edeef interval_s=5.000
+10.225.27.112:50000 - "GET /api/v1/health HTTP/1.1" 200
+INFO:app.voice_v2.asr_runtime:evt=asr_idle_close sid=b70179370b934e49a9b77ad359152f39 stream_id=dg-stream-7ab85c36acdb435590cd3b196e3edeef idle_ms=18439
 DEBUG:websockets.client:> CLOSE 1000 (OK) [2 bytes]
 DEBUG:websockets.client:= connection is CLOSING
 DEBUG:websockets.client:< CLOSE 1000 (OK) [2 bytes]
@@ -309,21 +103,22 @@ DEBUG:websockets.client:< EOF
 DEBUG:websockets.client:> EOF
 DEBUG:websockets.client:= connection is CLOSED
 DEBUG:websockets.client:x closing TCP connection
-INFO:app.services.streaming_asr.deepgram_client:evt=dg_stream_closed sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 code=1000 reason=""
-10.225.25.234:49678 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=ffbc73acc4084582bc94a1c7877ff7be&since_ms=1761713701376&limit=200 HTTP/1.1" 200
-[2025-10-29 04:55:07 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M...on":"user_requested"}}}' [836 bytes]
-[2025-10-29 04:55:07 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M...on":"user_requested"}}}' [830 bytes]
-[2025-10-29 04:55:07 +0000] [58] [DEBUG] < CLOSE 1000 (OK) user_requested [16 bytes]
-[2025-10-29 04:55:07 +0000] [58] [DEBUG] = connection is CLOSING
-[2025-10-29 04:55:07 +0000] [58] [DEBUG] > CLOSE 1000 (OK) user_requested [16 bytes]
-[2025-10-29 04:55:07 +0000] [58] [DEBUG] x half-closing TCP connection
-[2025-10-29 04:55:07 +0000] [58] [DEBUG] = connection is CLOSED
-[2025-10-29 04:55:07 +0000] [58] [INFO] connection closed
-INFO:app.voice_v2.asr_runtime:evt=asr_rollup sid=ffbc73acc4084582bc94a1c7877ff7be stream_id=dg-stream-424f7d6614194cb38ea9953d6319e364 opened_at_ms=1761713688674 last_audio_ts_ms=1761713688674 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=19230
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=ffbc73acc4084582bc94a1c7877ff7be&since_ms=1761713705409&limit=200 HTTP/1.1" 200
-10.225.25.234:43104 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/zip?sid=ffbc73acc4084582bc94a1c7877ff7be HTTP/1.1" 200
-10.225.25.234:43110 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.234:43108 - "GET /api/v1/health HTTP/1.1" 200
-10.225.25.234:58308 - "GET /api/v1/health HTTP/1.1" 200
+INFO:app.services.streaming_asr.deepgram_client:evt=dg_stream_closed sid=b70179370b934e49a9b77ad359152f39 stream_id=dg-stream-7ab85c36acdb435590cd3b196e3edeef code=1000 reason=""
+[2025-10-29 07:05:52 +0000] [58] [DEBUG] % sending keepalive ping
+[2025-10-29 07:05:52 +0000] [58] [DEBUG] % received keepalive pong
+10.225.27.112:48614 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.112:48622 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.112:36796 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.112:36802 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-29 07:06:12 +0000] [58] [DEBUG] % sending keepalive ping
+[2025-10-29 07:06:12 +0000] [58] [DEBUG] % received keepalive pong
+10.225.27.112:45598 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.112:45604 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.112:45614 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.112:55964 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.112:55980 - "GET /api/v1/health HTTP/1.1" 200
+[2025-10-29 07:06:32 +0000] [58] [DEBUG] % sending keepalive ping
+[2025-10-29 07:06:32 +0000] [58] [DEBUG] % received keepalive pong
+10.225.27.112:52176 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.112:52180 - "GET /api/v1/health HTTP/1.1" 200
+10.225.27.112:56296 - "GET /api/v1/health HTTP/1.1" 200
