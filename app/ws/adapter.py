@@ -2405,6 +2405,19 @@ class ChatV2Adapter:
         await self._update_backpressure(ctx, max(0, queued))
 
     async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
+        # Special handling: session-step telemetry
+        if event_type == EVT_SESSION_STEP:
+            event = {
+                "schema_version": "1",
+                "type": EVT_SESSION_STEP,   # normalize type explicitly
+                "sid": sid,
+                "who": "server",
+                "source": "ws_server",
+                "meta": dict(meta),
+            }
+            bus.publish(event)
+            return
+
         event = {
             "schema_version": "1",
             "type": event_type,
