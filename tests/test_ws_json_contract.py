@@ -8,7 +8,7 @@ import uuid
 from typing import Any, Callable, Dict, List
 
 from app.telemetry import bus
-from app.voice_v2 import EVT_CLIENT_BANNER
+from app.voice_v2 import EVT_CLIENT_BANNER, EVT_WS_JSON_RECV
 from app.security.jwt_utils import mint_ws_token
 from app.ws.adapter import (
     CHAT_V2_SUBPROTOCOL,
@@ -124,6 +124,38 @@ class TestWebSocketJsonContract(unittest.TestCase):
         self.assertEqual(
             payload,
             {"type": "error", "code": "unknown_type", "detail": "client.foo"},
+        )
+
+    def test_asr_rearm_request_frame_is_allowed(self) -> None:
+        adapter = ChatV2Adapter()
+        frame = {"type": "asr.rearm.request"}
+        events = [
+            {"type": "websocket.connect"},
+            {"type": "websocket.receive", "text": json.dumps(frame)},
+            {"type": "websocket.disconnect", "code": 1000},
+        ]
+
+        received: list[dict] = []
+        token = bus.subscribe(EVT_WS_JSON_RECV, received.append)
+        try:
+            sent = self._drive(adapter, events)
+        finally:
+            bus.unsubscribe(token)
+
+        accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
+        self.assertEqual(len(accepts), 1)
+
+        send_payloads = [
+            json.loads(msg["text"])
+            for msg in sent
+            if msg.get("type") == "websocket.send" and msg.get("text") is not None
+        ]
+        error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
+        self.assertEqual(error_payloads, [])
+
+        self.assertTrue(
+            any(event.get("meta", {}).get("frame_type") == "asr.rearm.request" for event in received),
+            "Expected EVT_WS_JSON_RECV event for asr.rearm.request frame",
         )
 
     def test_backpressure_events_toggle_on_thresholds(self) -> None:

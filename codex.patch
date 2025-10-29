@@ -1,297 +1,181 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 9cf7bd6be185a1b6a886bbaef24b3d39baf1d526..aa2d8f5425f212253069169a23e670f4aeeb9fc8 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1934,59 +1934,100 @@ window.addEventListener('turn.state', (event) => {
-       console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready threw', err);
-     }
-   }
- });
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 5075dd77795e0e0d8b4fd66d1c237f4571a7b974..4602f43a0c90a236499e2590c8db6690d25396cf 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -79,50 +79,51 @@ _OUTBOUND_ALLOWED_TYPES = {
+     "asr.ready",
+     "asr.partial",
+     "asr.final",
+     "asr.unavailable",
+     "error",
+     "chat.message",
+     "chat.history",
+     "dialog.plan",
+     "hud.nudge",
+ }
  
- // Assistant TTS finished → open mic after optional delay
- window.addEventListener('tts.end', () => {
-   const release = () => {
-     DiagRecorder.maybeStart('ready');
-     if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
-       try {
-         window.AudioRecorder.handleTtsEnd();
-       } catch (err) {
-         console.warn('AudioRecorder handleTtsEnd failed', err);
-       }
-     }
-   };
+ _OUTBOX_MAXSIZE = 256
  
-   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
-     setTimeout(release, POST_TTS_RELEASE_MS);
-   } else {
-     release();
-   }
- });
+ _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
  
--window.addEventListener('asr.unavailable', () => {
-+window.addEventListener('asr.unavailable', (event) => {
-+  const detail = event && typeof event === 'object' ? event.detail : undefined;
-+  let reason = null;
-+  if (detail && typeof detail === 'object') {
-+    if (typeof detail.reason === 'string') {
-+      reason = detail.reason;
-+    } else if (typeof detail.details === 'string') {
-+      reason = detail.details;
-+    } else if (typeof detail.detail === 'string') {
-+      reason = detail.detail;
-+    } else if (detail.detail && typeof detail.detail === 'object') {
-+      const nested = detail.detail;
-+      if (typeof nested.reason === 'string') {
-+        reason = nested.reason;
-+      } else if (typeof nested.details === 'string') {
-+        reason = nested.details;
-+      }
-+    }
-+  }
-+  if (diagHudEnabled()) {
-+    const reasonText = reason ? String(reason).slice(0, 120) : '';
-+    console.warn('diag=asr_unavailable', reasonText);
-+    setBadge('asr:down');
-+    sendDiagHudEvent(
-+      'EVT_CLIENT_ASR_UNAVAILABLE',
-+      reasonText ? { reason: reasonText } : undefined,
-+      {
-+        level: 'warn',
-+        badge: 'asr:down',
-+        message: reasonText ? `diag=asr_unavailable ${reasonText}` : 'diag=asr_unavailable',
-+      }
-+    );
-+  }
-   try {
-     scheduleAsrRearm();
-   } catch (err) {
-     console.warn('scheduleAsrRearm failed after asr.unavailable', err);
-   }
- });
+ _log = logging.getLogger(__name__)
  
--window.addEventListener('asr.ready', () => {
-+window.addEventListener('asr.ready', (event) => {
-+  if (diagHudEnabled()) {
-+    console.info('diag=asr_ready');
-+    setBadge('asr:ready');
-+    sendDiagHudEvent(
-+      'EVT_CLIENT_ASR_READY',
-+      event && typeof event === 'object' ? event.detail : undefined,
-+      { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
-+    );
-+  }
-   console.info('ui: asr.ready → startMicCaptureIfIdle()');
-   if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
-     try {
-       window.ChatView?.showSystemFromChip?.(
-         "Voice is back. You can speak again when you’re ready."
-       );
-     } catch (err) {
-       console.warn('Failed to show voice restoration message', err);
-     }
-     asrRetry.tries = 0;
-     clearTimeout(asrRetry.timer);
-     asrRetry.timer = null;
-   }
-   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
-     try {
-       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
-       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
-         maybe.catch((err) => {
-           console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
-         });
-       }
-     } catch (err) {
-       console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
-     }
-   }
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index 715bffa6bd8983347e469563b47331b6d2f69abe..4d9f2d3ccf492d2a3cc6c3dc8c3d8078875b6473 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -687,50 +687,51 @@ class ASRRuntime:
-                 sid,
-                 "(not set)",
-                 qs or "",
-             )
-             stream_id_value = stream_id if isinstance(stream_id, str) and stream_id else ""
-             if not stream_id_value and isinstance(state.stream_id, str) and state.stream_id:
-                 stream_id_value = state.stream_id
-             ready_kwargs = {
-                 "sid": sid,
-                 "vendor": "deepgram",
-                 "stream_id": stream_id_value,
-             }
-             emit = getattr(self._bus, "emit", None)
-             if callable(emit):
-                 try:
-                     emit(EVT_ASR_READY, **ready_kwargs)
-                 except TypeError:
-                     emit(EVT_ASR_READY, ready_kwargs)
-             ready_event = {"type": EVT_ASR_READY, **ready_kwargs}
-             self._bus.publish(ready_event)
-             _log.info(
-                 "evt=asr_ready sid=%s vendor=deepgram stream_id=%s",
-                 sid,
-                 stream_id_value,
-             )
-+            self._log_asr_rearmed(sid, state)
+ _ALLOWED_TEXT_FRAME_TYPES = {
+     "client.ready",
+     "audio.header",
+     "admin.toggle",
+     "chat.user",
+     "client.diag",
+     "client.log",
+     "client.banner",
++    "asr.rearm.request",
+ }
  
-             asr_ready_frame = {
-                 "type": "asr.ready",
-                 "vendor": "deepgram",
-                 "input": dict(state.input_desc),
-             }
-             self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
-             if stream_id:
-                 _log.info(
-                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
-                     sid,
-                     stream_id,
-                     "(not set)",
-                     int(self._idle_close_ms),
-                 )
-             pre_chunks_sent = state.chunks_sent
-             while state.pending:
-                 chunk = state.pending.popleft()
-                 chunk_len = len(chunk)
-                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
-                 self._forward_chunk(sid, state, chunk)
-             if state.chunks_sent == pre_chunks_sent:
-                 self._start_ready_watchdog(sid, state)
-             else:
-                 self._cancel_ready_watchdog(state)
-@@ -976,111 +977,133 @@ class ASRRuntime:
-         self._cancel_ready_watchdog(state)
-         try:
-             self._client.close_stream(sid)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_error_close_failed sid=%s", sid)
  
-     def _publish_asr_unavailable(
-         self,
-         sid: str,
-         reason: str,
-         details: str,
-         *,
-         state: _SessionState | None = None,
-         force: bool = False,
-     ) -> None:
-         if not isinstance(sid, str) or not sid:
-             return
-         if not isinstance(reason, str) or not reason:
-             return
-         if state is None:
-             state = self._sessions.get(sid)
-         if state is not None and state.unavailable_emitted and not force:
-             return
+ class TokenBucket:
+     """Simple in-memory token bucket."""
  
-         details_value = details if isinstance(details, str) else str(details)
-+        if len(details_value) > 160:
-+            details_value = f"{details_value[:157]}..."
-         payload = {
-             "type": "asr.unavailable",
-             "sid": sid,
-             "reason": reason,
-             "details": details_value,
-         }
-         try:
-             self._bus.publish(payload)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_unavailable_publish_failed sid=%s", sid)
+     def __init__(self, capacity: int, refill_seconds: float) -> None:
+         self.capacity = capacity
+         self.tokens = float(capacity)
+         self.refill_seconds = refill_seconds
+         self.last_refill = time.monotonic()
  
-         level = "WARNING" if reason == "no_audio_timeout" else "ERROR"
-         self._emit_log(
-             {
-                 "type": "EVT_LOG",
-                 "logger": "app.voice_v2.asr_runtime",
-                 "level": level,
-                 "sid": sid,
-                 "msg": (
-                     f"evt=asr_unavailable sid={sid} reason={reason} details={details_value}"
-                 ),
-             }
+     def consume(self, count: int, now: Optional[float] = None) -> bool:
+         if now is None:
+             now = time.monotonic()
+         elapsed = max(0.0, now - self.last_refill)
+         if elapsed > 0:
+             refill = (self.capacity / self.refill_seconds) * elapsed
+             if refill > 0:
+                 self.tokens = min(self.capacity, self.tokens + refill)
+                 self.last_refill = now
+         if self.tokens < count:
+             return False
+         self.tokens -= count
+         return True
+diff --git a/tests/test_ws_json_contract.py b/tests/test_ws_json_contract.py
+index 4bbcce2a901fea8cf82df2693dae759b65c65419..76e5e1503525a2013c546e9e45b04994d213ab0c 100644
+--- a/tests/test_ws_json_contract.py
++++ b/tests/test_ws_json_contract.py
+@@ -1,36 +1,36 @@
+ """Tests for chat.v2 JSON contract handshakes and diagnostics."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import json
+ import unittest
+ import uuid
+ from typing import Any, Callable, Dict, List
+ 
+ from app.telemetry import bus
+-from app.voice_v2 import EVT_CLIENT_BANNER
++from app.voice_v2 import EVT_CLIENT_BANNER, EVT_WS_JSON_RECV
+ from app.security.jwt_utils import mint_ws_token
+ from app.ws.adapter import (
+     CHAT_V2_SUBPROTOCOL,
+     EVT_BACKPRESSURE_OFF,
+     EVT_BACKPRESSURE_ON,
+     QUEUE_OFF_THRESHOLD,
+     QUEUE_ON_THRESHOLD,
+     ChatV2Adapter,
+ )
+ 
+ 
+ class RecordingEngine:
+     """Minimal engine stub that records the opened session identifier."""
+ 
+     def __init__(self) -> None:
+         self.open_sid: str | None = None
+ 
+     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
+         self.open_sid = sid
+ 
+ 
+ class TestWebSocketJsonContract(unittest.TestCase):
+     """Integration tests covering JSON contract behavior."""
+ 
+     def setUp(self) -> None:
+@@ -104,50 +104,82 @@ class TestWebSocketJsonContract(unittest.TestCase):
+         adapter = ChatV2Adapter()
+         frame = {"type": "client.foo", "payload": "ignored"}
+         events = [
+             {"type": "websocket.connect"},
+             {"type": "websocket.receive", "text": json.dumps(frame)},
+             {"type": "websocket.disconnect", "code": 1000},
+         ]
+ 
+         sent = self._drive(adapter, events)
+         accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
+         self.assertEqual(len(accepts), 1)
+ 
+         send_payloads = [
+             json.loads(msg["text"])
+             for msg in sent
+             if msg.get("type") == "websocket.send" and msg.get("text") is not None
+         ]
+         error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
+         self.assertEqual(len(error_payloads), 1)
+         payload = error_payloads[0]
+         self.assertEqual(
+             payload,
+             {"type": "error", "code": "unknown_type", "detail": "client.foo"},
          )
  
-         if state is not None:
-             state.unavailable_emitted = True
- 
-+    def _log_asr_rearmed(self, sid: str, state: _SessionState | None = None) -> None:
-+        if not isinstance(sid, str) or not sid:
-+            return
-+        if state is None:
-+            state = self._sessions.get(sid)
-+        if state is None or not state.unavailable_emitted:
-+            return
++    def test_asr_rearm_request_frame_is_allowed(self) -> None:
++        adapter = ChatV2Adapter()
++        frame = {"type": "asr.rearm.request"}
++        events = [
++            {"type": "websocket.connect"},
++            {"type": "websocket.receive", "text": json.dumps(frame)},
++            {"type": "websocket.disconnect", "code": 1000},
++        ]
 +
-+        self._emit_log(
-+            {
-+                "type": "EVT_LOG",
-+                "logger": "app.voice_v2.asr_runtime",
-+                "level": "INFO",
-+                "sid": sid,
-+                "msg": f"evt=asr_rearmed sid={sid}",
-+            }
++        received: list[dict] = []
++        token = bus.subscribe(EVT_WS_JSON_RECV, received.append)
++        try:
++            sent = self._drive(adapter, events)
++        finally:
++            bus.unsubscribe(token)
++
++        accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
++        self.assertEqual(len(accepts), 1)
++
++        send_payloads = [
++            json.loads(msg["text"])
++            for msg in sent
++            if msg.get("type") == "websocket.send" and msg.get("text") is not None
++        ]
++        error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
++        self.assertEqual(error_payloads, [])
++
++        self.assertTrue(
++            any(event.get("meta", {}).get("frame_type") == "asr.rearm.request" for event in received),
++            "Expected EVT_WS_JSON_RECV event for asr.rearm.request frame",
 +        )
-+        state.unavailable_emitted = False
 +
-     def _cancel_idle_timer(self, state: _SessionState) -> None:
-         handle = state.idle_handle
-         if handle is not None:
-             handle.cancel()
-             state.idle_handle = None
+     def test_backpressure_events_toggle_on_thresholds(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine()
+         adapter.engine = engine
  
-     def _cancel_ready_watchdog(self, state: _SessionState) -> None:
-         handle = state.ready_watchdog
-         if handle is not None:
-             handle.cancel()
-         state.ready_watchdog = None
-         state.ready_armed_at = 0.0
+         received: List[dict] = []
+         token_on = bus.subscribe(EVT_BACKPRESSURE_ON, lambda event: received.append(event))
+         token_off = bus.subscribe(EVT_BACKPRESSURE_OFF, lambda event: received.append(event))
+         try:
+             asyncio.run(self._exercise_backpressure(adapter, engine))
+         finally:
+             bus.unsubscribe(token_on)
+             bus.unsubscribe(token_off)
  
-     def _start_ready_watchdog(self, sid: str, state: _SessionState) -> None:
-         loop = self._ensure_loop()
-         if loop is None:
-             return
-         self._cancel_ready_watchdog(state)
+         self.assertEqual([event["type"] for event in received], [EVT_BACKPRESSURE_ON, EVT_BACKPRESSURE_OFF])
+         self.assertEqual(received[0]["meta"]["queue_depth"], QUEUE_ON_THRESHOLD + 1)
+         self.assertEqual(received[0]["meta"]["state"], "on")
+         self.assertEqual(received[1]["meta"]["queue_depth"], QUEUE_OFF_THRESHOLD - 1)
+         self.assertEqual(received[1]["meta"]["state"], "off")
  
-         def _fire() -> None:
-             state.ready_watchdog = None
-             armed_at = state.ready_armed_at
-             state.ready_armed_at = 0.0
-             if armed_at and state.last_audio_ts <= armed_at:
-                 _log.warning("evt=asr_no_audio_timeout sid=%s", sid)
-                 self._publish_asr_unavailable(
-                     sid,
-                     "no_audio_timeout",
-                     f"no audio received for {int(_NO_AUDIO_TIMEOUT_S)}s",
-                     state=state,
-                     force=False,
-                 )
-                 self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
-                 _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
-+                self._log_asr_rearmed(sid, state)
-                 asr_ready_frame = {
-                     "type": "asr.ready",
-                     "vendor": "deepgram",
-                     "input": dict(state.input_desc),
-                 }
-                 self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
- 
-         state.ready_armed_at = time.monotonic()
-         state.ready_watchdog = loop.call_later(_NO_AUDIO_TIMEOUT_S, _fire)
- 
-     def _reset_idle_timer(self, sid: str, state: _SessionState) -> None:
-         threshold_ms = self._idle_close_ms
-         if threshold_ms <= 0:
-             return
-         loop = self._ensure_loop()
-         if loop is None:
-             return
-         self._cancel_idle_timer(state)
- 
-         delay = threshold_ms / 1000.0
- 
-         def _fire() -> None:
-             state.idle_handle = None
-             self._handle_idle_timeout(sid, state)
+     async def _exercise_backpressure(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
+         scope = self._make_scope()
+         queue: asyncio.Queue[dict] = asyncio.Queue()
+         sent: List[dict] = []
  

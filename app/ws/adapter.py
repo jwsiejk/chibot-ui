@@ -101,6 +101,7 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "client.diag",
     "client.log",
     "client.banner",
+    "asr.rearm.request",
 }
 
 
