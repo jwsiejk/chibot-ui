@@ -231,6 +231,26 @@
     return window.WSClient || null;
   }
 
+  function getLiveSocket() {
+    if (typeof WSClient !== 'undefined' && WSClient && WSClient._ws) {
+      return WSClient._ws;
+    }
+    if (typeof AppState !== 'undefined' && AppState) {
+      if (AppState.websocket) {
+        return AppState.websocket;
+      }
+      if (typeof AppState.getState === 'function') {
+        try {
+          const state = AppState.getState();
+          if (state && state.websocket) {
+            return state.websocket;
+          }
+        } catch {}
+      }
+    }
+    return null;
+  }
+
   function wsClientIsConnected(wsClient) {
     if (!wsClient || typeof wsClient.send !== "function") {
       return false;
@@ -242,7 +262,7 @@
     } catch (err) {
       // Ignore connectivity helper failures and fall back to socket state checks.
     }
-    const socket = wsClient.socket;
+    const socket = getLiveSocket();
     return Boolean(socket && socket.readyState === WebSocket.OPEN);
   }
 
@@ -523,7 +543,7 @@
     if (!chunkBlobOrBuf) {
       return null;
     }
-    const client = window.WSClient;
+    const client = typeof WSClient !== 'undefined' ? WSClient : window.WSClient;
     const bytes = chunkBlobOrBuf.byteLength || chunkBlobOrBuf.size || 0;
     let result = null;
     if (client && typeof client.send === 'function') {
@@ -619,7 +639,7 @@
         return recorder;
       }
       const wsClient = window.WSClient;
-      const ws = wsClient && wsClient.socket;
+      const ws = getLiveSocket();
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         return null;
       }
@@ -707,7 +727,7 @@
         return;
       }
       const wsClient = window.WSClient;
-      const ws = wsClient && wsClient.socket;
+      const ws = getLiveSocket();
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         return;
       }
@@ -1188,13 +1208,13 @@
         summary.extra = extraDetail;
       }
       const wsClient = getWsClient();
-      const socket = wsClient && wsClient.socket;
+      const socket = getLiveSocket();
       if (socket && typeof socket.readyState === 'number') {
         summary.readyState = socket.readyState;
       }
       if (!sendClientLog('client_ready_handshake', summary)) {
         enqueueDeferredClientLog('client_ready_handshake', summary);
-      } else {
+      } else if (getLiveSocket()) {
         flushDeferredClientLogs();
       }
       clientReadyStats = null;
@@ -1216,7 +1236,7 @@
         recordClientReadyEvent('wsclient_missing');
         return false;
       }
-      const socket = wsClient.socket;
+      const socket = getLiveSocket();
       const readyState = socket && typeof socket.readyState === 'number' ? socket.readyState : -1;
       if (clientReadyStats) {
         clientReadyStats.attempts += 1;
@@ -1336,7 +1356,11 @@
       runtimeState.turnState = null;
       updateRecordingState(false, 'ws.open');
       runtimeState.policy = null;
-      flushDeferredClientLogs();
+      if (getLiveSocket()) {
+        try {
+          flushDeferredClientLogs();
+        } catch {}
+      }
     });
     
     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
@@ -2212,8 +2236,10 @@
               if (typeof logClient === 'function') {
                 logClient('client.mic', `evt=policy_capture asr_input=${asrInput} timeslice_ms=${timeslice}`);
               }
-              if (typeof flushDeferredClientLogs === 'function') {
-                flushDeferredClientLogs();
+              if (getLiveSocket()) {
+                try {
+                  flushDeferredClientLogs();
+                } catch {}
               }
               runtimeState.policyCaptureLogged = true;
             }
@@ -2230,8 +2256,17 @@
 
       if (becameConnected) {
         Waveform.start();
-        flushDeferredClientLogs();
+        if (getLiveSocket()) {
+          try {
+            flushDeferredClientLogs();
+          } catch {}
+        }
 
+        if (audioRecorder && typeof audioRecorder.setSocket === 'function') {
+          try {
+            audioRecorder.setSocket(getLiveSocket());
+          } catch {}
+        }
         if (audioRecorder && typeof audioRecorder.start === 'function') {
           audioRecorder.start()
             .then(() => {

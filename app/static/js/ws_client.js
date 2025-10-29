@@ -11,6 +11,10 @@
   if (!AppState) {
     throw new Error("AppState store is required before loading WSClient");
   }
+  const WSClient = window.WSClient = window.WSClient || {};
+  WSClient._ws = WSClient._ws || null;
+  WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
+  WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
   const getAudioPlayer = () => window.AudioPlayer;
 
   let socket = null;
@@ -631,7 +635,7 @@
       options.dropIfBusy = false;
     }
     const dropIfBusy = Boolean(options.dropIfBusy);
-    const client = window.WSClient;
+    const client = WSClient;
     const state = typeof AppState !== "undefined" && typeof AppState.getState === "function"
       ? AppState.getState()
       : null;
@@ -671,7 +675,7 @@
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return false;
     }
-    const client = window.WSClient;
+    const client = WSClient;
     if (client && typeof client.isConnected === "function") {
       try {
         if (!client.isConnected()) {
@@ -1400,40 +1404,31 @@
     const handlers = {
       open: () => {
         updateState({ websocket: ws });
-        const client = window.WSClient;
-        if (client && typeof client === "object") {
-          client._ws = ws;
-          client._connected = true;
-          if (!Array.isArray(client._queue)) {
-            client._queue = [];
+        try {
+          WSClient._ws = ws;
+          WSClient._connected = true;
+        } catch {}
+        try {
+          if (!Array.isArray(WSClient._queue)) {
+            WSClient._queue = [];
           }
-          if (!client._linkedProofLogged) {
-            let appWs = null;
-            try {
-              if (AppState && typeof AppState.getState === "function") {
-                const state = AppState.getState();
-                appWs = state && state.websocket ? state.websocket : null;
-              }
-            } catch (err) {
-              appWs = null;
+          if (WSClient._queue.length) {
+            for (const { data, isBinary } of WSClient._queue) {
+              WSClient.send(data, { binary: isBinary });
             }
-            const fallbackAppWs = AppState && AppState.websocket ? AppState.websocket : null;
-            console.info("evt=ws_linked", !!(appWs || fallbackAppWs), !!client._ws);
-            client._linkedProofLogged = true;
+            WSClient._queue.length = 0;
           }
-          if (Array.isArray(client._queue) && client._queue.length) {
-            for (const { data, isBinary } of client._queue) {
-              try {
-                client.send(data, { binary: isBinary });
-              } catch (err) {
-                console.warn("WSClient queued send failed", err);
-              }
-            }
-            client._queue.length = 0;
+        } catch {}
+        try {
+          window.dispatchEvent(new CustomEvent("ws.open", { detail: { websocket: ws } }));
+        } catch {}
+        try {
+          if (!WSClient._linkedProofLogged) {
+            console.info("evt=ws_linked AppState", !!AppState?.websocket, "WSClient", !!WSClient._ws);
+            WSClient._linkedProofLogged = true;
           }
-        }
+        } catch {}
         startHeartbeat();
-        window.dispatchEvent(new CustomEvent("ws.open", { detail: { websocket: ws } }));
       },
       message: parseFrame,
       error: (event) => {
@@ -1442,12 +1437,11 @@
       },
       close: (event) => {
         const expected = ws.__intentionalClose === true;
-        const client = window.WSClient;
-        if (client && typeof client === "object") {
-          client._ws = null;
-          client._connected = false;
-          client._linkedProofLogged = false;
-        }
+        try {
+          WSClient._connected = false;
+          WSClient._ws = null;
+          WSClient._linkedProofLogged = false;
+        } catch {}
         if (socket === ws) {
           socket = null;
           expectInfoFrame = true;
@@ -1503,7 +1497,7 @@
       inputDescriptor = null;
       inputVendor = null;
     }
-    const client = window.WSClient;
+    const client = WSClient;
     if (client && typeof client === "object") {
       client._ws = null;
       client._connected = false;
@@ -1668,33 +1662,28 @@
   }
 
   function send(payload, { binary = false } = {}) {
-    const client = window.WSClient || {};
-    if (!Array.isArray(client._queue)) {
-      client._queue = [];
+    if (!Array.isArray(this._queue)) {
+      this._queue = [];
     }
-    const stateGetter = AppState && typeof AppState.getState === "function"
-      ? AppState.getState
-      : null;
-    let state = null;
-    try {
-      state = stateGetter ? stateGetter() : null;
-    } catch (err) {
-      state = null;
+    let stateSocket = null;
+    if (typeof AppState !== "undefined" && AppState) {
+      stateSocket = AppState.websocket || null;
+      if (!stateSocket && typeof AppState.getState === "function") {
+        try {
+          const snapshot = AppState.getState();
+          stateSocket = snapshot && snapshot.websocket ? snapshot.websocket : null;
+        } catch {}
+      }
     }
-    const live = client._ws || (state && state.websocket ? state.websocket : null);
-    const isOpen = !!(live && live.readyState === WebSocket.OPEN);
-    client._connected = isOpen;
-    if (!isOpen) {
-      client._queue.push({ data: payload, isBinary: !!binary });
-      console.warn("WSClient.send queued (socket not open yet)");
+    const live = this._ws || stateSocket;
+    if (!live || live.readyState !== WebSocket.OPEN) {
+      this._queue.push({ data: payload, isBinary: !!binary });
+      console.warn("WSClient.send queued (socket not open)");
       return;
     }
-    client._ws = live;
-    try {
-      live.binaryType = "arraybuffer";
-    } catch (err) {
-      // ignore binaryType errors
-    }
+    this._ws = live;
+    this._connected = true;
+    try { live.binaryType = "arraybuffer"; } catch {}
     if (binary) {
       if (payload instanceof Blob) {
         return payload.arrayBuffer().then((buf) => {
@@ -1705,17 +1694,10 @@
           }
         });
       }
-      if (payload instanceof ArrayBuffer) {
-        try {
-          live.send(payload);
-        } catch (err) {
-          console.error("WSClient binary send error", err);
-        }
-        return;
-      }
-      if (ArrayBuffer.isView(payload)) {
-        const view = payload;
-        const buffer = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+      if (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
+        const buffer = payload instanceof ArrayBuffer
+          ? payload
+          : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
         try {
           live.send(buffer);
         } catch (err) {
@@ -1753,22 +1735,27 @@
     }
   };
 
-  window.WSClient = {
-    open,
-    close,
-    send,
-    sendBinary,
-    getBufferedAmount,
-    get socket() {
+  WSClient.open = open;
+  WSClient.close = close;
+  WSClient.send = send;
+  WSClient.sendBinary = sendBinary;
+  WSClient.getBufferedAmount = getBufferedAmount;
+  Object.defineProperty(WSClient, "socket", {
+    configurable: true,
+    enumerable: true,
+    get() {
       return socket;
-    },
-    isConnected() {
-      return !!socket && socket.readyState === WebSocket.OPEN && AppState.getState().connectionState === "connected";
-    },
-    __debug: debug
+    }
+  });
+  WSClient.isConnected = function isConnected() {
+    return !!socket && socket.readyState === WebSocket.OPEN && AppState.getState().connectionState === "connected";
   };
-  window.WSClient._ws = window.WSClient._ws || null;
-  window.WSClient._connected = !!(window.WSClient._ws && window.WSClient._ws.readyState === WebSocket.OPEN);
-  window.WSClient._queue = Array.isArray(window.WSClient._queue) ? window.WSClient._queue : [];
-  window.WSClient._linkedProofLogged = false;
+  WSClient.__debug = debug;
+  window.WSClient = WSClient;
+  WSClient._ws = WSClient._ws || null;
+  WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
+  WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
+  if (typeof WSClient._linkedProofLogged !== "boolean") {
+    WSClient._linkedProofLogged = false;
+  }
 })();
