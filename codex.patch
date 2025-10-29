@@ -1,598 +1,410 @@
-diff --git a/app/admin/flow_api.py b/app/admin/flow_api.py
-index ad32ecd4f2b273d13a71900bd56c399515303a7e..1aa63f87377699a0dcec27be99a0e898c893573b 100644
---- a/app/admin/flow_api.py
-+++ b/app/admin/flow_api.py
-@@ -1,34 +1,34 @@
- """Admin HTTP endpoints exposing flow trace streams and ZIP archives."""
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index e725154187ca7bda54302093f9b68d29bb3cc0c1..09fd401bace0e77c87ec3fdfd5dec3df8f29cb92 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -247,56 +247,58 @@ class AdapterContext:
+     audio_subscription_token: Optional[str] = None
+     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+     asr_ready: bool = False
+     asr_subscription_token: Optional[str] = None
+     asr_subscription_bus: Optional[Any] = None
+     asr_open_subscription_token: Optional[str] = None
+     asr_unavailable_subscription_token: Optional[str] = None
+     server_keepalive_task: asyncio.Task[None] | None = None
+     last_policy_interaction: Optional[Dict[str, Any]] = None
+     policy_snapshot: Optional[Dict[str, Any]] = None
+     partial_seq: int = 0
+     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+     send_lock: asyncio.Lock | None = None
+     tts_end_ts: Optional[float] = None
+     diag_audio_seen: bool = False
+     diag_timer: asyncio.TimerHandle | None = None
+     diag_timer_key: Optional[str] = None
+     await_user_expected: bool = False
+     await_user_pending: bool = False
+     await_user_pending_key: Optional[str] = None
+     await_user_after_mask: bool = False
+     await_user_after_mask_key: Optional[str] = None
+     tts_mask_phase: str = "off"
+     mask_subscription_token: Optional[str] = None
+     tts_end_subscription_token: Optional[str] = None
++    turn_state_subscription_token: Optional[str] = None
+     hud_state: Optional[str] = None
+     client_mic_open: bool = False
+     mic_open_timer: asyncio.TimerHandle | None = None
+     mic_nudge_sent: bool = False
+     await_user_req_id: Optional[str] = None
+     last_tts_end_req_id: Optional[str] = None
++    await_user_cue_emitted: bool = False
+     listen_handoff_done: set[str] = field(default_factory=set)
+     listen_handoff_task: asyncio.Task[None] | None = None
+     listen_handoff_task_key: Optional[str] = None
+     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+     client_banner_info: Optional[Dict[str, Any]] = None
+     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
  
- from __future__ import annotations
  
- import json
- from dataclasses import dataclass
- from io import BytesIO
- from pathlib import Path
--from typing import Awaitable, Callable, Dict, List, Optional
-+from typing import Any, Awaitable, Callable, Dict, List, Optional
- from urllib.parse import parse_qs
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
  
- from app.admin.flow_zip import build_flow_zip
+     def __init__(
+         self,
+         engine: EngineHooks | None = None,
+         exporter: FileExporter | None = None,
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+@@ -321,50 +323,84 @@ class ChatV2Adapter:
+     @staticmethod
+     def _clear_pending_for_key(ctx: AdapterContext, key: Optional[str]) -> None:
+         if key is None:
+             if ctx.await_user_pending_key is None:
+                 ctx.await_user_pending = False
+             return
+         if ctx.await_user_pending_key == key:
+             ctx.await_user_pending = False
+             ctx.await_user_pending_key = None
  
+     @staticmethod
+     def _set_after_mask_for_key(ctx: AdapterContext, key: Optional[str]) -> None:
+         ctx.await_user_after_mask = True
+         ctx.await_user_after_mask_key = key
  
- EXPORT_ROOT = Path("exports")
- _EVENTS_FILENAME = "events.ndjson"
- _ARCHIVE_FILENAME = "flow.zip"
- _CONTENT_TYPE_NDJSON = b"application/x-ndjson"
- _CONTENT_TYPE_ZIP = b"application/zip"
+     @staticmethod
+     def _clear_after_mask_for_key(ctx: AdapterContext, key: Optional[str]) -> None:
+         if key is None:
+             if ctx.await_user_after_mask_key is None:
+                 ctx.await_user_after_mask = False
+             return
+         if ctx.await_user_after_mask_key == key:
+             ctx.await_user_after_mask = False
+             ctx.await_user_after_mask_key = None
  
- _TYPE_PREFIX_ALIASES: dict[str, tuple[str, ...]] = {
-     "EVT_DIAG_HUD": ("EVT_HUD_", "EVT_CLIENT_"),
-     "EVT_DIAG_FIRST_AUDIO_FRAME": ("EVT_AG_",),
-     "EVT_DIAG_NO_AUDIO_FROM_CLIENT": ("EVT_AG_",),
- }
++    def _maybe_emit_await_user(self, ctx: Any, policy: Dict[str, Any]) -> None:
++        capture = policy.get("capture") if isinstance(policy, dict) else None
++        start_on_ready = bool(capture.get("start_on_turn_ready")) if isinstance(capture, dict) else False
++        sid = getattr(ctx, "sid", "")
++        if not start_on_ready:
++            _log.debug("evt=await_user_skip sid=%s", sid)
++            return
++        if not getattr(ctx, "await_user_expected", False):
++            return
++        if getattr(ctx, "await_user_cue_emitted", False):
++            return
++        outbox = getattr(ctx, "outbox", None)
++        if outbox is None:
++            return
++        payload = {"type": "assistant.await_user", "reason": "tts_end", "ts": self._now_ms()}
++        try:
++            outbox.put_nowait(payload)
++        except asyncio.QueueFull:
++            now = outbox.qsize()
++            try:
++                asyncio.create_task(
++                    self._publish(
++                        EVT_WS_OUTBOX_DROP,
++                        sid,
++                        {"sid": sid, "dropped": 1, "now": now},
++                    )
++                )
++            except RuntimeError:
++                pass
++            return
++        ctx.await_user_cue_emitted = True
++        _log.info("evt=turn_listen_cue sid=%s reason=tts_end policy_start=true", sid)
++        _log.info("evt=await_user_emit sid=%s", sid)
++
+     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+         if scope.get("type") != "websocket":
+             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
  
+         connect_event = await receive()
+         if connect_event.get("type") != "websocket.connect":
+             return
  
- @dataclass(frozen=True)
- class Response:
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
+         raw_path = scope.get("raw_path")
+         if isinstance(raw_path, bytes):
+             try:
+                 path = raw_path.decode("utf-8")
+             except UnicodeDecodeError:  # pragma: no cover - defensive fallback
+                 path = raw_path.decode("latin-1", errors="ignore")
+         else:
+             path = scope.get("path", "")
  
+         query_bytes = scope.get("query_string") or b""
+         try:
+             query_string = query_bytes.decode("utf-8")
+         except UnicodeDecodeError:  # pragma: no cover - defensive fallback
+             query_string = query_bytes.decode("latin-1", errors="ignore")
+         path_qs = path
+         if query_string:
+             path_qs = f"{path}?{query_string}"
+@@ -1726,50 +1762,76 @@ class ChatV2Adapter:
+                 return
  
-@@ -238,60 +238,98 @@ def _parse_trace_filters(query: bytes) -> tuple[Optional[set[str]], Optional[int
+             stripped = raw_phase.strip()
+             normalized = stripped.lower()
+             phase_value = normalized or stripped or raw_phase
  
- 
- def _filter_events(
-     events_path: Path,
-     requested_types: Optional[set[str]],
-     since_ms: Optional[int],
-     limit: Optional[int],
- ) -> bytes:
-     matched = BytesIO()
-     remaining = limit if limit is not None else None
- 
-     with events_path.open("r", encoding="utf-8") as handle:
-         for raw_line in handle:
-             if remaining is not None and remaining <= 0:
-                 break
- 
-             stripped = raw_line.strip()
-             if not stripped:
-                 continue
+             def _on_loop() -> None:
+                 ctx.tts_mask_phase = phase_value
+                 if ctx.tts_mask_phase != "off":
+                     ctx.await_user_after_mask = False
+                     ctx.await_user_after_mask_key = None
+                     ctx.client_mic_open = False
+                     ctx.hud_state = None
+                     ctx.mic_nudge_sent = False
+                     self._cancel_mic_open_timer(ctx)
+                     return
+                 _schedule_listen_handoff(None)
  
              try:
-                 event = json.loads(stripped)
-             except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-                 raise ValueError("event payload must be valid JSON") from exc
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
  
--            event_type = event.get("type")
--            if requested_types and not _type_filter_matches(event_type, requested_types):
-+            if requested_types and not _type_filter_matches(event, requested_types):
-                 continue
+         ctx.mask_subscription_token = bus.subscribe(EVT_TTS_MASK, _handle_tts_mask_event)
  
-             if since_ms is not None:
-                 ts_value = event.get("ts_ms")
-                 if not isinstance(ts_value, int):
-                     continue
-                 if ts_value < since_ms:
-                     continue
- 
-             matched.write(stripped.encode("utf-8"))
-             matched.write(b"\n")
-             if remaining is not None:
-                 remaining -= 1
- 
-     return matched.getvalue()
- 
- 
--def _type_filter_matches(event_type: object, requested_types: set[str]) -> bool:
-+def _type_filter_matches(event: object, requested_types: set[str]) -> bool:
-+    if not isinstance(event, dict):
-+        return False
++        def _handle_turn_state_event(event: dict) -> None:
++            if event.get("type") != "EVT_TURN_STATE":
++                return
++            if event.get("sid") != ctx.sid:
++                return
++            meta = event.get("meta")
++            if not isinstance(meta, Mapping):
++                return
++            state = meta.get("state")
++            reason = meta.get("reason")
++            if state != "Ready" or reason != "tts_end":
++                return
 +
-+    event_type = event.get("type")
-     if not isinstance(event_type, str):
-         return False
--    if event_type in requested_types:
--        return True
++            def _on_loop() -> None:
++                policy = self._policy_snapshot()
++                self._maybe_emit_await_user(ctx, policy)
 +
-     for token in requested_types:
--        prefixes = _TYPE_PREFIX_ALIASES.get(token)
--        if not prefixes:
--            continue
--        for prefix in prefixes:
--            if event_type.startswith(prefix):
--                return True
-+        if _token_matches_event(event, event_type, token):
-+            return True
++            try:
++                loop.call_soon_threadsafe(_on_loop)
++            except RuntimeError:
++                _on_loop()
 +
-+    return False
-+
-+
-+def _token_matches_event(event: dict, event_type: str, token: str) -> bool:
-+    base, sep, remainder = token.partition(":")
-+    if sep:
-+        if "=" in remainder:
-+            path_expr, _, expected_value = remainder.partition("=")
-+        else:
-+            path_expr = "step"
-+            expected_value = remainder
-+
-+        if event_type != base:
-+            return False
-+
-+        meta = event.get("meta")
-+        if not isinstance(meta, dict):
-+            return False
-+
-+        path = [segment for segment in path_expr.split(".") if segment]
-+        current: Any = meta
-+        for segment in path:
-+            if not isinstance(current, dict) or segment not in current:
-+                return False
-+            current = current.get(segment)
-+
-+        return current == expected_value
-+
-+    if event_type == token:
-+        return True
-+
-+    prefixes = _TYPE_PREFIX_ALIASES.get(token)
-+    if not prefixes:
-+        return False
-+
-+    for prefix in prefixes:
-+        if event_type.startswith(prefix):
-+            return True
-+
-     return False
- 
- 
- __all__ = ["handle_flow_trace", "handle_flow_zip", "handle_flow_sessions"]
-diff --git a/app/static/js/admin_logs.js b/app/static/js/admin_logs.js
-index f9494dac09c1880b5732a1fda12a4e33e2e727e3..4f9a3414c4d08d373aeaa55ac57e50b0f22f6e90 100644
---- a/app/static/js/admin_logs.js
-+++ b/app/static/js/admin_logs.js
-@@ -339,87 +339,104 @@
-     sinceMs: null,
-     sid: null,
-   };
- 
-   const LIVE_POLL_INTERVAL_MS = 3000;
-   const LIVE_POLL_ERROR_INTERVAL_MS = 8000;
- 
-   const sessionState = {
-     loading: false,
-     prefix: '',
-     openOnly: false,
-     sessions: [],
-     debounceId: null,
-   };
- 
-   const historyState = {
-     offset: 0,
-     limit: 50,
-     sid: null,
-     events: [],
-     hasMore: false,
-     loading: false,
-   };
- 
-   function selectedTypes() {
--    return Array.from(
--      document.querySelectorAll(`${TYPE_CHECKBOX_SELECTOR}:checked`)
--    )
--      .map((checkbox) => checkbox.value)
--      .filter(Boolean);
-+    const tokens = new Set();
-+    document
-+      .querySelectorAll(`${TYPE_CHECKBOX_SELECTOR}:checked`)
-+      .forEach((checkbox) => {
-+        if (!(checkbox instanceof HTMLInputElement)) {
-+          return;
-+        }
-+        const aliasRaw = checkbox.dataset.filterTypes;
-+        if (aliasRaw) {
-+          aliasRaw
-+            .split(/[\s,]+/)
-+            .map((token) => token.trim())
-+            .filter(Boolean)
-+            .forEach((token) => tokens.add(token));
-+        }
-+        const { value } = checkbox;
-+        if (value) {
-+          tokens.add(value);
-+        }
-+      });
-+    return Array.from(tokens);
-   }
- 
-   function syncTypesAllButton() {
-     if (!typesAllBtn) {
-       return;
-     }
-     const allCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
-     const allSelected =
-       allCheckboxes.length > 0 && allCheckboxes.every((checkbox) => checkbox.checked);
-     typesAllBtn.classList.toggle('is-active', allSelected);
-     typesAllBtn.setAttribute('aria-pressed', String(allSelected));
-   }
- 
-   function ensureSid(context) {
-     const value = (sidInput.value || '').trim();
-     if (!value) {
-       sidInput.focus({ preventScroll: false });
-       if (context === 'live') {
-         setLiveStatus('Enter a session id to start live tailing.');
-       } else if (context === 'history') {
-         setHistoryStatus('Enter a session id to load history.');
-       }
-       return null;
-     }
-     return value;
-   }
- 
-   function buildTypesQuery(params) {
-     const allCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
--    const total = allCheckboxes.length;
-     const types = selectedTypes();
--    if (!total || !types.length || types.length === total) {
-+    const allSelected =
-+      allCheckboxes.length > 0 && allCheckboxes.every((checkbox) => checkbox.checked);
-+    if (!types.length || allSelected) {
-       params.delete('type');
-     } else {
-       params.set('type', types.join(','));
-     }
-   }
- 
-   function renderSessions(sessions) {
-     if (!sessionTableBody) {
-       return;
-     }
- 
-     sessionTableBody.innerHTML = '';
-     sessionState.sessions = sessions;
- 
-     if (!sessions.length) {
-       const emptyRow = document.createElement('tr');
-       const cell = document.createElement('td');
-       cell.colSpan = 6;
-       cell.className = 'admin-logs__empty';
-       cell.textContent = 'No sessions found.';
-       emptyRow.appendChild(cell);
-       sessionTableBody.appendChild(emptyRow);
-       return;
-     }
- 
-@@ -750,91 +767,116 @@
-       startLivePolling(0);
-     }
-   }
- 
-   function parseNdjson(text) {
-     const events = [];
-     for (const line of text.split('\n')) {
-       const trimmed = line.trim();
-       if (!trimmed) continue;
-       try {
-         events.push(JSON.parse(trimmed));
-       } catch (err) {
-         console.warn('Skipping invalid JSON line', err);
-       }
-     }
-     return events;
-   }
- 
-   function renderHistory(events) {
-     historyTableBody.innerHTML = '';
-     historyState.events = events;
- 
-     if (!events.length) {
-       const emptyRow = document.createElement('tr');
-       const cell = document.createElement('td');
--      cell.colSpan = 3;
-+      cell.colSpan = 5;
-       cell.className = 'admin-logs__empty';
-       cell.textContent = 'No events found for these filters.';
-       emptyRow.appendChild(cell);
-       historyTableBody.appendChild(emptyRow);
-       historyCount.textContent = '0 events';
-       return;
-     }
- 
-     const fragment = document.createDocumentFragment();
-     events.forEach((event, index) => {
-       const row = document.createElement('tr');
-       row.dataset.index = String(index);
- 
-       const tsCell = document.createElement('td');
-       const typeCell = document.createElement('td');
-       const summaryCell = document.createElement('td');
-+      const seqCell = document.createElement('td');
-+      const byteCountCell = document.createElement('td');
- 
-       const tsValue = typeof event.ts_ms === 'number' ? event.ts_ms : event.ts_ms || '—';
-       const typeValue = event.type || '—';
-       let summaryValue = event.summary || '';
- 
-+      let seqValue = '—';
-+      let byteCountValue = '—';
-+
-       if (!summaryValue) {
-         if (typeof event.msg === 'string' && event.msg) {
-           summaryValue = event.msg;
-         } else if (event.meta && typeof event.meta === 'object') {
-           summaryValue = JSON.stringify(event.meta);
-         } else if (event.text) {
-           summaryValue = String(event.text).slice(0, 160);
-         } else {
-           summaryValue = typeValue;
-         }
-       }
- 
-       tsCell.textContent = tsValue;
-       typeCell.textContent = typeValue;
-       summaryCell.textContent = summaryValue;
- 
-+      if (typeValue === 'EVT_WS_AUDIO_RECV' && event.meta && typeof event.meta === 'object') {
-+        if (Object.prototype.hasOwnProperty.call(event.meta, 'seq')) {
-+          const seqRaw = event.meta.seq;
-+          if (seqRaw !== null && seqRaw !== undefined) {
-+            seqValue = String(seqRaw);
-+          }
-+        }
-+        if (Object.prototype.hasOwnProperty.call(event.meta, 'byte_count')) {
-+          const byteCountRaw = event.meta.byte_count;
-+          if (byteCountRaw !== null && byteCountRaw !== undefined) {
-+            byteCountValue = String(byteCountRaw);
-+          }
-+        }
-+      }
-+
-+      seqCell.textContent = seqValue;
-+      byteCountCell.textContent = byteCountValue;
-+
-       row.appendChild(tsCell);
-       row.appendChild(typeCell);
-       row.appendChild(summaryCell);
-+      row.appendChild(seqCell);
-+      row.appendChild(byteCountCell);
-       fragment.appendChild(row);
-     });
- 
-     historyTableBody.appendChild(fragment);
-     historyCount.textContent = `${events.length} event${events.length === 1 ? '' : 's'}`;
-   }
- 
-   function toggleDrawer(open, event) {
-     if (!drawer || !drawerContent || !drawerBackdrop) return;
-     if (open) {
-       drawer.hidden = false;
-       drawerBackdrop.hidden = false;
-       drawer.classList.add('open');
-       drawerBackdrop.classList.add('open');
-       drawer.setAttribute('aria-hidden', 'false');
-       drawerBackdrop.setAttribute('aria-hidden', 'false');
-       if (event) {
-         try {
-           drawerContent.textContent = JSON.stringify(event, null, 2);
-         } catch (err) {
-           drawerContent.textContent = 'Unable to render event payload.';
-         }
-       }
-       drawerContent.scrollTop = 0;
-       drawer.focus({ preventScroll: true });
-diff --git a/app/templates/admin_logs.html b/app/templates/admin_logs.html
-index ced6fdd1efbe431f0ecb7848d9649f3ae29b12a1..e48cf7ae643dbba279fb0ceffe049c864a04c4cb 100644
---- a/app/templates/admin_logs.html
-+++ b/app/templates/admin_logs.html
-@@ -113,50 +113,59 @@
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_JSON_SEND" checked />
-               <span>JSON send</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_SESSION_STEP" checked />
-               <span>Session steps</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_JSON_RECV" />
-               <span>JSON recv</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_TTS_START" />
-               <span>TTS start</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_TTS_END" />
-               <span>TTS end</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_AUDIO_RECV" />
-               <span>Audio recv</span>
-             </label>
-+            <label class="admin-logs__type">
-+              <input
-+                type="checkbox"
-+                name="logType"
-+                value=""
-+                data-filter-types="EVT_WS_AUDIO_RECV EVT_SESSION_STEP:audio.stream_started"
-+              />
-+              <span>Audio (server)</span>
-+            </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_AUDIO_SEND" />
-               <span>Audio send</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_LOG" checked />
-               <span>Logs</span>
-             </label>
-             <label class="admin-logs__type" data-diabinds="audio">
-               <input type="checkbox" name="logType" value="EVT_DIAG_FIRST_AUDIO_FRAME" />
-               <span>Diag: first audio</span>
-             </label>
-             <label class="admin-logs__type" data-diabinds="audio">
-               <input type="checkbox" name="logType" value="EVT_DIAG_NO_AUDIO_FROM_CLIENT" />
-               <span>Diag: no audio</span>
-             </label>
-             <label class="admin-logs__type" data-diabinds="hud">
-               <input type="checkbox" name="logType" value="EVT_DIAG_HUD" />
-               <span>Diag: HUD</span>
-             </label>
-           </div>
-         </section>
- 
-         <div class="admin-logs__main">
-           <div class="admin-logs__tabs" role="tablist" aria-label="Log views">
-@@ -191,50 +200,52 @@
-             <header class="admin-logs__panel-header">
-               <h3>Live stream</h3>
-               <div id="liveStatus" class="admin-logs__status" role="status">Awaiting session…</div>
-             </header>
-             <pre id="liveOutput" class="admin-logs__live" aria-live="polite"></pre>
-           </section>
- 
-           <section
-             id="historyPanel"
-             class="admin-logs__panel"
-             role="tabpanel"
-             aria-labelledby="historyTab"
-             hidden
-           >
-             <header class="admin-logs__panel-header">
-               <h3>History</h3>
-               <div id="historyStatus" class="admin-logs__status" role="status">Load events to review history.</div>
-             </header>
-             <div class="admin-logs__table-wrapper">
-               <table class="admin-logs__table" aria-describedby="historyStatus">
-                 <thead>
-                   <tr>
-                     <th scope="col">ts_ms</th>
-                     <th scope="col">Type</th>
-                     <th scope="col">Summary</th>
-+                    <th scope="col">seq</th>
-+                    <th scope="col">byte_count</th>
-                   </tr>
-                 </thead>
-                 <tbody id="historyTableBody"></tbody>
-               </table>
-             </div>
-             <footer class="admin-logs__pagination">
-               <button id="historyPrev" class="pill secondary" type="button" disabled>Previous</button>
-               <span id="historyCount" class="admin-logs__status">0 events</span>
-               <button id="historyNext" class="pill secondary" type="button" disabled>Next</button>
-             </footer>
-           </section>
-         </div>
-       </main>
-     </div>
- 
-     <div
-       id="jsonDrawerBackdrop"
-       class="admin-logs__drawer-backdrop"
-       role="presentation"
-       hidden
-     ></div>
-     <aside
-       id="jsonDrawer"
-       class="admin-logs__drawer"
-       role="dialog"
-diff --git a/tests/test_admin_flow_api.py b/tests/test_admin_flow_api.py
-index 6a61f60009b8329fc83a50f7ad73cb1d024612d9..3f212530ff7a5787e1ad668f98d2f0829ed490ae 100644
---- a/tests/test_admin_flow_api.py
-+++ b/tests/test_admin_flow_api.py
-@@ -71,50 +71,92 @@ class AdminFlowApiTest(unittest.TestCase):
-             {"type": "EVT_TURN_END", "ts_ms": 80, "sid": self.sid, "meta": {"idx": 2}},
-             {"type": "EVT_TURN_BEGIN", "ts_ms": 120, "sid": self.sid, "meta": {"idx": 3}},
-         ]
-         self._write_events(events)
- 
-         query = b"type=EVT_TURN_BEGIN&since_ms=75&limit=1"
-         scope = self._make_scope(
-             path=f"/api/v1/admin/flow/{self.sid}/trace",
-             query_string=query,
-             headers=(),
-         )
- 
-         response = asyncio.run(flow_api.handle_flow_trace(scope, self._receive(), sid=self.sid))
- 
-         self.assertEqual(response.status, 200)
-         header_map = dict(response.headers)
-         self.assertEqual(header_map[b"content-type"], b"application/x-ndjson")
- 
-         body_lines = [line for line in response.body.decode("utf-8").splitlines() if line]
-         self.assertEqual(len(body_lines), 1)
-         event = json.loads(body_lines[0])
-         self.assertEqual(event.get("type"), "EVT_TURN_BEGIN")
-         self.assertEqual(event.get("ts_ms"), 75)
-         self.assertEqual(event.get("meta", {}).get("idx"), 1)
- 
-+    def test_trace_filters_by_type_and_meta_step(self) -> None:
-+        events = [
-+            {
-+                "type": "EVT_SESSION_STEP",
-+                "ts_ms": 10,
-+                "sid": self.sid,
-+                "meta": {"step": "audio.stream_started"},
-+            },
-+            {
-+                "type": "EVT_SESSION_STEP",
-+                "ts_ms": 15,
-+                "sid": self.sid,
-+                "meta": {"step": "other_step"},
-+            },
-+            {
-+                "type": "EVT_WS_AUDIO_RECV",
-+                "ts_ms": 20,
-+                "sid": self.sid,
-+                "meta": {"seq": 1, "byte_count": 42},
-+            },
-+        ]
-+        self._write_events(events)
-+
-+        query = b"type=EVT_WS_AUDIO_RECV,EVT_SESSION_STEP:audio.stream_started"
-+        scope = self._make_scope(
-+            path=f"/api/v1/admin/flow/{self.sid}/trace",
-+            query_string=query,
-+            headers=(),
++        ctx.turn_state_subscription_token = bus.subscribe(
++            "EVT_TURN_STATE", _handle_turn_state_event
 +        )
 +
-+        response = asyncio.run(flow_api.handle_flow_trace(scope, self._receive(), sid=self.sid))
+         def _handle_audio_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+             chunk = event.get("chunk")
+             if isinstance(chunk, (bytes, bytearray, memoryview)):
+                 chunk_bytes = bytes(chunk)
+             else:
+                 return
+ 
+             def _deliver() -> None:
+                 task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
+                 ctx.audio_tasks.add(task)
+ 
+                 def _on_done(done: asyncio.Task[None]) -> None:
+                     ctx.audio_tasks.discard(done)
+                     try:
+                         done.result()
+                     except asyncio.CancelledError:
+                         pass
+                     except Exception:  # pragma: no cover - defensive logging
+                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
+ 
+                 task.add_done_callback(_on_done)
+ 
+             try:
+@@ -1859,89 +1921,91 @@ class ChatV2Adapter:
+     ) -> Optional[Dict[str, Any]]:
+         payload = self._coerce_payload(event.get("payload"))
+         if payload is None:
+             payload = self._coerce_payload(event.get("frame"))
+ 
+         if payload is None:
+             meta = event.get("meta")
+             if isinstance(meta, dict):
+                 ws_meta = meta.get("ws")
+                 if isinstance(ws_meta, dict):
+                     payload = self._coerce_payload(ws_meta.get("frame"))
+                     if payload is None:
+                         payload = self._coerce_payload(ws_meta.get("preview"))
+ 
+         if payload is None:
+             return None
+ 
+         frame_type = payload.get("type") if isinstance(payload, dict) else None
+         if frame_type == "policy.interaction" and isinstance(payload, dict):
+             prev_req_id = ctx.await_user_req_id
+             prev_key = self._turn_key(ctx, prev_req_id)
+             ctx.await_user_expected = self._policy_requests_listen(payload)
+             req_id_value = payload.get("req_id") if isinstance(payload, dict) else None
+             new_req_id = req_id_value if isinstance(req_id_value, str) and req_id_value else None
+             ctx.await_user_req_id = new_req_id
++            ctx.await_user_cue_emitted = False
+             new_key = self._turn_key(ctx, new_req_id)
+             if prev_key is not None and prev_key != new_key:
+                 task = ctx.listen_handoff_task
+                 if (
+                     task is not None
+                     and not task.done()
+                     and ctx.listen_handoff_task_key == prev_key
+                 ):
+                     task.cancel()
+ 
+                     def _suppress_cancel(done: asyncio.Task[None]) -> None:
+                         try:
+                             done.result()
+                         except asyncio.CancelledError:
+                             pass
+                         except Exception:  # pragma: no cover - defensive logging
+                             _log.exception(
+                                 "evt=listen_handoff_cancel_error sid=%s", ctx.sid
+                             )
+ 
+                     task.add_done_callback(_suppress_cancel)
+                     ctx.listen_handoff_task = None
+                     ctx.listen_handoff_task_key = None
+                 self._clear_pending_for_key(ctx, prev_key)
+                 self._clear_after_mask_for_key(ctx, prev_key)
+             if ctx.await_user_expected:
+                 ctx.await_user_pending = False
+                 ctx.await_user_pending_key = None
+                 ctx.await_user_after_mask = False
+                 ctx.await_user_after_mask_key = None
+                 ctx.last_tts_end_req_id = None
+             else:
+                 ctx.await_user_pending = False
+                 ctx.await_user_pending_key = None
+                 ctx.await_user_after_mask = False
+                 ctx.await_user_after_mask_key = None
+                 ctx.last_tts_end_req_id = None
+                 ctx.mic_nudge_sent = False
+                 self._cancel_mic_open_timer(ctx)
++                ctx.await_user_cue_emitted = False
+         if frame_type == "asr.ready":
+             return None
+         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
+             return None
+         normalized = dict(payload)
+         if frame_type == "policy.interaction":
+             normalized = self._sanitize_policy_interaction(normalized)
+             last_policy = ctx.last_policy_interaction
+             if last_policy is not None and last_policy == normalized:
+                 return None
+             ctx.last_policy_interaction = json.loads(
+                 json.dumps(normalized, separators=(",", ":"))
+             )
+         if frame_type == "info":
+             meta = {}
+             source_meta = normalized.get("meta")
+             if isinstance(source_meta, dict):
+                 meta = dict(source_meta)
+             meta["sid"] = ctx.sid
+             normalized["meta"] = meta
+             policy_payload = normalized.get("policy")
+             if isinstance(policy_payload, dict):
+                 ctx.policy_snapshot = policy_payload
+         return normalized
+ 
+@@ -2159,86 +2223,92 @@ class ChatV2Adapter:
+                 )
+ 
+     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
+         self._cancel_diag_timer(ctx)
+         self._cancel_mic_open_timer(ctx)
+         token = ctx.subscription_token
+         ctx.subscription_token = None
+         if token:
+             bus.unsubscribe(token)
+ 
+         audio_token = ctx.audio_subscription_token
+         ctx.audio_subscription_token = None
+         if audio_token:
+             bus.unsubscribe(audio_token)
+ 
+         unavailable_token = ctx.asr_unavailable_subscription_token
+         ctx.asr_unavailable_subscription_token = None
+         if unavailable_token:
+             bus.unsubscribe(unavailable_token)
+ 
+         mask_token = ctx.mask_subscription_token
+         ctx.mask_subscription_token = None
+         if mask_token:
+             bus.unsubscribe(mask_token)
+ 
++        turn_state_token = ctx.turn_state_subscription_token
++        ctx.turn_state_subscription_token = None
++        if turn_state_token:
++            bus.unsubscribe(turn_state_token)
 +
-+        self.assertEqual(response.status, 200)
-+        body_lines = [line for line in response.body.decode("utf-8").splitlines() if line]
-+        self.assertEqual(len(body_lines), 2)
-+        first_event = json.loads(body_lines[0])
-+        second_event = json.loads(body_lines[1])
-+        self.assertEqual(first_event.get("type"), "EVT_SESSION_STEP")
-+        self.assertEqual(first_event.get("meta", {}).get("step"), "audio.stream_started")
-+        self.assertEqual(second_event.get("type"), "EVT_WS_AUDIO_RECV")
-+        self.assertEqual(second_event.get("meta", {}).get("byte_count"), 42)
-+
-     def test_zip_returns_archive_with_valid_digests(self) -> None:
-         events = [
-             {"type": "EVT_TURN_BEGIN", "ts_ms": 100, "sid": self.sid, "meta": {"idx": 1}},
-             {"type": "EVT_TURN_END", "ts_ms": 140, "sid": self.sid, "meta": {"idx": 2}},
-         ]
-         self._write_events(events)
+         tts_end_token = ctx.tts_end_subscription_token
+         ctx.tts_end_subscription_token = None
+         if tts_end_token:
+             bus.unsubscribe(tts_end_token)
  
-         scope = self._make_scope(
-             path=f"/api/v1/admin/flow/{self.sid}/zip",
-             query_string=b"",
-             headers=(),
-         )
+         task = ctx.outbound_task
+         ctx.outbound_task = None
+         if task:
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task
  
-         response = asyncio.run(flow_api.handle_flow_zip(scope, self._receive(), sid=self.sid))
+         ctx.partial_coalescer.cancel()
  
-         self.assertEqual(response.status, 200)
-         header_map = dict(response.headers)
-         self.assertEqual(header_map[b"content-type"], b"application/zip")
+         pending_handoff = ctx.listen_handoff_task
+         ctx.listen_handoff_task = None
+         ctx.listen_handoff_task_key = None
+         if pending_handoff is not None:
+             pending_handoff.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await pending_handoff
  
-         with ZipFile(BytesIO(response.body)) as zf:
-             manifest_data = json.loads(zf.read("manifest.json").decode("utf-8"))
-             sha_map = manifest_data.get("sha256", {})
-             for name, digest in sha_map.items():
-                 payload = zf.read(name)
-                 self.assertEqual(hashlib.sha256(payload).hexdigest(), digest)
+         for task in list(ctx.audio_tasks):
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task
+         ctx.audio_tasks.clear()
+ 
+         ctx.outbox = None
+         ctx.await_user_expected = False
+         ctx.await_user_pending = False
+         ctx.await_user_pending_key = None
+         ctx.await_user_after_mask = False
+         ctx.await_user_after_mask_key = None
+         ctx.await_user_req_id = None
+         ctx.last_tts_end_req_id = None
++        ctx.await_user_cue_emitted = False
+ 
+     def _handle_tts_end_diag(
+         self,
+         ctx: AdapterContext,
+         loop: asyncio.AbstractEventLoop,
+         payload: Optional[Dict[str, Any]] = None,
+     ) -> None:
+         if not config.DIAG_AUDIO_GUARD:
+             return
+         req_id = None
+         if isinstance(payload, dict):
+             candidate = payload.get("req_id")
+             if isinstance(candidate, str) and candidate:
+                 req_id = candidate
+         key = self._turn_key(ctx, req_id)
+         ctx.tts_end_ts = time.monotonic()
+         ctx.diag_audio_seen = False
+         self._cancel_diag_timer(ctx)
+         ctx.diag_timer_key = key
+         try:
+             ctx.diag_timer = loop.call_later(
+                 _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS,
+                 self._emit_no_audio_diag,
+                 ctx,
+                 loop,
