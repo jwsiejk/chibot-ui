@@ -2051,6 +2051,7 @@
 
       if (becameConnected) {
         Waveform.start();
+        flushDeferredClientLogs();
 
         if (audioRecorder && typeof audioRecorder.start === 'function') {
           audioRecorder.start()

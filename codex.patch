@@ -1,60 +1,56 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index ce921ae251dd313e9588fef0e36bac3a1f4d5cc3..9e25483a25fc9c63238731f0f28e1ea04a540246 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1369,53 +1369,54 @@
-     if (data instanceof Blob) {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(data);
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index e1c22ce303d4d4cf3291a89c5ec485387c1dbe91..9c0446d44b3f115cb2bb139ecaf0c3407d79c5b5 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -2029,50 +2029,51 @@
+         updateRecordingState(false, 'appstate.disconnect');
+         runtimeState.turnState = null;
+         runtimeState.asrReady = false;
+         runtimeState.policy = null;
+       } else if (state.infoFrame) {
+         updateVoiceState(extractVoiceLocale(state.infoFrame));
+         try {
+           const framePolicy = state.infoFrame && typeof state.infoFrame === 'object'
+             ? state.infoFrame.policy
+             : null;
+           if (framePolicy && typeof framePolicy === 'object') {
+             runtimeState.policy = framePolicy;
+           }
+         } catch (err) {
+           console.warn('Failed to update policy from info frame', err);
+         }
        }
-       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-       return;
-     }
-     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-       const chunk = data instanceof ArrayBuffer
-         ? data
-         : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(chunk);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
-       return;
-     }
-     console.warn("Unknown WS frame type", data);
-   }
+       const prevConnectionState = previousConnectionState;
+       const nextConnectionState = state.connectionState;
+       const becameConnected = prevConnectionState !== 'connected' && nextConnectionState === 'connected';
+       const becameDisconnected = prevConnectionState !== 'disconnected' && nextConnectionState === 'disconnected';
+       previousConnectionState = nextConnectionState;
  
-   function attachSocket(ws) {
-     ws.__intentionalClose = false;
-     const handlers = {
--      open: () => {
-+      open: (event) => {
-         updateState({ websocket: ws });
-         startHeartbeat();
-+        window.dispatchEvent(new CustomEvent("ws.open", { detail: event }));
-       },
-       message: parseFrame,
-       error: (event) => {
-         console.error("WebSocket error", event);
-         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
-       },
-       close: (event) => {
-         const expected = ws.__intentionalClose === true;
-         if (socket === ws) {
-           socket = null;
-           expectInfoFrame = true;
-           clearInfoWatchdog();
+       if (becameConnected) {
+         Waveform.start();
++        flushDeferredClientLogs();
+ 
+         if (audioRecorder && typeof audioRecorder.start === 'function') {
+           audioRecorder.start()
+             .then(() => {
+               setMicPermissionGranted(true, 'recorder.start');
+             })
+             .catch((err) => {
+               console.error('AudioRecorder start error', err);
+               setMicPermissionGranted(false, 'recorder.start_error');
+             });
          }
-         clearHeartbeat();
-         updateState({ websocket: null });
-         let resumed = false;
-         if (!expected) {
-           resumed = attemptAutoResume();
+         if (pendingClientReady && clientReadyTimerId === null) {
+           flushPendingClientReady();
          }
-         if (!resumed) {
-           updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+       } else if (becameDisconnected) {
+         Waveform.stop();
+ 
+         if (audioRecorder && typeof audioRecorder.stop === 'function') {
+           try {
+             audioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
+           }
          }
-         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
-       }
-     };
+         updateRecordingState(false, 'appstate.disconnect');
