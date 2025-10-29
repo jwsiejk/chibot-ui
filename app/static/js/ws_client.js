@@ -625,36 +625,43 @@
     return true;
   }
 
-  function sendRaw(payload) {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(payload);
-  }
-
   function sendBinary(payload, opts = {}) {
     const options = opts && typeof opts === "object" ? { ...opts } : {};
     if (options.lane === "mic") {
       options.dropIfBusy = false;
     }
     const dropIfBusy = Boolean(options.dropIfBusy);
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      console.warn("WSClient.sendBinary called without an open socket");
+    const client = window.WSClient;
+    const state = typeof AppState !== "undefined" && typeof AppState.getState === "function"
+      ? AppState.getState()
+      : null;
+    const live = client && client._ws
+      ? client._ws
+      : (state && state.websocket ? state.websocket : null);
+    if (dropIfBusy && live && live.readyState === WebSocket.OPEN && live.bufferedAmount > 512 * 1024) {
       return false;
     }
-    if (dropIfBusy && socket.bufferedAmount > 512 * 1024) {
-      return false;
+    if (client && typeof client.send === "function") {
+      const result = client.send(payload, { binary: true });
+      if (result && typeof result.then === "function") {
+        return result;
+      }
+      return true;
     }
     try {
-      socket.send(payload);
-      return true;
+      if (live && live.readyState === WebSocket.OPEN) {
+        live.send(payload);
+        return true;
+      }
     } catch (err) {
       console.error("WSClient sendBinary error", err);
-      return false;
     }
+    return false;
   }
 
   function sendJson(frame) {
     try {
-      sendRaw(JSON.stringify(frame));
+      send(frame);
     } catch (err) {
       console.error("WSClient sendJson error", err);
     }
@@ -1391,10 +1398,42 @@
   function attachSocket(ws) {
     ws.__intentionalClose = false;
     const handlers = {
-      open: (event) => {
+      open: () => {
         updateState({ websocket: ws });
+        const client = window.WSClient;
+        if (client && typeof client === "object") {
+          client._ws = ws;
+          client._connected = true;
+          if (!Array.isArray(client._queue)) {
+            client._queue = [];
+          }
+          if (!client._linkedProofLogged) {
+            let appWs = null;
+            try {
+              if (AppState && typeof AppState.getState === "function") {
+                const state = AppState.getState();
+                appWs = state && state.websocket ? state.websocket : null;
+              }
+            } catch (err) {
+              appWs = null;
+            }
+            const fallbackAppWs = AppState && AppState.websocket ? AppState.websocket : null;
+            console.info("evt=ws_linked", !!(appWs || fallbackAppWs), !!client._ws);
+            client._linkedProofLogged = true;
+          }
+          if (Array.isArray(client._queue) && client._queue.length) {
+            for (const { data, isBinary } of client._queue) {
+              try {
+                client.send(data, { binary: isBinary });
+              } catch (err) {
+                console.warn("WSClient queued send failed", err);
+              }
+            }
+            client._queue.length = 0;
+          }
+        }
         startHeartbeat();
-        window.dispatchEvent(new CustomEvent("ws.open", { detail: event }));
+        window.dispatchEvent(new CustomEvent("ws.open", { detail: { websocket: ws } }));
       },
       message: parseFrame,
       error: (event) => {
@@ -1403,6 +1442,12 @@
       },
       close: (event) => {
         const expected = ws.__intentionalClose === true;
+        const client = window.WSClient;
+        if (client && typeof client === "object") {
+          client._ws = null;
+          client._connected = false;
+          client._linkedProofLogged = false;
+        }
         if (socket === ws) {
           socket = null;
           expectInfoFrame = true;
@@ -1457,6 +1502,11 @@
       stopInputCapture();
       inputDescriptor = null;
       inputVendor = null;
+    }
+    const client = window.WSClient;
+    if (client && typeof client === "object") {
+      client._ws = null;
+      client._connected = false;
     }
   }
 
@@ -1617,13 +1667,69 @@
     updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
   }
 
-  function send(frame) {
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      console.warn("WSClient.send called without an open socket");
+  function send(payload, { binary = false } = {}) {
+    const client = window.WSClient || {};
+    if (!Array.isArray(client._queue)) {
+      client._queue = [];
+    }
+    const stateGetter = AppState && typeof AppState.getState === "function"
+      ? AppState.getState
+      : null;
+    let state = null;
+    try {
+      state = stateGetter ? stateGetter() : null;
+    } catch (err) {
+      state = null;
+    }
+    const live = client._ws || (state && state.websocket ? state.websocket : null);
+    const isOpen = !!(live && live.readyState === WebSocket.OPEN);
+    client._connected = isOpen;
+    if (!isOpen) {
+      client._queue.push({ data: payload, isBinary: !!binary });
+      console.warn("WSClient.send queued (socket not open yet)");
       return;
     }
-    const payload = typeof frame === "string" ? frame : JSON.stringify(frame);
-    sendRaw(payload);
+    client._ws = live;
+    try {
+      live.binaryType = "arraybuffer";
+    } catch (err) {
+      // ignore binaryType errors
+    }
+    if (binary) {
+      if (payload instanceof Blob) {
+        return payload.arrayBuffer().then((buf) => {
+          try {
+            live.send(buf);
+          } catch (err) {
+            console.error("WSClient binary send error", err);
+          }
+        });
+      }
+      if (payload instanceof ArrayBuffer) {
+        try {
+          live.send(payload);
+        } catch (err) {
+          console.error("WSClient binary send error", err);
+        }
+        return;
+      }
+      if (ArrayBuffer.isView(payload)) {
+        const view = payload;
+        const buffer = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+        try {
+          live.send(buffer);
+        } catch (err) {
+          console.error("WSClient binary send error", err);
+        }
+        return;
+      }
+    }
+    const text = typeof payload === "string" ? payload : JSON.stringify(payload);
+    try {
+      live.send(text);
+    } catch (err) {
+      console.error("WSClient send error", err);
+    }
   }
 
   function getBufferedAmount() {
@@ -1661,4 +1767,8 @@
     },
     __debug: debug
   };
+  window.WSClient._ws = window.WSClient._ws || null;
+  window.WSClient._connected = !!(window.WSClient._ws && window.WSClient._ws.readyState === WebSocket.OPEN);
+  window.WSClient._queue = Array.isArray(window.WSClient._queue) ? window.WSClient._queue : [];
+  window.WSClient._linkedProofLogged = false;
 })();

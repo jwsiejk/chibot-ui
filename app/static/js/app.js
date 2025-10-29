@@ -416,11 +416,14 @@
     if (typeof MediaRecorder === "undefined") {
       throw new Error("MediaRecorder unsupported");
     }
-    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
     let sentBytes = 0;
     let chunkCount = 0;
     const sampleEvery = Math.max(1, diagChunkSampleN());
     recorder.addEventListener("start", () => {
+      if (typeof logClient === 'function') {
+        logClient('client.mic', 'evt=recorder_started');
+      }
       if (diagHudEnabled()) {
         const ts = Date.now();
         console.info("DIAG_RECORDER_STARTED", ts);
@@ -433,47 +436,113 @@
         );
       }
     });
-    recorder.addEventListener("dataavailable", async (event) => {
-      if (!event.data || !event.data.size) {
+    recorder.addEventListener("dataavailable", (event) => {
+      const blob = event && event.data;
+      if (!blob || !blob.size) {
         return;
       }
       chunkCount += 1;
+      const bytes = blob.size;
       const shouldSample = chunkCount % sampleEvery === 0;
+      if (typeof logClient === 'function') {
+        logClient('client.mic', `evt=mic_chunk bytes=${bytes}`);
+      }
       if (diagHudEnabled() && shouldSample) {
-        console.debug("DIAG_CHUNK", { size: event.data.size, chunkCount });
+        console.debug("DIAG_CHUNK", { size: bytes, chunkCount });
         const badge = `chunks:${chunkCount}`;
         setBadge(badge);
         sendDiagHudEvent(
           "EVT_CLIENT_CHUNK_SAMPLE",
-          { size: event.data.size, chunkCount },
+          { size: bytes, chunkCount },
           { level: "debug", badge, sample: true, message: "Sampled recorder chunk" }
         );
       }
+      let sendError = null;
       try {
-        const buffer = await event.data.arrayBuffer();
-        if (typeof onChunk === "function") {
-          onChunk(buffer);
-        }
-        sentBytes += buffer.byteLength;
-        if (diagHudEnabled() && shouldSample) {
-          console.debug("DIAG_WS_BIN_SENT", { chunkCount, sentBytes });
-          sendDiagHudEvent(
-            "EVT_CLIENT_WS_BINARY_SENT",
-            { chunkCount, sentBytes },
-            { level: "debug", sample: true, message: "Sampled binary chunk sent" }
-          );
+        const maybeSend = sendAudioChunk(blob);
+        if (maybeSend && typeof maybeSend.then === 'function') {
+          maybeSend.catch((err) => {
+            sendError = err;
+            if (diagHudEnabled()) {
+              console.warn("DIAG_CHUNK_SEND_ERROR", err);
+              sendDiagHudEvent("EVT_CLIENT_CHUNK_ERROR", { message: err && err.message }, {
+                level: "warn",
+                message: "Failed to send chunk"
+              });
+            }
+          });
         }
       } catch (err) {
+        sendError = err;
         if (diagHudEnabled()) {
-          console.warn("DIAG_CHUNK_ERROR", err);
+          console.warn("DIAG_CHUNK_SEND_ERROR", err);
           sendDiagHudEvent("EVT_CLIENT_CHUNK_ERROR", { message: err && err.message }, {
             level: "warn",
-            message: "Failed to process chunk"
+            message: "Failed to send chunk"
           });
         }
       }
+      if (typeof onChunk === 'function') {
+        try {
+          const result = onChunk(blob);
+          if (result && typeof result.then === 'function') {
+            result.catch((err) => {
+              if (diagHudEnabled()) {
+                console.warn("DIAG_CHUNK_HANDLER_ERROR", err);
+                sendDiagHudEvent("EVT_CLIENT_CHUNK_ERROR", { message: err && err.message }, {
+                  level: "warn",
+                  message: "Chunk handler rejected"
+                });
+              }
+            });
+          }
+        } catch (err) {
+          if (diagHudEnabled()) {
+            console.warn("DIAG_CHUNK_HANDLER_ERROR", err);
+            sendDiagHudEvent("EVT_CLIENT_CHUNK_ERROR", { message: err && err.message }, {
+              level: "warn",
+              message: "Chunk handler failed"
+            });
+          }
+        }
+      }
+      sentBytes += bytes;
+      if (!sendError && diagHudEnabled() && shouldSample) {
+        console.debug("DIAG_WS_BIN_SENT", { chunkCount, sentBytes });
+        sendDiagHudEvent(
+          "EVT_CLIENT_WS_BINARY_SENT",
+          { chunkCount, sentBytes },
+          { level: "debug", sample: true, message: "Sampled binary chunk sent" }
+        );
+      }
     });
     return recorder;
+  }
+
+  function sendAudioChunk(chunkBlobOrBuf) {
+    if (!chunkBlobOrBuf) {
+      return null;
+    }
+    const client = window.WSClient;
+    const bytes = chunkBlobOrBuf.byteLength || chunkBlobOrBuf.size || 0;
+    let result = null;
+    if (client && typeof client.send === 'function') {
+      try {
+        result = client.send(chunkBlobOrBuf, { binary: true });
+      } catch (err) {
+        console.error('WSClient audio chunk send error', err);
+      }
+    } else if (client && typeof client.sendBinary === 'function') {
+      try {
+        result = client.sendBinary(chunkBlobOrBuf, { lane: 'mic' });
+      } catch (err) {
+        console.error('WSClient audio chunk legacy send error', err);
+      }
+    }
+    if (typeof logClient === 'function') {
+      logClient('client.mic', `evt=mic_chunk_sent bytes=${bytes}`);
+    }
+    return result;
   }
 
   const DiagRecorder = (() => {
@@ -570,22 +639,7 @@
         return null;
       }
       try {
-        recorder = attachRecorder(stream, (buffer) => {
-          if (!ws || ws.readyState !== WebSocket.OPEN) {
-            return;
-          }
-          try {
-            ws.send(buffer);
-          } catch (err) {
-            if (diagHudEnabled()) {
-              console.warn("DIAG_WS_SEND_ERROR", err);
-              sendDiagHudEvent("EVT_CLIENT_WS_SEND_ERROR", { message: err && err.message }, {
-                level: "warn",
-                message: "Binary send failed"
-              });
-            }
-          }
-        });
+        recorder = attachRecorder(stream);
       } catch (err) {
         if (diagHudEnabled()) {
           console.warn("DIAG_RECORDER_ERROR", err);
@@ -610,8 +664,14 @@
           });
         }
       });
+      const cap = (runtimeState && runtimeState.policy && runtimeState.policy.capture) || {};
+      const sliceCandidate = Number(cap && cap.timeslice_ms);
+      const slice = Number.isFinite(sliceCandidate) && sliceCandidate > 0 ? sliceCandidate : 250;
+      if (typeof logClient === 'function') {
+        logClient('client.mic', `evt=recorder_start slice_ms=${slice}`);
+      }
       try {
-        recorder.start(250);
+        recorder.start(slice);
       } catch (err) {
         if (diagHudEnabled()) {
           console.warn("DIAG_RECORDER_START_ERROR", err);
@@ -718,6 +778,7 @@
       isRecording: false,
       micPermissionGranted: false,
       audioPlaybackIdle: true,
+      policyCaptureLogged: false,
     };
 
     const micSessionTelemetry = {
@@ -832,17 +893,27 @@
     }
 
     function logClient(message, detail) {
-      const text = typeof message === 'string'
-        ? message
-        : (message == null ? '' : String(message));
+      let text = '';
+      let payloadSource = detail;
+      if (typeof message === 'string' && message === 'client.mic' && typeof detail === 'string') {
+        text = `${message} ${detail}`;
+        payloadSource = { message: text };
+      } else {
+        text = typeof message === 'string'
+          ? message
+          : (message == null ? '' : String(message));
+        if (typeof detail === 'string' && detail) {
+          payloadSource = { message: detail };
+        }
+      }
+      const payload = payloadSource && typeof payloadSource === 'object' ? { ...payloadSource } : {};
       if (text) {
         try {
           console.log(text);
         } catch (_) {}
-      }
-      const payload = detail && typeof detail === 'object' ? { ...detail } : {};
-      if (text && !payload.message) {
-        payload.message = text.slice(0, 256);
+        if (!payload.message) {
+          payload.message = text.slice(0, 256);
+        }
       }
       if (!sendClientLog('client.mic', payload)) {
         enqueueDeferredClientLog('client.mic', payload);
@@ -954,6 +1025,22 @@
     }
 
     function logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, extra) {
+      const cap = (runtimeState && runtimeState.policy && runtimeState.policy.capture) || {};
+      const gateSnapshot = {
+        asrReady: !!runtimeState.asrReady,
+        turnState: runtimeState.turnState || '',
+        micPerm: !!runtimeState.micPermissionGranted,
+        start_on_asr_ready: !!cap.start_on_asr_ready,
+        start_on_turn_ready: !!cap.start_on_turn_ready
+      };
+      if (typeof logClient === 'function') {
+        try {
+          const gatesJson = JSON.stringify(gateSnapshot);
+          logClient('client.mic', `evt=maybe_autostart_blocked gates=${gatesJson} trigger=${triggerLabel} reason=${reasonLabel}`);
+        } catch (err) {
+          logClient('client.mic', `evt=maybe_autostart_blocked gates_error trigger=${triggerLabel} reason=${reasonLabel}`);
+        }
+      }
       const parts = [
         `asrReady=${gates.asrReady}`,
         `turnState=${gates.turnState === null ? 'null' : gates.turnState}`,
@@ -990,6 +1077,18 @@
       const wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
       const wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
       if (!(wantsAsrReady || wantsTurnReady)) {
+        const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+        const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+        const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+          ? runtimeState.turnState.slice(0, 32)
+          : null;
+        const gates = {
+          asrReady: Boolean(runtimeState.asrReady),
+          turnState: rawTurnState,
+          micPerm: Boolean(runtimeState.micPermissionGranted),
+          recording: Boolean(runtimeState.isRecording),
+        };
+        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
         return;
       }
 
@@ -2097,6 +2196,7 @@
         runtimeState.asrReady = false;
         runtimeState.policy = null;
         runtimeState.audioPlaybackIdle = true;
+        runtimeState.policyCaptureLogged = false;
       } else if (state.infoFrame) {
         updateVoiceState(extractVoiceLocale(state.infoFrame));
         try {
@@ -2105,6 +2205,18 @@
             : null;
           if (framePolicy && typeof framePolicy === 'object') {
             runtimeState.policy = framePolicy;
+            if (!runtimeState.policyCaptureLogged) {
+              const cap = framePolicy && typeof framePolicy.capture === 'object' ? framePolicy.capture : {};
+              const asrInput = cap && typeof cap.asr_input === 'string' ? cap.asr_input : '';
+              const timeslice = cap && cap.timeslice_ms !== undefined ? cap.timeslice_ms : '';
+              if (typeof logClient === 'function') {
+                logClient('client.mic', `evt=policy_capture asr_input=${asrInput} timeslice_ms=${timeslice}`);
+              }
+              if (typeof flushDeferredClientLogs === 'function') {
+                flushDeferredClientLogs();
+              }
+              runtimeState.policyCaptureLogged = true;
+            }
           }
         } catch (err) {
           console.warn('Failed to update policy from info frame', err);
