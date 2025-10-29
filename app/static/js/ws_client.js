@@ -1308,6 +1308,34 @@
           console.warn("TranscriptView final handler error", err);
         }
       }
+    } else if (frame.type === "asr.unavailable") {
+      const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
+      const details = frame && typeof frame.details === "string"
+        ? frame.details
+        : (frame && typeof frame.detail === "string" ? frame.detail : "");
+      console.warn("asr.unavailable", reason, details);
+      try {
+        const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
+        hud?.setState?.("Chat");
+      } catch (err) {
+        console.warn("Failed to update HUD state after asr.unavailable", err);
+      }
+      try {
+        const view = window.TranscriptView;
+        view?.showSystemFromChip?.(
+          "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
+        );
+      } catch (err) {
+        console.warn("Failed to render Chip system message after asr.unavailable", err);
+      }
+      try {
+        window?.Banner?.show?.(
+          "Voice temporarily unavailable. You can continue via chat.",
+          { level: "warning", ttlMs: 10000 }
+        );
+      } catch (err) {
+        console.warn("Failed to show voice unavailable banner", err);
+      }
     } else if (frame.type === "chat.message") {
       const view = window.TranscriptView;
       if (view && typeof view.handleChatMessage === "function") {

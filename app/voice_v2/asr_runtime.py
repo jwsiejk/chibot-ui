@@ -98,7 +98,8 @@ class _SessionState:
     ready_watchdog: asyncio.TimerHandle | None = None
     ready_armed_at: float = 0.0
     prearm_requested: bool = False
-    input_desc: Dict[str, Any] = field(default_factory=_default_input_descriptor)    
+    input_desc: Dict[str, Any] = field(default_factory=_default_input_descriptor)
+    unavailable_emitted: bool = False
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -240,6 +241,8 @@ class ASRRuntime:
         if state is None:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
+
+        state.unavailable_emitted = False
 
         now_monotonic = time.monotonic()
         state.last_audio_ts = now_monotonic
@@ -545,6 +548,12 @@ class ASRRuntime:
                 state.stream_id = None
                 state.stream_open = False
                 state.stream_open_task = None
+                self._publish_asr_unavailable(
+                    sid,
+                    "open_failed",
+                    f"stream open timed out after {open_timeout:.1f}s",
+                    state=state,
+                )
                 loop = self._ensure_loop()
                 if loop is not None:
                     loop.call_later(0.1, self._ensure_stream, sid, state)
@@ -588,12 +597,22 @@ class ASRRuntime:
                 state.stream_open = False
                 state.stream_id = None
                 state.stream_open_task = None
+                detail_reason = reason or type(e).__name__
+                if code is not None:
+                    detail_reason = f"{detail_reason} (code={code})"
+                self._publish_asr_unavailable(
+                    sid,
+                    "open_failed",
+                    f"stream open failed: {detail_reason}",
+                    state=state,
+                )
                 loop = self._ensure_loop()
                 if loop is not None:
                     loop.call_later(0.5, self._ensure_stream, sid, state)
                 return
 
             state.stream_open = True
+            state.unavailable_emitted = False
             mp = getattr(self.policy, "media", None)
             cp = getattr(self.policy, "capture", None)
             if mp is not None and cp is not None:
@@ -729,6 +748,24 @@ class ASRRuntime:
                 stream_id,
                 reason,
             )
+            if (
+                not state.unavailable_emitted
+                and (
+                    _code == 1011
+                    or (_reason and "net0001" in str(_reason).lower())
+                )
+            ):
+                detail = "Deepgram closed stream"
+                if _code is not None:
+                    detail += f" code={_code}"
+                if _reason:
+                    detail += f" reason={_reason}"
+                self._publish_asr_unavailable(
+                    sid,
+                    "upstream_closed",
+                    detail,
+                    state=state,
+                )
             state.stream_id = None
             state.close_reason = None
             state.stream_open = False
@@ -889,6 +926,12 @@ class ASRRuntime:
         state = self._sessions.get(sid)
         if state is None:
             return
+        self._publish_asr_unavailable(
+            sid,
+            "upstream_closed",
+            error or "unknown error",
+            state=state,
+        )
         state.close_reason = "error"
         state.stream_open = False
         state.req_id = None
@@ -898,6 +941,52 @@ class ASRRuntime:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
             _log.exception("evt=asr_error_close_failed sid=%s", sid)
+
+    def _publish_asr_unavailable(
+        self,
+        sid: str,
+        reason: str,
+        details: str,
+        *,
+        state: _SessionState | None = None,
+        force: bool = False,
+    ) -> None:
+        if not isinstance(sid, str) or not sid:
+            return
+        if not isinstance(reason, str) or not reason:
+            return
+        if state is None:
+            state = self._sessions.get(sid)
+        if state is not None and state.unavailable_emitted and not force:
+            return
+
+        details_value = details if isinstance(details, str) else str(details)
+        payload = {
+            "type": "asr.unavailable",
+            "sid": sid,
+            "reason": reason,
+            "details": details_value,
+        }
+        try:
+            self._bus.publish(payload)
+        except Exception:  # pragma: no cover - defensive
+            _log.exception("evt=asr_unavailable_publish_failed sid=%s", sid)
+
+        level = "WARNING" if reason == "no_audio_timeout" else "ERROR"
+        self._emit_log(
+            {
+                "type": "EVT_LOG",
+                "logger": "app.voice_v2.asr_runtime",
+                "level": level,
+                "sid": sid,
+                "msg": (
+                    f"evt=asr_unavailable sid={sid} reason={reason} details={details_value}"
+                ),
+            }
+        )
+
+        if state is not None:
+            state.unavailable_emitted = True
 
     def _cancel_idle_timer(self, state: _SessionState) -> None:
         handle = state.idle_handle
@@ -924,6 +1013,13 @@ class ASRRuntime:
             state.ready_armed_at = 0.0
             if armed_at and state.last_audio_ts <= armed_at:
                 _log.warning("evt=asr_no_audio_timeout sid=%s", sid)
+                self._publish_asr_unavailable(
+                    sid,
+                    "no_audio_timeout",
+                    f"no audio received for {int(_NO_AUDIO_TIMEOUT_S)}s",
+                    state=state,
+                    force=False,
+                )
                 self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
                 _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
                 asr_ready_frame = {

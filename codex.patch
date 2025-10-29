@@ -1,155 +1,365 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 2c2612b98c4f111f659492378d7370f4d8ebaba4..a41385ba40e750bd9b4e6aa27c63fc631672d062 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -546,50 +546,53 @@
-     const query = params.toString();
-     return query ? `${base}?${query}` : base;
-   }
+diff --git a/app/static/css/styles.css b/app/static/css/styles.css
+index 32a4b418bc6208e708ed5665c29f80702f5de28d..5733dfa202d38f740f927a410bf05aea39a2a810 100644
+--- a/app/static/css/styles.css
++++ b/app/static/css/styles.css
+@@ -211,50 +211,53 @@ body{
+ .chat{
+   display:flex; flex-direction:column; gap:0;
+   border:1px solid var(--border); border-radius:16px;
+   background:linear-gradient(180deg, #0e1422, #0b101b);
+   overflow:hidden;
+ }
+ .chat-header{
+   padding:14px 16px; border-bottom:1px solid var(--border);
+   background:rgba(255,255,255,.02);
+ }
+ .chat-header h2{margin:0; font-size:14px; letter-spacing:.3px; color:#b9c8e6}
+ .messages{
+   padding:16px; display:flex; flex-direction:column; gap:12px; overflow:auto; min-height:180px;
+ }
+ .msg{display:flex; flex-direction:column; gap:6px}
+ .msg .bubble{
+   max-width: 100%;
+   background: var(--elev);
+   border:1px solid var(--border);
+   padding:12px 14px; border-radius:14px;
+   box-shadow: 0 2px 10px rgba(0,0,0,.25) inset;
+ }
+ .msg.assistant .bubble{background:linear-gradient(180deg, #10192b, #0b1321)}
+ .msg.user .bubble{background:linear-gradient(180deg, #101f2b, #0b1921)}
+ .msg .meta{font-size:12px;color:var(--muted)}
++.msg.system .bubble{background:linear-gradient(180deg, #101c2d, #0c1423);border:1px solid rgba(92,130,194,0.35);color:#d7e6ff}
++.msg.system.chip-system .bubble{background:linear-gradient(180deg, #122a41, #0d1e31);border-color:rgba(120,166,255,0.45);box-shadow:0 6px 18px rgba(5,24,54,0.45)}
++.msg.system .meta{color:rgba(215,230,255,0.72)}
  
-   function clearInfoWatchdog() {
-     if (infoWatchdogTimerId) {
-       clearTimeout(infoWatchdogTimerId);
-       infoWatchdogTimerId = null;
+ /* Toolbar */
+ .toolbar{
+   position:sticky; bottom:0; z-index:10;
+   display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+   gap:12px; padding:12px 16px; border-top:1px solid var(--border);
+   background: linear-gradient(180deg, rgba(8,12,20,.6), rgba(8,12,20,.9));
+   backdrop-filter:saturate(140%) blur(6px);
+ }
+ .toolbar-center{display:flex; gap:10px; justify-content:center}
+ .pill{
+   display:inline-flex; align-items:center; gap:8px;
+   border-radius:999px; padding:10px 16px;
+   font-weight:700; letter-spacing:.3px; border:1px solid transparent;
+   background:var(--glass); color:var(--text); cursor:pointer;
+   transition: transform .04s ease, background .2s ease, border-color .2s ease, box-shadow .2s ease;
+   box-shadow: 0 6px 16px rgba(0,0,0,.25);
+ }
+ .pill:active{transform:translateY(1px)}
+ .pill:focus-visible{
+   outline:2px solid rgba(91,157,255,.8);
+   outline-offset:3px;
+ }
+ .pill.start{background:linear-gradient(135deg, #1bd8a8, #1fbf7b); color:#04110c}
+ .pill.end{background:linear-gradient(135deg, #ff6b81, #ff3b55); color:#190307}
+diff --git a/app/static/js/transcript_view.js b/app/static/js/transcript_view.js
+index 3ff77869fa9b4949a9dc195953ceb7411f91921e..73d66416be6b96e04868e846cfdae84efeadecdd 100644
+--- a/app/static/js/transcript_view.js
++++ b/app/static/js/transcript_view.js
+@@ -1,105 +1,108 @@
+ (() => {
+   const view = {
+     handlePartial: () => {},
+     handleFinal: () => {},
+     handleChatMessage: () => {},
+     addUserMessage: () => {},
+-    reset: () => {}
++    reset: () => {},
++    showSystemFromChip: () => {}
+   };
+ 
+   function init() {
+     const container = document.getElementById("messages");
+     if (!container) {
+       console.warn("TranscriptView: messages container not found");
+       return;
      }
-   }
+     const form = document.getElementById("textChatForm");
+     const input = document.getElementById("textChatInput");
  
-   function startInfoWatchdog() {
-     clearInfoWatchdog();
-     infoWatchdogTimerId = setTimeout(() => {
-       infoWatchdogTimerId = null;
-       console.warn("WS info frame not received within deadline");
-       recordClientBannerEvent("ws.info.deadline", null);
-     }, INFO_DEADLINE_MS);
-   }
+     const PARTIAL_THROTTLE_MS = 50;
  
-   function clearHeartbeat() {
-     if (heartbeatTimerId) {
-       clearInterval(heartbeatTimerId);
-       heartbeatTimerId = null;
-     }
-+    if (window.WSClient) {
-+      window.WSClient._hb = null;
-+    }
-     updateState({ heartbeatTimerId: null, lastPingAt: null });
-   }
+     let partialNode = null;
+     let pendingPartial = null;
+     let partialTimer = null;
+     let lastPartialSeq = null;
+     let lastPartialReqId = null;
+     let lastPartialRenderAt = 0;
+     let bargeInEnabled = true;
+     const messageNodesById = new Map();
+     const messageNodesByClientId = new Map();
+     const messageNodesByReqId = new Map();
  
-   function clearRateLimitRetryTimer() {
-     if (rateLimitRetryTimerId) {
-       clearTimeout(rateLimitRetryTimerId);
-       rateLimitRetryTimerId = null;
-     }
-   }
- 
-   function resetRateLimitRecovery() {
-     clearRateLimitRetryTimer();
-     rateLimitRetryCount = 0;
-     if (window.WSErrorUI && typeof window.WSErrorUI.clearRateLimitToast === "function") {
-       try {
-         window.WSErrorUI.clearRateLimitToast();
-       } catch (err) {
-         console.warn("Failed to clear rate limit toast", err);
+     function setNodeRole(node, role) {
+       if (!node) return;
+       const wrapper = node;
+       if (!(wrapper instanceof HTMLElement)) return;
+       wrapper.dataset.role = role;
+-      wrapper.classList.remove("assistant", "user");
+-      if (role === "assistant" || role === "user") {
++      wrapper.classList.remove("assistant", "user", "system");
++      if (role === "assistant" || role === "user" || role === "system") {
+         wrapper.classList.add(role);
        }
      }
-   }
  
-   function scheduleRateLimitRetry(delayMs, callbacks = {}) {
-     const delay = Number(delayMs);
-     if (!Number.isFinite(delay) || delay <= 0) return false;
-@@ -635,62 +638,83 @@
-     const dropIfBusy = Boolean(options.dropIfBusy);
-     if (!socket || socket.readyState !== WebSocket.OPEN) {
-       console.warn("WSClient.sendBinary called without an open socket");
-       return false;
+     function scrollToBottom() {
+       try {
+         container.scrollTop = container.scrollHeight;
+       } catch (err) {
+         console.warn("TranscriptView: failed to scroll", err);
+       }
      }
-     if (dropIfBusy && socket.bufferedAmount > 512 * 1024) {
-       return false;
-     }
-     try {
-       socket.send(payload);
-       return true;
-     } catch (err) {
-       console.error("WSClient sendBinary error", err);
-       return false;
-     }
-   }
  
-   function sendJson(frame) {
-     try {
-       sendRaw(JSON.stringify(frame));
-     } catch (err) {
-       console.error("WSClient sendJson error", err);
+     function ensureParagraph(node) {
+       if (!node) return null;
+       const bubble = node.querySelector(".bubble");
+       if (!bubble) return null;
+       let paragraph = bubble.querySelector("p");
+       if (!paragraph) {
+         paragraph = document.createElement("p");
+         bubble.appendChild(paragraph);
+       }
+       return paragraph;
      }
-   }
  
-+  function canSendHeartbeat() {
-+    if (!socket || socket.readyState !== WebSocket.OPEN) {
-+      return false;
-+    }
-+    const client = window.WSClient;
-+    if (client && typeof client.isConnected === "function") {
-+      try {
-+        if (!client.isConnected()) {
-+          return false;
-+        }
-+      } catch (err) {
-+        console.warn("WSClient.isConnected check failed", err);
+     function setNodeText(node, text) {
+       const paragraph = ensureParagraph(node);
+       if (!paragraph) return;
+       const safe = typeof text === "string" && text.length ? text : "\u00a0";
+       paragraph.textContent = safe;
+     }
+ 
+     function updateMeta(node, role, { partial = false, pending = false } = {}) {
+       const meta = node.querySelector(".meta");
+       if (!meta) return;
+       if (role === "user") {
+         if (partial) {
+           meta.textContent = "you · speaking…";
+         } else if (pending) {
+           meta.textContent = "you · sending…";
+         } else {
+           meta.textContent = "you · just now";
+         }
++      } else if (role === "system") {
++        meta.textContent = "Chip · just now";
+       } else if (partial) {
+         meta.textContent = "assistant · transcribing…";
+       } else {
+         meta.textContent = "assistant · just now";
+       }
+     }
+ 
+     function createMessage(role, text, { partial = false } = {}) {
+       const wrapper = document.createElement("div");
+       wrapper.className = `msg ${role}${partial ? " partial" : ""}`;
+       if (partial) {
+         wrapper.dataset.partial = "true";
+       }
+       setNodeRole(wrapper, role);
+       const bubble = document.createElement("div");
+       bubble.className = "bubble";
+       const paragraph = document.createElement("p");
+       bubble.appendChild(paragraph);
+       wrapper.appendChild(bubble);
+       const meta = document.createElement("div");
+       meta.className = "meta";
+       wrapper.appendChild(meta);
+       setNodeText(wrapper, text);
+       updateMeta(wrapper, role, { partial });
+       return wrapper;
+@@ -314,51 +317,56 @@
+           new CustomEvent("engine.mode", { detail: { mode: "Listening", source: "text_barge" } })
+         );
+       } catch (err) {
+         console.warn("TranscriptView: failed to emit engine.mode", err);
+       }
+     }
+ 
+     function handleSubmit(event) {
+       event.preventDefault();
+       if (!input) return;
+       const raw = input.value || "";
+       const trimmed = raw.trim();
+       if (!trimmed) return;
+       input.value = "";
+       const clientMsgId = generateClientMsgId();
+       addUserMessage(trimmed, { clientMsgId, pending: true });
+       sendChatPayload(trimmed, clientMsgId);
+       maybeInterruptForBarge();
+       input.focus();
+     }
+ 
+     function handleChatMessage(frame) {
+       if (!frame || typeof frame !== "object") return;
+       const text = typeof frame.text === "string" ? frame.text.trim() : "";
+       if (!text) return;
+-      const role = frame.role === "assistant" ? "assistant" : "user";
++      let role = "assistant";
++      if (frame.role === "user") {
++        role = "user";
++      } else if (frame.role === "system") {
++        role = "system";
 +      }
+       const messageId = typeof frame.id === "string" ? frame.id : null;
+       const clientMsgId = typeof frame.client_msg_id === "string" ? frame.client_msg_id : null;
+       const reqId = typeof frame.req_id === "string" ? frame.req_id : null;
+ 
+       let node = null;
+ 
+       if (messageId && messageNodesById.has(messageId)) {
+         node = messageNodesById.get(messageId);
+       }
+       if (!node && clientMsgId && messageNodesByClientId.has(clientMsgId)) {
+         node = messageNodesByClientId.get(clientMsgId);
+       }
+       if (!node && role === "user" && reqId && messageNodesByReqId.has(reqId)) {
+         const entry = messageNodesByReqId.get(reqId);
+         if (entry && entry.node) {
+           if (!entry.role || entry.role === role) {
+             node = entry.node;
+           }
+         }
+       }
+ 
+       if (!node) {
+         node = createMessage(role, text);
+         container.appendChild(node);
+       } else {
+@@ -374,58 +382,71 @@
+         messageNodesById.set(messageId, node);
+         node.dataset.messageId = messageId;
+       } else {
+         delete node.dataset.messageId;
+       }
+ 
+       if (clientMsgId) {
+         messageNodesByClientId.set(clientMsgId, node);
+         node.dataset.clientMsgId = clientMsgId;
+       } else {
+         delete node.dataset.clientMsgId;
+       }
+ 
+       if (reqId && role === "user") {
+         messageNodesByReqId.set(reqId, { node, role });
+         node.dataset.reqId = reqId;
+       } else if (reqId) {
+         node.dataset.reqId = reqId;
+       } else {
+         delete node.dataset.reqId;
+       }
+ 
+       scrollToBottom();
+     }
+ 
++    function showSystemFromChip(text) {
++      const message = typeof text === "string" ? text.trim() : "";
++      if (!message) {
++        return;
++      }
++      const node = createMessage("system", message);
++      node.classList.add("chip-system");
++      node.dataset.from = "Chip";
++      container.appendChild(node);
++      scrollToBottom();
 +    }
-+    return true;
-+  }
 +
-   function sendPing() {
--    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-+    if (!canSendHeartbeat()) return;
-     lastPingAt = Date.now();
-     updateState({ lastPingAt });
--    sendJson({ type: "client.ping", ts: lastPingAt });
-+    send({ type: "client.ping", ts: lastPingAt });
+     function handlePolicyInteraction(event) {
+       const detail = event && event.detail;
+       const policy = detail && detail.policy;
+       if (policy && typeof policy.barge_in_enabled === "boolean") {
+         bargeInEnabled = policy.barge_in_enabled;
+       }
+     }
+ 
+     if (form && input) {
+       form.addEventListener("submit", handleSubmit);
+     }
+ 
+     window.addEventListener("policy.interaction", handlePolicyInteraction);
+     window.addEventListener("ws.close", () => {
+       bargeInEnabled = true;
+       clearPartial({ removeNode: true });
+     });
+ 
+     view.handlePartial = handlePartial;
+     view.handleFinal = handleFinal;
+     view.handleChatMessage = handleChatMessage;
+     view.addUserMessage = addUserMessage;
+     view.reset = () => clearPartial({ removeNode: true });
++    view.showSystemFromChip = showSystemFromChip;
    }
  
-   function startHeartbeat() {
-     clearHeartbeat();
-+    const intervalId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
-+    heartbeatTimerId = intervalId;
-+    if (window.WSClient) {
-+      window.WSClient._hb = intervalId;
-+    }
-     sendPing();
--    heartbeatTimerId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
--    updateState({ heartbeatTimerId });
-+    updateState({ heartbeatTimerId: intervalId });
-   }
+   window.TranscriptView = view;
  
-   function attemptAutoResume() {
-     const resume = getResumeState();
-     if (!resume) {
-       return false;
-     }
-     if (Date.now() >= resume.expiresAt) {
-       clearResumeState();
-       updateState({ resumeError: "invalid" });
-       recordClientBannerEvent("ws.auto_resume.expired", { expires_at_ms: resume.expiresAt });
-       return false;
-     }
-     const state = AppState.getState();
-     if (autoResumeAttemptToken === resume.token) {
-       return false;
-     }
-     autoResumeAttemptToken = resume.token;
-     updateState({ connectionState: "resuming", resumeError: null });
-     recordClientBannerEvent("ws.auto_resume.start", { resume_token_present: true, expires_at_ms: resume.expiresAt });
-     try {
-       open({ resumeToken: resume.token, skipRateLimitCancel: true });
-       return true;
-     } catch (err) {
-       console.error("Auto-resume open failed", err);
-@@ -1282,50 +1306,54 @@
+   if (document.readyState === "loading") {
+     document.addEventListener("DOMContentLoaded", init);
+   } else {
+     init();
+   }
+ })();
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index a41385ba40e750bd9b4e6aa27c63fc631672d062..ce921ae251dd313e9588fef0e36bac3a1f4d5cc3 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1286,50 +1286,78 @@
+       }
+     } else if (frame.type === "input.start") {
+       handleInputStartFrame(frame);
+     } else if (frame.type === "input.stop") {
+       handleInputStopFrame();
+     } else if (frame.type === "asr.ready") {
+       handleAsrReadyFrame(frame);
+     } else if (frame.type === "asr.partial") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handlePartial === "function") {
+         try {
+           view.handlePartial(frame);
+         } catch (err) {
+           console.warn("TranscriptView partial handler error", err);
+         }
+       }
+     } else if (frame.type === "asr.final") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleFinal === "function") {
+         try {
            view.handleFinal(frame);
          } catch (err) {
            console.warn("TranscriptView final handler error", err);
          }
        }
++    } else if (frame.type === "asr.unavailable") {
++      const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
++      const details = frame && typeof frame.details === "string"
++        ? frame.details
++        : (frame && typeof frame.detail === "string" ? frame.detail : "");
++      console.warn("asr.unavailable", reason, details);
++      try {
++        const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
++        hud?.setState?.("Chat");
++      } catch (err) {
++        console.warn("Failed to update HUD state after asr.unavailable", err);
++      }
++      try {
++        const view = window.TranscriptView;
++        view?.showSystemFromChip?.(
++          "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
++        );
++      } catch (err) {
++        console.warn("Failed to render Chip system message after asr.unavailable", err);
++      }
++      try {
++        window?.Banner?.show?.(
++          "Voice temporarily unavailable. You can continue via chat.",
++          { level: "warning", ttlMs: 10000 }
++        );
++      } catch (err) {
++        console.warn("Failed to show voice unavailable banner", err);
++      }
      } else if (frame.type === "chat.message") {
        const view = window.TranscriptView;
        if (view && typeof view.handleChatMessage === "function") {
@@ -170,105 +380,8 @@ index 2c2612b98c4f111f659492378d7370f4d8ebaba4..a41385ba40e750bd9b4e6aa27c63fc63
      if (typeof data === "string") {
        try {
          const frame = JSON.parse(data);
-+        if (frame && frame.type === "server.ping") {
-+          send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
-+          return;
-+        }
+         if (frame && frame.type === "server.ping") {
+           send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
+           return;
+         }
          handleMessageFrame(frame);
-       } catch (err) {
-         console.error("Failed to parse WS frame", err, data);
-       }
-       return;
-     }
-     if (data instanceof Blob) {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(data);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-       return;
-     }
-     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-       const chunk = data instanceof ArrayBuffer
-         ? data
-         : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(chunk);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
-       return;
-     }
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 681a3f09269cde9bfcf063395d8c62f53e71fbd6..efe19d35225098903cff3b29ae4950350a97367f 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1206,55 +1206,66 @@ class ChatV2Adapter:
-         if preview is not None:
-             meta["ws"]["preview"] = preview
-         await self._publish(EVT_WS_JSON_SEND, sid, meta)
- 
-     async def _send_error(
-         self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
-     ) -> None:
-         payload = {"type": "error", "code": code, "detail": detail}
-         await self._send_json(send, sid, payload)
- 
-     def _start_server_keepalive(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> None:
-         if self._ping_interval_ms <= 0 or ctx.server_keepalive_task is not None:
-             return
- 
-         async def _run() -> None:
-             interval = self._ping_interval_ms / 1000.0
-             if interval <= 0:
-                 return
-             try:
-                 while True:
-                     await asyncio.sleep(interval)
-                     now_ms = int(time.time() * 1000)
-                     last_activity = ctx.last_client_activity_ms or 0
--                    if last_activity and now_ms - last_activity >= _HEARTBEAT_TIMEOUT_MS:
-+                    last_pong = ctx.last_client_pong_ms or 0
-+                    last_ping = ctx.last_server_ping_ms or 0
-+                    timeout_threshold = now_ms - _HEARTBEAT_TIMEOUT_MS
-+                    activity_missed = bool(last_activity) and last_activity <= timeout_threshold
-+                    pong_missed = False
-+                    if last_ping and last_ping <= timeout_threshold:
-+                        pong_missed = last_pong == 0 or last_pong < last_ping
-+                    if activity_missed or pong_missed:
-+                        reason = "no_client_activity" if activity_missed else "no_client_pong"
-                         _log.warning(
--                            "evt=ws_heartbeat_missed sid=%s last_client_ms=%s",
-+                            "evt=ws_heartbeat_missed sid=%s last_client_ms=%s last_client_pong_ms=%s last_server_ping_ms=%s reason=%s",
-                             ctx.sid,
-                             last_activity,
-+                            last_pong,
-+                            last_ping,
-+                            reason,
-                         )
-                         await send(
-                             {
-                                 "type": "websocket.close",
-                                 "code": 1001,
-                                 "reason": "heartbeat_timeout",
-                             }
-                         )
-                         return
-                     payload = json.dumps(
-                         {"type": "server.ping", "ts": now_ms},
-                         separators=(",", ":"),
-                     )
-                     ctx.last_server_ping_ms = now_ms
-                     await send({"type": "websocket.send", "text": payload})
-             except asyncio.CancelledError:
-                 raise
-             except Exception:  # pragma: no cover - defensive
-                 _log.exception("evt=ws_keepalive_failed sid=%s", ctx.sid)
-             finally:
-                 ctx.server_keepalive_task = None
- 
-         ctx.server_keepalive_task = asyncio.create_task(_run())
- 
-     async def _stop_server_keepalive(self, ctx: AdapterContext) -> None:

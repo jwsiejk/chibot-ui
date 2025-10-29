@@ -4,7 +4,8 @@
     handleFinal: () => {},
     handleChatMessage: () => {},
     addUserMessage: () => {},
-    reset: () => {}
+    reset: () => {},
+    showSystemFromChip: () => {}
   };
 
   function init() {
@@ -34,8 +35,8 @@
       const wrapper = node;
       if (!(wrapper instanceof HTMLElement)) return;
       wrapper.dataset.role = role;
-      wrapper.classList.remove("assistant", "user");
-      if (role === "assistant" || role === "user") {
+      wrapper.classList.remove("assistant", "user", "system");
+      if (role === "assistant" || role === "user" || role === "system") {
         wrapper.classList.add(role);
       }
     }
@@ -78,6 +79,8 @@
         } else {
           meta.textContent = "you · just now";
         }
+      } else if (role === "system") {
+        meta.textContent = "Chip · just now";
       } else if (partial) {
         meta.textContent = "assistant · transcribing…";
       } else {
@@ -336,7 +339,12 @@
       if (!frame || typeof frame !== "object") return;
       const text = typeof frame.text === "string" ? frame.text.trim() : "";
       if (!text) return;
-      const role = frame.role === "assistant" ? "assistant" : "user";
+      let role = "assistant";
+      if (frame.role === "user") {
+        role = "user";
+      } else if (frame.role === "system") {
+        role = "system";
+      }
       const messageId = typeof frame.id === "string" ? frame.id : null;
       const clientMsgId = typeof frame.client_msg_id === "string" ? frame.client_msg_id : null;
       const reqId = typeof frame.req_id === "string" ? frame.req_id : null;
@@ -396,6 +404,18 @@
       scrollToBottom();
     }
 
+    function showSystemFromChip(text) {
+      const message = typeof text === "string" ? text.trim() : "";
+      if (!message) {
+        return;
+      }
+      const node = createMessage("system", message);
+      node.classList.add("chip-system");
+      node.dataset.from = "Chip";
+      container.appendChild(node);
+      scrollToBottom();
+    }
+
     function handlePolicyInteraction(event) {
       const detail = event && event.detail;
       const policy = detail && detail.policy;
@@ -419,6 +439,7 @@
     view.handleChatMessage = handleChatMessage;
     view.addUserMessage = addUserMessage;
     view.reset = () => clearPartial({ removeNode: true });
+    view.showSystemFromChip = showSystemFromChip;
   }
 
   window.TranscriptView = view;

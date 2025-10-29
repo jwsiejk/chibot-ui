@@ -79,6 +79,7 @@ _OUTBOUND_ALLOWED_TYPES = {
     "asr.ready",
     "asr.partial",
     "asr.final",
+    "asr.unavailable",
     "error",
     "chat.message",
     "chat.history",
@@ -241,6 +242,7 @@ class AdapterContext:
     asr_subscription_token: Optional[str] = None
     asr_subscription_bus: Optional[Any] = None
     asr_open_subscription_token: Optional[str] = None
+    asr_unavailable_subscription_token: Optional[str] = None
     server_keepalive_task: asyncio.Task[None] | None = None
     last_policy_interaction: Optional[Dict[str, Any]] = None
     policy_snapshot: Optional[Dict[str, Any]] = None
@@ -1333,6 +1335,32 @@ class ChatV2Adapter:
 
         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
 
+        def _handle_asr_unavailable_event(event: dict) -> None:
+            if event.get("type") != "asr.unavailable":
+                return
+            if event.get("sid") != ctx.sid or ctx.outbox is None:
+                return
+
+            def _on_loop() -> None:
+                ctx.asr_ready = False
+                payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
+                reason = event.get("reason")
+                if isinstance(reason, str) and reason:
+                    payload["reason"] = reason
+                details = event.get("details")
+                if details is not None:
+                    payload["details"] = details if isinstance(details, str) else str(details)
+                _enqueue(payload)
+
+            try:
+                loop.call_soon_threadsafe(_on_loop)
+            except RuntimeError:
+                pass
+
+        ctx.asr_unavailable_subscription_token = bus.subscribe(
+            "asr.unavailable", _handle_asr_unavailable_event
+        )
+
         async def _perform_listen_handoff(req_id: str) -> None:
             key = self._turn_key(ctx, req_id)
             runtime = getattr(self, "asr_runtime", None)
@@ -1976,6 +2004,11 @@ class ChatV2Adapter:
         ctx.audio_subscription_token = None
         if audio_token:
             bus.unsubscribe(audio_token)
+
+        unavailable_token = ctx.asr_unavailable_subscription_token
+        ctx.asr_unavailable_subscription_token = None
+        if unavailable_token:
+            bus.unsubscribe(unavailable_token)
 
         mask_token = ctx.mask_subscription_token
         ctx.mask_subscription_token = None
