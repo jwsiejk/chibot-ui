@@ -568,6 +568,9 @@
       clearInterval(heartbeatTimerId);
       heartbeatTimerId = null;
     }
+    if (window.WSClient) {
+      window.WSClient._hb = null;
+    }
     updateState({ heartbeatTimerId: null, lastPingAt: null });
   }
 
@@ -657,18 +660,39 @@
     }
   }
 
+  function canSendHeartbeat() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    const client = window.WSClient;
+    if (client && typeof client.isConnected === "function") {
+      try {
+        if (!client.isConnected()) {
+          return false;
+        }
+      } catch (err) {
+        console.warn("WSClient.isConnected check failed", err);
+      }
+    }
+    return true;
+  }
+
   function sendPing() {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (!canSendHeartbeat()) return;
     lastPingAt = Date.now();
     updateState({ lastPingAt });
-    sendJson({ type: "client.ping", ts: lastPingAt });
+    send({ type: "client.ping", ts: lastPingAt });
   }
 
   function startHeartbeat() {
     clearHeartbeat();
+    const intervalId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
+    heartbeatTimerId = intervalId;
+    if (window.WSClient) {
+      window.WSClient._hb = intervalId;
+    }
     sendPing();
-    heartbeatTimerId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
-    updateState({ heartbeatTimerId });
+    updateState({ heartbeatTimerId: intervalId });
   }
 
   function attemptAutoResume() {
@@ -1304,6 +1328,10 @@
     if (typeof data === "string") {
       try {
         const frame = JSON.parse(data);
+        if (frame && frame.type === "server.ping") {
+          send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
+          return;
+        }
         handleMessageFrame(frame);
       } catch (err) {
         console.error("Failed to parse WS frame", err, data);

@@ -1,73 +1,274 @@
-diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
-index 50f5f45d7a399c28788d2a1b7ab3d4b8df1116dd..6a8dab1e830bc512e9ae85203f9fc2f127f5165f 100644
---- a/app/services/streaming_asr/deepgram_client.py
-+++ b/app/services/streaming_asr/deepgram_client.py
-@@ -374,50 +374,68 @@ class DeepgramClient:
-         return interval
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 2c2612b98c4f111f659492378d7370f4d8ebaba4..a41385ba40e750bd9b4e6aa27c63fc631672d062 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -546,50 +546,53 @@
+     const query = params.toString();
+     return query ? `${base}?${query}` : base;
+   }
  
-     def _start_keepalive(self, state: _StreamState) -> None:
-         if self._keepalive_interval <= 0:
-             return
-         if state.keepalive_task is not None and not state.keepalive_task.done():
-             return
-         try:
-             loop = state.loop
-         except Exception:  # pragma: no cover - defensive
-             return
-         state.keepalive_task = loop.create_task(
-             self._keepalive_loop(state, self._keepalive_interval),
-             name=f"dg-keepalive-{state.sid}",
-         )
+   function clearInfoWatchdog() {
+     if (infoWatchdogTimerId) {
+       clearTimeout(infoWatchdogTimerId);
+       infoWatchdogTimerId = null;
+     }
+   }
  
-     def _cancel_keepalive(self, state: _StreamState) -> None:
-         task = state.keepalive_task
-         if task is None:
-             return
-         state.keepalive_task = None
-         self._safe_cancel(task)
+   function startInfoWatchdog() {
+     clearInfoWatchdog();
+     infoWatchdogTimerId = setTimeout(() => {
+       infoWatchdogTimerId = null;
+       console.warn("WS info frame not received within deadline");
+       recordClientBannerEvent("ws.info.deadline", null);
+     }, INFO_DEADLINE_MS);
+   }
  
-     async def _keepalive_loop(self, state: _StreamState, interval: float) -> None:
-         try:
-+            try:
-+                await state.websocket.send(self._keepalive_payload)
-+                _log.debug(
-+                    "evt=dg_keepalive_sent sid=%s stream_id=%s interval_s=0.000",
-+                    state.sid,
-+                    state.stream_id,
-+                )
-+            except asyncio.CancelledError:
-+                raise
-+            except Exception:  # pragma: no cover - defensive
-+                _log.debug(
-+                    "evt=dg_keepalive_send_failed sid=%s stream_id=%s",
-+                    state.sid,
-+                    state.stream_id,
-+                    exc_info=True,
-+                )
-+                return
+   function clearHeartbeat() {
+     if (heartbeatTimerId) {
+       clearInterval(heartbeatTimerId);
+       heartbeatTimerId = null;
+     }
++    if (window.WSClient) {
++      window.WSClient._hb = null;
++    }
+     updateState({ heartbeatTimerId: null, lastPingAt: null });
+   }
+ 
+   function clearRateLimitRetryTimer() {
+     if (rateLimitRetryTimerId) {
+       clearTimeout(rateLimitRetryTimerId);
+       rateLimitRetryTimerId = null;
+     }
+   }
+ 
+   function resetRateLimitRecovery() {
+     clearRateLimitRetryTimer();
+     rateLimitRetryCount = 0;
+     if (window.WSErrorUI && typeof window.WSErrorUI.clearRateLimitToast === "function") {
+       try {
+         window.WSErrorUI.clearRateLimitToast();
+       } catch (err) {
+         console.warn("Failed to clear rate limit toast", err);
+       }
+     }
+   }
+ 
+   function scheduleRateLimitRetry(delayMs, callbacks = {}) {
+     const delay = Number(delayMs);
+     if (!Number.isFinite(delay) || delay <= 0) return false;
+@@ -635,62 +638,83 @@
+     const dropIfBusy = Boolean(options.dropIfBusy);
+     if (!socket || socket.readyState !== WebSocket.OPEN) {
+       console.warn("WSClient.sendBinary called without an open socket");
+       return false;
+     }
+     if (dropIfBusy && socket.bufferedAmount > 512 * 1024) {
+       return false;
+     }
+     try {
+       socket.send(payload);
+       return true;
+     } catch (err) {
+       console.error("WSClient sendBinary error", err);
+       return false;
+     }
+   }
+ 
+   function sendJson(frame) {
+     try {
+       sendRaw(JSON.stringify(frame));
+     } catch (err) {
+       console.error("WSClient sendJson error", err);
+     }
+   }
+ 
++  function canSendHeartbeat() {
++    if (!socket || socket.readyState !== WebSocket.OPEN) {
++      return false;
++    }
++    const client = window.WSClient;
++    if (client && typeof client.isConnected === "function") {
++      try {
++        if (!client.isConnected()) {
++          return false;
++        }
++      } catch (err) {
++        console.warn("WSClient.isConnected check failed", err);
++      }
++    }
++    return true;
++  }
 +
-             while not state.closing:
-                 await asyncio.sleep(interval)
-                 if state.closing:
-                     break
-                 try:
-                     await state.websocket.send(self._keepalive_payload)
-                 except asyncio.CancelledError:
-                     raise
-                 except Exception:  # pragma: no cover - defensive
-                     _log.debug(
-                         "evt=dg_keepalive_send_failed sid=%s stream_id=%s",
-                         state.sid,
-                         state.stream_id,
-                         exc_info=True,
+   function sendPing() {
+-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
++    if (!canSendHeartbeat()) return;
+     lastPingAt = Date.now();
+     updateState({ lastPingAt });
+-    sendJson({ type: "client.ping", ts: lastPingAt });
++    send({ type: "client.ping", ts: lastPingAt });
+   }
+ 
+   function startHeartbeat() {
+     clearHeartbeat();
++    const intervalId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
++    heartbeatTimerId = intervalId;
++    if (window.WSClient) {
++      window.WSClient._hb = intervalId;
++    }
+     sendPing();
+-    heartbeatTimerId = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
+-    updateState({ heartbeatTimerId });
++    updateState({ heartbeatTimerId: intervalId });
+   }
+ 
+   function attemptAutoResume() {
+     const resume = getResumeState();
+     if (!resume) {
+       return false;
+     }
+     if (Date.now() >= resume.expiresAt) {
+       clearResumeState();
+       updateState({ resumeError: "invalid" });
+       recordClientBannerEvent("ws.auto_resume.expired", { expires_at_ms: resume.expiresAt });
+       return false;
+     }
+     const state = AppState.getState();
+     if (autoResumeAttemptToken === resume.token) {
+       return false;
+     }
+     autoResumeAttemptToken = resume.token;
+     updateState({ connectionState: "resuming", resumeError: null });
+     recordClientBannerEvent("ws.auto_resume.start", { resume_token_present: true, expires_at_ms: resume.expiresAt });
+     try {
+       open({ resumeToken: resume.token, skipRateLimitCancel: true });
+       return true;
+     } catch (err) {
+       console.error("Auto-resume open failed", err);
+@@ -1282,50 +1306,54 @@
+           view.handleFinal(frame);
+         } catch (err) {
+           console.warn("TranscriptView final handler error", err);
+         }
+       }
+     } else if (frame.type === "chat.message") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleChatMessage === "function") {
+         try {
+           view.handleChatMessage(frame);
+         } catch (err) {
+           console.warn("TranscriptView chat handler error", err);
+         }
+       }
+     } else if (frame.type === "chat.history") {
+       handleChatHistoryFrame(frame);
+     }
+     dispatchFrame(frame);
+   }
+ 
+   function parseFrame(event) {
+     const { data } = event;
+     if (typeof data === "string") {
+       try {
+         const frame = JSON.parse(data);
++        if (frame && frame.type === "server.ping") {
++          send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
++          return;
++        }
+         handleMessageFrame(frame);
+       } catch (err) {
+         console.error("Failed to parse WS frame", err, data);
+       }
+       return;
+     }
+     if (data instanceof Blob) {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(data);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+       return;
+     }
+     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+       const chunk = data instanceof ArrayBuffer
+         ? data
+         : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(chunk);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
+       return;
+     }
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 681a3f09269cde9bfcf063395d8c62f53e71fbd6..efe19d35225098903cff3b29ae4950350a97367f 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -1206,55 +1206,66 @@ class ChatV2Adapter:
+         if preview is not None:
+             meta["ws"]["preview"] = preview
+         await self._publish(EVT_WS_JSON_SEND, sid, meta)
+ 
+     async def _send_error(
+         self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
+     ) -> None:
+         payload = {"type": "error", "code": code, "detail": detail}
+         await self._send_json(send, sid, payload)
+ 
+     def _start_server_keepalive(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> None:
+         if self._ping_interval_ms <= 0 or ctx.server_keepalive_task is not None:
+             return
+ 
+         async def _run() -> None:
+             interval = self._ping_interval_ms / 1000.0
+             if interval <= 0:
+                 return
+             try:
+                 while True:
+                     await asyncio.sleep(interval)
+                     now_ms = int(time.time() * 1000)
+                     last_activity = ctx.last_client_activity_ms or 0
+-                    if last_activity and now_ms - last_activity >= _HEARTBEAT_TIMEOUT_MS:
++                    last_pong = ctx.last_client_pong_ms or 0
++                    last_ping = ctx.last_server_ping_ms or 0
++                    timeout_threshold = now_ms - _HEARTBEAT_TIMEOUT_MS
++                    activity_missed = bool(last_activity) and last_activity <= timeout_threshold
++                    pong_missed = False
++                    if last_ping and last_ping <= timeout_threshold:
++                        pong_missed = last_pong == 0 or last_pong < last_ping
++                    if activity_missed or pong_missed:
++                        reason = "no_client_activity" if activity_missed else "no_client_pong"
+                         _log.warning(
+-                            "evt=ws_heartbeat_missed sid=%s last_client_ms=%s",
++                            "evt=ws_heartbeat_missed sid=%s last_client_ms=%s last_client_pong_ms=%s last_server_ping_ms=%s reason=%s",
+                             ctx.sid,
+                             last_activity,
++                            last_pong,
++                            last_ping,
++                            reason,
+                         )
+                         await send(
+                             {
+                                 "type": "websocket.close",
+                                 "code": 1001,
+                                 "reason": "heartbeat_timeout",
+                             }
+                         )
+                         return
+                     payload = json.dumps(
+                         {"type": "server.ping", "ts": now_ms},
+                         separators=(",", ":"),
                      )
-                     return
-                 _log.debug(
-                     "evt=dg_keepalive_sent sid=%s stream_id=%s interval_s=%.3f",
-                     state.sid,
-                     state.stream_id,
-                     interval,
-                 )
-         except asyncio.CancelledError:
-             raise
-         except Exception:  # pragma: no cover - defensive
+                     ctx.last_server_ping_ms = now_ms
+                     await send({"type": "websocket.send", "text": payload})
+             except asyncio.CancelledError:
+                 raise
+             except Exception:  # pragma: no cover - defensive
+                 _log.exception("evt=ws_keepalive_failed sid=%s", ctx.sid)
+             finally:
+                 ctx.server_keepalive_task = None
+ 
+         ctx.server_keepalive_task = asyncio.create_task(_run())
+ 
+     async def _stop_server_keepalive(self, ctx: AdapterContext) -> None:

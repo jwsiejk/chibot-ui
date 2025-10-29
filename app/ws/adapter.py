@@ -1228,11 +1228,22 @@ class ChatV2Adapter:
                     await asyncio.sleep(interval)
                     now_ms = int(time.time() * 1000)
                     last_activity = ctx.last_client_activity_ms or 0
-                    if last_activity and now_ms - last_activity >= _HEARTBEAT_TIMEOUT_MS:
+                    last_pong = ctx.last_client_pong_ms or 0
+                    last_ping = ctx.last_server_ping_ms or 0
+                    timeout_threshold = now_ms - _HEARTBEAT_TIMEOUT_MS
+                    activity_missed = bool(last_activity) and last_activity <= timeout_threshold
+                    pong_missed = False
+                    if last_ping and last_ping <= timeout_threshold:
+                        pong_missed = last_pong == 0 or last_pong < last_ping
+                    if activity_missed or pong_missed:
+                        reason = "no_client_activity" if activity_missed else "no_client_pong"
                         _log.warning(
-                            "evt=ws_heartbeat_missed sid=%s last_client_ms=%s",
+                            "evt=ws_heartbeat_missed sid=%s last_client_ms=%s last_client_pong_ms=%s last_server_ping_ms=%s reason=%s",
                             ctx.sid,
                             last_activity,
+                            last_pong,
+                            last_ping,
+                            reason,
                         )
                         await send(
                             {
