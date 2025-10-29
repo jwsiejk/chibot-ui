@@ -101,8 +101,14 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "chat.user",
     "client.diag",
     "client.log",
+    "client.telemetry",
     "client.banner",
     "asr.rearm.request",
+}
+
+_CLIENT_TELEMETRY_ALLOWED_EVENTS = {
+    "EVT_RECORDER_STARTED",
+    "EVT_AUDIO_CHUNK_SENT_CLIENT",
 }
 
 
@@ -1078,6 +1084,58 @@ class ChatV2Adapter:
                     "who": "client",
                     "source": "ws_client",
                     "meta": log_meta,
+                }
+            )
+
+        if frame_type == "client.telemetry":
+            event_name = frame.get("event")
+            if event_name not in _CLIENT_TELEMETRY_ALLOWED_EVENTS:
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.telemetry event must be a supported value",
+                )
+                return self._HandleResult(True)
+
+            frame_sid = frame.get("sid")
+            if frame_sid is not None and not isinstance(frame_sid, str):
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.telemetry sid must be a string if provided",
+                )
+                return self._HandleResult(True)
+
+            telemetry_meta = frame.get("meta")
+            if telemetry_meta is None:
+                telemetry_meta_dict: Dict[str, Any] = {}
+            elif isinstance(telemetry_meta, Mapping):
+                telemetry_meta_dict = dict(telemetry_meta)
+            else:
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.telemetry meta must be an object if provided",
+                )
+                return self._HandleResult(True)
+
+            bus.publish(
+                {
+                    "schema_version": "1",
+                    "type": event_name,
+                    "sid": frame_sid if isinstance(frame_sid, str) else ctx.sid,
+                    "who": "client",
+                    "source": "browser",
+                    "meta": telemetry_meta_dict,
                 }
             )
 
