@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List
 
+import asyncio
 import logging
 
-from openai import AsyncOpenAI
+from openai import OpenAI
 
 from app.config import get_env
 from app.telemetry import bus
@@ -58,9 +59,7 @@ class OpenAILLMProvider(LLMProviderBase):
         self._base_url = base_url
         self._default_model = model
         self._client = (
-            AsyncOpenAI(api_key=api_key, base_url=base_url or None)
-            if api_key
-            else None
+            OpenAI(api_key=api_key, base_url=base_url or None) if api_key else None
         )
 
     @property
@@ -96,12 +95,16 @@ class OpenAILLMProvider(LLMProviderBase):
         max_tokens = kwargs.get("max_tokens")
         kwargs.pop("purpose", None)
 
-        response = await client.chat.completions.create(
-            model=model,
-            messages=prepared,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        request_kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": prepared,
+        }
+        if temperature is not None:
+            request_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            request_kwargs["max_tokens"] = max_tokens
+
+        response = await asyncio.to_thread(client.chat.completions.create, **request_kwargs)
 
         try:
             choice = response.choices[0]
