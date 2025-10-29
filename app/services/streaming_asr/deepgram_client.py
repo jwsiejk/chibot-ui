@@ -396,6 +396,24 @@ class DeepgramClient:
 
     async def _keepalive_loop(self, state: _StreamState, interval: float) -> None:
         try:
+            try:
+                await state.websocket.send(self._keepalive_payload)
+                _log.debug(
+                    "evt=dg_keepalive_sent sid=%s stream_id=%s interval_s=0.000",
+                    state.sid,
+                    state.stream_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # pragma: no cover - defensive
+                _log.debug(
+                    "evt=dg_keepalive_send_failed sid=%s stream_id=%s",
+                    state.sid,
+                    state.stream_id,
+                    exc_info=True,
+                )
+                return
+
             while not state.closing:
                 await asyncio.sleep(interval)
                 if state.closing:

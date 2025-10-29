@@ -1,153 +1,73 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 17a8cdfdf42563bf2a14d60902cf9d5d45049bbc..44a78ca65d82cced8c975ce5b08aaa62282bc6bd 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1825,132 +1825,128 @@
-         }
-       } else if (becameDisconnected) {
-         Waveform.stop();
+diff --git a/app/services/streaming_asr/deepgram_client.py b/app/services/streaming_asr/deepgram_client.py
+index 50f5f45d7a399c28788d2a1b7ab3d4b8df1116dd..6a8dab1e830bc512e9ae85203f9fc2f127f5165f 100644
+--- a/app/services/streaming_asr/deepgram_client.py
++++ b/app/services/streaming_asr/deepgram_client.py
+@@ -374,50 +374,68 @@ class DeepgramClient:
+         return interval
  
-         if (audioRecorder && typeof audioRecorder.stop === 'function') {
-           try {
-             audioRecorder.stop();
-           } catch (err) {
-             console.warn('AudioRecorder stop error', err);
-           }
-         }
-         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
-           window.AudioPlayer.interrupt();
-         }
-       }
-       updateResumeBanner(state);
-     });
+     def _start_keepalive(self, state: _StreamState) -> None:
+         if self._keepalive_interval <= 0:
+             return
+         if state.keepalive_task is not None and not state.keepalive_task.done():
+             return
+         try:
+             loop = state.loop
+         except Exception:  # pragma: no cover - defensive
+             return
+         state.keepalive_task = loop.create_task(
+             self._keepalive_loop(state, self._keepalive_interval),
+             name=f"dg-keepalive-{state.sid}",
+         )
  
-     const POST_TTS_RELEASE_MS = 150;
+     def _cancel_keepalive(self, state: _StreamState) -> None:
+         task = state.keepalive_task
+         if task is None:
+             return
+         state.keepalive_task = None
+         self._safe_cancel(task)
  
- window.addEventListener('tts.start', (event) => {
-   const detail = event && event.detail;
-   if (detail) {
-     updateVoiceState(extractVoiceLocale(detail));
-   }
--  const recorder = window.AudioRecorder || audioRecorder;
--  if (recorder && typeof recorder.handleTtsStart === 'function') {
-+  if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
-     try {
--      recorder.handleTtsStart();
-+      window.AudioRecorder.handleTtsStart();
-     } catch (err) {
-       console.warn('AudioRecorder handleTtsStart failed', err);
-     }
-   }
- });
- 
- window.addEventListener('policy.snapshot', (event) => {
-   if (!audioRecorder || typeof audioRecorder.setPolicy !== 'function') {
-     return;
-   }
-   const frame = event && event.detail;
-   try {
-     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
-     audioRecorder.setPolicy(policy);
-   } catch (err) {
-     console.warn('AudioRecorder setPolicy failed', err);
-   }
- });
- 
- // Turn becomes Ready → hand control to user
- window.addEventListener('turn.state', (event) => {
--  const detail = (event && event.detail) || {};
--  const state = (typeof detail.state === 'string')
--    ? detail.state
--    : (detail.meta && typeof detail.meta.state === 'string' ? detail.meta.state : null);
--  if (!state || state.toLowerCase() !== 'ready') return;
-+  const frame = (event && event.detail) || {};
-+  const state = typeof frame.state === 'string'
-+    ? frame.state
-+    : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
-+  if (state !== 'Ready') return;
- 
-   // Optional: why we became ready (e.g., 'tts')
--  const reason = (typeof detail.reason === 'string')
--    ? detail.reason
--    : (detail.meta && typeof detail.meta.reason === 'string' ? detail.meta.reason : null);
-+  const reason = typeof frame.reason === 'string'
-+    ? frame.reason
-+    : (frame.meta && typeof frame.meta.reason === 'string' ? frame.meta.reason : null);
-   void reason; // not strictly needed, but kept for clarity
- 
-   DiagRecorder.maybeStart('turn');
- 
-   console.info('ui: turn=Ready → startMicCaptureIfIdle()');
--  const recorder = window.AudioRecorder || audioRecorder;
--  if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
-+  if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
-     try {
--      const maybe = recorder.startMicCaptureIfIdle();
-+      const maybe = window.AudioRecorder.startMicCaptureIfIdle();
-       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
-         maybe.catch((err) => {
-           console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready failed', err);
-         });
-       }
-     } catch (err) {
-       console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready threw', err);
-     }
-   }
- });
- 
- // Assistant TTS finished → open mic after optional delay
- window.addEventListener('tts.end', () => {
-   const release = () => {
-     DiagRecorder.maybeStart('ready');
--    const recorder = window.AudioRecorder || audioRecorder;
--    if (recorder && typeof recorder.handleTtsEnd === 'function') {
-+    if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
-       try {
--        recorder.handleTtsEnd();
-+        window.AudioRecorder.handleTtsEnd();
-       } catch (err) {
-         console.warn('AudioRecorder handleTtsEnd failed', err);
-       }
-     }
-   };
- 
-   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
-     setTimeout(release, POST_TTS_RELEASE_MS);
-   } else {
-     release();
-   }
- });
- 
- window.addEventListener('asr.ready', () => {
-   console.info('ui: asr.ready → startMicCaptureIfIdle()');
--  const recorder = window.AudioRecorder || audioRecorder;
--  if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
-+  if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
-     try {
--      const maybe = recorder.startMicCaptureIfIdle();
-+      const maybe = window.AudioRecorder.startMicCaptureIfIdle();
-       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
-         maybe.catch((err) => {
-           console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
-         });
-       }
-     } catch (err) {
-       console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
-     }
-   }
- });
- 
- window.addEventListener('assistant.suggestions', (event) => {
-   const detail = event && event.detail;
-   applySuggestionsFrame(detail);
- });
- 
- 
- // Start mic immediately on ws.open as a safety net; send diag banner
- window.addEventListener('ws.open', () => {
-   if (audioRecorder && typeof audioRecorder.start === 'function') {
-     audioRecorder.start().catch(() => {});
-   }
-   try {
-     if (WSClient && typeof WSClient.send === 'function') {
-       WSClient.send({
+     async def _keepalive_loop(self, state: _StreamState, interval: float) -> None:
+         try:
++            try:
++                await state.websocket.send(self._keepalive_payload)
++                _log.debug(
++                    "evt=dg_keepalive_sent sid=%s stream_id=%s interval_s=0.000",
++                    state.sid,
++                    state.stream_id,
++                )
++            except asyncio.CancelledError:
++                raise
++            except Exception:  # pragma: no cover - defensive
++                _log.debug(
++                    "evt=dg_keepalive_send_failed sid=%s stream_id=%s",
++                    state.sid,
++                    state.stream_id,
++                    exc_info=True,
++                )
++                return
++
+             while not state.closing:
+                 await asyncio.sleep(interval)
+                 if state.closing:
+                     break
+                 try:
+                     await state.websocket.send(self._keepalive_payload)
+                 except asyncio.CancelledError:
+                     raise
+                 except Exception:  # pragma: no cover - defensive
+                     _log.debug(
+                         "evt=dg_keepalive_send_failed sid=%s stream_id=%s",
+                         state.sid,
+                         state.stream_id,
+                         exc_info=True,
+                     )
+                     return
+                 _log.debug(
+                     "evt=dg_keepalive_sent sid=%s stream_id=%s interval_s=%.3f",
+                     state.sid,
+                     state.stream_id,
+                     interval,
+                 )
+         except asyncio.CancelledError:
+             raise
+         except Exception:  # pragma: no cover - defensive
