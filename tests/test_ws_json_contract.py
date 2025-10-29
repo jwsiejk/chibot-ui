@@ -8,7 +8,7 @@ import uuid
 from typing import Any, Callable, Dict, List
 
 from app.telemetry import bus
-from app.voice_v2 import EVT_CLIENT_BANNER, EVT_WS_JSON_RECV
+from app.voice_v2 import EVT_CLIENT_AUTOSTART, EVT_CLIENT_BANNER, EVT_WS_JSON_RECV
 from app.security.jwt_utils import mint_ws_token
 from app.ws.adapter import (
     CHAT_V2_SUBPROTOCOL,
@@ -157,6 +157,60 @@ class TestWebSocketJsonContract(unittest.TestCase):
             any(event.get("meta", {}).get("frame_type") == "asr.rearm.request" for event in received),
             "Expected EVT_WS_JSON_RECV event for asr.rearm.request frame",
         )
+
+    def test_client_autostart_frame_is_allowed(self) -> None:
+        adapter = ChatV2Adapter()
+        long_reason = "x" * 160
+        frame = {
+            "type": "client.autostart",
+            "event": "blocked",
+            "meta": {
+                "trigger": "boot",
+                "reason": long_reason,
+                "attempt": 3,
+                "active": True,
+                "ignore": {"bad": "value"},
+                "empty": " ",
+            },
+        }
+        events = [
+            {"type": "websocket.connect"},
+            {"type": "websocket.receive", "text": json.dumps(frame)},
+            {"type": "websocket.disconnect", "code": 1000},
+        ]
+
+        recorded: list[dict] = []
+        token = bus.subscribe(EVT_CLIENT_AUTOSTART, recorded.append)
+        try:
+            sent = self._drive(adapter, events)
+        finally:
+            bus.unsubscribe(token)
+
+        accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
+        self.assertEqual(len(accepts), 1)
+
+        send_payloads = [
+            json.loads(msg["text"])
+            for msg in sent
+            if msg.get("type") == "websocket.send" and msg.get("text") is not None
+        ]
+        error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
+        self.assertEqual(error_payloads, [])
+
+        self.assertEqual(len(recorded), 1)
+        event = recorded[0]
+        self.assertEqual(event["type"], EVT_CLIENT_AUTOSTART)
+        event_meta = event.get("meta", {})
+        self.assertEqual(event_meta.get("event"), "blocked")
+        sanitized_meta = event_meta.get("meta", {})
+        self.assertIn("trigger", sanitized_meta)
+        self.assertEqual(sanitized_meta["trigger"], "boot")
+        self.assertIn("reason", sanitized_meta)
+        self.assertEqual(len(sanitized_meta["reason"]), 120)
+        self.assertEqual(sanitized_meta["attempt"], 3)
+        self.assertTrue(sanitized_meta["active"])
+        self.assertNotIn("ignore", sanitized_meta)
+        self.assertNotIn("empty", sanitized_meta)
 
     def test_backpressure_events_toggle_on_thresholds(self) -> None:
         adapter = ChatV2Adapter()

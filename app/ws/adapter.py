@@ -24,6 +24,7 @@ from app.voice_v2 import (
     EVT_ASR_READY,
     EVT_CHAT_USER,
     EVT_CLIENT_BANNER,
+    EVT_CLIENT_AUTOSTART,
     EVT_CLIENT_MIC_OPEN,
     EVT_HUD_STATE,
     EVT_SESSION_STEP,
@@ -101,6 +102,7 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "chat.user",
     "client.diag",
     "client.log",
+    "client.autostart",
     "client.telemetry",
     "client.banner",
     "asr.rearm.request",
@@ -109,6 +111,20 @@ _ALLOWED_TEXT_FRAME_TYPES = {
 _CLIENT_TELEMETRY_ALLOWED_EVENTS = {
     "EVT_RECORDER_STARTED",
     "EVT_AUDIO_CHUNK_SENT_CLIENT",
+}
+
+_CLIENT_AUTOSTART_ALLOWED_EVENTS = {
+    "attempt",
+    "armed",
+    "blocked",
+    "cta_click",
+    "cta_shown",
+    "error",
+    "gesture",
+    "max_attempts",
+    "recording_started",
+    "recording_stopped",
+    "rejected",
 }
 
 
@@ -1131,6 +1147,47 @@ class ChatV2Adapter:
                     "who": "client",
                     "source": "ws_client",
                     "meta": log_meta,
+                }
+            )
+
+        if frame_type == "client.autostart":
+            event_name = frame.get("event")
+            if not isinstance(event_name, str) or not event_name.strip():
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.autostart requires an event label",
+                )
+                return self._HandleResult(True)
+
+            normalized_event = event_name.strip()
+            if normalized_event not in _CLIENT_AUTOSTART_ALLOWED_EVENTS:
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.autostart event must be a supported value",
+                )
+                return self._HandleResult(True)
+
+            sanitized_meta = self._sanitize_autostart_meta(frame.get("meta"))
+            event_payload: Dict[str, Any] = {"event": normalized_event}
+            if sanitized_meta:
+                event_payload["meta"] = sanitized_meta
+            meta["client_autostart"] = dict(event_payload)
+            bus.publish(
+                {
+                    "schema_version": "1",
+                    "type": EVT_CLIENT_AUTOSTART,
+                    "sid": ctx.sid,
+                    "who": "client",
+                    "source": "ws_client",
+                    "meta": event_payload,
                 }
             )
 
@@ -2158,6 +2215,37 @@ class ChatV2Adapter:
                 sanitized["extra"] = bus.redact_payload(extra)
             except Exception:
                 sanitized["extra"] = str(extra)
+
+        return sanitized
+
+    @staticmethod
+    def _sanitize_autostart_meta(raw_meta: Any) -> Dict[str, Any]:
+        if not isinstance(raw_meta, Mapping):
+            return {}
+
+        sanitized: Dict[str, Any] = {}
+        count = 0
+        for key, value in raw_meta.items():
+            if count >= 8:
+                break
+            if not isinstance(key, str):
+                continue
+            trimmed_key = key.strip()
+            if not trimmed_key:
+                continue
+            truncated_key = trimmed_key[:48]
+            if isinstance(value, str):
+                trimmed_value = value.strip()
+                if not trimmed_value:
+                    continue
+                sanitized[truncated_key] = trimmed_value[:120]
+            elif isinstance(value, bool):
+                sanitized[truncated_key] = value
+            elif isinstance(value, (int, float)) and math.isfinite(value):
+                sanitized[truncated_key] = value
+            else:
+                continue
+            count += 1
 
         return sanitized
 
