@@ -1847,10 +1847,9 @@ window.addEventListener('tts.start', (event) => {
   if (detail) {
     updateVoiceState(extractVoiceLocale(detail));
   }
-  const recorder = window.AudioRecorder || audioRecorder;
-  if (recorder && typeof recorder.handleTtsStart === 'function') {
+  if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
     try {
-      recorder.handleTtsStart();
+      window.AudioRecorder.handleTtsStart();
     } catch (err) {
       console.warn('AudioRecorder handleTtsStart failed', err);
     }
@@ -1872,25 +1871,24 @@ window.addEventListener('policy.snapshot', (event) => {
 
 // Turn becomes Ready → hand control to user
 window.addEventListener('turn.state', (event) => {
-  const detail = (event && event.detail) || {};
-  const state = (typeof detail.state === 'string')
-    ? detail.state
-    : (detail.meta && typeof detail.meta.state === 'string' ? detail.meta.state : null);
-  if (!state || state.toLowerCase() !== 'ready') return;
+  const frame = (event && event.detail) || {};
+  const state = typeof frame.state === 'string'
+    ? frame.state
+    : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
+  if (state !== 'Ready') return;
 
   // Optional: why we became ready (e.g., 'tts')
-  const reason = (typeof detail.reason === 'string')
-    ? detail.reason
-    : (detail.meta && typeof detail.meta.reason === 'string' ? detail.meta.reason : null);
+  const reason = typeof frame.reason === 'string'
+    ? frame.reason
+    : (frame.meta && typeof frame.meta.reason === 'string' ? frame.meta.reason : null);
   void reason; // not strictly needed, but kept for clarity
 
   DiagRecorder.maybeStart('turn');
 
   console.info('ui: turn=Ready → startMicCaptureIfIdle()');
-  const recorder = window.AudioRecorder || audioRecorder;
-  if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
+  if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
     try {
-      const maybe = recorder.startMicCaptureIfIdle();
+      const maybe = window.AudioRecorder.startMicCaptureIfIdle();
       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
         maybe.catch((err) => {
           console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready failed', err);
@@ -1906,10 +1904,9 @@ window.addEventListener('turn.state', (event) => {
 window.addEventListener('tts.end', () => {
   const release = () => {
     DiagRecorder.maybeStart('ready');
-    const recorder = window.AudioRecorder || audioRecorder;
-    if (recorder && typeof recorder.handleTtsEnd === 'function') {
+    if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
       try {
-        recorder.handleTtsEnd();
+        window.AudioRecorder.handleTtsEnd();
       } catch (err) {
         console.warn('AudioRecorder handleTtsEnd failed', err);
       }
@@ -1925,10 +1922,9 @@ window.addEventListener('tts.end', () => {
 
 window.addEventListener('asr.ready', () => {
   console.info('ui: asr.ready → startMicCaptureIfIdle()');
-  const recorder = window.AudioRecorder || audioRecorder;
-  if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
+  if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
     try {
-      const maybe = recorder.startMicCaptureIfIdle();
+      const maybe = window.AudioRecorder.startMicCaptureIfIdle();
       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
         maybe.catch((err) => {
           console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
