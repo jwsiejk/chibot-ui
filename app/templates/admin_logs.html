@@ -136,6 +136,15 @@
               <span>Audio recv</span>
             </label>
             <label class="admin-logs__type">
+              <input
+                type="checkbox"
+                name="logType"
+                value=""
+                data-filter-types="EVT_WS_AUDIO_RECV EVT_SESSION_STEP:audio.stream_started"
+              />
+              <span>Audio (server)</span>
+            </label>
+            <label class="admin-logs__type">
               <input type="checkbox" name="logType" value="EVT_WS_AUDIO_SEND" />
               <span>Audio send</span>
             </label>
@@ -213,6 +222,8 @@
                     <th scope="col">ts_ms</th>
                     <th scope="col">Type</th>
                     <th scope="col">Summary</th>
+                    <th scope="col">seq</th>
+                    <th scope="col">byte_count</th>
                   </tr>
                 </thead>
                 <tbody id="historyTableBody"></tbody>

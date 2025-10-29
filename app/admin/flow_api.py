@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import parse_qs
 
 from app.admin.flow_zip import build_flow_zip
@@ -260,8 +260,7 @@ def _filter_events(
             except json.JSONDecodeError as exc:  # pragma: no cover - defensive
                 raise ValueError("event payload must be valid JSON") from exc
 
-            event_type = event.get("type")
-            if requested_types and not _type_filter_matches(event_type, requested_types):
+            if requested_types and not _type_filter_matches(event, requested_types):
                 continue
 
             if since_ms is not None:
@@ -279,18 +278,57 @@ def _filter_events(
     return matched.getvalue()
 
 
-def _type_filter_matches(event_type: object, requested_types: set[str]) -> bool:
+def _type_filter_matches(event: object, requested_types: set[str]) -> bool:
+    if not isinstance(event, dict):
+        return False
+
+    event_type = event.get("type")
     if not isinstance(event_type, str):
         return False
-    if event_type in requested_types:
-        return True
+
     for token in requested_types:
-        prefixes = _TYPE_PREFIX_ALIASES.get(token)
-        if not prefixes:
-            continue
-        for prefix in prefixes:
-            if event_type.startswith(prefix):
-                return True
+        if _token_matches_event(event, event_type, token):
+            return True
+
+    return False
+
+
+def _token_matches_event(event: dict, event_type: str, token: str) -> bool:
+    base, sep, remainder = token.partition(":")
+    if sep:
+        if "=" in remainder:
+            path_expr, _, expected_value = remainder.partition("=")
+        else:
+            path_expr = "step"
+            expected_value = remainder
+
+        if event_type != base:
+            return False
+
+        meta = event.get("meta")
+        if not isinstance(meta, dict):
+            return False
+
+        path = [segment for segment in path_expr.split(".") if segment]
+        current: Any = meta
+        for segment in path:
+            if not isinstance(current, dict) or segment not in current:
+                return False
+            current = current.get(segment)
+
+        return current == expected_value
+
+    if event_type == token:
+        return True
+
+    prefixes = _TYPE_PREFIX_ALIASES.get(token)
+    if not prefixes:
+        return False
+
+    for prefix in prefixes:
+        if event_type.startswith(prefix):
+            return True
+
     return False
 
 

@@ -361,11 +361,27 @@
   };
 
   function selectedTypes() {
-    return Array.from(
-      document.querySelectorAll(`${TYPE_CHECKBOX_SELECTOR}:checked`)
-    )
-      .map((checkbox) => checkbox.value)
-      .filter(Boolean);
+    const tokens = new Set();
+    document
+      .querySelectorAll(`${TYPE_CHECKBOX_SELECTOR}:checked`)
+      .forEach((checkbox) => {
+        if (!(checkbox instanceof HTMLInputElement)) {
+          return;
+        }
+        const aliasRaw = checkbox.dataset.filterTypes;
+        if (aliasRaw) {
+          aliasRaw
+            .split(/[\s,]+/)
+            .map((token) => token.trim())
+            .filter(Boolean)
+            .forEach((token) => tokens.add(token));
+        }
+        const { value } = checkbox;
+        if (value) {
+          tokens.add(value);
+        }
+      });
+    return Array.from(tokens);
   }
 
   function syncTypesAllButton() {
@@ -395,9 +411,10 @@
 
   function buildTypesQuery(params) {
     const allCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
-    const total = allCheckboxes.length;
     const types = selectedTypes();
-    if (!total || !types.length || types.length === total) {
+    const allSelected =
+      allCheckboxes.length > 0 && allCheckboxes.every((checkbox) => checkbox.checked);
+    if (!types.length || allSelected) {
       params.delete('type');
     } else {
       params.set('type', types.join(','));
@@ -772,7 +789,7 @@
     if (!events.length) {
       const emptyRow = document.createElement('tr');
       const cell = document.createElement('td');
-      cell.colSpan = 3;
+      cell.colSpan = 5;
       cell.className = 'admin-logs__empty';
       cell.textContent = 'No events found for these filters.';
       emptyRow.appendChild(cell);
@@ -789,10 +806,15 @@
       const tsCell = document.createElement('td');
       const typeCell = document.createElement('td');
       const summaryCell = document.createElement('td');
+      const seqCell = document.createElement('td');
+      const byteCountCell = document.createElement('td');
 
       const tsValue = typeof event.ts_ms === 'number' ? event.ts_ms : event.ts_ms || '—';
       const typeValue = event.type || '—';
       let summaryValue = event.summary || '';
+
+      let seqValue = '—';
+      let byteCountValue = '—';
 
       if (!summaryValue) {
         if (typeof event.msg === 'string' && event.msg) {
@@ -810,9 +832,29 @@
       typeCell.textContent = typeValue;
       summaryCell.textContent = summaryValue;
 
+      if (typeValue === 'EVT_WS_AUDIO_RECV' && event.meta && typeof event.meta === 'object') {
+        if (Object.prototype.hasOwnProperty.call(event.meta, 'seq')) {
+          const seqRaw = event.meta.seq;
+          if (seqRaw !== null && seqRaw !== undefined) {
+            seqValue = String(seqRaw);
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(event.meta, 'byte_count')) {
+          const byteCountRaw = event.meta.byte_count;
+          if (byteCountRaw !== null && byteCountRaw !== undefined) {
+            byteCountValue = String(byteCountRaw);
+          }
+        }
+      }
+
+      seqCell.textContent = seqValue;
+      byteCountCell.textContent = byteCountValue;
+
       row.appendChild(tsCell);
       row.appendChild(typeCell);
       row.appendChild(summaryCell);
+      row.appendChild(seqCell);
+      row.appendChild(byteCountCell);
       fragment.appendChild(row);
     });
 

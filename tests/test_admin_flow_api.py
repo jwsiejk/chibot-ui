@@ -93,6 +93,48 @@ class AdminFlowApiTest(unittest.TestCase):
         self.assertEqual(event.get("ts_ms"), 75)
         self.assertEqual(event.get("meta", {}).get("idx"), 1)
 
+    def test_trace_filters_by_type_and_meta_step(self) -> None:
+        events = [
+            {
+                "type": "EVT_SESSION_STEP",
+                "ts_ms": 10,
+                "sid": self.sid,
+                "meta": {"step": "audio.stream_started"},
+            },
+            {
+                "type": "EVT_SESSION_STEP",
+                "ts_ms": 15,
+                "sid": self.sid,
+                "meta": {"step": "other_step"},
+            },
+            {
+                "type": "EVT_WS_AUDIO_RECV",
+                "ts_ms": 20,
+                "sid": self.sid,
+                "meta": {"seq": 1, "byte_count": 42},
+            },
+        ]
+        self._write_events(events)
+
+        query = b"type=EVT_WS_AUDIO_RECV,EVT_SESSION_STEP:audio.stream_started"
+        scope = self._make_scope(
+            path=f"/api/v1/admin/flow/{self.sid}/trace",
+            query_string=query,
+            headers=(),
+        )
+
+        response = asyncio.run(flow_api.handle_flow_trace(scope, self._receive(), sid=self.sid))
+
+        self.assertEqual(response.status, 200)
+        body_lines = [line for line in response.body.decode("utf-8").splitlines() if line]
+        self.assertEqual(len(body_lines), 2)
+        first_event = json.loads(body_lines[0])
+        second_event = json.loads(body_lines[1])
+        self.assertEqual(first_event.get("type"), "EVT_SESSION_STEP")
+        self.assertEqual(first_event.get("meta", {}).get("step"), "audio.stream_started")
+        self.assertEqual(second_event.get("type"), "EVT_WS_AUDIO_RECV")
+        self.assertEqual(second_event.get("meta", {}).get("byte_count"), 42)
+
     def test_zip_returns_archive_with_valid_digests(self) -> None:
         events = [
             {"type": "EVT_TURN_BEGIN", "ts_ms": 100, "sid": self.sid, "meta": {"idx": 1}},
