@@ -17,6 +17,15 @@
   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
   const getAudioPlayer = () => window.AudioPlayer;
 
+  try {
+  if (typeof AppState.websocket === "undefined" && typeof AppState.getState === "function") {
+    Object.defineProperty(AppState, "websocket", {
+      configurable: true, enumerable: false,
+      get() { try { return AppState.getState().websocket || null; } catch { return null; } }
+    });
+  }
+} catch {}
+
   let socket = null;
   let heartbeatTimerId = null;
   let expectInfoFrame = true;
@@ -1403,7 +1412,16 @@
     ws.__intentionalClose = false;
     const handlers = {
       open: () => {
-        updateState({ websocket: ws });
+  // Write live socket and mark connected so UI gates on ws.open can run
+  try {
+    if (typeof AppState.setState === "function") {
+      AppState.setState({ websocket: ws, connectionState: "connected" });
+    } else {
+      updateState({ websocket: ws, connectionState: "connected" });
+    }
+  } catch {
+    updateState({ websocket: ws, connectionState: "connected" });
+  }
         try {
           WSClient._ws = ws;
           WSClient._connected = true;
