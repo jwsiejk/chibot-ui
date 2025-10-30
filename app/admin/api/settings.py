@@ -94,6 +94,10 @@ def _extract_updates(payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         "diag_chunk_sample_n",
         "policy_media",
         "policy_capture",
+        "policy_recorder",
+        "policy_input",
+        "policy_asr",
+        "policy_routing",
     ):
         if key in settings:
             updates[key] = settings[key]
@@ -166,6 +170,73 @@ def _normalize_policy_capture(value: Any) -> Dict[str, Any]:
     return current
 
 
+def _normalize_policy_recorder(value: Any) -> Dict[str, Any]:
+    current = dict(config.POLICY_RECORDER)
+    if value is None:
+        raise ValueError("expected_object")
+    if not isinstance(value, Mapping):
+        raise ValueError("expected_object")
+
+    if "stop_on_tts_start" in value:
+        current["stop_on_tts_start"] = _coerce_bool(value.get("stop_on_tts_start"))
+
+    if "mute_send_during_tts" in value:
+        current["mute_send_during_tts"] = _coerce_bool(
+            value.get("mute_send_during_tts")
+        )
+
+    return current
+
+
+def _normalize_policy_input(value: Any) -> Dict[str, Any]:
+    current = dict(config.POLICY_INPUT)
+    if value is None:
+        raise ValueError("expected_object")
+    if not isinstance(value, Mapping):
+        raise ValueError("expected_object")
+
+    if "require_hotword_to_start" in value:
+        current["require_hotword_to_start"] = _coerce_bool(
+            value.get("require_hotword_to_start")
+        )
+
+    return current
+
+
+def _normalize_policy_asr(value: Any) -> Dict[str, Any]:
+    current = dict(config.POLICY_ASR)
+    if value is None:
+        raise ValueError("expected_object")
+    if not isinstance(value, Mapping):
+        raise ValueError("expected_object")
+
+    if "prearm_on_tts_end" in value:
+        current["prearm_on_tts_end"] = _coerce_bool(value.get("prearm_on_tts_end"))
+
+    if "keep_stream_warm_ms" in value:
+        current["keep_stream_warm_ms"] = _coerce_int(
+            value.get("keep_stream_warm_ms"), minimum=0, maximum=600000
+        )
+
+    return current
+
+
+def _normalize_policy_routing(value: Any) -> Dict[str, Any]:
+    current = dict(config.POLICY_ROUTING)
+    if value is None:
+        raise ValueError("expected_object")
+    if not isinstance(value, Mapping):
+        raise ValueError("expected_object")
+
+    if "ws_version" in value:
+        candidate = value.get("ws_version")
+        if not isinstance(candidate, str) or not candidate.strip():
+            raise ValueError("expected_string")
+        current["ws_version"] = candidate.strip()
+
+    return current
+
+
 def _normalize_setting(key: str, value: Any) -> Optional[Any]:
     if value is None:
         return None
@@ -179,6 +250,14 @@ def _normalize_setting(key: str, value: Any) -> Optional[Any]:
         return _normalize_policy_media(value)
     if key == "policy_capture":
         return _normalize_policy_capture(value)
+    if key == "policy_recorder":
+        return _normalize_policy_recorder(value)
+    if key == "policy_input":
+        return _normalize_policy_input(value)
+    if key == "policy_asr":
+        return _normalize_policy_asr(value)
+    if key == "policy_routing":
+        return _normalize_policy_routing(value)
     raise ValueError("unsupported_setting")
 
 
@@ -232,6 +311,10 @@ def _current_settings() -> Dict[str, Any]:
             "diag_chunk_sample_n": int(config.DIAG_CHUNK_SAMPLE_N),
             "policy_media": dict(config.POLICY_MEDIA),
             "policy_capture": dict(config.POLICY_CAPTURE),
+            "policy_recorder": dict(config.POLICY_RECORDER),
+            "policy_input": dict(config.POLICY_INPUT),
+            "policy_asr": dict(config.POLICY_ASR),
+            "policy_routing": dict(config.POLICY_ROUTING),
         }
     )
     return settings

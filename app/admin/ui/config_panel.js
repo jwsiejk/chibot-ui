@@ -22,6 +22,20 @@
       timeslice_ms: 200,
       mask_during_tts: true,
     },
+    policy_recorder: {
+      stop_on_tts_start: false,
+      mute_send_during_tts: true,
+    },
+    policy_input: {
+      require_hotword_to_start: false,
+    },
+    policy_asr: {
+      prearm_on_tts_end: true,
+      keep_stream_warm_ms: 30000,
+    },
+    policy_routing: {
+      ws_version: 'v1',
+    },
   };
   const CHUNK_MIN = 1;
   const CHUNK_MAX = 100;
@@ -36,6 +50,10 @@
       diag_chunk_sample_n: DEFAULTS.diag_chunk_sample_n,
       policy_media: { ...DEFAULTS.policy_media },
       policy_capture: { ...DEFAULTS.policy_capture },
+      policy_recorder: { ...DEFAULTS.policy_recorder },
+      policy_input: { ...DEFAULTS.policy_input },
+      policy_asr: { ...DEFAULTS.policy_asr },
+      policy_routing: { ...DEFAULTS.policy_routing },
     };
   }
 
@@ -125,6 +143,65 @@
       type: 'boolean',
       label: 'Mask during TTS',
       description: 'Mute microphone capture while the assistant is speaking.',
+    },
+    {
+      key: 'policy_recorder.stop_on_tts_start',
+      settingKey: 'policy_recorder',
+      prop: 'stop_on_tts_start',
+      type: 'boolean',
+      label: 'Stop recorder on TTS start',
+      description: 'Disable microphone streaming entirely when TTS begins.',
+    },
+    {
+      key: 'policy_recorder.mute_send_during_tts',
+      settingKey: 'policy_recorder',
+      prop: 'mute_send_during_tts',
+      type: 'boolean',
+      label: 'Mute send during TTS',
+      description: 'Keep the recorder armed but pause audio chunk transmission while TTS plays.',
+    },
+    {
+      key: 'policy_input.require_hotword_to_start',
+      settingKey: 'policy_input',
+      prop: 'require_hotword_to_start',
+      type: 'boolean',
+      label: 'Require wake word to start',
+      description: 'Require the wake word before auto-starting microphone capture.',
+    },
+    {
+      key: 'policy_asr.prearm_on_tts_end',
+      settingKey: 'policy_asr',
+      prop: 'prearm_on_tts_end',
+      type: 'boolean',
+      label: 'Pre-arm ASR after TTS',
+      description: 'Open a warm ASR stream when TTS ends so listening is immediate.',
+    },
+    {
+      key: 'policy_asr.keep_stream_warm_ms',
+      settingKey: 'policy_asr',
+      prop: 'keep_stream_warm_ms',
+      type: 'number',
+      label: 'ASR keep-warm (ms)',
+      description: 'How long to keep the ASR stream warm after pre-arming.',
+      min: 0,
+      sanitize: (value) => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric < 0) {
+          return DEFAULTS.policy_asr.keep_stream_warm_ms;
+        }
+        return Math.round(numeric);
+      },
+    },
+    {
+      key: 'policy_routing.ws_version',
+      settingKey: 'policy_routing',
+      prop: 'ws_version',
+      type: 'select',
+      label: 'WS routing version',
+      description: 'WebSocket API version for chat connections.',
+      options: [
+        { value: 'v1', label: 'v1 (/ws/v1/chat)' },
+      ],
     },
   ];
 
@@ -245,12 +322,90 @@
     return base;
   }
 
+  function sanitizePolicyRecorder(value) {
+    const base = { ...DEFAULTS.policy_recorder };
+    if (!value || typeof value !== 'object') {
+      return base;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'stop_on_tts_start')) {
+      base.stop_on_tts_start = coerceBoolean(
+        value.stop_on_tts_start,
+        base.stop_on_tts_start,
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'mute_send_during_tts')) {
+      base.mute_send_during_tts = coerceBoolean(
+        value.mute_send_during_tts,
+        base.mute_send_during_tts,
+      );
+    }
+    return base;
+  }
+
+  function sanitizePolicyInput(value) {
+    const base = { ...DEFAULTS.policy_input };
+    if (!value || typeof value !== 'object') {
+      return base;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'require_hotword_to_start')) {
+      base.require_hotword_to_start = coerceBoolean(
+        value.require_hotword_to_start,
+        base.require_hotword_to_start,
+      );
+    }
+    return base;
+  }
+
+  function sanitizePolicyAsr(value) {
+    const base = { ...DEFAULTS.policy_asr };
+    if (!value || typeof value !== 'object') {
+      return base;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'prearm_on_tts_end')) {
+      base.prearm_on_tts_end = coerceBoolean(
+        value.prearm_on_tts_end,
+        base.prearm_on_tts_end,
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'keep_stream_warm_ms')) {
+      const numeric = Number(value.keep_stream_warm_ms);
+      base.keep_stream_warm_ms = Number.isFinite(numeric) && numeric >= 0
+        ? Math.round(numeric)
+        : DEFAULTS.policy_asr.keep_stream_warm_ms;
+    }
+    return base;
+  }
+
+  function sanitizePolicyRouting(value) {
+    const base = { ...DEFAULTS.policy_routing };
+    if (!value || typeof value !== 'object') {
+      return base;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'ws_version')) {
+      const candidate = typeof value.ws_version === 'string' ? value.ws_version.trim() : '';
+      base.ws_version = candidate || base.ws_version;
+    }
+    return base;
+  }
+
   function sanitizeSettingValue(key, value) {
     if (key === 'policy_media') {
       return sanitizePolicyMedia(value);
     }
     if (key === 'policy_capture') {
       return sanitizePolicyCapture(value);
+    }
+    if (key === 'policy_recorder') {
+      return sanitizePolicyRecorder(value);
+    }
+    if (key === 'policy_input') {
+      return sanitizePolicyInput(value);
+    }
+    if (key === 'policy_asr') {
+      return sanitizePolicyAsr(value);
+    }
+    if (key === 'policy_routing') {
+      return sanitizePolicyRouting(value);
     }
     if (key === 'diag_chunk_sample_n') {
       return clampChunk(value);
@@ -357,6 +512,18 @@
     if (Object.prototype.hasOwnProperty.call(raw, 'policy_capture')) {
       result.policy_capture = sanitizePolicyCapture(raw.policy_capture);
     }
+    if (Object.prototype.hasOwnProperty.call(raw, 'policy_recorder')) {
+      result.policy_recorder = sanitizePolicyRecorder(raw.policy_recorder);
+    }
+    if (Object.prototype.hasOwnProperty.call(raw, 'policy_input')) {
+      result.policy_input = sanitizePolicyInput(raw.policy_input);
+    }
+    if (Object.prototype.hasOwnProperty.call(raw, 'policy_asr')) {
+      result.policy_asr = sanitizePolicyAsr(raw.policy_asr);
+    }
+    if (Object.prototype.hasOwnProperty.call(raw, 'policy_routing')) {
+      result.policy_routing = sanitizePolicyRouting(raw.policy_routing);
+    }
     return result;
   }
 
@@ -371,6 +538,10 @@
       DIAG_CHUNK_SAMPLE_N: clampChunk(values.diag_chunk_sample_n),
       POLICY_MEDIA: sanitizePolicyMedia(values.policy_media),
       POLICY_CAPTURE: sanitizePolicyCapture(values.policy_capture),
+      POLICY_RECORDER: sanitizePolicyRecorder(values.policy_recorder),
+      POLICY_INPUT: sanitizePolicyInput(values.policy_input),
+      POLICY_ASR: sanitizePolicyAsr(values.policy_asr),
+      POLICY_ROUTING: sanitizePolicyRouting(values.policy_routing),
     });
   }
 
@@ -381,7 +552,14 @@
     const next = { ...state.values };
     Object.keys(values).forEach((key) => {
       const sanitized = sanitizeSettingValue(key, values[key]);
-      if (key === 'policy_media' || key === 'policy_capture') {
+      if (
+        key === 'policy_media' ||
+        key === 'policy_capture' ||
+        key === 'policy_recorder' ||
+        key === 'policy_input' ||
+        key === 'policy_asr' ||
+        key === 'policy_routing'
+      ) {
         next[key] = { ...sanitized };
       } else {
         next[key] = sanitized;
@@ -406,6 +584,10 @@
       diag_chunk_sample_n: cfg.DIAG_CHUNK_SAMPLE_N,
       policy_media: cfg.POLICY_MEDIA,
       policy_capture: cfg.POLICY_CAPTURE,
+      policy_recorder: cfg.POLICY_RECORDER,
+      policy_input: cfg.POLICY_INPUT,
+      policy_asr: cfg.POLICY_ASR,
+      policy_routing: cfg.POLICY_ROUTING,
     });
   }
 

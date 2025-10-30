@@ -70,8 +70,6 @@
     }
   })();
 
-  const WAKE_WORD_ONLY = true;
-
   function isSameOrigin(url) {
     try {
       if (!/^(?:[a-z]+:)?\/\//i.test(url)) {
@@ -825,6 +823,58 @@
       policyCaptureLogged: false,
     };
 
+    let asrPrearmIssued = false;
+
+    function getPolicySnapshot() {
+      if (runtimeState.policy && typeof runtimeState.policy === 'object') {
+        return runtimeState.policy;
+      }
+      if (AppState && typeof AppState.policy === 'object') {
+        return AppState.policy;
+      }
+      return null;
+    }
+
+    function getNestedPolicySection(section) {
+      const snapshot = getPolicySnapshot();
+      if (!snapshot || typeof snapshot !== 'object') {
+        return null;
+      }
+      const nested = snapshot.policy;
+      if (!nested || typeof nested !== 'object') {
+        return null;
+      }
+      const candidate = nested[section];
+      return candidate && typeof candidate === 'object' ? candidate : null;
+    }
+
+    function requireHotwordToStart() {
+      const inputPolicy = getNestedPolicySection('input');
+      if (inputPolicy && typeof inputPolicy.require_hotword_to_start === 'boolean') {
+        return inputPolicy.require_hotword_to_start;
+      }
+      return false;
+    }
+
+    function shouldPrearmOnTtsEnd() {
+      const asrPolicy = getNestedPolicySection('asr');
+      if (asrPolicy && typeof asrPolicy.prearm_on_tts_end === 'boolean') {
+        return asrPolicy.prearm_on_tts_end;
+      }
+      return true;
+    }
+
+    function getKeepWarmMs() {
+      const asrPolicy = getNestedPolicySection('asr');
+      if (asrPolicy && Number.isFinite(Number(asrPolicy.keep_stream_warm_ms))) {
+        const value = Number(asrPolicy.keep_stream_warm_ms);
+        if (value >= 0) {
+          return Math.round(value);
+        }
+      }
+      return 30000;
+    }
+
     const micSessionTelemetry = {
       micOpenLogged: false,
       firstChunkLogged: false,
@@ -1148,7 +1198,7 @@
         recording: Boolean(runtimeState.isRecording),
       };
 
-      if (WAKE_WORD_ONLY) {
+      if (requireHotwordToStart()) {
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
           blockedBy: 'wake_word_only',
           audioIdle: runtimeState.audioPlaybackIdle,
@@ -1939,7 +1989,17 @@
           params.set('resume', resume.token);
         }
       }
-      const wsUrl = `/ws/v2/chat?${params.toString()}`;
+      let wsPath = '/ws/v1/chat';
+      try {
+        const routing = AppState?.policy?.policy?.routing;
+        const candidate = typeof routing?.ws_version === 'string' ? routing.ws_version.trim() : '';
+        if (candidate && candidate.toLowerCase() !== 'v1') {
+          console.warn('Unsupported ws_version from policy; forcing v1', candidate);
+        }
+      } catch (err) {
+        console.warn('Failed to inspect policy routing for ws path', err);
+      }
+      const wsUrl = `${wsPath}?${params.toString()}`;
 
       // Add token as SECOND subprotocol so the server can read it if a proxy
       // or any client path drops the query string.
@@ -2369,12 +2429,37 @@
       }
     }
 
+    function requestAsrPrearm(trigger) {
+      if (asrPrearmIssued) {
+        return;
+      }
+      asrPrearmIssued = true;
+      const payload = { type: 'asr.rearm.request' };
+      const keepWarm = getKeepWarmMs();
+      try {
+        const client = window.WSClient;
+        if (client && typeof client.send === 'function') {
+          client.send(payload);
+        } else {
+          const ws = window.WS;
+          if (ws && typeof ws.send === 'function') {
+            ws.send(payload);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to send asr.rearm.request', err);
+      }
+      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
+      logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
+    }
+
 window.addEventListener('tts.start', (event) => {
   const detail = event && event.detail;
   if (detail) {
     updateVoiceState(extractVoiceLocale(detail));
   }
   runtimeState.audioPlaybackIdle = false;
+  asrPrearmIssued = false;
   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
     try {
       window.AudioRecorder.handleTtsStart();
@@ -2416,7 +2501,7 @@ window.addEventListener('turn.state', (event) => {
   DiagRecorder.maybeStart('turn');
   maybeAutoStartCapture('turn_ready', 'tts_end');
 
-  if (WAKE_WORD_ONLY) {
+  if (requireHotwordToStart()) {
     console.info('diag=mic_capture_skip trigger=turn_ready mode=wake_word_only');
     return;
   }
@@ -2431,6 +2516,13 @@ window.addEventListener('tts.end', () => {
         window.AudioRecorder.handleTtsEnd();
       } catch (err) {
         console.warn('AudioRecorder handleTtsEnd failed', err);
+      }
+    }
+    if (shouldPrearmOnTtsEnd()) {
+      try {
+        requestAsrPrearm('tts_end');
+      } catch (err) {
+        console.warn('requestAsrPrearm failed after tts.end', err);
       }
     }
   };
@@ -2454,6 +2546,13 @@ window.addEventListener('assistant.await_user', (event) => {
   const frame = event && event.detail;
   const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
   maybeAutoStartCapture('await_user', reason);
+  if (shouldPrearmOnTtsEnd()) {
+    try {
+      requestAsrPrearm('await_user');
+    } catch (err) {
+      console.warn('requestAsrPrearm failed after assistant.await_user', err);
+    }
+  }
 });
 
 window.addEventListener('asr.unavailable', (event) => {
@@ -2522,7 +2621,7 @@ window.addEventListener('asr.ready', (event) => {
     asrRetry.timer = null;
   }
   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
-    if (WAKE_WORD_ONLY) {
+    if (requireHotwordToStart()) {
       console.info('diag=mic_capture_skip trigger=asr_ready mode=wake_word_only');
       return;
     }

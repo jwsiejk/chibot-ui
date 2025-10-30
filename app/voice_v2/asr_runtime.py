@@ -127,6 +127,7 @@ class _SessionState:
     first_ingress_ms: int = 0
     first_partial_logged: bool = False
     model: Optional[str] = None
+    keep_warm_until: float = 0.0
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -405,7 +406,7 @@ class ASRRuntime:
         state.bytes_received = 0
         state.listening = False
 
-    def prearm(self, sid: str) -> None:
+    def prearm(self, sid: str, *, keep_warm_ms: int | None = None) -> None:
         """Request that the ASR stream open proactively for the session."""
 
         if not isinstance(sid, str) or not sid:
@@ -416,9 +417,19 @@ class ASRRuntime:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
         if state.stream_open:
+            if keep_warm_ms is not None and keep_warm_ms > 0:
+                state.keep_warm_until = max(
+                    state.keep_warm_until,
+                    time.monotonic() + (keep_warm_ms / 1000.0),
+                )
             return
 
         state.prearm_requested = True
+        if keep_warm_ms is not None and keep_warm_ms > 0:
+            state.keep_warm_until = max(
+                state.keep_warm_until,
+                time.monotonic() + (keep_warm_ms / 1000.0),
+            )
         self._ensure_stream(sid, state)
 
     async def open_if_needed(self, sid: str, *, req_id: str | None = None) -> None:
@@ -1353,16 +1364,20 @@ class ASRRuntime:
         state.ready_armed_at = time.monotonic()
         state.ready_watchdog = loop.call_later(_NO_AUDIO_TIMEOUT_S, _fire)
 
-    def _reset_idle_timer(self, sid: str, state: _SessionState) -> None:
+    def _reset_idle_timer(
+        self, sid: str, state: _SessionState, *, delay_override: float | None = None
+    ) -> None:
         threshold_ms = self._idle_close_ms
-        if threshold_ms <= 0:
+        if delay_override is None and threshold_ms <= 0:
             return
         loop = self._ensure_loop()
         if loop is None:
             return
         self._cancel_idle_timer(state)
 
-        delay = threshold_ms / 1000.0
+        delay = delay_override if delay_override is not None else threshold_ms / 1000.0
+        if delay <= 0:
+            return
 
         def _fire() -> None:
             state.idle_handle = None
@@ -1372,6 +1387,12 @@ class ASRRuntime:
 
     def _handle_idle_timeout(self, sid: str, state: _SessionState) -> None:
         if not state.stream_open:
+            return
+
+        now_monotonic = time.monotonic()
+        if state.keep_warm_until and now_monotonic < state.keep_warm_until:
+            remaining = state.keep_warm_until - now_monotonic
+            self._reset_idle_timer(sid, state, delay_override=remaining)
             return
 
         state.close_reason = "idle_timeout"
@@ -1403,6 +1424,7 @@ class ASRRuntime:
             else self._idle_close_ms
         )
         stream_id = state.stream_id or state.last_stream_id or ""
+        state.keep_warm_until = 0.0
         if close_for_prearm:
             _log.warning(
                 "evt=asr_prearm_idle sid=%s stream_id=%s idle_ms=%d action=close",

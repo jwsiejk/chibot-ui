@@ -1,185 +1,3266 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 9ecaa66099698512846b224a24f136a51a334bf1..d52883d9da68960affd439903d119bc8ebf3f4ea 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -807,66 +807,79 @@ async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[s
+diff --git a/app/admin/api/settings.py b/app/admin/api/settings.py
+index 8bf7b24d3561d4ee06077e95b4a90f026b86622b..d97ca09d979979763c460540ab30c4511675ff3b 100644
+--- a/app/admin/api/settings.py
++++ b/app/admin/api/settings.py
+@@ -72,50 +72,54 @@ async def handle_admin_settings(scope: dict, receive) -> "Response":
+         _log.exception(
+             "evt=admin_settings_update_failed err=%s",
+             exc.__class__.__name__,
+             extra={"component": "admin.settings"},
+         )
+         return _json_response(status=500, error="update_failed")
  
- def _get_adapter() -> ChatV2Adapter:
-     """Return a lazily instantiated ChatV2Adapter singleton."""
-     global _adapter
-     if _adapter is None:
-         exporter = FileExporter(EXPORT_ROOT)
-         engine = EngineV2(exporter=exporter)
-         tts_runtime = TTSRuntime(engine=engine)
-         asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
-         asr_runtime = ASRRuntime(engine=engine, client=asr_client)
-         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
-         _adapter.tts_runtime = tts_runtime
-         _adapter.asr_runtime = asr_runtime
-     return _adapter
+     return _respond_settings(method)
  
  
- async def _handle_admin_settings_route(
-     scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-     rejection = await _require_admin_api(scope, receive)
-     if rejection is not None:
-         return rejection
-     return await handle_admin_settings(scope, receive)
+ def _extract_updates(payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+     if not isinstance(payload, Mapping):
+         return None
+     settings = payload.get("settings")
+     if settings is None:
+         return None
+     if not isinstance(settings, Mapping):
+         return None
+     updates: Dict[str, Any] = {}
+     for key in (
+         "diag_client_hud",
+         "diag_audio_guard",
+         "diag_chunk_sample_n",
+         "policy_media",
+         "policy_capture",
++        "policy_recorder",
++        "policy_input",
++        "policy_asr",
++        "policy_routing",
+     ):
+         if key in settings:
+             updates[key] = settings[key]
+     return updates
  
  
-+def require_db_ready(handler: HttpHandler) -> HttpHandler:
-+    async def _wrapped(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-+        status = neon.db_status()
-+        state = status.get("state", "init")
-+        if state != "ready":
-+            await _drain_request_body(receive)
-+            _log.info("evt=db_guard_warming state=%s", state)
-+            return json_response(status=503, db="warming")
-+        return await handler(scope, receive)
+ def _normalize_policy_media(value: Any) -> Dict[str, Any]:
+     current = dict(config.POLICY_MEDIA)
+     if value is None:
+         raise ValueError("expected_object")
+     if isinstance(value, str):
+         candidate = value.strip()
+         if candidate not in _POLICY_MEDIA_ALLOWED_INPUTS:
+             raise ValueError("invalid_asr_input")
+         current["asr_input"] = candidate
+         return current
+     if not isinstance(value, Mapping):
+         raise ValueError("expected_object")
+ 
+     if "asr_input" in value:
+         candidate_raw = value.get("asr_input")
+         if not isinstance(candidate_raw, str):
+             raise ValueError("invalid_asr_input")
+         candidate = candidate_raw.strip()
+         if candidate not in _POLICY_MEDIA_ALLOWED_INPUTS:
+@@ -144,63 +148,138 @@ def _normalize_policy_capture(value: Any) -> Dict[str, Any]:
+     current = dict(config.POLICY_CAPTURE)
+     if value is None:
+         raise ValueError("expected_object")
+     if not isinstance(value, Mapping):
+         raise ValueError("expected_object")
+ 
+     if "start_on_asr_ready" in value:
+         current["start_on_asr_ready"] = _coerce_bool(value.get("start_on_asr_ready"))
+ 
+     if "start_on_turn_ready" in value:
+         current["start_on_turn_ready"] = _coerce_bool(value.get("start_on_turn_ready"))
+ 
+     if "mask_during_tts" in value:
+         current["mask_during_tts"] = _coerce_bool(value.get("mask_during_tts"))
+ 
+     if "timeslice_ms" in value:
+         current["timeslice_ms"] = _coerce_int(
+             value.get("timeslice_ms"),
+             minimum=_POLICY_CAPTURE_MIN_TIMESLICE,
+             maximum=600000,
+         )
+ 
+     return current
+ 
+ 
++def _normalize_policy_recorder(value: Any) -> Dict[str, Any]:
++    current = dict(config.POLICY_RECORDER)
++    if value is None:
++        raise ValueError("expected_object")
++    if not isinstance(value, Mapping):
++        raise ValueError("expected_object")
 +
-+    return _wrapped
++    if "stop_on_tts_start" in value:
++        current["stop_on_tts_start"] = _coerce_bool(value.get("stop_on_tts_start"))
++
++    if "mute_send_during_tts" in value:
++        current["mute_send_during_tts"] = _coerce_bool(
++            value.get("mute_send_during_tts")
++        )
++
++    return current
 +
 +
- _HTTP_ROUTES: Dict[str, HttpHandler] = {
-     ROOT_ROUTE: _handle_index,
-     ADMIN_LOGS_ROUTE: _handle_admin_logs,
--    ADMIN_SETTINGS_ROUTE: _handle_admin_settings_route,
--    ADMIN_CONFIG_ROUTE: _handle_admin_config,
-+    ADMIN_SETTINGS_ROUTE: require_db_ready(_handle_admin_settings_route),
-+    ADMIN_CONFIG_ROUTE: require_db_ready(_handle_admin_config),
-     FAVICON_ROUTE: _handle_favicon,
-     HEALTH_ROUTE: _handle_health,
-     HEALTHZ_ROUTE: _handle_healthz,
-     DIAG_DB_ROUTE: _handle_diag_db,
-     LIVE_ROUTE: _handle_live,
-     READY_ROUTE: _handle_ready,
-     INFO_ROUTE: _handle_info,
-     WS_TOKEN_ROUTE: post_ws_token,
-     LOGIN_ROUTE: post_login,
--    ME_ROUTE: get_me,
--    PROFILE_ROUTE: post_profile,
-+    ME_ROUTE: require_db_ready(get_me),
-+    PROFILE_ROUTE: require_db_ready(post_profile),
-     ADMIN_FLOW_TRACE_ROUTE: _handle_admin_flow_trace_query,
-     ADMIN_FLOW_ZIP_ROUTE: _handle_admin_flow_zip_query,
-     ADMIN_FLOW_SESSIONS_ROUTE: _handle_admin_flow_sessions,
-     ADMIN_FLOW_LIVE_ROUTE: _handle_admin_flow_live_query,
- }
++def _normalize_policy_input(value: Any) -> Dict[str, Any]:
++    current = dict(config.POLICY_INPUT)
++    if value is None:
++        raise ValueError("expected_object")
++    if not isinstance(value, Mapping):
++        raise ValueError("expected_object")
++
++    if "require_hotword_to_start" in value:
++        current["require_hotword_to_start"] = _coerce_bool(
++            value.get("require_hotword_to_start")
++        )
++
++    return current
++
++
++def _normalize_policy_asr(value: Any) -> Dict[str, Any]:
++    current = dict(config.POLICY_ASR)
++    if value is None:
++        raise ValueError("expected_object")
++    if not isinstance(value, Mapping):
++        raise ValueError("expected_object")
++
++    if "prearm_on_tts_end" in value:
++        current["prearm_on_tts_end"] = _coerce_bool(value.get("prearm_on_tts_end"))
++
++    if "keep_stream_warm_ms" in value:
++        current["keep_stream_warm_ms"] = _coerce_int(
++            value.get("keep_stream_warm_ms"), minimum=0, maximum=600000
++        )
++
++    return current
++
++
++def _normalize_policy_routing(value: Any) -> Dict[str, Any]:
++    current = dict(config.POLICY_ROUTING)
++    if value is None:
++        raise ValueError("expected_object")
++    if not isinstance(value, Mapping):
++        raise ValueError("expected_object")
++
++    if "ws_version" in value:
++        candidate = value.get("ws_version")
++        if not isinstance(candidate, str) or not candidate.strip():
++            raise ValueError("expected_string")
++        current["ws_version"] = candidate.strip()
++
++    return current
++
++
+ def _normalize_setting(key: str, value: Any) -> Optional[Any]:
+     if value is None:
+         return None
+     if key == "diag_client_hud" or key == "diag_audio_guard":
+         coerced = _coerce_bool(value)
+         return "true" if coerced else "false"
+     if key == "diag_chunk_sample_n":
+         coerced = _coerce_int(value, minimum=_CHUNK_SAMPLE_MIN, maximum=_CHUNK_SAMPLE_MAX)
+         return str(coerced)
+     if key == "policy_media":
+         return _normalize_policy_media(value)
+     if key == "policy_capture":
+         return _normalize_policy_capture(value)
++    if key == "policy_recorder":
++        return _normalize_policy_recorder(value)
++    if key == "policy_input":
++        return _normalize_policy_input(value)
++    if key == "policy_asr":
++        return _normalize_policy_asr(value)
++    if key == "policy_routing":
++        return _normalize_policy_routing(value)
+     raise ValueError("unsupported_setting")
  
  
- asgi = app
- 
- __all__ = ["app", "asgi"]
- 
- 
- def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
-     headers = scope.get("headers") or []
-     for name, value in headers:
-         if name == header_name:
-             try:
-                 return value.decode("latin1")
-             except UnicodeDecodeError:
-                 return value.decode("latin1", errors="ignore")
-     return None
+ def _coerce_bool(value: Any) -> bool:
+     if isinstance(value, bool):
+         return value
+     if isinstance(value, (int, float)):
+         return bool(value)
+     if isinstance(value, str):
+         candidate = value.strip().lower()
+         if candidate in {"1", "true", "t", "yes", "y", "on"}:
+             return True
+         if candidate in {"0", "false", "f", "no", "n", "off"}:
+             return False
+     raise ValueError("expected_boolean")
  
  
- async def _handle_lifespan(
-     receive: Callable[[], Awaitable[dict]],
-diff --git a/app/db/neon.py b/app/db/neon.py
-index 115e3c88af09e9bff36e6e5096c928090061b8c8..7dd596b323b6e0ae692ec5c6bf7d77f049e520df 100644
---- a/app/db/neon.py
-+++ b/app/db/neon.py
-@@ -1,88 +1,90 @@
- """Neon database pool and helpers."""
- from __future__ import annotations
+ def _coerce_int(value: Any, *, minimum: int, maximum: int) -> int:
+     if isinstance(value, bool):
+         raise ValueError("expected_integer")
+     if isinstance(value, (int, float)) and not isinstance(value, bool):
+         candidate = int(value)
+     elif isinstance(value, str):
+         try:
+             candidate = int(float(value.strip()))
+@@ -210,50 +289,54 @@ def _coerce_int(value: Any, *, minimum: int, maximum: int) -> int:
+         raise ValueError("expected_integer")
  
- import asyncio
- import logging
- import os
- import random
- import time
- from typing import Any, Dict, Optional
+     if candidate < minimum:
+         return minimum
+     if candidate > maximum:
+         return maximum
+     return candidate
  
- import asyncpg
  
- from app.db.postgres_config import get_postgres_config, redact_dsn
+ def _respond_settings(method: str) -> "Response":
+     payload = {"settings": _current_settings()}
+     if method == "HEAD":
+         return _json_response(status=200, **payload, body_only=True)
+     return _json_response(status=200, **payload)
+ 
+ 
+ def _current_settings() -> Dict[str, Any]:
+     settings = dict(_DEFAULT_SETTINGS)
+     settings.update(
+         {
+             "diag_client_hud": bool(config.DIAG_CLIENT_HUD),
+             "diag_audio_guard": bool(config.DIAG_AUDIO_GUARD),
+             "diag_chunk_sample_n": int(config.DIAG_CHUNK_SAMPLE_N),
+             "policy_media": dict(config.POLICY_MEDIA),
+             "policy_capture": dict(config.POLICY_CAPTURE),
++            "policy_recorder": dict(config.POLICY_RECORDER),
++            "policy_input": dict(config.POLICY_INPUT),
++            "policy_asr": dict(config.POLICY_ASR),
++            "policy_routing": dict(config.POLICY_ROUTING),
+         }
+     )
+     return settings
+ 
+ 
+ async def _read_body(receive) -> bytes:
+     chunks: list[bytes] = []
+     while True:
+         message = await receive()
+         if message.get("type") != "http.request":
+             break
+         body = message.get("body", b"") or b""
+         if body:
+             chunks.append(body)
+         if not message.get("more_body", False):
+             break
+     return b"".join(chunks)
+ 
+ 
+ async def _drain_body(receive) -> None:
+     while True:
+         message = await receive()
+         if message.get("type") != "http.request":
+             break
+         if not message.get("more_body", False):
+diff --git a/app/admin/ui/config_panel.js b/app/admin/ui/config_panel.js
+index 8f819222dc2882e046563289d24bc5a94a88607d..ee77cef17d4cf8c37dc88d51b4de0bae7c0b5977 100644
+--- a/app/admin/ui/config_panel.js
++++ b/app/admin/ui/config_panel.js
+@@ -1,63 +1,81 @@
+ (() => {
+   const ROOT_SCOPE = typeof window !== 'undefined'
+     ? window
+     : typeof globalThis !== 'undefined'
+     ? globalThis
+     : {};
+ 
+   const API_ENDPOINT = '/api/v1/admin/settings';
+   const DEFAULTS = {
+     diag_client_hud: false,
+     diag_audio_guard: true,
+     diag_chunk_sample_n: 10,
+     policy_media: {
+       asr_input: 'webm_opus',
+       asr_rate_hz: 48000,
+       asr_channels: 1,
+       fallbacks_allowed: false,
+     },
+     policy_capture: {
+       start_on_asr_ready: true,
+       start_on_turn_ready: true,
+       timeslice_ms: 200,
+       mask_during_tts: true,
+     },
++    policy_recorder: {
++      stop_on_tts_start: false,
++      mute_send_during_tts: true,
++    },
++    policy_input: {
++      require_hotword_to_start: false,
++    },
++    policy_asr: {
++      prearm_on_tts_end: true,
++      keep_stream_warm_ms: 30000,
++    },
++    policy_routing: {
++      ws_version: 'v1',
++    },
+   };
+   const CHUNK_MIN = 1;
+   const CHUNK_MAX = 100;
+   const MEDIA_ALLOWED_INPUTS = ['webm_opus', 'pcm_16k'];
+   const CAPTURE_TIMESLICE_MIN = 20;
+   const CAPTURE_TIMESLICE_STEP = 10;
+ 
+   function cloneDefaults() {
+     return {
+       diag_client_hud: DEFAULTS.diag_client_hud,
+       diag_audio_guard: DEFAULTS.diag_audio_guard,
+       diag_chunk_sample_n: DEFAULTS.diag_chunk_sample_n,
+       policy_media: { ...DEFAULTS.policy_media },
+       policy_capture: { ...DEFAULTS.policy_capture },
++      policy_recorder: { ...DEFAULTS.policy_recorder },
++      policy_input: { ...DEFAULTS.policy_input },
++      policy_asr: { ...DEFAULTS.policy_asr },
++      policy_routing: { ...DEFAULTS.policy_routing },
+     };
+   }
+ 
+   const state = {
+     values: cloneDefaults(),
+     loading: false,
+     saving: {},
+   };
+ 
+   const elements = {};
+   let statusElement = null;
+   let panelRoot = null;
+ 
+   const FIELDS = [
+     {
+       key: 'diag_client_hud',
+       type: 'boolean',
+       label: 'Client HUD',
+       description: 'Enable the in-client diagnostics overlay.',
+     },
+     {
+       key: 'diag_audio_guard',
+       type: 'boolean',
+       label: 'Audio guardrails',
+       description: 'Emit server-side diagnostics when client audio stalls.',
+@@ -104,50 +122,109 @@
+       settingKey: 'policy_capture',
+       prop: 'start_on_turn_ready',
+       type: 'boolean',
+       label: 'Start on Turn Ready',
+       description: 'Begin microphone capture when the turn is ready to listen.',
+     },
+     {
+       key: 'policy_capture.timeslice_ms',
+       settingKey: 'policy_capture',
+       prop: 'timeslice_ms',
+       type: 'number',
+       label: 'Timeslice (ms)',
+       description: 'Chunk duration to send from the browser when streaming audio.',
+       min: CAPTURE_TIMESLICE_MIN,
+       step: CAPTURE_TIMESLICE_STEP,
+       sanitize: clampTimeslice,
+     },
+     {
+       key: 'policy_capture.mask_during_tts',
+       settingKey: 'policy_capture',
+       prop: 'mask_during_tts',
+       type: 'boolean',
+       label: 'Mask during TTS',
+       description: 'Mute microphone capture while the assistant is speaking.',
+     },
++    {
++      key: 'policy_recorder.stop_on_tts_start',
++      settingKey: 'policy_recorder',
++      prop: 'stop_on_tts_start',
++      type: 'boolean',
++      label: 'Stop recorder on TTS start',
++      description: 'Disable microphone streaming entirely when TTS begins.',
++    },
++    {
++      key: 'policy_recorder.mute_send_during_tts',
++      settingKey: 'policy_recorder',
++      prop: 'mute_send_during_tts',
++      type: 'boolean',
++      label: 'Mute send during TTS',
++      description: 'Keep the recorder armed but pause audio chunk transmission while TTS plays.',
++    },
++    {
++      key: 'policy_input.require_hotword_to_start',
++      settingKey: 'policy_input',
++      prop: 'require_hotword_to_start',
++      type: 'boolean',
++      label: 'Require wake word to start',
++      description: 'Require the wake word before auto-starting microphone capture.',
++    },
++    {
++      key: 'policy_asr.prearm_on_tts_end',
++      settingKey: 'policy_asr',
++      prop: 'prearm_on_tts_end',
++      type: 'boolean',
++      label: 'Pre-arm ASR after TTS',
++      description: 'Open a warm ASR stream when TTS ends so listening is immediate.',
++    },
++    {
++      key: 'policy_asr.keep_stream_warm_ms',
++      settingKey: 'policy_asr',
++      prop: 'keep_stream_warm_ms',
++      type: 'number',
++      label: 'ASR keep-warm (ms)',
++      description: 'How long to keep the ASR stream warm after pre-arming.',
++      min: 0,
++      sanitize: (value) => {
++        const numeric = Number(value);
++        if (!Number.isFinite(numeric) || numeric < 0) {
++          return DEFAULTS.policy_asr.keep_stream_warm_ms;
++        }
++        return Math.round(numeric);
++      },
++    },
++    {
++      key: 'policy_routing.ws_version',
++      settingKey: 'policy_routing',
++      prop: 'ws_version',
++      type: 'select',
++      label: 'WS routing version',
++      description: 'WebSocket API version for chat connections.',
++      options: [
++        { value: 'v1', label: 'v1 (/ws/v1/chat)' },
++      ],
++    },
+   ];
+ 
+   function setStatus(message, tone) {
+     if (!statusElement) {
+       return;
+     }
+     statusElement.textContent = message || '';
+     if (!tone) {
+       statusElement.removeAttribute('data-tone');
+       return;
+     }
+     statusElement.setAttribute('data-tone', tone);
+   }
+ 
+   function updatePanelState() {
+     if (!panelRoot) return;
+     const saving = Object.keys(state.saving).length > 0;
+     panelRoot.classList.toggle('is-loading', Boolean(state.loading));
+     panelRoot.classList.toggle('is-saving', saving);
+   }
+ 
+   function clampChunk(value) {
+     const candidate = Number(value);
+     if (!Number.isFinite(candidate)) {
+       return DEFAULTS.diag_chunk_sample_n;
+@@ -223,57 +300,135 @@
+     }
+     if (Object.prototype.hasOwnProperty.call(value, 'start_on_asr_ready')) {
+       base.start_on_asr_ready = coerceBoolean(
+         value.start_on_asr_ready,
+         base.start_on_asr_ready,
+       );
+     }
+     if (Object.prototype.hasOwnProperty.call(value, 'start_on_turn_ready')) {
+       base.start_on_turn_ready = coerceBoolean(
+         value.start_on_turn_ready,
+         base.start_on_turn_ready,
+       );
+     }
+     if (Object.prototype.hasOwnProperty.call(value, 'mask_during_tts')) {
+       base.mask_during_tts = coerceBoolean(
+         value.mask_during_tts,
+         base.mask_during_tts,
+       );
+     }
+     if (Object.prototype.hasOwnProperty.call(value, 'timeslice_ms')) {
+       base.timeslice_ms = clampTimeslice(value.timeslice_ms);
+     }
+     return base;
+   }
+ 
++  function sanitizePolicyRecorder(value) {
++    const base = { ...DEFAULTS.policy_recorder };
++    if (!value || typeof value !== 'object') {
++      return base;
++    }
++    if (Object.prototype.hasOwnProperty.call(value, 'stop_on_tts_start')) {
++      base.stop_on_tts_start = coerceBoolean(
++        value.stop_on_tts_start,
++        base.stop_on_tts_start,
++      );
++    }
++    if (Object.prototype.hasOwnProperty.call(value, 'mute_send_during_tts')) {
++      base.mute_send_during_tts = coerceBoolean(
++        value.mute_send_during_tts,
++        base.mute_send_during_tts,
++      );
++    }
++    return base;
++  }
++
++  function sanitizePolicyInput(value) {
++    const base = { ...DEFAULTS.policy_input };
++    if (!value || typeof value !== 'object') {
++      return base;
++    }
++    if (Object.prototype.hasOwnProperty.call(value, 'require_hotword_to_start')) {
++      base.require_hotword_to_start = coerceBoolean(
++        value.require_hotword_to_start,
++        base.require_hotword_to_start,
++      );
++    }
++    return base;
++  }
++
++  function sanitizePolicyAsr(value) {
++    const base = { ...DEFAULTS.policy_asr };
++    if (!value || typeof value !== 'object') {
++      return base;
++    }
++    if (Object.prototype.hasOwnProperty.call(value, 'prearm_on_tts_end')) {
++      base.prearm_on_tts_end = coerceBoolean(
++        value.prearm_on_tts_end,
++        base.prearm_on_tts_end,
++      );
++    }
++    if (Object.prototype.hasOwnProperty.call(value, 'keep_stream_warm_ms')) {
++      const numeric = Number(value.keep_stream_warm_ms);
++      base.keep_stream_warm_ms = Number.isFinite(numeric) && numeric >= 0
++        ? Math.round(numeric)
++        : DEFAULTS.policy_asr.keep_stream_warm_ms;
++    }
++    return base;
++  }
++
++  function sanitizePolicyRouting(value) {
++    const base = { ...DEFAULTS.policy_routing };
++    if (!value || typeof value !== 'object') {
++      return base;
++    }
++    if (Object.prototype.hasOwnProperty.call(value, 'ws_version')) {
++      const candidate = typeof value.ws_version === 'string' ? value.ws_version.trim() : '';
++      base.ws_version = candidate || base.ws_version;
++    }
++    return base;
++  }
++
+   function sanitizeSettingValue(key, value) {
+     if (key === 'policy_media') {
+       return sanitizePolicyMedia(value);
+     }
+     if (key === 'policy_capture') {
+       return sanitizePolicyCapture(value);
+     }
++    if (key === 'policy_recorder') {
++      return sanitizePolicyRecorder(value);
++    }
++    if (key === 'policy_input') {
++      return sanitizePolicyInput(value);
++    }
++    if (key === 'policy_asr') {
++      return sanitizePolicyAsr(value);
++    }
++    if (key === 'policy_routing') {
++      return sanitizePolicyRouting(value);
++    }
+     if (key === 'diag_chunk_sample_n') {
+       return clampChunk(value);
+     }
+     if (key === 'diag_client_hud' || key === 'diag_audio_guard') {
+       return coerceBoolean(value, DEFAULTS[key]);
+     }
+     return value;
+   }
+ 
+   function getSettingKey(field) {
+     return field && field.settingKey ? field.settingKey : field.key;
+   }
+ 
+   function sanitizeFieldInput(field, value) {
+     if (!field) {
+       return value;
+     }
+     if (field.type === 'boolean') {
+       const settingKey = getSettingKey(field);
+       let fallback = false;
+       if (field.prop) {
+         const defaults = DEFAULTS[settingKey];
+         if (defaults && typeof defaults === 'object') {
+           fallback = Boolean(defaults[field.prop]);
+         }
+@@ -335,99 +490,126 @@
+       entry.input.value = String(sanitizedValue);
+     }
+     persistFieldValue(field, sanitizedValue);
+   }
+ 
+   function normalizeSettings(raw) {
+     const result = {};
+     if (!raw || typeof raw !== 'object') {
+       return result;
+     }
+     if (Object.prototype.hasOwnProperty.call(raw, 'diag_client_hud')) {
+       result.diag_client_hud = Boolean(raw.diag_client_hud);
+     }
+     if (Object.prototype.hasOwnProperty.call(raw, 'diag_audio_guard')) {
+       result.diag_audio_guard = Boolean(raw.diag_audio_guard);
+     }
+     if (Object.prototype.hasOwnProperty.call(raw, 'diag_chunk_sample_n')) {
+       result.diag_chunk_sample_n = clampChunk(raw.diag_chunk_sample_n);
+     }
+     if (Object.prototype.hasOwnProperty.call(raw, 'policy_media')) {
+       result.policy_media = sanitizePolicyMedia(raw.policy_media);
+     }
+     if (Object.prototype.hasOwnProperty.call(raw, 'policy_capture')) {
+       result.policy_capture = sanitizePolicyCapture(raw.policy_capture);
+     }
++    if (Object.prototype.hasOwnProperty.call(raw, 'policy_recorder')) {
++      result.policy_recorder = sanitizePolicyRecorder(raw.policy_recorder);
++    }
++    if (Object.prototype.hasOwnProperty.call(raw, 'policy_input')) {
++      result.policy_input = sanitizePolicyInput(raw.policy_input);
++    }
++    if (Object.prototype.hasOwnProperty.call(raw, 'policy_asr')) {
++      result.policy_asr = sanitizePolicyAsr(raw.policy_asr);
++    }
++    if (Object.prototype.hasOwnProperty.call(raw, 'policy_routing')) {
++      result.policy_routing = sanitizePolicyRouting(raw.policy_routing);
++    }
+     return result;
+   }
+ 
+   function mergeIntoGlobal(values) {
+     if (typeof window === 'undefined') {
+       return;
+     }
+     const existing = window.__CFG__ && typeof window.__CFG__ === 'object' ? window.__CFG__ : {};
+     window.__CFG__ = Object.assign(existing, {
+       DIAG_CLIENT_HUD: Boolean(values.diag_client_hud),
+       DIAG_AUDIO_GUARD: Boolean(values.diag_audio_guard),
+       DIAG_CHUNK_SAMPLE_N: clampChunk(values.diag_chunk_sample_n),
+       POLICY_MEDIA: sanitizePolicyMedia(values.policy_media),
+       POLICY_CAPTURE: sanitizePolicyCapture(values.policy_capture),
++      POLICY_RECORDER: sanitizePolicyRecorder(values.policy_recorder),
++      POLICY_INPUT: sanitizePolicyInput(values.policy_input),
++      POLICY_ASR: sanitizePolicyAsr(values.policy_asr),
++      POLICY_ROUTING: sanitizePolicyRouting(values.policy_routing),
+     });
+   }
+ 
+   function applyValues(values) {
+     if (!values || typeof values !== 'object') {
+       return;
+     }
+     const next = { ...state.values };
+     Object.keys(values).forEach((key) => {
+       const sanitized = sanitizeSettingValue(key, values[key]);
+-      if (key === 'policy_media' || key === 'policy_capture') {
++      if (
++        key === 'policy_media' ||
++        key === 'policy_capture' ||
++        key === 'policy_recorder' ||
++        key === 'policy_input' ||
++        key === 'policy_asr' ||
++        key === 'policy_routing'
++      ) {
+         next[key] = { ...sanitized };
+       } else {
+         next[key] = sanitized;
+       }
+     });
+     state.values = next;
+     mergeIntoGlobal(state.values);
+     updateInputs();
+   }
+ 
+   function hydrateFromGlobal() {
+     if (typeof window === 'undefined') {
+       return {};
+     }
+     const cfg = window.__CFG__;
+     if (!cfg || typeof cfg !== 'object') {
+       return {};
+     }
+     return normalizeSettings({
+       diag_client_hud: cfg.DIAG_CLIENT_HUD,
+       diag_audio_guard: cfg.DIAG_AUDIO_GUARD,
+       diag_chunk_sample_n: cfg.DIAG_CHUNK_SAMPLE_N,
+       policy_media: cfg.POLICY_MEDIA,
+       policy_capture: cfg.POLICY_CAPTURE,
++      policy_recorder: cfg.POLICY_RECORDER,
++      policy_input: cfg.POLICY_INPUT,
++      policy_asr: cfg.POLICY_ASR,
++      policy_routing: cfg.POLICY_ROUTING,
+     });
+   }
+ 
+   function updateInputs() {
+     Object.keys(elements).forEach((key) => {
+       const entry = elements[key];
+       if (!entry || !entry.input || !entry.field) {
+         return;
+       }
+       const field = entry.field;
+       const disabled = Boolean(state.loading) || Boolean(state.saving[key]);
+       entry.input.disabled = disabled;
+       const value = getFieldValue(field);
+       if (field.type === 'boolean') {
+         entry.input.checked = Boolean(value);
+       } else if (field.type === 'number') {
+         entry.input.value = String(value);
+       } else if (field.type === 'select') {
+         entry.input.value = String(value);
+       }
+     });
+     updatePanelState();
+   }
+ 
+   async function fetchSettings() {
+diff --git a/app/config.py b/app/config.py
+index 590e649af4090b6e47b8bcde86410d04a3cb6b00..774fdb2c73c932190230adda843c25721170ef59 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -47,55 +47,83 @@ def get_env(name: str, default=None):
  
  _log = logging.getLogger(__name__)
  
- _pool: Optional[asyncpg.Pool] = None
- _pool_lock = asyncio.Lock()
- _schema_lock = asyncio.Lock()
- _schema_initialized = False
+ _ADMIN_SETTINGS_LOCK = threading.RLock()
+ _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
+ _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
+ _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
  
- _status: Dict[str, Any] = {"state": "init", "last_error": None, "updated_at": time.time()}
+ _ALLOWED_ASR_INPUTS = {"webm_opus", "pcm_16k"}
+ _CAPTURE_TIMESLICE_MIN_MS = 20
  
--_DB_CONNECT_TIMEOUT_S = float(os.getenv("DB_CONNECT_TIMEOUT_S", "30"))
--_DB_RETRY_ATTEMPTS = int(os.getenv("DB_RETRY_ATTEMPTS", "6"))
-+_DB_CONNECT_TIMEOUT_S = float(os.getenv("DB_CONNECT_TIMEOUT_S", "45"))
-+_DB_RETRY_ATTEMPTS = int(os.getenv("DB_RETRY_ATTEMPTS", "10"))
- _DB_RETRY_BASE_S = float(os.getenv("DB_RETRY_BASE_S", "1.0"))
- _DB_RETRY_CAP_S = float(os.getenv("DB_RETRY_CAP_S", "30.0"))
+ _DEFAULT_POLICY_MEDIA = {
+     "asr_input": "webm_opus",
+     "asr_rate_hz": 48000,
+     "asr_channels": 1,
+     "fallbacks_allowed": False,
+ }
+ 
+ _DEFAULT_POLICY_CAPTURE = {
+     "start_on_asr_ready": True,
+     "start_on_turn_ready": True,
+     "timeslice_ms": 200,
+     "mask_during_tts": True,
+ }
+ 
++_DEFAULT_POLICY_RECORDER = {
++    "stop_on_tts_start": False,
++    "mute_send_during_tts": True,
++}
++
++_DEFAULT_POLICY_INPUT = {
++    "require_hotword_to_start": False,
++}
++
++_DEFAULT_POLICY_ASR = {
++    "prearm_on_tts_end": True,
++    "keep_stream_warm_ms": 30000,
++}
++
++_DEFAULT_POLICY_ROUTING = {
++    "ws_version": "v1",
++}
++
+ POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
+ POLICY_CAPTURE: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_CAPTURE)
++POLICY_RECORDER: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_RECORDER)
++POLICY_INPUT: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_INPUT)
++POLICY_ASR: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ASR)
++POLICY_ROUTING: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ROUTING)
+ POLICY_OVERRIDES: MutableMapping[str, Any] = {
+     "media": dict(POLICY_MEDIA),
+     "capture": dict(POLICY_CAPTURE),
++    "policy": {
++        "recorder": dict(POLICY_RECORDER),
++        "input": dict(POLICY_INPUT),
++        "asr": dict(POLICY_ASR),
++        "routing": dict(POLICY_ROUTING),
++    },
+ }
  
  
- def _update_status(**fields: Any) -> None:
-     _status.update(fields)
-     _status["updated_at"] = time.time()
+ def _normalize_key(key: str) -> str:
+     return key.strip().lower()
  
  
- async def get_pool() -> asyncpg.Pool:
-     """Return a lazily created asyncpg pool."""
+ def _env_name(key: str) -> str:
+     return _normalize_key(key).upper()
  
-     global _pool
-     if _pool is None:
-         async with _pool_lock:
-             if _pool is None:
-                 config = get_postgres_config()
-                 dsn = config.main.dsn
-                 if not dsn:
-                     _update_status(state="error", last_error="MissingDatabaseURL")
-                     _log.error("evt=db_connect_missing_url")
-                     raise ValueError("DATABASE_URL is required")
  
-                 attempt = 0
-                 for attempt in range(1, _DB_RETRY_ATTEMPTS + 1):
-                     state = "connecting" if attempt == 1 else "retrying"
-                     _update_status(state=state, last_error=None, attempt=attempt, timeout_s=_DB_CONNECT_TIMEOUT_S)
-                     _log.info(
-                         "evt=db_connect_attempt attempt=%s timeout_s=%s",
-                         attempt,
-                         _DB_CONNECT_TIMEOUT_S,
+ def _get_admin_settings_store():
+     global _ADMIN_SETTINGS_STORE
+     if _ADMIN_SETTINGS_STORE is False:
+         return None
+     if _ADMIN_SETTINGS_STORE is None:
+         try:  # pragma: no cover - import guarded for optional deps
+             from app.db.admin_settings import AdminSettingsStore
+         except Exception:  # pragma: no cover - defensive import guard
+             _ADMIN_SETTINGS_STORE = False
+             return None
+         _ADMIN_SETTINGS_STORE = AdminSettingsStore()
+     return _ADMIN_SETTINGS_STORE
+ 
+ 
+@@ -249,50 +277,151 @@ def _sanitize_capture_policy(
+ ) -> Mapping[str, Any]:
+     sanitized = dict(_DEFAULT_POLICY_CAPTURE)
+     if not isinstance(value, Mapping):
+         return sanitized
+ 
+     for key in ("start_on_asr_ready", "start_on_turn_ready", "mask_during_tts"):
+         try:
+             sanitized[key] = _coerce_db_bool(value.get(key), sanitized[key])
+         except ValueError:
+             _log.warning(
+                 "evt=admin_settings_invalid_policy_capture key=%s source=%s",
+                 key,
+                 source,
+                 extra={"component": "admin.settings", "raw": raw},
+             )
+ 
+     sanitized["timeslice_ms"] = _coerce_db_int(
+         value.get("timeslice_ms"),
+         sanitized["timeslice_ms"],
+         minimum=_CAPTURE_TIMESLICE_MIN_MS,
+     )
+ 
+     return sanitized
+ 
+ 
++def _sanitize_recorder_policy(
++    value: Mapping[str, Any] | None,
++    *,
++    source: str,
++    raw: Any,
++) -> Mapping[str, Any]:
++    sanitized = dict(_DEFAULT_POLICY_RECORDER)
++    if not isinstance(value, Mapping):
++        return sanitized
++
++    for key in ("stop_on_tts_start", "mute_send_during_tts"):
++        try:
++            sanitized[key] = _coerce_db_bool(value.get(key), sanitized[key])
++        except ValueError:
++            _log.warning(
++                "evt=admin_settings_invalid_policy_recorder key=%s source=%s",
++                key,
++                source,
++                extra={"component": "admin.settings", "raw": raw},
++            )
++
++    return sanitized
++
++
++def _sanitize_input_policy(
++    value: Mapping[str, Any] | None,
++    *,
++    source: str,
++    raw: Any,
++) -> Mapping[str, Any]:
++    sanitized = dict(_DEFAULT_POLICY_INPUT)
++    if not isinstance(value, Mapping):
++        return sanitized
++
++    try:
++        sanitized["require_hotword_to_start"] = _coerce_db_bool(
++            value.get("require_hotword_to_start"), sanitized["require_hotword_to_start"]
++        )
++    except ValueError:
++        _log.warning(
++            "evt=admin_settings_invalid_policy_input key=require_hotword_to_start source=%s",
++            source,
++            extra={"component": "admin.settings", "raw": raw},
++        )
++
++    return sanitized
++
++
++def _sanitize_asr_policy(
++    value: Mapping[str, Any] | None,
++    *,
++    source: str,
++    raw: Any,
++) -> Mapping[str, Any]:
++    sanitized = dict(_DEFAULT_POLICY_ASR)
++    if not isinstance(value, Mapping):
++        return sanitized
++
++    for key in ("prearm_on_tts_end",):
++        try:
++            sanitized[key] = _coerce_db_bool(value.get(key), sanitized[key])
++        except ValueError:
++            _log.warning(
++                "evt=admin_settings_invalid_policy_asr key=%s source=%s",
++                key,
++                source,
++                extra={"component": "admin.settings", "raw": raw},
++            )
++
++    sanitized["keep_stream_warm_ms"] = _coerce_db_int(
++        value.get("keep_stream_warm_ms"),
++        sanitized["keep_stream_warm_ms"],
++        minimum=0,
++    )
++
++    return sanitized
++
++
++def _sanitize_routing_policy(
++    value: Mapping[str, Any] | None,
++    *,
++    source: str,
++    raw: Any,
++) -> Mapping[str, Any]:
++    sanitized = dict(_DEFAULT_POLICY_ROUTING)
++    if not isinstance(value, Mapping):
++        return sanitized
++
++    ws_version = value.get("ws_version")
++    if isinstance(ws_version, str) and ws_version.strip():
++        sanitized["ws_version"] = ws_version.strip()
++    elif ws_version is not None:
++        _log.warning(
++            "evt=admin_settings_invalid_policy_routing key=ws_version source=%s",
++            source,
++            extra={"component": "admin.settings", "raw": raw},
++        )
++
++    return sanitized
++
++
+ def _get_cached_admin_setting(key: str) -> Optional[Any]:
+     normalized = _normalize_key(key)
+     with _ADMIN_SETTINGS_LOCK:
+         if normalized in _ADMIN_SETTINGS_CACHE:
+             return _ADMIN_SETTINGS_CACHE[normalized]
+     store = _get_admin_settings_store()
+     if store is None:
+         with _ADMIN_SETTINGS_LOCK:
+             _ADMIN_SETTINGS_CACHE.setdefault(normalized, None)
+         return None
+     value = store.get(normalized)
+     with _ADMIN_SETTINGS_LOCK:
+         _ADMIN_SETTINGS_CACHE[normalized] = value
+     return value
+ 
+ 
+ def update_admin_settings_cache(updates: Mapping[str, Optional[Any]]) -> None:
+     """Merge ``updates`` into the local admin settings cache and refresh flags."""
+ 
+     changed = False
+     with _ADMIN_SETTINGS_LOCK:
+         for raw_key, raw_value in updates.items():
+             normalized = _normalize_key(raw_key)
+             if _ADMIN_SETTINGS_CACHE.get(normalized) != raw_value:
+                 _ADMIN_SETTINGS_CACHE[normalized] = raw_value
+@@ -395,130 +524,202 @@ def reload_runtime_flags() -> None:
+     audio_guardrails_default = {"enabled": True}
+     audio_guardrails, guardrails_source, _guardrails_raw = _resolve_mapping_setting(
+         "audio_guardrails", default=audio_guardrails_default
+     )
+     diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
+         "diag_audio_guard", default=True
+     )
+     diag_chunk_sample_n, chunk_source, _chunk_raw = _resolve_int_setting(
+         "diag_chunk_sample_n", default=10, minimum=1
+     )
+ 
+     policy_media_raw, media_source, media_raw = _resolve_mapping_setting(
+         "policy_media", default=_DEFAULT_POLICY_MEDIA
+     )
+     policy_media = _sanitize_media_policy(
+         policy_media_raw, source=media_source, raw=media_raw
+     )
+ 
+     policy_capture_raw, capture_source, capture_raw = _resolve_mapping_setting(
+         "policy_capture", default=_DEFAULT_POLICY_CAPTURE
+     )
+     policy_capture = _sanitize_capture_policy(
+         policy_capture_raw, source=capture_source, raw=capture_raw
+     )
+ 
++    policy_recorder_raw, recorder_source, recorder_raw = _resolve_mapping_setting(
++        "policy_recorder", default=_DEFAULT_POLICY_RECORDER
++    )
++    policy_recorder = _sanitize_recorder_policy(
++        policy_recorder_raw, source=recorder_source, raw=recorder_raw
++    )
++
++    policy_input_raw, input_source, input_raw = _resolve_mapping_setting(
++        "policy_input", default=_DEFAULT_POLICY_INPUT
++    )
++    policy_input = _sanitize_input_policy(
++        policy_input_raw, source=input_source, raw=input_raw
++    )
++
++    policy_asr_raw, asr_source, asr_raw = _resolve_mapping_setting(
++        "policy_asr", default=_DEFAULT_POLICY_ASR
++    )
++    policy_asr = _sanitize_asr_policy(policy_asr_raw, source=asr_source, raw=asr_raw)
++
++    policy_routing_raw, routing_source, routing_raw = _resolve_mapping_setting(
++        "policy_routing", default=_DEFAULT_POLICY_ROUTING
++    )
++    policy_routing = _sanitize_routing_policy(
++        policy_routing_raw, source=routing_source, raw=routing_raw
++    )
++
+     guardrails_value = dict(audio_guardrails)
+     flags = {
+         "DIAG_CLIENT_HUD": diag_client_hud,
+         "AUDIO_GUARDRAILS": guardrails_value,
+         "DIAG_AUDIO_GUARD": diag_audio_guard,
+         "DIAG_CHUNK_SAMPLE_N": diag_chunk_sample_n,
+         "POLICY_MEDIA": dict(policy_media),
+         "POLICY_CAPTURE": dict(policy_capture),
++        "POLICY_RECORDER": dict(policy_recorder),
++        "POLICY_INPUT": dict(policy_input),
++        "POLICY_ASR": dict(policy_asr),
++        "POLICY_ROUTING": dict(policy_routing),
+     }
+     with _ADMIN_SETTINGS_LOCK:
+         _RUNTIME_FLAGS.clear()
+         _RUNTIME_FLAGS.update(flags)
+     globals().update(flags)
+ 
+     POLICY_MEDIA.clear()
+     POLICY_MEDIA.update(policy_media)
+ 
+     POLICY_CAPTURE.clear()
+     POLICY_CAPTURE.update(policy_capture)
+ 
++    POLICY_RECORDER.clear()
++    POLICY_RECORDER.update(policy_recorder)
++
++    POLICY_INPUT.clear()
++    POLICY_INPUT.update(policy_input)
++
++    POLICY_ASR.clear()
++    POLICY_ASR.update(policy_asr)
++
++    POLICY_ROUTING.clear()
++    POLICY_ROUTING.update(policy_routing)
++
+     POLICY_OVERRIDES.clear()
+     POLICY_OVERRIDES.update({
+         "media": dict(POLICY_MEDIA),
+         "capture": dict(POLICY_CAPTURE),
++        "policy": {
++            "recorder": dict(POLICY_RECORDER),
++            "input": dict(POLICY_INPUT),
++            "asr": dict(POLICY_ASR),
++            "routing": dict(POLICY_ROUTING),
++        },
+     })
+ 
+     log_snapshot = [
+         {"key": "DIAG_CLIENT_HUD", "value": diag_client_hud, "source": hud_source},
+         {"key": "DIAG_AUDIO_GUARD", "value": diag_audio_guard, "source": audio_source},
+         {
+             "key": "AUDIO_GUARDRAILS",
+             "value": guardrails_value,
+             "source": guardrails_source,
+         },
+         {
+             "key": "DIAG_CHUNK_SAMPLE_N",
+             "value": diag_chunk_sample_n,
+             "source": chunk_source,
+         },
+         {
+             "key": "POLICY_MEDIA",
+             "value": dict(policy_media),
+             "source": media_source,
+         },
+         {
+             "key": "POLICY_CAPTURE",
+             "value": dict(policy_capture),
+             "source": capture_source,
+         },
++        {
++            "key": "POLICY_RECORDER",
++            "value": dict(policy_recorder),
++            "source": recorder_source,
++        },
++        {
++            "key": "POLICY_INPUT",
++            "value": dict(policy_input),
++            "source": input_source,
++        },
++        {
++            "key": "POLICY_ASR",
++            "value": dict(policy_asr),
++            "source": asr_source,
++        },
++        {
++            "key": "POLICY_ROUTING",
++            "value": dict(policy_routing),
++            "source": routing_source,
++        },
+     ]
+     _log.info(
+         "evt=EVT_ADMIN_SETTINGS_LOAD snapshot=%s",
+         log_snapshot,
+         extra={"component": "admin.settings"},
+     )
+ 
+ 
+ def get_client_config_snapshot() -> dict[str, Any]:
+     """Return the current runtime flags exposed to browser clients."""
+ 
+     with _ADMIN_SETTINGS_LOCK:
+         return dict(_RUNTIME_FLAGS)
+ 
+ 
+ def set_admin_settings(
+     values: Mapping[str, Optional[Any]], *, updated_by: str | None = None
+ ) -> None:
+     """Persist multiple admin settings and refresh runtime flags."""
+ 
+     store = _get_admin_settings_store()
+     if store is None:
+         raise RuntimeError("Admin settings store unavailable")
+     normalized_updates: dict[str, Optional[Any]] = {}
+     for key, value in values.items():
+         normalized = _normalize_key(key)
+         store.set(normalized, value, updated_by=updated_by)
+         normalized_updates[normalized] = value
+     update_admin_settings_cache(normalized_updates)
+ 
+ 
+ reload_runtime_flags()
+ 
+ 
+ __all__ = [
+     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
+     "ASR_IDLE_CLOSE_MS",
+     "ASR_TRACE",
+     "AUDIO_GUARDRAILS",
+     "DEEPGRAM_API_KEY",
+     "DIAG_AUDIO_GUARD",
+     "DIAG_CHUNK_SAMPLE_N",
+     "DIAG_CLIENT_HUD",
+     "POLICY_MEDIA",
+     "POLICY_CAPTURE",
++    "POLICY_RECORDER",
++    "POLICY_INPUT",
++    "POLICY_ASR",
++    "POLICY_ROUTING",
+     "POLICY_OVERRIDES",
+     "bool_env_or_db",
+     "get_admin_setting_raw",
+     "get_client_config_snapshot",
+     "get_env",
+     "int_env_or_db",
+     "reload_runtime_flags",
+     "set_admin_setting_raw",
+     "set_admin_settings",
+     "update_admin_settings_cache",
+ ]
+diff --git a/app/policy/loader.py b/app/policy/loader.py
+index bcbb65794a88fb3bb03d6eadb8427bd3dee57875..b3dfca262fe9d83afe5eadae2f50808fbff8027c 100644
+--- a/app/policy/loader.py
++++ b/app/policy/loader.py
+@@ -4,50 +4,66 @@ from __future__ import annotations
+ from copy import deepcopy
+ from typing import Any, Dict, Mapping, Sequence
+ 
+ from app import config
+ 
+ InteractionPolicySnapshot = Dict[str, Any]
+ 
+ _ASSISTANT_TURN_SEQUENCE_KEY = "assistant_turn_sequence"
+ _DEFAULT_ASSISTANT_TURN_ACTIONS: Sequence[str] = (
+     "assistant.say",
+     "assistant.await_user",
+ )
+ 
+ # NOTE: These defaults represent the deterministic policy snapshot returned by
+ # ``load_interaction_policy`` when no overrides are provided. The structure is
+ # intentionally shallow so that overrides replace entire child objects rather
+ # than performing recursive merges.
+ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
+     "mode": "idle",
+     "allow_auto_vad": True,
+     "barge_in_enabled": True,
+     "auto_commit_when_ready": True,
+     "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
+     "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
+     "suggestions": {"on_connect": True, "count": 3},
++    "policy": {
++        "recorder": {
++            "stop_on_tts_start": False,
++            "mute_send_during_tts": True,
++        },
++        "input": {
++            "require_hotword_to_start": False,
++        },
++        "asr": {
++            "prearm_on_tts_end": True,
++            "keep_stream_warm_ms": 30000,
++        },
++        "routing": {
++            "ws_version": "v1",
++        },
++    },
+     "actions": {
+         "allowed": ["answer"],
+         "surface_via_suggestions": True,
+         _ASSISTANT_TURN_SEQUENCE_KEY: list(_DEFAULT_ASSISTANT_TURN_ACTIONS),
+     },
+     "telemetry": {
+         "enabled": True,
+         "level": "debug",
+         "categories": {
+             "ws": True,
+             "audio": True,
+             "policy": True,
+             "tts": True,
+             "gate": True,
+             "barge": True,
+             "asr": True,
+             "nlu": True,
+             "nlg": True,
+             "client_ui": True,
+             "provider_debug": True,
+         },
+         "redaction": {"pii": True, "secrets": True, "text": False},
+         "sampling": {"percent": 100},
+     },
+ }
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index c2cfd7cd61c0be08347628ca4c6270b01b38f5c6..60a85c14df28ef73149397d84c09ba278ce48d3c 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -48,52 +48,50 @@
+     }
+ 
+     return "/static/js/";
+   })();
+ 
+   const VERSION_QUERY = (() => {
+     if (typeof document === "undefined") {
+       return "";
+     }
+     try {
+       const current =
+         document.currentScript ||
+         document.querySelector('script[src*="/static/js/app.js"]') ||
+         null;
+       if (!current || !current.src) {
+         return "";
+       }
+       const url = new URL(current.src, window.location.href);
+       return url.search || "";
+     } catch (err) {
+       console.warn("Failed to derive version query", err);
+       return "";
+     }
+   })();
+ 
+-  const WAKE_WORD_ONLY = true;
+-
+   function isSameOrigin(url) {
+     try {
+       if (!/^(?:[a-z]+:)?\/\//i.test(url)) {
+         return true;
+       }
+       const parsed = new URL(url, window.location.href);
+       return parsed.origin === window.location.origin;
+     } catch (err) {
+       return false;
+     }
+   }
+ 
+   function isSpecialScheme(url) {
+     return /^(data:|blob:)/i.test(url);
+   }
+ 
+   function appendVersionQuery(url) {
+     if (!VERSION_QUERY || typeof url !== "string" || url.includes("?")) {
+       return url;
+     }
+     const hashIndex = url.indexOf("#");
+     if (hashIndex === -1) {
+       return `${url}${VERSION_QUERY}`;
+     }
+     return `${url.slice(0, hashIndex)}${VERSION_QUERY}${url.slice(hashIndex)}`;
+@@ -803,50 +801,102 @@
+               audioRecorder.stopListening({ reason });
+             } else {
+               audioRecorder.stopListening();
+             }
+           } catch (err) {
+             console.warn("AudioRecorder stopListening failed", err);
+           }
+         },
+       };
+ 
+       hub._install(hubImpl);
+     }
+ 
+     installHubInterface();
+ 
+     const runtimeState = {
+       policy: null,
+       turnState: null,
+       asrReady: false,
+       isRecording: false,
+       micPermissionGranted: false,
+       audioPlaybackIdle: true,
+       policyCaptureLogged: false,
+     };
+ 
++    let asrPrearmIssued = false;
++
++    function getPolicySnapshot() {
++      if (runtimeState.policy && typeof runtimeState.policy === 'object') {
++        return runtimeState.policy;
++      }
++      if (AppState && typeof AppState.policy === 'object') {
++        return AppState.policy;
++      }
++      return null;
++    }
++
++    function getNestedPolicySection(section) {
++      const snapshot = getPolicySnapshot();
++      if (!snapshot || typeof snapshot !== 'object') {
++        return null;
++      }
++      const nested = snapshot.policy;
++      if (!nested || typeof nested !== 'object') {
++        return null;
++      }
++      const candidate = nested[section];
++      return candidate && typeof candidate === 'object' ? candidate : null;
++    }
++
++    function requireHotwordToStart() {
++      const inputPolicy = getNestedPolicySection('input');
++      if (inputPolicy && typeof inputPolicy.require_hotword_to_start === 'boolean') {
++        return inputPolicy.require_hotword_to_start;
++      }
++      return false;
++    }
++
++    function shouldPrearmOnTtsEnd() {
++      const asrPolicy = getNestedPolicySection('asr');
++      if (asrPolicy && typeof asrPolicy.prearm_on_tts_end === 'boolean') {
++        return asrPolicy.prearm_on_tts_end;
++      }
++      return true;
++    }
++
++    function getKeepWarmMs() {
++      const asrPolicy = getNestedPolicySection('asr');
++      if (asrPolicy && Number.isFinite(Number(asrPolicy.keep_stream_warm_ms))) {
++        const value = Number(asrPolicy.keep_stream_warm_ms);
++        if (value >= 0) {
++          return Math.round(value);
++        }
++      }
++      return 30000;
++    }
++
+     const micSessionTelemetry = {
+       micOpenLogged: false,
+       firstChunkLogged: false,
+       recBadgeLogged: false,
+     };
+     let micPermissionTelemetryLogged = false;
+ 
+     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
+     let pendingClientReady = null;
+     let clientReadyTimerId = null;
+     let clientReadyStats = null;
+     const deferredClientLogs = [];
+ 
+     function startClientReadyTracking(detail) {
+       clientReadyStats = {
+         detail,
+         attempts: 0,
+         events: [],
+         startedAt: Date.now(),
+       };
+       recordClientReadyEvent('enqueue', {
+         vendor: detail && detail.vendor ? detail.vendor : undefined,
+         micTs: detail && typeof detail.ts === 'number' ? detail.ts : undefined,
+       });
+     }
+@@ -1126,51 +1176,51 @@
+         const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+           ? runtimeState.turnState.slice(0, 32)
+           : null;
+         const gates = {
+           asrReady: Boolean(runtimeState.asrReady),
+           turnState: rawTurnState,
+           micPerm: Boolean(runtimeState.micPermissionGranted),
+           recording: Boolean(runtimeState.isRecording),
+         };
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
+         return;
+       }
+ 
+       const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+       const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+       const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+         ? runtimeState.turnState.slice(0, 32)
+         : null;
+       const gates = {
+         asrReady: Boolean(runtimeState.asrReady),
+         turnState: rawTurnState,
+         micPerm: Boolean(runtimeState.micPermissionGranted),
+         recording: Boolean(runtimeState.isRecording),
+       };
+ 
+-      if (WAKE_WORD_ONLY) {
++      if (requireHotwordToStart()) {
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'wake_word_only',
+           audioIdle: runtimeState.audioPlaybackIdle,
+         });
+         return;
+       }
+ 
+       if (runtimeState.isRecording) {
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'recording',
+           audioIdle: runtimeState.audioPlaybackIdle,
+         });
+         return;
+       }
+       if (!runtimeState.micPermissionGranted) {
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'mic_permission',
+           audioIdle: runtimeState.audioPlaybackIdle,
+         });
+         return;
+       }
+       if (!runtimeState.asrReady) {
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'asr_ready',
+           audioIdle: runtimeState.audioPlaybackIdle,
+@@ -1917,51 +1967,61 @@
+       }
+ 
+       const ttlValue = Number(ttl_ms);
+       if (!Number.isFinite(ttlValue) || ttlValue <= 0) {
+         console.error('ws-token ttl invalid', ttl_ms);
+         showStartToast('Could not start session. Try again.');
+         return;
+       }
+ 
+       rememberToken(sid, ttlValue);
+ 
+       if (!tokenFreshEnough()) {
+         console.error('ws-token considered stale', { sid, ttl_ms: ttlValue });
+         showStartToast('Could not start session. Try again.');
+         return;
+       }
+ 
+       const params = new URLSearchParams({ access_token });
+       const state = AppState && typeof AppState.getState === 'function' ? AppState.getState() : null;
+       if (state && state.resume && typeof state.resume.token === 'string') {
+         const resume = state.resume;
+         if (Number.isFinite(resume.expiresAt) && Date.now() < resume.expiresAt) {
+           params.set('resume', resume.token);
+         }
+       }
+-      const wsUrl = `/ws/v2/chat?${params.toString()}`;
++      let wsPath = '/ws/v1/chat';
++      try {
++        const routing = AppState?.policy?.policy?.routing;
++        const candidate = typeof routing?.ws_version === 'string' ? routing.ws_version.trim() : '';
++        if (candidate && candidate.toLowerCase() !== 'v1') {
++          console.warn('Unsupported ws_version from policy; forcing v1', candidate);
++        }
++      } catch (err) {
++        console.warn('Failed to inspect policy routing for ws path', err);
++      }
++      const wsUrl = `${wsPath}?${params.toString()}`;
+ 
+       // Add token as SECOND subprotocol so the server can read it if a proxy
+       // or any client path drops the query string.
+       const subprotocols = ['chat.v2', `jwt.${access_token}`];
+ 
+       console.log('evt=ws_open_attempt', { url: wsUrl, protocols: subprotocols, sid });
+ 
+       try {
+         WSClient.open(wsUrl, subprotocols);
+       } catch (err) {
+         console.error('WSClient.open failed', err);
+         if (AppState && typeof AppState.setState === 'function') {
+           AppState.setState({ connectionState: 'disconnected' });
+         }
+         showStartToast('Could not open a session. Please try again.');
+       }
+     }
+ 
+     startBtn.addEventListener('click', (event) => {
+       event.preventDefault();
+       if (startBtn.disabled) return;
+       startBtn.disabled = true;
+       Promise.resolve(handleStartSessionClick()).finally(() => {
+         startBtn.disabled = false;
+       });
+@@ -2347,135 +2407,174 @@
+       const delay = Math.min(30000, 1000 * Math.pow(2, exponent));
+       if (asrRetry && typeof asrRetry === 'object') {
+         asrRetry.tries = tries + 1;
+       }
+       const timer = setTimeout(() => {
+         try {
+           const payload = { type: 'asr.rearm.request' };
+           const client = window.WSClient;
+           if (client && typeof client.send === 'function') {
+             client.send(payload);
+             return;
+           }
+           const ws = window.WS;
+           if (ws && typeof ws.send === 'function') {
+             ws.send(payload);
+           }
+         } catch (err) {
+           console.warn('Failed to send asr.rearm.request', err);
+         }
+       }, delay);
+       if (asrRetry && typeof asrRetry === 'object') {
+         asrRetry.timer = timer;
+       }
+     }
+ 
++    function requestAsrPrearm(trigger) {
++      if (asrPrearmIssued) {
++        return;
++      }
++      asrPrearmIssued = true;
++      const payload = { type: 'asr.rearm.request' };
++      const keepWarm = getKeepWarmMs();
++      try {
++        const client = window.WSClient;
++        if (client && typeof client.send === 'function') {
++          client.send(payload);
++        } else {
++          const ws = window.WS;
++          if (ws && typeof ws.send === 'function') {
++            ws.send(payload);
++          }
++        }
++      } catch (err) {
++        console.warn('Failed to send asr.rearm.request', err);
++      }
++      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
++      logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
++    }
++
+ window.addEventListener('tts.start', (event) => {
+   const detail = event && event.detail;
+   if (detail) {
+     updateVoiceState(extractVoiceLocale(detail));
+   }
+   runtimeState.audioPlaybackIdle = false;
++  asrPrearmIssued = false;
+   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
+     try {
+       window.AudioRecorder.handleTtsStart();
+     } catch (err) {
+       console.warn('AudioRecorder handleTtsStart failed', err);
+     }
+   }
+ });
+ 
+ window.addEventListener('policy.snapshot', (event) => {
+   const frame = event && event.detail;
+   try {
+     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
+     runtimeState.policy = policy && typeof policy === 'object' ? policy : null;
+     if (audioRecorder && typeof audioRecorder.setPolicy === 'function') {
+       audioRecorder.setPolicy(policy);
+     }
+   } catch (err) {
+     console.warn('AudioRecorder setPolicy failed', err);
+   }
+ });
+ 
+ // Turn becomes Ready → hand control to user
+ window.addEventListener('turn.state', (event) => {
+   const frame = (event && event.detail) || {};
+   const nextState = typeof frame.state === 'string'
+     ? frame.state
+     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
+   runtimeState.turnState = typeof nextState === 'string' ? nextState : null;
+   if (runtimeState.turnState !== 'Ready') return;
+ 
+   // Optional: why we became ready (e.g., 'tts')
+   const reason = typeof frame.reason === 'string'
+     ? frame.reason
+     : (frame.meta && typeof frame.meta.reason === 'string' ? frame.meta.reason : null);
+   void reason; // not strictly needed, but kept for clarity
+ 
+   runtimeState.audioPlaybackIdle = true;
+   DiagRecorder.maybeStart('turn');
+   maybeAutoStartCapture('turn_ready', 'tts_end');
+ 
+-  if (WAKE_WORD_ONLY) {
++  if (requireHotwordToStart()) {
+     console.info('diag=mic_capture_skip trigger=turn_ready mode=wake_word_only');
+     return;
+   }
+ });
+ 
+ // Assistant TTS finished → open mic after optional delay
+ window.addEventListener('tts.end', () => {
+   const release = () => {
+     DiagRecorder.maybeStart('ready');
+     if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
+       try {
+         window.AudioRecorder.handleTtsEnd();
+       } catch (err) {
+         console.warn('AudioRecorder handleTtsEnd failed', err);
+       }
+     }
++    if (shouldPrearmOnTtsEnd()) {
++      try {
++        requestAsrPrearm('tts_end');
++      } catch (err) {
++        console.warn('requestAsrPrearm failed after tts.end', err);
++      }
++    }
+   };
+ 
+   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
+     setTimeout(release, POST_TTS_RELEASE_MS);
+   } else {
+     release();
+   }
+ });
+ 
+ window.addEventListener('local_audio.ended', (event) => {
+   runtimeState.audioPlaybackIdle = true;
+   const detail = event && event.detail;
+   const trigger = detail && detail.uttId === null ? 'local_audio_end_unknown' : 'local_audio_end';
+   maybeAutoStartCapture(trigger, 'tts_end');
+ });
+ 
+ window.addEventListener('assistant.await_user', (event) => {
+   runtimeState.audioPlaybackIdle = true;
+   const frame = event && event.detail;
+   const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
+   maybeAutoStartCapture('await_user', reason);
++  if (shouldPrearmOnTtsEnd()) {
++    try {
++      requestAsrPrearm('await_user');
++    } catch (err) {
++      console.warn('requestAsrPrearm failed after assistant.await_user', err);
++    }
++  }
+ });
+ 
+ window.addEventListener('asr.unavailable', (event) => {
+   runtimeState.asrReady = false;
+   const detail = event && typeof event === 'object' ? event.detail : undefined;
+   let reason = null;
+   if (detail && typeof detail === 'object') {
+     if (typeof detail.reason === 'string') {
+       reason = detail.reason;
+     } else if (typeof detail.details === 'string') {
+       reason = detail.details;
+     } else if (typeof detail.detail === 'string') {
+       reason = detail.detail;
+     } else if (detail.detail && typeof detail.detail === 'object') {
+       const nested = detail.detail;
+       if (typeof nested.reason === 'string') {
+         reason = nested.reason;
+       } else if (typeof nested.details === 'string') {
+         reason = nested.details;
+       }
+     }
+   }
+   if (diagHudEnabled()) {
+     const reasonText = reason ? String(reason).slice(0, 120) : '';
+     console.warn('diag=asr_unavailable', reasonText);
+@@ -2500,51 +2599,51 @@ window.addEventListener('asr.unavailable', (event) => {
+ window.addEventListener('asr.ready', (event) => {
+   runtimeState.asrReady = true;
+   maybeAutoStartCapture('asr_ready', 'policy');
+   if (diagHudEnabled()) {
+     console.info('diag=asr_ready');
+     setBadge('asr:ready');
+     sendDiagHudEvent(
+       'EVT_CLIENT_ASR_READY',
+       event && typeof event === 'object' ? event.detail : undefined,
+       { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
+     );
+   }
+   if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
+     try {
+       window.ChatView?.showSystemFromChip?.(
+         "Voice is back. You can speak again when you’re ready."
+       );
+     } catch (err) {
+       console.warn('Failed to show voice restoration message', err);
+     }
+     asrRetry.tries = 0;
+     clearTimeout(asrRetry.timer);
+     asrRetry.timer = null;
+   }
+   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
+-    if (WAKE_WORD_ONLY) {
++    if (requireHotwordToStart()) {
+       console.info('diag=mic_capture_skip trigger=asr_ready mode=wake_word_only');
+       return;
+     }
+     try {
+       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
+       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
+         maybe.catch((err) => {
+           console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
+         });
+       }
+     } catch (err) {
+       console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
+     }
+   }
+ });
+ 
+ window.addEventListener('assistant.suggestions', (event) => {
+   const detail = event && event.detail;
+   applySuggestionsFrame(detail);
+ });
+ 
+ 
+ // Start mic immediately on ws.open as a safety net; send diag banner
+ window.addEventListener('ws.open', () => {
+   if (audioRecorder && typeof audioRecorder.start === 'function') {
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index acb893c0967974625abc07f0a1c280bd35adf545..33b28dcc763ed1ed5bf64f629dec145bc4153d8c 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -35,68 +35,113 @@ import { WakeWord } from "./wake_word.js";
+     } catch (err) {
+       console.warn("AudioRecorder device summary failed", err);
+       return null;
+     }
+   }
+ 
+   function emitEvent(type, detail) {
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail }));
+     } catch (err) {
+       console.warn("AudioRecorder event dispatch failed", type, err);
+     }
+   }
+ 
+   class AudioRecorder {
+     constructor(ws, appState) {
+       this._ws = ws || null;
+       this._state = appState || null;
+       this._stream = null;
+       this._rec = null;
+       this._sendGate = false;
+       this._policy = {};
+       this._micOpenEmitted = false;
+       this._active = false;
+       this._wakeInit = false;
++      this._sendMuted = false;
+     }
+ 
+     setSocket(ws) {
+       this._ws = ws || null;
+     }
+ 
+     setPolicy(policy) {
+       if (policy && typeof policy === "object") {
+         this._policy = policy;
+       } else {
+         this._policy = {};
+       }
+     }
+ 
+     get policy() {
+       return this._policy || {};
+     }
+ 
++    _recorderPolicy() {
++      const policy = this.policy;
++      if (!policy || typeof policy !== "object") {
++        return {};
++      }
++      const nested = policy.policy;
++      if (!nested || typeof nested !== "object") {
++        return {};
++      }
++      const recorder = nested.recorder;
++      return recorder && typeof recorder === "object" ? recorder : {};
++    }
++
++    _shouldStopOnTtsStart() {
++      const recorder = this._recorderPolicy();
++      if (typeof recorder.stop_on_tts_start === "boolean") {
++        return recorder.stop_on_tts_start;
++      }
++      return false;
++    }
++
++    _shouldMuteDuringTts() {
++      const recorder = this._recorderPolicy();
++      if (typeof recorder.mute_send_during_tts === "boolean") {
++        return recorder.mute_send_during_tts;
++      }
++      return true;
++    }
++
++    _setSendMuted(muted, reason) {
++      const next = Boolean(muted);
++      if (this._sendMuted === next) {
++        return;
++      }
++      this._sendMuted = next;
++      const label = next ? "diag=send_gate_muted" : "diag=send_gate_unmuted";
++      const detail = typeof reason === "string" && reason ? reason : "policy";
++      try {
++        console.info(`${label} reason=%s`, detail);
++      } catch (err) {
++        console.info(label);
++      }
++    }
++
+     async _ensureArmed() {
+       if (!navigator?.mediaDevices?.getUserMedia) {
+         const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+         const logMic = typeof window !== "undefined" ? window.__logMic : null;
+         logMic?.({ outcome: (micOutcome && micOutcome.ERROR_NO_DEVICE) || 'error_no_device', message: 'media_devices_unavailable' });
+         throw new Error("media_devices_unavailable");
+       }
+       if (!this._stream) {
+         try {
+           this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+           const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+           const logMic = typeof window !== "undefined" ? window.__logMic : null;
+           const summary = currentInputDeviceSummary(this._stream);
+           logMic?.({ outcome: (micOutcome && micOutcome.PERM_GRANTED) || 'perm_granted', perm: 'granted', device: summary });
+           console.info("diag=mic_armed");
+         } catch (err) {
+           const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+           const logMic = typeof window !== "undefined" ? window.__logMic : null;
+           const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+           logMic?.({
+             outcome: denied ? (micOutcome && micOutcome.ERROR_DENIED) || 'error_denied' : (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media',
+             perm: denied ? 'denied' : 'error',
+             message: err?.message,
+           });
+           throw err;
+@@ -114,51 +159,51 @@ import { WakeWord } from "./wake_word.js";
+         const logStage = typeof window !== "undefined" ? window.__logStage : null;
+         logMic?.({ outcome: (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media', message: 'media_recorder_unavailable' });
+         logStage?.('client.audio', { outcome: 'error', message: 'media_recorder_unavailable' });
+         throw new Error("media_recorder_unavailable");
+       }
+       if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(OPUS_MIME)) {
+         const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+         const logMic = typeof window !== "undefined" ? window.__logMic : null;
+         const logStage = typeof window !== "undefined" ? window.__logStage : null;
+         logMic?.({ outcome: (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media', message: 'media_recorder_unsupported' });
+         logStage?.('client.audio', { outcome: 'error', message: 'media_recorder_unsupported' });
+         throw new Error("media_recorder_unsupported");
+       }
+       if (!this._rec) {
+         this._rec = new MediaRecorder(this._stream, { mimeType: OPUS_MIME });
+         const logStage = typeof window !== "undefined" ? window.__logStage : null;
+         logStage?.('client.audio', { outcome: 'encoder_ready', format: 'webm_opus', sr: 48000, channels: 1 });
+         this._rec.addEventListener("dataavailable", async (event) => {
+           if (!event?.data || event.data.size === 0) {
+             return;
+           }
+           const buf = await event.data.arrayBuffer();
+           if (!buf || buf.byteLength === 0) {
+             return;
+           }
+-          if (!this._sendGate) {
++          if (!this._sendGate || this._sendMuted) {
+             return;
+           }
+           const socket = this._ws;
+           if (!socket || socket.readyState !== WebSocket.OPEN) {
+             return;
+           }
+           const packet = buf;
+           const globalWindow = typeof window !== "undefined" ? window : null;
+           const logMic = globalWindow?.__logMic;
+           const logStage = globalWindow?.__logStage;
+           const micOutcome = globalWindow?.__MIC_OUTCOME;
+           if (globalWindow && typeof globalWindow.__micChunks === "number") {
+             if (globalWindow.__micChunks === 0) {
+               globalWindow.__micChunks = 1;
+               globalWindow.__micBytes += (packet?.byteLength ?? 0);
+               const armedAt = globalWindow.__micArmedAt || 0;
+               const firstChunkMs = Math.max(0, Date.now() - armedAt);
+               logMic?.({ outcome: (micOutcome && micOutcome.STREAMING) || 'streaming', first_chunk_ms: firstChunkMs });
+               logStage?.('client.audio', { outcome: 'packet_sent', packet_bytes: packet?.byteLength ?? 0, send_q_len: socket.bufferedAmount });
+               if (armedAt && globalWindow.__micChunks === 1) {
+                 logStage?.('client.perf', { outcome: 'mark', name: 'first_chunk_ms', t_ms: firstChunkMs });
+               }
+             } else {
+               globalWindow.__micChunks += 1;
+               globalWindow.__micBytes += (packet?.byteLength ?? 0);
+@@ -233,84 +278,93 @@ import { WakeWord } from "./wake_word.js";
+         });
+       }
+     }
+ 
+     async start(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return this._stream;
+     }
+ 
+     async startMicCaptureIfIdle(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return true;
+     }
+ 
+     async startListening(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       if (!this._sendGate) {
+         this._sendGate = true;
+         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
+         console.info("diag=send_gate_open reason=%s", reason);
+         this._updateRecorderState(true, reason);
+       }
++      this._setSendMuted(false, "start_listening");
+       return true;
+     }
+ 
+     stopListening(opts = {}) {
+       if (this._sendGate) {
+         this._sendGate = false;
+         const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
+         console.info("diag=send_gate_closed reason=%s", reason);
+         this._updateRecorderState(false, reason);
+       }
++      this._setSendMuted(false, typeof opts?.reason === "string" ? opts.reason : "stop_listening");
+     }
+ 
+     handleStopListening(opts = {}) {
+       this.stopListening(opts);
+     }
+ 
+     handleTtsStart() {
+-      this.stopListening({ reason: "tts_active" });
++      if (this._shouldStopOnTtsStart()) {
++        this.stopListening({ reason: "tts_active" });
++        return;
++      }
++      if (this._shouldMuteDuringTts()) {
++        this._setSendMuted(true, "tts_active");
++      }
+     }
+ 
+     handleTtsEnd() {
+-      // No automatic restart; server will instruct when to resume.
++      this._setSendMuted(false, "tts_end");
+     }
+ 
+     handleWsClose() {
+       this.endSession();
+     }
+ 
+     stop() {
+       this.endSession();
+     }
+ 
+     endSession() {
+       this._sendGate = false;
++      this._setSendMuted(false, "session_end");
+       this._updateRecorderState(false, "session_end");
+       try {
+         if (this._rec && this._rec.state !== "inactive") {
+           this._rec.stop();
+         }
+       } catch (err) {
+         console.warn("AudioRecorder stop error", err);
+       }
+       this._rec = null;
+       this._micOpenEmitted = false;
+       this._active = false;
+       this._wakeInit = false;
+       if (this._stream) {
+         try {
+           this._stream.getTracks?.().forEach((track) => track.stop?.());
+         } catch {}
+         this._stream = null;
+       }
+     }
+   }
+ 
+   const initialWs = typeof window !== "undefined" ? window.ws || null : null;
+   const recorder = new AudioRecorder(initialWs, window.AppState || null);
+   if (typeof window !== "undefined") {
+     window.addEventListener("ws.close", () => {
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index a2407e426e37fd885ec23dbe1d046674682f5a26..04f484234f84bd3e49b3a5ce9e661b00ae0548f6 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,39 +1,37 @@
+ import { WakeWord } from "./wake_word.js";
+ 
+ /** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 20000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+ 
+-  const WAKE_WORD_ONLY = true;
+-
+   // ---- Golden-path turn trace & mic outcomes (additive) ----
+   // ---- Telemetry (additive) ----
+   const MIC_OUTCOME = {
+     PERM_GRANTED: 'perm_granted',
+     ARMED: 'armed',
+     STREAMING: 'streaming',
+     STREAMING_HEARTBEAT: 'streaming_heartbeat',
+     STOPPED: 'stopped',
+     ERROR_DENIED: 'error_denied',
+     ERROR_NO_DEVICE: 'error_no_device',
+     ERROR_GUM: 'error_getuser_media',
+     ERROR_SILENT: 'error_silent_stream',
+     ERROR_WS_SEND: 'error_ws_send',
+     ERROR_STATE_GUARD: 'error_state_guard',
+     ERROR_UNKNOWN: 'error_unknown',
+   };
+ 
+   let __micAttempts = 0;
+   let __micChunks = 0;
+   let __micBytes = 0;
+   let __micArmedAt = 0;     // ms since epoch
+   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
+ 
+   if (typeof window !== "undefined") {
+     try {
+@@ -367,59 +365,80 @@ import { WakeWord } from "./wake_word.js";
+         console.warn("Failed to attach gesture listener", eventName, err);
+       }
+     });
+     gestureListenerCleanup = () => {
+       if (typeof window === "undefined") {
+         return;
+       }
+       listeners.forEach((entry) => {
+         window.removeEventListener(entry.eventName, entry.handler);
+       });
+       gestureListenerCleanup = null;
+     };
+   }
+ 
+   function markUserGestureSatisfied(reason) {
+     if (userGestureSatisfied) {
+       return;
+     }
+     userGestureSatisfied = true;
+     if (typeof gestureListenerCleanup === "function") {
+       gestureListenerCleanup();
+     }
+     sendAutostartTelemetry("gesture", { reason });
+   }
+ 
++  function requireHotwordToStart(policyCandidate) {
++    const snapshot = policyCandidate && typeof policyCandidate === 'object'
++      ? policyCandidate
++      : (AppState && typeof AppState.policy === 'object' ? AppState.policy : null);
++    if (!snapshot || typeof snapshot !== 'object') {
++      return false;
++    }
++    const nested = snapshot.policy;
++    if (!nested || typeof nested !== 'object') {
++      return false;
++    }
++    const inputPolicy = nested.input;
++    if (!inputPolicy || typeof inputPolicy !== 'object') {
++      return false;
++    }
++    if (typeof inputPolicy.require_hotword_to_start === 'boolean') {
++      return inputPolicy.require_hotword_to_start;
++    }
++    return false;
++  }
++
+   function canAutoRecord(state) {
+-    if (WAKE_WORD_ONLY) return false;
++    if (requireHotwordToStart(state?.policy)) return false;
+     if (!state?.policy?.auto_record_after_greet) return false;
+     if (state.policy.tts_gate_enabled && state.ttsActive) return false;
+     return state.asrReady === true && state.turnState === "Ready" && !state.recorder?.active;
+   }
+ 
+   function reasonFromState(state) {
+-    if (WAKE_WORD_ONLY) return "wake_word_only";
++    if (requireHotwordToStart(state?.policy)) return "wake_word_only";
+     if (!userGestureSatisfied && state?.policy?.require_user_gesture_first_visit) return "needs_user_gesture";
+     if (!state?.policy?.auto_record_after_greet) return "policy_disabled";
+     if (state.policy.tts_gate_enabled && state.ttsActive) return "tts_active";
+     if (!state.asrReady) return "asr_not_ready";
+     if (state.turnState !== "Ready") return "turn_not_ready";
+     if (state.recorder?.active) return "already_active";
+     return null;
+   }
+ 
+   function shouldAttemptForTrigger(trigger, policy) {
+     if (!trigger) {
+       return true;
+     }
+     if (AUTOSTART_TRIGGERS_ALWAYS.has(trigger)) {
+       return true;
+     }
+     const retries = Array.isArray(policy?.autostart_retry_on) ? policy.autostart_retry_on : [];
+     if (!retries.length) {
+       return true;
+     }
+     return retries.includes(trigger);
+   }
+ 
+   function getAutostartSnapshot() {
+     const state = typeof AppState.getState === "function" ? AppState.getState() : {};
+@@ -463,51 +482,51 @@ import { WakeWord } from "./wake_word.js";
+         }
+       } else if (typeof value === "boolean") {
+         cleaned[key.slice(0, 48)] = value;
+       }
+     }
+     return Object.keys(cleaned).length ? cleaned : undefined;
+   }
+ 
+   function sendAutostartTelemetry(event, meta) {
+     if (typeof event !== "string" || !event) {
+       return;
+     }
+     const payload = { type: "client.autostart", event };
+     const sanitizedMeta = sanitizeAutostartMeta(meta);
+     if (sanitizedMeta) {
+       payload.meta = sanitizedMeta;
+     }
+     try {
+       sendJson(payload);
+     } catch (err) {
+       console.warn("Failed to send autostart telemetry", err);
+     }
+   }
+ 
+   function invokeStartRecording(trigger) {
+-    if (WAKE_WORD_ONLY) {
++    if (requireHotwordToStart()) {
+       const label = trigger ? String(trigger).slice(0, 32) : "unknown";
+       console.info("diag=start_recording_blocked trigger=%s mode=wake_word_only", label);
+       return false;
+     }
+     let handler = null;
+     if (typeof window !== "undefined" && typeof window.startRecording === "function") {
+       handler = window.startRecording;
+     } else if (typeof startRecording === "function") {
+       handler = startRecording;
+     }
+     if (handler) {
+       const context = typeof window !== "undefined" ? window : null;
+       return handler.call(context, { trigger });
+     }
+     const hub = AppState?.hub;
+     if (hub && typeof hub.startListening === "function") {
+       try {
+         return hub.startListening({ trigger });
+       } catch (err) {
+         console.warn("Hub startListening failed", err);
+         throw err;
+       }
+     }
+     throw new Error("startRecording_unavailable");
+   }
+@@ -1158,53 +1177,66 @@ import { WakeWord } from "./wake_word.js";
+     }
+     if (ws.readyState !== WebSocket.CLOSED || closeCode !== 1006) {
+       return;
+     }
+     const info = ws.__accessTokenInfo || { token: null, mintedAt: null };
+     const mintedAt = info && typeof info.mintedAt === "number" && Number.isFinite(info.mintedAt)
+       ? info.mintedAt
+       : null;
+     let message = null;
+     if (!mintedAt) {
+       message = "Couldn’t connect. Please login or complete your profile.";
+     } else if (Date.now() - mintedAt > TOKEN_EXPIRY_MS) {
+       message = "Session token expired. Click Start again.";
+     } else {
+       message = "Connection failed. Please try again.";
+     }
+     showConnectionToast(message);
+     ws.__handshakeToastShown = true;
+     recordClientBannerEvent("ws.handshake.toast", {
+       message,
+       minted_ms: mintedAt,
+       close_code: closeCode,
+     });
+   }
+ 
++  function resolveWsPath() {
++    try {
++      const routing = AppState?.policy?.policy?.routing;
++      const candidate = typeof routing?.ws_version === 'string' ? routing.ws_version.trim() : '';
++      if (candidate && candidate.toLowerCase() !== 'v1') {
++        console.warn('Unsupported ws_version from policy; normalizing to v1', candidate);
++      }
++    } catch (err) {
++      console.warn('Failed to inspect policy routing version', err);
++    }
++    return '/ws/v1/chat';
++  }
++
+   function computeUrl(resumeToken) {
+     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+-    const base = `${protocol}//${window.location.host}/ws/v2/chat`;
++    const base = `${protocol}//${window.location.host}${resolveWsPath()}`;
+     const params = new URLSearchParams();
+     if (typeof resumeToken === "string" && resumeToken.trim()) {
+       params.set("resume", resumeToken.trim());
+     }
+     const query = params.toString();
+     return query ? `${base}?${query}` : base;
+   }
+ 
+   function clearInfoWatchdog() {
+     if (infoWatchdogTimerId) {
+       clearTimeout(infoWatchdogTimerId);
+       infoWatchdogTimerId = null;
+     }
+   }
+ 
+   function startInfoWatchdog() {
+     clearInfoWatchdog();
+     infoWatchdogTimerId = setTimeout(() => {
+       infoWatchdogTimerId = null;
+       console.warn("WS info frame not received within deadline");
+       recordClientBannerEvent("ws.info.deadline", null);
+     }, INFO_DEADLINE_MS);
+   }
+ 
+   function clearHeartbeat() {
+@@ -1449,108 +1481,244 @@ import { WakeWord } from "./wake_word.js";
+         safe[key] = frame[key];
+       }
+     }
+ 
+     if (Number.isFinite(frame.pid)) {
+       safe.pid = frame.pid;
+     }
+ 
+     if (Array.isArray(frame.subprotocols_offered)) {
+       const subs = frame.subprotocols_offered.filter((value) => typeof value === "string" && value);
+       if (subs.length) {
+         safe.subprotocols_offered = subs;
+       }
+     }
+ 
+     return safe;
+   }
+ 
+   function handleServerBannerFrame(frame) {
+     const sanitized = sanitizeServerBannerFrame(frame);
+     updateState({ serverBanner: sanitized });
+     console.log("WS server banner", sanitized);
+     dispatchFrame(sanitized);
+   }
+ 
+-  function sanitizePolicyFrame(frame) {
+-    const safe = { type: "policy.interaction" };
+-    if (!frame || typeof frame !== "object") {
+-      safe.policy = {};
+-      return safe;
+-    }
+-    Object.keys(frame).forEach((key) => {
+-      if (key === "policy") return;
+-      safe[key] = frame[key];
+-    });
+-    const policy = {};
+-    const source = frame.policy;
+-    if (source && typeof source === "object") {
+-      if (typeof source.mode === "string") {
++  const DEFAULT_POLICY_FLAGS = {
++    recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
++    input: { require_hotword_to_start: false },
++    asr: { prearm_on_tts_end: true, keep_stream_warm_ms: 30000 },
++    routing: { ws_version: 'v1' },
++  };
++
++  function sanitizePolicySnapshot(source) {
++    const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
++    const policy = { ...base };
++
++    if (source && typeof source === 'object') {
++      if (typeof source.mode === 'string') {
+         policy.mode = source.mode;
+       }
+-      if (typeof source.allow_auto_vad === "boolean") {
++      if (typeof source.allow_auto_vad === 'boolean') {
+         policy.allow_auto_vad = source.allow_auto_vad;
+       }
+-      if (typeof source.barge_in_enabled === "boolean") {
++      if (typeof source.barge_in_enabled === 'boolean') {
+         policy.barge_in_enabled = source.barge_in_enabled;
+       }
+-      if (typeof source.ws_auth_mode === "string" && source.ws_auth_mode.trim()) {
++      if (typeof source.ws_auth_mode === 'string' && source.ws_auth_mode.trim()) {
+         policy.ws_auth_mode = source.ws_auth_mode.trim();
+       }
++      if (typeof source.require_user_gesture_first_visit === 'boolean') {
++        policy.require_user_gesture_first_visit = source.require_user_gesture_first_visit;
++      }
++      if (typeof source.auto_record_after_greet === 'boolean') {
++        policy.auto_record_after_greet = source.auto_record_after_greet;
++      }
++      if (typeof source.tts_gate_enabled === 'boolean') {
++        policy.tts_gate_enabled = source.tts_gate_enabled;
++      }
++      if (Array.isArray(source.autostart_retry_on)) {
++        policy.autostart_retry_on = source.autostart_retry_on
++          .filter((item) => typeof item === 'string' && item)
++          .map((item) => item.slice(0, 64));
++      }
++      if (Array.isArray(source.autostart_backoff_ms)) {
++        policy.autostart_backoff_ms = source.autostart_backoff_ms
++          .map((item) => Number(item))
++          .filter((value) => Number.isFinite(value) && value >= 0);
++      }
++      if (Number.isFinite(Number(source.autostart_max_attempts))) {
++        policy.autostart_max_attempts = Number(source.autostart_max_attempts);
++      }
++      if (source.capture && typeof source.capture === 'object') {
++        policy.capture = { ...source.capture };
++      }
++      if (source.media && typeof source.media === 'object') {
++        policy.media = { ...source.media };
++      }
++      if (source.voice && typeof source.voice === 'object') {
++        policy.voice = { ...source.voice };
++      }
++      if (source.greet && typeof source.greet === 'object') {
++        policy.greet = { ...source.greet };
++      }
++      if (source.suggestions && typeof source.suggestions === 'object') {
++        policy.suggestions = { ...source.suggestions };
++      }
++      if (source.actions && typeof source.actions === 'object') {
++        policy.actions = { ...source.actions };
++      }
++      if (source.telemetry && typeof source.telemetry === 'object') {
++        policy.telemetry = { ...source.telemetry };
++      }
++    }
++
++    const existingNested = (policy && typeof policy.policy === 'object') ? policy.policy : {};
++    const nested = {
++      recorder: {
++        ...DEFAULT_POLICY_FLAGS.recorder,
++        ...(existingNested && typeof existingNested.recorder === 'object' ? existingNested.recorder : {}),
++      },
++      input: {
++        ...DEFAULT_POLICY_FLAGS.input,
++        ...(existingNested && typeof existingNested.input === 'object' ? existingNested.input : {}),
++      },
++      asr: {
++        ...DEFAULT_POLICY_FLAGS.asr,
++        ...(existingNested && typeof existingNested.asr === 'object' ? existingNested.asr : {}),
++      },
++      routing: {
++        ...DEFAULT_POLICY_FLAGS.routing,
++        ...(existingNested && typeof existingNested.routing === 'object' ? existingNested.routing : {}),
++      },
++    };
++
++    const rawNested = source && typeof source === 'object' ? source.policy : null;
++    if (rawNested && typeof rawNested === 'object') {
++      const recorder = rawNested.recorder && typeof rawNested.recorder === 'object'
++        ? rawNested.recorder
++        : null;
++      nested.recorder = {
++        stop_on_tts_start: recorder && typeof recorder.stop_on_tts_start === 'boolean'
++          ? recorder.stop_on_tts_start
++          : DEFAULT_POLICY_FLAGS.recorder.stop_on_tts_start,
++        mute_send_during_tts: recorder && typeof recorder.mute_send_during_tts === 'boolean'
++          ? recorder.mute_send_during_tts
++          : DEFAULT_POLICY_FLAGS.recorder.mute_send_during_tts,
++      };
++
++      const input = rawNested.input && typeof rawNested.input === 'object' ? rawNested.input : null;
++      nested.input = {
++        require_hotword_to_start: input && typeof input.require_hotword_to_start === 'boolean'
++          ? input.require_hotword_to_start
++          : DEFAULT_POLICY_FLAGS.input.require_hotword_to_start,
++      };
++
++      const asr = rawNested.asr && typeof rawNested.asr === 'object' ? rawNested.asr : null;
++      let keepWarm = DEFAULT_POLICY_FLAGS.asr.keep_stream_warm_ms;
++      if (asr && Number.isFinite(Number(asr.keep_stream_warm_ms))) {
++        const parsed = Number(asr.keep_stream_warm_ms);
++        if (parsed >= 0) {
++          keepWarm = Math.round(parsed);
++        }
++      }
++      nested.asr = {
++        prearm_on_tts_end: asr && typeof asr.prearm_on_tts_end === 'boolean'
++          ? asr.prearm_on_tts_end
++          : DEFAULT_POLICY_FLAGS.asr.prearm_on_tts_end,
++        keep_stream_warm_ms: keepWarm,
++      };
++
++      const routing = rawNested.routing && typeof rawNested.routing === 'object'
++        ? rawNested.routing
++        : null;
++      const rawVersion = routing && typeof routing.ws_version === 'string'
++        ? routing.ws_version.trim()
++        : '';
++      nested.routing = {
++        ws_version: rawVersion && rawVersion.toLowerCase() === 'v1' ? 'v1' : 'v1',
++      };
++    }
++
++    policy.policy = nested;
++    return policy;
++  }
++
++  function applyPolicySnapshotFromSource(source, origin) {
++    const sanitizedPolicy = sanitizePolicySnapshot(source);
++    AppState.policy = sanitizedPolicy;
++    updateState({ policy: sanitizedPolicy });
++    const snapshotFrame = { type: 'policy.snapshot', policy: sanitizedPolicy, origin: origin || null };
++    dispatchFrame(snapshotFrame);
++    dispatchFrame({ type: 'config.updated', policy: sanitizedPolicy, origin: origin || null });
++    return sanitizedPolicy;
++  }
++
++  function sanitizePolicyFrame(frame) {
++    const safe = { type: 'policy.interaction' };
++    if (frame && typeof frame === 'object') {
++      Object.keys(frame).forEach((key) => {
++        if (key === 'policy') return;
++        safe[key] = frame[key];
++      });
+     }
+-    safe.policy = policy;
++    const source = frame && typeof frame === 'object' ? frame.policy : null;
++    safe.policy = sanitizePolicySnapshot(source);
+     return safe;
+   }
+ 
+   function handleInfoFrame(frame) {
+     const meta = frame && frame.meta;
+     if (!meta || typeof meta.sid !== "string") {
+       console.error("Invalid info frame", frame);
+       close("bad_info_frame");
+       return;
+     }
+     expectInfoFrame = false;
+     clearInfoWatchdog();
+     resetRateLimitRecovery();
+     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
+     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
+     if (resumeToken && resumeTtlMs) {
+       assignResume(resumeToken, resumeTtlMs);
+     } else {
+       clearResumeState();
+     }
+     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
+     const audioPlayer = getAudioPlayer();
+     if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+       audioPlayer.setDescriptor(descriptor);
+     }
+     updateState({
+       connectionState: "connected",
+       sid: meta.sid,
+       infoFrame: frame,
+       resumeError: null
+     });
++    if (frame && typeof frame.policy === 'object') {
++      applyPolicySnapshotFromSource(frame.policy, 'info');
++    }
+     logStage('client.ws', { outcome: 'auth_ok' });
+     flushClientBannerQueue();
+   }
+ 
+   function handlePongFrame(frame) {
+     const now = Date.now();
+     let reference = null;
+     if (frame && typeof frame.echo === "number") {
+       reference = frame.echo;
+     } else if (frame && typeof frame.t === "number") {
+       reference = frame.t;
+     } else if (typeof lastPingAt === "number") {
+       reference = lastPingAt;
+     }
+     let rtt = null;
+     if (typeof reference === "number") {
+       const latency = Math.max(0, now - reference);
+       updateState({ latencyMs: latency });
+       rtt = latency;
+     }
+     logStage('client.ws', { outcome: 'pong', rtt_ms: rtt });
+   }
+ 
+   function handleChatHistoryFrame(frame) {
+     const view = window.TranscriptView;
+@@ -1612,62 +1780,71 @@ import { WakeWord } from "./wake_word.js";
+     }
+   }
+ 
+   function handleMessageFrame(frame) {
+     if (frame.type === "keepalive") {
+       // Some transports may emit a keepalive frame before the info frame has
+       // been sent. Treat it as a no-op and continue waiting for the info
+       // frame so we do not close the connection prematurely.
+       return;
+     }
+ 
+     if (frame.type === "server.ping") {
+       const response = { type: "client.pong", ts: Date.now() };
+       if (typeof frame.ts === "number") {
+         response.echo = frame.ts;
+       }
+       sendJson(response);
+       return;
+     }
+ 
+     if (frame.type === "ping") {
+       sendJson({ type: "pong", t: Date.now() });
+       return;
+     }
+ 
++    if (frame.type === "config.updated" || frame.type === "config_updated") {
++      const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
++      const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
++      const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
++      if (incomingType !== 'config.updated') {
++        dispatchFrame({ ...frame, policy: appliedPolicy, type: incomingType });
++      }
++      return;
++    }
++
+     if (frame.type === "policy.interaction") {
+       const sanitized = sanitizePolicyFrame(frame);
+-      if (sanitized && sanitized.policy && typeof sanitized.policy === "object") {
+-        const mergedPolicy = { ...AppState.policy, ...sanitized.policy };
+-        AppState.policy = mergedPolicy;
+-        sanitized.policy = mergedPolicy;
+-        updateState({ policy: mergedPolicy });
+-        if (!userGestureSatisfied && !mergedPolicy.require_user_gesture_first_visit) {
+-          markUserGestureSatisfied("policy_update");
+-        }
+-        attachUserGestureListeners();
+-      }
++      const appliedPolicy = applyPolicySnapshotFromSource(
++        sanitized && sanitized.policy ? sanitized.policy : null,
++        'policy.interaction'
++      );
++      sanitized.policy = appliedPolicy;
++      if (!userGestureSatisfied && !appliedPolicy.require_user_gesture_first_visit) {
++        markUserGestureSatisfied('policy_update');
++      }
++      attachUserGestureListeners();
+       dispatchFrame(sanitized);
+       maybeAutoStart("policy");
+       return;
+     }
+ 
+     if (frame.type === "server.banner") {
+       handleServerBannerFrame(frame);
+       return;
+     }
+ 
+     if (expectInfoFrame) {
+       if (frame.type === "chat.history") {
+         handleChatHistoryFrame(frame);
+       } else if (frame.type === "error") {
+         handleErrorFrame(frame);
+         return;
+       } else if (frame.type !== "info") {
+         console.error("Expected info frame first, received", frame.type);
+         close("bad_info_sequence");
+         return;
+       }
+       if (frame.type === "info") {
+         handleInfoFrame(frame);
+       }
+     } else if (frame.type === "info") {
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index c76aeb0edee6788a3d41397ec9c0afc9eb1a3b44..33e57e521f22ae5c5f7cee92eb4e9f0e465cbd70 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -105,50 +105,51 @@ class _SessionState:
+     opened_at_monotonic: float = 0.0
+     last_audio_ts_ms: int = 0
+     chunks_sent: int = 0
+     bytes_sent: int = 0
+     dg_msgs_partial: int = 0
+     dg_msgs_final: int = 0
+     finals_delivered: int = 0
+     dropped_chunks: int = 0
+     last_stream_id: Optional[str] = None
+     ready_watchdog: asyncio.TimerHandle | None = None
+     ready_armed_at: float = 0.0
+     prearm_requested: bool = False
+     input_desc: Dict[str, Any] = field(default_factory=_default_input_descriptor)
+     unavailable_emitted: bool = False
+     first_chunk_seen: bool = False
+     rollup_window_start: float = 0.0
+     rollup_chunks: int = 0
+     rollup_bytes: int = 0
+     bytes_received: int = 0
+     listening: bool = False
+     ingress_packets: int = 0
+     ingress_bytes: int = 0
+     first_ingress_ms: int = 0
+     first_partial_logged: bool = False
+     model: Optional[str] = None
++    keep_warm_until: float = 0.0
+ 
+     def __post_init__(self) -> None:
+         now_monotonic = time.monotonic()
+         now_wall = time.time()
+         self.opened_at_monotonic = now_monotonic
+         self.opened_at_ms = int(now_wall * 1000)
+         self.last_audio_ts = now_monotonic
+         self.last_audio_ts_ms = int(now_wall * 1000)
+ 
+ 
+ class ASRRuntime:
+     """Bridge websocket audio to Deepgram realtime transcription."""
+ 
+     def __init__(
+         self,
+         engine: EngineV2,
+         client: DeepgramClient,
+         *,
+         telemetry_bus: Any | None = None,
+     ) -> None:
+         if engine is None:
+             raise ValueError("engine must be provided")
+         if client is None:
+             raise ValueError("client must be provided")
+ 
+@@ -383,64 +384,74 @@ class ASRRuntime:
+             )
+ 
+         self._reset_idle_timer(sid, state)
+ 
+     def on_ws_close(self, sid: str) -> None:
+         state = self._sessions.pop(sid, None)
+         if state is None:
+             return
+         state.close_reason = "client_ws_closed"
+         self._cancel_idle_timer(state)
+         self._cancel_ready_watchdog(state)
+         task = state.stream_open_task
+         if task is not None and not task.done():
+             task.cancel()
+         state.stream_open = False
+         try:
+             self._client.close_stream(sid)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_stream_close_failed sid=%s", sid)
+         finally:
+             self._log_session_rollup(state)
+         state.req_id = None
+         state.bytes_received = 0
+         state.listening = False
+ 
+-    def prearm(self, sid: str) -> None:
++    def prearm(self, sid: str, *, keep_warm_ms: int | None = None) -> None:
+         """Request that the ASR stream open proactively for the session."""
+ 
+         if not isinstance(sid, str) or not sid:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+         if state.stream_open:
++            if keep_warm_ms is not None and keep_warm_ms > 0:
++                state.keep_warm_until = max(
++                    state.keep_warm_until,
++                    time.monotonic() + (keep_warm_ms / 1000.0),
++                )
+             return
+ 
+         state.prearm_requested = True
++        if keep_warm_ms is not None and keep_warm_ms > 0:
++            state.keep_warm_until = max(
++                state.keep_warm_until,
++                time.monotonic() + (keep_warm_ms / 1000.0),
++            )
+         self._ensure_stream(sid, state)
+ 
+     async def open_if_needed(self, sid: str, *, req_id: str | None = None) -> None:
+         """Ensure the streaming session is open before capturing microphone audio."""
+ 
+         if not isinstance(sid, str) or not sid:
+             return
+ 
+         loop = self._ensure_loop()
+         if loop is None:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+ 
+         if isinstance(req_id, str) and req_id:
+             state.req_id = req_id
+ 
+         if state.stream_open:
+             return
+ 
+         state.prearm_requested = True
+         self._ensure_stream(sid, state)
+@@ -1331,100 +1342,111 @@ class ASRRuntime:
+             state.ready_watchdog = None
+             armed_at = state.ready_armed_at
+             state.ready_armed_at = 0.0
+             if armed_at and state.last_audio_ts <= armed_at:
+                 _log.warning("evt=asr_no_audio_timeout sid=%s", sid)
+                 self._publish_asr_unavailable(
+                     sid,
+                     "no_audio_timeout",
+                     f"no audio received for {int(_NO_AUDIO_TIMEOUT_S)}s",
+                     state=state,
+                     force=False,
+                 )
+                 self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+                 _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
+                 self._log_asr_rearmed(sid, state)
+                 asr_ready_frame = {
+                     "type": "asr.ready",
+                     "vendor": "deepgram",
+                     "input": dict(state.input_desc),
+                 }
+                 self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
+ 
+         state.ready_armed_at = time.monotonic()
+         state.ready_watchdog = loop.call_later(_NO_AUDIO_TIMEOUT_S, _fire)
+ 
+-    def _reset_idle_timer(self, sid: str, state: _SessionState) -> None:
++    def _reset_idle_timer(
++        self, sid: str, state: _SessionState, *, delay_override: float | None = None
++    ) -> None:
+         threshold_ms = self._idle_close_ms
+-        if threshold_ms <= 0:
++        if delay_override is None and threshold_ms <= 0:
+             return
+         loop = self._ensure_loop()
+         if loop is None:
+             return
+         self._cancel_idle_timer(state)
+ 
+-        delay = threshold_ms / 1000.0
++        delay = delay_override if delay_override is not None else threshold_ms / 1000.0
++        if delay <= 0:
++            return
+ 
+         def _fire() -> None:
+             state.idle_handle = None
+             self._handle_idle_timeout(sid, state)
+ 
+         state.idle_handle = loop.call_later(delay, _fire)
+ 
+     def _handle_idle_timeout(self, sid: str, state: _SessionState) -> None:
+         if not state.stream_open:
+             return
+ 
++        now_monotonic = time.monotonic()
++        if state.keep_warm_until and now_monotonic < state.keep_warm_until:
++            remaining = state.keep_warm_until - now_monotonic
++            self._reset_idle_timer(sid, state, delay_override=remaining)
++            return
++
+         state.close_reason = "idle_timeout"
+         ensure_session = getattr(self._engine, "_ensure_session", None)
+         engine_state = None
+         if callable(ensure_session):
+             try:
+                 engine_session = ensure_session(sid)
+             except Exception:  # pragma: no cover - defensive
+                 engine_session = None
+             if engine_session is not None:
+                 engine_state = getattr(engine_session, "state", None)
+ 
+         close_for_prearm = False
+         if engine_state == _LISTENING_STATE:
+             if state.chunks_sent == 0 and not state.pending:
+                 close_for_prearm = True
+             else:
+                 self._reset_idle_timer(sid, state)
+                 return
+         elif engine_state not in _READY_STATES:
+             # Re-arm the timer to check again once the engine transitions.
+             self._reset_idle_timer(sid, state)
+             return
+ 
+         idle_ms = int(
+             max(0.0, (time.monotonic() - state.last_audio_ts) * 1000)
+             if state.last_audio_ts
+             else self._idle_close_ms
+         )
+         stream_id = state.stream_id or state.last_stream_id or ""
++        state.keep_warm_until = 0.0
+         if close_for_prearm:
+             _log.warning(
+                 "evt=asr_prearm_idle sid=%s stream_id=%s idle_ms=%d action=close",
+                 sid,
+                 stream_id,
+                 idle_ms,
+             )
+         else:
+             _log.info(
+                 "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
+                 sid,
+                 stream_id,
+                 idle_ms,
+             )
+         try:
+             self._client.close_stream(sid)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_idle_close_failed sid=%s", sid)
+         state.stream_open = False
+         state.last_stream_id = stream_id or state.last_stream_id
+         state.stream_id = None
+         state.req_id = None
+         state.bytes_received = 0
+ 
+     # Optional idle guard
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index afb00cbfe0390560805e4b33efbf32ffc6820844..658745b82c775f9fde26cd1c022293dcf415a3c2 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -571,50 +571,51 @@ class ChatV2Adapter:
+                 sid,
+                 "ws.banner_sent",
+                 summary="Sent server banner",
+                 meta={
+                     "build_id": build_id,
+                     "host": host,
+                     "pid": pid,
+                     "subprotocol": selected,
+                 },
+             )
+         except Exception:
+             _log.exception("evt=server_banner_emit_failed")
+         # ---- END RUNTIME BANNER ----
+ 
+         now_ms = int(time.time() * 1000)
+         info_frame: Dict[str, Any] = {
+             "type": "info",
+             "protocol": CHAT_V2_SUBPROTOCOL,
+             "sid": sid,
+             "ts_ms": now_ms,
+             "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
+         }
+         info_frame["meta"] = {"sid": sid}
+         policy_snapshot = self._policy_snapshot()
+         if policy_snapshot:
++            self._log_policy_flags(sid, policy_snapshot)
+             info_frame["policy"] = policy_snapshot
+         await self._send_json(send, sid, info_frame)
+         _log.info("evt=ws_info_sent sid=%s", sid)
+         self._emit_session_step(
+             sid,
+             "ws.info_sent",
+             summary="Sent info frame",
+             meta={"has_policy": bool(policy_snapshot)},
+         )
+ 
+         ctx = AdapterContext(
+             sid=sid,
+             headers=dict(headers),
+             principal=principal,
+             user_id=sub,
+             is_admin=is_admin,
+         )
+         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
+         ctx.last_client_activity_ms = now_ms
+ 
+         token = current_sid.set(ctx.sid)
+         try:
+             if not (
+                 inspect.iscoroutinefunction(self._on_open_and_greet)
+                 and inspect.iscoroutinefunction(self._invoke_engine)
+@@ -1018,50 +1019,72 @@ class ChatV2Adapter:
+                 return self._HandleResult(False, 4400, "policy_violation")
+             ctx.audio_profile = profile
+             if seq_start is not None:
+                 ctx.audio_seq = max(0, seq_start)
+                 ctx.audio_expected_seq = ctx.audio_seq
+                 ctx.audio_highest_seq = ctx.audio_seq - 1
+                 ctx.audio_buffer.clear()
+             audio_meta = {
+                 key: value
+                 for key, value in (
+                     ("format", profile.get("format")),
+                     ("sample_rate", profile.get("sample_rate")),
+                     ("channels", profile.get("channels")),
+                     ("seq_start", profile.get("seq_start")),
+                 )
+                 if value is not None
+             }
+             self._emit_session_step(
+                 ctx.sid,
+                 "audio.header.accepted",
+                 summary="Accepted audio header",
+                 meta=audio_meta,
+                 source="ws.audio",
+             )
+ 
++        if frame_type == "asr.rearm.request":
++            keep_warm_ms = self._policy_keep_warm_ms(ctx)
++            runtime = getattr(self, "asr_runtime", None)
++            if runtime is not None:
++                prearm = getattr(runtime, "prearm", None)
++                if callable(prearm):
++                    try:
++                        prearm(ctx.sid, keep_warm_ms=keep_warm_ms)
++                    except TypeError:
++                        prearm(ctx.sid)
++                    except Exception:  # pragma: no cover - defensive logging
++                        _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
++            _log.info(
++                "evt=asr_prearm_requested sid=%s source=client keep_stream_warm_ms=%s",
++                ctx.sid,
++                keep_warm_ms,
++            )
++            try:
++                await self._send_asr_ready_bundle(send, ctx)
++            except Exception:  # pragma: no cover - defensive logging
++                _log.exception("evt=ws_asr_ready_bundle_failed sid=%s", ctx.sid)
++
+         if frame_type == "client.ready":
+             mic_info = frame.get("mic")
+             if isinstance(mic_info, dict):
+                 state = mic_info.get("state")
+                 if isinstance(state, str) and state.lower() == "open":
+                     vendor = mic_info.get("vendor")
+                     opened_ts = mic_info.get("ts")
+                     ts_value = opened_ts if isinstance(opened_ts, int) else None
+                     self._emit_client_mic_open(
+                         ctx,
+                         vendor=vendor if isinstance(vendor, str) else None,
+                         opened_ts=ts_value,
                      )
-                     try:
-                         _pool = await asyncpg.create_pool(
-                             dsn,
-                             statement_cache_size=0,
-+                            min_size=0,
-                             max_size=10,
-                             timeout=_DB_CONNECT_TIMEOUT_S,
-+                            max_inactive_connection_lifetime=180,
-                         )
-                         break
-                     except Exception as exc:  # pragma: no cover - network failures
-                         if attempt < _DB_RETRY_ATTEMPTS:
-                             base_wait = min(_DB_RETRY_CAP_S, _DB_RETRY_BASE_S * (2 ** (attempt - 1)))
-                             jitter = random.uniform(0, base_wait)
-                             wait_seconds = min(_DB_RETRY_CAP_S, base_wait + jitter)
-                         else:
-                             wait_seconds = 0.0
-                         _update_status(state="retrying", last_error=exc.__class__.__name__, attempt=attempt)
-                         _log.info(
-                             "evt=db_connect_retry attempt=%s wait_s=%.2f err=%s",
-                             attempt,
-                             wait_seconds,
-                             exc.__class__.__name__,
-                         )
-                         if attempt >= _DB_RETRY_ATTEMPTS:
-                             _update_status(state="error", last_error=exc.__class__.__name__, attempt=attempt)
-                             _log.error("evt=db_connect_failed err=%s", exc.__class__.__name__)
-                             raise
-                         await asyncio.sleep(wait_seconds)
-                 else:  # pragma: no cover
-                     raise RuntimeError("DB connection attempts exhausted")
+                     ctx.mic_nudge_sent = False
+                 ready_meta = {
+                     key: value
+                     for key, value in (
+                         ("state", state if isinstance(state, str) else None),
+                         (
+                             "vendor",
+                             mic_info.get("vendor")
+                             if isinstance(mic_info.get("vendor"), str)
+                             else None,
+                         ),
+                     )
+@@ -2773,52 +2796,183 @@ class ChatV2Adapter:
+         if not engine:
+             return {}
+         try:
+             snapshot = getattr(engine, "policy_snapshot", None)
+             if callable(snapshot) and not isinstance(snapshot, dict):
+                 snapshot = snapshot()
+         except Exception:  # pragma: no cover - defensive logging
+             _log.exception("evt=ws_policy_snapshot_error")
+             return {}
+         if not isinstance(snapshot, dict):
+             return {}
+         stable: Dict[str, Any] = {}
+         for key in _POLICY_STABLE_KEYS:
+             if key in snapshot:
+                 stable[key] = snapshot[key]
+         media = snapshot.get("media")
+         if isinstance(media, dict):
+             stable["media"] = {
+                 key: media[key]
+                 for key in ("asr_input", "asr_rate_hz", "asr_channels")
+                 if key in media
+             }
+         capture = snapshot.get("capture")
+         if isinstance(capture, dict):
+             stable["capture"] = dict(capture)
++        nested_policy = snapshot.get("policy")
++        if isinstance(nested_policy, dict):
++            stable["policy"] = json.loads(json.dumps(nested_policy))
+         return stable
  
-                 assert _pool is not None
++    def _log_policy_flags(self, sid: str, snapshot: Mapping[str, Any]) -> None:
++        if not isinstance(snapshot, Mapping):
++            return
++        policy_block = snapshot.get("policy")
++        if not isinstance(policy_block, Mapping):
++            return
++
++        recorder_block = policy_block.get("recorder")
++        input_block = policy_block.get("input")
++        asr_block = policy_block.get("asr")
++        routing_block = policy_block.get("routing")
++
++        stop_on_tts = bool(
++            recorder_block.get("stop_on_tts_start") if isinstance(recorder_block, Mapping) else False
++        )
++        mute_during_tts = bool(
++            recorder_block.get("mute_send_during_tts") if isinstance(recorder_block, Mapping) else False
++        )
++        require_hotword = bool(
++            input_block.get("require_hotword_to_start") if isinstance(input_block, Mapping) else False
++        )
++        prearm_on_tts_end = bool(
++            asr_block.get("prearm_on_tts_end") if isinstance(asr_block, Mapping) else False
++        )
++        keep_warm_raw = (
++            asr_block.get("keep_stream_warm_ms") if isinstance(asr_block, Mapping) else 0
++        )
++        try:
++            keep_warm_ms = int(keep_warm_raw)
++        except (TypeError, ValueError):
++            keep_warm_ms = 0
++
++        routing_dict = dict(routing_block) if isinstance(routing_block, Mapping) else {}
++        ws_version = str(routing_dict.get("ws_version") or "").strip() or "v1"
++        if ws_version != "v1":
++            _log.warning(
++                "evt=policy_routing_normalized sid=%s configured_ws_version=%s normalized_ws_version=v1",
++                sid,
++                ws_version,
++            )
++            ws_version = "v1"
++        routing_dict["ws_version"] = ws_version
++        policy_block_mut = dict(policy_block)
++        policy_block_mut["routing"] = routing_dict
++        snapshot["policy"] = policy_block_mut
++
++        _log.info(
++            "evt=policy_snapshot sid=%s recorder.stop_on_tts_start=%s recorder.mute_send_during_tts=%s "
++            "input.require_hotword_to_start=%s asr.prearm_on_tts_end=%s asr.keep_stream_warm_ms=%s ws_version=%s",
++            sid,
++            stop_on_tts,
++            mute_during_tts,
++            require_hotword,
++            prearm_on_tts_end,
++            keep_warm_ms,
++            ws_version,
++        )
++
++    def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
++        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
++        policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
++        if not isinstance(policy_block, Mapping):
++            return 0
++        asr_block = policy_block.get("asr")
++        if not isinstance(asr_block, Mapping):
++            return 0
++        value = asr_block.get("keep_stream_warm_ms")
++        try:
++            keep_warm = int(value)
++        except (TypeError, ValueError):
++            keep_warm = 0
++        if keep_warm < 0:
++            return 0
++        return keep_warm
++
++    async def _send_asr_ready_bundle(
++        self,
++        send: Callable[[dict], Awaitable[None]],
++        ctx: AdapterContext,
++    ) -> None:
++        capture_block: Mapping[str, Any] | None = None
++        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
++        capture_candidate = snapshot.get("capture") if isinstance(snapshot, Mapping) else None
++        if isinstance(capture_candidate, Mapping):
++            capture_block = capture_candidate
++
++        timeslice_ms = 250
++        if capture_block is not None:
++            candidate_timeslice = capture_block.get("timeslice_ms")
++            try:
++                parsed = int(candidate_timeslice)
++            except (TypeError, ValueError):
++                parsed = timeslice_ms
++            if parsed > 0:
++                timeslice_ms = parsed
++
++        ready_frame = {
++            "type": "asr.ready",
++            "input": {
++                "container": "webm",
++                "codec": "opus",
++                "rate_hz": 48000,
++                "channels": 1,
++                "mime": "audio/webm;codecs=opus",
++            },
++        }
++        input_start = {
++            "type": "input.start",
++            "capture": {
++                "container": "webm",
++                "codec": "opus",
++                "mime": "audio/webm;codecs=opus",
++                "timeslice_ms": timeslice_ms,
++                "manual_gate": False,
++            },
++        }
++
++        now_ms = int(time.time() * 1000)
++        ctx.asr_ready = True
++        ctx.ingress_packets = 0
++        ctx.ingress_bytes = 0
++        ctx.first_ingress_ms = None
++        ctx.mic_armed_ms = now_ms
++
++        await self._send_json(send, ctx.sid, ready_frame)
++        await self._send_json(send, ctx.sid, input_start)
++        await self._send_json(send, ctx.sid, {"type": "start_listening"})
++
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
+     @staticmethod
+     def _now_ms() -> int:
+         return int(time.time() * 1000)
+ 
+     @staticmethod
+     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
+         if not payload:
+             return None
+         preview = payload.decode("utf-8", "replace")
+         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
+         if len(preview) > limit:
+             return f"{preview[: limit - 1]}…"
+         return preview
+ 
+     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
+         ctx.outbound_queue_depth = queued
+         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
+             ctx.backpressure_state = "on"
+diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
+index 5a20130b1307a0e24b390137c57607f4cf486e4e..afdcfb269fc6e885391f9e1cc8a28e86f387304c 100644
+--- a/tests/test_adapter_outbound_bridge.py
++++ b/tests/test_adapter_outbound_bridge.py
+@@ -31,51 +31,51 @@ from app.ws.adapter import (
+ class RecordingEngine:
+     """Engine stub that captures the opened session identifier."""
+ 
+     def __init__(self) -> None:
+         self.open_sid: str | None = None
+ 
+     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
+         self.open_sid = sid
+ 
+ 
+ class _StubAsrRuntime:
+     """ASR runtime stub that records prearm invocations."""
+ 
+     def __init__(self) -> None:
+         self.prearm_calls: list[str] = []
+ 
+     def on_ws_open(self, sid: str) -> None:  # pragma: no cover - noop for tests
+         return
+ 
+     def on_ws_close(self, sid: str) -> None:  # pragma: no cover - noop for tests
+         return
+ 
+     def on_ws_audio(self, sid: str, chunk: bytes) -> None:  # pragma: no cover - noop
+         return
+ 
+-    def prearm(self, sid: str) -> None:
++    def prearm(self, sid: str, *, keep_warm_ms: int | None = None) -> None:
+         self.prearm_calls.append(sid)
+ 
+ 
+ class OutboundHarness:
+     """Helper for driving the adapter within an asyncio test."""
+ 
+     def __init__(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
+         self.adapter = adapter
+         self.engine = engine
+         self._token_sid = f"sid-{uuid.uuid4().hex}"
+         token = mint_ws_token("user-1", self._token_sid, False)
+         self.scope = {
+             "type": "websocket",
+             "subprotocols": [CHAT_V2_SUBPROTOCOL],
+             "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
+             "client": ("127.0.0.1", 1234),
+             "query_string": f"access_token={token}".encode("ascii"),
+         }
+         self._inbound: asyncio.Queue[dict] = asyncio.Queue()
+         self.sent: list[dict] = []
+         self.outbound_frames: list[Dict[str, Any]] = []
+         self.binary_frames: list[bytes] = []
+         self.accepted = False
+         self._task: asyncio.Task[None] | None = None
+ 
+diff --git a/tests/test_listen_handoff.py b/tests/test_listen_handoff.py
+index 97fa6b1a8a4359661d7b4120de14b0a9e65230d1..d9cd5a5028ba07918e09037478b94cacbed2d16a 100644
+--- a/tests/test_listen_handoff.py
++++ b/tests/test_listen_handoff.py
+@@ -32,51 +32,51 @@ class FakeBus:
+         if not event_type:
+             return
+         tokens = self._by_event.get(event_type)
+         if tokens and token in tokens:
+             tokens.remove(token)
+             if not tokens:
+                 self._by_event.pop(event_type, None)
+ 
+     def publish(self, event: dict) -> None:
+         self.published.append(event)
+         event_type = event.get("type")
+         tokens = list(self._by_event.get(event_type, ()))
+         tokens += list(self._by_event.get("*", ()))
+         for token in tokens:
+             _, callback = self._subscriptions.get(token, (None, None))
+             if callback:
+                 callback(event)
+ 
+ 
+ class FakeASRRuntime:
+     def __init__(self, bus: FakeBus) -> None:
+         self.bus = bus
+         self.prearm_calls: List[str] = []
+         self.open_calls: List[Tuple[str, str]] = []
+ 
+-    def prearm(self, sid: str) -> None:
++    def prearm(self, sid: str, *, keep_warm_ms: int | None = None) -> None:
+         self.prearm_calls.append(sid)
+ 
+     async def open_if_needed(self, sid: str, *, req_id: str) -> None:
+         self.open_calls.append((sid, req_id))
+ 
+ 
+ class FakeWebSocket:
+     def __init__(self) -> None:
+         self.sent: List[dict] = []
+         self.text_frames: List[Dict[str, Any]] = []
+         self.binary_frames: List[bytes] = []
+ 
+     async def send(self, message: dict) -> None:
+         self.sent.append(message)
+         if message.get("type") == "websocket.send":
+             payload = message.get("text")
+             if payload is not None:
+                 self.text_frames.append(json.loads(payload))
+             chunk = message.get("bytes")
+             if chunk is not None:
+                 self.binary_frames.append(chunk)
+ 
+     def frames_of_type(self, frame_type: str) -> List[Dict[str, Any]]:
+         return [frame for frame in self.text_frames if frame.get("type") == frame_type]
+ 

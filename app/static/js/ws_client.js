@@ -10,8 +10,6 @@ import { WakeWord } from "./wake_word.js";
   const TOAST_STYLE_ID = "wsclient-toast-styles";
   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
 
-  const WAKE_WORD_ONLY = true;
-
   // ---- Golden-path turn trace & mic outcomes (additive) ----
   // ---- Telemetry (additive) ----
   const MIC_OUTCOME = {
@@ -389,15 +387,36 @@ import { WakeWord } from "./wake_word.js";
     sendAutostartTelemetry("gesture", { reason });
   }
 
+  function requireHotwordToStart(policyCandidate) {
+    const snapshot = policyCandidate && typeof policyCandidate === 'object'
+      ? policyCandidate
+      : (AppState && typeof AppState.policy === 'object' ? AppState.policy : null);
+    if (!snapshot || typeof snapshot !== 'object') {
+      return false;
+    }
+    const nested = snapshot.policy;
+    if (!nested || typeof nested !== 'object') {
+      return false;
+    }
+    const inputPolicy = nested.input;
+    if (!inputPolicy || typeof inputPolicy !== 'object') {
+      return false;
+    }
+    if (typeof inputPolicy.require_hotword_to_start === 'boolean') {
+      return inputPolicy.require_hotword_to_start;
+    }
+    return false;
+  }
+
   function canAutoRecord(state) {
-    if (WAKE_WORD_ONLY) return false;
+    if (requireHotwordToStart(state?.policy)) return false;
     if (!state?.policy?.auto_record_after_greet) return false;
     if (state.policy.tts_gate_enabled && state.ttsActive) return false;
     return state.asrReady === true && state.turnState === "Ready" && !state.recorder?.active;
   }
 
   function reasonFromState(state) {
-    if (WAKE_WORD_ONLY) return "wake_word_only";
+    if (requireHotwordToStart(state?.policy)) return "wake_word_only";
     if (!userGestureSatisfied && state?.policy?.require_user_gesture_first_visit) return "needs_user_gesture";
     if (!state?.policy?.auto_record_after_greet) return "policy_disabled";
     if (state.policy.tts_gate_enabled && state.ttsActive) return "tts_active";
@@ -485,7 +504,7 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function invokeStartRecording(trigger) {
-    if (WAKE_WORD_ONLY) {
+    if (requireHotwordToStart()) {
       const label = trigger ? String(trigger).slice(0, 32) : "unknown";
       console.info("diag=start_recording_blocked trigger=%s mode=wake_word_only", label);
       return false;
@@ -1180,9 +1199,22 @@ import { WakeWord } from "./wake_word.js";
     });
   }
 
+  function resolveWsPath() {
+    try {
+      const routing = AppState?.policy?.policy?.routing;
+      const candidate = typeof routing?.ws_version === 'string' ? routing.ws_version.trim() : '';
+      if (candidate && candidate.toLowerCase() !== 'v1') {
+        console.warn('Unsupported ws_version from policy; normalizing to v1', candidate);
+      }
+    } catch (err) {
+      console.warn('Failed to inspect policy routing version', err);
+    }
+    return '/ws/v1/chat';
+  }
+
   function computeUrl(resumeToken) {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const base = `${protocol}//${window.location.host}/ws/v2/chat`;
+    const base = `${protocol}//${window.location.host}${resolveWsPath()}`;
     const params = new URLSearchParams();
     if (typeof resumeToken === "string" && resumeToken.trim()) {
       params.set("resume", resumeToken.trim());
@@ -1471,33 +1503,166 @@ import { WakeWord } from "./wake_word.js";
     dispatchFrame(sanitized);
   }
 
-  function sanitizePolicyFrame(frame) {
-    const safe = { type: "policy.interaction" };
-    if (!frame || typeof frame !== "object") {
-      safe.policy = {};
-      return safe;
-    }
-    Object.keys(frame).forEach((key) => {
-      if (key === "policy") return;
-      safe[key] = frame[key];
-    });
-    const policy = {};
-    const source = frame.policy;
-    if (source && typeof source === "object") {
-      if (typeof source.mode === "string") {
+  const DEFAULT_POLICY_FLAGS = {
+    recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
+    input: { require_hotword_to_start: false },
+    asr: { prearm_on_tts_end: true, keep_stream_warm_ms: 30000 },
+    routing: { ws_version: 'v1' },
+  };
+
+  function sanitizePolicySnapshot(source) {
+    const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
+    const policy = { ...base };
+
+    if (source && typeof source === 'object') {
+      if (typeof source.mode === 'string') {
         policy.mode = source.mode;
       }
-      if (typeof source.allow_auto_vad === "boolean") {
+      if (typeof source.allow_auto_vad === 'boolean') {
         policy.allow_auto_vad = source.allow_auto_vad;
       }
-      if (typeof source.barge_in_enabled === "boolean") {
+      if (typeof source.barge_in_enabled === 'boolean') {
         policy.barge_in_enabled = source.barge_in_enabled;
       }
-      if (typeof source.ws_auth_mode === "string" && source.ws_auth_mode.trim()) {
+      if (typeof source.ws_auth_mode === 'string' && source.ws_auth_mode.trim()) {
         policy.ws_auth_mode = source.ws_auth_mode.trim();
       }
+      if (typeof source.require_user_gesture_first_visit === 'boolean') {
+        policy.require_user_gesture_first_visit = source.require_user_gesture_first_visit;
+      }
+      if (typeof source.auto_record_after_greet === 'boolean') {
+        policy.auto_record_after_greet = source.auto_record_after_greet;
+      }
+      if (typeof source.tts_gate_enabled === 'boolean') {
+        policy.tts_gate_enabled = source.tts_gate_enabled;
+      }
+      if (Array.isArray(source.autostart_retry_on)) {
+        policy.autostart_retry_on = source.autostart_retry_on
+          .filter((item) => typeof item === 'string' && item)
+          .map((item) => item.slice(0, 64));
+      }
+      if (Array.isArray(source.autostart_backoff_ms)) {
+        policy.autostart_backoff_ms = source.autostart_backoff_ms
+          .map((item) => Number(item))
+          .filter((value) => Number.isFinite(value) && value >= 0);
+      }
+      if (Number.isFinite(Number(source.autostart_max_attempts))) {
+        policy.autostart_max_attempts = Number(source.autostart_max_attempts);
+      }
+      if (source.capture && typeof source.capture === 'object') {
+        policy.capture = { ...source.capture };
+      }
+      if (source.media && typeof source.media === 'object') {
+        policy.media = { ...source.media };
+      }
+      if (source.voice && typeof source.voice === 'object') {
+        policy.voice = { ...source.voice };
+      }
+      if (source.greet && typeof source.greet === 'object') {
+        policy.greet = { ...source.greet };
+      }
+      if (source.suggestions && typeof source.suggestions === 'object') {
+        policy.suggestions = { ...source.suggestions };
+      }
+      if (source.actions && typeof source.actions === 'object') {
+        policy.actions = { ...source.actions };
+      }
+      if (source.telemetry && typeof source.telemetry === 'object') {
+        policy.telemetry = { ...source.telemetry };
+      }
     }
-    safe.policy = policy;
+
+    const existingNested = (policy && typeof policy.policy === 'object') ? policy.policy : {};
+    const nested = {
+      recorder: {
+        ...DEFAULT_POLICY_FLAGS.recorder,
+        ...(existingNested && typeof existingNested.recorder === 'object' ? existingNested.recorder : {}),
+      },
+      input: {
+        ...DEFAULT_POLICY_FLAGS.input,
+        ...(existingNested && typeof existingNested.input === 'object' ? existingNested.input : {}),
+      },
+      asr: {
+        ...DEFAULT_POLICY_FLAGS.asr,
+        ...(existingNested && typeof existingNested.asr === 'object' ? existingNested.asr : {}),
+      },
+      routing: {
+        ...DEFAULT_POLICY_FLAGS.routing,
+        ...(existingNested && typeof existingNested.routing === 'object' ? existingNested.routing : {}),
+      },
+    };
+
+    const rawNested = source && typeof source === 'object' ? source.policy : null;
+    if (rawNested && typeof rawNested === 'object') {
+      const recorder = rawNested.recorder && typeof rawNested.recorder === 'object'
+        ? rawNested.recorder
+        : null;
+      nested.recorder = {
+        stop_on_tts_start: recorder && typeof recorder.stop_on_tts_start === 'boolean'
+          ? recorder.stop_on_tts_start
+          : DEFAULT_POLICY_FLAGS.recorder.stop_on_tts_start,
+        mute_send_during_tts: recorder && typeof recorder.mute_send_during_tts === 'boolean'
+          ? recorder.mute_send_during_tts
+          : DEFAULT_POLICY_FLAGS.recorder.mute_send_during_tts,
+      };
+
+      const input = rawNested.input && typeof rawNested.input === 'object' ? rawNested.input : null;
+      nested.input = {
+        require_hotword_to_start: input && typeof input.require_hotword_to_start === 'boolean'
+          ? input.require_hotword_to_start
+          : DEFAULT_POLICY_FLAGS.input.require_hotword_to_start,
+      };
+
+      const asr = rawNested.asr && typeof rawNested.asr === 'object' ? rawNested.asr : null;
+      let keepWarm = DEFAULT_POLICY_FLAGS.asr.keep_stream_warm_ms;
+      if (asr && Number.isFinite(Number(asr.keep_stream_warm_ms))) {
+        const parsed = Number(asr.keep_stream_warm_ms);
+        if (parsed >= 0) {
+          keepWarm = Math.round(parsed);
+        }
+      }
+      nested.asr = {
+        prearm_on_tts_end: asr && typeof asr.prearm_on_tts_end === 'boolean'
+          ? asr.prearm_on_tts_end
+          : DEFAULT_POLICY_FLAGS.asr.prearm_on_tts_end,
+        keep_stream_warm_ms: keepWarm,
+      };
+
+      const routing = rawNested.routing && typeof rawNested.routing === 'object'
+        ? rawNested.routing
+        : null;
+      const rawVersion = routing && typeof routing.ws_version === 'string'
+        ? routing.ws_version.trim()
+        : '';
+      nested.routing = {
+        ws_version: rawVersion && rawVersion.toLowerCase() === 'v1' ? 'v1' : 'v1',
+      };
+    }
+
+    policy.policy = nested;
+    return policy;
+  }
+
+  function applyPolicySnapshotFromSource(source, origin) {
+    const sanitizedPolicy = sanitizePolicySnapshot(source);
+    AppState.policy = sanitizedPolicy;
+    updateState({ policy: sanitizedPolicy });
+    const snapshotFrame = { type: 'policy.snapshot', policy: sanitizedPolicy, origin: origin || null };
+    dispatchFrame(snapshotFrame);
+    dispatchFrame({ type: 'config.updated', policy: sanitizedPolicy, origin: origin || null });
+    return sanitizedPolicy;
+  }
+
+  function sanitizePolicyFrame(frame) {
+    const safe = { type: 'policy.interaction' };
+    if (frame && typeof frame === 'object') {
+      Object.keys(frame).forEach((key) => {
+        if (key === 'policy') return;
+        safe[key] = frame[key];
+      });
+    }
+    const source = frame && typeof frame === 'object' ? frame.policy : null;
+    safe.policy = sanitizePolicySnapshot(source);
     return safe;
   }
 
@@ -1529,6 +1694,9 @@ import { WakeWord } from "./wake_word.js";
       infoFrame: frame,
       resumeError: null
     });
+    if (frame && typeof frame.policy === 'object') {
+      applyPolicySnapshotFromSource(frame.policy, 'info');
+    }
     logStage('client.ws', { outcome: 'auth_ok' });
     flushClientBannerQueue();
   }
@@ -1634,18 +1802,27 @@ import { WakeWord } from "./wake_word.js";
       return;
     }
 
+    if (frame.type === "config.updated" || frame.type === "config_updated") {
+      const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
+      const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
+      const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
+      if (incomingType !== 'config.updated') {
+        dispatchFrame({ ...frame, policy: appliedPolicy, type: incomingType });
+      }
+      return;
+    }
+
     if (frame.type === "policy.interaction") {
       const sanitized = sanitizePolicyFrame(frame);
-      if (sanitized && sanitized.policy && typeof sanitized.policy === "object") {
-        const mergedPolicy = { ...AppState.policy, ...sanitized.policy };
-        AppState.policy = mergedPolicy;
-        sanitized.policy = mergedPolicy;
-        updateState({ policy: mergedPolicy });
-        if (!userGestureSatisfied && !mergedPolicy.require_user_gesture_first_visit) {
-          markUserGestureSatisfied("policy_update");
-        }
-        attachUserGestureListeners();
+      const appliedPolicy = applyPolicySnapshotFromSource(
+        sanitized && sanitized.policy ? sanitized.policy : null,
+        'policy.interaction'
+      );
+      sanitized.policy = appliedPolicy;
+      if (!userGestureSatisfied && !appliedPolicy.require_user_gesture_first_visit) {
+        markUserGestureSatisfied('policy_update');
       }
+      attachUserGestureListeners();
       dispatchFrame(sanitized);
       maybeAutoStart("policy");
       return;

@@ -54,7 +54,7 @@ class FakeASRRuntime:
         self.prearm_calls: List[str] = []
         self.open_calls: List[Tuple[str, str]] = []
 
-    def prearm(self, sid: str) -> None:
+    def prearm(self, sid: str, *, keep_warm_ms: int | None = None) -> None:
         self.prearm_calls.append(sid)
 
     async def open_if_needed(self, sid: str, *, req_id: str) -> None:

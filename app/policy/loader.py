@@ -26,6 +26,22 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
     "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
     "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
     "suggestions": {"on_connect": True, "count": 3},
+    "policy": {
+        "recorder": {
+            "stop_on_tts_start": False,
+            "mute_send_during_tts": True,
+        },
+        "input": {
+            "require_hotword_to_start": False,
+        },
+        "asr": {
+            "prearm_on_tts_end": True,
+            "keep_stream_warm_ms": 30000,
+        },
+        "routing": {
+            "ws_version": "v1",
+        },
+    },
     "actions": {
         "allowed": ["answer"],
         "surface_via_suggestions": True,

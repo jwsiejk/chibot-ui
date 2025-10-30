@@ -57,6 +57,7 @@ import { WakeWord } from "./wake_word.js";
       this._micOpenEmitted = false;
       this._active = false;
       this._wakeInit = false;
+      this._sendMuted = false;
     }
 
     setSocket(ws) {
@@ -73,6 +74,50 @@ import { WakeWord } from "./wake_word.js";
 
     get policy() {
       return this._policy || {};
+    }
+
+    _recorderPolicy() {
+      const policy = this.policy;
+      if (!policy || typeof policy !== "object") {
+        return {};
+      }
+      const nested = policy.policy;
+      if (!nested || typeof nested !== "object") {
+        return {};
+      }
+      const recorder = nested.recorder;
+      return recorder && typeof recorder === "object" ? recorder : {};
+    }
+
+    _shouldStopOnTtsStart() {
+      const recorder = this._recorderPolicy();
+      if (typeof recorder.stop_on_tts_start === "boolean") {
+        return recorder.stop_on_tts_start;
+      }
+      return false;
+    }
+
+    _shouldMuteDuringTts() {
+      const recorder = this._recorderPolicy();
+      if (typeof recorder.mute_send_during_tts === "boolean") {
+        return recorder.mute_send_during_tts;
+      }
+      return true;
+    }
+
+    _setSendMuted(muted, reason) {
+      const next = Boolean(muted);
+      if (this._sendMuted === next) {
+        return;
+      }
+      this._sendMuted = next;
+      const label = next ? "diag=send_gate_muted" : "diag=send_gate_unmuted";
+      const detail = typeof reason === "string" && reason ? reason : "policy";
+      try {
+        console.info(`${label} reason=%s`, detail);
+      } catch (err) {
+        console.info(label);
+      }
     }
 
     async _ensureArmed() {
@@ -136,7 +181,7 @@ import { WakeWord } from "./wake_word.js";
           if (!buf || buf.byteLength === 0) {
             return;
           }
-          if (!this._sendGate) {
+          if (!this._sendGate || this._sendMuted) {
             return;
           }
           const socket = this._ws;
@@ -255,6 +300,7 @@ import { WakeWord } from "./wake_word.js";
         console.info("diag=send_gate_open reason=%s", reason);
         this._updateRecorderState(true, reason);
       }
+      this._setSendMuted(false, "start_listening");
       return true;
     }
 
@@ -265,6 +311,7 @@ import { WakeWord } from "./wake_word.js";
         console.info("diag=send_gate_closed reason=%s", reason);
         this._updateRecorderState(false, reason);
       }
+      this._setSendMuted(false, typeof opts?.reason === "string" ? opts.reason : "stop_listening");
     }
 
     handleStopListening(opts = {}) {
@@ -272,11 +319,17 @@ import { WakeWord } from "./wake_word.js";
     }
 
     handleTtsStart() {
-      this.stopListening({ reason: "tts_active" });
+      if (this._shouldStopOnTtsStart()) {
+        this.stopListening({ reason: "tts_active" });
+        return;
+      }
+      if (this._shouldMuteDuringTts()) {
+        this._setSendMuted(true, "tts_active");
+      }
     }
 
     handleTtsEnd() {
-      // No automatic restart; server will instruct when to resume.
+      this._setSendMuted(false, "tts_end");
     }
 
     handleWsClose() {
@@ -289,6 +342,7 @@ import { WakeWord } from "./wake_word.js";
 
     endSession() {
       this._sendGate = false;
+      this._setSendMuted(false, "session_end");
       this._updateRecorderState(false, "session_end");
       try {
         if (this._rec && this._rec.state !== "inactive") {

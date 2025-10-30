@@ -69,11 +69,39 @@ _DEFAULT_POLICY_CAPTURE = {
     "mask_during_tts": True,
 }
 
+_DEFAULT_POLICY_RECORDER = {
+    "stop_on_tts_start": False,
+    "mute_send_during_tts": True,
+}
+
+_DEFAULT_POLICY_INPUT = {
+    "require_hotword_to_start": False,
+}
+
+_DEFAULT_POLICY_ASR = {
+    "prearm_on_tts_end": True,
+    "keep_stream_warm_ms": 30000,
+}
+
+_DEFAULT_POLICY_ROUTING = {
+    "ws_version": "v1",
+}
+
 POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
 POLICY_CAPTURE: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_CAPTURE)
+POLICY_RECORDER: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_RECORDER)
+POLICY_INPUT: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_INPUT)
+POLICY_ASR: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ASR)
+POLICY_ROUTING: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ROUTING)
 POLICY_OVERRIDES: MutableMapping[str, Any] = {
     "media": dict(POLICY_MEDIA),
     "capture": dict(POLICY_CAPTURE),
+    "policy": {
+        "recorder": dict(POLICY_RECORDER),
+        "input": dict(POLICY_INPUT),
+        "asr": dict(POLICY_ASR),
+        "routing": dict(POLICY_ROUTING),
+    },
 }
 
 
@@ -271,6 +299,107 @@ def _sanitize_capture_policy(
     return sanitized
 
 
+def _sanitize_recorder_policy(
+    value: Mapping[str, Any] | None,
+    *,
+    source: str,
+    raw: Any,
+) -> Mapping[str, Any]:
+    sanitized = dict(_DEFAULT_POLICY_RECORDER)
+    if not isinstance(value, Mapping):
+        return sanitized
+
+    for key in ("stop_on_tts_start", "mute_send_during_tts"):
+        try:
+            sanitized[key] = _coerce_db_bool(value.get(key), sanitized[key])
+        except ValueError:
+            _log.warning(
+                "evt=admin_settings_invalid_policy_recorder key=%s source=%s",
+                key,
+                source,
+                extra={"component": "admin.settings", "raw": raw},
+            )
+
+    return sanitized
+
+
+def _sanitize_input_policy(
+    value: Mapping[str, Any] | None,
+    *,
+    source: str,
+    raw: Any,
+) -> Mapping[str, Any]:
+    sanitized = dict(_DEFAULT_POLICY_INPUT)
+    if not isinstance(value, Mapping):
+        return sanitized
+
+    try:
+        sanitized["require_hotword_to_start"] = _coerce_db_bool(
+            value.get("require_hotword_to_start"), sanitized["require_hotword_to_start"]
+        )
+    except ValueError:
+        _log.warning(
+            "evt=admin_settings_invalid_policy_input key=require_hotword_to_start source=%s",
+            source,
+            extra={"component": "admin.settings", "raw": raw},
+        )
+
+    return sanitized
+
+
+def _sanitize_asr_policy(
+    value: Mapping[str, Any] | None,
+    *,
+    source: str,
+    raw: Any,
+) -> Mapping[str, Any]:
+    sanitized = dict(_DEFAULT_POLICY_ASR)
+    if not isinstance(value, Mapping):
+        return sanitized
+
+    for key in ("prearm_on_tts_end",):
+        try:
+            sanitized[key] = _coerce_db_bool(value.get(key), sanitized[key])
+        except ValueError:
+            _log.warning(
+                "evt=admin_settings_invalid_policy_asr key=%s source=%s",
+                key,
+                source,
+                extra={"component": "admin.settings", "raw": raw},
+            )
+
+    sanitized["keep_stream_warm_ms"] = _coerce_db_int(
+        value.get("keep_stream_warm_ms"),
+        sanitized["keep_stream_warm_ms"],
+        minimum=0,
+    )
+
+    return sanitized
+
+
+def _sanitize_routing_policy(
+    value: Mapping[str, Any] | None,
+    *,
+    source: str,
+    raw: Any,
+) -> Mapping[str, Any]:
+    sanitized = dict(_DEFAULT_POLICY_ROUTING)
+    if not isinstance(value, Mapping):
+        return sanitized
+
+    ws_version = value.get("ws_version")
+    if isinstance(ws_version, str) and ws_version.strip():
+        sanitized["ws_version"] = ws_version.strip()
+    elif ws_version is not None:
+        _log.warning(
+            "evt=admin_settings_invalid_policy_routing key=ws_version source=%s",
+            source,
+            extra={"component": "admin.settings", "raw": raw},
+        )
+
+    return sanitized
+
+
 def _get_cached_admin_setting(key: str) -> Optional[Any]:
     normalized = _normalize_key(key)
     with _ADMIN_SETTINGS_LOCK:
@@ -417,6 +546,32 @@ def reload_runtime_flags() -> None:
         policy_capture_raw, source=capture_source, raw=capture_raw
     )
 
+    policy_recorder_raw, recorder_source, recorder_raw = _resolve_mapping_setting(
+        "policy_recorder", default=_DEFAULT_POLICY_RECORDER
+    )
+    policy_recorder = _sanitize_recorder_policy(
+        policy_recorder_raw, source=recorder_source, raw=recorder_raw
+    )
+
+    policy_input_raw, input_source, input_raw = _resolve_mapping_setting(
+        "policy_input", default=_DEFAULT_POLICY_INPUT
+    )
+    policy_input = _sanitize_input_policy(
+        policy_input_raw, source=input_source, raw=input_raw
+    )
+
+    policy_asr_raw, asr_source, asr_raw = _resolve_mapping_setting(
+        "policy_asr", default=_DEFAULT_POLICY_ASR
+    )
+    policy_asr = _sanitize_asr_policy(policy_asr_raw, source=asr_source, raw=asr_raw)
+
+    policy_routing_raw, routing_source, routing_raw = _resolve_mapping_setting(
+        "policy_routing", default=_DEFAULT_POLICY_ROUTING
+    )
+    policy_routing = _sanitize_routing_policy(
+        policy_routing_raw, source=routing_source, raw=routing_raw
+    )
+
     guardrails_value = dict(audio_guardrails)
     flags = {
         "DIAG_CLIENT_HUD": diag_client_hud,
@@ -425,6 +580,10 @@ def reload_runtime_flags() -> None:
         "DIAG_CHUNK_SAMPLE_N": diag_chunk_sample_n,
         "POLICY_MEDIA": dict(policy_media),
         "POLICY_CAPTURE": dict(policy_capture),
+        "POLICY_RECORDER": dict(policy_recorder),
+        "POLICY_INPUT": dict(policy_input),
+        "POLICY_ASR": dict(policy_asr),
+        "POLICY_ROUTING": dict(policy_routing),
     }
     with _ADMIN_SETTINGS_LOCK:
         _RUNTIME_FLAGS.clear()
@@ -437,10 +596,28 @@ def reload_runtime_flags() -> None:
     POLICY_CAPTURE.clear()
     POLICY_CAPTURE.update(policy_capture)
 
+    POLICY_RECORDER.clear()
+    POLICY_RECORDER.update(policy_recorder)
+
+    POLICY_INPUT.clear()
+    POLICY_INPUT.update(policy_input)
+
+    POLICY_ASR.clear()
+    POLICY_ASR.update(policy_asr)
+
+    POLICY_ROUTING.clear()
+    POLICY_ROUTING.update(policy_routing)
+
     POLICY_OVERRIDES.clear()
     POLICY_OVERRIDES.update({
         "media": dict(POLICY_MEDIA),
         "capture": dict(POLICY_CAPTURE),
+        "policy": {
+            "recorder": dict(POLICY_RECORDER),
+            "input": dict(POLICY_INPUT),
+            "asr": dict(POLICY_ASR),
+            "routing": dict(POLICY_ROUTING),
+        },
     })
 
     log_snapshot = [
@@ -465,6 +642,26 @@ def reload_runtime_flags() -> None:
             "key": "POLICY_CAPTURE",
             "value": dict(policy_capture),
             "source": capture_source,
+        },
+        {
+            "key": "POLICY_RECORDER",
+            "value": dict(policy_recorder),
+            "source": recorder_source,
+        },
+        {
+            "key": "POLICY_INPUT",
+            "value": dict(policy_input),
+            "source": input_source,
+        },
+        {
+            "key": "POLICY_ASR",
+            "value": dict(policy_asr),
+            "source": asr_source,
+        },
+        {
+            "key": "POLICY_ROUTING",
+            "value": dict(policy_routing),
+            "source": routing_source,
         },
     ]
     _log.info(
@@ -511,6 +708,10 @@ __all__ = [
     "DIAG_CLIENT_HUD",
     "POLICY_MEDIA",
     "POLICY_CAPTURE",
+    "POLICY_RECORDER",
+    "POLICY_INPUT",
+    "POLICY_ASR",
+    "POLICY_ROUTING",
     "POLICY_OVERRIDES",
     "bool_env_or_db",
     "get_admin_setting_raw",

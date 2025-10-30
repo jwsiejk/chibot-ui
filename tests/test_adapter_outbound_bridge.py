@@ -53,7 +53,7 @@ class _StubAsrRuntime:
     def on_ws_audio(self, sid: str, chunk: bytes) -> None:  # pragma: no cover - noop
         return
 
-    def prearm(self, sid: str) -> None:
+    def prearm(self, sid: str, *, keep_warm_ms: int | None = None) -> None:
         self.prearm_calls.append(sid)
 
 

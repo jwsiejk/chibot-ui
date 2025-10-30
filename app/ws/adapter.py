@@ -593,6 +593,7 @@ class ChatV2Adapter:
         info_frame["meta"] = {"sid": sid}
         policy_snapshot = self._policy_snapshot()
         if policy_snapshot:
+            self._log_policy_flags(sid, policy_snapshot)
             info_frame["policy"] = policy_snapshot
         await self._send_json(send, sid, info_frame)
         _log.info("evt=ws_info_sent sid=%s", sid)
@@ -1039,6 +1040,28 @@ class ChatV2Adapter:
                 meta=audio_meta,
                 source="ws.audio",
             )
+
+        if frame_type == "asr.rearm.request":
+            keep_warm_ms = self._policy_keep_warm_ms(ctx)
+            runtime = getattr(self, "asr_runtime", None)
+            if runtime is not None:
+                prearm = getattr(runtime, "prearm", None)
+                if callable(prearm):
+                    try:
+                        prearm(ctx.sid, keep_warm_ms=keep_warm_ms)
+                    except TypeError:
+                        prearm(ctx.sid)
+                    except Exception:  # pragma: no cover - defensive logging
+                        _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
+            _log.info(
+                "evt=asr_prearm_requested sid=%s source=client keep_stream_warm_ms=%s",
+                ctx.sid,
+                keep_warm_ms,
+            )
+            try:
+                await self._send_asr_ready_bundle(send, ctx)
+            except Exception:  # pragma: no cover - defensive logging
+                _log.exception("evt=ws_asr_ready_bundle_failed sid=%s", ctx.sid)
 
         if frame_type == "client.ready":
             mic_info = frame.get("mic")
@@ -2795,7 +2818,138 @@ class ChatV2Adapter:
         capture = snapshot.get("capture")
         if isinstance(capture, dict):
             stable["capture"] = dict(capture)
+        nested_policy = snapshot.get("policy")
+        if isinstance(nested_policy, dict):
+            stable["policy"] = json.loads(json.dumps(nested_policy))
         return stable
+
+    def _log_policy_flags(self, sid: str, snapshot: Mapping[str, Any]) -> None:
+        if not isinstance(snapshot, Mapping):
+            return
+        policy_block = snapshot.get("policy")
+        if not isinstance(policy_block, Mapping):
+            return
+
+        recorder_block = policy_block.get("recorder")
+        input_block = policy_block.get("input")
+        asr_block = policy_block.get("asr")
+        routing_block = policy_block.get("routing")
+
+        stop_on_tts = bool(
+            recorder_block.get("stop_on_tts_start") if isinstance(recorder_block, Mapping) else False
+        )
+        mute_during_tts = bool(
+            recorder_block.get("mute_send_during_tts") if isinstance(recorder_block, Mapping) else False
+        )
+        require_hotword = bool(
+            input_block.get("require_hotword_to_start") if isinstance(input_block, Mapping) else False
+        )
+        prearm_on_tts_end = bool(
+            asr_block.get("prearm_on_tts_end") if isinstance(asr_block, Mapping) else False
+        )
+        keep_warm_raw = (
+            asr_block.get("keep_stream_warm_ms") if isinstance(asr_block, Mapping) else 0
+        )
+        try:
+            keep_warm_ms = int(keep_warm_raw)
+        except (TypeError, ValueError):
+            keep_warm_ms = 0
+
+        routing_dict = dict(routing_block) if isinstance(routing_block, Mapping) else {}
+        ws_version = str(routing_dict.get("ws_version") or "").strip() or "v1"
+        if ws_version != "v1":
+            _log.warning(
+                "evt=policy_routing_normalized sid=%s configured_ws_version=%s normalized_ws_version=v1",
+                sid,
+                ws_version,
+            )
+            ws_version = "v1"
+        routing_dict["ws_version"] = ws_version
+        policy_block_mut = dict(policy_block)
+        policy_block_mut["routing"] = routing_dict
+        snapshot["policy"] = policy_block_mut
+
+        _log.info(
+            "evt=policy_snapshot sid=%s recorder.stop_on_tts_start=%s recorder.mute_send_during_tts=%s "
+            "input.require_hotword_to_start=%s asr.prearm_on_tts_end=%s asr.keep_stream_warm_ms=%s ws_version=%s",
+            sid,
+            stop_on_tts,
+            mute_during_tts,
+            require_hotword,
+            prearm_on_tts_end,
+            keep_warm_ms,
+            ws_version,
+        )
+
+    def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
+        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
+        policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+        if not isinstance(policy_block, Mapping):
+            return 0
+        asr_block = policy_block.get("asr")
+        if not isinstance(asr_block, Mapping):
+            return 0
+        value = asr_block.get("keep_stream_warm_ms")
+        try:
+            keep_warm = int(value)
+        except (TypeError, ValueError):
+            keep_warm = 0
+        if keep_warm < 0:
+            return 0
+        return keep_warm
+
+    async def _send_asr_ready_bundle(
+        self,
+        send: Callable[[dict], Awaitable[None]],
+        ctx: AdapterContext,
+    ) -> None:
+        capture_block: Mapping[str, Any] | None = None
+        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
+        capture_candidate = snapshot.get("capture") if isinstance(snapshot, Mapping) else None
+        if isinstance(capture_candidate, Mapping):
+            capture_block = capture_candidate
+
+        timeslice_ms = 250
+        if capture_block is not None:
+            candidate_timeslice = capture_block.get("timeslice_ms")
+            try:
+                parsed = int(candidate_timeslice)
+            except (TypeError, ValueError):
+                parsed = timeslice_ms
+            if parsed > 0:
+                timeslice_ms = parsed
+
+        ready_frame = {
+            "type": "asr.ready",
+            "input": {
+                "container": "webm",
+                "codec": "opus",
+                "rate_hz": 48000,
+                "channels": 1,
+                "mime": "audio/webm;codecs=opus",
+            },
+        }
+        input_start = {
+            "type": "input.start",
+            "capture": {
+                "container": "webm",
+                "codec": "opus",
+                "mime": "audio/webm;codecs=opus",
+                "timeslice_ms": timeslice_ms,
+                "manual_gate": False,
+            },
+        }
+
+        now_ms = int(time.time() * 1000)
+        ctx.asr_ready = True
+        ctx.ingress_packets = 0
+        ctx.ingress_bytes = 0
+        ctx.first_ingress_ms = None
+        ctx.mic_armed_ms = now_ms
+
+        await self._send_json(send, ctx.sid, ready_frame)
+        await self._send_json(send, ctx.sid, input_start)
+        await self._send_json(send, ctx.sid, {"type": "start_listening"})
 
     @staticmethod
     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
