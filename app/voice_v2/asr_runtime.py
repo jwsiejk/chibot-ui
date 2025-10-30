@@ -122,6 +122,11 @@ class _SessionState:
     rollup_bytes: int = 0
     bytes_received: int = 0
     listening: bool = False
+    ingress_packets: int = 0
+    ingress_bytes: int = 0
+    first_ingress_ms: int = 0
+    first_partial_logged: bool = False
+    model: Optional[str] = None
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -267,6 +272,10 @@ class ASRRuntime:
         state.listening = False
         state.prearm_requested = False
         state.bytes_received = 0
+        state.ingress_packets = 0
+        state.ingress_bytes = 0
+        state.first_ingress_ms = 0
+        state.first_partial_logged = False
 
     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
         if not isinstance(chunk, (bytes, bytearray, memoryview)):
@@ -287,10 +296,16 @@ class ASRRuntime:
 
         now_monotonic = time.monotonic()
         state.last_audio_ts = now_monotonic
-        state.last_audio_ts_ms = int(time.time() * 1000)
+        now_ms = int(time.time() * 1000)
+        state.last_audio_ts_ms = now_ms
         if state.ready_watchdog is not None and state.ready_armed_at:
             self._cancel_ready_watchdog(state)
         chunk_len = len(data)
+
+        if state.ingress_packets == 0:
+            state.first_ingress_ms = now_ms
+        state.ingress_packets += 1
+        state.ingress_bytes += chunk_len
 
         if (
             state.stream_open
@@ -515,6 +530,10 @@ class ASRRuntime:
         state.rollup_window_start = 0.0
         state.rollup_chunks = 0
         state.rollup_bytes = 0
+        state.ingress_packets = 0
+        state.ingress_bytes = 0
+        state.first_ingress_ms = 0
+        state.first_partial_logged = False
         state.pending.clear()
         state.buffered_bytes = 0
         state.prearm_requested = True
@@ -537,6 +556,10 @@ class ASRRuntime:
         state.rollup_window_start = 0.0
         state.rollup_chunks = 0
         state.rollup_bytes = 0
+        state.ingress_packets = 0
+        state.ingress_bytes = 0
+        state.first_ingress_ms = 0
+        state.first_partial_logged = False
         self._cancel_ready_watchdog(state)
         self._cancel_idle_timer(state)
 
@@ -619,6 +642,13 @@ class ASRRuntime:
             duration_ms,
         )
         _log.info(msg)
+        if getattr(state, "ingress_packets", 0) >= 0:
+            _log.info(
+                "evt=audio_wire_rollup sid=%s ingress_packets=%s ingress_bytes=%s",
+                state.sid,
+                state.ingress_packets,
+                state.ingress_bytes,
+            )
         self._emit_log(
             {
                 "type": "EVT_LOG",
@@ -702,7 +732,27 @@ class ASRRuntime:
                 except Exception:  # pragma: no cover - defensive
                     policy_snapshot = None
                 input_desc = self._input_descriptor_from_policy(policy_snapshot)
-                state.input_desc = input_desc 
+                state.input_desc = input_desc
+                model_name = None
+                if isinstance(policy_snapshot, Mapping):
+                    candidate = policy_snapshot.get("model")
+                    if isinstance(candidate, str) and candidate:
+                        model_name = candidate
+                    else:
+                        interaction = policy_snapshot.get("interaction")
+                        if isinstance(interaction, Mapping):
+                            maybe_model = interaction.get("model")
+                            if isinstance(maybe_model, str) and maybe_model:
+                                model_name = maybe_model
+                else:
+                    candidate_model = getattr(policy_snapshot, "model", None)
+                    if isinstance(candidate_model, str) and candidate_model:
+                        model_name = candidate_model
+                state.model = model_name if isinstance(model_name, str) and model_name else None
+                _log.info(
+                    "evt=asr_open_attempt sid=%s vendor=deepgram trigger=first_ingress_packet",
+                    sid,
+                )
                 open_timeout = max(5.0, float(_STREAM_OPEN_TIMEOUT_S))
                 qs = await asyncio.wait_for(
                     self._client.open_stream(
@@ -716,9 +766,19 @@ class ASRRuntime:
                     ),
                     timeout=open_timeout,
                 )
+                _log.info(
+                    "evt=asr_opened sid=%s vendor=deepgram stream_id=%s",
+                    sid,
+                    stream_id,
+                )
+                _log.info(
+                    "evt=asr_vendor_info sid=%s vendor=deepgram transport=ws container=webm_opus model=%s",
+                    sid,
+                    state.model or "auto",
+                )
             except asyncio.CancelledError:
                 raise
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as err:
                 last_url = getattr(self._client, "debug_last_url", None)
                 self._emit_log(
                     {
@@ -731,6 +791,11 @@ class ASRRuntime:
                         )
                         % (sid, _safe_url(last_url), open_timeout),
                     }
+                )
+                _log.error(
+                    "evt=asr_open_failed sid=%s vendor=deepgram err=%s",
+                    sid,
+                    str(err) or "timeout",
                 )
                 _log.error(
                     "evt=asr_open_failed_timeout sid=%s vendor=deepgram url=%s timeout_s=%s",
@@ -761,6 +826,11 @@ class ASRRuntime:
                 )
                 last_url = getattr(self._client, "debug_last_url", None)
                 last_error = getattr(self._client, "last_error", None)
+                _log.error(
+                    "evt=asr_open_failed sid=%s vendor=deepgram err=%s",
+                    sid,
+                    str(e),
+                )
                 self._emit_log(
                     {
                         "type": "EVT_LOG",
@@ -985,6 +1055,14 @@ class ASRRuntime:
         if state is None:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
+
+        if not state.first_partial_logged:
+            lat = None
+            first_ingress = getattr(state, "first_ingress_ms", 0)
+            if isinstance(first_ingress, int) and first_ingress > 0:
+                lat = int(time.time() * 1000) - first_ingress
+            _log.info("evt=asr_partial sid=%s first_partial_latency_ms=%s", sid, lat)
+            state.first_partial_logged = True
 
         metadata = metadata or {}
         if state.stream_id is None:

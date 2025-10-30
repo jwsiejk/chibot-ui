@@ -13,6 +13,7 @@ import { WakeWord } from "./wake_word.js";
   const USE_AUDIORECORDER = !!window.AudioRecorder;
   const WAKE_WORD_ONLY = true;
 
+  // ---- Golden-path turn trace & mic outcomes (additive) ----
   // ---- Telemetry (additive) ----
   const MIC_OUTCOME = {
     PERM_GRANTED: 'perm_granted',
@@ -140,17 +141,18 @@ import { WakeWord } from "./wake_word.js";
 
   function logMic(detail = {}) {
     try {
+      const holdFlags = {
+        ttsActive: !!AppState?.ttsActive,
+        systemHold: !!AppState?.systemHold,
+        userMuted: !!AppState?.userMuted,
+      };
       const base = {
         trace_id: __turnTraceId || null,
         attempts: __micAttempts,
         chunks: __micChunks,
         bytes: __micBytes,
         phase: AppState?.ttsActive ? 'tts_active' : 'post_tts',
-        hold_flags: {
-          ttsActive: !!AppState?.ttsActive,
-          systemHold: !!AppState?.systemHold,
-          userMuted: !!AppState?.userMuted,
-        },
+        hold_flags: holdFlags,
       };
       if (typeof logClient === "function") {
         logClient('client.mic', { ...base, ...detail });
@@ -1556,6 +1558,16 @@ import { WakeWord } from "./wake_word.js";
         console.warn("Error handler threw", err);
       }
     }
+    try {
+      const reason = typeof frame?.detail === "string" && frame.detail
+        ? frame.detail
+        : (typeof frame?.message === "string" ? frame.message : null);
+      logStage('client.ws', {
+        outcome: 'auth_fail',
+        code: typeof frame?.code === 'string' ? frame.code : null,
+        reason: reason || null,
+      });
+    } catch {}
     if (isResumeInvalid) {
       close("resume_invalid");
     }
@@ -1655,6 +1667,16 @@ import { WakeWord } from "./wake_word.js";
         audioPlayer.handleTtsEnd(frame);
       }
       logStage('client.tts', { outcome: 'ended', utt_id: frame?.utt_id || 'utt-00001', dur_ms: frame?.dur_ms });
+    } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
+      const uttId = frame?.utt_id || 'utt-00001';
+      const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
+      logStage('client.tts', {
+        outcome: 'ended',
+        utt_id: uttId,
+        dur_ms: frame?.dur_ms,
+        reason,
+      });
+      logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
     } else if (frame.type === "start_listening") {
       if (USE_AUDIORECORDER) {
         try {

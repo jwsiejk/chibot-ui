@@ -245,6 +245,10 @@ class AdapterContext:
     audio_window: int = AUDIO_SEQ_WINDOW
     audio_chunks_recv: int = 0
     audio_bytes_recv: int = 0
+    ingress_packets: int = 0
+    ingress_bytes: int = 0
+    first_ingress_ms: Optional[int] = None
+    mic_armed_ms: Optional[int] = None
     last_pong_sent_ms: int = 0
     last_client_activity_ms: int = 0
     last_client_pong_ms: int = 0
@@ -1305,6 +1309,32 @@ class ChatV2Adapter:
             return self._HandleResult(True)
 
         ctx.audio_violation_count = 0
+        now_ms = int(time.time() * 1000)
+        if ctx.ingress_packets <= 0:
+            ctx.ingress_packets = 0
+            ctx.ingress_bytes = 0
+            ctx.first_ingress_ms = now_ms
+        ctx.ingress_packets += 1
+        pkt_len = byte_count
+        ctx.ingress_bytes += pkt_len
+
+        if ctx.ingress_packets == 1:
+            armed_ms = ctx.mic_armed_ms if isinstance(ctx.mic_armed_ms, int) else None
+            delta = (now_ms - armed_ms) if armed_ms is not None else None
+            _log.info(
+                "evt=ws_audio_ingress sid=%s first_chunk=1 bytes=%s first_chunk_ms_since_mic_armed=%s",
+                ctx.sid,
+                pkt_len,
+                delta,
+            )
+        elif ctx.ingress_packets % 50 == 0:
+            _log.info(
+                "evt=ws_audio_ingress sid=%s packets=%s bytes=%s",
+                ctx.sid,
+                ctx.ingress_packets,
+                ctx.ingress_bytes,
+            )
+
         if ctx.audio_highest_seq < 0:
             ctx.audio_expected_seq = ctx.audio_seq
         seq = ctx.audio_seq
@@ -1719,6 +1749,10 @@ class ChatV2Adapter:
 
             _enqueue(ready_frame)
             _enqueue(input_start)
+            ctx.ingress_packets = 0
+            ctx.ingress_bytes = 0
+            ctx.first_ingress_ms = None
+            ctx.mic_armed_ms = int(time.time() * 1000)
             _enqueue({"type": "start_listening"})
 
             if key is not None:

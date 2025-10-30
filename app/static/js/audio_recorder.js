@@ -156,6 +156,9 @@ import { WakeWord } from "./wake_word.js";
               const firstChunkMs = Math.max(0, Date.now() - armedAt);
               logMic?.({ outcome: (micOutcome && micOutcome.STREAMING) || 'streaming', first_chunk_ms: firstChunkMs });
               logStage?.('client.audio', { outcome: 'packet_sent', packet_bytes: packet?.byteLength ?? 0, send_q_len: socket.bufferedAmount });
+              if (armedAt && globalWindow.__micChunks === 1) {
+                logStage?.('client.perf', { outcome: 'mark', name: 'first_chunk_ms', t_ms: firstChunkMs });
+              }
             } else {
               globalWindow.__micChunks += 1;
               globalWindow.__micBytes += (packet?.byteLength ?? 0);
