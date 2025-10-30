@@ -1,438 +1,315 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index ed264fb6ec52f45a3414aa063dae4e49ca6ade52..a2407e426e37fd885ec23dbe1d046674682f5a26 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1,38 +1,37 @@
- import { WakeWord } from "./wake_word.js";
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index a5dc014f216ce3c30bb18bdd95c9198d06667473..b596e5384c59b033ac20b15b67d66d5777dafd35 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -1,37 +1,37 @@
+ """Minimal Engine v2 shell with telemetry hooks and session exporting."""
+ from __future__ import annotations
  
- /** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
- (() => {
-   const HEARTBEAT_INTERVAL_MS = 20000;
-   const DEFAULT_CLOSE_REASON = "client_shutdown";
-   const SUBPROTOCOL = "chat.v2";
-   const INFO_DEADLINE_MS = 20000;
-   const TOKEN_EXPIRY_MS = 60 * 1000;
-   const TOAST_STYLE_ID = "wsclient-toast-styles";
-   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+ import asyncio
+ from dataclasses import dataclass
+ import json
+ import logging
+ import re
+ import threading
+ import time
+ import uuid
+-from typing import Any, Dict, Mapping, Optional
++from typing import Any, Dict, Mapping, Optional, Sequence
  
--  const USE_AUDIORECORDER = !!window.AudioRecorder;
-   const WAKE_WORD_ONLY = true;
+ from app import config
+ from app.logging_config import apply_logging_policy
+ from app.policy.loader import assistant_turn_actions, load_interaction_policy
+ from app.policy.watch import compute_diff, should_reapply
+ from app.telemetry import bus
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ACWR_RECOMPUTE,
+     EVT_CHAT_USER,
+     EVT_ASR_FINAL,
+     EVT_ASR_PARTIAL,
+     EVT_ACTION_SAY_END,
+     EVT_BARGE_CONFIRMED,
+     EVT_BARGE_DETECTED,
+     EVT_BARGE_REJECTED,
+     EVT_NLG,
+     EVT_NLU,
+     EVT_DIALOG_PLAN,
+     EVT_POLICY_APPLIED,
+     EVT_TTS_END,
+     EVT_TTS_START,
+     EVT_TTS_MASK,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+@@ -137,50 +137,51 @@ class _Envelope:
+         data.setdefault("level", "debug")
+         return data
  
-   // ---- Golden-path turn trace & mic outcomes (additive) ----
-   // ---- Telemetry (additive) ----
-   const MIC_OUTCOME = {
-     PERM_GRANTED: 'perm_granted',
-     ARMED: 'armed',
-     STREAMING: 'streaming',
-     STREAMING_HEARTBEAT: 'streaming_heartbeat',
-     STOPPED: 'stopped',
-     ERROR_DENIED: 'error_denied',
-     ERROR_NO_DEVICE: 'error_no_device',
-     ERROR_GUM: 'error_getuser_media',
-     ERROR_SILENT: 'error_silent_stream',
-     ERROR_WS_SEND: 'error_ws_send',
-     ERROR_STATE_GUARD: 'error_state_guard',
-     ERROR_UNKNOWN: 'error_unknown',
-   };
  
-   let __micAttempts = 0;
-   let __micChunks = 0;
-   let __micBytes = 0;
-   let __micArmedAt = 0;     // ms since epoch
-   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
+ @dataclass
+ class _TurnSession:
+     state: str = READY
+     turn_id: Optional[str] = None
+     turn_started_ms: Optional[int] = None
+     tts_utt_id: Optional[str] = None
+     tts_mask_phase: str = "off"
+     req_id: Optional[str] = None
+     nlu_req_id: Optional[str] = None
+     perf_first_partial_ms: Optional[int] = None
+     perf_final_ms: Optional[int] = None
+     perf_tts_start_ms: Optional[int] = None
+     asr_final_emitted: bool = False
+     nlu_emitted: bool = False
+     policy_emitted: bool = False
+     nlg_emitted: bool = False
+     plan_emitted: bool = False
+     greet_emitted: bool = False
+     plan: Optional[Dict[str, Any]] = None
+     suggestions_emitted: bool = False
+     turn_committed: bool = False
++    policy_actions_mismatch_logged: bool = False
  
-@@ -233,51 +232,60 @@ import { WakeWord } from "./wake_word.js";
-       : (typeof AppState?.turnState === "string" ? AppState.turnState : null);
-     if (turnState !== "tts") {
-       return;
-     }
-     try {
-       const activeSocket = (socket && socket.readyState === WebSocket.OPEN)
-         ? socket
-         : (window.ws && window.ws.readyState === WebSocket.OPEN ? window.ws : null);
-       if (activeSocket) {
-         try {
-           activeSocket.send(JSON.stringify({ type: "tts.pause" }));
-         } catch {}
-       }
-     } catch {}
-     try {
-       __micAttempts += 1;
-       __micChunks = 0;
-       __micBytes = 0;
-       __micArmedAt = Date.now();
-       if (!__turnTraceId) {
-         __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
-       }
-       logMic({ outcome: MIC_OUTCOME.ARMED, reason: "wake_word" });
-     } catch {}
-     try {
--      window.AudioRecorder?.startListening?.({ reason: "wake_word" });
-+      const hub = AppState?.hub;
-+      const maybePromise = hub && typeof hub.startListening === "function"
-+        ? hub.startListening({ reason: "wake_word" })
-+        : null;
-+      if (maybePromise && typeof maybePromise.then === "function") {
-+        maybePromise.catch((err) => {
-+          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-+          logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-+        });
-+      }
-     } catch (err) {
-       const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-       logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-     }
-   });
  
-   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
-   const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture"]);
+ class _NullExporter:
+     """Exporter stub used when no exporter is provided."""
  
-   let gestureListenerCleanup = null;
+     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
+         return
  
-   function createEventEmitter() {
-     const registry = new Map();
-     return {
-       on(event, handler) {
-         if (typeof event !== "string" || !event || typeof handler !== "function") {
-           return () => {};
-         }
-         let listeners = registry.get(event);
-         if (!listeners) {
-           listeners = new Set();
-           registry.set(event, listeners);
-         }
-         listeners.add(handler);
-         return () => {
-@@ -470,53 +478,58 @@ import { WakeWord } from "./wake_word.js";
-       payload.meta = sanitizedMeta;
-     }
-     try {
-       sendJson(payload);
-     } catch (err) {
-       console.warn("Failed to send autostart telemetry", err);
-     }
-   }
  
-   function invokeStartRecording(trigger) {
-     if (WAKE_WORD_ONLY) {
-       const label = trigger ? String(trigger).slice(0, 32) : "unknown";
-       console.info("diag=start_recording_blocked trigger=%s mode=wake_word_only", label);
-       return false;
-     }
-     let handler = null;
-     if (typeof window !== "undefined" && typeof window.startRecording === "function") {
-       handler = window.startRecording;
-     } else if (typeof startRecording === "function") {
-       handler = startRecording;
-     }
-     if (handler) {
-       const context = typeof window !== "undefined" ? window : null;
-       return handler.call(context, { trigger });
-     }
--    const recorder = typeof window !== "undefined" ? window.AudioRecorder : null;
--    if (recorder && typeof recorder.startMicCaptureIfIdle === "function") {
--      return recorder.startMicCaptureIfIdle();
-+    const hub = AppState?.hub;
-+    if (hub && typeof hub.startListening === "function") {
-+      try {
-+        return hub.startListening({ trigger });
-+      } catch (err) {
-+        console.warn("Hub startListening failed", err);
-+        throw err;
-+      }
-     }
-     throw new Error("startRecording_unavailable");
-   }
+ class EngineV2:
+     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
  
-   function maybeAutoStart(trigger) {
-     const snapshot = getAutostartSnapshot();
-     const policy = snapshot.policy || {};
-     const reason = reasonFromState(snapshot);
-     if (reason) {
-       sendAutostartTelemetry("blocked", { trigger, reason });
-       return false;
-     }
-     if (!shouldAttemptForTrigger(trigger, policy)) {
-       return false;
-     }
-     if (!canAutoRecord(snapshot)) {
-       return false;
-     }
-     const maxAttempts = Number.isFinite(policy.autostart_max_attempts) ? policy.autostart_max_attempts : 5;
-     if (autostartAttempts >= Math.max(0, maxAttempts)) {
-       sendAutostartTelemetry("max_attempts", { trigger });
-       return false;
-     }
-     const delays = Array.isArray(policy.autostart_backoff_ms) && policy.autostart_backoff_ms.length
-       ? policy.autostart_backoff_ms
-@@ -1356,74 +1369,82 @@ import { WakeWord } from "./wake_word.js";
-       return true;
-     } catch (err) {
-       console.error("Auto-resume open failed", err);
-       autoResumeAttemptToken = null;
-       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
-       recordClientBannerEvent("ws.auto_resume.failed", { message: getErrorMessage(err) });
-       return false;
-     }
-   }
+     def __init__(
+         self,
+         exporter: FileExporter | None = None,
+         *,
+         telemetry_bus=bus,
+         fake_exporter: FileExporter | None = None,
+     ) -> None:
+         if exporter is None:
+             exporter = fake_exporter
+         if exporter is None:
+             exporter = _NullExporter()
+         self._exporter = exporter
+         self._bus = telemetry_bus
+@@ -1501,51 +1502,83 @@ class EngineV2:
  
-   function dispatchFrame(frame) {
-     if (!frame || typeof frame.type !== "string") return;
-     const type = frame.type;
-     try {
-       window.dispatchEvent(new CustomEvent(type, { detail: frame }));
-       if (type.includes(".")) {
-         const baseType = type.split(".")[0];
-         window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
-       }
-     } catch (err) {
-       console.warn("WSClient dispatch error", err);
-     }
-   }
+         if reason:
+             self._publish_action_say_end(
+                 sid,
+                 utt_id,
+                 reason=reason,
+                 req_id=req_id_value,
+             )
  
-   function startInputCapture(frame) {
--    if (USE_AUDIORECORDER) {
--      return;
-+    const hub = AppState?.hub;
-+    if (hub && typeof hub.startListening === "function") {
-+      try {
-+        return hub.startListening(frame?.policy || {});
-+      } catch (err) {
-+        console.warn("Hub startListening (legacy input) failed", err);
-+      }
-     }
--    console.warn('Legacy input capture is disabled; AudioRecorder missing.', frame);
-+    console.warn('Legacy input capture is disabled; recorder hub missing.', frame);
-   }
+         self._publish_tts_mask(sid, "off", force=was_active)
+         self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
  
-   function stopInputCapture(options = {}) {
--    if (USE_AUDIORECORDER) {
-+    const hub = AppState?.hub;
-+    if (hub && typeof hub.stopListening === "function") {
-+      try {
-+        const reason = options && typeof options === "object" && options.reason
-+          ? options.reason
-+          : "legacy_input";
-+        hub.stopListening(reason);
-+      } catch (err) {
-+        console.warn("Hub stopListening (legacy input) failed", err);
-+      }
-       return;
-     }
-     void options;
-   }
+         if transition_to_ready:
+             if post_hold_ms > 0:
+                 self._gate.set_reason(
+                     "system_hold",
+                     True,
+                     sid=sid,
+                     meta={"tts": {"utt_id": utt_id, "post_hold_ms": post_hold_ms}},
+                 )
+                 asyncio.create_task(self._release_system_hold_after(sid, post_hold_ms))
+             else:
+                 self._set_state(sid, READY, reason="tts_end")
  
-   function handleInputStartFrame(frame) {
--    if (USE_AUDIORECORDER) {
--      return;
--    }
-     startInputCapture(frame);
-   }
- 
-   function handleInputStopFrame() {
--    if (USE_AUDIORECORDER) {
--      return;
--    }
-     stopInputCapture({ reason: 'input.stop' });
-   }
- 
-   function sanitizeServerBannerFrame(frame) {
-     const safe = { type: "server.banner" };
-     if (!frame || typeof frame !== "object") {
-       return safe;
-     }
- 
-     const stringKeys = [
-       "build_id",
-       "host",
-       "cwd",
-       "python",
-       "platform",
-       "ws_path",
-       "subprotocol_selected",
-       "adapter_file",
-       "engine_file",
-       "asr_file"
-     ];
-     for (const key of stringKeys) {
-       if (typeof frame[key] === "string" && frame[key]) {
-         safe[key] = frame[key];
-       }
-@@ -1636,136 +1657,132 @@ import { WakeWord } from "./wake_word.js";
-     }
- 
-     if (expectInfoFrame) {
-       if (frame.type === "chat.history") {
-         handleChatHistoryFrame(frame);
-       } else if (frame.type === "error") {
-         handleErrorFrame(frame);
-         return;
-       } else if (frame.type !== "info") {
-         console.error("Expected info frame first, received", frame.type);
-         close("bad_info_sequence");
-         return;
-       }
-       if (frame.type === "info") {
-         handleInfoFrame(frame);
-       }
-     } else if (frame.type === "info") {
-       handleInfoFrame(frame);
-     } else if (frame.type === "server.pong") {
-       handlePongFrame(frame);
-     } else if (frame.type === "pong") {
-       handlePongFrame(frame);
-     } else if (frame.type === "error") {
-       handleErrorFrame(frame);
-     } else if (frame.type === "tts.start") {
--      if (USE_AUDIORECORDER) {
--        try {
--          window.AudioRecorder?.stopListening?.({ reason: "tts" });
--        } catch {}
--      }
-+      try {
-+        AppState?.hub?.stopListening?.("tts");
-+      } catch {}
-       AppState.ttsActive = true;
-       updateState({ ttsActive: true });
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: true });
-       }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
-         audioPlayer.handleTtsStart(frame);
-       }
-       logStage('client.tts', { outcome: 'playing', utt_id: frame?.utt_id || 'utt-00001' });
-       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
-     } else if (frame.type === "tts.end") {
-       AppState.ttsActive = false;
-       updateState({ ttsActive: false });
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: false });
-       }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
-         audioPlayer.handleTtsEnd(frame);
-       }
-       logStage('client.tts', { outcome: 'ended', utt_id: frame?.utt_id || 'utt-00001', dur_ms: frame?.dur_ms });
-     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
-       const uttId = frame?.utt_id || 'utt-00001';
-       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
-       logStage('client.tts', {
-         outcome: 'ended',
-         utt_id: uttId,
-         dur_ms: frame?.dur_ms,
-         reason,
-       });
-       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
-     } else if (frame.type === "start_listening") {
--      if (USE_AUDIORECORDER) {
--        try {
--          __micAttempts += 1;
--          __micChunks = 0;
--          __micBytes = 0;
--          __micArmedAt = Date.now();
--          if (!__turnTraceId) {
--            __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
--          }
--          logMic({ outcome: MIC_OUTCOME.ARMED });
--        } catch {}
--        try {
--          const maybePromise = window.AudioRecorder?.startListening?.(frame?.policy || {});
--          if (maybePromise && typeof maybePromise.then === "function") {
--            maybePromise.catch((err) => {
--              const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
--              logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
--            });
--          }
--        } catch (err) {
--          console.warn("AudioRecorder start_listening handler error", err);
--          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
--          logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-+      try {
-+        __micAttempts += 1;
-+        __micChunks = 0;
-+        __micBytes = 0;
-+        __micArmedAt = Date.now();
-+        if (!__turnTraceId) {
-+          __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
-         }
--      } else {
--        startInputCapture(frame);
-+        logMic({ outcome: MIC_OUTCOME.ARMED });
-+      } catch {}
-+      try {
-+        const hub = AppState?.hub;
-+        const maybePromise = hub && typeof hub.startListening === "function"
-+          ? hub.startListening(frame?.policy || {})
-+          : null;
-+        if (!hub || typeof hub.startListening !== "function") {
-+          startInputCapture(frame);
-+          return;
+     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
+-        frame = {"type": "policy.interaction", "policy": snapshot}
++        session = self._ensure_session(sid)
++
++        nested_sequence: list[Any] | None = None
++        actions_block = snapshot.get("actions")
++        if isinstance(actions_block, Mapping):
++            candidate = actions_block.get("assistant_turn_sequence")
++            if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes)):
++                nested_sequence = list(candidate)
++
++        derived_actions = assistant_turn_actions(snapshot)
++        summary_actions = (
++            list(nested_sequence)
++            if nested_sequence is not None
++            else list(derived_actions)
++        )
++
++        frame = {
++            "type": "policy.interaction",
++            "policy": snapshot,
++            "actions": summary_actions,
 +        }
-+        if (maybePromise && typeof maybePromise.then === "function") {
-+          maybePromise.catch((err) => {
-+            const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-+            logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-+          });
-+        }
-+      } catch (err) {
-+        console.warn("Hub start_listening handler error", err);
-+        const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-+        logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-       }
-     } else if (frame.type === "stop_listening") {
--      if (USE_AUDIORECORDER) {
--        try {
--          window.AudioRecorder?.stopListening?.({ reason: "server_requested" });
--          logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
--        } catch (err) {
--          console.warn("AudioRecorder stop_listening handler error", err);
--          logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-+      try {
-+        const hub = AppState?.hub;
-+        if (hub && typeof hub.stopListening === "function") {
-+          hub.stopListening("server_requested");
-+        } else {
-+          stopInputCapture({ reason: "server_requested" });
++
++        mismatch = nested_sequence is None or summary_actions != nested_sequence
++        if mismatch and not session.policy_actions_mismatch_logged:
++            _log.warning(
++                "evt=policy_actions_mismatch nested=%s summary=%s derived=%s",
++                nested_sequence,
++                summary_actions,
++                derived_actions,
++                extra={"sid": sid},
++            )
++            session.policy_actions_mismatch_logged = True
++
+         preview = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+         meta = {"ws": {"dir": "out", "size": len(preview.encode("utf-8")), "preview": preview}}
+         payload = {"meta": meta, "frame": frame}
+         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+         self._publish(event)
+ 
+     def _emit_dialog_plan(
+         self,
+         sid: str,
+         session: _TurnSession,
+         req_id: str,
+         turn_id: str,
+         user_text: str,
+     ) -> None:
+         if session.plan_emitted:
+             return
+ 
+         if not isinstance(req_id, str) or not req_id:
+             return
+         if not isinstance(turn_id, str) or not turn_id:
+             return
+ 
+         plan = plan_turn(user_text)
+         plan_payload = {
+             "req_id": req_id,
+diff --git a/tests/test_policy_apply_and_diff.py b/tests/test_policy_apply_and_diff.py
+index 1fecdde1ed2fac0999ecb0cfa68b484e7bbc1461..582e4df71285c241ce01acfae9a0ba954d607b78 100644
+--- a/tests/test_policy_apply_and_diff.py
++++ b/tests/test_policy_apply_and_diff.py
+@@ -1,28 +1,29 @@
+ """Tests for policy apply/reapply flow in the engine."""
+ from __future__ import annotations
+ 
++import logging
+ from typing import Any, Dict, List
+ import unittest
+ 
+ from app.policy.loader import load_interaction_policy
+ from app.telemetry.bus import reset, subscribe
+ from app.voice_v2 import EVT_POLICY_APPLIED, EVT_WS_JSON_SEND
+ from app.voice_v2.engine import EngineV2
+ 
+ 
+ class _FakeExporter:
+     """Minimal exporter stub satisfying the EngineV2 contract."""
+ 
+     def __init__(self) -> None:
+         self.events: List[Dict[str, Any]] = []
+ 
+     def begin(self, sid: str) -> None:  # pragma: no cover - not used in these tests
+         self.events.append({"action": "begin", "sid": sid})
+ 
+     def write(self, sid: str, event: Dict[str, Any]) -> None:
+         self.events.append({"action": "write", "sid": sid, "event": dict(event)})
+ 
+     def end(self, sid: str, summary: Dict[str, Any] | None = None) -> None:  # pragma: no cover
+         self.events.append({"action": "end", "sid": sid, "summary": dict(summary or {})})
+ 
+ 
+@@ -49,59 +50,100 @@ class PolicyApplyAndDiffTests(unittest.TestCase):
+ 
+     def _events_of_type(self, event_type: str) -> List[Dict[str, Any]]:
+         return [event for event in self._events if event.get("type") == event_type]
+ 
+     def test_on_open_emits_policy_frame_and_diff(self) -> None:
+         exporter = _FakeExporter()
+         engine = EngineV2(exporter)
+ 
+         engine.on_open("sid-1", headers={})
+ 
+         frames = self._policy_frames()
+         self.assertEqual(len(frames), 1)
+ 
+         applied_events = self._events_of_type(EVT_POLICY_APPLIED)
+         self.assertEqual(len(applied_events), 1)
+ 
+         diff_meta = applied_events[0].get("meta", {}).get("policy", {}).get("diff")
+         self.assertIsInstance(diff_meta, dict)
+ 
+         expected_keys = {
+             "mode",
+             "allow_auto_vad",
+             "barge_in_enabled",
+             "auto_commit_when_ready",
+             "telemetry",
++            "voice",
++            "greet",
++            "suggestions",
++            "actions",
++            "media",
++            "capture",
          }
--      } else {
--        stopInputCapture({ reason: "server_requested" });
-+        logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-+      } catch (err) {
-+        console.warn("Hub stop_listening handler error", err);
-+        logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-       }
-     } else if (frame.type === "input.start") {
--      if (USE_AUDIORECORDER) {
--        return;
--      }
-       startInputCapture(frame);
-     } else if (frame.type === "input.stop") {
--      if (USE_AUDIORECORDER) {
--        return;
--      }
-       stopInputCapture({ reason: "input.stop" });
-     } else if (frame.type === "asr.ready") {
-       handleAsrReadyFrame(frame);
-     } else if (frame.type === "asr.partial") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handlePartial === "function") {
-         try {
-           view.handlePartial(frame);
-         } catch (err) {
-           console.warn("TranscriptView partial handler error", err);
-         }
-       }
-     } else if (frame.type === "asr.final") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleFinal === "function") {
-         try {
-           view.handleFinal(frame);
-         } catch (err) {
-           console.warn("TranscriptView final handler error", err);
-         }
-       }
-     } else if (frame.type === "asr.unavailable") {
-       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
-       const details = frame && typeof frame.details === "string"
-         ? frame.details
+         self.assertEqual(set(diff_meta.keys()), expected_keys)
+ 
+         defaults = load_interaction_policy()
+         for key in expected_keys:
+             before_after = diff_meta[key]
+             self.assertEqual(before_after[0], None)
+             self.assertEqual(before_after[1], defaults[key])
+ 
++    def test_policy_frame_includes_action_summary(self) -> None:
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter)
++
++        engine.on_open("sid-1", headers={})
++
++        frames = self._policy_frames()
++        self.assertGreaterEqual(len(frames), 1)
++
++        payload = frames[0]["frame"]
++        self.assertIn("actions", payload)
++        actions = payload["actions"]
++        self.assertIsInstance(actions, list)
++
++        defaults = load_interaction_policy()
++        expected = (
++            defaults.get("actions", {})
++            .get("assistant_turn_sequence", [])
++        )
++        self.assertEqual(actions, expected)
++
++    def test_policy_actions_mismatch_warns_once_per_session(self) -> None:
++        exporter = _FakeExporter()
++        engine = EngineV2(exporter)
++
++        engine.on_open("sid-1", headers={})
++
++        logger = logging.getLogger("app.voice_v2.engine")
++        with self.assertLogs(logger, level="WARNING") as captured:
++            engine._emit_policy_frame("sid-1", {"actions": {}})
++            engine._emit_policy_frame("sid-1", {"actions": {}})
++
++        mismatch_logs = [line for line in captured.output if "policy_actions_mismatch" in line]
++        self.assertEqual(1, len(mismatch_logs))
++
+     def test_reapply_without_changes_is_noop(self) -> None:
+         exporter = _FakeExporter()
+         engine = EngineV2(exporter)
+         engine.on_open("sid-1", headers={})
+ 
+         baseline_frames = len(self._policy_frames())
+         baseline_applied = len(self._events_of_type(EVT_POLICY_APPLIED))
+ 
+         result = engine.reapply_policy({})
+         self.assertIs(result, False)
+ 
+         self.assertEqual(len(self._policy_frames()), baseline_frames)
+         self.assertEqual(len(self._events_of_type(EVT_POLICY_APPLIED)), baseline_applied)
+ 
+     def test_reapply_with_changes_emits_diff(self) -> None:
+         exporter = _FakeExporter()
+         engine = EngineV2(exporter)
+         engine.on_open("sid-1", headers={})
+ 
+         baseline_frames = len(self._policy_frames())
+         baseline_applied = len(self._events_of_type(EVT_POLICY_APPLIED))
+ 
+         result = engine.reapply_policy({"barge_in_enabled": False})
+         self.assertIs(result, True)
+ 

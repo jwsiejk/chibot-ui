@@ -1,6 +1,7 @@
 """Tests for policy apply/reapply flow in the engine."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 import unittest
 
@@ -71,6 +72,12 @@ class PolicyApplyAndDiffTests(unittest.TestCase):
             "barge_in_enabled",
             "auto_commit_when_ready",
             "telemetry",
+            "voice",
+            "greet",
+            "suggestions",
+            "actions",
+            "media",
+            "capture",
         }
         self.assertEqual(set(diff_meta.keys()), expected_keys)
 
@@ -79,6 +86,41 @@ class PolicyApplyAndDiffTests(unittest.TestCase):
             before_after = diff_meta[key]
             self.assertEqual(before_after[0], None)
             self.assertEqual(before_after[1], defaults[key])
+
+    def test_policy_frame_includes_action_summary(self) -> None:
+        exporter = _FakeExporter()
+        engine = EngineV2(exporter)
+
+        engine.on_open("sid-1", headers={})
+
+        frames = self._policy_frames()
+        self.assertGreaterEqual(len(frames), 1)
+
+        payload = frames[0]["frame"]
+        self.assertIn("actions", payload)
+        actions = payload["actions"]
+        self.assertIsInstance(actions, list)
+
+        defaults = load_interaction_policy()
+        expected = (
+            defaults.get("actions", {})
+            .get("assistant_turn_sequence", [])
+        )
+        self.assertEqual(actions, expected)
+
+    def test_policy_actions_mismatch_warns_once_per_session(self) -> None:
+        exporter = _FakeExporter()
+        engine = EngineV2(exporter)
+
+        engine.on_open("sid-1", headers={})
+
+        logger = logging.getLogger("app.voice_v2.engine")
+        with self.assertLogs(logger, level="WARNING") as captured:
+            engine._emit_policy_frame("sid-1", {"actions": {}})
+            engine._emit_policy_frame("sid-1", {"actions": {}})
+
+        mismatch_logs = [line for line in captured.output if "policy_actions_mismatch" in line]
+        self.assertEqual(1, len(mismatch_logs))
 
     def test_reapply_without_changes_is_noop(self) -> None:
         exporter = _FakeExporter()

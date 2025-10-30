@@ -9,7 +9,7 @@ import re
 import threading
 import time
 import uuid
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from app import config
 from app.logging_config import apply_logging_policy
@@ -159,6 +159,7 @@ class _TurnSession:
     plan: Optional[Dict[str, Any]] = None
     suggestions_emitted: bool = False
     turn_committed: bool = False
+    policy_actions_mismatch_logged: bool = False
 
 
 class _NullExporter:
@@ -1523,7 +1524,39 @@ class EngineV2:
                 self._set_state(sid, READY, reason="tts_end")
 
     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
-        frame = {"type": "policy.interaction", "policy": snapshot}
+        session = self._ensure_session(sid)
+
+        nested_sequence: list[Any] | None = None
+        actions_block = snapshot.get("actions")
+        if isinstance(actions_block, Mapping):
+            candidate = actions_block.get("assistant_turn_sequence")
+            if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes)):
+                nested_sequence = list(candidate)
+
+        derived_actions = assistant_turn_actions(snapshot)
+        summary_actions = (
+            list(nested_sequence)
+            if nested_sequence is not None
+            else list(derived_actions)
+        )
+
+        frame = {
+            "type": "policy.interaction",
+            "policy": snapshot,
+            "actions": summary_actions,
+        }
+
+        mismatch = nested_sequence is None or summary_actions != nested_sequence
+        if mismatch and not session.policy_actions_mismatch_logged:
+            _log.warning(
+                "evt=policy_actions_mismatch nested=%s summary=%s derived=%s",
+                nested_sequence,
+                summary_actions,
+                derived_actions,
+                extra={"sid": sid},
+            )
+            session.policy_actions_mismatch_logged = True
+
         preview = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
         meta = {"ws": {"dir": "out", "size": len(preview.encode("utf-8")), "preview": preview}}
         payload = {"meta": meta, "frame": frame}
