@@ -10,7 +10,6 @@ import { WakeWord } from "./wake_word.js";
   const TOAST_STYLE_ID = "wsclient-toast-styles";
   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
 
-  const USE_AUDIORECORDER = !!window.AudioRecorder;
   const WAKE_WORD_ONLY = true;
 
   // ---- Golden-path turn trace & mic outcomes (additive) ----
@@ -255,7 +254,16 @@ import { WakeWord } from "./wake_word.js";
       logMic({ outcome: MIC_OUTCOME.ARMED, reason: "wake_word" });
     } catch {}
     try {
-      window.AudioRecorder?.startListening?.({ reason: "wake_word" });
+      const hub = AppState?.hub;
+      const maybePromise = hub && typeof hub.startListening === "function"
+        ? hub.startListening({ reason: "wake_word" })
+        : null;
+      if (maybePromise && typeof maybePromise.then === "function") {
+        maybePromise.catch((err) => {
+          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+          logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+        });
+      }
     } catch (err) {
       const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
       logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
@@ -492,9 +500,14 @@ import { WakeWord } from "./wake_word.js";
       const context = typeof window !== "undefined" ? window : null;
       return handler.call(context, { trigger });
     }
-    const recorder = typeof window !== "undefined" ? window.AudioRecorder : null;
-    if (recorder && typeof recorder.startMicCaptureIfIdle === "function") {
-      return recorder.startMicCaptureIfIdle();
+    const hub = AppState?.hub;
+    if (hub && typeof hub.startListening === "function") {
+      try {
+        return hub.startListening({ trigger });
+      } catch (err) {
+        console.warn("Hub startListening failed", err);
+        throw err;
+      }
     }
     throw new Error("startRecording_unavailable");
   }
@@ -1378,30 +1391,38 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function startInputCapture(frame) {
-    if (USE_AUDIORECORDER) {
-      return;
+    const hub = AppState?.hub;
+    if (hub && typeof hub.startListening === "function") {
+      try {
+        return hub.startListening(frame?.policy || {});
+      } catch (err) {
+        console.warn("Hub startListening (legacy input) failed", err);
+      }
     }
-    console.warn('Legacy input capture is disabled; AudioRecorder missing.', frame);
+    console.warn('Legacy input capture is disabled; recorder hub missing.', frame);
   }
 
   function stopInputCapture(options = {}) {
-    if (USE_AUDIORECORDER) {
+    const hub = AppState?.hub;
+    if (hub && typeof hub.stopListening === "function") {
+      try {
+        const reason = options && typeof options === "object" && options.reason
+          ? options.reason
+          : "legacy_input";
+        hub.stopListening(reason);
+      } catch (err) {
+        console.warn("Hub stopListening (legacy input) failed", err);
+      }
       return;
     }
     void options;
   }
 
   function handleInputStartFrame(frame) {
-    if (USE_AUDIORECORDER) {
-      return;
-    }
     startInputCapture(frame);
   }
 
   function handleInputStopFrame() {
-    if (USE_AUDIORECORDER) {
-      return;
-    }
     stopInputCapture({ reason: 'input.stop' });
   }
 
@@ -1658,11 +1679,9 @@ import { WakeWord } from "./wake_word.js";
     } else if (frame.type === "error") {
       handleErrorFrame(frame);
     } else if (frame.type === "tts.start") {
-      if (USE_AUDIORECORDER) {
-        try {
-          window.AudioRecorder?.stopListening?.({ reason: "tts" });
-        } catch {}
-      }
+      try {
+        AppState?.hub?.stopListening?.("tts");
+      } catch {}
       AppState.ttsActive = true;
       updateState({ ttsActive: true });
       if (typeof AppState.emit === "function") {
@@ -1696,54 +1715,52 @@ import { WakeWord } from "./wake_word.js";
       });
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
     } else if (frame.type === "start_listening") {
-      if (USE_AUDIORECORDER) {
-        try {
-          __micAttempts += 1;
-          __micChunks = 0;
-          __micBytes = 0;
-          __micArmedAt = Date.now();
-          if (!__turnTraceId) {
-            __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
-          }
-          logMic({ outcome: MIC_OUTCOME.ARMED });
-        } catch {}
-        try {
-          const maybePromise = window.AudioRecorder?.startListening?.(frame?.policy || {});
-          if (maybePromise && typeof maybePromise.then === "function") {
-            maybePromise.catch((err) => {
-              const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-              logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-            });
-          }
-        } catch (err) {
-          console.warn("AudioRecorder start_listening handler error", err);
-          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-          logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+      try {
+        __micAttempts += 1;
+        __micChunks = 0;
+        __micBytes = 0;
+        __micArmedAt = Date.now();
+        if (!__turnTraceId) {
+          __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
         }
-      } else {
-        startInputCapture(frame);
+        logMic({ outcome: MIC_OUTCOME.ARMED });
+      } catch {}
+      try {
+        const hub = AppState?.hub;
+        const maybePromise = hub && typeof hub.startListening === "function"
+          ? hub.startListening(frame?.policy || {})
+          : null;
+        if (!hub || typeof hub.startListening !== "function") {
+          startInputCapture(frame);
+          return;
+        }
+        if (maybePromise && typeof maybePromise.then === "function") {
+          maybePromise.catch((err) => {
+            const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+            logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+          });
+        }
+      } catch (err) {
+        console.warn("Hub start_listening handler error", err);
+        const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+        logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
       }
     } else if (frame.type === "stop_listening") {
-      if (USE_AUDIORECORDER) {
-        try {
-          window.AudioRecorder?.stopListening?.({ reason: "server_requested" });
-          logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-        } catch (err) {
-          console.warn("AudioRecorder stop_listening handler error", err);
-          logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+      try {
+        const hub = AppState?.hub;
+        if (hub && typeof hub.stopListening === "function") {
+          hub.stopListening("server_requested");
+        } else {
+          stopInputCapture({ reason: "server_requested" });
         }
-      } else {
-        stopInputCapture({ reason: "server_requested" });
+        logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+      } catch (err) {
+        console.warn("Hub stop_listening handler error", err);
+        logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
       }
     } else if (frame.type === "input.start") {
-      if (USE_AUDIORECORDER) {
-        return;
-      }
       startInputCapture(frame);
     } else if (frame.type === "input.stop") {
-      if (USE_AUDIORECORDER) {
-        return;
-      }
       stopInputCapture({ reason: "input.stop" });
     } else if (frame.type === "asr.ready") {
       handleAsrReadyFrame(frame);
