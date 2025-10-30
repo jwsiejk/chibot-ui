@@ -36,6 +36,7 @@ _FINAL_CONFIDENCE = 0.9
 _DEFAULT_IDLE_CLOSE_MS = 4000
 _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
 _TRACE_ENABLED = bool(ASR_TRACE)
+_EBML_MAGIC = b"\x1a\x45\xdf\xa3"
 def _resolve_stream_open_timeout(default: float = 10.0) -> float:
     raw = os.getenv("DG_STREAM_OPEN_TIMEOUT_S")
     if raw is None:
@@ -119,6 +120,8 @@ class _SessionState:
     rollup_window_start: float = 0.0
     rollup_chunks: int = 0
     rollup_bytes: int = 0
+    bytes_received: int = 0
+    listening: bool = False
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -162,6 +165,7 @@ class ASRRuntime:
         if self._idle_close_ms < 0:
             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
         self._ws_json_subscription = None
+        self._ws_send_subscription = None
         subscribe = getattr(self._bus, "subscribe", None)
         if callable(subscribe):
             try:
@@ -170,6 +174,12 @@ class ASRRuntime:
                 )
             except Exception:  # pragma: no cover - defensive logging
                 _log.exception("evt=asr_runtime_subscribe_failed")
+            try:
+                self._ws_send_subscription = subscribe(
+                    EVT_WS_JSON_SEND, self._handle_ws_send_event
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                _log.exception("evt=asr_runtime_send_subscribe_failed")
 
     def set_bus(self, telemetry_bus: Any | None) -> None:
         if telemetry_bus is None:
@@ -254,9 +264,9 @@ class ASRRuntime:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
         _log.info("evt=asr_on_ws_open sid=%s", sid)
-        if not state.stream_open:
-            state.prearm_requested = True
-            self._ensure_stream(sid, state)
+        state.listening = False
+        state.prearm_requested = False
+        state.bytes_received = 0
 
     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
         if not isinstance(chunk, (bytes, bytearray, memoryview)):
@@ -270,6 +280,9 @@ class ASRRuntime:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
 
+        if not state.listening:
+            return
+
         state.unavailable_emitted = False
 
         now_monotonic = time.monotonic()
@@ -278,6 +291,30 @@ class ASRRuntime:
         if state.ready_watchdog is not None and state.ready_armed_at:
             self._cancel_ready_watchdog(state)
         chunk_len = len(data)
+
+        if (
+            state.stream_open
+            and state.bytes_received > 0
+            and data.startswith(_EBML_MAGIC)
+        ):
+            stream_id = state.stream_id or state.last_stream_id or ""
+            _log.warning(
+                "evt=asr_midstream_header sid=%s stream_id=%s action=reopen_vendor",
+                sid,
+                stream_id,
+            )
+            state.close_reason = "midstream_header"
+            try:
+                self._client.close_stream(sid)
+            except Exception:  # pragma: no cover - defensive
+                _log.exception("evt=asr_midstream_close_failed sid=%s", sid)
+            state.stream_open = False
+            state.stream_id = None
+            state.bytes_received = 0
+            state.chunks_sent = 0
+            state.pending.clear()
+            state.buffered_bytes = 0
+            state.first_chunk_seen = False
 
         if not state.first_chunk_seen:
             state.first_chunk_seen = True
@@ -350,6 +387,8 @@ class ASRRuntime:
         finally:
             self._log_session_rollup(state)
         state.req_id = None
+        state.bytes_received = 0
+        state.listening = False
 
     def prearm(self, sid: str) -> None:
         """Request that the ASR stream open proactively for the session."""
@@ -441,6 +480,77 @@ class ASRRuntime:
             self.prearm(sid)
         except Exception:  # pragma: no cover - defensive logging
             _log.exception("evt=asr_runtime_rearm_failed sid=%s", sid)
+
+    def _handle_ws_send_event(self, event: Mapping[str, Any]) -> None:
+        if not isinstance(event, Mapping):
+            return
+        if event.get("type") != EVT_WS_JSON_SEND:
+            return
+        sid = event.get("sid")
+        if not isinstance(sid, str) or not sid:
+            return
+        payload = event.get("payload") or event.get("frame")
+        if not isinstance(payload, Mapping):
+            return
+        frame_type = payload.get("type")
+        if frame_type == "start_listening":
+            self._on_start_listening_frame(sid)
+        elif frame_type in {"stop_listening", "input.stop"}:
+            reason_value = payload.get("reason")
+            reason = reason_value if isinstance(reason_value, str) else None
+            self._on_stop_listening_frame(sid, reason)
+
+    def _on_start_listening_frame(self, sid: str) -> None:
+        if not isinstance(sid, str) or not sid:
+            return
+
+        state = self._sessions.get(sid)
+        if state is None:
+            state = _SessionState(sid=sid)
+            self._sessions[sid] = state
+
+        state.listening = True
+        state.bytes_received = 0
+        state.first_chunk_seen = False
+        state.rollup_window_start = 0.0
+        state.rollup_chunks = 0
+        state.rollup_bytes = 0
+        state.pending.clear()
+        state.buffered_bytes = 0
+        state.prearm_requested = True
+        self._ensure_stream(sid, state)
+
+    def _on_stop_listening_frame(self, sid: str, reason: str | None) -> None:
+        if not isinstance(sid, str) or not sid:
+            return
+
+        state = self._sessions.get(sid)
+        if state is None:
+            return
+
+        state.listening = False
+        state.prearm_requested = False
+        state.pending.clear()
+        state.buffered_bytes = 0
+        state.bytes_received = 0
+        state.first_chunk_seen = False
+        state.rollup_window_start = 0.0
+        state.rollup_chunks = 0
+        state.rollup_bytes = 0
+        self._cancel_ready_watchdog(state)
+        self._cancel_idle_timer(state)
+
+        if state.stream_open:
+            stream_id = state.stream_id or state.last_stream_id or ""
+            state.close_reason = reason or "stop_listening"
+            try:
+                self._client.close_stream(sid)
+            except Exception:  # pragma: no cover - defensive
+                _log.exception("evt=asr_stop_listening_close_failed sid=%s", sid)
+            state.stream_open = False
+            state.stream_id = None
+            state.req_id = None
+            _log.info("evt=asr_stop_listening sid=%s stream_id=%s", sid, stream_id)
     def _emit_log(self, payload: Dict[str, Any]) -> None:
         if not isinstance(payload, dict):
             return
@@ -700,6 +810,7 @@ class ASRRuntime:
             state.rollup_chunks = 0
             state.rollup_bytes = 0
             state.unavailable_emitted = False
+            state.bytes_received = 0
             mp = getattr(self.policy, "media", None)
             cp = getattr(self.policy, "capture", None)
             if mp is not None and cp is not None:
@@ -732,15 +843,15 @@ class ASRRuntime:
             if stream_id:
                 open_event["stream_id"] = stream_id
             self._bus.publish(open_event)
-            _log.info(
-                "evt=asr_session_open sid=%s content_type=%s qs=%s",
-                sid,
-                "(not set)",
-                qs or "",
-            )
             stream_id_value = stream_id if isinstance(stream_id, str) and stream_id else ""
             if not stream_id_value and isinstance(state.stream_id, str) and state.stream_id:
                 stream_id_value = state.stream_id
+            _log.info(
+                "evt=asr_open sid=%s stream_id=%s vendor=deepgram qs=%s",
+                sid,
+                stream_id_value,
+                qs or "",
+            )
             ready_kwargs = {
                 "sid": sid,
                 "vendor": "deepgram",
@@ -801,7 +912,10 @@ class ASRRuntime:
         chunk_len = len(chunk)
         state.chunks_sent += 1
         state.bytes_sent += chunk_len
+        stream_id = state.stream_id or state.last_stream_id or ""
+        _log.info("evt=asr_chunk sid=%s stream_id=%s bytes=%d", sid, stream_id, chunk_len)
         self._client.send_audio(sid, chunk)
+        state.bytes_received += chunk_len
 
     def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
@@ -858,6 +972,7 @@ class ASRRuntime:
             state.close_reason = None
             state.stream_open = False
             state.req_id = None
+            state.bytes_received = 0
 
         return _callback
 
@@ -1232,6 +1347,7 @@ class ASRRuntime:
         state.last_stream_id = stream_id or state.last_stream_id
         state.stream_id = None
         state.req_id = None
+        state.bytes_received = 0
 
     # Optional idle guard
     def close_idle_streams(self) -> None:
@@ -1262,3 +1378,4 @@ class ASRRuntime:
                 state.last_stream_id = state.stream_id or state.last_stream_id
                 state.stream_id = None
                 state.req_id = None
+                state.bytes_received = 0

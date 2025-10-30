@@ -1642,19 +1642,7 @@ class ChatV2Adapter:
                 self._clear_pending_for_key(ctx, key)
                 return
             open_if_needed = getattr(runtime, "open_if_needed", None)
-            should_wait_for_ready = True
-            if callable(open_if_needed):
-                try:
-                    await open_if_needed(ctx.sid, req_id=req_id)
-                except asyncio.CancelledError:
-                    self._clear_pending_for_key(ctx, key)
-                    raise
-                except Exception:  # pragma: no cover - defensive logging
-                    self._clear_pending_for_key(ctx, key)
-                    _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
-                    return
-            else:
-                should_wait_for_ready = False
+            should_wait_for_ready = callable(open_if_needed)
 
             if ctx.tts_mask_phase != "off":
                 self._set_after_mask_for_key(ctx, key)
@@ -1665,6 +1653,17 @@ class ChatV2Adapter:
                     req_id,
                 )
                 return
+
+            if callable(open_if_needed):
+                try:
+                    await open_if_needed(ctx.sid, req_id=req_id)
+                except asyncio.CancelledError:
+                    self._clear_pending_for_key(ctx, key)
+                    raise
+                except Exception:  # pragma: no cover - defensive logging
+                    self._clear_pending_for_key(ctx, key)
+                    _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
+                    return
 
             if should_wait_for_ready:
                 deadline = time.monotonic() + 1.0
