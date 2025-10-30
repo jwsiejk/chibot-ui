@@ -39,7 +39,7 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
             "keep_stream_warm_ms": 30000,
         },
         "routing": {
-            "ws_version": "v1",
+            "ws_version": "v2",
         },
     },
     "actions": {

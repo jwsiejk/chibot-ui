@@ -232,7 +232,10 @@ def _normalize_policy_routing(value: Any) -> Dict[str, Any]:
         candidate = value.get("ws_version")
         if not isinstance(candidate, str) or not candidate.strip():
             raise ValueError("expected_string")
-        current["ws_version"] = candidate.strip()
+        normalized = candidate.strip().lower()
+        if normalized != "v2":
+            raise ValueError("unsupported_ws_version")
+        current["ws_version"] = "v2"
 
     return current
 

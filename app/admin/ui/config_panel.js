@@ -34,7 +34,7 @@
       keep_stream_warm_ms: 30000,
     },
     policy_routing: {
-      ws_version: 'v1',
+      ws_version: 'v2',
     },
   };
   const CHUNK_MIN = 1;
@@ -200,7 +200,7 @@
       label: 'WS routing version',
       description: 'WebSocket API version for chat connections.',
       options: [
-        { value: 'v1', label: 'v1 (/ws/v1/chat)' },
+        { value: 'v2', label: 'v2 (/ws/v2/chat)' },
       ],
     },
   ];
@@ -383,7 +383,7 @@
     }
     if (Object.prototype.hasOwnProperty.call(value, 'ws_version')) {
       const candidate = typeof value.ws_version === 'string' ? value.ws_version.trim() : '';
-      base.ws_version = candidate || base.ws_version;
+      base.ws_version = candidate && candidate.toLowerCase() === 'v2' ? 'v2' : base.ws_version;
     }
     return base;
   }

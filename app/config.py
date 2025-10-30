@@ -84,7 +84,7 @@ _DEFAULT_POLICY_ASR = {
 }
 
 _DEFAULT_POLICY_ROUTING = {
-    "ws_version": "v1",
+    "ws_version": "v2",
 }
 
 POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
@@ -389,7 +389,21 @@ def _sanitize_routing_policy(
 
     ws_version = value.get("ws_version")
     if isinstance(ws_version, str) and ws_version.strip():
-        sanitized["ws_version"] = ws_version.strip()
+        candidate = ws_version.strip().lower()
+        if candidate == "v2":
+            sanitized["ws_version"] = "v2"
+        else:
+            _log.warning(
+                "evt=admin_settings_invalid_policy_routing key=ws_version source=%s",
+                source,
+                extra={
+                    "component": "admin.settings",
+                    "raw": raw,
+                    "configured_ws_version": ws_version,
+                    "normalized_ws_version": "v2",
+                },
+            )
+            sanitized["ws_version"] = "v2"
     elif ws_version is not None:
         _log.warning(
             "evt=admin_settings_invalid_policy_routing key=ws_version source=%s",

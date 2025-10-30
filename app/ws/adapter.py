@@ -2856,14 +2856,14 @@ class ChatV2Adapter:
             keep_warm_ms = 0
 
         routing_dict = dict(routing_block) if isinstance(routing_block, Mapping) else {}
-        ws_version = str(routing_dict.get("ws_version") or "").strip() or "v1"
-        if ws_version != "v1":
+        ws_version = str(routing_dict.get("ws_version") or "").strip() or "v2"
+        if ws_version != "v2":
             _log.warning(
-                "evt=policy_routing_normalized sid=%s configured_ws_version=%s normalized_ws_version=v1",
+                "evt=policy_routing_normalized sid=%s configured_ws_version=%s normalized_ws_version=v2",
                 sid,
                 ws_version,
             )
-            ws_version = "v1"
+            ws_version = "v2"
         routing_dict["ws_version"] = ws_version
         policy_block_mut = dict(policy_block)
         policy_block_mut["routing"] = routing_dict

@@ -1203,13 +1203,13 @@ import { WakeWord } from "./wake_word.js";
     try {
       const routing = AppState?.policy?.policy?.routing;
       const candidate = typeof routing?.ws_version === 'string' ? routing.ws_version.trim() : '';
-      if (candidate && candidate.toLowerCase() !== 'v1') {
-        console.warn('Unsupported ws_version from policy; normalizing to v1', candidate);
+      if (candidate && candidate.toLowerCase() !== 'v2') {
+        console.warn('Unsupported ws_version from policy; normalizing to v2', candidate);
       }
     } catch (err) {
       console.warn('Failed to inspect policy routing version', err);
     }
-    return '/ws/v1/chat';
+    return '/ws/v2/chat';
   }
 
   function computeUrl(resumeToken) {
@@ -1507,7 +1507,7 @@ import { WakeWord } from "./wake_word.js";
     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
     input: { require_hotword_to_start: false },
     asr: { prearm_on_tts_end: true, keep_stream_warm_ms: 30000 },
-    routing: { ws_version: 'v1' },
+    routing: { ws_version: 'v2' },
   };
 
   function sanitizePolicySnapshot(source) {
@@ -1635,7 +1635,9 @@ import { WakeWord } from "./wake_word.js";
         ? routing.ws_version.trim()
         : '';
       nested.routing = {
-        ws_version: rawVersion && rawVersion.toLowerCase() === 'v1' ? 'v1' : 'v1',
+        ws_version: rawVersion && rawVersion.toLowerCase() === 'v2'
+          ? 'v2'
+          : DEFAULT_POLICY_FLAGS.routing.ws_version,
       };
     }
 

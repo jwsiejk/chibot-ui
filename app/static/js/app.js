@@ -1989,12 +1989,12 @@
           params.set('resume', resume.token);
         }
       }
-      let wsPath = '/ws/v1/chat';
+      let wsPath = '/ws/v2/chat';
       try {
         const routing = AppState?.policy?.policy?.routing;
         const candidate = typeof routing?.ws_version === 'string' ? routing.ws_version.trim() : '';
-        if (candidate && candidate.toLowerCase() !== 'v1') {
-          console.warn('Unsupported ws_version from policy; forcing v1', candidate);
+        if (candidate && candidate.toLowerCase() !== 'v2') {
+          console.warn('Unsupported ws_version from policy; forcing v2', candidate);
         }
       } catch (err) {
         console.warn('Failed to inspect policy routing for ws path', err);
