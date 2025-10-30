@@ -7,6 +7,37 @@ import { WakeWord } from "./wake_word.js";
   const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
   const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
 
+  function currentInputDeviceSummary(stream) {
+    if (!stream) {
+      return null;
+    }
+    try {
+      const tracks = typeof stream.getAudioTracks === "function" ? stream.getAudioTracks() : [];
+      const track = Array.isArray(tracks) && tracks.length ? tracks[0] : null;
+      if (!track) {
+        return null;
+      }
+      const summary = {};
+      const settings = typeof track.getSettings === "function" ? track.getSettings() : {};
+      if (settings && typeof settings.deviceId === "string" && settings.deviceId) {
+        summary.id = settings.deviceId;
+      }
+      if (typeof track.label === "string" && track.label) {
+        summary.label = track.label;
+      }
+      if (Number.isFinite(settings.sampleRate)) {
+        summary.sample_rate = settings.sampleRate;
+      }
+      if (Number.isFinite(settings.channelCount)) {
+        summary.channels = settings.channelCount;
+      }
+      return Object.keys(summary).length ? summary : null;
+    } catch (err) {
+      console.warn("AudioRecorder device summary failed", err);
+      return null;
+    }
+  }
+
   function emitEvent(type, detail) {
     try {
       window.dispatchEvent(new CustomEvent(type, { detail }));
@@ -46,11 +77,30 @@ import { WakeWord } from "./wake_word.js";
 
     async _ensureArmed() {
       if (!navigator?.mediaDevices?.getUserMedia) {
+        const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+        const logMic = typeof window !== "undefined" ? window.__logMic : null;
+        logMic?.({ outcome: (micOutcome && micOutcome.ERROR_NO_DEVICE) || 'error_no_device', message: 'media_devices_unavailable' });
         throw new Error("media_devices_unavailable");
       }
       if (!this._stream) {
-        this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        console.info("diag=mic_armed");
+        try {
+          this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+          const logMic = typeof window !== "undefined" ? window.__logMic : null;
+          const summary = currentInputDeviceSummary(this._stream);
+          logMic?.({ outcome: (micOutcome && micOutcome.PERM_GRANTED) || 'perm_granted', perm: 'granted', device: summary });
+          console.info("diag=mic_armed");
+        } catch (err) {
+          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+          const logMic = typeof window !== "undefined" ? window.__logMic : null;
+          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+          logMic?.({
+            outcome: denied ? (micOutcome && micOutcome.ERROR_DENIED) || 'error_denied' : (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media',
+            perm: denied ? 'denied' : 'error',
+            message: err?.message,
+          });
+          throw err;
+        }
         if (!this._wakeInit) {
           try {
             WakeWord.init(this._stream);
@@ -59,13 +109,25 @@ import { WakeWord } from "./wake_word.js";
         }
       }
       if (!window.MediaRecorder) {
+        const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+        const logMic = typeof window !== "undefined" ? window.__logMic : null;
+        const logStage = typeof window !== "undefined" ? window.__logStage : null;
+        logMic?.({ outcome: (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media', message: 'media_recorder_unavailable' });
+        logStage?.('client.audio', { outcome: 'error', message: 'media_recorder_unavailable' });
         throw new Error("media_recorder_unavailable");
       }
       if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(OPUS_MIME)) {
+        const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+        const logMic = typeof window !== "undefined" ? window.__logMic : null;
+        const logStage = typeof window !== "undefined" ? window.__logStage : null;
+        logMic?.({ outcome: (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media', message: 'media_recorder_unsupported' });
+        logStage?.('client.audio', { outcome: 'error', message: 'media_recorder_unsupported' });
         throw new Error("media_recorder_unsupported");
       }
       if (!this._rec) {
         this._rec = new MediaRecorder(this._stream, { mimeType: OPUS_MIME });
+        const logStage = typeof window !== "undefined" ? window.__logStage : null;
+        logStage?.('client.audio', { outcome: 'encoder_ready', format: 'webm_opus', sr: 48000, channels: 1 });
         this._rec.addEventListener("dataavailable", async (event) => {
           if (!event?.data || event.data.size === 0) {
             return;
@@ -81,18 +143,50 @@ import { WakeWord } from "./wake_word.js";
           if (!socket || socket.readyState !== WebSocket.OPEN) {
             return;
           }
+          const packet = buf;
+          const globalWindow = typeof window !== "undefined" ? window : null;
+          const logMic = globalWindow?.__logMic;
+          const logStage = globalWindow?.__logStage;
+          const micOutcome = globalWindow?.__MIC_OUTCOME;
+          if (globalWindow && typeof globalWindow.__micChunks === "number") {
+            if (globalWindow.__micChunks === 0) {
+              globalWindow.__micChunks = 1;
+              globalWindow.__micBytes += (packet?.byteLength ?? 0);
+              const armedAt = globalWindow.__micArmedAt || 0;
+              const firstChunkMs = Math.max(0, Date.now() - armedAt);
+              logMic?.({ outcome: (micOutcome && micOutcome.STREAMING) || 'streaming', first_chunk_ms: firstChunkMs });
+              logStage?.('client.audio', { outcome: 'packet_sent', packet_bytes: packet?.byteLength ?? 0, send_q_len: socket.bufferedAmount });
+            } else {
+              globalWindow.__micChunks += 1;
+              globalWindow.__micBytes += (packet?.byteLength ?? 0);
+              if ((globalWindow.__micChunks % 50) === 0) {
+                logMic?.({ outcome: (micOutcome && micOutcome.STREAMING_HEARTBEAT) || 'streaming_heartbeat' });
+              }
+            }
+          }
           try {
-            socket.send(buf);
-            console.info("diag=audio_chunk_sent bytes=%d", buf.byteLength);
+            socket.send(packet);
+            console.info("diag=audio_chunk_sent bytes=%d", packet.byteLength);
           } catch (err) {
+            logMic?.({ outcome: (micOutcome && micOutcome.ERROR_WS_SEND) || 'error_ws_send', message: err?.message });
+            logStage?.('client.audio', { outcome: 'error', message: err?.message });
             console.warn("diag=audio_chunk_send_failed %o", err);
           }
         });
         this._rec.addEventListener("stop", () => {
           this._rec = null;
+          const logMic = typeof window !== "undefined" ? window.__logMic : null;
+          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+          logMic?.({ outcome: (micOutcome && micOutcome.STOPPED) || 'stopped', reason: 'recorder_stop' });
         });
         this._rec.addEventListener("error", (event) => {
           console.warn("diag=media_recorder_error %o", event);
+          const logMic = typeof window !== "undefined" ? window.__logMic : null;
+          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+          const logStage = typeof window !== "undefined" ? window.__logStage : null;
+          const message = event?.error?.message || event?.name || "recorder_error";
+          logMic?.({ outcome: (micOutcome && micOutcome.ERROR_UNKNOWN) || 'error_unknown', message });
+          logStage?.('client.audio', { outcome: 'error', message });
         });
       }
       if (this._rec.state !== "recording") {
@@ -122,6 +216,11 @@ import { WakeWord } from "./wake_word.js";
         type: CLIENT_HUD_STATE_EVENT,
         meta: { state: this._active ? "Listening" : "Idle", source: "client" }
       });
+      if (!this._active) {
+        const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+        const logMic = typeof window !== "undefined" ? window.__logMic : null;
+        logMic?.({ outcome: (micOutcome && micOutcome.STOPPED) || 'stopped', reason, source: 'recorder_state' });
+      }
       if (this._active && !this._micOpenEmitted) {
         this._micOpenEmitted = true;
         emitEvent(CLIENT_MIC_OPEN_EVENT, {

@@ -1,17 +1,48 @@
 diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index e7fbb3c5753deec0d692d380eee887439d5133ce..ae7a19c13ef1c7e21652d810dbc9775435742109 100644
+index ae7a19c13ef1c7e21652d810dbc9775435742109..133a58fcf15630f2a3a58f8edcda837aa389e3c7 100644
 --- a/app/static/js/audio_recorder.js
 +++ b/app/static/js/audio_recorder.js
-@@ -1,27 +1,28 @@
+@@ -1,149 +1,248 @@
  import { WakeWord } from "./wake_word.js";
  
-+/** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
+ /** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
  (() => {
    const SEND_TIMESLICE_MS = 300;
    const OPUS_MIME = "audio/webm;codecs=opus";
    const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
    const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
  
++  function currentInputDeviceSummary(stream) {
++    if (!stream) {
++      return null;
++    }
++    try {
++      const tracks = typeof stream.getAudioTracks === "function" ? stream.getAudioTracks() : [];
++      const track = Array.isArray(tracks) && tracks.length ? tracks[0] : null;
++      if (!track) {
++        return null;
++      }
++      const summary = {};
++      const settings = typeof track.getSettings === "function" ? track.getSettings() : {};
++      if (settings && typeof settings.deviceId === "string" && settings.deviceId) {
++        summary.id = settings.deviceId;
++      }
++      if (typeof track.label === "string" && track.label) {
++        summary.label = track.label;
++      }
++      if (Number.isFinite(settings.sampleRate)) {
++        summary.sample_rate = settings.sampleRate;
++      }
++      if (Number.isFinite(settings.channelCount)) {
++        summary.channels = settings.channelCount;
++      }
++      return Object.keys(summary).length ? summary : null;
++    } catch (err) {
++      console.warn("AudioRecorder device summary failed", err);
++      return null;
++    }
++  }
++
    function emitEvent(type, detail) {
      try {
        window.dispatchEvent(new CustomEvent(type, { detail }));
@@ -31,7 +62,161 @@ index e7fbb3c5753deec0d692d380eee887439d5133ce..ae7a19c13ef1c7e21652d810dbc97754
        this._micOpenEmitted = false;
        this._active = false;
        this._wakeInit = false;
-@@ -116,55 +117,53 @@ import { WakeWord } from "./wake_word.js";
+     }
+ 
+     setSocket(ws) {
+       this._ws = ws || null;
+     }
+ 
+     setPolicy(policy) {
+       if (policy && typeof policy === "object") {
+         this._policy = policy;
+       } else {
+         this._policy = {};
+       }
+     }
+ 
+     get policy() {
+       return this._policy || {};
+     }
+ 
+     async _ensureArmed() {
+       if (!navigator?.mediaDevices?.getUserMedia) {
++        const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
++        const logMic = typeof window !== "undefined" ? window.__logMic : null;
++        logMic?.({ outcome: (micOutcome && micOutcome.ERROR_NO_DEVICE) || 'error_no_device', message: 'media_devices_unavailable' });
+         throw new Error("media_devices_unavailable");
+       }
+       if (!this._stream) {
+-        this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+-        console.info("diag=mic_armed");
++        try {
++          this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
++          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
++          const logMic = typeof window !== "undefined" ? window.__logMic : null;
++          const summary = currentInputDeviceSummary(this._stream);
++          logMic?.({ outcome: (micOutcome && micOutcome.PERM_GRANTED) || 'perm_granted', perm: 'granted', device: summary });
++          console.info("diag=mic_armed");
++        } catch (err) {
++          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
++          const logMic = typeof window !== "undefined" ? window.__logMic : null;
++          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
++          logMic?.({
++            outcome: denied ? (micOutcome && micOutcome.ERROR_DENIED) || 'error_denied' : (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media',
++            perm: denied ? 'denied' : 'error',
++            message: err?.message,
++          });
++          throw err;
++        }
+         if (!this._wakeInit) {
+           try {
+             WakeWord.init(this._stream);
+           } catch {}
+           this._wakeInit = true;
+         }
+       }
+       if (!window.MediaRecorder) {
++        const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
++        const logMic = typeof window !== "undefined" ? window.__logMic : null;
++        const logStage = typeof window !== "undefined" ? window.__logStage : null;
++        logMic?.({ outcome: (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media', message: 'media_recorder_unavailable' });
++        logStage?.('client.audio', { outcome: 'error', message: 'media_recorder_unavailable' });
+         throw new Error("media_recorder_unavailable");
+       }
+       if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(OPUS_MIME)) {
++        const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
++        const logMic = typeof window !== "undefined" ? window.__logMic : null;
++        const logStage = typeof window !== "undefined" ? window.__logStage : null;
++        logMic?.({ outcome: (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media', message: 'media_recorder_unsupported' });
++        logStage?.('client.audio', { outcome: 'error', message: 'media_recorder_unsupported' });
+         throw new Error("media_recorder_unsupported");
+       }
+       if (!this._rec) {
+         this._rec = new MediaRecorder(this._stream, { mimeType: OPUS_MIME });
++        const logStage = typeof window !== "undefined" ? window.__logStage : null;
++        logStage?.('client.audio', { outcome: 'encoder_ready', format: 'webm_opus', sr: 48000, channels: 1 });
+         this._rec.addEventListener("dataavailable", async (event) => {
+           if (!event?.data || event.data.size === 0) {
+             return;
+           }
+           const buf = await event.data.arrayBuffer();
+           if (!buf || buf.byteLength === 0) {
+             return;
+           }
+           if (!this._sendGate) {
+             return;
+           }
+           const socket = this._ws;
+           if (!socket || socket.readyState !== WebSocket.OPEN) {
+             return;
+           }
++          const packet = buf;
++          const globalWindow = typeof window !== "undefined" ? window : null;
++          const logMic = globalWindow?.__logMic;
++          const logStage = globalWindow?.__logStage;
++          const micOutcome = globalWindow?.__MIC_OUTCOME;
++          if (globalWindow && typeof globalWindow.__micChunks === "number") {
++            if (globalWindow.__micChunks === 0) {
++              globalWindow.__micChunks = 1;
++              globalWindow.__micBytes += (packet?.byteLength ?? 0);
++              const armedAt = globalWindow.__micArmedAt || 0;
++              const firstChunkMs = Math.max(0, Date.now() - armedAt);
++              logMic?.({ outcome: (micOutcome && micOutcome.STREAMING) || 'streaming', first_chunk_ms: firstChunkMs });
++              logStage?.('client.audio', { outcome: 'packet_sent', packet_bytes: packet?.byteLength ?? 0, send_q_len: socket.bufferedAmount });
++            } else {
++              globalWindow.__micChunks += 1;
++              globalWindow.__micBytes += (packet?.byteLength ?? 0);
++              if ((globalWindow.__micChunks % 50) === 0) {
++                logMic?.({ outcome: (micOutcome && micOutcome.STREAMING_HEARTBEAT) || 'streaming_heartbeat' });
++              }
++            }
++          }
+           try {
+-            socket.send(buf);
+-            console.info("diag=audio_chunk_sent bytes=%d", buf.byteLength);
++            socket.send(packet);
++            console.info("diag=audio_chunk_sent bytes=%d", packet.byteLength);
+           } catch (err) {
++            logMic?.({ outcome: (micOutcome && micOutcome.ERROR_WS_SEND) || 'error_ws_send', message: err?.message });
++            logStage?.('client.audio', { outcome: 'error', message: err?.message });
+             console.warn("diag=audio_chunk_send_failed %o", err);
+           }
+         });
+         this._rec.addEventListener("stop", () => {
+           this._rec = null;
++          const logMic = typeof window !== "undefined" ? window.__logMic : null;
++          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
++          logMic?.({ outcome: (micOutcome && micOutcome.STOPPED) || 'stopped', reason: 'recorder_stop' });
+         });
+         this._rec.addEventListener("error", (event) => {
+           console.warn("diag=media_recorder_error %o", event);
++          const logMic = typeof window !== "undefined" ? window.__logMic : null;
++          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
++          const logStage = typeof window !== "undefined" ? window.__logStage : null;
++          const message = event?.error?.message || event?.name || "recorder_error";
++          logMic?.({ outcome: (micOutcome && micOutcome.ERROR_UNKNOWN) || 'error_unknown', message });
++          logStage?.('client.audio', { outcome: 'error', message });
+         });
+       }
+       if (this._rec.state !== "recording") {
+         this._rec.start(SEND_TIMESLICE_MS);
+         console.info("diag=media_recorder_start timeslice_ms=%d", SEND_TIMESLICE_MS);
+       }
+     }
+ 
+     _updateRecorderState(active, reason) {
+       this._active = Boolean(active);
+       const payload = { active: this._active };
+       if (reason && typeof reason === "string") {
+         payload.reason = reason;
+       }
+       try {
+         if (this._state) {
+           if (typeof this._state.setState === "function") {
+             this._state.setState({ recorder: { active: payload.active } });
+           }
+           this._state.recorder = { active: payload.active };
+           this._state.emit?.(payload.active ? "recordingStarted" : "recordingStopped", payload);
          }
        } catch (err) {
          console.warn("AudioRecorder state update failed", err);
@@ -40,6 +225,11 @@ index e7fbb3c5753deec0d692d380eee887439d5133ce..ae7a19c13ef1c7e21652d810dbc97754
          type: CLIENT_HUD_STATE_EVENT,
          meta: { state: this._active ? "Listening" : "Idle", source: "client" }
        });
++      if (!this._active) {
++        const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
++        const logMic = typeof window !== "undefined" ? window.__logMic : null;
++        logMic?.({ outcome: (micOutcome && micOutcome.STOPPED) || 'stopped', reason, source: 'recorder_state' });
++      }
        if (this._active && !this._micOpenEmitted) {
          this._micOpenEmitted = true;
          emitEvent(CLIENT_MIC_OPEN_EVENT, {
@@ -57,52 +247,22 @@ index e7fbb3c5753deec0d692d380eee887439d5133ce..ae7a19c13ef1c7e21652d810dbc97754
      }
  
      async startMicCaptureIfIdle(policy = {}) {
--      return this.startListening(policy);
--    }
--
--    async handleStartListening(policy = {}) {
--      return this.startListening(policy);
-+      this.setPolicy(policy);
-+      await this._ensureArmed();
-+      return true;
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return true;
      }
  
      async startListening(policy = {}) {
        this.setPolicy(policy);
        await this._ensureArmed();
-       if (!this._sendGate) {
-         this._sendGate = true;
-         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
-         console.info("diag=send_gate_open reason=%s", reason);
-         this._updateRecorderState(true, reason);
-       }
-       return true;
-     }
- 
-     stopListening(opts = {}) {
-       if (this._sendGate) {
-         this._sendGate = false;
-         const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
-         console.info("diag=send_gate_closed reason=%s", reason);
-         this._updateRecorderState(false, reason);
-       }
-     }
- 
-     handleStopListening(opts = {}) {
-       this.stopListening(opts);
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 22154afe794fb588cd1f6c1e4376cc69e33233b8..5456fd0fadc552d76fcff07b35aaa231845060f0 100644
+index 5456fd0fadc552d76fcff07b35aaa231845060f0..3ebc733666a1045355c74f764fb4c307c03641ac 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -1,32 +1,28 @@
+@@ -1,40 +1,112 @@
  import { WakeWord } from "./wake_word.js";
  
--/**
-- * POLICY: MediaRecorder may ONLY be instantiated in app/static/js/audio_recorder.js.
-- * AudioRecorder is the single owner of the mic and the send-gate.
-- * No manual or VAD-based barge-in; wake-word only.
-- */
-+/** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
+ /** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
  (() => {
    const HEARTBEAT_INTERVAL_MS = 20000;
    const DEFAULT_CLOSE_REASON = "client_shutdown";
@@ -115,6 +275,78 @@ index 22154afe794fb588cd1f6c1e4376cc69e33233b8..5456fd0fadc552d76fcff07b35aaa231
    const USE_AUDIORECORDER = !!window.AudioRecorder;
    const WAKE_WORD_ONLY = true;
  
++  // ---- Telemetry (additive) ----
++  const MIC_OUTCOME = {
++    PERM_GRANTED: 'perm_granted',
++    ARMED: 'armed',
++    STREAMING: 'streaming',
++    STREAMING_HEARTBEAT: 'streaming_heartbeat',
++    STOPPED: 'stopped',
++    ERROR_DENIED: 'error_denied',
++    ERROR_NO_DEVICE: 'error_no_device',
++    ERROR_GUM: 'error_getuser_media',
++    ERROR_SILENT: 'error_silent_stream',
++    ERROR_WS_SEND: 'error_ws_send',
++    ERROR_STATE_GUARD: 'error_state_guard',
++    ERROR_UNKNOWN: 'error_unknown',
++  };
++
++  let __micAttempts = 0;
++  let __micChunks = 0;
++  let __micBytes = 0;
++  let __micArmedAt = 0;     // ms since epoch
++  let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
++
++  if (typeof window !== "undefined") {
++    try {
++      Object.defineProperty(window, "__micAttempts", {
++        configurable: true,
++        get() { return __micAttempts; },
++        set(value) {
++          if (Number.isFinite(value)) {
++            __micAttempts = value;
++          }
++        },
++      });
++      Object.defineProperty(window, "__micChunks", {
++        configurable: true,
++        get() { return __micChunks; },
++        set(value) {
++          if (Number.isFinite(value)) {
++            __micChunks = value;
++          }
++        },
++      });
++      Object.defineProperty(window, "__micBytes", {
++        configurable: true,
++        get() { return __micBytes; },
++        set(value) {
++          if (Number.isFinite(value)) {
++            __micBytes = value;
++          }
++        },
++      });
++      Object.defineProperty(window, "__micArmedAt", {
++        configurable: true,
++        get() { return __micArmedAt; },
++        set(value) {
++          if (Number.isFinite(value)) {
++            __micArmedAt = value;
++          }
++        },
++      });
++      Object.defineProperty(window, "__turnTraceId", {
++        configurable: true,
++        get() { return __turnTraceId; },
++        set(value) {
++          if (typeof value === "string" || value === null) {
++            __turnTraceId = value;
++          }
++        },
++      });
++    } catch {}
++  }
++
    const AppState = window.AppState;
    if (!AppState) {
      throw new Error("AppState store is required before loading WSClient");
@@ -128,3 +360,528 @@ index 22154afe794fb588cd1f6c1e4376cc69e33233b8..5456fd0fadc552d76fcff07b35aaa231
      autostart_retry_on: Array.isArray(P0.autostart_retry_on)
        ? P0.autostart_retry_on.slice()
        : ["asrReady", "ttsEnded", "turnState:Ready"],
+     autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
+       ? P0.autostart_backoff_ms.slice()
+       : [0, 300, 1000],
+     autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts) ? P0.autostart_max_attempts : 5,
+     show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
+       ? P0.show_tap_to_speak_cta_after_ms
+       : 2000,
+     reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
+   };
+ 
+   const appStateEventEmitter = createEventEmitter();
+   if (typeof AppState.on !== "function") {
+@@ -44,50 +116,84 @@ import { WakeWord } from "./wake_word.js";
+     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
+   }
+ 
+   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
+   let autostartAttempts = 0;
+   let autostartTimer = null;
+ 
+   const WSClient = window.WSClient = window.WSClient || {};
+   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
+     window.ws = null;
+   }
+   WSClient._ws = WSClient._ws || null;
+   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
+   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
+   const getAudioPlayer = () => window.AudioPlayer;
+ 
+   try {
+   if (typeof AppState.websocket === "undefined" && typeof AppState.getState === "function") {
+     Object.defineProperty(AppState, "websocket", {
+       configurable: true, enumerable: false,
+       get() { try { return AppState.getState().websocket || null; } catch { return null; } }
+     });
+   }
+ } catch {}
+ 
++  function logMic(detail = {}) {
++    try {
++      const base = {
++        trace_id: __turnTraceId || null,
++        attempts: __micAttempts,
++        chunks: __micChunks,
++        bytes: __micBytes,
++        phase: AppState?.ttsActive ? 'tts_active' : 'post_tts',
++        hold_flags: {
++          ttsActive: !!AppState?.ttsActive,
++          systemHold: !!AppState?.systemHold,
++          userMuted: !!AppState?.userMuted,
++        },
++      };
++      if (typeof logClient === "function") {
++        logClient('client.mic', { ...base, ...detail });
++      }
++    } catch {}
++  }
++
++  function logStage(label, detail = {}) {
++    try {
++      if (typeof logClient === "function") {
++        logClient(label, { trace_id: __turnTraceId || null, ...detail });
++      }
++    } catch {}
++  }
++
++  if (typeof window !== "undefined") {
++    try { window.__logMic = logMic; } catch {}
++    try { window.__logStage = logStage; } catch {}
++    try { window.__MIC_OUTCOME = MIC_OUTCOME; } catch {}
++  }
++
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
+   let infoWatchdogTimerId = null;
+   let lastPingAt = null;
+   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
+   let autoResumeAttemptToken = null;
+   let toastRoot = null;
+   let lastTokenValue = null;
+   let lastTokenMintedAt = null;
+ 
+   const CLIENT_BANNER_TYPE = "client.banner";
+   const CLIENT_BANNER_MAX_HISTORY = 24;
+   const CLIENT_BANNER_MAX_QUEUE = 24;
+   const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
+   const CLIENT_BANNER_STRING_MAX = 240;
+ 
+   let clientBannerQueue = [];
+ 
+   // Initialize the client banner state only after related constants are defined.
+   ensureClientBannerState();
+ 
+   WakeWord.onHotword(() => {
+@@ -97,52 +203,65 @@ import { WakeWord } from "./wake_word.js";
+         state = AppState.get();
+       }
+     } catch {}
+     if (!state && typeof AppState?.getState === "function") {
+       try {
+         state = AppState.getState();
+       } catch {}
+     }
+     const turnState = typeof state?.turnState === "string"
+       ? state.turnState
+       : (typeof AppState?.turnState === "string" ? AppState.turnState : null);
+     if (turnState !== "tts") {
+       return;
+     }
+     try {
+       const activeSocket = (socket && socket.readyState === WebSocket.OPEN)
+         ? socket
+         : (window.ws && window.ws.readyState === WebSocket.OPEN ? window.ws : null);
+       if (activeSocket) {
+         try {
+           activeSocket.send(JSON.stringify({ type: "tts.pause" }));
+         } catch {}
+       }
+     } catch {}
+     try {
+-      window.AudioRecorder?.startListening?.({ reason: "wake_word" });
++      __micAttempts += 1;
++      __micChunks = 0;
++      __micBytes = 0;
++      __micArmedAt = Date.now();
++      if (!__turnTraceId) {
++        __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
++      }
++      logMic({ outcome: MIC_OUTCOME.ARMED, reason: "wake_word" });
+     } catch {}
++    try {
++      window.AudioRecorder?.startListening?.({ reason: "wake_word" });
++    } catch (err) {
++      const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
++      logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
++    }
+   });
+ 
+   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
+   const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture"]);
+ 
+   let gestureListenerCleanup = null;
+ 
+   function createEventEmitter() {
+     const registry = new Map();
+     return {
+       on(event, handler) {
+         if (typeof event !== "string" || !event || typeof handler !== "function") {
+           return () => {};
+         }
+         let listeners = registry.get(event);
+         if (!listeners) {
+           listeners = new Set();
+           registry.set(event, listeners);
+         }
+         listeners.add(handler);
+         return () => {
+           listeners.delete(handler);
+         };
+       },
+       emit(event, detail) {
+@@ -481,50 +600,51 @@ import { WakeWord } from "./wake_word.js";
+           if (changed) {
+             prevSnapshot = {
+               asrReady: snapshot.asrReady,
+               ttsActive: snapshot.ttsActive,
+               turnState: snapshot.turnState,
+             };
+             fn(changedKeys, snapshot);
+           }
+         }, 100);
+       };
+       watch(["asrReady", "ttsActive", "turnState"], (changedKeys, snapshot) => {
+         changedKeys.forEach((key) => {
+           if (key === "asrReady" && snapshot.asrReady) {
+             maybeAutoStart("asrReady");
+           } else if (key === "ttsActive" && !snapshot.ttsActive) {
+             maybeAutoStart("ttsEnded");
+           } else if (key === "turnState" && snapshot.turnState === "Ready") {
+             autostartAttempts = 0;
+             maybeAutoStart("turnState:Ready");
+           }
+         });
+       });
+     }
+     AppState.on?.("turnReset", () => {
+       autostartAttempts = 0;
++      __turnTraceId = null;
+     });
+ 
+     maybeAutoStart("boot");
+   }
+ 
+   function handleTurnStateEvent(event) {
+     const detail = event && typeof event === "object" ? event.detail : null;
+     const stateValue = detail && typeof detail === "object" && typeof detail.state === "string"
+       ? detail.state
+       : (detail && detail.meta && typeof detail.meta.state === "string" ? detail.meta.state : null);
+     const normalized = typeof stateValue === "string" ? stateValue : null;
+     const reasonValue = detail && typeof detail === "object" && typeof detail.reason === "string"
+       ? detail.reason
+       : (detail && detail.meta && typeof detail.meta.reason === "string" ? detail.meta.reason : null);
+     AppState.turnState = normalized;
+     updateState({ turnState: normalized });
+     if (normalized === "Ready") {
+       autostartAttempts = 0;
+       if (typeof AppState.emit === "function") {
+         AppState.emit("turnReset", { state: normalized, reason: reasonValue || null });
+       }
+     }
+   }
+ 
+   ensureInitialAutostartState();
+@@ -1346,67 +1466,71 @@ import { WakeWord } from "./wake_word.js";
+       console.error("Invalid info frame", frame);
+       close("bad_info_frame");
+       return;
+     }
+     expectInfoFrame = false;
+     clearInfoWatchdog();
+     resetRateLimitRecovery();
+     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
+     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
+     if (resumeToken && resumeTtlMs) {
+       assignResume(resumeToken, resumeTtlMs);
+     } else {
+       clearResumeState();
+     }
+     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
+     const audioPlayer = getAudioPlayer();
+     if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+       audioPlayer.setDescriptor(descriptor);
+     }
+     updateState({
+       connectionState: "connected",
+       sid: meta.sid,
+       infoFrame: frame,
+       resumeError: null
+     });
++    logStage('client.ws', { outcome: 'auth_ok' });
+     flushClientBannerQueue();
+   }
+ 
+   function handlePongFrame(frame) {
+     const now = Date.now();
+     let reference = null;
+     if (frame && typeof frame.echo === "number") {
+       reference = frame.echo;
+     } else if (frame && typeof frame.t === "number") {
+       reference = frame.t;
+     } else if (typeof lastPingAt === "number") {
+       reference = lastPingAt;
+     }
++    let rtt = null;
+     if (typeof reference === "number") {
+       const latency = Math.max(0, now - reference);
+       updateState({ latencyMs: latency });
++      rtt = latency;
+     }
++    logStage('client.ws', { outcome: 'pong', rtt_ms: rtt });
+   }
+ 
+   function handleChatHistoryFrame(frame) {
+     const view = window.TranscriptView;
+     const messages = Array.isArray(frame.messages) ? frame.messages : [];
+     if (view && typeof view.handleChatMessage === "function" && messages.length) {
+       for (const message of messages) {
+         try {
+           view.handleChatMessage(message);
+         } catch (err) {
+           console.warn("TranscriptView chat history handler error", err);
+           break;
+         }
+       }
+     }
+   }
+ 
+   function handleErrorFrame(frame) {
+     console.error("WS error frame", frame);
+     const errorMeta = {};
+     if (frame && typeof frame.code === "string") {
+       errorMeta.code = truncateBannerString(frame.code, 64);
+     }
+     if (frame && typeof frame.detail === "string" && frame.detail) {
+       errorMeta.detail = truncateBannerString(frame.detail, 160);
+@@ -1496,76 +1620,99 @@ import { WakeWord } from "./wake_word.js";
+         handleInfoFrame(frame);
+       }
+     } else if (frame.type === "info") {
+       handleInfoFrame(frame);
+     } else if (frame.type === "server.pong") {
+       handlePongFrame(frame);
+     } else if (frame.type === "pong") {
+       handlePongFrame(frame);
+     } else if (frame.type === "error") {
+       handleErrorFrame(frame);
+     } else if (frame.type === "tts.start") {
+       if (USE_AUDIORECORDER) {
+         try {
+           window.AudioRecorder?.stopListening?.({ reason: "tts" });
+         } catch {}
+       }
+       AppState.ttsActive = true;
+       updateState({ ttsActive: true });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: true });
+       }
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+         audioPlayer.handleTtsStart(frame);
+       }
++      logStage('client.tts', { outcome: 'playing', utt_id: frame?.utt_id || 'utt-00001' });
++      logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
+     } else if (frame.type === "tts.end") {
+       AppState.ttsActive = false;
+       updateState({ ttsActive: false });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: false });
+       }
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
++      logStage('client.tts', { outcome: 'ended', utt_id: frame?.utt_id || 'utt-00001', dur_ms: frame?.dur_ms });
+     } else if (frame.type === "start_listening") {
+       if (USE_AUDIORECORDER) {
+         try {
+-          window.AudioRecorder?.startListening?.(frame?.policy || {});
++          __micAttempts += 1;
++          __micChunks = 0;
++          __micBytes = 0;
++          __micArmedAt = Date.now();
++          if (!__turnTraceId) {
++            __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
++          }
++          logMic({ outcome: MIC_OUTCOME.ARMED });
++        } catch {}
++        try {
++          const maybePromise = window.AudioRecorder?.startListening?.(frame?.policy || {});
++          if (maybePromise && typeof maybePromise.then === "function") {
++            maybePromise.catch((err) => {
++              const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
++              logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
++            });
++          }
+         } catch (err) {
+           console.warn("AudioRecorder start_listening handler error", err);
++          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
++          logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+         }
+       } else {
+         startInputCapture(frame);
+       }
+     } else if (frame.type === "stop_listening") {
+       if (USE_AUDIORECORDER) {
+         try {
+           window.AudioRecorder?.stopListening?.({ reason: "server_requested" });
++          logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+         } catch (err) {
+           console.warn("AudioRecorder stop_listening handler error", err);
++          logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+         }
+       } else {
+         stopInputCapture({ reason: "server_requested" });
+       }
+     } else if (frame.type === "input.start") {
+       if (USE_AUDIORECORDER) {
+         return;
+       }
+       startInputCapture(frame);
+     } else if (frame.type === "input.stop") {
+       if (USE_AUDIORECORDER) {
+         return;
+       }
+       stopInputCapture({ reason: "input.stop" });
+     } else if (frame.type === "asr.ready") {
+       handleAsrReadyFrame(frame);
+     } else if (frame.type === "asr.partial") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handlePartial === "function") {
+         try {
+           view.handlePartial(frame);
+         } catch (err) {
+           console.warn("TranscriptView partial handler error", err);
+         }
+       }
+@@ -1683,58 +1830,61 @@ import { WakeWord } from "./wake_word.js";
+         } catch {}
+         try {
+           window.ws = ws;
+         } catch {}
+         try {
+           if (!Array.isArray(WSClient._queue)) {
+             WSClient._queue = [];
+           }
+           if (WSClient._queue.length) {
+             for (const { data, isBinary } of WSClient._queue) {
+               WSClient.send(data, { binary: isBinary });
+             }
+             WSClient._queue.length = 0;
+           }
+         } catch {}
+         try {
+           window.dispatchEvent(new CustomEvent("ws.open", { detail: { websocket: ws } }));
+         } catch {}
+         try {
+           if (!WSClient._linkedProofLogged) {
+             console.info("evt=ws_linked AppState", !!AppState?.websocket, "WSClient", !!WSClient._ws);
+             WSClient._linkedProofLogged = true;
+           }
+         } catch {}
+         startHeartbeat();
++        logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || null });
+       },
+       message: parseFrame,
+       error: (event) => {
+         console.error("WebSocket error", event);
+         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
+       },
+       close: (event) => {
+         const expected = ws.__intentionalClose === true;
++        logStage('client.ws', { outcome: 'close', code: event?.code, reason: event?.reason });
++        logMic({ outcome: MIC_OUTCOME.STOPPED, reason: event?.reason || (expected ? 'intentional_close' : 'ws_close') });
+         try {
+           WSClient._connected = false;
+           WSClient._ws = null;
+           WSClient._linkedProofLogged = false;
+         } catch {}
+         try {
+           window.ws = null;
+         } catch {}
+         if (socket === ws) {
+           socket = null;
+           expectInfoFrame = true;
+           clearInfoWatchdog();
+         }
+         clearHeartbeat();
+         updateState({ websocket: null });
+         let resumed = false;
+         if (!expected) {
+           resumed = attemptAutoResume();
+         }
+         if (!resumed) {
+           updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+         }
+         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
+       }
+     };
+@@ -1855,71 +2005,73 @@ import { WakeWord } from "./wake_word.js";
+       resume: isResuming,
+       skip_rate_limit_cancel: Boolean(skipRateLimitCancel),
+       has_access_token: hasAccessToken,
+       url: bannerUrlMeta,
+       protocols: bannerProtocols,
+     });
+     console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
+     const logPayload = Array.isArray(wsProtocols)
+       ? { url: wsUrl, protocols: wsProtocols }
+       : { url: wsUrl, subprotocol: wsProtocols };
+     console.log("WS opening", logPayload);
+ 
+     const tokenInfo = trackTokenFromUrl(wsUrl);
+     const ws = transportFactory(wsUrl, wsProtocols);
+     ws.__accessTokenInfo = tokenInfo;
+     ws.__handshakeToastShown = false;
+     try {
+       ws.binaryType = "arraybuffer";
+     } catch (err) {
+       console.warn("Failed to set WebSocket binaryType", err);
+     }
+ 
+     ws.onopen = () => {
+       // Lightweight breadcrumb; keep as console.log
+       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
++      logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || (typeof wsProtocols === "string" ? wsProtocols : null) });
+       recordClientBannerEvent("ws.socket.open", {
+         protocol: truncateBannerString(ws.protocol || (typeof wsProtocols === "string" ? wsProtocols : ""), 48),
+       });
+       flushClientBannerQueue();
+     };
+ 
+     ws.onerror = (e) => {
+       console.error("WebSocket error", e, { readyState: ws.readyState });
+       maybeShowHandshakeToast(ws, null);
+       recordClientBannerEvent("ws.socket.error", {
+         ready_state: ws.readyState,
+       });
+     };
+ 
+     ws.onclose = (e) => {
+       console.error("WebSocket closed", {
+         code: e.code,
+         reason: e.reason,
+         wasClean: e.wasClean,
+         readyState: ws.readyState,
+       });
++      logStage('client.ws', { outcome: 'close', code: e?.code, reason: e?.reason });
+       maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
+       recordClientBannerEvent("ws.socket.close", {
+         code: typeof e.code === "number" ? e.code : undefined,
+         reason: truncateBannerString(e.reason || "", 160),
+         was_clean: Boolean(e.wasClean),
+         ready_state: ws.readyState,
+       });
+     };
+ 
+     socket = ws;
+     updateState({
+       connectionState: resumeTokenValue ? "resuming" : "connecting",
+       websocket: ws,
+       latencyMs: null,
+       lastPingAt: null,
+       resumeError: null,
+       infoFrame: null,
+       serverBanner: null
+     });
+     attachSocket(ws);
+     return ws;
+   }
+ 
+   function close(reason = DEFAULT_CLOSE_REASON) {
+     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });

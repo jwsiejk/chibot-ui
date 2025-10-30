@@ -13,6 +13,78 @@ import { WakeWord } from "./wake_word.js";
   const USE_AUDIORECORDER = !!window.AudioRecorder;
   const WAKE_WORD_ONLY = true;
 
+  // ---- Telemetry (additive) ----
+  const MIC_OUTCOME = {
+    PERM_GRANTED: 'perm_granted',
+    ARMED: 'armed',
+    STREAMING: 'streaming',
+    STREAMING_HEARTBEAT: 'streaming_heartbeat',
+    STOPPED: 'stopped',
+    ERROR_DENIED: 'error_denied',
+    ERROR_NO_DEVICE: 'error_no_device',
+    ERROR_GUM: 'error_getuser_media',
+    ERROR_SILENT: 'error_silent_stream',
+    ERROR_WS_SEND: 'error_ws_send',
+    ERROR_STATE_GUARD: 'error_state_guard',
+    ERROR_UNKNOWN: 'error_unknown',
+  };
+
+  let __micAttempts = 0;
+  let __micChunks = 0;
+  let __micBytes = 0;
+  let __micArmedAt = 0;     // ms since epoch
+  let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
+
+  if (typeof window !== "undefined") {
+    try {
+      Object.defineProperty(window, "__micAttempts", {
+        configurable: true,
+        get() { return __micAttempts; },
+        set(value) {
+          if (Number.isFinite(value)) {
+            __micAttempts = value;
+          }
+        },
+      });
+      Object.defineProperty(window, "__micChunks", {
+        configurable: true,
+        get() { return __micChunks; },
+        set(value) {
+          if (Number.isFinite(value)) {
+            __micChunks = value;
+          }
+        },
+      });
+      Object.defineProperty(window, "__micBytes", {
+        configurable: true,
+        get() { return __micBytes; },
+        set(value) {
+          if (Number.isFinite(value)) {
+            __micBytes = value;
+          }
+        },
+      });
+      Object.defineProperty(window, "__micArmedAt", {
+        configurable: true,
+        get() { return __micArmedAt; },
+        set(value) {
+          if (Number.isFinite(value)) {
+            __micArmedAt = value;
+          }
+        },
+      });
+      Object.defineProperty(window, "__turnTraceId", {
+        configurable: true,
+        get() { return __turnTraceId; },
+        set(value) {
+          if (typeof value === "string" || value === null) {
+            __turnTraceId = value;
+          }
+        },
+      });
+    } catch {}
+  }
+
   const AppState = window.AppState;
   if (!AppState) {
     throw new Error("AppState store is required before loading WSClient");
@@ -65,6 +137,40 @@ import { WakeWord } from "./wake_word.js";
     });
   }
 } catch {}
+
+  function logMic(detail = {}) {
+    try {
+      const base = {
+        trace_id: __turnTraceId || null,
+        attempts: __micAttempts,
+        chunks: __micChunks,
+        bytes: __micBytes,
+        phase: AppState?.ttsActive ? 'tts_active' : 'post_tts',
+        hold_flags: {
+          ttsActive: !!AppState?.ttsActive,
+          systemHold: !!AppState?.systemHold,
+          userMuted: !!AppState?.userMuted,
+        },
+      };
+      if (typeof logClient === "function") {
+        logClient('client.mic', { ...base, ...detail });
+      }
+    } catch {}
+  }
+
+  function logStage(label, detail = {}) {
+    try {
+      if (typeof logClient === "function") {
+        logClient(label, { trace_id: __turnTraceId || null, ...detail });
+      }
+    } catch {}
+  }
+
+  if (typeof window !== "undefined") {
+    try { window.__logMic = logMic; } catch {}
+    try { window.__logStage = logStage; } catch {}
+    try { window.__MIC_OUTCOME = MIC_OUTCOME; } catch {}
+  }
 
   let socket = null;
   let heartbeatTimerId = null;
@@ -119,8 +225,21 @@ import { WakeWord } from "./wake_word.js";
       }
     } catch {}
     try {
-      window.AudioRecorder?.startListening?.({ reason: "wake_word" });
+      __micAttempts += 1;
+      __micChunks = 0;
+      __micBytes = 0;
+      __micArmedAt = Date.now();
+      if (!__turnTraceId) {
+        __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
+      }
+      logMic({ outcome: MIC_OUTCOME.ARMED, reason: "wake_word" });
     } catch {}
+    try {
+      window.AudioRecorder?.startListening?.({ reason: "wake_word" });
+    } catch (err) {
+      const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+      logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+    }
   });
 
   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
@@ -503,6 +622,7 @@ import { WakeWord } from "./wake_word.js";
     }
     AppState.on?.("turnReset", () => {
       autostartAttempts = 0;
+      __turnTraceId = null;
     });
 
     maybeAutoStart("boot");
@@ -1368,6 +1488,7 @@ import { WakeWord } from "./wake_word.js";
       infoFrame: frame,
       resumeError: null
     });
+    logStage('client.ws', { outcome: 'auth_ok' });
     flushClientBannerQueue();
   }
 
@@ -1381,10 +1502,13 @@ import { WakeWord } from "./wake_word.js";
     } else if (typeof lastPingAt === "number") {
       reference = lastPingAt;
     }
+    let rtt = null;
     if (typeof reference === "number") {
       const latency = Math.max(0, now - reference);
       updateState({ latencyMs: latency });
+      rtt = latency;
     }
+    logStage('client.ws', { outcome: 'pong', rtt_ms: rtt });
   }
 
   function handleChatHistoryFrame(frame) {
@@ -1518,6 +1642,8 @@ import { WakeWord } from "./wake_word.js";
       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
         audioPlayer.handleTtsStart(frame);
       }
+      logStage('client.tts', { outcome: 'playing', utt_id: frame?.utt_id || 'utt-00001' });
+      logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
     } else if (frame.type === "tts.end") {
       AppState.ttsActive = false;
       updateState({ ttsActive: false });
@@ -1528,12 +1654,31 @@ import { WakeWord } from "./wake_word.js";
       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
         audioPlayer.handleTtsEnd(frame);
       }
+      logStage('client.tts', { outcome: 'ended', utt_id: frame?.utt_id || 'utt-00001', dur_ms: frame?.dur_ms });
     } else if (frame.type === "start_listening") {
       if (USE_AUDIORECORDER) {
         try {
-          window.AudioRecorder?.startListening?.(frame?.policy || {});
+          __micAttempts += 1;
+          __micChunks = 0;
+          __micBytes = 0;
+          __micArmedAt = Date.now();
+          if (!__turnTraceId) {
+            __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
+          }
+          logMic({ outcome: MIC_OUTCOME.ARMED });
+        } catch {}
+        try {
+          const maybePromise = window.AudioRecorder?.startListening?.(frame?.policy || {});
+          if (maybePromise && typeof maybePromise.then === "function") {
+            maybePromise.catch((err) => {
+              const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+              logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+            });
+          }
         } catch (err) {
           console.warn("AudioRecorder start_listening handler error", err);
+          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+          logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
         }
       } else {
         startInputCapture(frame);
@@ -1542,8 +1687,10 @@ import { WakeWord } from "./wake_word.js";
       if (USE_AUDIORECORDER) {
         try {
           window.AudioRecorder?.stopListening?.({ reason: "server_requested" });
+          logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
         } catch (err) {
           console.warn("AudioRecorder stop_listening handler error", err);
+          logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
         }
       } else {
         stopInputCapture({ reason: "server_requested" });
@@ -1705,6 +1852,7 @@ import { WakeWord } from "./wake_word.js";
           }
         } catch {}
         startHeartbeat();
+        logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || null });
       },
       message: parseFrame,
       error: (event) => {
@@ -1713,6 +1861,8 @@ import { WakeWord } from "./wake_word.js";
       },
       close: (event) => {
         const expected = ws.__intentionalClose === true;
+        logStage('client.ws', { outcome: 'close', code: event?.code, reason: event?.reason });
+        logMic({ outcome: MIC_OUTCOME.STOPPED, reason: event?.reason || (expected ? 'intentional_close' : 'ws_close') });
         try {
           WSClient._connected = false;
           WSClient._ws = null;
@@ -1877,6 +2027,7 @@ import { WakeWord } from "./wake_word.js";
     ws.onopen = () => {
       // Lightweight breadcrumb; keep as console.log
       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
+      logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || (typeof wsProtocols === "string" ? wsProtocols : null) });
       recordClientBannerEvent("ws.socket.open", {
         protocol: truncateBannerString(ws.protocol || (typeof wsProtocols === "string" ? wsProtocols : ""), 48),
       });
@@ -1898,6 +2049,7 @@ import { WakeWord } from "./wake_word.js";
         wasClean: e.wasClean,
         readyState: ws.readyState,
       });
+      logStage('client.ws', { outcome: 'close', code: e?.code, reason: e?.reason });
       maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
       recordClientBannerEvent("ws.socket.close", {
         code: typeof e.code === "number" ? e.code : undefined,
