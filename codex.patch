@@ -1,802 +1,130 @@
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index b0caf1f824a1ef90d232db56d9c1ac43d16e3cae..bed2f42d65b306aff94aec0674c8f55ec0baac06 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -14,50 +14,51 @@ from app.config import (
-     ASR_BACKPRESSURE_THRESHOLD_BYTES,
-     ASR_IDLE_CLOSE_MS,
-     ASR_TRACE,
- )
- from app.policy.model import Policy
- from app.services.streaming_asr.deepgram_client import DeepgramClient
- from app.telemetry import bus
- from app.voice_v2 import (
-     EVT_ASR_FINAL,
-     EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_ASR_READY,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.voice_v2.engine import EngineV2
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index e7fbb3c5753deec0d692d380eee887439d5133ce..ae7a19c13ef1c7e21652d810dbc9775435742109 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -1,27 +1,28 @@
+ import { WakeWord } from "./wake_word.js";
  
- _log = logging.getLogger(__name__)
++/** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
+ (() => {
+   const SEND_TIMESLICE_MS = 300;
+   const OPUS_MIME = "audio/webm;codecs=opus";
+   const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
+   const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
  
- _DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
- _PARTIAL_CONFIDENCE = 0.55
- _FINAL_CONFIDENCE = 0.9
- _DEFAULT_IDLE_CLOSE_MS = 4000
- _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
- _TRACE_ENABLED = bool(ASR_TRACE)
-+_EBML_MAGIC = b"\x1a\x45\xdf\xa3"
- def _resolve_stream_open_timeout(default: float = 10.0) -> float:
-     raw = os.getenv("DG_STREAM_OPEN_TIMEOUT_S")
-     if raw is None:
-         return default
-     try:
-         timeout = float(raw)
-     except (TypeError, ValueError):
-         return default
-     if timeout <= 0:
-         return default
-     return timeout
+   function emitEvent(type, detail) {
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail }));
+     } catch (err) {
+       console.warn("AudioRecorder event dispatch failed", type, err);
+     }
+   }
  
+   class AudioRecorder {
+     constructor(ws, appState) {
+       this._ws = ws || null;
+       this._state = appState || null;
+       this._stream = null;
+       this._rec = null;
+       this._sendGate = false;
+       this._policy = {};
+       this._micOpenEmitted = false;
+       this._active = false;
+       this._wakeInit = false;
+@@ -116,55 +117,53 @@ import { WakeWord } from "./wake_word.js";
+         }
+       } catch (err) {
+         console.warn("AudioRecorder state update failed", err);
+       }
+       emitEvent(CLIENT_HUD_STATE_EVENT, {
+         type: CLIENT_HUD_STATE_EVENT,
+         meta: { state: this._active ? "Listening" : "Idle", source: "client" }
+       });
+       if (this._active && !this._micOpenEmitted) {
+         this._micOpenEmitted = true;
+         emitEvent(CLIENT_MIC_OPEN_EVENT, {
+           type: CLIENT_MIC_OPEN_EVENT,
+           ts: Date.now(),
+           vendor: "webm_opus"
+         });
+       }
+     }
  
- _STREAM_OPEN_TIMEOUT_S = _resolve_stream_open_timeout()
- _NO_AUDIO_TIMEOUT_S = 9.0
- _LISTENING_STATE = "Listening"
- _READY_STATES = {"Ready", "Idle"}
+     async start(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return this._stream;
+     }
  
+     async startMicCaptureIfIdle(policy = {}) {
+-      return this.startListening(policy);
+-    }
+-
+-    async handleStartListening(policy = {}) {
+-      return this.startListening(policy);
++      this.setPolicy(policy);
++      await this._ensureArmed();
++      return true;
+     }
  
- def _safe_url(url: str | None) -> str:
-     if not url:
-         return ""
-     try:
-         from urllib.parse import urlparse, urlunparse
+     async startListening(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       if (!this._sendGate) {
+         this._sendGate = true;
+         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
+         console.info("diag=send_gate_open reason=%s", reason);
+         this._updateRecorderState(true, reason);
+       }
+       return true;
+     }
  
-@@ -97,101 +98,110 @@ class _SessionState:
-     stream_open_task: Optional[asyncio.Task[None]] = None
-     stream_open: bool = False
-     last_audio_ts: float = 0.0
-     idle_handle: asyncio.TimerHandle | None = None
-     stream_id: Optional[str] = None
-     close_reason: Optional[str] = None
-     opened_at_ms: int = 0
-     opened_at_monotonic: float = 0.0
-     last_audio_ts_ms: int = 0
-     chunks_sent: int = 0
-     bytes_sent: int = 0
-     dg_msgs_partial: int = 0
-     dg_msgs_final: int = 0
-     finals_delivered: int = 0
-     dropped_chunks: int = 0
-     last_stream_id: Optional[str] = None
-     ready_watchdog: asyncio.TimerHandle | None = None
-     ready_armed_at: float = 0.0
-     prearm_requested: bool = False
-     input_desc: Dict[str, Any] = field(default_factory=_default_input_descriptor)
-     unavailable_emitted: bool = False
-     first_chunk_seen: bool = False
-     rollup_window_start: float = 0.0
-     rollup_chunks: int = 0
-     rollup_bytes: int = 0
-+    bytes_received: int = 0
-+    listening: bool = False
+     stopListening(opts = {}) {
+       if (this._sendGate) {
+         this._sendGate = false;
+         const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
+         console.info("diag=send_gate_closed reason=%s", reason);
+         this._updateRecorderState(false, reason);
+       }
+     }
  
-     def __post_init__(self) -> None:
-         now_monotonic = time.monotonic()
-         now_wall = time.time()
-         self.opened_at_monotonic = now_monotonic
-         self.opened_at_ms = int(now_wall * 1000)
-         self.last_audio_ts = now_monotonic
-         self.last_audio_ts_ms = int(now_wall * 1000)
+     handleStopListening(opts = {}) {
+       this.stopListening(opts);
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 22154afe794fb588cd1f6c1e4376cc69e33233b8..5456fd0fadc552d76fcff07b35aaa231845060f0 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,32 +1,28 @@
+ import { WakeWord } from "./wake_word.js";
  
+-/**
+- * POLICY: MediaRecorder may ONLY be instantiated in app/static/js/audio_recorder.js.
+- * AudioRecorder is the single owner of the mic and the send-gate.
+- * No manual or VAD-based barge-in; wake-word only.
+- */
++/** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 20000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
  
- class ASRRuntime:
-     """Bridge websocket audio to Deepgram realtime transcription."""
+   const USE_AUDIORECORDER = !!window.AudioRecorder;
+   const WAKE_WORD_ONLY = true;
  
-     def __init__(
-         self,
-         engine: EngineV2,
-         client: DeepgramClient,
-         *,
-         telemetry_bus: Any | None = None,
-     ) -> None:
-         if engine is None:
-             raise ValueError("engine must be provided")
-         if client is None:
-             raise ValueError("client must be provided")
- 
-         self._engine = engine
-         self._client = client
-         self._bus = telemetry_bus or bus
-         self._configure_client()
-         self._sessions: Dict[str, _SessionState] = {}
-         self._loop: asyncio.AbstractEventLoop | None = None
-         self.policy = Policy()
-         configured_idle = ASR_IDLE_CLOSE_MS
-         if not isinstance(configured_idle, (int, float)):
-             configured_idle = _DEFAULT_IDLE_CLOSE_MS
-         client_idle = getattr(client, "idle_close_ms", None)
-         if isinstance(client_idle, (int, float)) and client_idle >= 0:
-             self._idle_close_ms = int(client_idle)
-         else:
-             self._idle_close_ms = int(configured_idle)
-         if self._idle_close_ms < 0:
-             self._idle_close_ms = _DEFAULT_IDLE_CLOSE_MS
-         self._ws_json_subscription = None
-+        self._ws_send_subscription = None
-         subscribe = getattr(self._bus, "subscribe", None)
-         if callable(subscribe):
-             try:
-                 self._ws_json_subscription = subscribe(
-                     EVT_WS_JSON_RECV, self._handle_ws_json_event
-                 )
-             except Exception:  # pragma: no cover - defensive logging
-                 _log.exception("evt=asr_runtime_subscribe_failed")
-+            try:
-+                self._ws_send_subscription = subscribe(
-+                    EVT_WS_JSON_SEND, self._handle_ws_send_event
-+                )
-+            except Exception:  # pragma: no cover - defensive logging
-+                _log.exception("evt=asr_runtime_send_subscribe_failed")
- 
-     def set_bus(self, telemetry_bus: Any | None) -> None:
-         if telemetry_bus is None:
-             return
-         self._bus = telemetry_bus
- 
-     def _configure_client(self) -> None:
-         """Force the Deepgram client to use the containerized listen URL."""
- 
-         target_url = _DG_LISTEN_URL
-         current_url = getattr(self._client, "_url", None)
-         if current_url == target_url:
-             return
-         try:
-             setattr(self._client, "_url", target_url)
-         except Exception:  # pragma: no cover - defensive
-             _log.debug(
-                 "evt=asr_runtime_set_listen_url_failed target_url=%s", target_url,
-                 exc_info=True,
-             )
-         else:
-             _log.debug(
-                 "evt=asr_runtime_listen_url_set url=%s", target_url
-             )
- 
-@@ -232,75 +242,102 @@ class ASRRuntime:
- 
-         if asr_input == "pcm_16k":
-             return _pcm_input_descriptor()
- 
-         if asr_input:
-             self._emit_log(
-                 {
-                     "type": "EVT_LOG",
-                     "level": "ERROR",
-                     "msg": f"evt=asr_policy_invalid input={asr_input}",
-                 }
-             )
- 
-         return _default_input_descriptor()
- 
-     # ------------------------------------------------------------------
-     # Websocket hooks
-     # ------------------------------------------------------------------
-     def on_ws_open(self, sid: str) -> None:
-         self._ensure_loop()
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-         _log.info("evt=asr_on_ws_open sid=%s", sid)
--        if not state.stream_open:
--            state.prearm_requested = True
--            self._ensure_stream(sid, state)
-+        state.listening = False
-+        state.prearm_requested = False
-+        state.bytes_received = 0
- 
-     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
-         if not isinstance(chunk, (bytes, bytearray, memoryview)):
-             raise TypeError("chunk must be bytes-like")
-         data = bytes(chunk)
-         if not data:
-             return
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
- 
-+        if not state.listening:
-+            return
-+
-         state.unavailable_emitted = False
- 
-         now_monotonic = time.monotonic()
-         state.last_audio_ts = now_monotonic
-         state.last_audio_ts_ms = int(time.time() * 1000)
-         if state.ready_watchdog is not None and state.ready_armed_at:
-             self._cancel_ready_watchdog(state)
-         chunk_len = len(data)
- 
-+        if (
-+            state.stream_open
-+            and state.bytes_received > 0
-+            and data.startswith(_EBML_MAGIC)
-+        ):
-+            stream_id = state.stream_id or state.last_stream_id or ""
-+            _log.warning(
-+                "evt=asr_midstream_header sid=%s stream_id=%s action=reopen_vendor",
-+                sid,
-+                stream_id,
-+            )
-+            state.close_reason = "midstream_header"
-+            try:
-+                self._client.close_stream(sid)
-+            except Exception:  # pragma: no cover - defensive
-+                _log.exception("evt=asr_midstream_close_failed sid=%s", sid)
-+            state.stream_open = False
-+            state.stream_id = None
-+            state.bytes_received = 0
-+            state.chunks_sent = 0
-+            state.pending.clear()
-+            state.buffered_bytes = 0
-+            state.first_chunk_seen = False
-+
-         if not state.first_chunk_seen:
-             state.first_chunk_seen = True
-             state.rollup_window_start = now_monotonic
-             state.rollup_chunks = 0
-             state.rollup_bytes = 0
-             _log.info(
-                 "evt=audio_first_chunk sid=%s bytes=%d codec=webm_opus",
-                 sid,
-                 chunk_len,
-             )
-         if not state.rollup_window_start:
-             state.rollup_window_start = now_monotonic
-         state.rollup_chunks += 1
-         state.rollup_bytes += chunk_len
-         if (
-             state.rollup_window_start
-             and now_monotonic - state.rollup_window_start >= 1.0
-         ):
-             _log.debug(
-                 "evt=audio_rollup sid=%s chunks=%d bytes=%d window_ms=1000",
-                 sid,
-                 state.rollup_chunks,
-                 state.rollup_bytes,
-             )
-             state.rollup_window_start = now_monotonic
-@@ -328,50 +365,52 @@ class ASRRuntime:
-                 chunk_len,
-                 state.buffered_bytes,
-                 len(state.pending),
-             )
- 
-         self._reset_idle_timer(sid, state)
- 
-     def on_ws_close(self, sid: str) -> None:
-         state = self._sessions.pop(sid, None)
-         if state is None:
-             return
-         state.close_reason = "client_ws_closed"
-         self._cancel_idle_timer(state)
-         self._cancel_ready_watchdog(state)
-         task = state.stream_open_task
-         if task is not None and not task.done():
-             task.cancel()
-         state.stream_open = False
-         try:
-             self._client.close_stream(sid)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_stream_close_failed sid=%s", sid)
-         finally:
-             self._log_session_rollup(state)
-         state.req_id = None
-+        state.bytes_received = 0
-+        state.listening = False
- 
-     def prearm(self, sid: str) -> None:
-         """Request that the ASR stream open proactively for the session."""
- 
-         if not isinstance(sid, str) or not sid:
-             return
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-         if state.stream_open:
-             return
- 
-         state.prearm_requested = True
-         self._ensure_stream(sid, state)
- 
-     async def open_if_needed(self, sid: str, *, req_id: str | None = None) -> None:
-         """Ensure the streaming session is open before capturing microphone audio."""
- 
-         if not isinstance(sid, str) or not sid:
-             return
- 
-         loop = self._ensure_loop()
-         if loop is None:
-@@ -419,50 +458,121 @@ class ASRRuntime:
-         if not isinstance(event, Mapping):
-             return
-         if event.get("type") != EVT_WS_JSON_RECV:
-             return
-         sid = event.get("sid")
-         if not isinstance(sid, str) or not sid:
-             return
-         state = self._sessions.get(sid)
-         if state is None:
-             return
-         payload = event.get("payload")
-         meta: Mapping[str, Any] | None = None
-         if isinstance(payload, Mapping):
-             candidate = payload.get("meta")
-             if isinstance(candidate, Mapping):
-                 meta = candidate
-         frame_type = meta.get("frame_type") if meta is not None else None
-         if frame_type != "asr.rearm.request":
-             return
-         if state.stream_open:
-             return
-         try:
-             self.prearm(sid)
-         except Exception:  # pragma: no cover - defensive logging
-             _log.exception("evt=asr_runtime_rearm_failed sid=%s", sid)
-+
-+    def _handle_ws_send_event(self, event: Mapping[str, Any]) -> None:
-+        if not isinstance(event, Mapping):
-+            return
-+        if event.get("type") != EVT_WS_JSON_SEND:
-+            return
-+        sid = event.get("sid")
-+        if not isinstance(sid, str) or not sid:
-+            return
-+        payload = event.get("payload") or event.get("frame")
-+        if not isinstance(payload, Mapping):
-+            return
-+        frame_type = payload.get("type")
-+        if frame_type == "start_listening":
-+            self._on_start_listening_frame(sid)
-+        elif frame_type in {"stop_listening", "input.stop"}:
-+            reason_value = payload.get("reason")
-+            reason = reason_value if isinstance(reason_value, str) else None
-+            self._on_stop_listening_frame(sid, reason)
-+
-+    def _on_start_listening_frame(self, sid: str) -> None:
-+        if not isinstance(sid, str) or not sid:
-+            return
-+
-+        state = self._sessions.get(sid)
-+        if state is None:
-+            state = _SessionState(sid=sid)
-+            self._sessions[sid] = state
-+
-+        state.listening = True
-+        state.bytes_received = 0
-+        state.first_chunk_seen = False
-+        state.rollup_window_start = 0.0
-+        state.rollup_chunks = 0
-+        state.rollup_bytes = 0
-+        state.pending.clear()
-+        state.buffered_bytes = 0
-+        state.prearm_requested = True
-+        self._ensure_stream(sid, state)
-+
-+    def _on_stop_listening_frame(self, sid: str, reason: str | None) -> None:
-+        if not isinstance(sid, str) or not sid:
-+            return
-+
-+        state = self._sessions.get(sid)
-+        if state is None:
-+            return
-+
-+        state.listening = False
-+        state.prearm_requested = False
-+        state.pending.clear()
-+        state.buffered_bytes = 0
-+        state.bytes_received = 0
-+        state.first_chunk_seen = False
-+        state.rollup_window_start = 0.0
-+        state.rollup_chunks = 0
-+        state.rollup_bytes = 0
-+        self._cancel_ready_watchdog(state)
-+        self._cancel_idle_timer(state)
-+
-+        if state.stream_open:
-+            stream_id = state.stream_id or state.last_stream_id or ""
-+            state.close_reason = reason or "stop_listening"
-+            try:
-+                self._client.close_stream(sid)
-+            except Exception:  # pragma: no cover - defensive
-+                _log.exception("evt=asr_stop_listening_close_failed sid=%s", sid)
-+            state.stream_open = False
-+            state.stream_id = None
-+            state.req_id = None
-+            _log.info("evt=asr_stop_listening sid=%s stream_id=%s", sid, stream_id)
-     def _emit_log(self, payload: Dict[str, Any]) -> None:
-         if not isinstance(payload, dict):
-             return
-         event = dict(payload)
-         event.setdefault("type", "EVT_LOG")
-         try:
-             self._bus.publish(event)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_emit_log_failed")
- 
-     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
-         loop = self._loop
-         if loop is not None:
-             return loop
-         try:
-             loop = asyncio.get_running_loop()
-         except RuntimeError:
-             loop = None
-         self._loop = loop
-         return loop
- 
-     def _apply_backpressure(self, sid: str, state: _SessionState) -> None:
-         if _BACKPRESSURE_THRESHOLD <= 0:
-             return
-         if state.buffered_bytes <= _BACKPRESSURE_THRESHOLD:
-@@ -678,91 +788,92 @@ class ASRRuntime:
-                     last_error,
-                 )
-                 state.stream_open = False
-                 state.stream_id = None
-                 state.stream_open_task = None
-                 detail_reason = reason or type(e).__name__
-                 if code is not None:
-                     detail_reason = f"{detail_reason} (code={code})"
-                 self._publish_asr_unavailable(
-                     sid,
-                     "open_failed",
-                     f"stream open failed: {detail_reason}",
-                     state=state,
-                 )
-                 loop = self._ensure_loop()
-                 if loop is not None:
-                     loop.call_later(0.5, self._ensure_stream, sid, state)
-                 return
- 
-             state.stream_open = True
-             state.first_chunk_seen = False
-             state.rollup_window_start = 0.0
-             state.rollup_chunks = 0
-             state.rollup_bytes = 0
-             state.unavailable_emitted = False
-+            state.bytes_received = 0
-             mp = getattr(self.policy, "media", None)
-             cp = getattr(self.policy, "capture", None)
-             if mp is not None and cp is not None:
-                 self._emit_log(
-                     {
-                         "type": "EVT_LOG",
-                         "logger": "app.voice_v2.asr_runtime",
-                         "level": "INFO",
-                         "sid": sid,
-                         "msg": (
-                             "evt=asr_policy input=%s rate_hz=%s ch=%s fallbacks=%s "
-                             "start_on_asr_ready=%s start_on_turn_ready=%s timeslice_ms=%s "
-                             "mask_during_tts=%s mask_keepalive_enable=%s mask_keepalive_ms=%s"
-                         )
-                         % (
-                             getattr(mp, "asr_input", ""),
-                             getattr(mp, "asr_rate_hz", ""),
-                             getattr(mp, "asr_channels", ""),
-                             getattr(mp, "fallbacks_allowed", ""),
-                             getattr(cp, "start_on_asr_ready", ""),
-                             getattr(cp, "start_on_turn_ready", ""),
-                             getattr(cp, "timeslice_ms", ""),
-                             getattr(cp, "mask_during_tts", ""),
-                             getattr(cp, "mask_keepalive_enable", ""),
-                             getattr(cp, "mask_keepalive_ms", ""),
-                         ),
-                     }
-                 )
-             open_event = {"type": EVT_ASR_OPEN, "sid": sid, "vendor": "deepgram"}
-             if stream_id:
-                 open_event["stream_id"] = stream_id
-             self._bus.publish(open_event)
-+            stream_id_value = stream_id if isinstance(stream_id, str) and stream_id else ""
-+            if not stream_id_value and isinstance(state.stream_id, str) and state.stream_id:
-+                stream_id_value = state.stream_id
-             _log.info(
--                "evt=asr_session_open sid=%s content_type=%s qs=%s",
-+                "evt=asr_open sid=%s stream_id=%s vendor=deepgram qs=%s",
-                 sid,
--                "(not set)",
-+                stream_id_value,
-                 qs or "",
-             )
--            stream_id_value = stream_id if isinstance(stream_id, str) and stream_id else ""
--            if not stream_id_value and isinstance(state.stream_id, str) and state.stream_id:
--                stream_id_value = state.stream_id
-             ready_kwargs = {
-                 "sid": sid,
-                 "vendor": "deepgram",
-                 "stream_id": stream_id_value,
-             }
-             emit = getattr(self._bus, "emit", None)
-             if callable(emit):
-                 try:
-                     emit(EVT_ASR_READY, **ready_kwargs)
-                 except TypeError:
-                     emit(EVT_ASR_READY, ready_kwargs)
-             ready_event = {"type": EVT_ASR_READY, **ready_kwargs}
-             self._bus.publish(ready_event)
-             _log.info(
-                 "evt=asr_ready sid=%s vendor=deepgram stream_id=%s",
-                 sid,
-                 stream_id_value,
-             )
-             self._log_asr_rearmed(sid, state)
- 
-             asr_ready_frame = {
-                 "type": "asr.ready",
-                 "vendor": "deepgram",
-                 "input": dict(state.input_desc),
-             }
-@@ -779,51 +890,54 @@ class ASRRuntime:
-             while state.pending:
-                 chunk = state.pending.popleft()
-                 chunk_len = len(chunk)
-                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
-                 self._forward_chunk(sid, state, chunk)
-             if state.chunks_sent == pre_chunks_sent:
-                 self._start_ready_watchdog(sid, state)
-             else:
-                 self._cancel_ready_watchdog(state)
-             state.stream_open_task = None
-             self._reset_idle_timer(sid, state)
- 
-         def _on_done(_task: asyncio.Task[None]) -> None:
-             if state.stream_open_task is _task:
-                 state.stream_open_task = None
- 
-         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
-         state.stream_open_task.add_done_callback(_on_done)
- 
-     def _forward_chunk(self, sid: str, state: _SessionState, chunk: bytes) -> None:
-         if not chunk:
-             return
-         chunk_len = len(chunk)
-         state.chunks_sent += 1
-         state.bytes_sent += chunk_len
-+        stream_id = state.stream_id or state.last_stream_id or ""
-+        _log.info("evt=asr_chunk sid=%s stream_id=%s bytes=%d", sid, stream_id, chunk_len)
-         self._client.send_audio(sid, chunk)
-+        state.bytes_received += chunk_len
- 
-     def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
-         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
-             self._on_partial(sid, text, metadata or {})
- 
-         return _callback
- 
-     def _make_final_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
-         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
-             self._on_final(sid, text, metadata or {})
- 
-         return _callback
- 
-     def _make_error_cb(self, sid: str) -> Callable[[str], None]:
-         def _callback(error: str) -> None:
-             self._on_error(sid, error)
- 
-         return _callback
- 
-     def _make_close_cb(self, sid: str, state: _SessionState) -> Callable[[int | None, str | None], None]:
-         def _callback(_code: int | None, _reason: str | None) -> None:
-             stream_id = state.stream_id
-             if not stream_id:
-                 return
-             reason = state.close_reason
-@@ -836,50 +950,51 @@ class ASRRuntime:
-                 stream_id,
-                 reason,
-             )
-             if (
-                 not state.unavailable_emitted
-                 and (
-                     _code == 1011
-                     or (_reason and "net0001" in str(_reason).lower())
-                 )
-             ):
-                 detail = "Deepgram closed stream"
-                 if _code is not None:
-                     detail += f" code={_code}"
-                 if _reason:
-                     detail += f" reason={_reason}"
-                 self._publish_asr_unavailable(
-                     sid,
-                     "upstream_closed",
-                     detail,
-                     state=state,
-                 )
-             state.stream_id = None
-             state.close_reason = None
-             state.stream_open = False
-             state.req_id = None
-+            state.bytes_received = 0
- 
-         return _callback
- 
-     def _on_partial(
-         self, sid: str, text: str, metadata: Dict[str, object] | None = None
-     ) -> None:
-         if not isinstance(text, str) or not text.strip():
-             return
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
- 
-         metadata = metadata or {}
-         if state.stream_id is None:
-             meta_stream = metadata.get("stream_id")
-             if isinstance(meta_stream, str) and meta_stream:
-                 state.stream_id = meta_stream
-         stream_id = state.stream_id or ""
-         if not stream_id:
-             stream_id = f"dg-stream-{uuid.uuid4().hex}"
-             state.stream_id = stream_id
-         state.last_stream_id = stream_id
-         state.dg_msgs_partial += 1
-         raw_len = metadata.get("len_chars")
-@@ -1210,55 +1325,57 @@ class ASRRuntime:
-             else self._idle_close_ms
-         )
-         stream_id = state.stream_id or state.last_stream_id or ""
-         if close_for_prearm:
-             _log.warning(
-                 "evt=asr_prearm_idle sid=%s stream_id=%s idle_ms=%d action=close",
-                 sid,
-                 stream_id,
-                 idle_ms,
-             )
-         else:
-             _log.info(
-                 "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
-                 sid,
-                 stream_id,
-                 idle_ms,
-             )
-         try:
-             self._client.close_stream(sid)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_idle_close_failed sid=%s", sid)
-         state.stream_open = False
-         state.last_stream_id = stream_id or state.last_stream_id
-         state.stream_id = None
-         state.req_id = None
-+        state.bytes_received = 0
- 
-     # Optional idle guard
-     def close_idle_streams(self) -> None:
-         if self._loop is None:
-             return
-         now = time.monotonic()
-         threshold = self._idle_close_ms / 1000.0
-         for sid, state in list(self._sessions.items()):
-             if not state.stream_open:
-                 continue
-             if threshold <= 0:
-                 continue
-             if state.last_audio_ts and now - state.last_audio_ts >= threshold:
-                 state.close_reason = "idle_timeout"
-                 try:
-                     stream_id = state.stream_id or state.last_stream_id or ""
-                     idle_ms = int(max(0.0, (now - state.last_audio_ts) * 1000))
-                     _log.info(
-                         "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
-                         sid,
-                         stream_id,
-                         idle_ms,
-                     )
-                     self._client.close_stream(sid)
-                 except Exception:  # pragma: no cover - defensive
-                     _log.exception("evt=asr_idle_close_failed sid=%s", sid)
-                 state.stream_open = False
-                 state.last_stream_id = state.stream_id or state.last_stream_id
-                 state.stream_id = None
-                 state.req_id = None
-+                state.bytes_received = 0
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index a84859680fff648a30585118937a66bf5e53b37f..c4473d09c701e25ddd34b9fccb52ae3d09636719 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1620,74 +1620,73 @@ class ChatV2Adapter:
-                 payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
-                 reason = event.get("reason")
-                 if isinstance(reason, str) and reason:
-                     payload["reason"] = reason
-                 details = event.get("details")
-                 if details is not None:
-                     payload["details"] = details if isinstance(details, str) else str(details)
-                 _enqueue(payload)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.asr_unavailable_subscription_token = bus.subscribe(
-             "asr.unavailable", _handle_asr_unavailable_event
-         )
- 
-         async def _perform_listen_handoff(req_id: str) -> None:
-             key = self._turn_key(ctx, req_id)
-             runtime = getattr(self, "asr_runtime", None)
-             if runtime is None:
-                 self._clear_pending_for_key(ctx, key)
-                 return
-             open_if_needed = getattr(runtime, "open_if_needed", None)
--            should_wait_for_ready = True
--            if callable(open_if_needed):
--                try:
--                    await open_if_needed(ctx.sid, req_id=req_id)
--                except asyncio.CancelledError:
--                    self._clear_pending_for_key(ctx, key)
--                    raise
--                except Exception:  # pragma: no cover - defensive logging
--                    self._clear_pending_for_key(ctx, key)
--                    _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
--                    return
--            else:
--                should_wait_for_ready = False
-+            should_wait_for_ready = callable(open_if_needed)
- 
-             if ctx.tts_mask_phase != "off":
-                 self._set_after_mask_for_key(ctx, key)
-                 self._clear_pending_for_key(ctx, key)
-                 _log.info(
-                     "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
-                     ctx.sid,
-                     req_id,
-                 )
-                 return
- 
-+            if callable(open_if_needed):
-+                try:
-+                    await open_if_needed(ctx.sid, req_id=req_id)
-+                except asyncio.CancelledError:
-+                    self._clear_pending_for_key(ctx, key)
-+                    raise
-+                except Exception:  # pragma: no cover - defensive logging
-+                    self._clear_pending_for_key(ctx, key)
-+                    _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
-+                    return
-+
-             if should_wait_for_ready:
-                 deadline = time.monotonic() + 1.0
-                 while not ctx.asr_ready and time.monotonic() < deadline:
-                     if ctx.tts_mask_phase != "off":
-                         self._set_after_mask_for_key(ctx, key)
-                         self._clear_pending_for_key(ctx, key)
-                         _log.info(
-                             "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
-                             ctx.sid,
-                             req_id,
-                         )
-                         return
-                     await asyncio.sleep(0.01)
- 
-                 if not ctx.asr_ready:
-                     _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
- 
-             if ctx.outbox is None:
-                 self._clear_pending_for_key(ctx, key)
-                 return
- 
-             if ctx.tts_mask_phase != "off":
-                 self._set_after_mask_for_key(ctx, key)
-                 self._clear_pending_for_key(ctx, key)
-                 _log.info(
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading WSClient");
+   }
+   const P0 = AppState.policy || {};
+   AppState.policy = {
+     ...P0,
+     auto_record_after_greet: P0.auto_record_after_greet ?? true,
+     require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? true,
+     tts_gate_enabled: P0.tts_gate_enabled ?? true,
+     autostart_retry_on: Array.isArray(P0.autostart_retry_on)
+       ? P0.autostart_retry_on.slice()
+       : ["asrReady", "ttsEnded", "turnState:Ready"],

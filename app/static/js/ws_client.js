@@ -1,10 +1,6 @@
 import { WakeWord } from "./wake_word.js";
 
-/**
- * POLICY: MediaRecorder may ONLY be instantiated in app/static/js/audio_recorder.js.
- * AudioRecorder is the single owner of the mic and the send-gate.
- * No manual or VAD-based barge-in; wake-word only.
- */
+/** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
 (() => {
   const HEARTBEAT_INTERVAL_MS = 20000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";

@@ -1,5 +1,6 @@
 import { WakeWord } from "./wake_word.js";
 
+/** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
 (() => {
   const SEND_TIMESLICE_MS = 300;
   const OPUS_MIME = "audio/webm;codecs=opus";
@@ -138,11 +139,9 @@ import { WakeWord } from "./wake_word.js";
     }
 
     async startMicCaptureIfIdle(policy = {}) {
-      return this.startListening(policy);
-    }
-
-    async handleStartListening(policy = {}) {
-      return this.startListening(policy);
+      this.setPolicy(policy);
+      await this._ensureArmed();
+      return true;
     }
 
     async startListening(policy = {}) {
