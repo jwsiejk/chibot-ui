@@ -95,12 +95,21 @@ import { WakeWord } from "./wake_word.js";
   ensureClientBannerState();
 
   WakeWord.onHotword(() => {
-    let snapshot = {};
+    let state = null;
     try {
-      snapshot = getAutostartSnapshot();
+      if (typeof AppState?.get === "function") {
+        state = AppState.get();
+      }
     } catch {}
-    const ttsActive = snapshot.ttsActive === true || Boolean(AppState.ttsActive);
-    if (!ttsActive) {
+    if (!state && typeof AppState?.getState === "function") {
+      try {
+        state = AppState.getState();
+      } catch {}
+    }
+    const turnState = typeof state?.turnState === "string"
+      ? state.turnState
+      : (typeof AppState?.turnState === "string" ? AppState.turnState : null);
+    if (turnState !== "tts") {
       return;
     }
     try {

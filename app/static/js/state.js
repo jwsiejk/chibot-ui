@@ -76,6 +76,7 @@
   }
 
   window.AppState = {
+    get: snapshot,
     getState: snapshot,
     setState,
     reset,

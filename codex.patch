@@ -1,60 +1,116 @@
+diff --git a/app/static/js/state.js b/app/static/js/state.js
+index e1469415c5883d600f0532394758d97021609f00..d2687642916820902d2de526b2172f0e22002039 100644
+--- a/app/static/js/state.js
++++ b/app/static/js/state.js
+@@ -54,36 +54,37 @@
+ 
+   function clearResume() {
+     if (state.resume !== null || state.resumeError !== null) {
+       state = { ...state, resume: null, resumeError: null };
+       notify();
+     }
+   }
+ 
+   function reset() {
+     state = { ...initialState };
+     notify();
+   }
+ 
+   function subscribe(listener) {
+     if (typeof listener !== "function") {
+       throw new TypeError("listener must be a function");
+     }
+     listeners.add(listener);
+     listener(snapshot());
+     return () => {
+       listeners.delete(listener);
+     };
+   }
+ 
+   window.AppState = {
++    get: snapshot,
+     getState: snapshot,
+     setState,
+     reset,
+     subscribe,
+     setResume,
+     clearResume,
+     get initialState() {
+       return { ...initialState };
+     }
+   };
+ })();
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 3c25ab8d4b19930d3e5e0f1870f4de79b7225592..702ad75c1a916f7c11bccbff17e0e461894b2145 100644
+index 702ad75c1a916f7c11bccbff17e0e461894b2145..22154afe794fb588cd1f6c1e4376cc69e33233b8 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -1477,50 +1477,55 @@ import { WakeWord } from "./wake_word.js";
-     }
+@@ -73,56 +73,65 @@ import { WakeWord } from "./wake_word.js";
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
+   let infoWatchdogTimerId = null;
+   let lastPingAt = null;
+   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
+   let autoResumeAttemptToken = null;
+   let toastRoot = null;
+   let lastTokenValue = null;
+   let lastTokenMintedAt = null;
  
-     if (expectInfoFrame) {
-       if (frame.type === "chat.history") {
-         handleChatHistoryFrame(frame);
-       } else if (frame.type === "error") {
-         handleErrorFrame(frame);
-         return;
-       } else if (frame.type !== "info") {
-         console.error("Expected info frame first, received", frame.type);
-         close("bad_info_sequence");
-         return;
-       }
-       if (frame.type === "info") {
-         handleInfoFrame(frame);
-       }
-     } else if (frame.type === "info") {
-       handleInfoFrame(frame);
-     } else if (frame.type === "server.pong") {
-       handlePongFrame(frame);
-     } else if (frame.type === "pong") {
-       handlePongFrame(frame);
-     } else if (frame.type === "error") {
-       handleErrorFrame(frame);
-     } else if (frame.type === "tts.start") {
-+      if (USE_AUDIORECORDER) {
-+        try {
-+          window.AudioRecorder?.stopListening?.({ reason: "tts" });
-+        } catch {}
+   const CLIENT_BANNER_TYPE = "client.banner";
+   const CLIENT_BANNER_MAX_HISTORY = 24;
+   const CLIENT_BANNER_MAX_QUEUE = 24;
+   const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
+   const CLIENT_BANNER_STRING_MAX = 240;
+ 
+   let clientBannerQueue = [];
+ 
+   // Initialize the client banner state only after related constants are defined.
+   ensureClientBannerState();
+ 
+   WakeWord.onHotword(() => {
+-    let snapshot = {};
++    let state = null;
+     try {
+-      snapshot = getAutostartSnapshot();
++      if (typeof AppState?.get === "function") {
++        state = AppState.get();
 +      }
-       AppState.ttsActive = true;
-       updateState({ ttsActive: true });
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: true });
-       }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
-         audioPlayer.handleTtsStart(frame);
-       }
-     } else if (frame.type === "tts.end") {
-       AppState.ttsActive = false;
-       updateState({ ttsActive: false });
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: false });
-       }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
-         audioPlayer.handleTtsEnd(frame);
-       }
-     } else if (frame.type === "start_listening") {
-       if (USE_AUDIORECORDER) {
+     } catch {}
+-    const ttsActive = snapshot.ttsActive === true || Boolean(AppState.ttsActive);
+-    if (!ttsActive) {
++    if (!state && typeof AppState?.getState === "function") {
++      try {
++        state = AppState.getState();
++      } catch {}
++    }
++    const turnState = typeof state?.turnState === "string"
++      ? state.turnState
++      : (typeof AppState?.turnState === "string" ? AppState.turnState : null);
++    if (turnState !== "tts") {
+       return;
+     }
+     try {
+       const activeSocket = (socket && socket.readyState === WebSocket.OPEN)
+         ? socket
+         : (window.ws && window.ws.readyState === WebSocket.OPEN ? window.ws : null);
+       if (activeSocket) {
          try {
-           window.AudioRecorder?.startListening?.(frame?.policy || {});
-         } catch (err) {
-           console.warn("AudioRecorder start_listening handler error", err);
+           activeSocket.send(JSON.stringify({ type: "tts.pause" }));
+         } catch {}
+       }
+     } catch {}
+     try {
+       window.AudioRecorder?.startListening?.({ reason: "wake_word" });
+     } catch {}
+   });
+ 
+   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
+   const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture"]);
+ 
+   let gestureListenerCleanup = null;
+ 
+   function createEventEmitter() {
+     const registry = new Map();
+     return {
