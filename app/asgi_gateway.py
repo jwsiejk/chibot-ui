@@ -1,6 +1,7 @@
 """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -80,6 +81,8 @@ HEALTH_ROUTE = "/api/v1/health"
 LIVE_ROUTE = "/api/v1/live"
 READY_ROUTE = "/api/v1/ready"
 INFO_ROUTE = "/api/v1/info"
+HEALTHZ_ROUTE = "/healthz"
+DIAG_DB_ROUTE = "/diag/db"
 WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
 LOGIN_ROUTE = "/api/v1/auth/login"
 ME_ROUTE = "/api/v1/auth/me"
@@ -116,6 +119,7 @@ HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response
 
 _adapter: Optional[ChatV2Adapter] = None
 _lifespan_started = False
+_warmup_task: Optional[asyncio.Task[Any]] = None
 
 
 def _ws_route_matches(scope: dict, expected: str) -> bool:
@@ -191,6 +195,37 @@ async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) ->
 
     await _drain_request_body(receive)
     return json_response(ok=True, engine="v2", ws_subprotocol=CHAT_V2_SUBPROTOCOL)
+
+
+async def _handle_healthz(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+    if not _method_is_get(scope):
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+    status = neon.db_status()
+    state = status.get("state", "init")
+    if state == "ready":
+        summary = "ready"
+    elif state == "error":
+        summary = "error"
+    elif state in {"connecting", "retrying"}:
+        summary = "warming"
+    else:
+        summary = "warming"
+    _log.info("evt=healthz state=%s", state)
+    return json_response(db=summary)
+
+
+async def _handle_diag_db(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+    if not _method_is_get(scope):
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+    status = neon.db_status()
+    _log.info("evt=diag_db state=%s", status.get("state"))
+    return json_response(**status)
 
 
 async def _handle_live(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
@@ -801,6 +836,8 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     ADMIN_CONFIG_ROUTE: _handle_admin_config,
     FAVICON_ROUTE: _handle_favicon,
     HEALTH_ROUTE: _handle_health,
+    HEALTHZ_ROUTE: _handle_healthz,
+    DIAG_DB_ROUTE: _handle_diag_db,
     LIVE_ROUTE: _handle_live,
     READY_ROUTE: _handle_ready,
     INFO_ROUTE: _handle_info,
@@ -836,6 +873,7 @@ async def _handle_lifespan(
     send: Callable[[dict], Awaitable[None]],
 ) -> None:
     global _lifespan_started
+    global _warmup_task
 
     while True:
         message = await receive()
@@ -843,12 +881,7 @@ async def _handle_lifespan(
 
         if message_type == "lifespan.startup":
             if not _lifespan_started:
-                try:
-                    await neon.init_schema()
-                except Exception:
-                    _log.exception("evt=lifespan_startup_failed")
-                    await send({"type": "lifespan.startup.failed", "message": "init_schema"})
-                    raise
+                _warmup_task = asyncio.create_task(neon.warmup_neon())
                 _lifespan_started = True
             await send({"type": "lifespan.startup.complete"})
         elif message_type == "lifespan.shutdown":
