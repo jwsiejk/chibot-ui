@@ -2118,8 +2118,9 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function send(payload, { binary = false } = {}) {
-    if (!Array.isArray(this._queue)) {
-      this._queue = [];
+    const client = (this && typeof this === "object") ? this : WSClient;
+    if (!Array.isArray(client._queue)) {
+      client._queue = [];
     }
     let stateSocket = null;
     if (typeof AppState !== "undefined" && AppState) {
@@ -2131,14 +2132,14 @@ import { WakeWord } from "./wake_word.js";
         } catch {}
       }
     }
-    const live = this._ws || stateSocket;
+    const live = client._ws || stateSocket;
     if (!live || live.readyState !== WebSocket.OPEN) {
-      this._queue.push({ data: payload, isBinary: !!binary });
+      client._queue.push({ data: payload, isBinary: !!binary });
       console.warn("WSClient.send queued (socket not open)");
       return;
     }
-    this._ws = live;
-    this._connected = true;
+    client._ws = live;
+    client._connected = true;
     try { live.binaryType = "arraybuffer"; } catch {}
     if (binary) {
       if (payload instanceof Blob) {
