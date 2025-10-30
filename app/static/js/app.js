@@ -429,114 +429,8 @@
     return stream;
   }
 
-  function attachRecorder(stream, onChunk) {
-    if (!stream) {
-      throw new Error("MediaStream required");
-    }
-    if (typeof MediaRecorder === "undefined") {
-      throw new Error("MediaRecorder unsupported");
-    }
-    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
-    let sentBytes = 0;
-    let chunkCount = 0;
-    const sampleEvery = Math.max(1, diagChunkSampleN());
-    recorder.addEventListener("start", () => {
-      if (typeof logClient === 'function') {
-        logClient('client.mic', 'evt=recorder_started');
-      }
-      if (diagHudEnabled()) {
-        const ts = Date.now();
-        console.info("DIAG_RECORDER_STARTED", ts);
-        const badge = "rec:start";
-        setBadge(badge);
-        sendDiagHudEvent(
-          "EVT_CLIENT_RECORDER_STARTED",
-          { timestamp: ts },
-          { level: "info", badge, message: "Recorder started" }
-        );
-      }
-    });
-    recorder.addEventListener("dataavailable", (event) => {
-      const blob = event && event.data;
-      if (!blob || !blob.size) {
-        return;
-      }
-      chunkCount += 1;
-      const bytes = blob.size;
-      const shouldSample = chunkCount % sampleEvery === 0;
-      if (typeof logClient === 'function') {
-        logClient('client.mic', `evt=mic_chunk bytes=${bytes}`);
-      }
-      if (diagHudEnabled() && shouldSample) {
-        console.debug("DIAG_CHUNK", { size: bytes, chunkCount });
-        const badge = `chunks:${chunkCount}`;
-        setBadge(badge);
-        sendDiagHudEvent(
-          "EVT_CLIENT_CHUNK_SAMPLE",
-          { size: bytes, chunkCount },
-          { level: "debug", badge, sample: true, message: "Sampled recorder chunk" }
-        );
-      }
-      let sendError = null;
-      try {
-        const maybeSend = sendAudioChunk(blob);
-        if (maybeSend && typeof maybeSend.then === 'function') {
-          maybeSend.catch((err) => {
-            sendError = err;
-            if (diagHudEnabled()) {
-              console.warn("DIAG_CHUNK_SEND_ERROR", err);
-              sendDiagHudEvent("EVT_CLIENT_CHUNK_ERROR", { message: err && err.message }, {
-                level: "warn",
-                message: "Failed to send chunk"
-              });
-            }
-          });
-        }
-      } catch (err) {
-        sendError = err;
-        if (diagHudEnabled()) {
-          console.warn("DIAG_CHUNK_SEND_ERROR", err);
-          sendDiagHudEvent("EVT_CLIENT_CHUNK_ERROR", { message: err && err.message }, {
-            level: "warn",
-            message: "Failed to send chunk"
-          });
-        }
-      }
-      if (typeof onChunk === 'function') {
-        try {
-          const result = onChunk(blob);
-          if (result && typeof result.then === 'function') {
-            result.catch((err) => {
-              if (diagHudEnabled()) {
-                console.warn("DIAG_CHUNK_HANDLER_ERROR", err);
-                sendDiagHudEvent("EVT_CLIENT_CHUNK_ERROR", { message: err && err.message }, {
-                  level: "warn",
-                  message: "Chunk handler rejected"
-                });
-              }
-            });
-          }
-        } catch (err) {
-          if (diagHudEnabled()) {
-            console.warn("DIAG_CHUNK_HANDLER_ERROR", err);
-            sendDiagHudEvent("EVT_CLIENT_CHUNK_ERROR", { message: err && err.message }, {
-              level: "warn",
-              message: "Chunk handler failed"
-            });
-          }
-        }
-      }
-      sentBytes += bytes;
-      if (!sendError && diagHudEnabled() && shouldSample) {
-        console.debug("DIAG_WS_BIN_SENT", { chunkCount, sentBytes });
-        sendDiagHudEvent(
-          "EVT_CLIENT_WS_BINARY_SENT",
-          { chunkCount, sentBytes },
-          { level: "debug", sample: true, message: "Sampled binary chunk sent" }
-        );
-      }
-    });
-    return recorder;
+  function attachRecorder() {
+    throw new Error('media_recorder_disabled_by_policy');
   }
 
   function sendAudioChunk(chunkBlobOrBuf) {
@@ -765,11 +659,11 @@
     if (!window.AudioPlayer) {
       await loadScript("audio_player.js");
     }
-    if (!window.WSClient) {
-      await loadScript("ws_client.js");
-    }
     if (!window.AudioRecorder) {
       await loadScript("audio_recorder.js");
+    }
+    if (!window.WSClient) {
+      await loadScript("ws_client.js");
     }
     if (!window.PolicyBadges) {
       await loadScript("policy_badges.js");
@@ -1470,7 +1364,27 @@
     const localeLabel = document.getElementById('localeLabel');
     const textChatForm = document.getElementById('textChatForm');
     const textChatInput = document.getElementById('textChatInput');
-    
+
+    const manualStopSelectors = ['[data-role="stop-button"]', '[data-action="stop-tts"]', '#stopBtn', '#stopButton'];
+    const manualStopButtons = [];
+    for (const selector of manualStopSelectors) {
+      manualStopButtons.push(...document.querySelectorAll(selector));
+    }
+    const boundManualStops = new Set();
+    manualStopButtons.forEach((btn) => {
+      if (!(btn instanceof HTMLElement) || boundManualStops.has(btn)) {
+        return;
+      }
+      boundManualStops.add(btn);
+      btn.addEventListener('click', (event) => {
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        sendManualInterrupt('manual_stop_button');
+      });
+    });
+
     // Chat submit wiring
     // Send typed chat to the server using chat.user frames
     if (textChatForm) {
@@ -1655,6 +1569,28 @@
       return false;
     }
 
+    function sendManualInterrupt(reason = 'manual_interrupt') {
+      const ws = window.ws;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({ type: 'tts.pause' }));
+        } catch (err) {
+          console.warn('Failed to send tts.pause frame', err);
+        }
+      } else {
+        console.warn('Skipping tts.pause; websocket unavailable');
+      }
+      try {
+        window.AudioRecorder?.startListening?.({ reason });
+      } catch (err) {
+        console.warn('AudioRecorder manual interrupt failed', err);
+      }
+      const audioPlayer = window.AudioPlayer;
+      if (audioPlayer && typeof audioPlayer.interrupt === 'function') {
+        audioPlayer.interrupt();
+      }
+    }
+
     function handleGlobalKeyDown(event) {
       if (event.defaultPrevented) return;
       const { key, ctrlKey, metaKey, altKey } = event;
@@ -1689,10 +1625,8 @@
         if (isInteractiveTarget(event.target)) {
           return;
         }
-        const audioPlayer = window.AudioPlayer;
-        if (audioPlayer && typeof audioPlayer.interrupt === 'function') {
-          audioPlayer.interrupt();
-        }
+        event.preventDefault();
+        sendManualInterrupt();
         return;
       }
     }
