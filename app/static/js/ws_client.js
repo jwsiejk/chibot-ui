@@ -1499,6 +1499,11 @@ import { WakeWord } from "./wake_word.js";
     } else if (frame.type === "error") {
       handleErrorFrame(frame);
     } else if (frame.type === "tts.start") {
+      if (USE_AUDIORECORDER) {
+        try {
+          window.AudioRecorder?.stopListening?.({ reason: "tts" });
+        } catch {}
+      }
       AppState.ttsActive = true;
       updateState({ ttsActive: true });
       if (typeof AppState.emit === "function") {
