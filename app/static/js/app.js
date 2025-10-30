@@ -137,6 +137,7 @@
       }
       const el = document.createElement("script");
       el.src = resolvedSrc;
+      el.type = "module";
       el.async = false;
       el.dataset.dynamic = resolvedSrc;
       el.addEventListener("load", () => {

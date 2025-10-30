@@ -1,641 +1,269 @@
+diff --git a/README.md b/README.md
+index c017107e6e5462f2f5c94ea0ecc7bc7553856cb8..2be2bc3fd39960e8fddc25ae3ee800d299d8d42d 100644
+--- a/README.md
++++ b/README.md
+@@ -1,7 +1,13 @@
+ # Chibot UI
+ 
+ This project contains the web client for the AskChip experience.
+ 
+ ## Recorder Policy
+ 
+-POLICY: Do not instantiate MediaRecorder outside app/static/js/audio_recorder.js.
++```
++/**
++ * POLICY: MediaRecorder may ONLY be instantiated in app/static/js/audio_recorder.js.
++ * AudioRecorder is the single owner of the mic and the send-gate.
++ * No manual or VAD-based barge-in; wake-word only.
++ */
++```
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 57acefd07e4c2a0341be0cf6d52520712d0c107b..8870f0662a3b4f6dad98d0e7d28297abe9da5d9b 100644
+index 8870f0662a3b4f6dad98d0e7d28297abe9da5d9b..1260e6c42c5d389fbf84d22995e4ba0f2f53baa5 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -48,50 +48,52 @@
+@@ -115,50 +115,51 @@
+       return appendVersionQuery(src);
      }
  
-     return "/static/js/";
-   })();
+     const normalized = src.replace(/^\.\//, "");
+     const base = STATIC_JS_BASE.replace(/\/?$/, "/");
+     const joined = `${base}${normalized}`;
  
-   const VERSION_QUERY = (() => {
-     if (typeof document === "undefined") {
-       return "";
-     }
-     try {
-       const current =
-         document.currentScript ||
-         document.querySelector('script[src*="/static/js/app.js"]') ||
-         null;
-       if (!current || !current.src) {
-         return "";
-       }
-       const url = new URL(current.src, window.location.href);
-       return url.search || "";
-     } catch (err) {
-       console.warn("Failed to derive version query", err);
-       return "";
-     }
-   })();
- 
-+  const WAKE_WORD_ONLY = true;
-+
-   function isSameOrigin(url) {
-     try {
-       if (!/^(?:[a-z]+:)?\/\//i.test(url)) {
-         return true;
-       }
-       const parsed = new URL(url, window.location.href);
-       return parsed.origin === window.location.origin;
-     } catch (err) {
-       return false;
-     }
+     return appendVersionQuery(joined);
    }
  
-   function isSpecialScheme(url) {
-     return /^(data:|blob:)/i.test(url);
-   }
- 
-   function appendVersionQuery(url) {
-     if (!VERSION_QUERY || typeof url !== "string" || url.includes("?")) {
-       return url;
-     }
-     const hashIndex = url.indexOf("#");
-     if (hashIndex === -1) {
-       return `${url}${VERSION_QUERY}`;
-     }
-     return `${url.slice(0, hashIndex)}${VERSION_QUERY}${url.slice(hashIndex)}`;
-@@ -996,50 +998,58 @@
-         const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
-           ? runtimeState.turnState.slice(0, 32)
-           : null;
-         const gates = {
-           asrReady: Boolean(runtimeState.asrReady),
-           turnState: rawTurnState,
-           micPerm: Boolean(runtimeState.micPermissionGranted),
-           recording: Boolean(runtimeState.isRecording),
-         };
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
-         return;
-       }
- 
-       const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
-       const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
-       const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
-         ? runtimeState.turnState.slice(0, 32)
-         : null;
-       const gates = {
-         asrReady: Boolean(runtimeState.asrReady),
-         turnState: rawTurnState,
-         micPerm: Boolean(runtimeState.micPermissionGranted),
-         recording: Boolean(runtimeState.isRecording),
-       };
- 
-+      if (WAKE_WORD_ONLY) {
-+        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-+          blockedBy: 'wake_word_only',
-+          audioIdle: runtimeState.audioPlaybackIdle,
-+        });
-+        return;
-+      }
-+
-       if (runtimeState.isRecording) {
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'recording',
-           audioIdle: runtimeState.audioPlaybackIdle,
-         });
-         return;
-       }
-       if (!runtimeState.micPermissionGranted) {
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'mic_permission',
-           audioIdle: runtimeState.audioPlaybackIdle,
-         });
-         return;
-       }
-       if (!runtimeState.asrReady) {
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'asr_ready',
-           audioIdle: runtimeState.audioPlaybackIdle,
-         });
-         return;
-       }
-       if (wantsTurnReady && !runtimeState.audioPlaybackIdle) {
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'audio_playback',
-           audioIdle: runtimeState.audioPlaybackIdle,
-@@ -1343,70 +1353,50 @@
-     });
-     document.getElementById('logoutItem').addEventListener('click', () => {
-       alert("Logging out… (placeholder)"); closeMenu();
-     });    
- 
-     // --- Chat toggle ---
-     const openChatBtn = document.getElementById('openChatBtn');
-     const chatPanel = document.querySelector('.chat');
-     openChatBtn.addEventListener('click', () => {
-       const hidden = chatPanel.classList.toggle('hidden');
-       openChatBtn.setAttribute('aria-pressed', String(!hidden));
-     });
- 
-     // --- Start/End button wiring ---
-     const startBtn = document.getElementById('startBtn');
-     const endBtn = document.getElementById('endBtn');
-     const sidText = document.getElementById('sid-text');
-     const connLabel = document.getElementById('connLabel');
-     const statusDot = document.querySelector('.status-dot');
-     const latencyHint = document.getElementById('latencyHint');
-     const voiceLabel = document.getElementById('voiceLabel');
-     const localeLabel = document.getElementById('localeLabel');
-     const textChatForm = document.getElementById('textChatForm');
-     const textChatInput = document.getElementById('textChatInput');
- 
--    const manualStopSelectors = ['[data-role="stop-button"]', '[data-action="stop-tts"]', '#stopBtn', '#stopButton'];
--    const manualStopButtons = [];
--    for (const selector of manualStopSelectors) {
--      manualStopButtons.push(...document.querySelectorAll(selector));
--    }
--    const boundManualStops = new Set();
--    manualStopButtons.forEach((btn) => {
--      if (!(btn instanceof HTMLElement) || boundManualStops.has(btn)) {
--        return;
--      }
--      boundManualStops.add(btn);
--      btn.addEventListener('click', (event) => {
--        if (event) {
--          event.preventDefault();
--          event.stopPropagation();
--        }
--        sendManualInterrupt('manual_stop_button');
--      });
--    });
--
-     // Chat submit wiring
-     // Send typed chat to the server using chat.user frames
-     if (textChatForm) {
-       textChatForm.addEventListener('submit', (e) => {
-         e.preventDefault();
-         const text = (textChatInput && textChatInput.value || '').trim();
-         if (!text) return;
-         try {
-           WSClient && WSClient.send && WSClient.send({ type: 'chat.user', text });
-           textChatInput.value = '';
-         } catch (err) {
-           console.error('chat.user send failed', err);
+   function loadScript(src) {
+     const resolvedSrc = resolveScriptSrc(src);
+     return new Promise((resolve, reject) => {
+       const existing = document.querySelector(`script[data-dynamic="${resolvedSrc}"]`);
+       if (existing) {
+         if (existing.dataset.loaded === "true") {
+           resolve();
+         } else {
+           existing.addEventListener("load", resolve, { once: true });
+           existing.addEventListener("error", reject, { once: true });
          }
+         return;
+       }
+       const el = document.createElement("script");
+       el.src = resolvedSrc;
++      el.type = "module";
+       el.async = false;
+       el.dataset.dynamic = resolvedSrc;
+       el.addEventListener("load", () => {
+         el.dataset.loaded = "true";
+         resolve();
+       }, { once: true });
+       el.addEventListener("error", reject, { once: true });
+       document.head.appendChild(el);
+     });
+   }
+ 
+   async function bootstrapClientConfig() {
+     if (typeof window === "undefined") {
+       return {};
+     }
+     const existing = window.__CFG__ && typeof window.__CFG__ === "object"
+       ? window.__CFG__
+       : {};
+     let merged = existing;
+     try {
+       const response = await fetch("/api/v1/admin/config", {
+         method: "GET",
+         credentials: "include"
        });
+       if (response && response.ok) {
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index 90da380fc45017f4450f0cfae49050505ec7947d..e7fbb3c5753deec0d692d380eee887439d5133ce 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -1,74 +1,83 @@
++import { WakeWord } from "./wake_word.js";
++
+ (() => {
+   const SEND_TIMESLICE_MS = 300;
+   const OPUS_MIME = "audio/webm;codecs=opus";
+   const CLIENT_MIC_OPEN_EVENT = "EVT_CLIENT_MIC_OPEN";
+   const CLIENT_HUD_STATE_EVENT = "EVT_HUD_STATE";
+ 
+   function emitEvent(type, detail) {
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail }));
+     } catch (err) {
+       console.warn("AudioRecorder event dispatch failed", type, err);
      }
-     
+   }
  
-     const voiceState = { voiceId: null, locale: null };
- 
-     const modeSuggestionsEl = document.getElementById('modeSuggestions');
-     const modeSuggestionsLabelEl = document.getElementById('modeSuggestionsLabel');
-     const modeSuggestionsChipsEl = document.getElementById('modeSuggestionsChips');
-     const modeSuggestionsState = { mode: null, items: [] };
- 
-     function formatModeLabel(value) {
-@@ -1547,108 +1537,84 @@
-     renderSuggestions();
- 
-     function isInteractiveTarget(target) {
-       if (!target || target === document.body || target === document.documentElement) {
-         return false;
-       }
-       if (target.isContentEditable) {
-         return true;
-       }
-       if (!(target instanceof HTMLElement)) {
-         return false;
-       }
-       const tag = target.tagName;
-       if (tag) {
-         const normalized = tag.toUpperCase();
-         if (normalized === 'INPUT' || normalized === 'TEXTAREA' || normalized === 'SELECT' || normalized === 'BUTTON') {
-           return true;
-         }
-       }
-       if (target.closest('input, textarea, select, button, a[href], [role="textbox"], [role="button"], [role="menuitem"]')) {
-         return true;
-       }
-       return false;
+   class AudioRecorder {
+     constructor(ws, appState) {
+       this._ws = ws || null;
+       this._state = appState || null;
+       this._stream = null;
+       this._rec = null;
+       this._sendGate = false;
+       this._policy = {};
+       this._micOpenEmitted = false;
+       this._active = false;
++      this._wakeInit = false;
      }
  
--    function sendManualInterrupt(reason = 'manual_interrupt') {
--      const ws = window.ws;
--      if (ws && ws.readyState === WebSocket.OPEN) {
--        try {
--          ws.send(JSON.stringify({ type: 'tts.pause' }));
--        } catch (err) {
--          console.warn('Failed to send tts.pause frame', err);
--        }
--      } else {
--        console.warn('Skipping tts.pause; websocket unavailable');
--      }
--      try {
--        window.AudioRecorder?.startListening?.({ reason });
--      } catch (err) {
--        console.warn('AudioRecorder manual interrupt failed', err);
--      }
--      const audioPlayer = window.AudioPlayer;
--      if (audioPlayer && typeof audioPlayer.interrupt === 'function') {
--        audioPlayer.interrupt();
--      }
--    }
--
-     function handleGlobalKeyDown(event) {
-       if (event.defaultPrevented) return;
-       const { key, ctrlKey, metaKey, altKey } = event;
-       const isModifier = ctrlKey || metaKey || altKey;
-       if (key === 'Enter' && !isModifier) {
-         if (isInteractiveTarget(event.target)) {
-           return;
-         }
-         if (textChatInput) {
-           const value = textChatInput.value || '';
-           if (value.trim()) {
-             event.preventDefault();
-             if (textChatForm && typeof textChatForm.requestSubmit === 'function') {
-               textChatForm.requestSubmit();
-             } else if (textChatForm) {
-               textChatForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-             }
-           } else {
-             event.preventDefault();
-             textChatInput.focus();
+     setSocket(ws) {
+       this._ws = ws || null;
+     }
+ 
+     setPolicy(policy) {
+       if (policy && typeof policy === "object") {
+         this._policy = policy;
+       } else {
+         this._policy = {};
+       }
+     }
+ 
+     get policy() {
+       return this._policy || {};
+     }
+ 
+     async _ensureArmed() {
+       if (!navigator?.mediaDevices?.getUserMedia) {
+         throw new Error("media_devices_unavailable");
+       }
+       if (!this._stream) {
+         this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+         console.info("diag=mic_armed");
++        if (!this._wakeInit) {
++          try {
++            WakeWord.init(this._stream);
++          } catch {}
++          this._wakeInit = true;
++        }
+       }
+       if (!window.MediaRecorder) {
+         throw new Error("media_recorder_unavailable");
+       }
+       if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(OPUS_MIME)) {
+         throw new Error("media_recorder_unsupported");
+       }
+       if (!this._rec) {
+         this._rec = new MediaRecorder(this._stream, { mimeType: OPUS_MIME });
+         this._rec.addEventListener("dataavailable", async (event) => {
+           if (!event?.data || event.data.size === 0) {
+             return;
            }
-         }
-         return;
-       }
-       if (key === 'Escape') {
-         if (brandMenu && brandMenu.classList.contains('open')) {
-           event.preventDefault();
-           closeMenu();
-           brandBtn.focus();
-           return;
-         }
-         if (isInteractiveTarget(event.target)) {
-           return;
-         }
--        event.preventDefault();
--        sendManualInterrupt();
-         return;
-       }
+           const buf = await event.data.arrayBuffer();
+           if (!buf || buf.byteLength === 0) {
+             return;
+           }
+           if (!this._sendGate) {
+             return;
+           }
+           const socket = this._ws;
+           if (!socket || socket.readyState !== WebSocket.OPEN) {
+             return;
+           }
+           try {
+@@ -168,47 +177,48 @@
+     handleTtsEnd() {
+       // No automatic restart; server will instruct when to resume.
      }
  
-     window.addEventListener('keydown', handleGlobalKeyDown, true);
- 
-     const showToastMessage = (() => {
-       let root = null;
-       const styleId = 'inline-toast-styles';
-       const styleText = '#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}';
-       function ensureRoot() {
-         root = root && root.isConnected ? root : document.getElementById('toast-root');
-         if (!root) {
-           root = document.createElement('div');
-           root.id = 'toast-root';
-           root.className = 'toast-container';
-           document.body.appendChild(root);
-         }
-         if (!document.getElementById(styleId)) {
-           document.head.appendChild(Object.assign(document.createElement('style'), { id: styleId, textContent: styleText }));
-         }
-         return root;
-       }
-       return (message) => {
-         if (!message) return;
-@@ -2295,62 +2261,53 @@ window.addEventListener('policy.snapshot', (event) => {
+     handleWsClose() {
+       this.endSession();
      }
-   } catch (err) {
-     console.warn('AudioRecorder setPolicy failed', err);
-   }
- });
  
- // Turn becomes Ready → hand control to user
- window.addEventListener('turn.state', (event) => {
-   const frame = (event && event.detail) || {};
-   const nextState = typeof frame.state === 'string'
-     ? frame.state
-     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
-   runtimeState.turnState = typeof nextState === 'string' ? nextState : null;
-   if (runtimeState.turnState !== 'Ready') return;
+     stop() {
+       this.endSession();
+     }
  
-   // Optional: why we became ready (e.g., 'tts')
-   const reason = typeof frame.reason === 'string'
-     ? frame.reason
-     : (frame.meta && typeof frame.meta.reason === 'string' ? frame.meta.reason : null);
-   void reason; // not strictly needed, but kept for clarity
- 
-   runtimeState.audioPlaybackIdle = true;
-   DiagRecorder.maybeStart('turn');
-   maybeAutoStartCapture('turn_ready', 'tts_end');
- 
--  console.info('ui: turn=Ready → startMicCaptureIfIdle()');
--  if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
--    try {
--      const maybe = window.AudioRecorder.startMicCaptureIfIdle();
--      if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
--        maybe.catch((err) => {
--          console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready failed', err);
--        });
--      }
--    } catch (err) {
--      console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready threw', err);
--    }
-+  if (WAKE_WORD_ONLY) {
-+    console.info('diag=mic_capture_skip trigger=turn_ready mode=wake_word_only');
-+    return;
-   }
- });
- 
- // Assistant TTS finished → open mic after optional delay
- window.addEventListener('tts.end', () => {
-   const release = () => {
-     DiagRecorder.maybeStart('ready');
-     if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
+     endSession() {
+       this._sendGate = false;
+       this._updateRecorderState(false, "session_end");
        try {
-         window.AudioRecorder.handleTtsEnd();
-       } catch (err) {
-         console.warn('AudioRecorder handleTtsEnd failed', err);
-       }
-     }
-   };
- 
-   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
-     setTimeout(release, POST_TTS_RELEASE_MS);
-   } else {
-     release();
-   }
- });
- 
- window.addEventListener('local_audio.ended', (event) => {
-   runtimeState.audioPlaybackIdle = true;
-@@ -2397,64 +2354,67 @@ window.addEventListener('asr.unavailable', (event) => {
-         level: 'warn',
-         badge: 'asr:down',
-         message: reasonText ? `diag=asr_unavailable ${reasonText}` : 'diag=asr_unavailable',
-       }
-     );
-   }
-   try {
-     scheduleAsrRearm();
-   } catch (err) {
-     console.warn('scheduleAsrRearm failed after asr.unavailable', err);
-   }
- });
- 
- window.addEventListener('asr.ready', (event) => {
-   runtimeState.asrReady = true;
-   maybeAutoStartCapture('asr_ready', 'policy');
-   if (diagHudEnabled()) {
-     console.info('diag=asr_ready');
-     setBadge('asr:ready');
-     sendDiagHudEvent(
-       'EVT_CLIENT_ASR_READY',
-       event && typeof event === 'object' ? event.detail : undefined,
-       { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
-     );
-   }
--  console.info('ui: asr.ready → startMicCaptureIfIdle()');
-   if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
-     try {
-       window.ChatView?.showSystemFromChip?.(
-         "Voice is back. You can speak again when you’re ready."
-       );
-     } catch (err) {
-       console.warn('Failed to show voice restoration message', err);
-     }
-     asrRetry.tries = 0;
-     clearTimeout(asrRetry.timer);
-     asrRetry.timer = null;
-   }
-   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
-+    if (WAKE_WORD_ONLY) {
-+      console.info('diag=mic_capture_skip trigger=asr_ready mode=wake_word_only');
-+      return;
-+    }
-     try {
-       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
-       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
-         maybe.catch((err) => {
-           console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
-         });
-       }
-     } catch (err) {
-       console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
-     }
-   }
- });
- 
- window.addEventListener('assistant.suggestions', (event) => {
-   const detail = event && event.detail;
-   applySuggestionsFrame(detail);
- });
- 
- 
- // Start mic immediately on ws.open as a safety net; send diag banner
- window.addEventListener('ws.open', () => {
-   if (audioRecorder && typeof audioRecorder.start === 'function') {
-     audioRecorder.start()
-       .then(() => {
-         setMicPermissionGranted(true, 'ws.open_start');
-diff --git a/app/static/js/transcript_view.js b/app/static/js/transcript_view.js
-index 73d66416be6b96e04868e846cfdae84efeadecdd..897f21e4f0352940d1770e68e53621b56d4d08e3 100644
---- a/app/static/js/transcript_view.js
-+++ b/app/static/js/transcript_view.js
-@@ -3,51 +3,50 @@
-     handlePartial: () => {},
-     handleFinal: () => {},
-     handleChatMessage: () => {},
-     addUserMessage: () => {},
-     reset: () => {},
-     showSystemFromChip: () => {}
-   };
- 
-   function init() {
-     const container = document.getElementById("messages");
-     if (!container) {
-       console.warn("TranscriptView: messages container not found");
-       return;
-     }
-     const form = document.getElementById("textChatForm");
-     const input = document.getElementById("textChatInput");
- 
-     const PARTIAL_THROTTLE_MS = 50;
- 
-     let partialNode = null;
-     let pendingPartial = null;
-     let partialTimer = null;
-     let lastPartialSeq = null;
-     let lastPartialReqId = null;
-     let lastPartialRenderAt = 0;
--    let bargeInEnabled = true;
-     const messageNodesById = new Map();
-     const messageNodesByClientId = new Map();
-     const messageNodesByReqId = new Map();
- 
-     function setNodeRole(node, role) {
-       if (!node) return;
-       const wrapper = node;
-       if (!(wrapper instanceof HTMLElement)) return;
-       wrapper.dataset.role = role;
-       wrapper.classList.remove("assistant", "user", "system");
-       if (role === "assistant" || role === "user" || role === "system") {
-         wrapper.classList.add(role);
-       }
-     }
- 
-     function scrollToBottom() {
-       try {
-         container.scrollTop = container.scrollHeight;
-       } catch (err) {
-         console.warn("TranscriptView: failed to scroll", err);
-       }
-     }
- 
-     function ensureParagraph(node) {
-       if (!node) return null;
-@@ -277,83 +276,60 @@
-         } catch (err) {
-           console.warn("TranscriptView: crypto.randomUUID failed", err);
+         if (this._rec && this._rec.state !== "inactive") {
+           this._rec.stop();
          }
+       } catch (err) {
+         console.warn("AudioRecorder stop error", err);
        }
-       const random = Math.random().toString(36).slice(2, 10);
-       return `client-${Date.now().toString(36)}-${random}`;
-     }
- 
-     function sendChatPayload(text, clientMsgId) {
-       const payload = { type: "chat.user", text };
-       if (clientMsgId) {
-         payload.client_msg_id = clientMsgId;
-       }
-       const WSClient = window.WSClient;
-       if (WSClient && typeof WSClient.send === "function") {
+       this._rec = null;
+       this._micOpenEmitted = false;
+       this._active = false;
++      this._wakeInit = false;
+       if (this._stream) {
          try {
-           WSClient.send(payload);
-         } catch (err) {
-           console.error("TranscriptView: failed to send chat.user", err);
-         }
-       } else {
-         console.warn("TranscriptView: WSClient unavailable for chat.user");
+           this._stream.getTracks?.().forEach((track) => track.stop?.());
+         } catch {}
+         this._stream = null;
        }
      }
+   }
  
--    function maybeInterruptForBarge() {
--      const AppState = window.AppState;
--      if (!AppState || typeof AppState.getState !== "function") return;
--      const state = AppState.getState();
--      const speaking = !!(state && state.ttsUttId);
--      if (!speaking || !bargeInEnabled) return;
--      const audioPlayer = window.AudioPlayer;
--      if (audioPlayer && typeof audioPlayer.interrupt === "function") {
--        audioPlayer.interrupt();
--      }
--      if (typeof AppState.setState === "function") {
--        AppState.setState({ engineMode: "Listening" });
--      }
--      try {
--        window.dispatchEvent(
--          new CustomEvent("engine.mode", { detail: { mode: "Listening", source: "text_barge" } })
--        );
--      } catch (err) {
--        console.warn("TranscriptView: failed to emit engine.mode", err);
--      }
--    }
--
-     function handleSubmit(event) {
-       event.preventDefault();
-       if (!input) return;
-       const raw = input.value || "";
-       const trimmed = raw.trim();
-       if (!trimmed) return;
-       input.value = "";
-       const clientMsgId = generateClientMsgId();
-       addUserMessage(trimmed, { clientMsgId, pending: true });
-       sendChatPayload(trimmed, clientMsgId);
--      maybeInterruptForBarge();
-       input.focus();
-     }
- 
-     function handleChatMessage(frame) {
-       if (!frame || typeof frame !== "object") return;
-       const text = typeof frame.text === "string" ? frame.text.trim() : "";
-       if (!text) return;
-       let role = "assistant";
-       if (frame.role === "user") {
-         role = "user";
-       } else if (frame.role === "system") {
-         role = "system";
-       }
-       const messageId = typeof frame.id === "string" ? frame.id : null;
-       const clientMsgId = typeof frame.client_msg_id === "string" ? frame.client_msg_id : null;
-       const reqId = typeof frame.req_id === "string" ? frame.req_id : null;
- 
-       let node = null;
- 
-       if (messageId && messageNodesById.has(messageId)) {
-         node = messageNodesById.get(messageId);
-       }
-       if (!node && clientMsgId && messageNodesByClientId.has(clientMsgId)) {
-         node = messageNodesByClientId.get(clientMsgId);
-       }
-@@ -394,59 +370,49 @@
- 
-       if (reqId && role === "user") {
-         messageNodesByReqId.set(reqId, { node, role });
-         node.dataset.reqId = reqId;
-       } else if (reqId) {
-         node.dataset.reqId = reqId;
-       } else {
-         delete node.dataset.reqId;
-       }
- 
-       scrollToBottom();
-     }
- 
-     function showSystemFromChip(text) {
-       const message = typeof text === "string" ? text.trim() : "";
-       if (!message) {
-         return;
-       }
-       const node = createMessage("system", message);
-       node.classList.add("chip-system");
-       node.dataset.from = "Chip";
-       container.appendChild(node);
-       scrollToBottom();
-     }
- 
--    function handlePolicyInteraction(event) {
--      const detail = event && event.detail;
--      const policy = detail && detail.policy;
--      if (policy && typeof policy.barge_in_enabled === "boolean") {
--        bargeInEnabled = policy.barge_in_enabled;
--      }
--    }
--
-     if (form && input) {
-       form.addEventListener("submit", handleSubmit);
-     }
- 
--    window.addEventListener("policy.interaction", handlePolicyInteraction);
+   const initialWs = typeof window !== "undefined" ? window.ws || null : null;
+   const recorder = new AudioRecorder(initialWs, window.AppState || null);
+   if (typeof window !== "undefined") {
      window.addEventListener("ws.close", () => {
--      bargeInEnabled = true;
-       clearPartial({ removeNode: true });
+       try {
+         recorder.handleWsClose();
+       } catch (err) {
+         console.warn("AudioRecorder ws.close handler failed", err);
+       }
      });
- 
-     view.handlePartial = handlePartial;
-     view.handleFinal = handleFinal;
-     view.handleChatMessage = handleChatMessage;
-     view.addUserMessage = addUserMessage;
-     view.reset = () => clearPartial({ removeNode: true });
-     view.showSystemFromChip = showSystemFromChip;
    }
- 
-   window.TranscriptView = view;
- 
-   if (document.readyState === "loading") {
-     document.addEventListener("DOMContentLoaded", init);
-   } else {
-     init();
-   }
+   window.AudioRecorder = recorder;
  })();
+diff --git a/app/static/js/wake_word.js b/app/static/js/wake_word.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..9300f426e4a1f501f258c29987a63ed00e233977
+--- /dev/null
++++ b/app/static/js/wake_word.js
+@@ -0,0 +1,34 @@
++export const WakeWord = (() => {
++  const listeners = new Set();
++  let initialized = false;
++
++  function init(_stream) {
++    initialized = true;
++  }
++
++  function onHotword(cb) {
++    listeners.add(cb);
++  }
++
++  window.__triggerHotword = () => {
++    listeners.forEach((fn) => {
++      try {
++        fn();
++      } catch (err) {
++        console.warn("WakeWord listener error", err);
++      }
++    });
++  };
++
++  return {
++    init,
++    onHotword,
++    get ready() {
++      return initialized;
++    }
++  };
++})();
++
++if (typeof window !== "undefined") {
++  window.WakeWord = WakeWord;
++}
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 9932b7fa7e4cec76d4f8e39184505b2c747a8d85..68ae8feafbc2a0cb6ba0d7a4c7767bd264e32163 100644
+index 68ae8feafbc2a0cb6ba0d7a4c7767bd264e32163..3c25ab8d4b19930d3e5e0f1870f4de79b7225592 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -1,36 +1,37 @@
+@@ -1,122 +1,147 @@
++import { WakeWord } from "./wake_word.js";
++
++/**
++ * POLICY: MediaRecorder may ONLY be instantiated in app/static/js/audio_recorder.js.
++ * AudioRecorder is the single owner of the mic and the send-gate.
++ * No manual or VAD-based barge-in; wake-word only.
++ */
  (() => {
-   // POLICY: Do not instantiate MediaRecorder outside app/static/js/audio_recorder.js.
+-  // POLICY: Do not instantiate MediaRecorder outside app/static/js/audio_recorder.js.
    const HEARTBEAT_INTERVAL_MS = 20000;
    const DEFAULT_CLOSE_REASON = "client_shutdown";
    const SUBPROTOCOL = "chat.v2";
@@ -645,7 +273,7 @@ index 9932b7fa7e4cec76d4f8e39184505b2c747a8d85..68ae8feafbc2a0cb6ba0d7a4c7767bd2
    const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
  
    const USE_AUDIORECORDER = !!window.AudioRecorder;
-+  const WAKE_WORD_ONLY = true;
+   const WAKE_WORD_ONLY = true;
  
    const AppState = window.AppState;
    if (!AppState) {
@@ -671,122 +299,263 @@ index 9932b7fa7e4cec76d4f8e39184505b2c747a8d85..68ae8feafbc2a0cb6ba0d7a4c7767bd2
    };
  
    const appStateEventEmitter = createEventEmitter();
-@@ -190,56 +191,58 @@
-       }
+   if (typeof AppState.on !== "function") {
+     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
+   }
+   if (typeof AppState.emit !== "function") {
+     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
+   }
+ 
+   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
+   let autostartAttempts = 0;
+   let autostartTimer = null;
+-  let tapToSpeakCTA = null;
+-  let tapToSpeakReason = null;
+-  let ctaTimer = null;
+ 
+   const WSClient = window.WSClient = window.WSClient || {};
+   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
+     window.ws = null;
+   }
+   WSClient._ws = WSClient._ws || null;
+   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
+   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
+   const getAudioPlayer = () => window.AudioPlayer;
+ 
+   try {
+   if (typeof AppState.websocket === "undefined" && typeof AppState.getState === "function") {
+     Object.defineProperty(AppState, "websocket", {
+       configurable: true, enumerable: false,
+       get() { try { return AppState.getState().websocket || null; } catch { return null; } }
      });
-     gestureListenerCleanup = () => {
-       if (typeof window === "undefined") {
-         return;
-       }
-       listeners.forEach((entry) => {
-         window.removeEventListener(entry.eventName, entry.handler);
-       });
-       gestureListenerCleanup = null;
-     };
    }
+ } catch {}
  
-   function markUserGestureSatisfied(reason) {
-     if (userGestureSatisfied) {
-       return;
-     }
-     userGestureSatisfied = true;
-     if (typeof gestureListenerCleanup === "function") {
-       gestureListenerCleanup();
-     }
-     sendAutostartTelemetry("gesture", { reason });
-   }
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
+   let infoWatchdogTimerId = null;
+   let lastPingAt = null;
+   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
+   let autoResumeAttemptToken = null;
+   let toastRoot = null;
+   let lastTokenValue = null;
+   let lastTokenMintedAt = null;
  
-   function canAutoRecord(state) {
-+    if (WAKE_WORD_ONLY) return false;
-     if (!state?.policy?.auto_record_after_greet) return false;
-     if (state.policy.tts_gate_enabled && state.ttsActive) return false;
-     return state.asrReady === true && state.turnState === "Ready" && !state.recorder?.active;
-   }
+   const CLIENT_BANNER_TYPE = "client.banner";
+   const CLIENT_BANNER_MAX_HISTORY = 24;
+   const CLIENT_BANNER_MAX_QUEUE = 24;
+   const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
+   const CLIENT_BANNER_STRING_MAX = 240;
  
-   function reasonFromState(state) {
-+    if (WAKE_WORD_ONLY) return "wake_word_only";
-     if (!userGestureSatisfied && state?.policy?.require_user_gesture_first_visit) return "needs_user_gesture";
-     if (!state?.policy?.auto_record_after_greet) return "policy_disabled";
-     if (state.policy.tts_gate_enabled && state.ttsActive) return "tts_active";
-     if (!state.asrReady) return "asr_not_ready";
-     if (state.turnState !== "Ready") return "turn_not_ready";
-     if (state.recorder?.active) return "already_active";
-     return null;
-   }
+   let clientBannerQueue = [];
  
-   function shouldAttemptForTrigger(trigger, policy) {
-     if (!trigger) {
-       return true;
-     }
-     if (AUTOSTART_TRIGGERS_ALWAYS.has(trigger)) {
-       return true;
-     }
-     const retries = Array.isArray(policy?.autostart_retry_on) ? policy.autostart_retry_on : [];
-     if (!retries.length) {
-       return true;
-     }
-     return retries.includes(trigger);
-   }
+   // Initialize the client banner state only after related constants are defined.
+   ensureClientBannerState();
  
-   function getAutostartSnapshot() {
-     const state = typeof AppState.getState === "function" ? AppState.getState() : {};
-@@ -373,75 +376,80 @@
-     }
-     tapToSpeakReason = reason || null;
-     if (tapToSpeakReason) {
-       button.setAttribute("data-reason", tapToSpeakReason);
-     } else {
-       button.removeAttribute("data-reason");
-     }
-     button.style.display = "inline-flex";
-     button.style.alignItems = "center";
-     button.style.justifyContent = "center";
-     sendAutostartTelemetry("cta_shown", { reason: tapToSpeakReason || null });
-   }
- 
-   function hideTapToSpeakCTA() {
-     tapToSpeakReason = null;
-     if (ctaTimer) {
-       clearTimeout(ctaTimer);
-       ctaTimer = null;
-     }
-     if (tapToSpeakCTA) {
-       tapToSpeakCTA.style.display = "none";
-     }
-   }
- 
-   function scheduleTapToSpeakCTA(policy, reason) {
--    if (reason === "already_active" || reason === "policy_disabled" || reason === "tts_active") {
-+    if (reason === "already_active" || reason === "policy_disabled" || reason === "tts_active" || reason === "wake_word_only") {
-       hideTapToSpeakCTA();
-       return;
-     }
-     const delay = Number(policy?.show_tap_to_speak_cta_after_ms);
-     if (!Number.isFinite(delay) || delay < 0) {
-       return;
-     }
-     if (ctaTimer) {
-       clearTimeout(ctaTimer);
-       ctaTimer = null;
-     }
-     ctaTimer = setTimeout(() => {
-       const latest = getAutostartSnapshot();
-       if (latest.recorder?.active) {
-         return;
-       }
-       if (!reasonFromState(latest)) {
-         return;
-       }
-       showTapToSpeakCTA(reason);
-     }, delay);
-   }
- 
-   function invokeStartRecording(trigger) {
-+    if (WAKE_WORD_ONLY) {
-+      const label = trigger ? String(trigger).slice(0, 32) : "unknown";
-+      console.info("diag=start_recording_blocked trigger=%s mode=wake_word_only", label);
-+      return false;
+-  const TAP_TO_SPEAK_CTA_ID = "wsclient-tap-to-speak-cta";
+-  const TAP_TO_SPEAK_CTA_CLASS = "wsclient-tap-to-speak-cta";
++  WakeWord.onHotword(() => {
++    let snapshot = {};
++    try {
++      snapshot = getAutostartSnapshot();
++    } catch {}
++    const ttsActive = snapshot.ttsActive === true || Boolean(AppState.ttsActive);
++    if (!ttsActive) {
++      return;
 +    }
++    try {
++      const activeSocket = (socket && socket.readyState === WebSocket.OPEN)
++        ? socket
++        : (window.ws && window.ws.readyState === WebSocket.OPEN ? window.ws : null);
++      if (activeSocket) {
++        try {
++          activeSocket.send(JSON.stringify({ type: "tts.pause" }));
++        } catch {}
++      }
++    } catch {}
++    try {
++      window.AudioRecorder?.startListening?.({ reason: "wake_word" });
++    } catch {}
++  });
++
+   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
+-  const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture", "cta", "cta_click"]);
++  const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture"]);
+ 
+   let gestureListenerCleanup = null;
+ 
+   function createEventEmitter() {
+     const registry = new Map();
+     return {
+       on(event, handler) {
+         if (typeof event !== "string" || !event || typeof handler !== "function") {
+           return () => {};
+         }
+         let listeners = registry.get(event);
+         if (!listeners) {
+           listeners = new Set();
+           registry.set(event, listeners);
+         }
+         listeners.add(handler);
+         return () => {
+           listeners.delete(handler);
+         };
+       },
+       emit(event, detail) {
+         if (typeof event !== "string" || !event) {
+           return;
+         }
+         const listeners = registry.get(event);
+@@ -285,241 +310,119 @@
+           cleaned[key.slice(0, 48)] = value;
+         }
+       } else if (typeof value === "boolean") {
+         cleaned[key.slice(0, 48)] = value;
+       }
+     }
+     return Object.keys(cleaned).length ? cleaned : undefined;
+   }
+ 
+   function sendAutostartTelemetry(event, meta) {
+     if (typeof event !== "string" || !event) {
+       return;
+     }
+     const payload = { type: "client.autostart", event };
+     const sanitizedMeta = sanitizeAutostartMeta(meta);
+     if (sanitizedMeta) {
+       payload.meta = sanitizedMeta;
+     }
+     try {
+       sendJson(payload);
+     } catch (err) {
+       console.warn("Failed to send autostart telemetry", err);
+     }
+   }
+ 
+-  function ensureTapToSpeakCTA() {
+-    if (typeof document === "undefined") {
+-      return null;
+-    }
+-    if (tapToSpeakCTA && tapToSpeakCTA.isConnected) {
+-      return tapToSpeakCTA;
+-    }
+-    const button = document.createElement("button");
+-    button.type = "button";
+-    button.id = TAP_TO_SPEAK_CTA_ID;
+-    button.className = TAP_TO_SPEAK_CTA_CLASS;
+-    button.textContent = "Tap to speak";
+-    button.style.display = "none";
+-    button.style.position = "fixed";
+-    button.style.bottom = "24px";
+-    button.style.right = "24px";
+-    button.style.zIndex = "4010";
+-    button.style.padding = "10px 18px";
+-    button.style.borderRadius = "999px";
+-    button.style.border = "none";
+-    button.style.background = "rgba(15,23,42,0.88)";
+-    button.style.color = "#fff";
+-    button.style.fontFamily = "inherit";
+-    button.style.fontSize = "0.85rem";
+-    button.style.fontWeight = "600";
+-    button.style.boxShadow = "0 12px 30px rgba(15,23,42,0.28)";
+-    button.style.cursor = "pointer";
+-    button.style.pointerEvents = "auto";
+-    button.addEventListener("click", () => {
+-      sendAutostartTelemetry("cta_click", { reason: tapToSpeakReason || null });
+-      markUserGestureSatisfied("cta_click");
+-      hideTapToSpeakCTA();
+-      try {
+-        const result = invokeStartRecording("cta");
+-        if (result && typeof result.then === "function") {
+-          result
+-            .then((value) => {
+-              if (value) {
+-                sendAutostartTelemetry("armed", { trigger: "cta" });
+-              } else {
+-                sendAutostartTelemetry("rejected", { trigger: "cta" });
+-              }
+-            })
+-            .catch((err) => {
+-              console.warn("Tap to speak CTA rejected", err);
+-              sendAutostartTelemetry("error", { trigger: "cta", message: getErrorMessage(err) });
+-            });
+-        } else if (result) {
+-          sendAutostartTelemetry("armed", { trigger: "cta" });
+-        } else {
+-          sendAutostartTelemetry("rejected", { trigger: "cta" });
+-        }
+-      } catch (err) {
+-        console.warn("Tap to speak CTA start failed", err);
+-        sendAutostartTelemetry("error", { trigger: "cta", message: getErrorMessage(err) });
+-      }
+-    });
+-    document.body.appendChild(button);
+-    tapToSpeakCTA = button;
+-    return tapToSpeakCTA;
+-  }
+-
+-  function showTapToSpeakCTA(reason) {
+-    const button = ensureTapToSpeakCTA();
+-    if (!button) {
+-      return;
+-    }
+-    tapToSpeakReason = reason || null;
+-    if (tapToSpeakReason) {
+-      button.setAttribute("data-reason", tapToSpeakReason);
+-    } else {
+-      button.removeAttribute("data-reason");
+-    }
+-    button.style.display = "inline-flex";
+-    button.style.alignItems = "center";
+-    button.style.justifyContent = "center";
+-    sendAutostartTelemetry("cta_shown", { reason: tapToSpeakReason || null });
+-  }
+-
+-  function hideTapToSpeakCTA() {
+-    tapToSpeakReason = null;
+-    if (ctaTimer) {
+-      clearTimeout(ctaTimer);
+-      ctaTimer = null;
+-    }
+-    if (tapToSpeakCTA) {
+-      tapToSpeakCTA.style.display = "none";
+-    }
+-  }
+-
+-  function scheduleTapToSpeakCTA(policy, reason) {
+-    if (reason === "already_active" || reason === "policy_disabled" || reason === "tts_active" || reason === "wake_word_only") {
+-      hideTapToSpeakCTA();
+-      return;
+-    }
+-    const delay = Number(policy?.show_tap_to_speak_cta_after_ms);
+-    if (!Number.isFinite(delay) || delay < 0) {
+-      return;
+-    }
+-    if (ctaTimer) {
+-      clearTimeout(ctaTimer);
+-      ctaTimer = null;
+-    }
+-    ctaTimer = setTimeout(() => {
+-      const latest = getAutostartSnapshot();
+-      if (latest.recorder?.active) {
+-        return;
+-      }
+-      if (!reasonFromState(latest)) {
+-        return;
+-      }
+-      showTapToSpeakCTA(reason);
+-    }, delay);
+-  }
+-
+   function invokeStartRecording(trigger) {
+     if (WAKE_WORD_ONLY) {
+       const label = trigger ? String(trigger).slice(0, 32) : "unknown";
+       console.info("diag=start_recording_blocked trigger=%s mode=wake_word_only", label);
+       return false;
+     }
      let handler = null;
      if (typeof window !== "undefined" && typeof window.startRecording === "function") {
        handler = window.startRecording;
@@ -810,5 +579,226 @@ index 9932b7fa7e4cec76d4f8e39184505b2c747a8d85..68ae8feafbc2a0cb6ba0d7a4c7767bd2
      const reason = reasonFromState(snapshot);
      if (reason) {
        sendAutostartTelemetry("blocked", { trigger, reason });
-       scheduleTapToSpeakCTA(policy, reason);
+-      scheduleTapToSpeakCTA(policy, reason);
        return false;
+     }
+-    hideTapToSpeakCTA();
+     if (!shouldAttemptForTrigger(trigger, policy)) {
+       return false;
+     }
+     if (!canAutoRecord(snapshot)) {
+       return false;
+     }
+     const maxAttempts = Number.isFinite(policy.autostart_max_attempts) ? policy.autostart_max_attempts : 5;
+     if (autostartAttempts >= Math.max(0, maxAttempts)) {
+       sendAutostartTelemetry("max_attempts", { trigger });
+-      scheduleTapToSpeakCTA(policy, "max_attempts");
+       return false;
+     }
+     const delays = Array.isArray(policy.autostart_backoff_ms) && policy.autostart_backoff_ms.length
+       ? policy.autostart_backoff_ms
+       : [0];
+     const delayIndex = Math.min(autostartAttempts, delays.length - 1);
+     const delay = Number(delays[delayIndex]) || 0;
+     const execute = () => {
+       autostartTimer = null;
+       autostartAttempts += 1;
+       sendAutostartTelemetry("attempt", { trigger, attempt: autostartAttempts });
+       let result;
+       try {
+         result = invokeStartRecording(trigger || "auto");
+       } catch (err) {
+         console.warn("Auto startRecording failed", err);
+         sendAutostartTelemetry("error", { trigger, message: getErrorMessage(err) });
+-        scheduleTapToSpeakCTA(policy, "invoke_error");
+         return;
+       }
+       const onFulfilled = (value) => {
+         if (!value) {
+           sendAutostartTelemetry("rejected", { trigger });
+-          scheduleTapToSpeakCTA(policy, "not_started");
+           return;
+         }
+         sendAutostartTelemetry("armed", { trigger });
+-        hideTapToSpeakCTA();
+       };
+       const onRejected = (err) => {
+         console.warn("Auto startRecording promise rejected", err);
+         sendAutostartTelemetry("error", { trigger, message: getErrorMessage(err) });
+-        scheduleTapToSpeakCTA(policy, "promise_reject");
+       };
+       if (result && typeof result.then === "function") {
+         result.then(onFulfilled, onRejected);
+       } else {
+         onFulfilled(result);
+       }
+     };
+     if (autostartTimer) {
+       clearTimeout(autostartTimer);
+       autostartTimer = null;
+     }
+     if (delay > 0) {
+       autostartTimer = setTimeout(execute, delay);
+     } else {
+       execute();
+     }
+     return true;
+   }
+ 
+   function installAutostartRechecks() {
+     if (!AppState) {
+       return;
+     }
+     if (typeof AppState.subscribe === "function") {
+       let previous = typeof AppState.getState === "function" ? AppState.getState() : {};
+@@ -534,98 +437,89 @@
+           autostartAttempts = 0;
+         }
+         const prevTts = Boolean(previous.ttsActive);
+         const nextTts = Boolean(next.ttsActive);
+         if (nextTts !== prevTts) {
+           events.push(nextTts ? "ttsActive" : "ttsEnded");
+         }
+         const prevTurn = typeof previous.turnState === "string" ? previous.turnState : null;
+         const nextTurn = typeof next.turnState === "string" ? next.turnState : null;
+         if (nextTurn !== prevTurn) {
+           if (nextTurn === "Ready") {
+             autostartAttempts = 0;
+             events.push("turnState:Ready");
+           } else if (prevTurn === "Ready") {
+             autostartAttempts = 0;
+           }
+         }
+         previous = {
+           ...previous,
+           asrReady: next.asrReady,
+           ttsActive: next.ttsActive,
+           turnState: next.turnState,
+           recorder: next.recorder,
+         };
+         events.forEach((eventName) => maybeAutoStart(eventName));
+-        if (next.recorder && next.recorder.active) {
+-          hideTapToSpeakCTA();
+-        }
+       });
+     } else {
+       const watch = (keys, fn) => {
+         let prevSnapshot = {};
+         setInterval(() => {
+           const snapshot = getAutostartSnapshot();
+           let changed = false;
+           const changedKeys = [];
+           keys.forEach((key) => {
+             if (prevSnapshot[key] !== snapshot[key]) {
+               changed = true;
+               changedKeys.push(key);
+             }
+           });
+           if (changed) {
+             prevSnapshot = {
+               asrReady: snapshot.asrReady,
+               ttsActive: snapshot.ttsActive,
+               turnState: snapshot.turnState,
+             };
+             fn(changedKeys, snapshot);
+           }
+         }, 100);
+       };
+       watch(["asrReady", "ttsActive", "turnState"], (changedKeys, snapshot) => {
+         changedKeys.forEach((key) => {
+           if (key === "asrReady" && snapshot.asrReady) {
+             maybeAutoStart("asrReady");
+           } else if (key === "ttsActive" && !snapshot.ttsActive) {
+             maybeAutoStart("ttsEnded");
+           } else if (key === "turnState" && snapshot.turnState === "Ready") {
+             autostartAttempts = 0;
+             maybeAutoStart("turnState:Ready");
+           }
+         });
+       });
+     }
+-
+     AppState.on?.("turnReset", () => {
+       autostartAttempts = 0;
+-      hideTapToSpeakCTA();
+-    });
+-
+-    AppState.on?.("recordingStarted", () => {
+-      hideTapToSpeakCTA();
+     });
+ 
+     maybeAutoStart("boot");
+   }
+ 
+   function handleTurnStateEvent(event) {
+     const detail = event && typeof event === "object" ? event.detail : null;
+     const stateValue = detail && typeof detail === "object" && typeof detail.state === "string"
+       ? detail.state
+       : (detail && detail.meta && typeof detail.meta.state === "string" ? detail.meta.state : null);
+     const normalized = typeof stateValue === "string" ? stateValue : null;
+     const reasonValue = detail && typeof detail === "object" && typeof detail.reason === "string"
+       ? detail.reason
+       : (detail && detail.meta && typeof detail.meta.reason === "string" ? detail.meta.reason : null);
+     AppState.turnState = normalized;
+     updateState({ turnState: normalized });
+     if (normalized === "Ready") {
+       autostartAttempts = 0;
+       if (typeof AppState.emit === "function") {
+         AppState.emit("turnReset", { state: normalized, reason: reasonValue || null });
+       }
+     }
+   }
+ 
+   ensureInitialAutostartState();
+@@ -1588,51 +1482,50 @@
+       } else if (frame.type === "error") {
+         handleErrorFrame(frame);
+         return;
+       } else if (frame.type !== "info") {
+         console.error("Expected info frame first, received", frame.type);
+         close("bad_info_sequence");
+         return;
+       }
+       if (frame.type === "info") {
+         handleInfoFrame(frame);
+       }
+     } else if (frame.type === "info") {
+       handleInfoFrame(frame);
+     } else if (frame.type === "server.pong") {
+       handlePongFrame(frame);
+     } else if (frame.type === "pong") {
+       handlePongFrame(frame);
+     } else if (frame.type === "error") {
+       handleErrorFrame(frame);
+     } else if (frame.type === "tts.start") {
+       AppState.ttsActive = true;
+       updateState({ ttsActive: true });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: true });
+       }
+-      hideTapToSpeakCTA();
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+         audioPlayer.handleTtsStart(frame);
+       }
+     } else if (frame.type === "tts.end") {
+       AppState.ttsActive = false;
+       updateState({ ttsActive: false });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: false });
+       }
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+     } else if (frame.type === "start_listening") {
+       if (USE_AUDIORECORDER) {
+         try {
+           window.AudioRecorder?.startListening?.(frame?.policy || {});
+         } catch (err) {
+           console.warn("AudioRecorder start_listening handler error", err);
+         }
+       } else {
+         startInputCapture(frame);
+       }
+     } else if (frame.type === "stop_listening") {

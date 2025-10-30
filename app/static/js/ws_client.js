@@ -1,5 +1,11 @@
+import { WakeWord } from "./wake_word.js";
+
+/**
+ * POLICY: MediaRecorder may ONLY be instantiated in app/static/js/audio_recorder.js.
+ * AudioRecorder is the single owner of the mic and the send-gate.
+ * No manual or VAD-based barge-in; wake-word only.
+ */
 (() => {
-  // POLICY: Do not instantiate MediaRecorder outside app/static/js/audio_recorder.js.
   const HEARTBEAT_INTERVAL_MS = 20000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";
   const SUBPROTOCOL = "chat.v2";
@@ -45,9 +51,6 @@
   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
   let autostartAttempts = 0;
   let autostartTimer = null;
-  let tapToSpeakCTA = null;
-  let tapToSpeakReason = null;
-  let ctaTimer = null;
 
   const WSClient = window.WSClient = window.WSClient || {};
   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
@@ -91,10 +94,32 @@
   // Initialize the client banner state only after related constants are defined.
   ensureClientBannerState();
 
-  const TAP_TO_SPEAK_CTA_ID = "wsclient-tap-to-speak-cta";
-  const TAP_TO_SPEAK_CTA_CLASS = "wsclient-tap-to-speak-cta";
+  WakeWord.onHotword(() => {
+    let snapshot = {};
+    try {
+      snapshot = getAutostartSnapshot();
+    } catch {}
+    const ttsActive = snapshot.ttsActive === true || Boolean(AppState.ttsActive);
+    if (!ttsActive) {
+      return;
+    }
+    try {
+      const activeSocket = (socket && socket.readyState === WebSocket.OPEN)
+        ? socket
+        : (window.ws && window.ws.readyState === WebSocket.OPEN ? window.ws : null);
+      if (activeSocket) {
+        try {
+          activeSocket.send(JSON.stringify({ type: "tts.pause" }));
+        } catch {}
+      }
+    } catch {}
+    try {
+      window.AudioRecorder?.startListening?.({ reason: "wake_word" });
+    } catch {}
+  });
+
   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
-  const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture", "cta", "cta_click"]);
+  const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture"]);
 
   let gestureListenerCleanup = null;
 
@@ -307,121 +332,6 @@
     }
   }
 
-  function ensureTapToSpeakCTA() {
-    if (typeof document === "undefined") {
-      return null;
-    }
-    if (tapToSpeakCTA && tapToSpeakCTA.isConnected) {
-      return tapToSpeakCTA;
-    }
-    const button = document.createElement("button");
-    button.type = "button";
-    button.id = TAP_TO_SPEAK_CTA_ID;
-    button.className = TAP_TO_SPEAK_CTA_CLASS;
-    button.textContent = "Tap to speak";
-    button.style.display = "none";
-    button.style.position = "fixed";
-    button.style.bottom = "24px";
-    button.style.right = "24px";
-    button.style.zIndex = "4010";
-    button.style.padding = "10px 18px";
-    button.style.borderRadius = "999px";
-    button.style.border = "none";
-    button.style.background = "rgba(15,23,42,0.88)";
-    button.style.color = "#fff";
-    button.style.fontFamily = "inherit";
-    button.style.fontSize = "0.85rem";
-    button.style.fontWeight = "600";
-    button.style.boxShadow = "0 12px 30px rgba(15,23,42,0.28)";
-    button.style.cursor = "pointer";
-    button.style.pointerEvents = "auto";
-    button.addEventListener("click", () => {
-      sendAutostartTelemetry("cta_click", { reason: tapToSpeakReason || null });
-      markUserGestureSatisfied("cta_click");
-      hideTapToSpeakCTA();
-      try {
-        const result = invokeStartRecording("cta");
-        if (result && typeof result.then === "function") {
-          result
-            .then((value) => {
-              if (value) {
-                sendAutostartTelemetry("armed", { trigger: "cta" });
-              } else {
-                sendAutostartTelemetry("rejected", { trigger: "cta" });
-              }
-            })
-            .catch((err) => {
-              console.warn("Tap to speak CTA rejected", err);
-              sendAutostartTelemetry("error", { trigger: "cta", message: getErrorMessage(err) });
-            });
-        } else if (result) {
-          sendAutostartTelemetry("armed", { trigger: "cta" });
-        } else {
-          sendAutostartTelemetry("rejected", { trigger: "cta" });
-        }
-      } catch (err) {
-        console.warn("Tap to speak CTA start failed", err);
-        sendAutostartTelemetry("error", { trigger: "cta", message: getErrorMessage(err) });
-      }
-    });
-    document.body.appendChild(button);
-    tapToSpeakCTA = button;
-    return tapToSpeakCTA;
-  }
-
-  function showTapToSpeakCTA(reason) {
-    const button = ensureTapToSpeakCTA();
-    if (!button) {
-      return;
-    }
-    tapToSpeakReason = reason || null;
-    if (tapToSpeakReason) {
-      button.setAttribute("data-reason", tapToSpeakReason);
-    } else {
-      button.removeAttribute("data-reason");
-    }
-    button.style.display = "inline-flex";
-    button.style.alignItems = "center";
-    button.style.justifyContent = "center";
-    sendAutostartTelemetry("cta_shown", { reason: tapToSpeakReason || null });
-  }
-
-  function hideTapToSpeakCTA() {
-    tapToSpeakReason = null;
-    if (ctaTimer) {
-      clearTimeout(ctaTimer);
-      ctaTimer = null;
-    }
-    if (tapToSpeakCTA) {
-      tapToSpeakCTA.style.display = "none";
-    }
-  }
-
-  function scheduleTapToSpeakCTA(policy, reason) {
-    if (reason === "already_active" || reason === "policy_disabled" || reason === "tts_active" || reason === "wake_word_only") {
-      hideTapToSpeakCTA();
-      return;
-    }
-    const delay = Number(policy?.show_tap_to_speak_cta_after_ms);
-    if (!Number.isFinite(delay) || delay < 0) {
-      return;
-    }
-    if (ctaTimer) {
-      clearTimeout(ctaTimer);
-      ctaTimer = null;
-    }
-    ctaTimer = setTimeout(() => {
-      const latest = getAutostartSnapshot();
-      if (latest.recorder?.active) {
-        return;
-      }
-      if (!reasonFromState(latest)) {
-        return;
-      }
-      showTapToSpeakCTA(reason);
-    }, delay);
-  }
-
   function invokeStartRecording(trigger) {
     if (WAKE_WORD_ONLY) {
       const label = trigger ? String(trigger).slice(0, 32) : "unknown";
@@ -451,10 +361,8 @@
     const reason = reasonFromState(snapshot);
     if (reason) {
       sendAutostartTelemetry("blocked", { trigger, reason });
-      scheduleTapToSpeakCTA(policy, reason);
       return false;
     }
-    hideTapToSpeakCTA();
     if (!shouldAttemptForTrigger(trigger, policy)) {
       return false;
     }
@@ -464,7 +372,6 @@
     const maxAttempts = Number.isFinite(policy.autostart_max_attempts) ? policy.autostart_max_attempts : 5;
     if (autostartAttempts >= Math.max(0, maxAttempts)) {
       sendAutostartTelemetry("max_attempts", { trigger });
-      scheduleTapToSpeakCTA(policy, "max_attempts");
       return false;
     }
     const delays = Array.isArray(policy.autostart_backoff_ms) && policy.autostart_backoff_ms.length
@@ -482,22 +389,18 @@
       } catch (err) {
         console.warn("Auto startRecording failed", err);
         sendAutostartTelemetry("error", { trigger, message: getErrorMessage(err) });
-        scheduleTapToSpeakCTA(policy, "invoke_error");
         return;
       }
       const onFulfilled = (value) => {
         if (!value) {
           sendAutostartTelemetry("rejected", { trigger });
-          scheduleTapToSpeakCTA(policy, "not_started");
           return;
         }
         sendAutostartTelemetry("armed", { trigger });
-        hideTapToSpeakCTA();
       };
       const onRejected = (err) => {
         console.warn("Auto startRecording promise rejected", err);
         sendAutostartTelemetry("error", { trigger, message: getErrorMessage(err) });
-        scheduleTapToSpeakCTA(policy, "promise_reject");
       };
       if (result && typeof result.then === "function") {
         result.then(onFulfilled, onRejected);
@@ -556,9 +459,6 @@
           recorder: next.recorder,
         };
         events.forEach((eventName) => maybeAutoStart(eventName));
-        if (next.recorder && next.recorder.active) {
-          hideTapToSpeakCTA();
-        }
       });
     } else {
       const watch = (keys, fn) => {
@@ -596,14 +496,8 @@
         });
       });
     }
-
     AppState.on?.("turnReset", () => {
       autostartAttempts = 0;
-      hideTapToSpeakCTA();
-    });
-
-    AppState.on?.("recordingStarted", () => {
-      hideTapToSpeakCTA();
     });
 
     maybeAutoStart("boot");
@@ -1610,7 +1504,6 @@
       if (typeof AppState.emit === "function") {
         AppState.emit("ttsActive", { active: true });
       }
-      hideTapToSpeakCTA();
       const audioPlayer = getAudioPlayer();
       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
         audioPlayer.handleTtsStart(frame);

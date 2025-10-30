@@ -1,3 +1,5 @@
+import { WakeWord } from "./wake_word.js";
+
 (() => {
   const SEND_TIMESLICE_MS = 300;
   const OPUS_MIME = "audio/webm;codecs=opus";
@@ -22,6 +24,7 @@
       this._policy = {};
       this._micOpenEmitted = false;
       this._active = false;
+      this._wakeInit = false;
     }
 
     setSocket(ws) {
@@ -47,6 +50,12 @@
       if (!this._stream) {
         this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         console.info("diag=mic_armed");
+        if (!this._wakeInit) {
+          try {
+            WakeWord.init(this._stream);
+          } catch {}
+          this._wakeInit = true;
+        }
       }
       if (!window.MediaRecorder) {
         throw new Error("media_recorder_unavailable");
@@ -190,6 +199,7 @@
       this._rec = null;
       this._micOpenEmitted = false;
       this._active = false;
+      this._wakeInit = false;
       if (this._stream) {
         try {
           this._stream.getTracks?.().forEach((track) => track.stop?.());
