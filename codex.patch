@@ -1,210 +1,15 @@
 diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 8952604b7360095037b60f533a98a57a8f2c4754..9ecaa66099698512846b224a24f136a51a334bf1 100644
+index 9ecaa66099698512846b224a24f136a51a334bf1..d52883d9da68960affd439903d119bc8ebf3f4ea 100644
 --- a/app/asgi_gateway.py
 +++ b/app/asgi_gateway.py
-@@ -1,28 +1,29 @@
- """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
- from __future__ import annotations
+@@ -807,66 +807,79 @@ async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[s
  
-+import asyncio
- import hashlib
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Optional
- from urllib.parse import parse_qs
- 
- from app import config
- from app.admin.api.settings import handle_admin_settings
- from app.admin.flow_api import handle_flow_sessions, handle_flow_trace, handle_flow_zip
- from app.auth.http_handlers import (
-     get_me,
-     post_login,
-     post_profile,
-     post_ws_token,
-     _session_email as _auth_session_email,
-     _is_admin as _auth_is_admin,
- )
-@@ -58,86 +59,89 @@ _log = logging.getLogger(__name__)
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
- 
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
- 
- 
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
- 
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
- 
- 
- WS_ROUTE = "/ws/v2/chat"
- HEALTH_ROUTE = "/api/v1/health"
- LIVE_ROUTE = "/api/v1/live"
- READY_ROUTE = "/api/v1/ready"
- INFO_ROUTE = "/api/v1/info"
-+HEALTHZ_ROUTE = "/healthz"
-+DIAG_DB_ROUTE = "/diag/db"
- WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
- LOGIN_ROUTE = "/api/v1/auth/login"
- ME_ROUTE = "/api/v1/auth/me"
- PROFILE_ROUTE = "/api/v1/auth/profile"
- ROOT_ROUTE = "/"
- ADMIN_LOGS_ROUTE = "/admin/logs"
- ADMIN_SETTINGS_ROUTE = "/api/v1/admin/settings"
- ADMIN_CONFIG_ROUTE = "/api/v1/admin/config"
- FAVICON_ROUTE = "/favicon.ico"
- STATIC_ROUTE_PREFIX = "/static/"
- ADMIN_UI_ROUTE_PREFIX = "/admin/ui/"
- ADMIN_FLOW_ROUTE_PREFIX = "/api/v1/admin/flow"
- ADMIN_FLOW_TRACE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/trace"
- ADMIN_FLOW_ZIP_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/zip"
- ADMIN_FLOW_SESSIONS_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/sessions"
- ADMIN_FLOW_LIVE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/live"
- EXPORT_ROOT = Path("exports")
- BASE_DIR = Path(__file__).resolve().parent
- STATIC_ROOT = BASE_DIR / "static"
- TEMPLATES_ROOT = BASE_DIR / "templates"
- INDEX_PATH = TEMPLATES_ROOT / "index.html"
- ADMIN_LOGS_PATH = TEMPLATES_ROOT / "admin_logs.html"
- FAVICON_PATH = STATIC_ROOT / "favicon.ico"
- ADMIN_UI_ROOT = BASE_DIR / "admin" / "ui"
- _DEFAULT_INDEX_HTML = (
-     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
- )
- _DEFAULT_ADMIN_HTML = (
-     "<!doctype html><title>Admin Logs</title><div id='admin-logs'></div>".encode("utf-8")
- )
- 
- 
- HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
- 
- _adapter: Optional[ChatV2Adapter] = None
- _lifespan_started = False
-+_warmup_task: Optional[asyncio.Task[Any]] = None
- 
- 
- def _ws_route_matches(scope: dict, expected: str) -> bool:
-     """
-     Return True when the incoming websocket request targets the expected route,
-     robust to deployments mounted under a non-empty ASGI root_path.
-     """
- 
-     raw_path = scope.get("path", "") or ""
-     root_path = scope.get("root_path") or ""
-     # Direct match (no prefix)
-     if raw_path == expected:
-         return True
-     # Combined path match (some servers expect root_path + path)
-     combined = f"{root_path}{raw_path}" if root_path else raw_path
-     if combined == expected:
-         return True
-     # Prefix-mount: accept if the combined path ends with expected
-     return combined.endswith(expected)
- 
- 
- async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-     # Log raw scope for the chat WS route before any routing/validation
-     p = (scope.get("path") or "")
-     if p.endswith("/ws/v2/chat"):
-@@ -171,50 +175,81 @@ async def app(scope: dict, receive: Callable[[], Awaitable[dict]], send: Callabl
-         if handler is None and path.startswith(ADMIN_UI_ROUTE_PREFIX):
-             handler = partial(_handle_admin_ui_asset, raw_path=path)
-         if handler is None and path.startswith(STATIC_ROUTE_PREFIX):
-             handler = partial(_handle_static, raw_path=path)
-         if handler is None:
-             await _drain_request_body(receive)
-             await _send_response(send, json_response(status=404, error="not_found"))
-         else:
-             response = await handler(scope, receive)
-             await _send_response(send, response)
-         return
- 
-     raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
- 
- 
- async def _handle_health(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Return a static JSON document for health checks."""
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
-     return json_response(ok=True, engine="v2", ws_subprotocol=CHAT_V2_SUBPROTOCOL)
- 
- 
-+async def _handle_healthz(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-+    if not _method_is_get(scope):
-+        await _drain_request_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    await _drain_request_body(receive)
-+    status = neon.db_status()
-+    state = status.get("state", "init")
-+    if state == "ready":
-+        summary = "ready"
-+    elif state == "error":
-+        summary = "error"
-+    elif state in {"connecting", "retrying"}:
-+        summary = "warming"
-+    else:
-+        summary = "warming"
-+    _log.info("evt=healthz state=%s", state)
-+    return json_response(db=summary)
-+
-+
-+async def _handle_diag_db(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-+    if not _method_is_get(scope):
-+        await _drain_request_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    await _drain_request_body(receive)
-+    status = neon.db_status()
-+    _log.info("evt=diag_db state=%s", status.get("state"))
-+    return json_response(**status)
-+
-+
- async def _handle_live(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Expose a lightweight pulse indicating the event loop is responsive."""
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
-     ts_ms = int(time.time() * 1000)
-     return json_response(ok=True, ts_ms=ts_ms)
- 
- 
- async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Report readiness by verifying the export directory is writable."""
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
-     try:
-         EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
-         with NamedTemporaryFile(dir=EXPORT_ROOT, prefix=".ready-", delete=True) as tmp:
-             tmp.write(b"ok")
-             tmp.flush()
-         _log.debug("evt=ready_probe_success path=%s", EXPORT_ROOT)
-         return json_response(ok=True, export_path=str(EXPORT_ROOT))
-@@ -779,78 +814,76 @@ def _get_adapter() -> ChatV2Adapter:
+ def _get_adapter() -> ChatV2Adapter:
+     """Return a lazily instantiated ChatV2Adapter singleton."""
+     global _adapter
+     if _adapter is None:
+         exporter = FileExporter(EXPORT_ROOT)
+         engine = EngineV2(exporter=exporter)
          tts_runtime = TTSRuntime(engine=engine)
          asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
          asr_runtime = ASRRuntime(engine=engine, client=asr_client)
@@ -223,22 +28,39 @@ index 8952604b7360095037b60f533a98a57a8f2c4754..9ecaa66099698512846b224a24f136a5
      return await handle_admin_settings(scope, receive)
  
  
++def require_db_ready(handler: HttpHandler) -> HttpHandler:
++    async def _wrapped(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
++        status = neon.db_status()
++        state = status.get("state", "init")
++        if state != "ready":
++            await _drain_request_body(receive)
++            _log.info("evt=db_guard_warming state=%s", state)
++            return json_response(status=503, db="warming")
++        return await handler(scope, receive)
++
++    return _wrapped
++
++
  _HTTP_ROUTES: Dict[str, HttpHandler] = {
      ROOT_ROUTE: _handle_index,
      ADMIN_LOGS_ROUTE: _handle_admin_logs,
-     ADMIN_SETTINGS_ROUTE: _handle_admin_settings_route,
-     ADMIN_CONFIG_ROUTE: _handle_admin_config,
+-    ADMIN_SETTINGS_ROUTE: _handle_admin_settings_route,
+-    ADMIN_CONFIG_ROUTE: _handle_admin_config,
++    ADMIN_SETTINGS_ROUTE: require_db_ready(_handle_admin_settings_route),
++    ADMIN_CONFIG_ROUTE: require_db_ready(_handle_admin_config),
      FAVICON_ROUTE: _handle_favicon,
      HEALTH_ROUTE: _handle_health,
-+    HEALTHZ_ROUTE: _handle_healthz,
-+    DIAG_DB_ROUTE: _handle_diag_db,
+     HEALTHZ_ROUTE: _handle_healthz,
+     DIAG_DB_ROUTE: _handle_diag_db,
      LIVE_ROUTE: _handle_live,
      READY_ROUTE: _handle_ready,
      INFO_ROUTE: _handle_info,
      WS_TOKEN_ROUTE: post_ws_token,
      LOGIN_ROUTE: post_login,
-     ME_ROUTE: get_me,
-     PROFILE_ROUTE: post_profile,
+-    ME_ROUTE: get_me,
+-    PROFILE_ROUTE: post_profile,
++    ME_ROUTE: require_db_ready(get_me),
++    PROFILE_ROUTE: require_db_ready(post_profile),
      ADMIN_FLOW_TRACE_ROUTE: _handle_admin_flow_trace_query,
      ADMIN_FLOW_ZIP_ROUTE: _handle_admin_flow_zip_query,
      ADMIN_FLOW_SESSIONS_ROUTE: _handle_admin_flow_sessions,
@@ -264,42 +86,19 @@ index 8952604b7360095037b60f533a98a57a8f2c4754..9ecaa66099698512846b224a24f136a5
  
  async def _handle_lifespan(
      receive: Callable[[], Awaitable[dict]],
-     send: Callable[[dict], Awaitable[None]],
- ) -> None:
-     global _lifespan_started
-+    global _warmup_task
- 
-     while True:
-         message = await receive()
-         message_type = message.get("type")
- 
-         if message_type == "lifespan.startup":
-             if not _lifespan_started:
--                try:
--                    await neon.init_schema()
--                except Exception:
--                    _log.exception("evt=lifespan_startup_failed")
--                    await send({"type": "lifespan.startup.failed", "message": "init_schema"})
--                    raise
-+                _warmup_task = asyncio.create_task(neon.warmup_neon())
-                 _lifespan_started = True
-             await send({"type": "lifespan.startup.complete"})
-         elif message_type == "lifespan.shutdown":
-             await send({"type": "lifespan.shutdown.complete"})
-             return
 diff --git a/app/db/neon.py b/app/db/neon.py
-index 461072d844d3bdb52ba0e593ae6c898194e410bc..115e3c88af09e9bff36e6e5096c928090061b8c8 100644
+index 115e3c88af09e9bff36e6e5096c928090061b8c8..7dd596b323b6e0ae692ec5c6bf7d77f049e520df 100644
 --- a/app/db/neon.py
 +++ b/app/db/neon.py
-@@ -1,75 +1,165 @@
+@@ -1,88 +1,90 @@
  """Neon database pool and helpers."""
  from __future__ import annotations
  
  import asyncio
  import logging
-+import os
-+import random
-+import time
+ import os
+ import random
+ import time
  from typing import Any, Dict, Optional
  
  import asyncpg
@@ -310,20 +109,22 @@ index 461072d844d3bdb52ba0e593ae6c898194e410bc..115e3c88af09e9bff36e6e5096c92809
  
  _pool: Optional[asyncpg.Pool] = None
  _pool_lock = asyncio.Lock()
-+_schema_lock = asyncio.Lock()
-+_schema_initialized = False
-+
-+_status: Dict[str, Any] = {"state": "init", "last_error": None, "updated_at": time.time()}
-+
-+_DB_CONNECT_TIMEOUT_S = float(os.getenv("DB_CONNECT_TIMEOUT_S", "30"))
-+_DB_RETRY_ATTEMPTS = int(os.getenv("DB_RETRY_ATTEMPTS", "6"))
-+_DB_RETRY_BASE_S = float(os.getenv("DB_RETRY_BASE_S", "1.0"))
-+_DB_RETRY_CAP_S = float(os.getenv("DB_RETRY_CAP_S", "30.0"))
-+
-+
-+def _update_status(**fields: Any) -> None:
-+    _status.update(fields)
-+    _status["updated_at"] = time.time()
+ _schema_lock = asyncio.Lock()
+ _schema_initialized = False
+ 
+ _status: Dict[str, Any] = {"state": "init", "last_error": None, "updated_at": time.time()}
+ 
+-_DB_CONNECT_TIMEOUT_S = float(os.getenv("DB_CONNECT_TIMEOUT_S", "30"))
+-_DB_RETRY_ATTEMPTS = int(os.getenv("DB_RETRY_ATTEMPTS", "6"))
++_DB_CONNECT_TIMEOUT_S = float(os.getenv("DB_CONNECT_TIMEOUT_S", "45"))
++_DB_RETRY_ATTEMPTS = int(os.getenv("DB_RETRY_ATTEMPTS", "10"))
+ _DB_RETRY_BASE_S = float(os.getenv("DB_RETRY_BASE_S", "1.0"))
+ _DB_RETRY_CAP_S = float(os.getenv("DB_RETRY_CAP_S", "30.0"))
+ 
+ 
+ def _update_status(**fields: Any) -> None:
+     _status.update(fields)
+     _status["updated_at"] = time.time()
  
  
  async def get_pool() -> asyncpg.Pool:
@@ -335,175 +136,50 @@ index 461072d844d3bdb52ba0e593ae6c898194e410bc..115e3c88af09e9bff36e6e5096c92809
              if _pool is None:
                  config = get_postgres_config()
                  dsn = config.main.dsn
--                _pool = await asyncpg.create_pool(
--                    dsn,
--                    statement_cache_size=0,
--                    max_size=10,
--                )
-+                if not dsn:
-+                    _update_status(state="error", last_error="MissingDatabaseURL")
-+                    _log.error("evt=db_connect_missing_url")
-+                    raise ValueError("DATABASE_URL is required")
-+
-+                attempt = 0
-+                for attempt in range(1, _DB_RETRY_ATTEMPTS + 1):
-+                    state = "connecting" if attempt == 1 else "retrying"
-+                    _update_status(state=state, last_error=None, attempt=attempt, timeout_s=_DB_CONNECT_TIMEOUT_S)
-+                    _log.info(
-+                        "evt=db_connect_attempt attempt=%s timeout_s=%s",
-+                        attempt,
-+                        _DB_CONNECT_TIMEOUT_S,
-+                    )
-+                    try:
-+                        _pool = await asyncpg.create_pool(
-+                            dsn,
-+                            statement_cache_size=0,
-+                            max_size=10,
-+                            timeout=_DB_CONNECT_TIMEOUT_S,
-+                        )
-+                        break
-+                    except Exception as exc:  # pragma: no cover - network failures
-+                        if attempt < _DB_RETRY_ATTEMPTS:
-+                            base_wait = min(_DB_RETRY_CAP_S, _DB_RETRY_BASE_S * (2 ** (attempt - 1)))
-+                            jitter = random.uniform(0, base_wait)
-+                            wait_seconds = min(_DB_RETRY_CAP_S, base_wait + jitter)
-+                        else:
-+                            wait_seconds = 0.0
-+                        _update_status(state="retrying", last_error=exc.__class__.__name__, attempt=attempt)
-+                        _log.info(
-+                            "evt=db_connect_retry attempt=%s wait_s=%.2f err=%s",
-+                            attempt,
-+                            wait_seconds,
-+                            exc.__class__.__name__,
-+                        )
-+                        if attempt >= _DB_RETRY_ATTEMPTS:
-+                            _update_status(state="error", last_error=exc.__class__.__name__, attempt=attempt)
-+                            _log.error("evt=db_connect_failed err=%s", exc.__class__.__name__)
-+                            raise
-+                        await asyncio.sleep(wait_seconds)
-+                else:  # pragma: no cover
-+                    raise RuntimeError("DB connection attempts exhausted")
-+
-+                assert _pool is not None
-+                _update_status(state="connected", last_error=None, attempt=attempt)
-+                _log.info("evt=db_connect_ok attempt=%s", attempt)
-                 _log.info("evt=db_pool_ready dsn=%s", redact_dsn(dsn))
-     assert _pool is not None
-     return _pool
+                 if not dsn:
+                     _update_status(state="error", last_error="MissingDatabaseURL")
+                     _log.error("evt=db_connect_missing_url")
+                     raise ValueError("DATABASE_URL is required")
  
+                 attempt = 0
+                 for attempt in range(1, _DB_RETRY_ATTEMPTS + 1):
+                     state = "connecting" if attempt == 1 else "retrying"
+                     _update_status(state=state, last_error=None, attempt=attempt, timeout_s=_DB_CONNECT_TIMEOUT_S)
+                     _log.info(
+                         "evt=db_connect_attempt attempt=%s timeout_s=%s",
+                         attempt,
+                         _DB_CONNECT_TIMEOUT_S,
+                     )
+                     try:
+                         _pool = await asyncpg.create_pool(
+                             dsn,
+                             statement_cache_size=0,
++                            min_size=0,
+                             max_size=10,
+                             timeout=_DB_CONNECT_TIMEOUT_S,
++                            max_inactive_connection_lifetime=180,
+                         )
+                         break
+                     except Exception as exc:  # pragma: no cover - network failures
+                         if attempt < _DB_RETRY_ATTEMPTS:
+                             base_wait = min(_DB_RETRY_CAP_S, _DB_RETRY_BASE_S * (2 ** (attempt - 1)))
+                             jitter = random.uniform(0, base_wait)
+                             wait_seconds = min(_DB_RETRY_CAP_S, base_wait + jitter)
+                         else:
+                             wait_seconds = 0.0
+                         _update_status(state="retrying", last_error=exc.__class__.__name__, attempt=attempt)
+                         _log.info(
+                             "evt=db_connect_retry attempt=%s wait_s=%.2f err=%s",
+                             attempt,
+                             wait_seconds,
+                             exc.__class__.__name__,
+                         )
+                         if attempt >= _DB_RETRY_ATTEMPTS:
+                             _update_status(state="error", last_error=exc.__class__.__name__, attempt=attempt)
+                             _log.error("evt=db_connect_failed err=%s", exc.__class__.__name__)
+                             raise
+                         await asyncio.sleep(wait_seconds)
+                 else:  # pragma: no cover
+                     raise RuntimeError("DB connection attempts exhausted")
  
- async def init_schema() -> None:
--    pool = await get_pool()
--    async with pool.acquire() as conn:
--        await conn.execute(
--            """
--            CREATE TABLE IF NOT EXISTS users (
--              email TEXT PRIMARY KEY,
--              name  TEXT,
--              title TEXT,
--              region TEXT,
--              created_at TIMESTAMPTZ DEFAULT NOW()
--            );
--            """
--        )
-+    global _schema_initialized
-+    if _schema_initialized:
-+        if _status.get("state") == "connected":
-+            _update_status(state="ready", last_error=None)
-+        return
-+
-+    async with _schema_lock:
-+        if _schema_initialized:
-+            if _status.get("state") == "connected":
-+                _update_status(state="ready", last_error=None)
-+            return
-+        try:
-+            pool = await get_pool()
-+            async with pool.acquire() as conn:
-+                await conn.execute(
-+                    """
-+                    CREATE TABLE IF NOT EXISTS users (
-+                      email TEXT PRIMARY KEY,
-+                      name  TEXT,
-+                      title TEXT,
-+                      region TEXT,
-+                      created_at TIMESTAMPTZ DEFAULT NOW()
-+                    );
-+                    """
-+                )
-+        except Exception as exc:
-+            _update_status(state="error", last_error=exc.__class__.__name__)
-+            raise
-+        _schema_initialized = True
-+        _update_status(state="ready", last_error=None)
-+        _log.info("evt=db_schema_ready")
-+
-+
-+async def warmup_neon() -> None:
-+    try:
-+        await get_pool()
-+        await init_schema()
-+    except Exception as exc:  # pragma: no cover - warmup failures
-+        _update_status(state="error", last_error=exc.__class__.__name__)
-+        _log.error("evt=db_warmup_failed err=%s", exc.__class__.__name__)
-+
-+
-+def db_status() -> Dict[str, Any]:
-+    return dict(_status)
- 
- 
- async def get_user(email: str) -> Optional[Dict[str, Any]]:
-     pool = await get_pool()
-     async with pool.acquire() as conn:
-         row = await conn.fetchrow(
-             "SELECT email, name, title, region FROM users WHERE email=$1",
-             email,
-         )
-     if row is None:
-         return None
-     return {
-         "email": row["email"],
-         "name": row["name"],
-         "title": row["title"],
-         "region": row["region"],
-     }
- 
- 
- async def upsert_user(
-     email: str,
-     name: Optional[str],
-     title: Optional[str],
-     region: Optional[str],
- ) -> Dict[str, Any]:
-@@ -86,29 +176,31 @@ async def upsert_user(
-               region = EXCLUDED.region
-             RETURNING email, name, title, region;
-             """,
-             email,
-             name,
-             title,
-             region,
-         )
-     return {
-         "email": row["email"],
-         "name": row["name"],
-         "title": row["title"],
-         "region": row["region"],
-     }
- 
- 
- def profile_complete(user: Dict[str, Any]) -> bool:
-     if not user:
-         return False
-     return bool(user.get("name") and user.get("title") and user.get("region"))
- 
- 
- __all__ = [
-     "get_pool",
-     "init_schema",
-+    "warmup_neon",
-+    "db_status",
-     "get_user",
-     "upsert_user",
-     "profile_complete",
- ]
+                 assert _pool is not None

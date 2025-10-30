@@ -21,8 +21,8 @@ _schema_initialized = False
 
 _status: Dict[str, Any] = {"state": "init", "last_error": None, "updated_at": time.time()}
 
-_DB_CONNECT_TIMEOUT_S = float(os.getenv("DB_CONNECT_TIMEOUT_S", "30"))
-_DB_RETRY_ATTEMPTS = int(os.getenv("DB_RETRY_ATTEMPTS", "6"))
+_DB_CONNECT_TIMEOUT_S = float(os.getenv("DB_CONNECT_TIMEOUT_S", "45"))
+_DB_RETRY_ATTEMPTS = int(os.getenv("DB_RETRY_ATTEMPTS", "10"))
 _DB_RETRY_BASE_S = float(os.getenv("DB_RETRY_BASE_S", "1.0"))
 _DB_RETRY_CAP_S = float(os.getenv("DB_RETRY_CAP_S", "30.0"))
 
@@ -59,8 +59,10 @@ async def get_pool() -> asyncpg.Pool:
                         _pool = await asyncpg.create_pool(
                             dsn,
                             statement_cache_size=0,
+                            min_size=0,
                             max_size=10,
                             timeout=_DB_CONNECT_TIMEOUT_S,
+                            max_inactive_connection_lifetime=180,
                         )
                         break
                     except Exception as exc:  # pragma: no cover - network failures

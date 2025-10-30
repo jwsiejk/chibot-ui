@@ -829,11 +829,24 @@ async def _handle_admin_settings_route(
     return await handle_admin_settings(scope, receive)
 
 
+def require_db_ready(handler: HttpHandler) -> HttpHandler:
+    async def _wrapped(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+        status = neon.db_status()
+        state = status.get("state", "init")
+        if state != "ready":
+            await _drain_request_body(receive)
+            _log.info("evt=db_guard_warming state=%s", state)
+            return json_response(status=503, db="warming")
+        return await handler(scope, receive)
+
+    return _wrapped
+
+
 _HTTP_ROUTES: Dict[str, HttpHandler] = {
     ROOT_ROUTE: _handle_index,
     ADMIN_LOGS_ROUTE: _handle_admin_logs,
-    ADMIN_SETTINGS_ROUTE: _handle_admin_settings_route,
-    ADMIN_CONFIG_ROUTE: _handle_admin_config,
+    ADMIN_SETTINGS_ROUTE: require_db_ready(_handle_admin_settings_route),
+    ADMIN_CONFIG_ROUTE: require_db_ready(_handle_admin_config),
     FAVICON_ROUTE: _handle_favicon,
     HEALTH_ROUTE: _handle_health,
     HEALTHZ_ROUTE: _handle_healthz,
@@ -843,8 +856,8 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     INFO_ROUTE: _handle_info,
     WS_TOKEN_ROUTE: post_ws_token,
     LOGIN_ROUTE: post_login,
-    ME_ROUTE: get_me,
-    PROFILE_ROUTE: post_profile,
+    ME_ROUTE: require_db_ready(get_me),
+    PROFILE_ROUTE: require_db_ready(post_profile),
     ADMIN_FLOW_TRACE_ROUTE: _handle_admin_flow_trace_query,
     ADMIN_FLOW_ZIP_ROUTE: _handle_admin_flow_zip_query,
     ADMIN_FLOW_SESSIONS_ROUTE: _handle_admin_flow_sessions,
