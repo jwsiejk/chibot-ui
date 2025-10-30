@@ -25,7 +25,6 @@
     let lastPartialSeq = null;
     let lastPartialReqId = null;
     let lastPartialRenderAt = 0;
-    let bargeInEnabled = true;
     const messageNodesById = new Map();
     const messageNodesByClientId = new Map();
     const messageNodesByReqId = new Map();
@@ -299,28 +298,6 @@
       }
     }
 
-    function maybeInterruptForBarge() {
-      const AppState = window.AppState;
-      if (!AppState || typeof AppState.getState !== "function") return;
-      const state = AppState.getState();
-      const speaking = !!(state && state.ttsUttId);
-      if (!speaking || !bargeInEnabled) return;
-      const audioPlayer = window.AudioPlayer;
-      if (audioPlayer && typeof audioPlayer.interrupt === "function") {
-        audioPlayer.interrupt();
-      }
-      if (typeof AppState.setState === "function") {
-        AppState.setState({ engineMode: "Listening" });
-      }
-      try {
-        window.dispatchEvent(
-          new CustomEvent("engine.mode", { detail: { mode: "Listening", source: "text_barge" } })
-        );
-      } catch (err) {
-        console.warn("TranscriptView: failed to emit engine.mode", err);
-      }
-    }
-
     function handleSubmit(event) {
       event.preventDefault();
       if (!input) return;
@@ -331,7 +308,6 @@
       const clientMsgId = generateClientMsgId();
       addUserMessage(trimmed, { clientMsgId, pending: true });
       sendChatPayload(trimmed, clientMsgId);
-      maybeInterruptForBarge();
       input.focus();
     }
 
@@ -416,21 +392,11 @@
       scrollToBottom();
     }
 
-    function handlePolicyInteraction(event) {
-      const detail = event && event.detail;
-      const policy = detail && detail.policy;
-      if (policy && typeof policy.barge_in_enabled === "boolean") {
-        bargeInEnabled = policy.barge_in_enabled;
-      }
-    }
-
     if (form && input) {
       form.addEventListener("submit", handleSubmit);
     }
 
-    window.addEventListener("policy.interaction", handlePolicyInteraction);
     window.addEventListener("ws.close", () => {
-      bargeInEnabled = true;
       clearPartial({ removeNode: true });
     });
 

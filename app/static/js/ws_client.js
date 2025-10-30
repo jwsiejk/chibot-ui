@@ -9,6 +9,7 @@
   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
 
   const USE_AUDIORECORDER = !!window.AudioRecorder;
+  const WAKE_WORD_ONLY = true;
 
   const AppState = window.AppState;
   if (!AppState) {
@@ -212,12 +213,14 @@
   }
 
   function canAutoRecord(state) {
+    if (WAKE_WORD_ONLY) return false;
     if (!state?.policy?.auto_record_after_greet) return false;
     if (state.policy.tts_gate_enabled && state.ttsActive) return false;
     return state.asrReady === true && state.turnState === "Ready" && !state.recorder?.active;
   }
 
   function reasonFromState(state) {
+    if (WAKE_WORD_ONLY) return "wake_word_only";
     if (!userGestureSatisfied && state?.policy?.require_user_gesture_first_visit) return "needs_user_gesture";
     if (!state?.policy?.auto_record_after_greet) return "policy_disabled";
     if (state.policy.tts_gate_enabled && state.ttsActive) return "tts_active";
@@ -395,7 +398,7 @@
   }
 
   function scheduleTapToSpeakCTA(policy, reason) {
-    if (reason === "already_active" || reason === "policy_disabled" || reason === "tts_active") {
+    if (reason === "already_active" || reason === "policy_disabled" || reason === "tts_active" || reason === "wake_word_only") {
       hideTapToSpeakCTA();
       return;
     }
@@ -420,6 +423,11 @@
   }
 
   function invokeStartRecording(trigger) {
+    if (WAKE_WORD_ONLY) {
+      const label = trigger ? String(trigger).slice(0, 32) : "unknown";
+      console.info("diag=start_recording_blocked trigger=%s mode=wake_word_only", label);
+      return false;
+    }
     let handler = null;
     if (typeof window !== "undefined" && typeof window.startRecording === "function") {
       handler = window.startRecording;

@@ -70,6 +70,8 @@
     }
   })();
 
+  const WAKE_WORD_ONLY = true;
+
   function isSameOrigin(url) {
     try {
       if (!/^(?:[a-z]+:)?\/\//i.test(url)) {
@@ -1018,6 +1020,14 @@
         recording: Boolean(runtimeState.isRecording),
       };
 
+      if (WAKE_WORD_ONLY) {
+        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+          blockedBy: 'wake_word_only',
+          audioIdle: runtimeState.audioPlaybackIdle,
+        });
+        return;
+      }
+
       if (runtimeState.isRecording) {
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
           blockedBy: 'recording',
@@ -1365,26 +1375,6 @@
     const textChatForm = document.getElementById('textChatForm');
     const textChatInput = document.getElementById('textChatInput');
 
-    const manualStopSelectors = ['[data-role="stop-button"]', '[data-action="stop-tts"]', '#stopBtn', '#stopButton'];
-    const manualStopButtons = [];
-    for (const selector of manualStopSelectors) {
-      manualStopButtons.push(...document.querySelectorAll(selector));
-    }
-    const boundManualStops = new Set();
-    manualStopButtons.forEach((btn) => {
-      if (!(btn instanceof HTMLElement) || boundManualStops.has(btn)) {
-        return;
-      }
-      boundManualStops.add(btn);
-      btn.addEventListener('click', (event) => {
-        if (event) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        sendManualInterrupt('manual_stop_button');
-      });
-    });
-
     // Chat submit wiring
     // Send typed chat to the server using chat.user frames
     if (textChatForm) {
@@ -1569,28 +1559,6 @@
       return false;
     }
 
-    function sendManualInterrupt(reason = 'manual_interrupt') {
-      const ws = window.ws;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        try {
-          ws.send(JSON.stringify({ type: 'tts.pause' }));
-        } catch (err) {
-          console.warn('Failed to send tts.pause frame', err);
-        }
-      } else {
-        console.warn('Skipping tts.pause; websocket unavailable');
-      }
-      try {
-        window.AudioRecorder?.startListening?.({ reason });
-      } catch (err) {
-        console.warn('AudioRecorder manual interrupt failed', err);
-      }
-      const audioPlayer = window.AudioPlayer;
-      if (audioPlayer && typeof audioPlayer.interrupt === 'function') {
-        audioPlayer.interrupt();
-      }
-    }
-
     function handleGlobalKeyDown(event) {
       if (event.defaultPrevented) return;
       const { key, ctrlKey, metaKey, altKey } = event;
@@ -1625,8 +1593,6 @@
         if (isInteractiveTarget(event.target)) {
           return;
         }
-        event.preventDefault();
-        sendManualInterrupt();
         return;
       }
     }
@@ -2317,18 +2283,9 @@ window.addEventListener('turn.state', (event) => {
   DiagRecorder.maybeStart('turn');
   maybeAutoStartCapture('turn_ready', 'tts_end');
 
-  console.info('ui: turn=Ready → startMicCaptureIfIdle()');
-  if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
-    try {
-      const maybe = window.AudioRecorder.startMicCaptureIfIdle();
-      if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
-        maybe.catch((err) => {
-          console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready failed', err);
-        });
-      }
-    } catch (err) {
-      console.error('AudioRecorder startMicCaptureIfIdle on turn=Ready threw', err);
-    }
+  if (WAKE_WORD_ONLY) {
+    console.info('diag=mic_capture_skip trigger=turn_ready mode=wake_word_only');
+    return;
   }
 });
 
@@ -2419,7 +2376,6 @@ window.addEventListener('asr.ready', (event) => {
       { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
     );
   }
-  console.info('ui: asr.ready → startMicCaptureIfIdle()');
   if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
     try {
       window.ChatView?.showSystemFromChip?.(
@@ -2433,6 +2389,10 @@ window.addEventListener('asr.ready', (event) => {
     asrRetry.timer = null;
   }
   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
+    if (WAKE_WORD_ONLY) {
+      console.info('diag=mic_capture_skip trigger=asr_ready mode=wake_word_only');
+      return;
+    }
     try {
       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
