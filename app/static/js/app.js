@@ -122,6 +122,27 @@
     return appendVersionQuery(joined);
   }
 
+  if (typeof window !== "undefined") {
+    window.addEventListener("client.log", (event) => {
+      try {
+        const detail = event?.detail;
+        if (!detail || typeof detail !== "object") {
+          return;
+        }
+        const AppState = window.AppState;
+        if (!AppState || !AppState.hub || typeof AppState.hub.log !== "function") {
+          return;
+        }
+        const label = typeof detail.label === "string" && detail.label ? detail.label : undefined;
+        AppState.hub.log(label, detail.detail);
+      } catch (err) {
+        try {
+          console.warn("client.log bridge failed", err);
+        } catch {}
+      }
+    });
+  }
+
   function loadScript(src) {
     const resolvedSrc = resolveScriptSrc(src);
     return new Promise((resolve, reject) => {
@@ -687,6 +708,112 @@
     const AppState = window.AppState;
     const WSClient = window.WSClient;
     const audioRecorder = window.AudioRecorder || null;
+
+    function installHubInterface() {
+      const hub = AppState && AppState.hub;
+      if (!hub || typeof hub._install !== "function") {
+        return;
+      }
+
+      const sendThroughPipe = (label, detail) => {
+        if (!sendClientLog(label, detail)) {
+          enqueueDeferredClientLog(label, detail);
+        }
+      };
+
+      const buildMirrorDetail = (detail, stageLabel) => {
+        let payload;
+        if (detail && typeof detail === "object") {
+          payload = cloneDiagDetail(detail);
+          if (!payload || typeof payload !== "object") {
+            payload = { value: payload };
+          }
+        } else if (detail === undefined) {
+          payload = {};
+        } else if (typeof detail === "string") {
+          payload = { message: detail };
+        } else {
+          payload = { value: detail };
+        }
+        if (payload && typeof payload === "object" && payload.stage_label === undefined) {
+          payload.stage_label = stageLabel;
+        }
+        return payload;
+      };
+
+      let boundSocket = null;
+
+      const hubImpl = {
+        log(label, detail) {
+          const normalizedLabel = typeof label === "string" && label ? label : "client.mic";
+          let consoleText = normalizedLabel;
+          let primaryDetail = detail;
+          if (normalizedLabel === "client.mic" && typeof detail === "string") {
+            consoleText = `${normalizedLabel} ${detail}`;
+            primaryDetail = { message: consoleText };
+          } else if (typeof detail === "string" && detail) {
+            consoleText = `${normalizedLabel} ${detail}`;
+          }
+          if (consoleText) {
+            try {
+              console.log(consoleText);
+            } catch {}
+          }
+          sendThroughPipe(normalizedLabel, primaryDetail);
+          if (normalizedLabel !== "client.mic") {
+            const mirrorDetail = buildMirrorDetail(detail, normalizedLabel);
+            sendThroughPipe("client.mic", mirrorDetail);
+          }
+        },
+        bindSocket(ws) {
+          const next = ws || null;
+          if (boundSocket === next) {
+            return;
+          }
+          boundSocket = next;
+          if (audioRecorder && typeof audioRecorder.setSocket === "function") {
+            try {
+              audioRecorder.setSocket(next);
+            } catch (err) {
+              console.warn("AudioRecorder bindSocket failed", err);
+            }
+          }
+          const outcome = next ? "bound" : "cleared";
+          hubImpl.log("client.ws", { outcome, source: "hub.bindSocket" });
+        },
+        startListening(policy) {
+          if (!audioRecorder || typeof audioRecorder.startListening !== "function") {
+            return undefined;
+          }
+          try {
+            return audioRecorder.startListening(policy || {});
+          } catch (err) {
+            console.warn("AudioRecorder startListening failed", err);
+            return undefined;
+          }
+        },
+        stopListening(reason) {
+          if (!audioRecorder || typeof audioRecorder.stopListening !== "function") {
+            return;
+          }
+          try {
+            if (reason && typeof reason === "object") {
+              audioRecorder.stopListening(reason);
+            } else if (reason !== undefined) {
+              audioRecorder.stopListening({ reason });
+            } else {
+              audioRecorder.stopListening();
+            }
+          } catch (err) {
+            console.warn("AudioRecorder stopListening failed", err);
+          }
+        },
+      };
+
+      hub._install(hubImpl);
+    }
+
+    installHubInterface();
 
     const runtimeState = {
       policy: null,
@@ -2163,10 +2290,10 @@
           } catch {}
         }
 
-        if (audioRecorder && typeof audioRecorder.setSocket === 'function') {
-          try {
-            audioRecorder.setSocket(getLiveSocket());
-          } catch {}
+        try {
+          AppState?.hub?.bindSocket?.(getLiveSocket());
+        } catch (err) {
+          console.warn('AppState.hub.bindSocket connect failed', err);
         }
         if (audioRecorder && typeof audioRecorder.start === 'function') {
           audioRecorder.start()
@@ -2190,6 +2317,11 @@
           } catch (err) {
             console.warn('AudioRecorder stop error', err);
           }
+        }
+        try {
+          AppState?.hub?.bindSocket?.(null);
+        } catch (err) {
+          console.warn('AppState.hub.bindSocket disconnect failed', err);
         }
         updateRecordingState(false, 'appstate.disconnect');
         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {

@@ -130,6 +130,28 @@ import { WakeWord } from "./wake_word.js";
   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
   const getAudioPlayer = () => window.AudioPlayer;
 
+  function hubLog(label, detail) {
+    const state = typeof window !== "undefined" ? window.AppState : null;
+    const hub = state && state.hub;
+    if (hub && typeof hub.log === "function") {
+      try {
+        hub.log(label, detail);
+        return true;
+      } catch (err) {
+        console.warn("AppState.hub.log failed", err);
+      }
+    }
+    if (typeof window !== "undefined") {
+      try {
+        window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
+        return true;
+      } catch (err) {
+        console.warn("client.log dispatch failed", err);
+      }
+    }
+    return false;
+  }
+
   try {
   if (typeof AppState.websocket === "undefined" && typeof AppState.getState === "function") {
     Object.defineProperty(AppState, "websocket", {
@@ -154,17 +176,13 @@ import { WakeWord } from "./wake_word.js";
         phase: AppState?.ttsActive ? 'tts_active' : 'post_tts',
         hold_flags: holdFlags,
       };
-      if (typeof logClient === "function") {
-        logClient('client.mic', { ...base, ...detail });
-      }
+      hubLog('client.mic', { ...base, ...detail });
     } catch {}
   }
 
   function logStage(label, detail = {}) {
     try {
-      if (typeof logClient === "function") {
-        logClient(label, { trace_id: __turnTraceId || null, ...detail });
-      }
+      hubLog(label, { trace_id: __turnTraceId || null, ...detail });
     } catch {}
   }
 
@@ -1854,6 +1872,13 @@ import { WakeWord } from "./wake_word.js";
           window.ws = ws;
         } catch {}
         try {
+          if (AppState && AppState.hub && typeof AppState.hub.bindSocket === "function") {
+            AppState.hub.bindSocket(ws);
+          }
+        } catch (err) {
+          console.warn("AppState.hub.bindSocket open failed", err);
+        }
+        try {
           if (!Array.isArray(WSClient._queue)) {
             WSClient._queue = [];
           }
@@ -1893,6 +1918,13 @@ import { WakeWord } from "./wake_word.js";
         try {
           window.ws = null;
         } catch {}
+        try {
+          if (AppState && AppState.hub && typeof AppState.hub.bindSocket === "function") {
+            AppState.hub.bindSocket(null);
+          }
+        } catch (err) {
+          console.warn("AppState.hub.bindSocket close failed", err);
+        }
         if (socket === ws) {
           socket = null;
           expectInfoFrame = true;
