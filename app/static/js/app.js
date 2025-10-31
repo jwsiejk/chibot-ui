@@ -289,7 +289,7 @@
   }
 
   function sendDiagHudEvent(eventName, detail, options = {}) {
-    if (!diagHudEnabled()) {      
+    if (!diagHudEnabled()) {
       return;
     }
     const wsClient = getWsClient();
@@ -327,9 +327,54 @@
     }
   }
 
+  const CLIENT_LOG_RATE_LIMIT_CAPACITY = 25;
+  const CLIENT_LOG_RATE_LIMIT_WINDOW_SECONDS = 2.0;
+  const CLIENT_LOG_RATE_LIMIT_WINDOW_MS = CLIENT_LOG_RATE_LIMIT_WINDOW_SECONDS * 1000;
+
+  const clientLogRateLimiter = {
+    tokens: CLIENT_LOG_RATE_LIMIT_CAPACITY,
+    lastRefill: Date.now(),
+  };
+
+  function refillClientLogTokens(now) {
+    const limiter = clientLogRateLimiter;
+    const elapsed = now - limiter.lastRefill;
+    if (!(elapsed > 0)) {
+      return;
+    }
+    const tokensToAdd = (elapsed / CLIENT_LOG_RATE_LIMIT_WINDOW_MS) * CLIENT_LOG_RATE_LIMIT_CAPACITY;
+    limiter.tokens = Math.min(
+      CLIENT_LOG_RATE_LIMIT_CAPACITY,
+      limiter.tokens + tokensToAdd
+    );
+    limiter.lastRefill = now;
+  }
+
+  function tryConsumeClientLogToken(count = 1) {
+    const limiter = clientLogRateLimiter;
+    const now = Date.now();
+    refillClientLogTokens(now);
+    if (limiter.tokens < count) {
+      return false;
+    }
+    limiter.tokens -= count;
+    return true;
+  }
+
+  function refundClientLogTokens(count = 1) {
+    const limiter = clientLogRateLimiter;
+    limiter.tokens = Math.min(
+      CLIENT_LOG_RATE_LIMIT_CAPACITY,
+      limiter.tokens + count
+    );
+  }
+
   function sendClientLog(label, detail) {
     const wsClient = getWsClient();
     if (!wsClientIsConnected(wsClient)) {
+      return false;
+    }
+    if (!tryConsumeClientLogToken(1)) {
       return false;
     }
     const frame = {
@@ -345,10 +390,11 @@
       wsClient.send(frame);
       return true;
     } catch (err) {
+      refundClientLogTokens(1);
       console.warn("Failed to send client.log event", err);
       return false;
     }
-  }  
+  }
 
   function diagChunkSampleN() {
     if (typeof window === "undefined") {
@@ -360,6 +406,47 @@
       return Math.floor(candidate);
     }
     return 10;
+  }
+
+  const MIC_TELEMETRY_CHUNK_SAMPLE_BUDGET = 1;
+  const MIC_TELEMETRY_HUB_SAMPLE_BUDGET = 1;
+  const MIC_TELEMETRY_FIRST_CHUNK_BUDGET = 1;
+
+  const micTelemetryState = {
+    streaming: false,
+    chunkLogBudget: 0,
+    firstChunkLogBudget: 0,
+    hubLogBudget: 0,
+  };
+
+  function beginMicTelemetrySession() {
+    micTelemetryState.streaming = true;
+    micTelemetryState.chunkLogBudget = MIC_TELEMETRY_CHUNK_SAMPLE_BUDGET;
+    micTelemetryState.firstChunkLogBudget = MIC_TELEMETRY_FIRST_CHUNK_BUDGET;
+    micTelemetryState.hubLogBudget = MIC_TELEMETRY_HUB_SAMPLE_BUDGET;
+  }
+
+  function endMicTelemetrySession() {
+    micTelemetryState.streaming = false;
+    micTelemetryState.chunkLogBudget = 0;
+    micTelemetryState.firstChunkLogBudget = 0;
+    micTelemetryState.hubLogBudget = 0;
+  }
+
+  function consumeMicTelemetryBudget(kind) {
+    if (!micTelemetryState.streaming) {
+      return true;
+    }
+    const key = `${kind}LogBudget`;
+    if (!Object.prototype.hasOwnProperty.call(micTelemetryState, key)) {
+      return false;
+    }
+    const remaining = micTelemetryState[key];
+    if (typeof remaining !== "number" || remaining <= 0) {
+      return false;
+    }
+    micTelemetryState[key] = remaining - 1;
+    return true;
   }
 
   let diagBadgeEl = null;
@@ -475,7 +562,7 @@
         console.error('WSClient audio chunk legacy send error', err);
       }
     }
-    if (typeof logClient === 'function') {
+    if (typeof logClient === 'function' && consumeMicTelemetryBudget('chunk')) {
       logClient('client.mic', `evt=mic_chunk_sent bytes=${bytes}`);
     }
     return result;
@@ -757,8 +844,14 @@
               console.log(consoleText);
             } catch {}
           }
+          if (normalizedLabel === "client.mic") {
+            if (consumeMicTelemetryBudget('hub')) {
+              sendThroughPipe(normalizedLabel, primaryDetail);
+            }
+            return;
+          }
           sendThroughPipe(normalizedLabel, primaryDetail);
-          if (normalizedLabel !== "client.mic") {
+          if (consumeMicTelemetryBudget('hub')) {
             const mirrorDetail = buildMirrorDetail(detail, normalizedLabel);
             sendThroughPipe("client.mic", mirrorDetail);
           }
@@ -887,6 +980,29 @@
     let clientReadyTimerId = null;
     let clientReadyStats = null;
     const deferredClientLogs = [];
+    let deferredClientLogFlushTimer = null;
+
+    function scheduleDeferredClientLogFlush(delayMs = CLIENT_LOG_RATE_LIMIT_WINDOW_MS) {
+      if (typeof window === 'undefined') {
+        return;
+      }
+      if (deferredClientLogFlushTimer) {
+        return;
+      }
+      const delay = Number.isFinite(delayMs) && delayMs > 0
+        ? delayMs
+        : CLIENT_LOG_RATE_LIMIT_WINDOW_MS;
+      deferredClientLogFlushTimer = window.setTimeout(() => {
+        deferredClientLogFlushTimer = null;
+        try {
+          flushDeferredClientLogs();
+        } catch (err) {
+          try {
+            console.warn('deferred client log flush failed', err);
+          } catch (_) {}
+        }
+      }, delay);
+    }
 
     function startClientReadyTracking(detail) {
       clientReadyStats = {
@@ -943,9 +1059,16 @@
       if (deferredClientLogs.length > 20) {
         deferredClientLogs.splice(0, deferredClientLogs.length - 20);
       }
+      scheduleDeferredClientLogFlush();
     }
 
     function flushDeferredClientLogs() {
+      if (deferredClientLogFlushTimer) {
+        try {
+          window.clearTimeout(deferredClientLogFlushTimer);
+        } catch (_) {}
+        deferredClientLogFlushTimer = null;
+      }
       if (!deferredClientLogs.length) {
         return;
       }
@@ -960,6 +1083,9 @@
           deferredClientLogs.unshift(entry);
           break;
         }
+      }
+      if (deferredClientLogs.length) {
+        scheduleDeferredClientLogFlush();
       }
     }
 
@@ -1038,10 +1164,12 @@
       runtimeState.isRecording = next;
       if (next) {
         if (!previous) {
+          beginMicTelemetrySession();
           resetMicSessionTelemetry();
           noteRecordingBadgeOn(source);
         }
       } else if (previous) {
+        endMicTelemetrySession();
         resetMicSessionTelemetry();
       }
       return next;
@@ -1110,8 +1238,10 @@
             : 0;
           if (size > 0) {
             micSessionTelemetry.firstChunkLogged = true;
-            const detail = { event: 'mic_first_chunk', bytes: size };
-            logClient(`evt=mic_first_chunk bytes=${size}`, detail);
+            if (consumeMicTelemetryBudget('firstChunk')) {
+              const detail = { event: 'mic_first_chunk', bytes: size };
+              logClient(`evt=mic_first_chunk bytes=${size}`, detail);
+            }
           }
         }
         return originalOnWebmData(event);
