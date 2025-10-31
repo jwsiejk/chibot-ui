@@ -1,988 +1,217 @@
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index 33e57e521f22ae5c5f7cee92eb4e9f0e465cbd70..8cecabe2293c07bb82d281568b8efa0ae89d35cf 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -936,51 +936,58 @@ class ASRRuntime:
-             ready_kwargs = {
-                 "sid": sid,
-                 "vendor": "deepgram",
-                 "stream_id": stream_id_value,
-             }
-             emit = getattr(self._bus, "emit", None)
-             if callable(emit):
-                 try:
-                     emit(EVT_ASR_READY, **ready_kwargs)
-                 except TypeError:
-                     emit(EVT_ASR_READY, ready_kwargs)
-             ready_event = {"type": EVT_ASR_READY, **ready_kwargs}
-             self._bus.publish(ready_event)
-             _log.info(
-                 "evt=asr_ready sid=%s vendor=deepgram stream_id=%s",
-                 sid,
-                 stream_id_value,
-             )
-             self._log_asr_rearmed(sid, state)
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 0e6355a6ceecfa9b8ef869fdf7de79ce4c669682..407b311fd832369e5f75db806333c36b37cd7e72 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1474,57 +1474,159 @@ import { WakeWord } from "./wake_word.js";
+       "subprotocol_selected",
+       "adapter_file",
+       "engine_file",
+       "asr_file"
+     ];
+     for (const key of stringKeys) {
+       if (typeof frame[key] === "string" && frame[key]) {
+         safe[key] = frame[key];
+       }
+     }
  
-             asr_ready_frame = {
-                 "type": "asr.ready",
-                 "vendor": "deepgram",
-                 "input": dict(state.input_desc),
-             }
--            self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
-+            self._bus.publish(
-+                {
-+                    "type": EVT_WS_JSON_SEND,
-+                    "sid": sid,
-+                    "frame": asr_ready_frame,
-+                    "payload": asr_ready_frame,
-+                }
-+            )
-             if stream_id:
-                 _log.info(
-                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
-                     sid,
-                     stream_id,
-                     "(not set)",
-                     int(self._idle_close_ms),
-                 )
-             pre_chunks_sent = state.chunks_sent
-             while state.pending:
-                 chunk = state.pending.popleft()
-                 chunk_len = len(chunk)
-                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
-                 self._forward_chunk(sid, state, chunk)
-             if state.chunks_sent == pre_chunks_sent:
-                 self._start_ready_watchdog(sid, state)
-             else:
-                 self._cancel_ready_watchdog(state)
-             state.stream_open_task = None
-             self._reset_idle_timer(sid, state)
+     if (Number.isFinite(frame.pid)) {
+       safe.pid = frame.pid;
+     }
  
-         def _on_done(_task: asyncio.Task[None]) -> None:
-             if state.stream_open_task is _task:
-                 state.stream_open_task = None
+     if (Array.isArray(frame.subprotocols_offered)) {
+       const subs = frame.subprotocols_offered.filter((value) => typeof value === "string" && value);
+       if (subs.length) {
+         safe.subprotocols_offered = subs;
+       }
+     }
  
-@@ -1337,51 +1344,58 @@ class ASRRuntime:
-         if loop is None:
-             return
-         self._cancel_ready_watchdog(state)
+     return safe;
+   }
  
-         def _fire() -> None:
-             state.ready_watchdog = None
-             armed_at = state.ready_armed_at
-             state.ready_armed_at = 0.0
-             if armed_at and state.last_audio_ts <= armed_at:
-                 _log.warning("evt=asr_no_audio_timeout sid=%s", sid)
-                 self._publish_asr_unavailable(
-                     sid,
-                     "no_audio_timeout",
-                     f"no audio received for {int(_NO_AUDIO_TIMEOUT_S)}s",
-                     state=state,
-                     force=False,
-                 )
-                 self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
-                 _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
-                 self._log_asr_rearmed(sid, state)
-                 asr_ready_frame = {
-                     "type": "asr.ready",
-                     "vendor": "deepgram",
-                     "input": dict(state.input_desc),
-                 }
--                self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
-+                self._bus.publish(
-+                    {
-+                        "type": EVT_WS_JSON_SEND,
-+                        "sid": sid,
-+                        "frame": asr_ready_frame,
-+                        "payload": asr_ready_frame,
-+                    }
-+                )
++  function sanitizeAsrReadyFrame(frame) {
++    const safe = { type: "asr.ready" };
++    if (!frame || typeof frame !== "object") {
++      return safe;
++    }
++
++    if (typeof frame.vendor === "string" && frame.vendor) {
++      safe.vendor = frame.vendor;
++    }
++
++    const rawInput = frame.input && typeof frame.input === "object" ? frame.input : null;
++    const input = {};
++    let hasInputField = false;
++
++    if (rawInput) {
++      if (typeof rawInput.container === "string" && rawInput.container) {
++        input.container = rawInput.container;
++        hasInputField = true;
++      }
++      if (typeof rawInput.codec === "string" && rawInput.codec) {
++        input.codec = rawInput.codec;
++        hasInputField = true;
++      }
++      if (typeof rawInput.mime === "string" && rawInput.mime) {
++        input.mime = rawInput.mime;
++        hasInputField = true;
++      }
++
++      if (Number.isFinite(rawInput.rate_hz)) {
++        input.rate_hz = rawInput.rate_hz;
++        hasInputField = true;
++      } else if (typeof rawInput.rate_hz === "string" && rawInput.rate_hz.trim()) {
++        const parsedRate = Number(rawInput.rate_hz);
++        if (Number.isFinite(parsedRate)) {
++          input.rate_hz = parsedRate;
++          hasInputField = true;
++        }
++      }
++
++      if (Number.isFinite(rawInput.channels)) {
++        input.channels = rawInput.channels;
++        hasInputField = true;
++      } else if (typeof rawInput.channels === "string" && rawInput.channels.trim()) {
++        const parsedChannels = Number(rawInput.channels);
++        if (Number.isFinite(parsedChannels)) {
++          input.channels = parsedChannels;
++          hasInputField = true;
++        }
++      }
++    }
++
++    const captureSources = [];
++    if (rawInput && rawInput.capture && typeof rawInput.capture === "object") {
++      captureSources.push(rawInput.capture);
++    }
++    if (frame.capture && typeof frame.capture === "object") {
++      captureSources.push(frame.capture);
++    }
++    for (const capture of captureSources) {
++      if (!capture || typeof capture !== "object") continue;
++      if (Number.isFinite(capture.timeslice_ms)) {
++        input.timeslice_ms = capture.timeslice_ms;
++        hasInputField = true;
++        break;
++      }
++      if (typeof capture.timeslice_ms === "string" && capture.timeslice_ms.trim()) {
++        const parsedSlice = Number(capture.timeslice_ms);
++        if (Number.isFinite(parsedSlice)) {
++          input.timeslice_ms = parsedSlice;
++          hasInputField = true;
++          break;
++        }
++      }
++    }
++
++    if (!hasInputField) {
++      return safe;
++    }
++
++    safe.input = input;
++    return safe;
++  }
++
+   function handleServerBannerFrame(frame) {
+     const sanitized = sanitizeServerBannerFrame(frame);
+     updateState({ serverBanner: sanitized });
+     console.log("WS server banner", sanitized);
+     dispatchFrame(sanitized);
+   }
  
-         state.ready_armed_at = time.monotonic()
-         state.ready_watchdog = loop.call_later(_NO_AUDIO_TIMEOUT_S, _fire)
++  function handleAsrReadyFrame(frame) {
++    const sanitized = sanitizeAsrReadyFrame(frame);
++    AppState.asrReady = true;
++    updateState({ asrReady: true });
++    if (typeof AppState.emit === "function") {
++      AppState.emit("asrReady", {
++        ready: true,
++        vendor: sanitized.vendor ?? null,
++        input: sanitized.input ?? null,
++      });
++    }
++    logStage('client.asr', {
++      stage: 'ready',
++      vendor: sanitized.vendor ?? null,
++      input: sanitized.input ?? null,
++    });
++    return sanitized;
++  }
++
+   const DEFAULT_POLICY_FLAGS = {
+     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
+     input: { require_hotword_to_start: false },
+     asr: { prearm_on_tts_end: true, keep_stream_warm_ms: 30000 },
+     routing: { ws_version: 'v2' },
+   };
  
-     def _reset_idle_timer(
-         self, sid: str, state: _SessionState, *, delay_override: float | None = None
-     ) -> None:
-         threshold_ms = self._idle_close_ms
-         if delay_override is None and threshold_ms <= 0:
-             return
-         loop = self._ensure_loop()
-         if loop is None:
-             return
-         self._cancel_idle_timer(state)
+   function sanitizePolicySnapshot(source) {
+     const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
+     const policy = { ...base };
  
-         delay = delay_override if delay_override is not None else threshold_ms / 1000.0
-         if delay <= 0:
-             return
- 
-         def _fire() -> None:
-             state.idle_handle = None
-             self._handle_idle_timeout(sid, state)
- 
-         state.idle_handle = loop.call_later(delay, _fire)
- 
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index f2f212e4e4cd04c0d55f1b33d9fb94222464fbc0..618394eb1afa5f329d6148b996930de4e4b4129a 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -815,245 +815,249 @@ class ChatV2Adapter:
-                 "error": "bad_utf8",
-                 "frame_type": None,
-                 "ws": {
-                     "dir": "in",
-                     "size": len(sanitized),
-                     "preview": self._make_preview_from_bytes(sanitized),
-                 },
-             }
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "bad_utf8", "Text frame must be UTF-8 encoded JSON")
-             return self._HandleResult(True)
- 
-         meta: Dict[str, Any] = {
-             "byte_count": byte_count,
-             "frame_type": None,
-             "ws": {
-                 "dir": "in",
-                 "size": byte_count,
-             },
+     if (source && typeof source === 'object') {
+       if (typeof source.mode === 'string') {
+         policy.mode = source.mode;
+       }
+       if (typeof source.allow_auto_vad === 'boolean') {
+         policy.allow_auto_vad = source.allow_auto_vad;
+       }
+       if (typeof source.barge_in_enabled === 'boolean') {
+         policy.barge_in_enabled = source.barge_in_enabled;
+       }
+       if (typeof source.ws_auth_mode === 'string' && source.ws_auth_mode.trim()) {
+         policy.ws_auth_mode = source.ws_auth_mode.trim();
+       }
+       if (typeof source.require_user_gesture_first_visit === 'boolean') {
+@@ -1920,51 +2022,51 @@ import { WakeWord } from "./wake_word.js";
+           });
          }
- 
-         preview = self._make_preview_from_bytes(payload_bytes)
-         if preview is not None:
-             meta["ws"]["preview"] = preview
- 
-+        frame_payload: Optional[Dict[str, Any]] = None
-+
-         if byte_count > self.text_limit_bytes:
-             meta["error"] = "frame_too_large"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "frame_too_large", "Text frame exceeds limit")
-             return self._HandleResult(False, 1009, "frame_too_large")
- 
-         try:
-             frame = json.loads(payload_bytes.decode("utf-8"))
-         except json.JSONDecodeError as exc:
-             meta["error"] = "bad_json"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
-             return self._HandleResult(True)
- 
-         if not isinstance(frame, dict):
-             meta["error"] = "schema_invalid"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
-             return self._HandleResult(True)
- 
-+        frame_payload = frame
-+
-         raw_type = frame.get("type")
-         if not isinstance(raw_type, str):
-             meta["error"] = "schema_invalid"
--            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
-             return self._HandleResult(True)
- 
-         frame_type = raw_type
-         meta["frame_type"] = frame_type
-         now_ms = int(time.time() * 1000)
-         ctx.last_client_activity_ms = now_ms
- 
-         if frame_type == "client.ping":
--            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
-                 ctx.last_pong_sent_ms = now_ms
-                 client_ts = frame.get("ts")
-                 payload = {"type": "server.pong", "ts": now_ms}
-                 if isinstance(client_ts, int):
-                     payload["echo"] = client_ts
-                 await self._send_json(send, ctx.sid, payload)
-             return self._HandleResult(True)
- 
-         if frame_type == "client.pong":
--            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             ctx.last_client_pong_ms = now_ms
-             return self._HandleResult(True)
- 
-         if frame_type == "ping":
--            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
-                 ctx.last_pong_sent_ms = now_ms
-                 reply_ts = frame.get("t")
-                 if not isinstance(reply_ts, int):
-                     reply_ts = now_ms
-                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
-             return self._HandleResult(True)
- 
-         if frame_type == "chat.user":
-             text = frame.get("text")
-             if not isinstance(text, str):
-                 meta["error"] = "schema_invalid"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "chat.user requires a string text field",
-                 )
-                 return self._HandleResult(False, 1003, "schema_invalid")
- 
-             try:
-                 text_bytes = text.encode("utf-8")
-             except UnicodeEncodeError:
-                 meta["error"] = "bad_utf8"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "bad_utf8",
-                     "chat.user text must be valid UTF-8",
-                 )
-                 return self._HandleResult(False, 1007, "bad_utf8")
- 
-             client_msg_id = frame.get("client_msg_id")
-             if client_msg_id is not None and not isinstance(client_msg_id, str):
-                 meta["error"] = "schema_invalid"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "chat.user client_msg_id must be a string if provided",
-                 )
-                 return self._HandleResult(False, 1003, "schema_invalid")
- 
-             ws_meta = meta.get("ws")
-             event_meta: Dict[str, Any] = {}
-             if isinstance(ws_meta, dict):
-                 event_meta["ws"] = dict(ws_meta)
-             event_meta["text_length"] = len(text_bytes)
-             preview = self._make_preview_from_bytes(text_bytes)
-             if preview is not None:
-                 event_meta["preview"] = preview
-             if client_msg_id is not None:
-                 event_meta["client_msg_id"] = client_msg_id
- 
-             event = {
-                 "schema_version": "1",
-                 "type": EVT_CHAT_USER,
-                 "sid": ctx.sid,
-                 "who": "server",
-                 "source": "ws_server",
-                 "meta": event_meta,
-                 "text": text,
-             }
-             if client_msg_id is not None:
-                 event["client_msg_id"] = client_msg_id
-             bus.publish(event)
-         else:
-             if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
-                 meta["error"] = "unknown_type"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(send, ctx.sid, "unknown_type", frame_type)
-                 return self._HandleResult(True)
- 
-             is_valid, hint = validate_frame(frame)
-             if not is_valid:
-                 meta["error"] = "schema_invalid"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 detail = hint or "Frame failed validation"
-                 await self._send_error(send, ctx.sid, "schema_invalid", detail)
-                 return self._HandleResult(True)
- 
-         if frame_type == "audio.header":
-             raw_format = frame.get("format")
-             effective_format: Optional[str] = None
-             snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
-             media_block = snapshot.get("media") if isinstance(snapshot, Mapping) else None
-             if isinstance(media_block, Mapping):
-                 media_format = media_block.get("asr_input")
-                 if isinstance(media_format, str) and media_format:
-                     effective_format = media_format
-             if not isinstance(effective_format, str) or not effective_format:
-                 if isinstance(raw_format, str):
-                     effective_format = "webm_opus" if raw_format == "opus" else raw_format
-                 else:
-                     effective_format = None
- 
-             profile = {
-                 "format": effective_format,
-                 "codec": raw_format,
-                 "sample_rate": frame.get("sample_rate"),
-                 "channels": frame.get("channels"),
-             }
-             if effective_format == "webm_opus" or raw_format == "opus":
-                 profile["container"] = "webm"
-                 profile["mime"] = "audio/webm;codecs=opus"
-             seq_start = frame.get("seq_start")
-             if seq_start is not None:
-                 if not isinstance(seq_start, int):
-                     meta["error"] = "schema_invalid"
--                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                     await self._send_error(
-                         send,
-                         ctx.sid,
-                         "schema_invalid",
-                         "audio.header seq_start must be an integer",
-                     )
-                     return self._HandleResult(False, 1003, "schema_invalid")
-                 if seq_start < 0:
-                     meta["error"] = "schema_invalid"
--                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                     await self._send_error(
-                         send,
-                         ctx.sid,
-                         "schema_invalid",
-                         "audio.header seq_start must be >= 0",
-                     )
-                     return self._HandleResult(False, 1003, "schema_invalid")
-                 profile["seq_start"] = seq_start
-             if ctx.audio_profile is not None:
-                 meta["error"] = "schema_invalid"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "duplicate or conflicting audio.header",
-                 )
-                 return self._HandleResult(True)
-             err = validate_audio_header_against_policy(frame, ctx.policy_snapshot)
-             if err:
-                 meta["error"] = "policy_violation"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 _log.warning("evt=policy_violation sid=%s err=%s", ctx.sid, err)
-                 await self._send_json(send, ctx.sid, {"type": "error", "error": err})
-                 return self._HandleResult(False, 4400, "policy_violation")
-             ctx.audio_profile = profile
-             if seq_start is not None:
-                 ctx.audio_seq = max(0, seq_start)
-                 ctx.audio_expected_seq = ctx.audio_seq
-                 ctx.audio_highest_seq = ctx.audio_seq - 1
-                 ctx.audio_buffer.clear()
-             audio_meta = {
-                 key: value
-                 for key, value in (
-                     ("format", profile.get("format")),
-                     ("sample_rate", profile.get("sample_rate")),
-                     ("channels", profile.get("channels")),
-                     ("seq_start", profile.get("seq_start")),
-                 )
-                 if value is not None
-             }
-             self._emit_session_step(
-                 ctx.sid,
-                 "audio.header.accepted",
-                 summary="Accepted audio header",
-                 meta=audio_meta,
-                 source="ws.audio",
-@@ -1142,175 +1146,175 @@ class ChatV2Adapter:
-                 bus.publish(
-                     {
-                         "type": EVT_CLIENT_LOG,
-                         "sid": ctx.sid,
-                         "who": "client",
-                         "source": "client_log",
-                         "meta": sanitized_log,
-                     }
-                 )
-             else:
-                 _log.info(
-                     "evt=ws_client_log sid=%s label=%s detail=empty",
-                     ctx.sid,
-                     frame.get("label"),
-                 )
- 
-         if frame_type == "client.banner":
-             sanitized_info = self._sanitize_client_banner_info(frame.get("info"))
-             if sanitized_info:
-                 ctx.client_banner_info = sanitized_info
-             elif ctx.client_banner_info is None:
-                 ctx.client_banner_info = {}
-             sanitized_event = self._sanitize_client_banner_event(frame.get("event"))
-             if sanitized_event is None:
-                 meta["error"] = "schema_invalid"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "client.banner event requires a label",
-                 )
-                 return self._HandleResult(True)
-             ctx.client_banner_events.append(dict(sanitized_event))
-             if len(ctx.client_banner_events) > 64:
-                 del ctx.client_banner_events[: len(ctx.client_banner_events) - 64]
-             log_meta: Dict[str, Any] = {
-                 "label": sanitized_event.get("label"),
-                 "client_ts_ms": sanitized_event.get("ts_ms"),
-             }
-             event_meta = sanitized_event.get("meta")
-             if event_meta:
-                 log_meta["event_meta"] = event_meta
-             if ctx.client_banner_info:
-                 log_meta["info"] = ctx.client_banner_info
-             meta["client_banner"] = {"label": sanitized_event.get("label")}
-             bus.publish(
-                 {
-                     "type": EVT_CLIENT_BANNER,
-                     "sid": ctx.sid,
-                     "who": "client",
-                     "source": "ws_client",
-                     "meta": log_meta,
-                 }
-             )
- 
-         if frame_type == "client.autostart":
-             event_name = frame.get("event")
-             if not isinstance(event_name, str) or not event_name.strip():
-                 meta["error"] = "schema_invalid"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "client.autostart requires an event label",
-                 )
-                 return self._HandleResult(True)
- 
-             normalized_event = event_name.strip()
-             if normalized_event not in _CLIENT_AUTOSTART_ALLOWED_EVENTS:
-                 meta["error"] = "schema_invalid"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "client.autostart event must be a supported value",
-                 )
-                 return self._HandleResult(True)
- 
-             sanitized_meta = self._sanitize_autostart_meta(frame.get("meta"))
-             event_payload: Dict[str, Any] = {"event": normalized_event}
-             if sanitized_meta:
-                 event_payload["meta"] = sanitized_meta
-             meta["client_autostart"] = dict(event_payload)
-             bus.publish(
-                 {
-                     "schema_version": "1",
-                     "type": EVT_CLIENT_AUTOSTART,
-                     "sid": ctx.sid,
-                     "who": "client",
-                     "source": "ws_client",
-                     "meta": event_payload,
-                 }
-             )
- 
-         if frame_type == "client.telemetry":
-             event_name = frame.get("event")
-             if event_name not in _CLIENT_TELEMETRY_ALLOWED_EVENTS:
-                 meta["error"] = "schema_invalid"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "client.telemetry event must be a supported value",
-                 )
-                 return self._HandleResult(True)
- 
-             frame_sid = frame.get("sid")
-             if frame_sid is not None and not isinstance(frame_sid, str):
-                 meta["error"] = "schema_invalid"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "client.telemetry sid must be a string if provided",
-                 )
-                 return self._HandleResult(True)
- 
-             telemetry_meta = frame.get("meta")
-             if telemetry_meta is None:
-                 telemetry_meta_dict: Dict[str, Any] = {}
-             elif isinstance(telemetry_meta, Mapping):
-                 telemetry_meta_dict = dict(telemetry_meta)
-             else:
-                 meta["error"] = "schema_invalid"
--                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "client.telemetry meta must be an object if provided",
-                 )
-                 return self._HandleResult(True)
- 
-             bus.publish(
-                 {
-                     "schema_version": "1",
-                     "type": event_name,
-                     "sid": frame_sid if isinstance(frame_sid, str) else ctx.sid,
-                     "who": "client",
-                     "source": "browser",
-                     "meta": telemetry_meta_dict,
-                 }
-             )
- 
--        await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-+        await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-         await self._invoke_engine("on_json", ctx.sid, frame)
-         return self._HandleResult(True)
- 
-     async def _handle_binary(
-         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> _HandleResult:
-         byte_count = len(data)
-         ctx.last_client_activity_ms = int(time.time() * 1000)
- 
-         limited = await self._check_rate_limit(ctx, send)
-         if limited is not None:
-             return limited
- 
-         if byte_count > self.binary_limit_bytes:
-             await self._publish(
-                 EVT_WS_AUDIO_RECV,
-                 ctx.sid,
-                 {
-                     "byte_count": byte_count,
-                     "error": "frame_too_large",
-                     "ws": {"dir": "in", "size": byte_count},
-                 },
-             )
-             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
-             return self._HandleResult(False, 1009, "frame_too_large")
-@@ -1523,67 +1527,72 @@ class ChatV2Adapter:
-         asr_runtime = getattr(self, "asr_runtime", None)
-         if asr_runtime is not None:
-             profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
-             fmt = str(profile.get("format") or "") if profile else ""
-             container = str(profile.get("container") or "") if profile else ""
-             codec = str(profile.get("codec") or "") if profile else ""
-             if not (fmt == "webm_opus" or (container == "webm" and codec == "opus")):
-                 try:
-                     asr_runtime.on_ws_audio(ctx.sid, chunk)
-                 except Exception:  # pragma: no cover - defensive logging
-                     _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
-         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
- 
-     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
-         removed = False
-         for key in list(ctx.audio_buffer):
-             if key < threshold:
-                 ctx.audio_buffer.pop(key, None)
-                 removed = True
-         if removed:
-             if ctx.audio_buffer:
-                 ctx.audio_highest_seq = max(ctx.audio_buffer)
-             else:
-                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
- 
--    async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
-+    async def _send_json(
-+        self,
-+        send: Callable[[dict], Awaitable[None]],
-+        sid: str,
-+        payload: Dict[str, Any],
-+    ) -> None:
-         text = json.dumps(payload, separators=(",", ":"))
-         await send({"type": "websocket.send", "text": text})
-         payload_bytes = text.encode("utf-8")
-         byte_count = len(payload_bytes)
-         meta: Dict[str, Any] = {
-             "byte_count": byte_count,
-             "frame_type": payload.get("type"),
-             "ws": {
-                 "dir": "out",
-                 "size": byte_count,
-             },
+       } catch (err) {
+         console.warn("Hub start_listening handler error", err);
+         const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+         logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+       }
+     } else if (frame.type === "stop_listening") {
+       try {
+         const hub = AppState?.hub;
+         if (hub && typeof hub.stopListening === "function") {
+           hub.stopListening("server_requested");
+         } else {
+           stopInputCapture({ reason: "server_requested" });
          }
-         preview = self._make_preview_from_bytes(payload_bytes)
-         if preview is not None:
-             meta["ws"]["preview"] = preview
--        await self._publish(EVT_WS_JSON_SEND, sid, meta)
-+        await self._publish(EVT_WS_JSON_SEND, sid, meta, payload)
- 
-     async def _send_error(
-         self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
-     ) -> None:
-         payload = {"type": "error", "code": code, "detail": detail}
-         await self._send_json(send, sid, payload)
- 
-     def _start_server_keepalive(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> None:
-         if self._ping_interval_ms <= 0 or ctx.server_keepalive_task is not None:
-             return
- 
-         async def _run() -> None:
-             interval = self._ping_interval_ms / 1000.0
-             if interval <= 0:
-                 return
-             try:
-                 while True:
-                     await asyncio.sleep(interval)
-                     now_ms = int(time.time() * 1000)
-                     last_activity = ctx.last_client_activity_ms or 0
-                     last_pong = ctx.last_client_pong_ms or 0
-                     last_ping = ctx.last_server_ping_ms or 0
-                     timeout_threshold = now_ms - _HEARTBEAT_TIMEOUT_MS
-@@ -2060,51 +2069,56 @@ class ChatV2Adapter:
-         _log.info("evt=asr_ready_tracker_start sid=%s", ctx.sid)
-         self._emit_session_step(
-             ctx.sid,
-             "asr.ready_tracker_started",
-             summary="Subscribed to ASR ready events",
-             source="ws.asr",
-         )
- 
-         loop = asyncio.get_running_loop()
- 
-         def _handle(event: dict) -> None:
-             if event.get("type") != EVT_ASR_READY:
-                 return
-             if event.get("sid") != ctx.sid:
-                 return
- 
-             def _mark_ready() -> None:
-                 if ctx.asr_ready:
-                     return
-                 ctx.asr_ready = True
-                 frame: Dict[str, Any] = {"type": "asr.ready"}
-                 vendor = event.get("vendor")
-                 if isinstance(vendor, str) and vendor:
-                     frame["vendor"] = vendor
-                 telemetry_bus.publish(
--                    {"type": EVT_WS_JSON_SEND, "sid": ctx.sid, "frame": frame}
-+                    {
-+                        "type": EVT_WS_JSON_SEND,
-+                        "sid": ctx.sid,
-+                        "frame": frame,
-+                        "payload": frame,
-+                    }
-                 )
- 
-             try:
-                 loop.call_soon_threadsafe(_mark_ready)
-             except RuntimeError:
-                 _mark_ready()
- 
-         ctx.asr_subscription_token = telemetry_bus.subscribe(EVT_ASR_READY, _handle)
- 
-     def _extract_outbound_payload(
-         self, ctx: AdapterContext, event: dict
-     ) -> Optional[Dict[str, Any]]:
-         payload = self._coerce_payload(event.get("payload"))
-         if payload is None:
-             payload = self._coerce_payload(event.get("frame"))
- 
-         if payload is None:
-             meta = event.get("meta")
-             if isinstance(meta, dict):
-                 ws_meta = meta.get("ws")
-                 if isinstance(ws_meta, dict):
-                     payload = self._coerce_payload(ws_meta.get("frame"))
-                     if payload is None:
-                         payload = self._coerce_payload(ws_meta.get("preview"))
- 
-@@ -2657,51 +2671,58 @@ class ChatV2Adapter:
- 
-         ctx.mic_nudge_sent = True
-         _log.warning(
-             "evt=ws_mic_open_timeout sid=%s timeout_s=%.2f mic_open=%s nudged=%s",
-             ctx.sid,
-             _MIC_OPEN_TIMEOUT_SECONDS,
-             ctx.client_mic_open,
-             ctx.mic_nudge_sent,
-         )
-         try:
-             asyncio.create_task(
-                 self._publish(
-                     "EVT_MIC_OPEN_TIMEOUT",
-                     ctx.sid,
-                     {"timeout_s": _MIC_OPEN_TIMEOUT_SECONDS},
-                 )
-             )
-         except RuntimeError:
-             pass
-         if ctx.outbox is not None:
-             nudge_frame = {
-                 "type": "hud.nudge",
-                 "code": "mic_permissions",
-                 "reason": "mic_open_timeout",
-             }
--            bus.publish({"type": EVT_WS_JSON_SEND, "sid": ctx.sid, "payload": nudge_frame})
-+            bus.publish(
-+                {
-+                    "type": EVT_WS_JSON_SEND,
-+                    "sid": ctx.sid,
-+                    "payload": nudge_frame,
-+                    "frame": nudge_frame,
-+                }
-+            )
- 
-     @staticmethod
-     def _cancel_mic_open_timer(ctx: AdapterContext) -> None:
-         timer = ctx.mic_open_timer
-         ctx.mic_open_timer = None
-         if timer is not None:
-             _log.info("evt=ws_mic_guard_cancel sid=%s", ctx.sid)
-             timer.cancel()
- 
-     def _initiate_listen_handoff(self, ctx: AdapterContext, req_id: str) -> bool:
-         if not ctx.await_user_expected or ctx.await_user_pending:
-             return False
- 
-         runtime = getattr(self, "asr_runtime", None)
-         if runtime is None:
-             return False
- 
-         prearm = getattr(runtime, "prearm", None)
-         if not callable(prearm):
-             return False
- 
-         key = self._turn_key(ctx, req_id)
-         self._set_pending_for_key(ctx, key)
-         self._clear_after_mask_for_key(ctx, key)
-         try:
-@@ -2721,72 +2742,86 @@ class ChatV2Adapter:
-         if token:
-             telemetry_bus.unsubscribe(token)
-         ctx.asr_ready = False
-         ctx.await_user_after_mask = False
- 
-         open_token = ctx.asr_open_subscription_token
-         ctx.asr_open_subscription_token = None
-         if open_token:
-             bus.unsubscribe(open_token)
-         
-     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
-         """Record the estimated outbound queue depth and emit diagnostics if needed."""
- 
-         ctx = self._contexts.get(sid)
-         if ctx is None:
-             return
- 
-         if not isinstance(queued, int):
-             try:
-                 queued = int(queued)
-             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
-                 raise TypeError("queued must be an integer") from exc
- 
-         await self._update_backpressure(ctx, max(0, queued))
- 
--    async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
-+    async def _publish(
-+        self,
-+        event_type: str,
-+        sid: str,
-+        meta: Dict[str, Any],
-+        payload: Optional[Mapping[str, Any]] = None,
-+    ) -> None:
-         # Special handling: session-step telemetry
-         if event_type == EVT_SESSION_STEP:
-             event = {
-                 "schema_version": "1",
-                 "type": EVT_SESSION_STEP,   # normalize type explicitly
-                 "sid": sid,
-                 "who": "server",
-                 "source": "ws_server",
-                 "meta": dict(meta),
-             }
-             bus.publish(event)
-             return
- 
-         event = {
-             "schema_version": "1",
-             "type": event_type,
-             "sid": sid,
-             "who": "server",
-             "source": "ws_server",
-             "meta": dict(meta),
+         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+       } catch (err) {
+         console.warn("Hub stop_listening handler error", err);
+         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+       }
+     } else if (frame.type === "input.start") {
+       startInputCapture(frame);
+     } else if (frame.type === "input.stop") {
+       stopInputCapture({ reason: "input.stop" });
+     } else if (frame.type === "asr.ready") {
+-      handleAsrReadyFrame(frame);
++      frame = handleAsrReadyFrame(frame) || frame;
+     } else if (frame.type === "asr.partial") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handlePartial === "function") {
+         try {
+           view.handlePartial(frame);
+         } catch (err) {
+           console.warn("TranscriptView partial handler error", err);
          }
-+        if payload is not None:
-+            if isinstance(payload, Mapping):
-+                frame_payload = dict(payload)
-+            else:
-+                frame_payload = payload
-+            event["payload"] = frame_payload
-+            if isinstance(frame_payload, Mapping):
-+                event.setdefault("frame", dict(frame_payload))
-         bus.publish(event)
- 
-     def _emit_session_step(
-         self,
-         sid: str,
-         step: str,
-         *,
-         summary: Optional[str] = None,
-         meta: Optional[Mapping[str, Any]] = None,
-         source: str = "ws_server",
-         who: str = "server",
-     ) -> None:
-         payload: Dict[str, Any] = {
-             "schema_version": "1",
-             "type": EVT_SESSION_STEP,
-             "sid": sid,
-             "who": who,
-             "source": source,
-             "meta": {"step": step},
+       }
+     } else if (frame.type === "asr.final") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleFinal === "function") {
+         try {
+           view.handleFinal(frame);
+         } catch (err) {
+           console.warn("TranscriptView final handler error", err);
          }
-         if meta:
-             try:
-                 payload["meta"].update(meta)
-             except Exception:
-                 payload["meta"]["detail"] = repr(meta)
-diff --git a/tests/test_ws_json_contract.py b/tests/test_ws_json_contract.py
-index a915ed09ece0331b81356315b4bfd61232fd708b..bea24ddbced6f63e43e8e13d75c88b6bebe0549c 100644
---- a/tests/test_ws_json_contract.py
-+++ b/tests/test_ws_json_contract.py
-@@ -1,36 +1,37 @@
- """Tests for chat.v2 JSON contract handshakes and diagnostics."""
- from __future__ import annotations
- 
- import asyncio
- import json
- import unittest
- import uuid
- from typing import Any, Callable, Dict, List
- 
- from app.telemetry import bus
--from app.voice_v2 import EVT_CLIENT_AUTOSTART, EVT_CLIENT_BANNER, EVT_WS_JSON_RECV
-+from app.voice_v2 import EVT_CLIENT_AUTOSTART, EVT_CLIENT_BANNER, EVT_WS_JSON_RECV, EVT_WS_JSON_SEND
-+from app.voice_v2.asr_runtime import ASRRuntime
- from app.security.jwt_utils import mint_ws_token
- from app.ws.adapter import (
-     CHAT_V2_SUBPROTOCOL,
-     EVT_BACKPRESSURE_OFF,
-     EVT_BACKPRESSURE_ON,
-     QUEUE_OFF_THRESHOLD,
-     QUEUE_ON_THRESHOLD,
-     ChatV2Adapter,
- )
- 
- 
- class RecordingEngine:
-     """Minimal engine stub that records the opened session identifier."""
- 
-     def __init__(self) -> None:
-         self.open_sid: str | None = None
- 
-     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
-         self.open_sid = sid
- 
- 
- class TestWebSocketJsonContract(unittest.TestCase):
-     """Integration tests covering JSON contract behavior."""
- 
-     def setUp(self) -> None:
-@@ -190,50 +191,89 @@ class TestWebSocketJsonContract(unittest.TestCase):
-         self.assertEqual(len(accepts), 1)
- 
-         send_payloads = [
-             json.loads(msg["text"])
-             for msg in sent
-             if msg.get("type") == "websocket.send" and msg.get("text") is not None
-         ]
-         error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
-         self.assertEqual(error_payloads, [])
- 
-         self.assertEqual(len(recorded), 1)
-         event = recorded[0]
-         self.assertEqual(event["type"], EVT_CLIENT_AUTOSTART)
-         event_meta = event.get("meta", {})
-         self.assertEqual(event_meta.get("event"), "blocked")
-         sanitized_meta = event_meta.get("meta", {})
-         self.assertIn("trigger", sanitized_meta)
-         self.assertEqual(sanitized_meta["trigger"], "boot")
-         self.assertIn("reason", sanitized_meta)
-         self.assertEqual(len(sanitized_meta["reason"]), 120)
-         self.assertEqual(sanitized_meta["attempt"], 3)
-         self.assertTrue(sanitized_meta["active"])
-         self.assertNotIn("ignore", sanitized_meta)
-         self.assertNotIn("empty", sanitized_meta)
- 
-+    def test_send_json_publishes_frame_payload_and_asr_runtime_consumes(self) -> None:
-+        adapter = ChatV2Adapter()
-+        sid = "sid-send-json"
-+        frame = {"type": "start_listening"}
-+
-+        recorded: List[dict] = []
-+        token = bus.subscribe(EVT_WS_JSON_SEND, recorded.append)
-+        try:
-+            sent: List[dict] = []
-+
-+            async def fake_send(message: dict) -> None:
-+                sent.append(message)
-+
-+            asyncio.run(adapter._send_json(fake_send, sid, frame))
-+        finally:
-+            bus.unsubscribe(token)
-+
-+        self.assertEqual(len(sent), 1)
-+        self.assertEqual(len(recorded), 1)
-+        event = recorded[0]
-+        self.assertEqual(event.get("type"), EVT_WS_JSON_SEND)
-+        self.assertEqual(event.get("sid"), sid)
-+        self.assertEqual(event.get("payload"), frame)
-+        self.assertEqual(event.get("frame"), frame)
-+
-+        runtime = ASRRuntime.__new__(ASRRuntime)
-+        runtime._sessions = {}
-+        runtime._ensure_stream = lambda *_args, **_kwargs: None  # type: ignore[attr-defined]
-+        runtime._bus = bus
-+        runtime._client = object()
-+        runtime._engine = object()
-+
-+        runtime._handle_ws_send_event(event)
-+
-+        session = runtime._sessions.get(sid)
-+        self.assertIsNotNone(session)
-+        if session is not None:
-+            self.assertTrue(session.listening)
-+
-     def test_backpressure_events_toggle_on_thresholds(self) -> None:
-         adapter = ChatV2Adapter()
-         engine = RecordingEngine()
-         adapter.engine = engine
- 
-         received: List[dict] = []
-         token_on = bus.subscribe(EVT_BACKPRESSURE_ON, lambda event: received.append(event))
-         token_off = bus.subscribe(EVT_BACKPRESSURE_OFF, lambda event: received.append(event))
-         try:
-             asyncio.run(self._exercise_backpressure(adapter, engine))
-         finally:
-             bus.unsubscribe(token_on)
-             bus.unsubscribe(token_off)
- 
-         self.assertEqual([event["type"] for event in received], [EVT_BACKPRESSURE_ON, EVT_BACKPRESSURE_OFF])
-         self.assertEqual(received[0]["meta"]["queue_depth"], QUEUE_ON_THRESHOLD + 1)
-         self.assertEqual(received[0]["meta"]["state"], "on")
-         self.assertEqual(received[1]["meta"]["queue_depth"], QUEUE_OFF_THRESHOLD - 1)
-         self.assertEqual(received[1]["meta"]["state"], "off")
- 
-     async def _exercise_backpressure(self, adapter: ChatV2Adapter, engine: RecordingEngine) -> None:
-         scope = self._make_scope()
-         queue: asyncio.Queue[dict] = asyncio.Queue()
-         sent: List[dict] = []
- 
+       }
+     } else if (frame.type === "asr.unavailable") {
+       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
+       const details = frame && typeof frame.details === "string"
+         ? frame.details
+         : (frame && typeof frame.detail === "string" ? frame.detail : "");
+       console.warn("asr.unavailable", reason, details);
+       AppState.asrReady = false;

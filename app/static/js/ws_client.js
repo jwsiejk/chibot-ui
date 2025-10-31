@@ -1496,11 +1496,113 @@ import { WakeWord } from "./wake_word.js";
     return safe;
   }
 
+  function sanitizeAsrReadyFrame(frame) {
+    const safe = { type: "asr.ready" };
+    if (!frame || typeof frame !== "object") {
+      return safe;
+    }
+
+    if (typeof frame.vendor === "string" && frame.vendor) {
+      safe.vendor = frame.vendor;
+    }
+
+    const rawInput = frame.input && typeof frame.input === "object" ? frame.input : null;
+    const input = {};
+    let hasInputField = false;
+
+    if (rawInput) {
+      if (typeof rawInput.container === "string" && rawInput.container) {
+        input.container = rawInput.container;
+        hasInputField = true;
+      }
+      if (typeof rawInput.codec === "string" && rawInput.codec) {
+        input.codec = rawInput.codec;
+        hasInputField = true;
+      }
+      if (typeof rawInput.mime === "string" && rawInput.mime) {
+        input.mime = rawInput.mime;
+        hasInputField = true;
+      }
+
+      if (Number.isFinite(rawInput.rate_hz)) {
+        input.rate_hz = rawInput.rate_hz;
+        hasInputField = true;
+      } else if (typeof rawInput.rate_hz === "string" && rawInput.rate_hz.trim()) {
+        const parsedRate = Number(rawInput.rate_hz);
+        if (Number.isFinite(parsedRate)) {
+          input.rate_hz = parsedRate;
+          hasInputField = true;
+        }
+      }
+
+      if (Number.isFinite(rawInput.channels)) {
+        input.channels = rawInput.channels;
+        hasInputField = true;
+      } else if (typeof rawInput.channels === "string" && rawInput.channels.trim()) {
+        const parsedChannels = Number(rawInput.channels);
+        if (Number.isFinite(parsedChannels)) {
+          input.channels = parsedChannels;
+          hasInputField = true;
+        }
+      }
+    }
+
+    const captureSources = [];
+    if (rawInput && rawInput.capture && typeof rawInput.capture === "object") {
+      captureSources.push(rawInput.capture);
+    }
+    if (frame.capture && typeof frame.capture === "object") {
+      captureSources.push(frame.capture);
+    }
+    for (const capture of captureSources) {
+      if (!capture || typeof capture !== "object") continue;
+      if (Number.isFinite(capture.timeslice_ms)) {
+        input.timeslice_ms = capture.timeslice_ms;
+        hasInputField = true;
+        break;
+      }
+      if (typeof capture.timeslice_ms === "string" && capture.timeslice_ms.trim()) {
+        const parsedSlice = Number(capture.timeslice_ms);
+        if (Number.isFinite(parsedSlice)) {
+          input.timeslice_ms = parsedSlice;
+          hasInputField = true;
+          break;
+        }
+      }
+    }
+
+    if (!hasInputField) {
+      return safe;
+    }
+
+    safe.input = input;
+    return safe;
+  }
+
   function handleServerBannerFrame(frame) {
     const sanitized = sanitizeServerBannerFrame(frame);
     updateState({ serverBanner: sanitized });
     console.log("WS server banner", sanitized);
     dispatchFrame(sanitized);
+  }
+
+  function handleAsrReadyFrame(frame) {
+    const sanitized = sanitizeAsrReadyFrame(frame);
+    AppState.asrReady = true;
+    updateState({ asrReady: true });
+    if (typeof AppState.emit === "function") {
+      AppState.emit("asrReady", {
+        ready: true,
+        vendor: sanitized.vendor ?? null,
+        input: sanitized.input ?? null,
+      });
+    }
+    logStage('client.asr', {
+      stage: 'ready',
+      vendor: sanitized.vendor ?? null,
+      input: sanitized.input ?? null,
+    });
+    return sanitized;
   }
 
   const DEFAULT_POLICY_FLAGS = {
@@ -1942,7 +2044,7 @@ import { WakeWord } from "./wake_word.js";
     } else if (frame.type === "input.stop") {
       stopInputCapture({ reason: "input.stop" });
     } else if (frame.type === "asr.ready") {
-      handleAsrReadyFrame(frame);
+      frame = handleAsrReadyFrame(frame) || frame;
     } else if (frame.type === "asr.partial") {
       const view = window.TranscriptView;
       if (view && typeof view.handlePartial === "function") {
