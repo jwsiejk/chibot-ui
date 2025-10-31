@@ -972,11 +972,29 @@ class ChatV2Adapter:
                 return self._HandleResult(True)
 
         if frame_type == "audio.header":
+            raw_format = frame.get("format")
+            effective_format: Optional[str] = None
+            snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
+            media_block = snapshot.get("media") if isinstance(snapshot, Mapping) else None
+            if isinstance(media_block, Mapping):
+                media_format = media_block.get("asr_input")
+                if isinstance(media_format, str) and media_format:
+                    effective_format = media_format
+            if not isinstance(effective_format, str) or not effective_format:
+                if isinstance(raw_format, str):
+                    effective_format = "webm_opus" if raw_format == "opus" else raw_format
+                else:
+                    effective_format = None
+
             profile = {
-                "format": frame.get("format"),
+                "format": effective_format,
+                "codec": raw_format,
                 "sample_rate": frame.get("sample_rate"),
                 "channels": frame.get("channels"),
             }
+            if effective_format == "webm_opus" or raw_format == "opus":
+                profile["container"] = "webm"
+                profile["mime"] = "audio/webm;codecs=opus"
             seq_start = frame.get("seq_start")
             if seq_start is not None:
                 if not isinstance(seq_start, int):
@@ -1358,6 +1376,20 @@ class ChatV2Adapter:
                 ctx.ingress_bytes,
             )
 
+        profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
+        runtime = getattr(self, "asr_runtime", None)
+        if runtime is not None and profile is not None:
+            fmt = str(profile.get("format") or "")
+            container = str(profile.get("container") or "")
+            codec = str(profile.get("codec") or "")
+            if fmt == "webm_opus" or (container == "webm" and codec == "opus"):
+                try:
+                    runtime.on_ws_audio(ctx.sid, data)
+                except Exception:  # pragma: no cover - defensive logging
+                    _log.warning(
+                        "evt=ws_asr_audio_forward_failed sid=%s", ctx.sid, exc_info=True
+                    )
+
         if ctx.audio_highest_seq < 0:
             ctx.audio_expected_seq = ctx.audio_seq
         seq = ctx.audio_seq
@@ -1490,10 +1522,15 @@ class ChatV2Adapter:
         self._handle_client_audio_activity(ctx)
         asr_runtime = getattr(self, "asr_runtime", None)
         if asr_runtime is not None:
-            try:
-                asr_runtime.on_ws_audio(ctx.sid, chunk)
-            except Exception:  # pragma: no cover - defensive logging
-                _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
+            profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
+            fmt = str(profile.get("format") or "") if profile else ""
+            container = str(profile.get("container") or "") if profile else ""
+            codec = str(profile.get("codec") or "") if profile else ""
+            if not (fmt == "webm_opus" or (container == "webm" and codec == "opus")):
+                try:
+                    asr_runtime.on_ws_audio(ctx.sid, chunk)
+                except Exception:  # pragma: no cover - defensive logging
+                    _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
 
     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
@@ -2950,6 +2987,11 @@ class ChatV2Adapter:
         await self._send_json(send, ctx.sid, ready_frame)
         await self._send_json(send, ctx.sid, input_start)
         await self._send_json(send, ctx.sid, {"type": "start_listening"})
+        _log.info(
+            "evt=asr_ready_bundle_sent sid=%s input.mime=audio/webm;codecs=opus capture.timeslice_ms=%s",
+            ctx.sid,
+            timeslice_ms,
+        )
 
     @staticmethod
     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:

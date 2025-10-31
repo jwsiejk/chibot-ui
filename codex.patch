@@ -1,708 +1,264 @@
-diff --git a/app/admin/api/settings.py b/app/admin/api/settings.py
-index d97ca09d979979763c460540ab30c4511675ff3b..09122b2de7efd136667957d46aed3b9829f9ca12 100644
---- a/app/admin/api/settings.py
-+++ b/app/admin/api/settings.py
-@@ -210,51 +210,54 @@ def _normalize_policy_asr(value: Any) -> Dict[str, Any]:
-     if not isinstance(value, Mapping):
-         raise ValueError("expected_object")
- 
-     if "prearm_on_tts_end" in value:
-         current["prearm_on_tts_end"] = _coerce_bool(value.get("prearm_on_tts_end"))
- 
-     if "keep_stream_warm_ms" in value:
-         current["keep_stream_warm_ms"] = _coerce_int(
-             value.get("keep_stream_warm_ms"), minimum=0, maximum=600000
-         )
- 
-     return current
- 
- 
- def _normalize_policy_routing(value: Any) -> Dict[str, Any]:
-     current = dict(config.POLICY_ROUTING)
-     if value is None:
-         raise ValueError("expected_object")
-     if not isinstance(value, Mapping):
-         raise ValueError("expected_object")
- 
-     if "ws_version" in value:
-         candidate = value.get("ws_version")
-         if not isinstance(candidate, str) or not candidate.strip():
-             raise ValueError("expected_string")
--        current["ws_version"] = candidate.strip()
-+        normalized = candidate.strip().lower()
-+        if normalized != "v2":
-+            raise ValueError("unsupported_ws_version")
-+        current["ws_version"] = "v2"
- 
-     return current
- 
- 
- def _normalize_setting(key: str, value: Any) -> Optional[Any]:
-     if value is None:
-         return None
-     if key == "diag_client_hud" or key == "diag_audio_guard":
-         coerced = _coerce_bool(value)
-         return "true" if coerced else "false"
-     if key == "diag_chunk_sample_n":
-         coerced = _coerce_int(value, minimum=_CHUNK_SAMPLE_MIN, maximum=_CHUNK_SAMPLE_MAX)
-         return str(coerced)
-     if key == "policy_media":
-         return _normalize_policy_media(value)
-     if key == "policy_capture":
-         return _normalize_policy_capture(value)
-     if key == "policy_recorder":
-         return _normalize_policy_recorder(value)
-     if key == "policy_input":
-         return _normalize_policy_input(value)
-     if key == "policy_asr":
-         return _normalize_policy_asr(value)
-     if key == "policy_routing":
-         return _normalize_policy_routing(value)
-diff --git a/app/admin/ui/config_panel.js b/app/admin/ui/config_panel.js
-index ee77cef17d4cf8c37dc88d51b4de0bae7c0b5977..f2d4b9d183f58866ac5a05f5e374d482422770f2 100644
---- a/app/admin/ui/config_panel.js
-+++ b/app/admin/ui/config_panel.js
-@@ -12,51 +12,51 @@
-     diag_chunk_sample_n: 10,
-     policy_media: {
-       asr_input: 'webm_opus',
-       asr_rate_hz: 48000,
-       asr_channels: 1,
-       fallbacks_allowed: false,
-     },
-     policy_capture: {
-       start_on_asr_ready: true,
-       start_on_turn_ready: true,
-       timeslice_ms: 200,
-       mask_during_tts: true,
-     },
-     policy_recorder: {
-       stop_on_tts_start: false,
-       mute_send_during_tts: true,
-     },
-     policy_input: {
-       require_hotword_to_start: false,
-     },
-     policy_asr: {
-       prearm_on_tts_end: true,
-       keep_stream_warm_ms: 30000,
-     },
-     policy_routing: {
--      ws_version: 'v1',
-+      ws_version: 'v2',
-     },
-   };
-   const CHUNK_MIN = 1;
-   const CHUNK_MAX = 100;
-   const MEDIA_ALLOWED_INPUTS = ['webm_opus', 'pcm_16k'];
-   const CAPTURE_TIMESLICE_MIN = 20;
-   const CAPTURE_TIMESLICE_STEP = 10;
- 
-   function cloneDefaults() {
-     return {
-       diag_client_hud: DEFAULTS.diag_client_hud,
-       diag_audio_guard: DEFAULTS.diag_audio_guard,
-       diag_chunk_sample_n: DEFAULTS.diag_chunk_sample_n,
-       policy_media: { ...DEFAULTS.policy_media },
-       policy_capture: { ...DEFAULTS.policy_capture },
-       policy_recorder: { ...DEFAULTS.policy_recorder },
-       policy_input: { ...DEFAULTS.policy_input },
-       policy_asr: { ...DEFAULTS.policy_asr },
-       policy_routing: { ...DEFAULTS.policy_routing },
-     };
-   }
- 
-   const state = {
-     values: cloneDefaults(),
-     loading: false,
-@@ -178,51 +178,51 @@
-     },
-     {
-       key: 'policy_asr.keep_stream_warm_ms',
-       settingKey: 'policy_asr',
-       prop: 'keep_stream_warm_ms',
-       type: 'number',
-       label: 'ASR keep-warm (ms)',
-       description: 'How long to keep the ASR stream warm after pre-arming.',
-       min: 0,
-       sanitize: (value) => {
-         const numeric = Number(value);
-         if (!Number.isFinite(numeric) || numeric < 0) {
-           return DEFAULTS.policy_asr.keep_stream_warm_ms;
-         }
-         return Math.round(numeric);
-       },
-     },
-     {
-       key: 'policy_routing.ws_version',
-       settingKey: 'policy_routing',
-       prop: 'ws_version',
-       type: 'select',
-       label: 'WS routing version',
-       description: 'WebSocket API version for chat connections.',
-       options: [
--        { value: 'v1', label: 'v1 (/ws/v1/chat)' },
-+        { value: 'v2', label: 'v2 (/ws/v2/chat)' },
-       ],
-     },
-   ];
- 
-   function setStatus(message, tone) {
-     if (!statusElement) {
-       return;
-     }
-     statusElement.textContent = message || '';
-     if (!tone) {
-       statusElement.removeAttribute('data-tone');
-       return;
-     }
-     statusElement.setAttribute('data-tone', tone);
-   }
- 
-   function updatePanelState() {
-     if (!panelRoot) return;
-     const saving = Object.keys(state.saving).length > 0;
-     panelRoot.classList.toggle('is-loading', Boolean(state.loading));
-     panelRoot.classList.toggle('is-saving', saving);
-   }
- 
-   function clampChunk(value) {
-     const candidate = Number(value);
-@@ -361,51 +361,51 @@
-     if (!value || typeof value !== 'object') {
-       return base;
-     }
-     if (Object.prototype.hasOwnProperty.call(value, 'prearm_on_tts_end')) {
-       base.prearm_on_tts_end = coerceBoolean(
-         value.prearm_on_tts_end,
-         base.prearm_on_tts_end,
-       );
-     }
-     if (Object.prototype.hasOwnProperty.call(value, 'keep_stream_warm_ms')) {
-       const numeric = Number(value.keep_stream_warm_ms);
-       base.keep_stream_warm_ms = Number.isFinite(numeric) && numeric >= 0
-         ? Math.round(numeric)
-         : DEFAULTS.policy_asr.keep_stream_warm_ms;
-     }
-     return base;
-   }
- 
-   function sanitizePolicyRouting(value) {
-     const base = { ...DEFAULTS.policy_routing };
-     if (!value || typeof value !== 'object') {
-       return base;
-     }
-     if (Object.prototype.hasOwnProperty.call(value, 'ws_version')) {
-       const candidate = typeof value.ws_version === 'string' ? value.ws_version.trim() : '';
--      base.ws_version = candidate || base.ws_version;
-+      base.ws_version = candidate && candidate.toLowerCase() === 'v2' ? 'v2' : base.ws_version;
-     }
-     return base;
-   }
- 
-   function sanitizeSettingValue(key, value) {
-     if (key === 'policy_media') {
-       return sanitizePolicyMedia(value);
-     }
-     if (key === 'policy_capture') {
-       return sanitizePolicyCapture(value);
-     }
-     if (key === 'policy_recorder') {
-       return sanitizePolicyRecorder(value);
-     }
-     if (key === 'policy_input') {
-       return sanitizePolicyInput(value);
-     }
-     if (key === 'policy_asr') {
-       return sanitizePolicyAsr(value);
-     }
-     if (key === 'policy_routing') {
-       return sanitizePolicyRouting(value);
-     }
-     if (key === 'diag_chunk_sample_n') {
-       return clampChunk(value);
-diff --git a/app/config.py b/app/config.py
-index 774fdb2c73c932190230adda843c25721170ef59..ab72566dbc5a1095d0f623f13295dcfa202e1a01 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -62,51 +62,51 @@ _DEFAULT_POLICY_MEDIA = {
-     "fallbacks_allowed": False,
- }
- 
- _DEFAULT_POLICY_CAPTURE = {
-     "start_on_asr_ready": True,
-     "start_on_turn_ready": True,
-     "timeslice_ms": 200,
-     "mask_during_tts": True,
- }
- 
- _DEFAULT_POLICY_RECORDER = {
-     "stop_on_tts_start": False,
-     "mute_send_during_tts": True,
- }
- 
- _DEFAULT_POLICY_INPUT = {
-     "require_hotword_to_start": False,
- }
- 
- _DEFAULT_POLICY_ASR = {
-     "prearm_on_tts_end": True,
-     "keep_stream_warm_ms": 30000,
- }
- 
- _DEFAULT_POLICY_ROUTING = {
--    "ws_version": "v1",
-+    "ws_version": "v2",
- }
- 
- POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
- POLICY_CAPTURE: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_CAPTURE)
- POLICY_RECORDER: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_RECORDER)
- POLICY_INPUT: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_INPUT)
- POLICY_ASR: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ASR)
- POLICY_ROUTING: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ROUTING)
- POLICY_OVERRIDES: MutableMapping[str, Any] = {
-     "media": dict(POLICY_MEDIA),
-     "capture": dict(POLICY_CAPTURE),
-     "policy": {
-         "recorder": dict(POLICY_RECORDER),
-         "input": dict(POLICY_INPUT),
-         "asr": dict(POLICY_ASR),
-         "routing": dict(POLICY_ROUTING),
-     },
- }
- 
- 
- def _normalize_key(key: str) -> str:
-     return key.strip().lower()
- 
- 
- def _env_name(key: str) -> str:
-@@ -367,51 +367,65 @@ def _sanitize_asr_policy(
-                 source,
-                 extra={"component": "admin.settings", "raw": raw},
-             )
- 
-     sanitized["keep_stream_warm_ms"] = _coerce_db_int(
-         value.get("keep_stream_warm_ms"),
-         sanitized["keep_stream_warm_ms"],
-         minimum=0,
-     )
- 
-     return sanitized
- 
- 
- def _sanitize_routing_policy(
-     value: Mapping[str, Any] | None,
-     *,
-     source: str,
-     raw: Any,
- ) -> Mapping[str, Any]:
-     sanitized = dict(_DEFAULT_POLICY_ROUTING)
-     if not isinstance(value, Mapping):
-         return sanitized
- 
-     ws_version = value.get("ws_version")
-     if isinstance(ws_version, str) and ws_version.strip():
--        sanitized["ws_version"] = ws_version.strip()
-+        candidate = ws_version.strip().lower()
-+        if candidate == "v2":
-+            sanitized["ws_version"] = "v2"
-+        else:
-+            _log.warning(
-+                "evt=admin_settings_invalid_policy_routing key=ws_version source=%s",
-+                source,
-+                extra={
-+                    "component": "admin.settings",
-+                    "raw": raw,
-+                    "configured_ws_version": ws_version,
-+                    "normalized_ws_version": "v2",
-+                },
-+            )
-+            sanitized["ws_version"] = "v2"
-     elif ws_version is not None:
-         _log.warning(
-             "evt=admin_settings_invalid_policy_routing key=ws_version source=%s",
-             source,
-             extra={"component": "admin.settings", "raw": raw},
-         )
- 
-     return sanitized
- 
- 
- def _get_cached_admin_setting(key: str) -> Optional[Any]:
-     normalized = _normalize_key(key)
-     with _ADMIN_SETTINGS_LOCK:
-         if normalized in _ADMIN_SETTINGS_CACHE:
-             return _ADMIN_SETTINGS_CACHE[normalized]
-     store = _get_admin_settings_store()
-     if store is None:
-         with _ADMIN_SETTINGS_LOCK:
-             _ADMIN_SETTINGS_CACHE.setdefault(normalized, None)
-         return None
-     value = store.get(normalized)
-     with _ADMIN_SETTINGS_LOCK:
-         _ADMIN_SETTINGS_CACHE[normalized] = value
-     return value
- 
-diff --git a/app/policy/loader.py b/app/policy/loader.py
-index b3dfca262fe9d83afe5eadae2f50808fbff8027c..3a7ca8507f6ce835f426487012d6331c0ac7cb32 100644
---- a/app/policy/loader.py
-+++ b/app/policy/loader.py
-@@ -17,51 +17,51 @@ _DEFAULT_ASSISTANT_TURN_ACTIONS: Sequence[str] = (
- # NOTE: These defaults represent the deterministic policy snapshot returned by
- # ``load_interaction_policy`` when no overrides are provided. The structure is
- # intentionally shallow so that overrides replace entire child objects rather
- # than performing recursive merges.
- _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
-     "mode": "idle",
-     "allow_auto_vad": True,
-     "barge_in_enabled": True,
-     "auto_commit_when_ready": True,
-     "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
-     "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
-     "suggestions": {"on_connect": True, "count": 3},
-     "policy": {
-         "recorder": {
-             "stop_on_tts_start": False,
-             "mute_send_during_tts": True,
-         },
-         "input": {
-             "require_hotword_to_start": False,
-         },
-         "asr": {
-             "prearm_on_tts_end": True,
-             "keep_stream_warm_ms": 30000,
-         },
-         "routing": {
--            "ws_version": "v1",
-+            "ws_version": "v2",
-         },
-     },
-     "actions": {
-         "allowed": ["answer"],
-         "surface_via_suggestions": True,
-         _ASSISTANT_TURN_SEQUENCE_KEY: list(_DEFAULT_ASSISTANT_TURN_ACTIONS),
-     },
-     "telemetry": {
-         "enabled": True,
-         "level": "debug",
-         "categories": {
-             "ws": True,
-             "audio": True,
-             "policy": True,
-             "tts": True,
-             "gate": True,
-             "barge": True,
-             "asr": True,
-             "nlu": True,
-             "nlg": True,
-             "client_ui": True,
-             "provider_debug": True,
-         },
-         "redaction": {"pii": True, "secrets": True, "text": False},
-         "sampling": {"percent": 100},
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 60a85c14df28ef73149397d84c09ba278ce48d3c..7a723d55a13d753a1e2fd74498dcf1ef0b0eef67 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1967,56 +1967,56 @@
-       }
- 
-       const ttlValue = Number(ttl_ms);
-       if (!Number.isFinite(ttlValue) || ttlValue <= 0) {
-         console.error('ws-token ttl invalid', ttl_ms);
-         showStartToast('Could not start session. Try again.');
-         return;
-       }
- 
-       rememberToken(sid, ttlValue);
- 
-       if (!tokenFreshEnough()) {
-         console.error('ws-token considered stale', { sid, ttl_ms: ttlValue });
-         showStartToast('Could not start session. Try again.');
-         return;
-       }
- 
-       const params = new URLSearchParams({ access_token });
-       const state = AppState && typeof AppState.getState === 'function' ? AppState.getState() : null;
-       if (state && state.resume && typeof state.resume.token === 'string') {
-         const resume = state.resume;
-         if (Number.isFinite(resume.expiresAt) && Date.now() < resume.expiresAt) {
-           params.set('resume', resume.token);
-         }
-       }
--      let wsPath = '/ws/v1/chat';
-+      let wsPath = '/ws/v2/chat';
-       try {
-         const routing = AppState?.policy?.policy?.routing;
-         const candidate = typeof routing?.ws_version === 'string' ? routing.ws_version.trim() : '';
--        if (candidate && candidate.toLowerCase() !== 'v1') {
--          console.warn('Unsupported ws_version from policy; forcing v1', candidate);
-+        if (candidate && candidate.toLowerCase() !== 'v2') {
-+          console.warn('Unsupported ws_version from policy; forcing v2', candidate);
-         }
-       } catch (err) {
-         console.warn('Failed to inspect policy routing for ws path', err);
-       }
-       const wsUrl = `${wsPath}?${params.toString()}`;
- 
-       // Add token as SECOND subprotocol so the server can read it if a proxy
-       // or any client path drops the query string.
-       const subprotocols = ['chat.v2', `jwt.${access_token}`];
- 
-       console.log('evt=ws_open_attempt', { url: wsUrl, protocols: subprotocols, sid });
- 
-       try {
-         WSClient.open(wsUrl, subprotocols);
-       } catch (err) {
-         console.error('WSClient.open failed', err);
-         if (AppState && typeof AppState.setState === 'function') {
-           AppState.setState({ connectionState: 'disconnected' });
-         }
-         showStartToast('Could not open a session. Please try again.');
-       }
-     }
- 
-     startBtn.addEventListener('click', (event) => {
-       event.preventDefault();
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 04f484234f84bd3e49b3a5ce9e661b00ae0548f6..0e6355a6ceecfa9b8ef869fdf7de79ce4c669682 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1181,57 +1181,57 @@ import { WakeWord } from "./wake_word.js";
-     const info = ws.__accessTokenInfo || { token: null, mintedAt: null };
-     const mintedAt = info && typeof info.mintedAt === "number" && Number.isFinite(info.mintedAt)
-       ? info.mintedAt
-       : null;
-     let message = null;
-     if (!mintedAt) {
-       message = "Couldn’t connect. Please login or complete your profile.";
-     } else if (Date.now() - mintedAt > TOKEN_EXPIRY_MS) {
-       message = "Session token expired. Click Start again.";
-     } else {
-       message = "Connection failed. Please try again.";
-     }
-     showConnectionToast(message);
-     ws.__handshakeToastShown = true;
-     recordClientBannerEvent("ws.handshake.toast", {
-       message,
-       minted_ms: mintedAt,
-       close_code: closeCode,
-     });
-   }
- 
-   function resolveWsPath() {
-     try {
-       const routing = AppState?.policy?.policy?.routing;
-       const candidate = typeof routing?.ws_version === 'string' ? routing.ws_version.trim() : '';
--      if (candidate && candidate.toLowerCase() !== 'v1') {
--        console.warn('Unsupported ws_version from policy; normalizing to v1', candidate);
-+      if (candidate && candidate.toLowerCase() !== 'v2') {
-+        console.warn('Unsupported ws_version from policy; normalizing to v2', candidate);
-       }
-     } catch (err) {
-       console.warn('Failed to inspect policy routing version', err);
-     }
--    return '/ws/v1/chat';
-+    return '/ws/v2/chat';
-   }
- 
-   function computeUrl(resumeToken) {
-     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-     const base = `${protocol}//${window.location.host}${resolveWsPath()}`;
-     const params = new URLSearchParams();
-     if (typeof resumeToken === "string" && resumeToken.trim()) {
-       params.set("resume", resumeToken.trim());
-     }
-     const query = params.toString();
-     return query ? `${base}?${query}` : base;
-   }
- 
-   function clearInfoWatchdog() {
-     if (infoWatchdogTimerId) {
-       clearTimeout(infoWatchdogTimerId);
-       infoWatchdogTimerId = null;
-     }
-   }
- 
-   function startInfoWatchdog() {
-     clearInfoWatchdog();
-     infoWatchdogTimerId = setTimeout(() => {
-       infoWatchdogTimerId = null;
-       console.warn("WS info frame not received within deadline");
-@@ -1485,51 +1485,51 @@ import { WakeWord } from "./wake_word.js";
-     if (Number.isFinite(frame.pid)) {
-       safe.pid = frame.pid;
-     }
- 
-     if (Array.isArray(frame.subprotocols_offered)) {
-       const subs = frame.subprotocols_offered.filter((value) => typeof value === "string" && value);
-       if (subs.length) {
-         safe.subprotocols_offered = subs;
-       }
-     }
- 
-     return safe;
-   }
- 
-   function handleServerBannerFrame(frame) {
-     const sanitized = sanitizeServerBannerFrame(frame);
-     updateState({ serverBanner: sanitized });
-     console.log("WS server banner", sanitized);
-     dispatchFrame(sanitized);
-   }
- 
-   const DEFAULT_POLICY_FLAGS = {
-     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
-     input: { require_hotword_to_start: false },
-     asr: { prearm_on_tts_end: true, keep_stream_warm_ms: 30000 },
--    routing: { ws_version: 'v1' },
-+    routing: { ws_version: 'v2' },
-   };
- 
-   function sanitizePolicySnapshot(source) {
-     const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
-     const policy = { ...base };
- 
-     if (source && typeof source === 'object') {
-       if (typeof source.mode === 'string') {
-         policy.mode = source.mode;
-       }
-       if (typeof source.allow_auto_vad === 'boolean') {
-         policy.allow_auto_vad = source.allow_auto_vad;
-       }
-       if (typeof source.barge_in_enabled === 'boolean') {
-         policy.barge_in_enabled = source.barge_in_enabled;
-       }
-       if (typeof source.ws_auth_mode === 'string' && source.ws_auth_mode.trim()) {
-         policy.ws_auth_mode = source.ws_auth_mode.trim();
-       }
-       if (typeof source.require_user_gesture_first_visit === 'boolean') {
-         policy.require_user_gesture_first_visit = source.require_user_gesture_first_visit;
-       }
-       if (typeof source.auto_record_after_greet === 'boolean') {
-         policy.auto_record_after_greet = source.auto_record_after_greet;
-       }
-@@ -1613,51 +1613,53 @@ import { WakeWord } from "./wake_word.js";
-           : DEFAULT_POLICY_FLAGS.input.require_hotword_to_start,
-       };
- 
-       const asr = rawNested.asr && typeof rawNested.asr === 'object' ? rawNested.asr : null;
-       let keepWarm = DEFAULT_POLICY_FLAGS.asr.keep_stream_warm_ms;
-       if (asr && Number.isFinite(Number(asr.keep_stream_warm_ms))) {
-         const parsed = Number(asr.keep_stream_warm_ms);
-         if (parsed >= 0) {
-           keepWarm = Math.round(parsed);
-         }
-       }
-       nested.asr = {
-         prearm_on_tts_end: asr && typeof asr.prearm_on_tts_end === 'boolean'
-           ? asr.prearm_on_tts_end
-           : DEFAULT_POLICY_FLAGS.asr.prearm_on_tts_end,
-         keep_stream_warm_ms: keepWarm,
-       };
- 
-       const routing = rawNested.routing && typeof rawNested.routing === 'object'
-         ? rawNested.routing
-         : null;
-       const rawVersion = routing && typeof routing.ws_version === 'string'
-         ? routing.ws_version.trim()
-         : '';
-       nested.routing = {
--        ws_version: rawVersion && rawVersion.toLowerCase() === 'v1' ? 'v1' : 'v1',
-+        ws_version: rawVersion && rawVersion.toLowerCase() === 'v2'
-+          ? 'v2'
-+          : DEFAULT_POLICY_FLAGS.routing.ws_version,
-       };
-     }
- 
-     policy.policy = nested;
-     return policy;
-   }
- 
-   function applyPolicySnapshotFromSource(source, origin) {
-     const sanitizedPolicy = sanitizePolicySnapshot(source);
-     AppState.policy = sanitizedPolicy;
-     updateState({ policy: sanitizedPolicy });
-     const snapshotFrame = { type: 'policy.snapshot', policy: sanitizedPolicy, origin: origin || null };
-     dispatchFrame(snapshotFrame);
-     dispatchFrame({ type: 'config.updated', policy: sanitizedPolicy, origin: origin || null });
-     return sanitizedPolicy;
-   }
- 
-   function sanitizePolicyFrame(frame) {
-     const safe = { type: 'policy.interaction' };
-     if (frame && typeof frame === 'object') {
-       Object.keys(frame).forEach((key) => {
-         if (key === 'policy') return;
-         safe[key] = frame[key];
-       });
-     }
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 658745b82c775f9fde26cd1c022293dcf415a3c2..8aecedef1707a375e5bc382693d18d27185b3b26 100644
+index 8aecedef1707a375e5bc382693d18d27185b3b26..a0837d938e8f813adc5a5d3b4c3981e7d536ae65 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -2834,58 +2834,58 @@ class ChatV2Adapter:
-         input_block = policy_block.get("input")
-         asr_block = policy_block.get("asr")
-         routing_block = policy_block.get("routing")
+@@ -950,55 +950,73 @@ class ChatV2Adapter:
+                 "sid": ctx.sid,
+                 "who": "server",
+                 "source": "ws_server",
+                 "meta": event_meta,
+                 "text": text,
+             }
+             if client_msg_id is not None:
+                 event["client_msg_id"] = client_msg_id
+             bus.publish(event)
+         else:
+             if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
+                 meta["error"] = "unknown_type"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                 await self._send_error(send, ctx.sid, "unknown_type", frame_type)
+                 return self._HandleResult(True)
  
-         stop_on_tts = bool(
-             recorder_block.get("stop_on_tts_start") if isinstance(recorder_block, Mapping) else False
-         )
-         mute_during_tts = bool(
-             recorder_block.get("mute_send_during_tts") if isinstance(recorder_block, Mapping) else False
-         )
-         require_hotword = bool(
-             input_block.get("require_hotword_to_start") if isinstance(input_block, Mapping) else False
-         )
-         prearm_on_tts_end = bool(
-             asr_block.get("prearm_on_tts_end") if isinstance(asr_block, Mapping) else False
-         )
-         keep_warm_raw = (
-             asr_block.get("keep_stream_warm_ms") if isinstance(asr_block, Mapping) else 0
-         )
-         try:
-             keep_warm_ms = int(keep_warm_raw)
-         except (TypeError, ValueError):
-             keep_warm_ms = 0
+             is_valid, hint = validate_frame(frame)
+             if not is_valid:
+                 meta["error"] = "schema_invalid"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                 detail = hint or "Frame failed validation"
+                 await self._send_error(send, ctx.sid, "schema_invalid", detail)
+                 return self._HandleResult(True)
  
-         routing_dict = dict(routing_block) if isinstance(routing_block, Mapping) else {}
--        ws_version = str(routing_dict.get("ws_version") or "").strip() or "v1"
--        if ws_version != "v1":
-+        ws_version = str(routing_dict.get("ws_version") or "").strip() or "v2"
-+        if ws_version != "v2":
-             _log.warning(
--                "evt=policy_routing_normalized sid=%s configured_ws_version=%s normalized_ws_version=v1",
-+                "evt=policy_routing_normalized sid=%s configured_ws_version=%s normalized_ws_version=v2",
-                 sid,
-                 ws_version,
+         if frame_type == "audio.header":
++            raw_format = frame.get("format")
++            effective_format: Optional[str] = None
++            snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
++            media_block = snapshot.get("media") if isinstance(snapshot, Mapping) else None
++            if isinstance(media_block, Mapping):
++                media_format = media_block.get("asr_input")
++                if isinstance(media_format, str) and media_format:
++                    effective_format = media_format
++            if not isinstance(effective_format, str) or not effective_format:
++                if isinstance(raw_format, str):
++                    effective_format = "webm_opus" if raw_format == "opus" else raw_format
++                else:
++                    effective_format = None
++
+             profile = {
+-                "format": frame.get("format"),
++                "format": effective_format,
++                "codec": raw_format,
+                 "sample_rate": frame.get("sample_rate"),
+                 "channels": frame.get("channels"),
+             }
++            if effective_format == "webm_opus" or raw_format == "opus":
++                profile["container"] = "webm"
++                profile["mime"] = "audio/webm;codecs=opus"
+             seq_start = frame.get("seq_start")
+             if seq_start is not None:
+                 if not isinstance(seq_start, int):
+                     meta["error"] = "schema_invalid"
+                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                     await self._send_error(
+                         send,
+                         ctx.sid,
+                         "schema_invalid",
+                         "audio.header seq_start must be an integer",
+                     )
+                     return self._HandleResult(False, 1003, "schema_invalid")
+                 if seq_start < 0:
+                     meta["error"] = "schema_invalid"
+                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                     await self._send_error(
+                         send,
+                         ctx.sid,
+                         "schema_invalid",
+                         "audio.header seq_start must be >= 0",
+                     )
+                     return self._HandleResult(False, 1003, "schema_invalid")
+                 profile["seq_start"] = seq_start
+             if ctx.audio_profile is not None:
+                 meta["error"] = "schema_invalid"
+@@ -1336,50 +1354,64 @@ class ChatV2Adapter:
+         if ctx.ingress_packets <= 0:
+             ctx.ingress_packets = 0
+             ctx.ingress_bytes = 0
+             ctx.first_ingress_ms = now_ms
+         ctx.ingress_packets += 1
+         pkt_len = byte_count
+         ctx.ingress_bytes += pkt_len
+ 
+         if ctx.ingress_packets == 1:
+             armed_ms = ctx.mic_armed_ms if isinstance(ctx.mic_armed_ms, int) else None
+             delta = (now_ms - armed_ms) if armed_ms is not None else None
+             _log.info(
+                 "evt=ws_audio_ingress sid=%s first_chunk=1 bytes=%s first_chunk_ms_since_mic_armed=%s",
+                 ctx.sid,
+                 pkt_len,
+                 delta,
              )
--            ws_version = "v1"
-+            ws_version = "v2"
-         routing_dict["ws_version"] = ws_version
-         policy_block_mut = dict(policy_block)
-         policy_block_mut["routing"] = routing_dict
-         snapshot["policy"] = policy_block_mut
+         elif ctx.ingress_packets % 50 == 0:
+             _log.info(
+                 "evt=ws_audio_ingress sid=%s packets=%s bytes=%s",
+                 ctx.sid,
+                 ctx.ingress_packets,
+                 ctx.ingress_bytes,
+             )
  
-         _log.info(
-             "evt=policy_snapshot sid=%s recorder.stop_on_tts_start=%s recorder.mute_send_during_tts=%s "
-             "input.require_hotword_to_start=%s asr.prearm_on_tts_end=%s asr.keep_stream_warm_ms=%s ws_version=%s",
-             sid,
-             stop_on_tts,
-             mute_during_tts,
-             require_hotword,
-             prearm_on_tts_end,
-             keep_warm_ms,
-             ws_version,
-         )
++        profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
++        runtime = getattr(self, "asr_runtime", None)
++        if runtime is not None and profile is not None:
++            fmt = str(profile.get("format") or "")
++            container = str(profile.get("container") or "")
++            codec = str(profile.get("codec") or "")
++            if fmt == "webm_opus" or (container == "webm" and codec == "opus"):
++                try:
++                    runtime.on_ws_audio(ctx.sid, data)
++                except Exception:  # pragma: no cover - defensive logging
++                    _log.warning(
++                        "evt=ws_asr_audio_forward_failed sid=%s", ctx.sid, exc_info=True
++                    )
++
+         if ctx.audio_highest_seq < 0:
+             ctx.audio_expected_seq = ctx.audio_seq
+         seq = ctx.audio_seq
+         ctx.audio_seq += 1
  
-     def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
-         snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
-         policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
-         if not isinstance(policy_block, Mapping):
-             return 0
-         asr_block = policy_block.get("asr")
-         if not isinstance(asr_block, Mapping):
-             return 0
+         if config.DIAG_AUDIO_GUARD and not ctx.diag_audio_seen:
+             ctx.diag_audio_seen = True
+             self._cancel_diag_timer(ctx)
+             bus.publish({"type": "EVT_DIAG_FIRST_AUDIO_FRAME", "sid": ctx.sid})
+ 
+         ctx.audio_chunks_recv += 1
+         ctx.audio_bytes_recv += byte_count
+         if ctx.audio_chunks_recv % 10 == 0:
+             _log.info(
+                 "evt=ws_audio_ingress sid=%s chunks=%d bytes=%d",
+                 ctx.sid,
+                 ctx.audio_chunks_recv,
+                 ctx.audio_bytes_recv,
+             )
+ 
+         await self._ingest_audio_chunk(ctx, bytes(data), seq)
+         return self._HandleResult(True)
+ 
+     async def _check_rate_limit(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+@@ -1468,54 +1500,59 @@ class ChatV2Adapter:
+             ctx.audio_expected_seq += 1
+         if ctx.audio_buffer:
+             ctx.audio_highest_seq = max(ctx.audio_buffer)
+         else:
+             ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+ 
+     async def _emit_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+         byte_count = len(chunk)
+         meta = {
+             "byte_count": byte_count,
+             "seq": seq,
+             "ws": {"dir": "in", "size": byte_count},
+         }
+         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+         if ctx.audio_chunks_recv == 1:
+             self._emit_session_step(
+                 ctx.sid,
+                 "audio.stream_started",
+                 summary="Received first audio chunk",
+                 meta={"byte_count": byte_count},
+                 source="ws.audio",
+             )
+         self._handle_client_audio_activity(ctx)
+         asr_runtime = getattr(self, "asr_runtime", None)
+         if asr_runtime is not None:
+-            try:
+-                asr_runtime.on_ws_audio(ctx.sid, chunk)
+-            except Exception:  # pragma: no cover - defensive logging
+-                _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
++            profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
++            fmt = str(profile.get("format") or "") if profile else ""
++            container = str(profile.get("container") or "") if profile else ""
++            codec = str(profile.get("codec") or "") if profile else ""
++            if not (fmt == "webm_opus" or (container == "webm" and codec == "opus")):
++                try:
++                    asr_runtime.on_ws_audio(ctx.sid, chunk)
++                except Exception:  # pragma: no cover - defensive logging
++                    _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
+         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
+ 
+     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
+         removed = False
+         for key in list(ctx.audio_buffer):
+             if key < threshold:
+                 ctx.audio_buffer.pop(key, None)
+                 removed = True
+         if removed:
+             if ctx.audio_buffer:
+                 ctx.audio_highest_seq = max(ctx.audio_buffer)
+             else:
+                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+ 
+     async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
+         text = json.dumps(payload, separators=(",", ":"))
+         await send({"type": "websocket.send", "text": text})
+         payload_bytes = text.encode("utf-8")
+         byte_count = len(payload_bytes)
+         meta: Dict[str, Any] = {
+             "byte_count": byte_count,
+             "frame_type": payload.get("type"),
+             "ws": {
+                 "dir": "out",
+                 "size": byte_count,
+@@ -2928,50 +2965,55 @@ class ChatV2Adapter:
+                 "channels": 1,
+                 "mime": "audio/webm;codecs=opus",
+             },
+         }
+         input_start = {
+             "type": "input.start",
+             "capture": {
+                 "container": "webm",
+                 "codec": "opus",
+                 "mime": "audio/webm;codecs=opus",
+                 "timeslice_ms": timeslice_ms,
+                 "manual_gate": False,
+             },
+         }
+ 
+         now_ms = int(time.time() * 1000)
+         ctx.asr_ready = True
+         ctx.ingress_packets = 0
+         ctx.ingress_bytes = 0
+         ctx.first_ingress_ms = None
+         ctx.mic_armed_ms = now_ms
+ 
+         await self._send_json(send, ctx.sid, ready_frame)
+         await self._send_json(send, ctx.sid, input_start)
+         await self._send_json(send, ctx.sid, {"type": "start_listening"})
++        _log.info(
++            "evt=asr_ready_bundle_sent sid=%s input.mime=audio/webm;codecs=opus capture.timeslice_ms=%s",
++            ctx.sid,
++            timeslice_ms,
++        )
+ 
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
+     @staticmethod
+     def _now_ms() -> int:
+         return int(time.time() * 1000)
+ 
+     @staticmethod
+     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
+         if not payload:
+             return None
+         preview = payload.decode("utf-8", "replace")
+         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
+         if len(preview) > limit:
+             return f"{preview[: limit - 1]}…"
+         return preview
+ 
+     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
+         ctx.outbound_queue_depth = queued
+         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
