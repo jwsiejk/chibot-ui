@@ -1,217 +1,300 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 0e6355a6ceecfa9b8ef869fdf7de79ce4c669682..407b311fd832369e5f75db806333c36b37cd7e72 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1474,57 +1474,159 @@ import { WakeWord } from "./wake_word.js";
-       "subprotocol_selected",
-       "adapter_file",
-       "engine_file",
-       "asr_file"
-     ];
-     for (const key of stringKeys) {
-       if (typeof frame[key] === "string" && frame[key]) {
-         safe[key] = frame[key];
-       }
-     }
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 618394eb1afa5f329d6148b996930de4e4b4129a..9448475e5a455a7622fe4f032a29541d374ed411 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -1280,54 +1280,50 @@ class ChatV2Adapter:
+                     "client.telemetry meta must be an object if provided",
+                 )
+                 return self._HandleResult(True)
  
-     if (Number.isFinite(frame.pid)) {
-       safe.pid = frame.pid;
-     }
+             bus.publish(
+                 {
+                     "schema_version": "1",
+                     "type": event_name,
+                     "sid": frame_sid if isinstance(frame_sid, str) else ctx.sid,
+                     "who": "client",
+                     "source": "browser",
+                     "meta": telemetry_meta_dict,
+                 }
+             )
  
-     if (Array.isArray(frame.subprotocols_offered)) {
-       const subs = frame.subprotocols_offered.filter((value) => typeof value === "string" && value);
-       if (subs.length) {
-         safe.subprotocols_offered = subs;
-       }
-     }
+         await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+         await self._invoke_engine("on_json", ctx.sid, frame)
+         return self._HandleResult(True)
  
-     return safe;
-   }
+     async def _handle_binary(
+         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> _HandleResult:
+         byte_count = len(data)
+         ctx.last_client_activity_ms = int(time.time() * 1000)
  
-+  function sanitizeAsrReadyFrame(frame) {
-+    const safe = { type: "asr.ready" };
-+    if (!frame || typeof frame !== "object") {
-+      return safe;
-+    }
-+
-+    if (typeof frame.vendor === "string" && frame.vendor) {
-+      safe.vendor = frame.vendor;
-+    }
-+
-+    const rawInput = frame.input && typeof frame.input === "object" ? frame.input : null;
-+    const input = {};
-+    let hasInputField = false;
-+
-+    if (rawInput) {
-+      if (typeof rawInput.container === "string" && rawInput.container) {
-+        input.container = rawInput.container;
-+        hasInputField = true;
-+      }
-+      if (typeof rawInput.codec === "string" && rawInput.codec) {
-+        input.codec = rawInput.codec;
-+        hasInputField = true;
-+      }
-+      if (typeof rawInput.mime === "string" && rawInput.mime) {
-+        input.mime = rawInput.mime;
-+        hasInputField = true;
-+      }
-+
-+      if (Number.isFinite(rawInput.rate_hz)) {
-+        input.rate_hz = rawInput.rate_hz;
-+        hasInputField = true;
-+      } else if (typeof rawInput.rate_hz === "string" && rawInput.rate_hz.trim()) {
-+        const parsedRate = Number(rawInput.rate_hz);
-+        if (Number.isFinite(parsedRate)) {
-+          input.rate_hz = parsedRate;
-+          hasInputField = true;
-+        }
-+      }
-+
-+      if (Number.isFinite(rawInput.channels)) {
-+        input.channels = rawInput.channels;
-+        hasInputField = true;
-+      } else if (typeof rawInput.channels === "string" && rawInput.channels.trim()) {
-+        const parsedChannels = Number(rawInput.channels);
-+        if (Number.isFinite(parsedChannels)) {
-+          input.channels = parsedChannels;
-+          hasInputField = true;
-+        }
-+      }
-+    }
-+
-+    const captureSources = [];
-+    if (rawInput && rawInput.capture && typeof rawInput.capture === "object") {
-+      captureSources.push(rawInput.capture);
-+    }
-+    if (frame.capture && typeof frame.capture === "object") {
-+      captureSources.push(frame.capture);
-+    }
-+    for (const capture of captureSources) {
-+      if (!capture || typeof capture !== "object") continue;
-+      if (Number.isFinite(capture.timeslice_ms)) {
-+        input.timeslice_ms = capture.timeslice_ms;
-+        hasInputField = true;
-+        break;
-+      }
-+      if (typeof capture.timeslice_ms === "string" && capture.timeslice_ms.trim()) {
-+        const parsedSlice = Number(capture.timeslice_ms);
-+        if (Number.isFinite(parsedSlice)) {
-+          input.timeslice_ms = parsedSlice;
-+          hasInputField = true;
-+          break;
-+        }
-+      }
-+    }
-+
-+    if (!hasInputField) {
-+      return safe;
-+    }
-+
-+    safe.input = input;
-+    return safe;
-+  }
-+
-   function handleServerBannerFrame(frame) {
-     const sanitized = sanitizeServerBannerFrame(frame);
-     updateState({ serverBanner: sanitized });
-     console.log("WS server banner", sanitized);
-     dispatchFrame(sanitized);
-   }
+-        limited = await self._check_rate_limit(ctx, send)
+-        if limited is not None:
+-            return limited
+-
+         if byte_count > self.binary_limit_bytes:
+             await self._publish(
+                 EVT_WS_AUDIO_RECV,
+                 ctx.sid,
+                 {
+                     "byte_count": byte_count,
+                     "error": "frame_too_large",
+                     "ws": {"dir": "in", "size": byte_count},
+                 },
+             )
+             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
+             return self._HandleResult(False, 1009, "frame_too_large")
  
-+  function handleAsrReadyFrame(frame) {
-+    const sanitized = sanitizeAsrReadyFrame(frame);
-+    AppState.asrReady = true;
-+    updateState({ asrReady: true });
-+    if (typeof AppState.emit === "function") {
-+      AppState.emit("asrReady", {
-+        ready: true,
-+        vendor: sanitized.vendor ?? null,
-+        input: sanitized.input ?? null,
-+      });
-+    }
-+    logStage('client.asr', {
-+      stage: 'ready',
-+      vendor: sanitized.vendor ?? null,
-+      input: sanitized.input ?? null,
-+    });
-+    return sanitized;
-+  }
+         if not ctx.asr_ready:
+             if ALLOW_AUDIO_WITHOUT_ASR:
+                 _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
+             else:
+                 meta = {
+                     "byte_count": byte_count,
+                     "error": "audio_not_expected",
+                     "ws": {"dir": "in", "size": byte_count},
+                 }
+                 await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+                 await self._send_error(
+                     send,
+diff --git a/tests/test_ws_binary_guard.py b/tests/test_ws_binary_guard.py
+index df2d077c043dec8a068557fb1614095c405cd1f5..d6399a8b8134cd819e6fc8c50fd07e4c7179e50b 100644
+--- a/tests/test_ws_binary_guard.py
++++ b/tests/test_ws_binary_guard.py
+@@ -1,38 +1,42 @@
+ """Tests for binary audio routing guard in the chat.v2 adapter."""
+ from __future__ import annotations
+ 
+ import asyncio
++import os
+ import json
+ import uuid
+ from typing import Any, Dict, List
+ 
+ import unittest
+ 
++os.environ.setdefault("SECRET_KEY", "test-secret")
++os.environ.setdefault("ALLOW_AUDIO_WITHOUT_ASR", "1")
 +
-   const DEFAULT_POLICY_FLAGS = {
-     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
-     input: { require_hotword_to_start: false },
-     asr: { prearm_on_tts_end: true, keep_stream_warm_ms: 30000 },
-     routing: { ws_version: 'v2' },
-   };
+ from app.telemetry import bus
+ from app.voice_v2 import EVT_ASR_READY, EVT_WS_AUDIO_RECV
+-from app.ws.adapter import ChatV2Adapter
++from app.ws.adapter import ChatV2Adapter, RATE_LIMIT_CAPACITY
+ from app.security.jwt_utils import mint_ws_token
  
-   function sanitizePolicySnapshot(source) {
-     const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
-     const policy = { ...base };
  
-     if (source && typeof source === 'object') {
-       if (typeof source.mode === 'string') {
-         policy.mode = source.mode;
-       }
-       if (typeof source.allow_auto_vad === 'boolean') {
-         policy.allow_auto_vad = source.allow_auto_vad;
-       }
-       if (typeof source.barge_in_enabled === 'boolean') {
-         policy.barge_in_enabled = source.barge_in_enabled;
-       }
-       if (typeof source.ws_auth_mode === 'string' && source.ws_auth_mode.trim()) {
-         policy.ws_auth_mode = source.ws_auth_mode.trim();
-       }
-       if (typeof source.require_user_gesture_first_visit === 'boolean') {
-@@ -1920,51 +2022,51 @@ import { WakeWord } from "./wake_word.js";
-           });
+ class RecordingEngine:
+     """Recording stub for the engine hooks."""
+ 
+     def __init__(self, adapter: ChatV2Adapter, accept_audio: bool = True) -> None:
+         self.adapter = adapter
+         self.accept_audio = accept_audio
+         self.open_sid: str | None = None
+         self.audio_calls: List[tuple[str, bytes, int]] = []
+ 
+     def on_open(self, sid: str, headers: Dict[str, str]) -> None:  # pragma: no cover - exercised via adapter
+         self.open_sid = sid
+         bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+         if not self.accept_audio:
+             self.adapter.set_accepting_audio(sid, False)
+ 
+     def on_json(self, sid: str, frame: Dict[str, Any]) -> None:  # pragma: no cover - signature stub
+         return None
+ 
+     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
+         self.audio_calls.append((sid, chunk, seq))
+ 
+ 
+@@ -54,50 +58,67 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
+             "subprotocols": ["chat.v2"],
+             "headers": [(b"authorization", f"Bearer {token}".encode("ascii"))],
+             "client": ("127.0.0.1", 12345),
+             "query_string": f"access_token={token}".encode("ascii"),
          }
-       } catch (err) {
-         console.warn("Hub start_listening handler error", err);
-         const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-         logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-       }
-     } else if (frame.type === "stop_listening") {
-       try {
-         const hub = AppState?.hub;
-         if (hub && typeof hub.stopListening === "function") {
-           hub.stopListening("server_requested");
-         } else {
-           stopInputCapture({ reason: "server_requested" });
-         }
-         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-       } catch (err) {
-         console.warn("Hub stop_listening handler error", err);
-         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-       }
-     } else if (frame.type === "input.start") {
-       startInputCapture(frame);
-     } else if (frame.type === "input.stop") {
-       stopInputCapture({ reason: "input.stop" });
-     } else if (frame.type === "asr.ready") {
--      handleAsrReadyFrame(frame);
-+      frame = handleAsrReadyFrame(frame) || frame;
-     } else if (frame.type === "asr.partial") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handlePartial === "function") {
-         try {
-           view.handlePartial(frame);
-         } catch (err) {
-           console.warn("TranscriptView partial handler error", err);
-         }
-       }
-     } else if (frame.type === "asr.final") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleFinal === "function") {
-         try {
-           view.handleFinal(frame);
-         } catch (err) {
-           console.warn("TranscriptView final handler error", err);
-         }
-       }
-     } else if (frame.type === "asr.unavailable") {
-       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
-       const details = frame && typeof frame.details === "string"
-         ? frame.details
-         : (frame && typeof frame.detail === "string" ? frame.detail : "");
-       console.warn("asr.unavailable", reason, details);
-       AppState.asrReady = false;
+ 
+     async def _run_adapter(self, adapter: ChatV2Adapter, events: List[dict]) -> List[dict]:
+         queue: asyncio.Queue[dict] = asyncio.Queue()
+         for event in events:
+             queue.put_nowait(event)
+ 
+         sent: List[dict] = []
+ 
+         async def receive() -> dict:
+             return await queue.get()
+ 
+         async def send(message: dict) -> None:
+             sent.append(message)
+ 
+         await adapter(self._make_scope(), receive, send)
+         return sent
+ 
+     def _drive(self, adapter: ChatV2Adapter, events: List[dict]) -> List[dict]:
+         return asyncio.run(self._run_adapter(adapter, events))
+ 
++    @staticmethod
++    def _extract_error_frames(messages: List[dict]) -> List[Dict[str, Any]]:
++        errors: List[Dict[str, Any]] = []
++        for message in messages:
++            if message.get("type") != "websocket.send":
++                continue
++            text = message.get("text")
++            if not text:
++                continue
++            try:
++                payload = json.loads(text)
++            except json.JSONDecodeError:
++                continue
++            if payload.get("type") == "error":
++                errors.append(payload)
++        return errors
++
+     def test_default_binary_flow_without_header(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine(adapter)
+         adapter.engine = engine
+ 
+         received_events: List[dict] = []
+         token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
+         try:
+             payload_one = b"\x01" * 4
+             payload_two = b"\x02" * 8
+             events = [
+                 {"type": "websocket.connect"},
+                 {"type": "websocket.receive", "bytes": payload_one},
+                 {"type": "websocket.receive", "bytes": payload_two},
+                 {"type": "websocket.disconnect", "code": 1000},
+             ]
+ 
+             sent = self._drive(adapter, events)
+         finally:
+             bus.unsubscribe(token)
+ 
+         accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
+         self.assertEqual(len(accept_messages), 1)
+ 
+         self.assertEqual(len(engine.audio_calls), 2)
+@@ -112,101 +133,113 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
+ 
+     def test_audio_header_sets_profile_and_allows_audio(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine(adapter)
+         adapter.engine = engine
+ 
+         received_events: List[dict] = []
+         token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
+         try:
+             header = {"type": "audio.header", "format": "opus", "sample_rate": 48000, "channels": 1}
+             payload = b"\x03" * 2
+             events = [
+                 {"type": "websocket.connect"},
+                 {"type": "websocket.receive", "text": json.dumps(header)},
+                 {"type": "websocket.receive", "bytes": payload},
+                 {"type": "websocket.disconnect", "code": 1000},
+             ]
+ 
+             sent = self._drive(adapter, events)
+         finally:
+             bus.unsubscribe(token)
+ 
+         self.assertEqual(len(engine.audio_calls), 1)
+         self.assertEqual(engine.audio_calls[0][2], 0)
+ 
+-        errors = [msg for msg in sent if msg.get("type") == "websocket.send" and msg.get("text")]
++        errors = self._extract_error_frames(sent)
+         self.assertFalse(errors)
+ 
+         self.assertEqual(len(received_events), 1)
+         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload))
+ 
+     def test_duplicate_audio_header_reports_error(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine(adapter)
+         adapter.engine = engine
+ 
+         header_one = {"type": "audio.header", "format": "opus", "sample_rate": 48000, "channels": 1}
+         header_two = {"type": "audio.header", "format": "pcm", "sample_rate": 16000, "channels": 1}
+         events = [
+             {"type": "websocket.connect"},
+             {"type": "websocket.receive", "text": json.dumps(header_one)},
+             {"type": "websocket.receive", "text": json.dumps(header_two)},
+             {"type": "websocket.disconnect", "code": 1000},
+         ]
+ 
+         sent = self._drive(adapter, events)
+ 
+-        error_messages = [msg for msg in sent if msg.get("type") == "websocket.send" and msg.get("text")]
++        error_messages = self._extract_error_frames(sent)
+         self.assertEqual(len(error_messages), 1)
+-        payload = json.loads(error_messages[0]["text"])
++        payload = error_messages[0]
+         self.assertEqual(payload, {
+             "type": "error",
+             "code": "schema_invalid",
+             "detail": "duplicate or conflicting audio.header",
+         })
+ 
+         close_messages = [msg for msg in sent if msg.get("type") == "websocket.close"]
+         self.assertFalse(close_messages)
+ 
+     def test_not_accepting_audio_triggers_policy_close(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine(adapter, accept_audio=False)
+         adapter.engine = engine
+ 
+         received_events: List[dict] = []
+         token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
+         try:
+             chunk = b"\x05" * 4
+             events = [
+                 {"type": "websocket.connect"},
+                 {"type": "websocket.receive", "bytes": chunk},
+                 {"type": "websocket.receive", "bytes": chunk},
+                 {"type": "websocket.receive", "bytes": chunk},
+             ]
+ 
+             sent = self._drive(adapter, events)
+         finally:
+             bus.unsubscribe(token)
+ 
+         self.assertFalse(engine.audio_calls)
+ 
+-        error_frames = [msg for msg in sent if msg.get("type") == "websocket.send" and msg.get("text")]
++        error_frames = self._extract_error_frames(sent)
+         self.assertEqual(len(error_frames), 3)
+-        parsed = [json.loads(msg["text"]) for msg in error_frames]
++        parsed = error_frames
+         for payload in parsed[:2]:
+             self.assertEqual(payload["code"], "audio_not_expected")
+             self.assertEqual(payload["detail"], "engine not accepting audio")
+         self.assertEqual(parsed[2]["code"], "audio_not_expected")
+         self.assertEqual(parsed[2]["detail"], "engine not accepting audio")
+ 
+-        closes = [msg for msg in sent if msg.get("type") == "websocket.close"]
+-        self.assertEqual(len(closes), 1)
+-        self.assertEqual(closes[0]["code"], 1003)
++    def test_audio_stream_not_rate_limited(self) -> None:
++        adapter = ChatV2Adapter()
++        engine = RecordingEngine(adapter)
++        adapter.engine = engine
++
++        chunk = b"\x07" * 160
++        events = [{"type": "websocket.connect"}]
++        events.extend({"type": "websocket.receive", "bytes": chunk} for _ in range(RATE_LIMIT_CAPACITY + 6))
++        events.append({"type": "websocket.disconnect", "code": 1000})
++
++        sent = self._drive(adapter, events)
++
++        error_frames = self._extract_error_frames(sent)
++        self.assertFalse(
++            any(frame.get("code") == "rate_limited" for frame in error_frames),
++            msg=f"unexpected rate limit errors: {error_frames}",
++        )
+ 
+-        self.assertEqual(len(received_events), 3)
+-        self.assertEqual(received_events[-1]["meta"]["error"], "audio_not_expected_close")
+-        self.assertEqual(received_events[-1]["meta"]["ws"]["size"], len(chunk))
++        self.assertEqual(len(engine.audio_calls), RATE_LIMIT_CAPACITY + 6)
+ 
+ 
+ if __name__ == "__main__":  # pragma: no cover
+     unittest.main()

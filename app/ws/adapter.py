@@ -1302,10 +1302,6 @@ class ChatV2Adapter:
         byte_count = len(data)
         ctx.last_client_activity_ms = int(time.time() * 1000)
 
-        limited = await self._check_rate_limit(ctx, send)
-        if limited is not None:
-            return limited
-
         if byte_count > self.binary_limit_bytes:
             await self._publish(
                 EVT_WS_AUDIO_RECV,

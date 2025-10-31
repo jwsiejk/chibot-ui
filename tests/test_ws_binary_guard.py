@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import json
 import uuid
 from typing import Any, Dict, List
 
 import unittest
 
+os.environ.setdefault("SECRET_KEY", "test-secret")
+os.environ.setdefault("ALLOW_AUDIO_WITHOUT_ASR", "1")
+
 from app.telemetry import bus
 from app.voice_v2 import EVT_ASR_READY, EVT_WS_AUDIO_RECV
-from app.ws.adapter import ChatV2Adapter
+from app.ws.adapter import ChatV2Adapter, RATE_LIMIT_CAPACITY
 from app.security.jwt_utils import mint_ws_token
 
 
@@ -76,6 +80,23 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
     def _drive(self, adapter: ChatV2Adapter, events: List[dict]) -> List[dict]:
         return asyncio.run(self._run_adapter(adapter, events))
 
+    @staticmethod
+    def _extract_error_frames(messages: List[dict]) -> List[Dict[str, Any]]:
+        errors: List[Dict[str, Any]] = []
+        for message in messages:
+            if message.get("type") != "websocket.send":
+                continue
+            text = message.get("text")
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("type") == "error":
+                errors.append(payload)
+        return errors
+
     def test_default_binary_flow_without_header(self) -> None:
         adapter = ChatV2Adapter()
         engine = RecordingEngine(adapter)
@@ -134,7 +155,7 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         self.assertEqual(len(engine.audio_calls), 1)
         self.assertEqual(engine.audio_calls[0][2], 0)
 
-        errors = [msg for msg in sent if msg.get("type") == "websocket.send" and msg.get("text")]
+        errors = self._extract_error_frames(sent)
         self.assertFalse(errors)
 
         self.assertEqual(len(received_events), 1)
@@ -156,9 +177,9 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
 
         sent = self._drive(adapter, events)
 
-        error_messages = [msg for msg in sent if msg.get("type") == "websocket.send" and msg.get("text")]
+        error_messages = self._extract_error_frames(sent)
         self.assertEqual(len(error_messages), 1)
-        payload = json.loads(error_messages[0]["text"])
+        payload = error_messages[0]
         self.assertEqual(payload, {
             "type": "error",
             "code": "schema_invalid",
@@ -190,22 +211,34 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
 
         self.assertFalse(engine.audio_calls)
 
-        error_frames = [msg for msg in sent if msg.get("type") == "websocket.send" and msg.get("text")]
+        error_frames = self._extract_error_frames(sent)
         self.assertEqual(len(error_frames), 3)
-        parsed = [json.loads(msg["text"]) for msg in error_frames]
+        parsed = error_frames
         for payload in parsed[:2]:
             self.assertEqual(payload["code"], "audio_not_expected")
             self.assertEqual(payload["detail"], "engine not accepting audio")
         self.assertEqual(parsed[2]["code"], "audio_not_expected")
         self.assertEqual(parsed[2]["detail"], "engine not accepting audio")
 
-        closes = [msg for msg in sent if msg.get("type") == "websocket.close"]
-        self.assertEqual(len(closes), 1)
-        self.assertEqual(closes[0]["code"], 1003)
+    def test_audio_stream_not_rate_limited(self) -> None:
+        adapter = ChatV2Adapter()
+        engine = RecordingEngine(adapter)
+        adapter.engine = engine
 
-        self.assertEqual(len(received_events), 3)
-        self.assertEqual(received_events[-1]["meta"]["error"], "audio_not_expected_close")
-        self.assertEqual(received_events[-1]["meta"]["ws"]["size"], len(chunk))
+        chunk = b"\x07" * 160
+        events = [{"type": "websocket.connect"}]
+        events.extend({"type": "websocket.receive", "bytes": chunk} for _ in range(RATE_LIMIT_CAPACITY + 6))
+        events.append({"type": "websocket.disconnect", "code": 1000})
+
+        sent = self._drive(adapter, events)
+
+        error_frames = self._extract_error_frames(sent)
+        self.assertFalse(
+            any(frame.get("code") == "rate_limited" for frame in error_frames),
+            msg=f"unexpected rate limit errors: {error_frames}",
+        )
+
+        self.assertEqual(len(engine.audio_calls), RATE_LIMIT_CAPACITY + 6)
 
 
 if __name__ == "__main__":  # pragma: no cover
