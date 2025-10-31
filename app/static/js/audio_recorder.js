@@ -58,6 +58,7 @@ import { WakeWord } from "./wake_word.js";
       this._active = false;
       this._wakeInit = false;
       this._sendMuted = false;
+      this._headerSent = false;
     }
 
     setSocket(ws) {
@@ -117,6 +118,51 @@ import { WakeWord } from "./wake_word.js";
         console.info(`${label} reason=%s`, detail);
       } catch (err) {
         console.info(label);
+      }
+    }
+
+    _sendAudioHeader() {
+      if (this._headerSent) {
+        return true;
+      }
+      const socket = this._ws;
+      if (!socket) {
+        return false;
+      }
+      if (socket.readyState === WebSocket.CONNECTING) {
+        const handleOpen = () => {
+          try {
+            socket.removeEventListener("open", handleOpen);
+          } catch {}
+          this._sendAudioHeader();
+        };
+        try {
+          socket.addEventListener("open", handleOpen, { once: true });
+        } catch {
+          socket.addEventListener("open", handleOpen);
+        }
+        return false;
+      }
+      if (socket.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      const mediaPolicy = this.policy?.media && typeof this.policy.media === "object" ? this.policy.media : {};
+      const sampleRate = Number.isFinite(mediaPolicy?.sample_rate) ? mediaPolicy.sample_rate : 48000;
+      const channels = Number.isFinite(mediaPolicy?.channels) ? mediaPolicy.channels : 1;
+      const payload = {
+        type: "audio.header",
+        format: "opus",
+        sample_rate: sampleRate,
+        channels,
+      };
+      try {
+        socket.send(JSON.stringify(payload));
+        this._headerSent = true;
+        console.info("diag=audio_header_sent sr=%d channels=%d", sampleRate, channels);
+        return true;
+      } catch (err) {
+        console.warn("diag=audio_header_send_failed %o", err);
+        return false;
       }
     }
 
@@ -294,6 +340,7 @@ import { WakeWord } from "./wake_word.js";
     async startListening(policy = {}) {
       this.setPolicy(policy);
       await this._ensureArmed();
+      this._sendAudioHeader();
       if (!this._sendGate) {
         this._sendGate = true;
         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
@@ -312,6 +359,7 @@ import { WakeWord } from "./wake_word.js";
         this._updateRecorderState(false, reason);
       }
       this._setSendMuted(false, typeof opts?.reason === "string" ? opts.reason : "stop_listening");
+      this._headerSent = false;
     }
 
     handleStopListening(opts = {}) {
@@ -333,6 +381,7 @@ import { WakeWord } from "./wake_word.js";
     }
 
     handleWsClose() {
+      this._headerSent = false;
       this.endSession();
     }
 
@@ -344,6 +393,7 @@ import { WakeWord } from "./wake_word.js";
       this._sendGate = false;
       this._setSendMuted(false, "session_end");
       this._updateRecorderState(false, "session_end");
+      this._headerSent = false;
       try {
         if (this._rec && this._rec.state !== "inactive") {
           this._rec.stop();

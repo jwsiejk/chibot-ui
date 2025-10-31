@@ -1,164 +1,257 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index a0837d938e8f813adc5a5d3b4c3981e7d536ae65..f2f212e4e4cd04c0d55f1b33d9fb94222464fbc0 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -2144,52 +2144,50 @@ class ChatV2Adapter:
-                         except Exception:  # pragma: no cover - defensive logging
-                             _log.exception(
-                                 "evt=listen_handoff_cancel_error sid=%s", ctx.sid
-                             )
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index 33b28dcc763ed1ed5bf64f629dec145bc4153d8c..11b42e0ecef68eedcb63d469d1efdf8d32b792a8 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -36,50 +36,51 @@ import { WakeWord } from "./wake_word.js";
+       console.warn("AudioRecorder device summary failed", err);
+       return null;
+     }
+   }
  
-                     task.add_done_callback(_suppress_cancel)
-                     ctx.listen_handoff_task = None
-                     ctx.listen_handoff_task_key = None
-                 self._clear_pending_for_key(ctx, prev_key)
-                 self._clear_after_mask_for_key(ctx, prev_key)
-             if ctx.await_user_expected:
-                 ctx.await_user_pending = False
-                 ctx.await_user_pending_key = None
-                 ctx.await_user_after_mask = False
-                 ctx.await_user_after_mask_key = None
-                 ctx.last_tts_end_req_id = None
-             else:
-                 ctx.await_user_pending = False
-                 ctx.await_user_pending_key = None
-                 ctx.await_user_after_mask = False
-                 ctx.await_user_after_mask_key = None
-                 ctx.last_tts_end_req_id = None
-                 ctx.mic_nudge_sent = False
-                 self._cancel_mic_open_timer(ctx)
-                 ctx.await_user_cue_emitted = False
--        if frame_type == "asr.ready":
--            return None
-         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
-             return None
-         normalized = dict(payload)
-         if frame_type == "policy.interaction":
-             normalized = self._sanitize_policy_interaction(normalized)
-             last_policy = ctx.last_policy_interaction
-             if last_policy is not None and last_policy == normalized:
-                 return None
-             ctx.last_policy_interaction = json.loads(
-                 json.dumps(normalized, separators=(",", ":"))
-             )
-         if frame_type == "info":
-             meta = {}
-             source_meta = normalized.get("meta")
-             if isinstance(source_meta, dict):
-                 meta = dict(source_meta)
-             meta["sid"] = ctx.sid
-             normalized["meta"] = meta
-             policy_payload = normalized.get("policy")
-             if isinstance(policy_payload, dict):
-                 ctx.policy_snapshot = policy_payload
-         return normalized
+   function emitEvent(type, detail) {
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail }));
+     } catch (err) {
+       console.warn("AudioRecorder event dispatch failed", type, err);
+     }
+   }
  
-     @staticmethod
-     def _truncate_banner_string(value: str, limit: int = 240) -> str:
-diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
-index afdcfb269fc6e885391f9e1cc8a28e86f387304c..0da08e84bc5eac1eb2468a24c61db34d00b21d29 100644
---- a/tests/test_adapter_outbound_bridge.py
-+++ b/tests/test_adapter_outbound_bridge.py
-@@ -182,83 +182,102 @@ class TestAdapterOutboundBridge(unittest.TestCase):
-         asyncio.run(
-             self._test_payload_other_sid_drop({"type": "chat.message", "message_id": "ignored"})
-         )
+   class AudioRecorder {
+     constructor(ws, appState) {
+       this._ws = ws || null;
+       this._state = appState || null;
+       this._stream = null;
+       this._rec = null;
+       this._sendGate = false;
+       this._policy = {};
+       this._micOpenEmitted = false;
+       this._active = false;
+       this._wakeInit = false;
+       this._sendMuted = false;
++      this._headerSent = false;
+     }
  
-     def test_allow_list_blocks_unknown_types(self) -> None:
-         asyncio.run(self._test_allow_list())
+     setSocket(ws) {
+       this._ws = ws || null;
+     }
  
-     def test_backpressure_reports_drops(self) -> None:
-         asyncio.run(self._test_backpressure())
+     setPolicy(policy) {
+       if (policy && typeof policy === "object") {
+         this._policy = policy;
+       } else {
+         this._policy = {};
+       }
+     }
  
-     def test_start_listening_handoff_after_tts_end(self) -> None:
-         asyncio.run(self._test_start_listening_handoff())
+     get policy() {
+       return this._policy || {};
+     }
  
-     def test_listen_handoff_waits_for_mask_off(self) -> None:
-         asyncio.run(self._test_listen_handoff_waits_for_mask_off())
+     _recorderPolicy() {
+       const policy = this.policy;
+       if (!policy || typeof policy !== "object") {
+         return {};
+       }
+       const nested = policy.policy;
+       if (!nested || typeof nested !== "object") {
+@@ -98,50 +99,95 @@ import { WakeWord } from "./wake_word.js";
+     }
  
-     def test_client_ready_mic_open_confirms_listen(self) -> None:
-         asyncio.run(self._test_client_ready_mic_open())
+     _shouldMuteDuringTts() {
+       const recorder = this._recorderPolicy();
+       if (typeof recorder.mute_send_during_tts === "boolean") {
+         return recorder.mute_send_during_tts;
+       }
+       return true;
+     }
  
-     def test_emits_await_user_after_tts_end(self) -> None:
-         asyncio.run(self._test_emits_await_user_after_tts_end())
+     _setSendMuted(muted, reason) {
+       const next = Boolean(muted);
+       if (this._sendMuted === next) {
+         return;
+       }
+       this._sendMuted = next;
+       const label = next ? "diag=send_gate_muted" : "diag=send_gate_unmuted";
+       const detail = typeof reason === "string" && reason ? reason : "policy";
+       try {
+         console.info(`${label} reason=%s`, detail);
+       } catch (err) {
+         console.info(label);
+       }
+     }
  
-     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
-         asyncio.run(self._test_audio_forwarding())
- 
-+    def test_asr_ready_frame_forwarded(self) -> None:
-+        asyncio.run(self._test_asr_ready_frame_forwarded())
++    _sendAudioHeader() {
++      if (this._headerSent) {
++        return true;
++      }
++      const socket = this._ws;
++      if (!socket) {
++        return false;
++      }
++      if (socket.readyState === WebSocket.CONNECTING) {
++        const handleOpen = () => {
++          try {
++            socket.removeEventListener("open", handleOpen);
++          } catch {}
++          this._sendAudioHeader();
++        };
++        try {
++          socket.addEventListener("open", handleOpen, { once: true });
++        } catch {
++          socket.addEventListener("open", handleOpen);
++        }
++        return false;
++      }
++      if (socket.readyState !== WebSocket.OPEN) {
++        return false;
++      }
++      const mediaPolicy = this.policy?.media && typeof this.policy.media === "object" ? this.policy.media : {};
++      const sampleRate = Number.isFinite(mediaPolicy?.sample_rate) ? mediaPolicy.sample_rate : 48000;
++      const channels = Number.isFinite(mediaPolicy?.channels) ? mediaPolicy.channels : 1;
++      const payload = {
++        type: "audio.header",
++        format: "opus",
++        sample_rate: sampleRate,
++        channels,
++      };
++      try {
++        socket.send(JSON.stringify(payload));
++        this._headerSent = true;
++        console.info("diag=audio_header_sent sr=%d channels=%d", sampleRate, channels);
++        return true;
++      } catch (err) {
++        console.warn("diag=audio_header_send_failed %o", err);
++        return false;
++      }
++    }
 +
-     def test_mic_open_timeout_triggers_nudge(self) -> None:
-         asyncio.run(self._test_mic_open_timeout_nudge())
+     async _ensureArmed() {
+       if (!navigator?.mediaDevices?.getUserMedia) {
+         const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+         const logMic = typeof window !== "undefined" ? window.__logMic : null;
+         logMic?.({ outcome: (micOutcome && micOutcome.ERROR_NO_DEVICE) || 'error_no_device', message: 'media_devices_unavailable' });
+         throw new Error("media_devices_unavailable");
+       }
+       if (!this._stream) {
+         try {
+           this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+           const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+           const logMic = typeof window !== "undefined" ? window.__logMic : null;
+           const summary = currentInputDeviceSummary(this._stream);
+           logMic?.({ outcome: (micOutcome && micOutcome.PERM_GRANTED) || 'perm_granted', perm: 'granted', device: summary });
+           console.info("diag=mic_armed");
+         } catch (err) {
+           const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+           const logMic = typeof window !== "undefined" ? window.__logMic : null;
+           const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+           logMic?.({
+             outcome: denied ? (micOutcome && micOutcome.ERROR_DENIED) || 'error_denied' : (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media',
+             perm: denied ? 'denied' : 'error',
+             message: err?.message,
+           });
+           throw err;
+@@ -272,100 +318,104 @@ import { WakeWord } from "./wake_word.js";
+       if (this._active && !this._micOpenEmitted) {
+         this._micOpenEmitted = true;
+         emitEvent(CLIENT_MIC_OPEN_EVENT, {
+           type: CLIENT_MIC_OPEN_EVENT,
+           ts: Date.now(),
+           vendor: "webm_opus"
+         });
+       }
+     }
  
-     async def _test_happy_path(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             payload = {"type": "policy.interaction", "interaction_id": "abc123"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+     async start(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return this._stream;
+     }
  
-             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction")
-             self.assertEqual(frame, payload)
+     async startMicCaptureIfIdle(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return true;
+     }
  
-             frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
-             self.assertEqual(len(frames), 1)
-         finally:
-             await harness.close()
+     async startListening(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
++      this._sendAudioHeader();
+       if (!this._sendGate) {
+         this._sendGate = true;
+         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
+         console.info("diag=send_gate_open reason=%s", reason);
+         this._updateRecorderState(true, reason);
+       }
+       this._setSendMuted(false, "start_listening");
+       return true;
+     }
  
-     async def _test_payload_forwarded(self, payload: Dict[str, Any]) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+     stopListening(opts = {}) {
+       if (this._sendGate) {
+         this._sendGate = false;
+         const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
+         console.info("diag=send_gate_closed reason=%s", reason);
+         this._updateRecorderState(false, reason);
+       }
+       this._setSendMuted(false, typeof opts?.reason === "string" ? opts.reason : "stop_listening");
++      this._headerSent = false;
+     }
  
-             frame = await harness.wait_for_outbound(lambda data: data == payload)
-             self.assertEqual(frame, payload)
-         finally:
-             await harness.close()
+     handleStopListening(opts = {}) {
+       this.stopListening(opts);
+     }
  
-+    async def _test_asr_ready_frame_forwarded(self) -> None:
-+        engine = RecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+        harness = OutboundHarness(adapter, engine)
-+        await harness.start()
-+        try:
-+            frame = {"type": "asr.ready", "vendor": "deepgram"}
-+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": frame})
-+
-+            delivered = await harness.wait_for_outbound(
-+                lambda data: data.get("type") == "asr.ready"
-+            )
-+            self.assertEqual(delivered, frame)
-+        finally:
-+            await harness.close()
-+
-     async def _test_sid_isolation(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             payload = {"type": "policy.interaction", "interaction_id": "ignored"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": "other", "payload": payload})
+     handleTtsStart() {
+       if (this._shouldStopOnTtsStart()) {
+         this.stopListening({ reason: "tts_active" });
+         return;
+       }
+       if (this._shouldMuteDuringTts()) {
+         this._setSendMuted(true, "tts_active");
+       }
+     }
  
-             with self.assertRaises(TimeoutError):
-                 await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction", timeout=0.1)
-             self.assertEqual(len(harness.outbound_frames), 0)
-         finally:
-             await harness.close()
+     handleTtsEnd() {
+       this._setSendMuted(false, "tts_end");
+     }
  
-     async def _test_payload_other_sid_drop(self, payload: Dict[str, Any]) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": "other", "payload": payload})
+     handleWsClose() {
++      this._headerSent = false;
+       this.endSession();
+     }
  
-             with self.assertRaises(TimeoutError):
-                 await harness.wait_for_outbound(
+     stop() {
+       this.endSession();
+     }
+ 
+     endSession() {
+       this._sendGate = false;
+       this._setSendMuted(false, "session_end");
+       this._updateRecorderState(false, "session_end");
++      this._headerSent = false;
+       try {
+         if (this._rec && this._rec.state !== "inactive") {
+           this._rec.stop();
+         }
+       } catch (err) {
+         console.warn("AudioRecorder stop error", err);
+       }
+       this._rec = null;
+       this._micOpenEmitted = false;
+       this._active = false;
+       this._wakeInit = false;
+       if (this._stream) {
+         try {
+           this._stream.getTracks?.().forEach((track) => track.stop?.());
+         } catch {}
+         this._stream = null;
+       }
+     }
+   }
+ 
+   const initialWs = typeof window !== "undefined" ? window.ws || null : null;
+   const recorder = new AudioRecorder(initialWs, window.AppState || null);
+   if (typeof window !== "undefined") {
+     window.addEventListener("ws.close", () => {
+       try {
