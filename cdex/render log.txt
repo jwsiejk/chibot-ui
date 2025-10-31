@@ -1,110 +1,125 @@
+10.225.24.59:49828 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:49838 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:49844 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:38726 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /admin/logs HTTP/1.1" 200
+170.85.75.32:0 - "GET /admin/ui/config_panel.js?v=78a6b738baca7748e616da42a811592cb5119469 HTTP/1.1" 200
+170.85.75.32:0 - "GET /static/js/admin_logs.js?v=78a6b738baca7748e616da42a811592cb5119469 HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/settings HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/sessions HTTP/1.1" 200
+10.225.24.59:38732 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /static/favicon.ico?v=78a6b738baca7748e616da42a811592cb5119469 HTTP/1.1" 200
+10.225.24.59:47650 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:47662 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/sessions?open=1 HTTP/1.1" 200
+10.225.24.59:40508 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:40520 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:40522 - "GET /api/v1/health HTTP/1.1" 200
 170.85.75.32:0 - "GET /api/v1/auth/me HTTP/1.1" 200
-INFO:app.security.jwt_utils:evt=ws_jwt_mint sid=267af97589bd49e8b264c59d969dfb9b ttl=60
-INFO:app.auth.http_handlers:evt=ws_token_mint sid=267af97589bd49e8b264c59d969dfb9b ttl=60
+INFO:app.security.jwt_utils:evt=ws_jwt_mint sid=aeb4b5e6ff6f4e4e8d20530e43640155 ttl=60
+INFO:app.auth.http_handlers:evt=ws_token_mint sid=aeb4b5e6ff6f4e4e8d20530e43640155 ttl=60
 170.85.75.32:0 - "POST /api/v1/auth/ws-token HTTP/1.1" 200
-INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjI2N2FmOTc1ODliZDQ5ZThiMjY0YzU5ZDk2OWRmYjliIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTg4NjAxMCwiZXhwIjoxNzYxODg2MDcwLCJqdGkiOiJjYzE3MDUwOC1jZTM2LTQxY2MtYjQ5MC1jMWZjMzkzMTI0MTkiLCJpc19hZG1pbiI6dHJ1ZX0.XHWa_j3CVCUejrz2evg9VQrajrmAggsdBAvULzVVWXQ'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjI2N2FmOTc1ODliZDQ5ZThiMjY0YzU5ZDk2OWRmYjliIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTg4NjAxMCwiZXhwIjoxNzYxODg2MDcwLCJqdGkiOiJjYzE3MDUwOC1jZTM2LTQxY2MtYjQ5MC1jMWZjMzkzMTI0MTkiLCJpc19hZG1pbiI6dHJ1ZX0.XHWa_j3CVCUejrz2evg9VQrajrmAggsdBAvULzVVWXQ' root_path=
+INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImFlYjRiNWU2ZmY2ZjRlNGU4ZDIwNTMwZTQzNjQwMTU1IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTg4NzU4OCwiZXhwIjoxNzYxODg3NjQ4LCJqdGkiOiJkNmI1NGE0Zi0yOWI2LTQ4ZjAtYWU0Mi1hZDYxN2ZjNjBhNmUiLCJpc19hZG1pbiI6dHJ1ZX0.ztkgJ4t2uTpYMkSTbvCiqR7184hUtH22q6iLC62HfeA'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImFlYjRiNWU2ZmY2ZjRlNGU4ZDIwNTMwZTQzNjQwMTU1IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTg4NzU4OCwiZXhwIjoxNzYxODg3NjQ4LCJqdGkiOiJkNmI1NGE0Zi0yOWI2LTQ4ZjAtYWU0Mi1hZDYxN2ZjNjBhNmUiLCJpc19hZG1pbiI6dHJ1ZX0.ztkgJ4t2uTpYMkSTbvCiqR7184hUtH22q6iLC62HfeA' root_path=
 INFO:app.voice_v2.tts_runtime:evt=tts_provider_ready provider=elevenlabs
-INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjI2N2FmOTc1ODliZDQ5ZThiMjY0YzU5ZDk2OWRmYjliIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTg4NjAxMCwiZXhwIjoxNzYxODg2MDcwLCJqdGkiOiJjYzE3MDUwOC1jZTM2LTQxY2MtYjQ5MC1jMWZjMzkzMTI0MTkiLCJpc19hZG1pbiI6dHJ1ZX0.XHWa_j3CVCUejrz2evg9VQrajrmAggsdBAvULzVVWXQ'] need='chat.v2'
-INFO:app.ws.adapter:evt=ws_accept_token_ok sid=267af97589bd49e8b264c59d969dfb9b
+INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImFlYjRiNWU2ZmY2ZjRlNGU4ZDIwNTMwZTQzNjQwMTU1IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTg4NzU4OCwiZXhwIjoxNzYxODg3NjQ4LCJqdGkiOiJkNmI1NGE0Zi0yOWI2LTQ4ZjAtYWU0Mi1hZDYxN2ZjNjBhNmUiLCJpc19hZG1pbiI6dHJ1ZX0.ztkgJ4t2uTpYMkSTbvCiqR7184hUtH22q6iLC62HfeA'] need='chat.v2'
+INFO:app.ws.adapter:evt=ws_accept_token_ok sid=aeb4b5e6ff6f4e4e8d20530e43640155
 INFO:app.ws.adapter:evt=ws_accept subprotocol='chat.v2'
-[2025-10-31 04:46:50 +0000] [57] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjI2N2FmOTc1ODliZDQ5ZThiMjY0YzU5ZDk2OWRmYjliIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTg4NjAxMCwiZXhwIjoxNzYxODg2MDcwLCJqdGkiOiJjYzE3MDUwOC1jZTM2LTQxY2MtYjQ5MC1jMWZjMzkzMTI0MTkiLCJpc19hZG1pbiI6dHJ1ZX0.XHWa_j3CVCUejrz2evg9VQrajrmAggsdBAvULzVVWXQ" [accepted]
-[2025-10-31 04:46:50 +0000] [57] [INFO] connection open
-INFO:app.ws.adapter:evt=server_banner build_id=unknown host=srv-d26hqi3e5dus73b43g10-hibernate-6ddb44cd54-nqm2g pid=57 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py asr=/opt/render/project/src/app/voice_v2/asr_runtime.py
-INFO:app.ws.adapter:evt=ws_info_sent sid=267af97589bd49e8b264c59d969dfb9b
-INFO:app.ws.adapter:evt=ws_open sid=267af97589bd49e8b264c59d969dfb9b
-INFO:app.ws.adapter:evt=ws_open sid=267af97589bd49e8b264c59d969dfb9b asr_runtime=ASRRuntime
-INFO:app.voice_v2.asr_runtime:evt=asr_on_ws_open sid=267af97589bd49e8b264c59d969dfb9b
-INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=267af97589bd49e8b264c59d969dfb9b
-INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=267af97589bd49e8b264c59d969dfb9b
-DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=267af97589bd49e8b264c59d969dfb9b purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
+[2025-10-31 05:13:08 +0000] [59] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImFlYjRiNWU2ZmY2ZjRlNGU4ZDIwNTMwZTQzNjQwMTU1IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MTg4NzU4OCwiZXhwIjoxNzYxODg3NjQ4LCJqdGkiOiJkNmI1NGE0Zi0yOWI2LTQ4ZjAtYWU0Mi1hZDYxN2ZjNjBhNmUiLCJpc19hZG1pbiI6dHJ1ZX0.ztkgJ4t2uTpYMkSTbvCiqR7184hUtH22q6iLC62HfeA" [accepted]
+[2025-10-31 05:13:08 +0000] [59] [INFO] connection open
+INFO:app.ws.adapter:evt=server_banner build_id=unknown host=srv-d26hqi3e5dus73b43g10-hibernate-555f4b8664-q8v5j pid=59 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py asr=/opt/render/project/src/app/voice_v2/asr_runtime.py
+INFO:app.ws.adapter:evt=ws_info_sent sid=aeb4b5e6ff6f4e4e8d20530e43640155
+INFO:app.ws.adapter:evt=ws_open sid=aeb4b5e6ff6f4e4e8d20530e43640155
+INFO:app.ws.adapter:evt=ws_open sid=aeb4b5e6ff6f4e4e8d20530e43640155 asr_runtime=ASRRuntime
+INFO:app.voice_v2.asr_runtime:evt=asr_on_ws_open sid=aeb4b5e6ff6f4e4e8d20530e43640155
+INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=aeb4b5e6ff6f4e4e8d20530e43640155
+INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=aeb4b5e6ff6f4e4e8d20530e43640155
+DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=aeb4b5e6ff6f4e4e8d20530e43640155 purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
 DEBUG:asyncio:Using selector: EpollSelector
-DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-c2094e9d-4d3c-4be2-9bfe-7cdc4fcadf37', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
+DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-4599edf9-813e-4ae0-a4e1-303157749ec7', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
 DEBUG:openai._base_client:Sending HTTP Request: POST https://api.openai.com/v1/chat/completions
 DEBUG:httpcore.connection:connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=5.0 socket_options=None
-DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7737d03beba0>
-DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7737d296c830> server_hostname='api.openai.com' timeout=5.0
-DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7737d0276490>
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7d72414a02f0>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7d7244470710> server_hostname='api.openai.com' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7d724169f110>
 DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_headers.complete
 DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_body.complete
 DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
-170.85.75.32:0 - "GET /api/v1/admin/flow/sessions?open=1 HTTP/1.1" 200
-10.225.24.78:41060 - "GET /api/v1/health HTTP/1.1" 200
-DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Fri, 31 Oct 2025 04:46:55 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'320'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'417'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199892'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'32ms'), (b'x-request-id', b'req_305d488206c94de39b3193d7055511d3'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=Oj7tXTYq_nJv98T.1nyG0rLMG_m_b4dS3w00r3P3sgA-1761886015-1.0.1.1-YNBlRLMTpcgKwXe.z7UsNbYW7hpz1XcYM.vbg6bYtJt2QVsaRWzR_X7VcddY0ryrsjFVWsdT40D.rZTGdbEWZ2FSF02qluTEeUYoC2IMp2k; path=/; expires=Fri, 31-Oct-25 05:16:55 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=WBeRqapqyqE_8YRjoTa_Yl40sCNPX3n7TDPBkFxovfk-1761886015293-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'997082e11d4d1f55-IAD'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
+10.225.24.59:49170 - "GET /api/v1/health HTTP/1.1" 200
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Fri, 31 Oct 2025 05:13:13 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'439'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'1016'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199892'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'32ms'), (b'x-request-id', b'req_9ecd3257ac7c408db1dedbfecc11f2a8'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=HHnnvEyG78.fwM0kiHfZfjxdUdzCrFzZtiZjIOGSIcU-1761887593-1.0.1.1-tVghTun.yHjgnw7GhhlIhqWQ46GpqtnbLK17ei3gWnYuarwrbolDQxetv9JH6AUkQcAg4ngCiflkdQnJbMAdV5BQA7oJGpC4XoX.HS6AC6k; path=/; expires=Fri, 31-Oct-25 05:43:13 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=J68kLFrr_OKuQiZu1ODuKnP410oX63pPban7zcQAxXE-1761887593534-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'9970a9687c57d683-IAD'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
 INFO:httpx:HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
 DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:receive_response_body.complete
 DEBUG:httpcore.http11:response_closed.started
 DEBUG:httpcore.http11:response_closed.complete
-DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Fri, 31 Oct 2025 04:46:55 GMT'), ('content-type', 'application/json'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-e0uazp84dxwznca9mgbvta53'), ('openai-processing-ms', '320'), ('openai-project', 'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '417'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '200000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '199892'), ('x-ratelimit-reset-requests', '8.64s'), ('x-ratelimit-reset-tokens', '32ms'), ('x-request-id', 'req_305d488206c94de39b3193d7055511d3'), ('x-openai-proxy-wasm', 'v0.1'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=Oj7tXTYq_nJv98T.1nyG0rLMG_m_b4dS3w00r3P3sgA-1761886015-1.0.1.1-YNBlRLMTpcgKwXe.z7UsNbYW7hpz1XcYM.vbg6bYtJt2QVsaRWzR_X7VcddY0ryrsjFVWsdT40D.rZTGdbEWZ2FSF02qluTEeUYoC2IMp2k; path=/; expires=Fri, 31-Oct-25 05:16:55 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=WBeRqapqyqE_8YRjoTa_Yl40sCNPX3n7TDPBkFxovfk-1761886015293-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '997082e11d4d1f55-IAD'), ('content-encoding', 'gzip'), ('alt-svc', 'h3=":443"; ma=86400')])
-DEBUG:openai._base_client:request_id: req_305d488206c94de39b3193d7055511d3
-DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=267af97589bd49e8b264c59d969dfb9b purpose=greet latency_ms=4439 model=gpt-4o-mini
+DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Fri, 31 Oct 2025 05:13:13 GMT'), ('content-type', 'application/json'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-e0uazp84dxwznca9mgbvta53'), ('openai-processing-ms', '439'), ('openai-project', 'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '1016'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '200000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '199892'), ('x-ratelimit-reset-requests', '8.64s'), ('x-ratelimit-reset-tokens', '32ms'), ('x-request-id', 'req_9ecd3257ac7c408db1dedbfecc11f2a8'), ('x-openai-proxy-wasm', 'v0.1'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=HHnnvEyG78.fwM0kiHfZfjxdUdzCrFzZtiZjIOGSIcU-1761887593-1.0.1.1-tVghTun.yHjgnw7GhhlIhqWQ46GpqtnbLK17ei3gWnYuarwrbolDQxetv9JH6AUkQcAg4ngCiflkdQnJbMAdV5BQA7oJGpC4XoX.HS6AC6k; path=/; expires=Fri, 31-Oct-25 05:43:13 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=J68kLFrr_OKuQiZu1ODuKnP410oX63pPban7zcQAxXE-1761887593534-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '9970a9687c57d683-IAD'), ('content-encoding', 'gzip'), ('alt-svc', 'h3=":443"; ma=86400')])
+DEBUG:openai._base_client:request_id: req_9ecd3257ac7c408db1dedbfecc11f2a8
+DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=aeb4b5e6ff6f4e4e8d20530e43640155 purpose=greet latency_ms=4806 model=gpt-4o-mini
 DEBUG:httpcore.connection:connect_tcp.started host='api.elevenlabs.io' port=443 local_address=None timeout=5.0 socket_options=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.ws outcome=connected attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=connected attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.ws outcome=bound attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=bound attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.ws outcome=connected attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=connected attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.ws outcome=auth_ok attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=auth_ok attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=perm_granted attempts=0
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.audio outcome=encoder_ready attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=encoder_ready attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=perm_granted attempts=0
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.ws outcome=auth_ok attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=auth_ok attempts=None
-DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7737d03bf0e0>
-DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7737d296f5c0> server_hostname='api.elevenlabs.io' timeout=5.0
-DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7737d0276710>
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.ws outcome=connected attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=connected attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.ws outcome=bound attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=bound attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.ws outcome=connected attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=connected attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.ws outcome=auth_ok attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=auth_ok attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=perm_granted attempts=0
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.audio outcome=encoder_ready attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=encoder_ready attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=perm_granted attempts=0
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.ws outcome=auth_ok attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=auth_ok attempts=None
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7d72414a1fd0>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7d7244470290> server_hostname='api.elevenlabs.io' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7d724169fd90>
 DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_headers.complete
 DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_body.complete
 DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.ws outcome=pong attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=pong attempts=None
-DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Fri, 31 Oct 2025 04:46:55 GMT'), (b'server', b'uvicorn'), (b'request-id', b'G9MYWF40rV04xSS2TL0M'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'sQmEfFaCsHizZ2QiTv44'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'54'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'ea6294c973c2a41185a04a2acafe0937'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.ws outcome=pong attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=pong attempts=None
+170.85.75.32:0 - "GET /api/v1/admin/flow/sessions?open=1 HTTP/1.1" 200
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Fri, 31 Oct 2025 05:13:14 GMT'), (b'server', b'uvicorn'), (b'request-id', b'6GRaJcV9i34Iw8FK4ssP'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'lWMnx4FSKhnCW158tt10'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'46'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'941efe3ed1894c836f14e17f551ad9d9'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
 INFO:httpx:HTTP Request: POST https://api.elevenlabs.io/v1/text-to-speech/MIAWBMadvHL0ek6oJEXD/stream?optimize_streaming_latency=4&output_format=pcm_16000 "HTTP/1.1 200 OK"
 INFO:app.services.tts.elevenlabs_client:evt=tts_provider_stream_opened provider=elevenlabs content_type=audio/pcm url_qs=optimize_streaming_latency=4&output_format=pcm_16000
-INFO:app.voice_v2.tts_runtime:evt=tts_start sid=267af97589bd49e8b264c59d969dfb9b utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=54
+INFO:app.voice_v2.tts_runtime:evt=tts_start sid=aeb4b5e6ff6f4e4e8d20530e43640155 utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=46
 DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=267af97589bd49e8b264c59d969dfb9b utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
-170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=267af97589bd49e8b264c59d969dfb9b&offset=0&limit=50 HTTP/1.1" 200
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=267af97589bd49e8b264c59d969dfb9b utt_id=utt-00001 chunks=48 bytes=61440 total_bytes=62720
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=aeb4b5e6ff6f4e4e8d20530e43640155 utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
 DEBUG:httpcore.http11:receive_response_body.complete
 DEBUG:httpcore.http11:response_closed.started
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=267af97589bd49e8b264c59d969dfb9b utt_id=utt-00001 chunks=34 bytes=43520 total_bytes=106240
 DEBUG:httpcore.http11:response_closed.complete
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=267af97589bd49e8b264c59d969dfb9b utt_id=utt-00001 chunks=6 bytes=6702 total_bytes=112942
-INFO:app.voice_v2.tts_runtime:evt=tts_end sid=267af97589bd49e8b264c59d969dfb9b utt_id=utt-00001 total_bytes=112942 duration_ms=1262
-INFO:app.ws.adapter:evt=turn_listen_cue sid=267af97589bd49e8b264c59d969dfb9b reason=tts_end policy_start=true
-INFO:app.ws.adapter:evt=await_user_emit sid=267af97589bd49e8b264c59d969dfb9b
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=asr_prearm_requested sid=267af97589bd49e8b264c59d969dfb9b source=client keep_stream_warm_ms=0
-INFO:app.ws.adapter:evt=asr_ready_bundle_sent sid=267af97589bd49e8b264c59d969dfb9b input.mime=audio/webm;codecs=opus capture.timeslice_ms=250
-INFO:app.voice_v2.asr_runtime:evt=asr_open_attempt sid=267af97589bd49e8b264c59d969dfb9b vendor=deepgram trigger=first_ingress_packet
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=aeb4b5e6ff6f4e4e8d20530e43640155 utt_id=utt-00001 chunks=73 bytes=92344 total_bytes=93624
+INFO:app.voice_v2.tts_runtime:evt=tts_end sid=aeb4b5e6ff6f4e4e8d20530e43640155 utt_id=utt-00001 total_bytes=93624 duration_ms=231
+INFO:app.ws.adapter:evt=turn_listen_cue sid=aeb4b5e6ff6f4e4e8d20530e43640155 reason=tts_end policy_start=true
+INFO:app.ws.adapter:evt=await_user_emit sid=aeb4b5e6ff6f4e4e8d20530e43640155
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=asr_prearm_requested sid=aeb4b5e6ff6f4e4e8d20530e43640155 source=client keep_stream_warm_ms=0
+INFO:app.ws.adapter:evt=asr_ready_bundle_sent sid=aeb4b5e6ff6f4e4e8d20530e43640155 input.mime=audio/webm;codecs=opus capture.timeslice_ms=250
+INFO:app.voice_v2.asr_runtime:evt=asr_open_attempt sid=aeb4b5e6ff6f4e4e8d20530e43640155 vendor=deepgram trigger=first_ingress_packet
 DEBUG:websockets.client:= connection is CONNECTING
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_mic_open sid=267af97589bd49e8b264c59d969dfb9b vendor=webm_opus ts=1761886017012
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client_ready_handshake outcome=sent attempts=1
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=armed attempts=1
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=streaming attempts=1
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.audio outcome=packet_sent attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=packet_sent attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.perf outcome=mark attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=mark attempts=None
-INFO:app.ws.adapter:evt=ws_audio_ingress sid=267af97589bd49e8b264c59d969dfb9b first_chunk=1 bytes=4846 first_chunk_ms_since_mic_armed=676
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_mic_open sid=aeb4b5e6ff6f4e4e8d20530e43640155 vendor=webm_opus ts=1761887593506
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client_ready_handshake outcome=sent attempts=1
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=armed attempts=1
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=streaming attempts=1
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.audio outcome=packet_sent attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=packet_sent attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.perf outcome=mark attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=mark attempts=None
+INFO:app.ws.adapter:evt=ws_audio_ingress sid=aeb4b5e6ff6f4e4e8d20530e43640155 first_chunk=1 bytes=5828 first_chunk_ms_since_mic_armed=321
+WARNING:app.voice_v2.engine:evt=state_transition_illegal from=Listening to=Ready relation=backward
 DEBUG:websockets.client:> GET /v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en HTTP/1.1
 DEBUG:websockets.client:> Host: api.deepgram.com
 DEBUG:websockets.client:> Upgrade: websocket
 DEBUG:websockets.client:> Connection: Upgrade
-DEBUG:websockets.client:> Sec-WebSocket-Key: elBRC/HfOOdLdsV42flUGQ==
+DEBUG:websockets.client:> Sec-WebSocket-Key: sMZkrOkY5OQMgwS8iRiGbg==
 DEBUG:websockets.client:> Sec-WebSocket-Version: 13
 DEBUG:websockets.client:> Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
 DEBUG:websockets.client:> Authorization: Token 38cfc39f41c64153aee87d5db20289dcbe400f62
@@ -112,50 +127,51 @@ DEBUG:websockets.client:> User-Agent: Python/3.13 websockets/15.0.1
 DEBUG:websockets.client:< HTTP/1.1 101 Switching Protocols
 DEBUG:websockets.client:< connection: upgrade
 DEBUG:websockets.client:< upgrade: websocket
-DEBUG:websockets.client:< sec-websocket-accept: a9rF6YqNVoIyoI1KCKKj7iOI45U=
+DEBUG:websockets.client:< sec-websocket-accept: tIq0kGuid/8KXpkIa8ZeJaa/rdM=
 DEBUG:websockets.client:< dg-project-id: 52f81254-537a-4ef1-b723-d1f10f7e3efa
 DEBUG:websockets.client:< vary: origin, access-control-request-method, access-control-request-headers
 DEBUG:websockets.client:< access-control-allow-credentials: true
 DEBUG:websockets.client:< access-control-expose-headers: dg-model-name,dg-model-uuid,dg-char-count,dg-request-id,dg-project-id,dg-error
-DEBUG:websockets.client:< dg-request-id: e93560d7-b18c-43fd-afb5-2f0ef8439f02
-DEBUG:websockets.client:< date: Fri, 31 Oct 2025 04:46:58 GMT
+DEBUG:websockets.client:< dg-request-id: 490207a6-34e8-427e-932e-352948a87476
+DEBUG:websockets.client:< date: Fri, 31 Oct 2025 05:13:14 GMT
 DEBUG:websockets.client:= connection is OPEN
 INFO:app.services.streaming_asr.deepgram_client:evt=dg_ws_open container=webm_opus start_payload=omitted url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
-INFO:app.voice_v2.asr_runtime:evt=asr_opened sid=267af97589bd49e8b264c59d969dfb9b vendor=deepgram stream_id=dg-stream-121433a4198e49b7857d2edac5389a50
-INFO:app.voice_v2.asr_runtime:evt=asr_vendor_info sid=267af97589bd49e8b264c59d969dfb9b vendor=deepgram transport=ws container=webm_opus model=auto
-INFO:app.voice_v2.asr_runtime:evt=asr_open sid=267af97589bd49e8b264c59d969dfb9b stream_id=dg-stream-121433a4198e49b7857d2edac5389a50 vendor=deepgram qs=model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
-INFO:app.voice_v2.asr_runtime:evt=asr_ready sid=267af97589bd49e8b264c59d969dfb9b vendor=deepgram stream_id=dg-stream-121433a4198e49b7857d2edac5389a50
-INFO:app.voice_v2.asr_runtime:evt=asr_session_open sid=267af97589bd49e8b264c59d969dfb9b stream_id=dg-stream-121433a4198e49b7857d2edac5389a50 content_type="(not set)" idle_close_ms=15000
+INFO:app.voice_v2.asr_runtime:evt=asr_opened sid=aeb4b5e6ff6f4e4e8d20530e43640155 vendor=deepgram stream_id=dg-stream-7521426c4a464845bf434bacef09b007
+INFO:app.voice_v2.asr_runtime:evt=asr_vendor_info sid=aeb4b5e6ff6f4e4e8d20530e43640155 vendor=deepgram transport=ws container=webm_opus model=auto
+INFO:app.voice_v2.asr_runtime:evt=asr_open sid=aeb4b5e6ff6f4e4e8d20530e43640155 stream_id=dg-stream-7521426c4a464845bf434bacef09b007 vendor=deepgram qs=model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
+INFO:app.voice_v2.asr_runtime:evt=asr_ready sid=aeb4b5e6ff6f4e4e8d20530e43640155 vendor=deepgram stream_id=dg-stream-7521426c4a464845bf434bacef09b007
+INFO:app.voice_v2.asr_runtime:evt=asr_session_open sid=aeb4b5e6ff6f4e4e8d20530e43640155 stream_id=dg-stream-7521426c4a464845bf434bacef09b007 content_type="(not set)" idle_close_ms=15000
 DEBUG:websockets.client:> TEXT '{"type": "KeepAlive"}' [21 bytes]
-DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=267af97589bd49e8b264c59d969dfb9b stream_id=dg-stream-121433a4198e49b7857d2edac5389a50 interval_s=0.000
-INFO:app.services.streaming_asr.deepgram_client:evt=dg_stream_open sid=267af97589bd49e8b264c59d969dfb9b stream_id=dg-stream-121433a4198e49b7857d2edac5389a50 url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
-10.225.24.78:41072 - "GET /api/v1/health HTTP/1.1" 200
-INFO:app.ws.adapter:evt=ws_audio_ingress sid=267af97589bd49e8b264c59d969dfb9b chunks=10 bytes=52324
+DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=aeb4b5e6ff6f4e4e8d20530e43640155 stream_id=dg-stream-7521426c4a464845bf434bacef09b007 interval_s=0.000
+INFO:app.services.streaming_asr.deepgram_client:evt=dg_stream_open sid=aeb4b5e6ff6f4e4e8d20530e43640155 stream_id=dg-stream-7521426c4a464845bf434bacef09b007 url=wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1200&language=en
+10.225.24.59:49184 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/trace?sid=aeb4b5e6ff6f4e4e8d20530e43640155&offset=0&limit=50 HTTP/1.1" 200
+INFO:app.ws.adapter:evt=ws_audio_ingress sid=aeb4b5e6ff6f4e4e8d20530e43640155 chunks=10 bytes=55238
 DEBUG:websockets.client:> TEXT '{"type": "KeepAlive"}' [21 bytes]
-DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=267af97589bd49e8b264c59d969dfb9b stream_id=dg-stream-121433a4198e49b7857d2edac5389a50 interval_s=5.000
-INFO:app.ws.adapter:evt=ws_audio_ingress sid=267af97589bd49e8b264c59d969dfb9b chunks=20 bytes=106580
-10.225.24.78:44008 - "GET /api/v1/health HTTP/1.1" 200
-INFO:app.ws.adapter:evt=ws_audio_ingress sid=267af97589bd49e8b264c59d969dfb9b chunks=30 bytes=159870
-WARNING:app.voice_v2.asr_runtime:evt=asr_no_audio_timeout sid=267af97589bd49e8b264c59d969dfb9b
-INFO:app.voice_v2.asr_runtime:evt=asr_ready_published sid=267af97589bd49e8b264c59d969dfb9b vendor=deepgram
+DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=aeb4b5e6ff6f4e4e8d20530e43640155 stream_id=dg-stream-7521426c4a464845bf434bacef09b007 interval_s=5.000
+INFO:app.ws.adapter:evt=ws_audio_ingress sid=aeb4b5e6ff6f4e4e8d20530e43640155 chunks=20 bytes=108528
+10.225.24.59:51268 - "GET /api/v1/health HTTP/1.1" 200
+WARNING:app.voice_v2.asr_runtime:evt=asr_no_audio_timeout sid=aeb4b5e6ff6f4e4e8d20530e43640155
+INFO:app.voice_v2.asr_runtime:evt=asr_ready_published sid=aeb4b5e6ff6f4e4e8d20530e43640155 vendor=deepgram
+INFO:app.ws.adapter:evt=ws_audio_ingress sid=aeb4b5e6ff6f4e4e8d20530e43640155 chunks=30 bytes=161802
 DEBUG:websockets.client:> TEXT '{"type": "KeepAlive"}' [21 bytes]
-DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=267af97589bd49e8b264c59d969dfb9b stream_id=dg-stream-121433a4198e49b7857d2edac5389a50 interval_s=5.000
-INFO:app.ws.adapter:evt=asr_prearm_requested sid=267af97589bd49e8b264c59d969dfb9b source=client keep_stream_warm_ms=0
-INFO:app.ws.adapter:evt=asr_ready_bundle_sent sid=267af97589bd49e8b264c59d969dfb9b input.mime=audio/webm;codecs=opus capture.timeslice_ms=250
-INFO:app.ws.adapter:evt=ws_audio_ingress sid=267af97589bd49e8b264c59d969dfb9b first_chunk=1 bytes=4846 first_chunk_ms_since_mic_armed=34
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=armed attempts=2
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=streaming attempts=2
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.audio outcome=packet_sent attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=packet_sent attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.perf outcome=mark attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=mark attempts=None
-10.225.24.78:44016 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-31 04:47:10 +0000] [57] [DEBUG] % sending keepalive ping
-[2025-10-31 04:47:10 +0000] [57] [DEBUG] % received keepalive pong
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.ws outcome=pong attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=267af97589bd49e8b264c59d969dfb9b label=client.mic outcome=pong attempts=None
-INFO:app.ws.adapter:evt=ws_audio_ingress sid=267af97589bd49e8b264c59d969dfb9b chunks=40 bytes=213160
-WARNING:app.voice_v2.asr_runtime:evt=asr_prearm_idle sid=267af97589bd49e8b264c59d969dfb9b stream_id=dg-stream-121433a4198e49b7857d2edac5389a50 idle_ms=23545 action=close
+DEBUG:app.services.streaming_asr.deepgram_client:evt=dg_keepalive_sent sid=aeb4b5e6ff6f4e4e8d20530e43640155 stream_id=dg-stream-7521426c4a464845bf434bacef09b007 interval_s=5.000
+INFO:app.ws.adapter:evt=asr_prearm_requested sid=aeb4b5e6ff6f4e4e8d20530e43640155 source=client keep_stream_warm_ms=0
+INFO:app.ws.adapter:evt=asr_ready_bundle_sent sid=aeb4b5e6ff6f4e4e8d20530e43640155 input.mime=audio/webm;codecs=opus capture.timeslice_ms=250
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=armed attempts=2
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=streaming attempts=2
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.audio outcome=packet_sent attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=packet_sent attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.perf outcome=mark attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=mark attempts=None
+INFO:app.ws.adapter:evt=ws_audio_ingress sid=aeb4b5e6ff6f4e4e8d20530e43640155 first_chunk=1 bytes=4846 first_chunk_ms_since_mic_armed=301
+10.225.24.59:51272 - "GET /api/v1/health HTTP/1.1" 200
+INFO:app.ws.adapter:evt=ws_audio_ingress sid=aeb4b5e6ff6f4e4e8d20530e43640155 chunks=40 bytes=216058
+[2025-10-31 05:13:28 +0000] [59] [DEBUG] % sending keepalive ping
+[2025-10-31 05:13:28 +0000] [59] [DEBUG] % received keepalive pong
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.ws outcome=pong attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=aeb4b5e6ff6f4e4e8d20530e43640155 label=client.mic outcome=pong attempts=None
+WARNING:app.voice_v2.asr_runtime:evt=asr_prearm_idle sid=aeb4b5e6ff6f4e4e8d20530e43640155 stream_id=dg-stream-7521426c4a464845bf434bacef09b007 idle_ms=21637 action=close
 DEBUG:websockets.client:> CLOSE 1000 (OK) [2 bytes]
 DEBUG:websockets.client:= connection is CLOSING
 DEBUG:websockets.client:< CLOSE 1000 (OK) [2 bytes]
@@ -163,18 +179,20 @@ DEBUG:websockets.client:< EOF
 DEBUG:websockets.client:> EOF
 DEBUG:websockets.client:= connection is CLOSED
 DEBUG:websockets.client:x closing TCP connection
-INFO:app.services.streaming_asr.deepgram_client:evt=dg_stream_closed sid=267af97589bd49e8b264c59d969dfb9b stream_id=dg-stream-121433a4198e49b7857d2edac5389a50 code=1000 reason=""
-INFO:app.ws.adapter:evt=ws_audio_ingress sid=267af97589bd49e8b264c59d969dfb9b chunks=50 bytes=264518
-10.225.24.78:48808 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.78:48810 - "GET /api/v1/health HTTP/1.1" 200
-[2025-10-31 04:47:16 +0000] [57] [DEBUG] = connection is CLOSED
-[2025-10-31 04:47:16 +0000] [57] [INFO] connection closed
-INFO:app.voice_v2.asr_runtime:evt=asr_rollup sid=267af97589bd49e8b264c59d969dfb9b stream_id=dg-stream-121433a4198e49b7857d2edac5389a50 opened_at_ms=1761886010862 last_audio_ts_ms=1761886010862 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=26036
-INFO:app.voice_v2.asr_runtime:evt=audio_wire_rollup sid=267af97589bd49e8b264c59d969dfb9b ingress_packets=0 ingress_bytes=0
-10.225.24.78:48834 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.78:48240 - "GET /api/v1/health HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/flow/zip?sid=267af97589bd49e8b264c59d969dfb9b HTTP/1.1" 200
-10.225.24.78:48250 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.78:48414 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.78:48426 - "GET /api/v1/health HTTP/1.1" 200
-10.225.24.78:34818 - "GET /api/v1/health HTTP/1.1" 200
+INFO:app.services.streaming_asr.deepgram_client:evt=dg_stream_closed sid=aeb4b5e6ff6f4e4e8d20530e43640155 stream_id=dg-stream-7521426c4a464845bf434bacef09b007 code=1000 reason=""
+[2025-10-31 05:13:31 +0000] [59] [DEBUG] = connection is CLOSED
+[2025-10-31 05:13:31 +0000] [59] [INFO] connection closed
+INFO:app.voice_v2.asr_runtime:evt=asr_rollup sid=aeb4b5e6ff6f4e4e8d20530e43640155 stream_id=dg-stream-7521426c4a464845bf434bacef09b007 opened_at_ms=1761887588736 last_audio_ts_ms=1761887588736 chunks_sent=0 bytes_sent=0 partials=0 finals=0 finals_delivered=0 dropped=0 duration_ms=22471
+INFO:app.voice_v2.asr_runtime:evt=audio_wire_rollup sid=aeb4b5e6ff6f4e4e8d20530e43640155 ingress_packets=0 ingress_bytes=0
+10.225.24.59:36920 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:36944 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:36934 - "GET /api/v1/health HTTP/1.1" 200
+170.85.75.32:0 - "GET /api/v1/admin/flow/zip?sid=aeb4b5e6ff6f4e4e8d20530e43640155 HTTP/1.1" 200
+10.225.24.59:50678 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:50684 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:42916 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:42924 - "GET /api/v1/health HTTP/1.1" 200
+==> Detected service running on port 10000
+==> Docs on specifying a port: https://render.com/docs/web-services#port-binding
+10.225.24.59:44872 - "GET /api/v1/health HTTP/1.1" 200
+10.225.24.59:44876 - "GET /api/v1/health HTTP/1.1" 200
