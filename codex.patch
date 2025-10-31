@@ -1,264 +1,164 @@
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 8aecedef1707a375e5bc382693d18d27185b3b26..a0837d938e8f813adc5a5d3b4c3981e7d536ae65 100644
+index a0837d938e8f813adc5a5d3b4c3981e7d536ae65..f2f212e4e4cd04c0d55f1b33d9fb94222464fbc0 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -950,55 +950,73 @@ class ChatV2Adapter:
-                 "sid": ctx.sid,
-                 "who": "server",
-                 "source": "ws_server",
-                 "meta": event_meta,
-                 "text": text,
-             }
-             if client_msg_id is not None:
-                 event["client_msg_id"] = client_msg_id
-             bus.publish(event)
-         else:
-             if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
-                 meta["error"] = "unknown_type"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-                 await self._send_error(send, ctx.sid, "unknown_type", frame_type)
-                 return self._HandleResult(True)
+@@ -2144,52 +2144,50 @@ class ChatV2Adapter:
+                         except Exception:  # pragma: no cover - defensive logging
+                             _log.exception(
+                                 "evt=listen_handoff_cancel_error sid=%s", ctx.sid
+                             )
  
-             is_valid, hint = validate_frame(frame)
-             if not is_valid:
-                 meta["error"] = "schema_invalid"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-                 detail = hint or "Frame failed validation"
-                 await self._send_error(send, ctx.sid, "schema_invalid", detail)
-                 return self._HandleResult(True)
- 
-         if frame_type == "audio.header":
-+            raw_format = frame.get("format")
-+            effective_format: Optional[str] = None
-+            snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
-+            media_block = snapshot.get("media") if isinstance(snapshot, Mapping) else None
-+            if isinstance(media_block, Mapping):
-+                media_format = media_block.get("asr_input")
-+                if isinstance(media_format, str) and media_format:
-+                    effective_format = media_format
-+            if not isinstance(effective_format, str) or not effective_format:
-+                if isinstance(raw_format, str):
-+                    effective_format = "webm_opus" if raw_format == "opus" else raw_format
-+                else:
-+                    effective_format = None
-+
-             profile = {
--                "format": frame.get("format"),
-+                "format": effective_format,
-+                "codec": raw_format,
-                 "sample_rate": frame.get("sample_rate"),
-                 "channels": frame.get("channels"),
-             }
-+            if effective_format == "webm_opus" or raw_format == "opus":
-+                profile["container"] = "webm"
-+                profile["mime"] = "audio/webm;codecs=opus"
-             seq_start = frame.get("seq_start")
-             if seq_start is not None:
-                 if not isinstance(seq_start, int):
-                     meta["error"] = "schema_invalid"
-                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-                     await self._send_error(
-                         send,
-                         ctx.sid,
-                         "schema_invalid",
-                         "audio.header seq_start must be an integer",
-                     )
-                     return self._HandleResult(False, 1003, "schema_invalid")
-                 if seq_start < 0:
-                     meta["error"] = "schema_invalid"
-                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-                     await self._send_error(
-                         send,
-                         ctx.sid,
-                         "schema_invalid",
-                         "audio.header seq_start must be >= 0",
-                     )
-                     return self._HandleResult(False, 1003, "schema_invalid")
-                 profile["seq_start"] = seq_start
-             if ctx.audio_profile is not None:
-                 meta["error"] = "schema_invalid"
-@@ -1336,50 +1354,64 @@ class ChatV2Adapter:
-         if ctx.ingress_packets <= 0:
-             ctx.ingress_packets = 0
-             ctx.ingress_bytes = 0
-             ctx.first_ingress_ms = now_ms
-         ctx.ingress_packets += 1
-         pkt_len = byte_count
-         ctx.ingress_bytes += pkt_len
- 
-         if ctx.ingress_packets == 1:
-             armed_ms = ctx.mic_armed_ms if isinstance(ctx.mic_armed_ms, int) else None
-             delta = (now_ms - armed_ms) if armed_ms is not None else None
-             _log.info(
-                 "evt=ws_audio_ingress sid=%s first_chunk=1 bytes=%s first_chunk_ms_since_mic_armed=%s",
-                 ctx.sid,
-                 pkt_len,
-                 delta,
-             )
-         elif ctx.ingress_packets % 50 == 0:
-             _log.info(
-                 "evt=ws_audio_ingress sid=%s packets=%s bytes=%s",
-                 ctx.sid,
-                 ctx.ingress_packets,
-                 ctx.ingress_bytes,
-             )
- 
-+        profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
-+        runtime = getattr(self, "asr_runtime", None)
-+        if runtime is not None and profile is not None:
-+            fmt = str(profile.get("format") or "")
-+            container = str(profile.get("container") or "")
-+            codec = str(profile.get("codec") or "")
-+            if fmt == "webm_opus" or (container == "webm" and codec == "opus"):
-+                try:
-+                    runtime.on_ws_audio(ctx.sid, data)
-+                except Exception:  # pragma: no cover - defensive logging
-+                    _log.warning(
-+                        "evt=ws_asr_audio_forward_failed sid=%s", ctx.sid, exc_info=True
-+                    )
-+
-         if ctx.audio_highest_seq < 0:
-             ctx.audio_expected_seq = ctx.audio_seq
-         seq = ctx.audio_seq
-         ctx.audio_seq += 1
- 
-         if config.DIAG_AUDIO_GUARD and not ctx.diag_audio_seen:
-             ctx.diag_audio_seen = True
-             self._cancel_diag_timer(ctx)
-             bus.publish({"type": "EVT_DIAG_FIRST_AUDIO_FRAME", "sid": ctx.sid})
- 
-         ctx.audio_chunks_recv += 1
-         ctx.audio_bytes_recv += byte_count
-         if ctx.audio_chunks_recv % 10 == 0:
-             _log.info(
-                 "evt=ws_audio_ingress sid=%s chunks=%d bytes=%d",
-                 ctx.sid,
-                 ctx.audio_chunks_recv,
-                 ctx.audio_bytes_recv,
-             )
- 
-         await self._ingest_audio_chunk(ctx, bytes(data), seq)
-         return self._HandleResult(True)
- 
-     async def _check_rate_limit(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-@@ -1468,54 +1500,59 @@ class ChatV2Adapter:
-             ctx.audio_expected_seq += 1
-         if ctx.audio_buffer:
-             ctx.audio_highest_seq = max(ctx.audio_buffer)
-         else:
-             ctx.audio_highest_seq = ctx.audio_expected_seq - 1
- 
-     async def _emit_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
-         byte_count = len(chunk)
-         meta = {
-             "byte_count": byte_count,
-             "seq": seq,
-             "ws": {"dir": "in", "size": byte_count},
-         }
-         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-         if ctx.audio_chunks_recv == 1:
-             self._emit_session_step(
-                 ctx.sid,
-                 "audio.stream_started",
-                 summary="Received first audio chunk",
-                 meta={"byte_count": byte_count},
-                 source="ws.audio",
-             )
-         self._handle_client_audio_activity(ctx)
-         asr_runtime = getattr(self, "asr_runtime", None)
-         if asr_runtime is not None:
--            try:
--                asr_runtime.on_ws_audio(ctx.sid, chunk)
--            except Exception:  # pragma: no cover - defensive logging
--                _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
-+            profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
-+            fmt = str(profile.get("format") or "") if profile else ""
-+            container = str(profile.get("container") or "") if profile else ""
-+            codec = str(profile.get("codec") or "") if profile else ""
-+            if not (fmt == "webm_opus" or (container == "webm" and codec == "opus")):
-+                try:
-+                    asr_runtime.on_ws_audio(ctx.sid, chunk)
-+                except Exception:  # pragma: no cover - defensive logging
-+                    _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
-         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
- 
-     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
-         removed = False
-         for key in list(ctx.audio_buffer):
-             if key < threshold:
-                 ctx.audio_buffer.pop(key, None)
-                 removed = True
-         if removed:
-             if ctx.audio_buffer:
-                 ctx.audio_highest_seq = max(ctx.audio_buffer)
+                     task.add_done_callback(_suppress_cancel)
+                     ctx.listen_handoff_task = None
+                     ctx.listen_handoff_task_key = None
+                 self._clear_pending_for_key(ctx, prev_key)
+                 self._clear_after_mask_for_key(ctx, prev_key)
+             if ctx.await_user_expected:
+                 ctx.await_user_pending = False
+                 ctx.await_user_pending_key = None
+                 ctx.await_user_after_mask = False
+                 ctx.await_user_after_mask_key = None
+                 ctx.last_tts_end_req_id = None
              else:
-                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
- 
-     async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
-         text = json.dumps(payload, separators=(",", ":"))
-         await send({"type": "websocket.send", "text": text})
-         payload_bytes = text.encode("utf-8")
-         byte_count = len(payload_bytes)
-         meta: Dict[str, Any] = {
-             "byte_count": byte_count,
-             "frame_type": payload.get("type"),
-             "ws": {
-                 "dir": "out",
-                 "size": byte_count,
-@@ -2928,50 +2965,55 @@ class ChatV2Adapter:
-                 "channels": 1,
-                 "mime": "audio/webm;codecs=opus",
-             },
-         }
-         input_start = {
-             "type": "input.start",
-             "capture": {
-                 "container": "webm",
-                 "codec": "opus",
-                 "mime": "audio/webm;codecs=opus",
-                 "timeslice_ms": timeslice_ms,
-                 "manual_gate": False,
-             },
-         }
- 
-         now_ms = int(time.time() * 1000)
-         ctx.asr_ready = True
-         ctx.ingress_packets = 0
-         ctx.ingress_bytes = 0
-         ctx.first_ingress_ms = None
-         ctx.mic_armed_ms = now_ms
- 
-         await self._send_json(send, ctx.sid, ready_frame)
-         await self._send_json(send, ctx.sid, input_start)
-         await self._send_json(send, ctx.sid, {"type": "start_listening"})
-+        _log.info(
-+            "evt=asr_ready_bundle_sent sid=%s input.mime=audio/webm;codecs=opus capture.timeslice_ms=%s",
-+            ctx.sid,
-+            timeslice_ms,
-+        )
- 
-     @staticmethod
-     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
-         decoded: Dict[str, str] = {}
-         for key, value in headers:
-             decoded[key.decode("latin1").lower()] = value.decode("latin1")
-         return decoded
- 
-     @staticmethod
-     def _now_ms() -> int:
-         return int(time.time() * 1000)
- 
-     @staticmethod
-     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
-         if not payload:
+                 ctx.await_user_pending = False
+                 ctx.await_user_pending_key = None
+                 ctx.await_user_after_mask = False
+                 ctx.await_user_after_mask_key = None
+                 ctx.last_tts_end_req_id = None
+                 ctx.mic_nudge_sent = False
+                 self._cancel_mic_open_timer(ctx)
+                 ctx.await_user_cue_emitted = False
+-        if frame_type == "asr.ready":
+-            return None
+         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
              return None
-         preview = payload.decode("utf-8", "replace")
-         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
-         if len(preview) > limit:
-             return f"{preview[: limit - 1]}…"
-         return preview
+         normalized = dict(payload)
+         if frame_type == "policy.interaction":
+             normalized = self._sanitize_policy_interaction(normalized)
+             last_policy = ctx.last_policy_interaction
+             if last_policy is not None and last_policy == normalized:
+                 return None
+             ctx.last_policy_interaction = json.loads(
+                 json.dumps(normalized, separators=(",", ":"))
+             )
+         if frame_type == "info":
+             meta = {}
+             source_meta = normalized.get("meta")
+             if isinstance(source_meta, dict):
+                 meta = dict(source_meta)
+             meta["sid"] = ctx.sid
+             normalized["meta"] = meta
+             policy_payload = normalized.get("policy")
+             if isinstance(policy_payload, dict):
+                 ctx.policy_snapshot = policy_payload
+         return normalized
  
-     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
-         ctx.outbound_queue_depth = queued
-         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
+     @staticmethod
+     def _truncate_banner_string(value: str, limit: int = 240) -> str:
+diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
+index afdcfb269fc6e885391f9e1cc8a28e86f387304c..0da08e84bc5eac1eb2468a24c61db34d00b21d29 100644
+--- a/tests/test_adapter_outbound_bridge.py
++++ b/tests/test_adapter_outbound_bridge.py
+@@ -182,83 +182,102 @@ class TestAdapterOutboundBridge(unittest.TestCase):
+         asyncio.run(
+             self._test_payload_other_sid_drop({"type": "chat.message", "message_id": "ignored"})
+         )
+ 
+     def test_allow_list_blocks_unknown_types(self) -> None:
+         asyncio.run(self._test_allow_list())
+ 
+     def test_backpressure_reports_drops(self) -> None:
+         asyncio.run(self._test_backpressure())
+ 
+     def test_start_listening_handoff_after_tts_end(self) -> None:
+         asyncio.run(self._test_start_listening_handoff())
+ 
+     def test_listen_handoff_waits_for_mask_off(self) -> None:
+         asyncio.run(self._test_listen_handoff_waits_for_mask_off())
+ 
+     def test_client_ready_mic_open_confirms_listen(self) -> None:
+         asyncio.run(self._test_client_ready_mic_open())
+ 
+     def test_emits_await_user_after_tts_end(self) -> None:
+         asyncio.run(self._test_emits_await_user_after_tts_end())
+ 
+     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
+         asyncio.run(self._test_audio_forwarding())
+ 
++    def test_asr_ready_frame_forwarded(self) -> None:
++        asyncio.run(self._test_asr_ready_frame_forwarded())
++
+     def test_mic_open_timeout_triggers_nudge(self) -> None:
+         asyncio.run(self._test_mic_open_timeout_nudge())
+ 
+     async def _test_happy_path(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+             payload = {"type": "policy.interaction", "interaction_id": "abc123"}
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+ 
+             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction")
+             self.assertEqual(frame, payload)
+ 
+             frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
+             self.assertEqual(len(frames), 1)
+         finally:
+             await harness.close()
+ 
+     async def _test_payload_forwarded(self, payload: Dict[str, Any]) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+ 
+             frame = await harness.wait_for_outbound(lambda data: data == payload)
+             self.assertEqual(frame, payload)
+         finally:
+             await harness.close()
+ 
++    async def _test_asr_ready_frame_forwarded(self) -> None:
++        engine = RecordingEngine()
++        adapter = ChatV2Adapter(engine=engine)
++        harness = OutboundHarness(adapter, engine)
++        await harness.start()
++        try:
++            frame = {"type": "asr.ready", "vendor": "deepgram"}
++            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": frame})
++
++            delivered = await harness.wait_for_outbound(
++                lambda data: data.get("type") == "asr.ready"
++            )
++            self.assertEqual(delivered, frame)
++        finally:
++            await harness.close()
++
+     async def _test_sid_isolation(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+             payload = {"type": "policy.interaction", "interaction_id": "ignored"}
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": "other", "payload": payload})
+ 
+             with self.assertRaises(TimeoutError):
+                 await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction", timeout=0.1)
+             self.assertEqual(len(harness.outbound_frames), 0)
+         finally:
+             await harness.close()
+ 
+     async def _test_payload_other_sid_drop(self, payload: Dict[str, Any]) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": "other", "payload": payload})
+ 
+             with self.assertRaises(TimeoutError):
+                 await harness.wait_for_outbound(

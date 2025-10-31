@@ -204,6 +204,9 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
         asyncio.run(self._test_audio_forwarding())
 
+    def test_asr_ready_frame_forwarded(self) -> None:
+        asyncio.run(self._test_asr_ready_frame_forwarded())
+
     def test_mic_open_timeout_triggers_nudge(self) -> None:
         asyncio.run(self._test_mic_open_timeout_nudge())
 
@@ -234,6 +237,22 @@ class TestAdapterOutboundBridge(unittest.TestCase):
 
             frame = await harness.wait_for_outbound(lambda data: data == payload)
             self.assertEqual(frame, payload)
+        finally:
+            await harness.close()
+
+    async def _test_asr_ready_frame_forwarded(self) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+        try:
+            frame = {"type": "asr.ready", "vendor": "deepgram"}
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": frame})
+
+            delivered = await harness.wait_for_outbound(
+                lambda data: data.get("type") == "asr.ready"
+            )
+            self.assertEqual(delivered, frame)
         finally:
             await harness.close()
 

@@ -2166,8 +2166,6 @@ class ChatV2Adapter:
                 ctx.mic_nudge_sent = False
                 self._cancel_mic_open_timer(ctx)
                 ctx.await_user_cue_emitted = False
-        if frame_type == "asr.ready":
-            return None
         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
             return None
         normalized = dict(payload)
