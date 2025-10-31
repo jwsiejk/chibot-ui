@@ -226,8 +226,51 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         adapter.engine = engine
 
         chunk = b"\x07" * 160
+        chunk_count = RATE_LIMIT_CAPACITY + 6
+
+        ready_frame = {
+            "type": "client.ready",
+            "mic": {"state": "open", "vendor": "webm_opus", "ts": 1761889784321},
+        }
+        client_log_ready = {
+            "type": "client.log",
+            "label": "client_ready_handshake",
+            "detail": {
+                "outcome": "sent",
+                "attempts": 1,
+                "readyState": 1,
+                "events": [
+                    {"kind": "enqueue", "ts": 1761889784339},
+                    {"kind": "attempt", "ts": 1761889784339},
+                    {"kind": "sent", "ts": 1761889784339},
+                ],
+            },
+        }
+
         events = [{"type": "websocket.connect"}]
-        events.extend({"type": "websocket.receive", "bytes": chunk} for _ in range(RATE_LIMIT_CAPACITY + 6))
+        events.append({"type": "websocket.receive", "text": json.dumps(ready_frame)})
+        events.append({"type": "websocket.receive", "text": json.dumps(client_log_ready)})
+
+        for idx in range(chunk_count):
+            if idx in {0, 3, 12}:
+                events.append(
+                    {
+                        "type": "websocket.receive",
+                        "text": json.dumps(
+                            {
+                                "type": "client.log",
+                                "label": "client_audio_stream",
+                                "detail": {
+                                    "chunk": idx,
+                                    "size": len(chunk),
+                                    "readyState": 1,
+                                },
+                            }
+                        ),
+                    }
+                )
+            events.append({"type": "websocket.receive", "bytes": chunk})
+
         events.append({"type": "websocket.disconnect", "code": 1000})
 
         sent = self._drive(adapter, events)
@@ -238,7 +281,7 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
             msg=f"unexpected rate limit errors: {error_frames}",
         )
 
-        self.assertEqual(len(engine.audio_calls), RATE_LIMIT_CAPACITY + 6)
+        self.assertEqual(len(engine.audio_calls), chunk_count)
 
 
 if __name__ == "__main__":  # pragma: no cover
