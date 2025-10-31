@@ -837,6 +837,8 @@ class ChatV2Adapter:
         if preview is not None:
             meta["ws"]["preview"] = preview
 
+        frame_payload: Optional[Dict[str, Any]] = None
+
         if byte_count > self.text_limit_bytes:
             meta["error"] = "frame_too_large"
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
@@ -857,10 +859,12 @@ class ChatV2Adapter:
             await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
             return self._HandleResult(True)
 
+        frame_payload = frame
+
         raw_type = frame.get("type")
         if not isinstance(raw_type, str):
             meta["error"] = "schema_invalid"
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
             return self._HandleResult(True)
 
@@ -870,7 +874,7 @@ class ChatV2Adapter:
         ctx.last_client_activity_ms = now_ms
 
         if frame_type == "client.ping":
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
                 ctx.last_pong_sent_ms = now_ms
                 client_ts = frame.get("ts")
@@ -881,12 +885,12 @@ class ChatV2Adapter:
             return self._HandleResult(True)
 
         if frame_type == "client.pong":
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
             ctx.last_client_pong_ms = now_ms
             return self._HandleResult(True)
 
         if frame_type == "ping":
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
                 ctx.last_pong_sent_ms = now_ms
                 reply_ts = frame.get("t")
@@ -899,7 +903,7 @@ class ChatV2Adapter:
             text = frame.get("text")
             if not isinstance(text, str):
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -912,7 +916,7 @@ class ChatV2Adapter:
                 text_bytes = text.encode("utf-8")
             except UnicodeEncodeError:
                 meta["error"] = "bad_utf8"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -924,7 +928,7 @@ class ChatV2Adapter:
             client_msg_id = frame.get("client_msg_id")
             if client_msg_id is not None and not isinstance(client_msg_id, str):
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -959,14 +963,14 @@ class ChatV2Adapter:
         else:
             if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
                 meta["error"] = "unknown_type"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(send, ctx.sid, "unknown_type", frame_type)
                 return self._HandleResult(True)
 
             is_valid, hint = validate_frame(frame)
             if not is_valid:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 detail = hint or "Frame failed validation"
                 await self._send_error(send, ctx.sid, "schema_invalid", detail)
                 return self._HandleResult(True)
@@ -999,7 +1003,7 @@ class ChatV2Adapter:
             if seq_start is not None:
                 if not isinstance(seq_start, int):
                     meta["error"] = "schema_invalid"
-                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                     await self._send_error(
                         send,
                         ctx.sid,
@@ -1009,7 +1013,7 @@ class ChatV2Adapter:
                     return self._HandleResult(False, 1003, "schema_invalid")
                 if seq_start < 0:
                     meta["error"] = "schema_invalid"
-                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                     await self._send_error(
                         send,
                         ctx.sid,
@@ -1020,7 +1024,7 @@ class ChatV2Adapter:
                 profile["seq_start"] = seq_start
             if ctx.audio_profile is not None:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -1031,7 +1035,7 @@ class ChatV2Adapter:
             err = validate_audio_header_against_policy(frame, ctx.policy_snapshot)
             if err:
                 meta["error"] = "policy_violation"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 _log.warning("evt=policy_violation sid=%s err=%s", ctx.sid, err)
                 await self._send_json(send, ctx.sid, {"type": "error", "error": err})
                 return self._HandleResult(False, 4400, "policy_violation")
@@ -1164,7 +1168,7 @@ class ChatV2Adapter:
             sanitized_event = self._sanitize_client_banner_event(frame.get("event"))
             if sanitized_event is None:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -1199,7 +1203,7 @@ class ChatV2Adapter:
             event_name = frame.get("event")
             if not isinstance(event_name, str) or not event_name.strip():
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -1211,7 +1215,7 @@ class ChatV2Adapter:
             normalized_event = event_name.strip()
             if normalized_event not in _CLIENT_AUTOSTART_ALLOWED_EVENTS:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -1240,7 +1244,7 @@ class ChatV2Adapter:
             event_name = frame.get("event")
             if event_name not in _CLIENT_TELEMETRY_ALLOWED_EVENTS:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -1252,7 +1256,7 @@ class ChatV2Adapter:
             frame_sid = frame.get("sid")
             if frame_sid is not None and not isinstance(frame_sid, str):
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -1268,7 +1272,7 @@ class ChatV2Adapter:
                 telemetry_meta_dict = dict(telemetry_meta)
             else:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -1288,7 +1292,7 @@ class ChatV2Adapter:
                 }
             )
 
-        await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+        await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
         await self._invoke_engine("on_json", ctx.sid, frame)
         return self._HandleResult(True)
 
@@ -1545,7 +1549,12 @@ class ChatV2Adapter:
             else:
                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
 
-    async def _send_json(self, send: Callable[[dict], Awaitable[None]], sid: str, payload: Dict[str, Any]) -> None:
+    async def _send_json(
+        self,
+        send: Callable[[dict], Awaitable[None]],
+        sid: str,
+        payload: Dict[str, Any],
+    ) -> None:
         text = json.dumps(payload, separators=(",", ":"))
         await send({"type": "websocket.send", "text": text})
         payload_bytes = text.encode("utf-8")
@@ -1561,7 +1570,7 @@ class ChatV2Adapter:
         preview = self._make_preview_from_bytes(payload_bytes)
         if preview is not None:
             meta["ws"]["preview"] = preview
-        await self._publish(EVT_WS_JSON_SEND, sid, meta)
+        await self._publish(EVT_WS_JSON_SEND, sid, meta, payload)
 
     async def _send_error(
         self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
@@ -2082,7 +2091,12 @@ class ChatV2Adapter:
                 if isinstance(vendor, str) and vendor:
                     frame["vendor"] = vendor
                 telemetry_bus.publish(
-                    {"type": EVT_WS_JSON_SEND, "sid": ctx.sid, "frame": frame}
+                    {
+                        "type": EVT_WS_JSON_SEND,
+                        "sid": ctx.sid,
+                        "frame": frame,
+                        "payload": frame,
+                    }
                 )
 
             try:
@@ -2679,7 +2693,14 @@ class ChatV2Adapter:
                 "code": "mic_permissions",
                 "reason": "mic_open_timeout",
             }
-            bus.publish({"type": EVT_WS_JSON_SEND, "sid": ctx.sid, "payload": nudge_frame})
+            bus.publish(
+                {
+                    "type": EVT_WS_JSON_SEND,
+                    "sid": ctx.sid,
+                    "payload": nudge_frame,
+                    "frame": nudge_frame,
+                }
+            )
 
     @staticmethod
     def _cancel_mic_open_timer(ctx: AdapterContext) -> None:
@@ -2743,7 +2764,13 @@ class ChatV2Adapter:
 
         await self._update_backpressure(ctx, max(0, queued))
 
-    async def _publish(self, event_type: str, sid: str, meta: Dict[str, Any]) -> None:
+    async def _publish(
+        self,
+        event_type: str,
+        sid: str,
+        meta: Dict[str, Any],
+        payload: Optional[Mapping[str, Any]] = None,
+    ) -> None:
         # Special handling: session-step telemetry
         if event_type == EVT_SESSION_STEP:
             event = {
@@ -2765,6 +2792,14 @@ class ChatV2Adapter:
             "source": "ws_server",
             "meta": dict(meta),
         }
+        if payload is not None:
+            if isinstance(payload, Mapping):
+                frame_payload = dict(payload)
+            else:
+                frame_payload = payload
+            event["payload"] = frame_payload
+            if isinstance(frame_payload, Mapping):
+                event.setdefault("frame", dict(frame_payload))
         bus.publish(event)
 
     def _emit_session_step(

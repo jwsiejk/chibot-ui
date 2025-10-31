@@ -958,7 +958,14 @@ class ASRRuntime:
                 "vendor": "deepgram",
                 "input": dict(state.input_desc),
             }
-            self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
+            self._bus.publish(
+                {
+                    "type": EVT_WS_JSON_SEND,
+                    "sid": sid,
+                    "frame": asr_ready_frame,
+                    "payload": asr_ready_frame,
+                }
+            )
             if stream_id:
                 _log.info(
                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
@@ -1359,7 +1366,14 @@ class ASRRuntime:
                     "vendor": "deepgram",
                     "input": dict(state.input_desc),
                 }
-                self._bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "frame": asr_ready_frame})
+                self._bus.publish(
+                    {
+                        "type": EVT_WS_JSON_SEND,
+                        "sid": sid,
+                        "frame": asr_ready_frame,
+                        "payload": asr_ready_frame,
+                    }
+                )
 
         state.ready_armed_at = time.monotonic()
         state.ready_watchdog = loop.call_later(_NO_AUDIO_TIMEOUT_S, _fire)

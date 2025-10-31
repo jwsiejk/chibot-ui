@@ -8,7 +8,8 @@ import uuid
 from typing import Any, Callable, Dict, List
 
 from app.telemetry import bus
-from app.voice_v2 import EVT_CLIENT_AUTOSTART, EVT_CLIENT_BANNER, EVT_WS_JSON_RECV
+from app.voice_v2 import EVT_CLIENT_AUTOSTART, EVT_CLIENT_BANNER, EVT_WS_JSON_RECV, EVT_WS_JSON_SEND
+from app.voice_v2.asr_runtime import ASRRuntime
 from app.security.jwt_utils import mint_ws_token
 from app.ws.adapter import (
     CHAT_V2_SUBPROTOCOL,
@@ -211,6 +212,45 @@ class TestWebSocketJsonContract(unittest.TestCase):
         self.assertTrue(sanitized_meta["active"])
         self.assertNotIn("ignore", sanitized_meta)
         self.assertNotIn("empty", sanitized_meta)
+
+    def test_send_json_publishes_frame_payload_and_asr_runtime_consumes(self) -> None:
+        adapter = ChatV2Adapter()
+        sid = "sid-send-json"
+        frame = {"type": "start_listening"}
+
+        recorded: List[dict] = []
+        token = bus.subscribe(EVT_WS_JSON_SEND, recorded.append)
+        try:
+            sent: List[dict] = []
+
+            async def fake_send(message: dict) -> None:
+                sent.append(message)
+
+            asyncio.run(adapter._send_json(fake_send, sid, frame))
+        finally:
+            bus.unsubscribe(token)
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(len(recorded), 1)
+        event = recorded[0]
+        self.assertEqual(event.get("type"), EVT_WS_JSON_SEND)
+        self.assertEqual(event.get("sid"), sid)
+        self.assertEqual(event.get("payload"), frame)
+        self.assertEqual(event.get("frame"), frame)
+
+        runtime = ASRRuntime.__new__(ASRRuntime)
+        runtime._sessions = {}
+        runtime._ensure_stream = lambda *_args, **_kwargs: None  # type: ignore[attr-defined]
+        runtime._bus = bus
+        runtime._client = object()
+        runtime._engine = object()
+
+        runtime._handle_ws_send_event(event)
+
+        session = runtime._sessions.get(sid)
+        self.assertIsNotNone(session)
+        if session is not None:
+            self.assertTrue(session.listening)
 
     def test_backpressure_events_toggle_on_thresholds(self) -> None:
         adapter = ChatV2Adapter()
