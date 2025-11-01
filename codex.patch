@@ -1,5 +1,5 @@
 diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941b29a2a7f 100644
+index 2292fc5da83351b6120fade9750a5ea8d8d0cd58..03258d279f1cad474291d68b8ddc2ad54acde283 100644
 --- a/app/voice_v2/asr_runtime.py
 +++ b/app/voice_v2/asr_runtime.py
 @@ -1,46 +1,45 @@
@@ -50,8 +50,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
      raw = os.getenv("DG_STREAM_OPEN_TIMEOUT_S")
      if raw is None:
          return default
-@@ -115,114 +114,143 @@ class _SessionState:
-     dropped_chunks: int = 0
+@@ -116,114 +115,141 @@ class _SessionState:
      last_stream_id: Optional[str] = None
      ready_watchdog: asyncio.TimerHandle | None = None
      ready_armed_at: float = 0.0
@@ -68,6 +67,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
      ingress_bytes: int = 0
      first_ingress_ms: int = 0
      first_partial_logged: bool = False
+     last_partial_log: float = 0.0
      model: Optional[str] = None
      keep_warm_until: float = 0.0
      probe_active: bool = False
@@ -152,9 +152,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
 +                    self._handle_client_audio_event,
 +                )
 +            except Exception:  # pragma: no cover - defensive logging
-+                _log.exception(
-+                    "evt=asr_runtime_client_telemetry_subscribe_failed"
-+                )
++                _log.exception("evt=asr_runtime_client_telemetry_subscribe_failed")
  
      def set_bus(self, telemetry_bus: Any | None) -> None:
          if telemetry_bus is None:
@@ -197,8 +195,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
          if policy_snapshot is None:
              return _default_input_descriptor()
  
-@@ -269,66 +297,74 @@ class ASRRuntime:
- 
+@@ -271,66 +297,74 @@ class ASRRuntime:
          return _default_input_descriptor()
  
      # ------------------------------------------------------------------
@@ -218,6 +215,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
          state.ingress_bytes = 0
          state.first_ingress_ms = 0
          state.first_partial_logged = False
+         state.last_partial_log = 0.0
          state.probe_active = False
          state.probe_target_samples = 0
          state.probe_samples_collected = 0
@@ -272,7 +270,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
                  "evt=asr_midstream_header sid=%s stream_id=%s action=reopen_vendor",
                  sid,
                  stream_id,
-@@ -386,50 +422,51 @@ class ASRRuntime:
+@@ -388,64 +422,66 @@ class ASRRuntime:
              self._apply_backpressure(sid, state)
              if state.pending:
                  self._ensure_stream(sid, state)
@@ -313,6 +311,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
          state.req_id = None
          state.bytes_received = 0
          state.listening = False
++        state.utterance_active = False
  
      def prearm(self, sid: str, *, keep_warm_ms: int | None = None) -> None:
          """Request that the ASR stream open proactively for the session."""
@@ -324,7 +323,21 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
          if state is None:
              state = _SessionState(sid=sid)
              self._sessions[sid] = state
-@@ -521,97 +558,134 @@ class ASRRuntime:
+         if state.stream_open:
+             if keep_warm_ms is not None and keep_warm_ms > 0:
+                 state.keep_warm_until = max(
+                     state.keep_warm_until,
+                     time.monotonic() + (keep_warm_ms / 1000.0),
+                 )
+             return
+ 
+         state.prearm_requested = True
+         if keep_warm_ms is not None and keep_warm_ms > 0:
+             state.keep_warm_until = max(
+                 state.keep_warm_until,
+                 time.monotonic() + (keep_warm_ms / 1000.0),
+             )
+@@ -523,99 +559,133 @@ class ASRRuntime:
              return
          try:
              self.prearm(sid)
@@ -370,10 +383,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
 +        if not state.commit_on_vad_silence:
 +            return
 +        reason_val = meta.get("reason")
-+        if isinstance(reason_val, str) and reason_val:
-+            reason = reason_val
-+        else:
-+            reason = "vad_silence"
++        reason = reason_val if isinstance(reason_val, str) and reason_val else "vad_silence"
 +        _log.info(
 +            "evt=asr_commit_trigger sid=%s vendor=%s source=client reason=%s",
 +            sid,
@@ -401,6 +411,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
          state.ingress_bytes = 0
          state.first_ingress_ms = 0
          state.first_partial_logged = False
+         state.last_partial_log = 0.0
          state.pending.clear()
          state.buffered_bytes = 0
          state.prearm_requested = True
@@ -430,6 +441,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
          state.ingress_bytes = 0
          state.first_ingress_ms = 0
          state.first_partial_logged = False
+         state.last_partial_log = 0.0
 +        state.utterance_active = False
          self._cancel_ready_watchdog(state)
          self._cancel_idle_timer(state)
@@ -459,7 +471,62 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
              _log.exception("evt=asr_emit_log_failed")
  
      def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
-@@ -758,142 +832,149 @@ class ASRRuntime:
+@@ -637,52 +707,53 @@ class ASRRuntime:
+ 
+         dropped_chunks = 0
+         while state.pending and state.buffered_bytes > _BACKPRESSURE_THRESHOLD:
+             removed = state.pending.popleft()
+             state.buffered_bytes = max(0, state.buffered_bytes - len(removed))
+             dropped_chunks += 1
+ 
+         if dropped_chunks:
+             state.dropped_chunks += dropped_chunks
+             stream_id = state.stream_id or state.last_stream_id or ""
+             _log.info(
+                 "evt=asr_backpressure sid=%s stream_id=%s buffered_bytes=%d threshold=%d action=drop_oldest dropped_chunks=%d",
+                 sid,
+                 stream_id,
+                 state.buffered_bytes,
+                 _BACKPRESSURE_THRESHOLD,
+                 dropped_chunks,
+             )
+ 
+     def _log_session_rollup(self, state: _SessionState) -> None:
+         stream_id = state.last_stream_id or state.stream_id or ""
+         duration_ms = int(
+             max(0.0, (time.monotonic() - state.opened_at_monotonic) * 1000)
+         )
+         msg = (
+-            "asr_rollup vendor=deepgram partials=%d finals=%d bytes=%d duration_ms=%d"
++            "asr_rollup vendor=%s partials=%d finals=%d bytes=%d duration_ms=%d"
+             % (
++                self._vendor,
+                 state.dg_msgs_partial,
+                 state.dg_msgs_final,
+                 state.bytes_sent,
+                 duration_ms,
+             )
+         )
+         _log.info(msg)
+         if getattr(state, "ingress_packets", 0) >= 0:
+             _log.info(
+                 "evt=audio_wire_rollup sid=%s ingress_packets=%s ingress_bytes=%s",
+                 state.sid,
+                 state.ingress_packets,
+                 state.ingress_bytes,
+             )
+         self._emit_log(
+             {
+                 "type": "EVT_LOG",
+                 "logger": "app.voice_v2.asr_runtime",
+                 "level": "INFO",
+                 "sid": state.sid,
+                 "stream_id": stream_id,
+                 "msg": msg,
+             }
+         )
+ 
+@@ -754,142 +825,149 @@ class ASRRuntime:
              try:
                  policy_snapshot = None
                  try:
@@ -618,7 +685,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
                      sid,
                      "open_failed",
                      f"stream open failed: {detail_reason}",
-@@ -918,86 +999,88 @@ class ASRRuntime:
+@@ -914,86 +992,88 @@ class ASRRuntime:
                  self._emit_log(
                      {
                          "type": "EVT_LOG",
@@ -712,7 +779,89 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
                  state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
                  self._forward_chunk(sid, state, chunk)
              if state.chunks_sent == pre_chunks_sent:
-@@ -1247,51 +1330,51 @@ class ASRRuntime:
+@@ -1169,241 +1249,246 @@ class ASRRuntime:
+                 self._publish_asr_unavailable(
+                     sid,
+                     "upstream_closed",
+                     detail,
+                     state=state,
+                 )
+             state.stream_id = None
+             state.close_reason = None
+             state.stream_open = False
+             state.req_id = None
+             state.bytes_received = 0
+ 
+         return _callback
+ 
+     def _on_partial(
+         self, sid: str, text: str, metadata: Dict[str, object] | None = None
+     ) -> None:
+         if not isinstance(text, str) or not text.strip():
+             return
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+ 
+         metadata = metadata or {}
++        self._cancel_commit_timer(state)
+         if state.stream_id is None:
+             meta_stream = metadata.get("stream_id")
+             if isinstance(meta_stream, str) and meta_stream:
+                 state.stream_id = meta_stream
+         stream_id = state.stream_id or ""
+         if not stream_id:
+             stream_id = f"dg-stream-{uuid.uuid4().hex}"
+             state.stream_id = stream_id
+         state.last_stream_id = stream_id
+         state.dg_msgs_partial += 1
+         raw_len = metadata.get("len_chars")
+         len_chars = len(text)
+         if raw_len:
+             try:
+                 candidate_len = int(raw_len)
+             except (TypeError, ValueError):
+                 candidate_len = None
+             if candidate_len is not None and candidate_len >= 0:
+                 len_chars = candidate_len
+         utterance_id = metadata.get("utterance_id")
+         if not utterance_id:
+             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+         latency_ms = int(metadata.get("latency_ms") or 0)
+ 
+         now_monotonic = time.monotonic()
+         should_log_partial = False
+         if not state.first_partial_logged:
+             should_log_partial = True
+         elif now_monotonic - state.last_partial_log >= 0.5:
+             should_log_partial = True
+         if should_log_partial:
+             state.first_partial_logged = True
+             state.last_partial_log = now_monotonic
+             _log.info(
+-                "asr_partial vendor=deepgram chars=%d latency_ms=%d",
++                "asr_partial vendor=%s chars=%d latency_ms=%d",
++                self._vendor,
+                 len_chars,
+                 latency_ms,
+             )
+ 
+         _log.debug(
+             "evt=dg_partial sid=%s stream_id=%s len_chars=%d is_final=false "
+             "utterance_id=%s latency_ms=%d",
+             sid,
+             stream_id,
+             len_chars,
+             utterance_id,
+             latency_ms,
+         )
+ 
+         ensure_session = getattr(self._engine, "_ensure_session", None)
+         engine_session = ensure_session(sid) if callable(ensure_session) else None
+         engine_req_id = None
+         if engine_session is not None:
+             candidate = getattr(engine_session, "req_id", None)
              if isinstance(candidate, str) and candidate:
                  engine_req_id = candidate
  
@@ -765,7 +914,45 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
          state.last_stream_id = stream_id
          state.dg_msgs_final += 1
          raw_len = metadata.get("len_chars")
-@@ -1330,51 +1413,51 @@ class ASRRuntime:
+         len_chars = len(text)
+         if raw_len:
+             try:
+                 candidate_len = int(raw_len)
+             except (TypeError, ValueError):
+                 candidate_len = None
+             if candidate_len is not None and candidate_len >= 0:
+                 len_chars = candidate_len
+         utterance_id = metadata.get("utterance_id")
+         if not utterance_id:
+             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+         latency_ms = int(metadata.get("latency_ms") or 0)
+ 
+         _log.info(
+-            "asr_final vendor=deepgram chars=%d latency_ms=%d",
++            "asr_final vendor=%s chars=%d latency_ms=%d",
++            self._vendor,
+             len_chars,
+             latency_ms,
+         )
+ 
+         ensure_session = getattr(self._engine, "_ensure_session", None)
+         engine_session = ensure_session(sid) if callable(ensure_session) else None
+         engine_req_id = None
+         if engine_session is not None:
+             candidate = getattr(engine_session, "req_id", None)
+             if isinstance(candidate, str) and candidate:
+                 engine_req_id = candidate
+ 
+         if isinstance(engine_req_id, str) and engine_req_id:
+             req_id = engine_req_id
+         elif isinstance(state.req_id, str) and state.req_id:
+             req_id = state.req_id
+             if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
+                 engine_session.req_id = req_id
+         else:
+             req_id = f"req-{uuid.uuid4().hex}"
+             if engine_session is not None:
+                 engine_session.req_id = req_id
  
          state.req_id = None
  
@@ -799,7 +986,9 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
          self._log_utterance(state, stream_id, req_id, metadata, text)
  
      def _on_error(self, sid: str, error: str) -> None:
-         _log.exception("evt=asr_error sid=%s err=%s", sid, error)
+         reason = error or "unknown"
+-        _log.error("asr_error vendor=deepgram code=stream reason=%s", reason)
++        _log.error("asr_error vendor=%s code=stream reason=%s", self._vendor, reason)
  
          state = self._sessions.get(sid)
          if state is None:
@@ -815,10 +1004,34 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
          state.req_id = None
          self._cancel_idle_timer(state)
          self._cancel_ready_watchdog(state)
++        self._cancel_commit_timer(state)
++        state.utterance_active = False
          try:
              self._client.close_stream(sid)
          except Exception:  # pragma: no cover - defensive
-@@ -1459,56 +1542,58 @@ class ASRRuntime:
+             _log.exception("evt=asr_error_close_failed sid=%s", sid)
+         finally:
+             self._finalize_rms_probe(sid, state)
+ 
+     def _publish_asr_unavailable(
+         self,
+         sid: str,
+         reason: str,
+         details: str,
+         *,
+         state: _SessionState | None = None,
+         force: bool = False,
+     ) -> None:
+         if not isinstance(sid, str) or not sid:
+             return
+         if not isinstance(reason, str) or not reason:
+             return
+         if state is None:
+             state = self._sessions.get(sid)
+         if state is not None and state.unavailable_emitted and not force:
+             return
+ 
+@@ -1466,56 +1551,56 @@ class ASRRuntime:
          handle = state.ready_watchdog
          if handle is not None:
              handle.cancel()
@@ -847,9 +1060,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
 -                self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
 -                _log.info("evt=asr_ready_published sid=%s vendor=deepgram", sid)
 +                self._bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": self._vendor})
-+                _log.info(
-+                    "evt=asr_ready_published sid=%s vendor=%s", sid, self._vendor
-+                )
++                _log.info("evt=asr_ready_published sid=%s vendor=%s", sid, self._vendor)
                  self._log_asr_rearmed(sid, state)
                  asr_ready_frame = {
                      "type": "asr.ready",
@@ -880,7 +1091,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
              return
          self._cancel_idle_timer(state)
  
-@@ -1560,63 +1645,187 @@ class ASRRuntime:
+@@ -1567,63 +1652,193 @@ class ASRRuntime:
              if state.last_audio_ts
              else self._idle_close_ms
          )
@@ -912,7 +1123,8 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
          state.stream_id = None
          state.req_id = None
          state.bytes_received = 0
- 
++        state.utterance_active = False
++
 +    def commit(self, sid: str, *, reason: str | None = None) -> None:
 +        if not isinstance(sid, str) or not sid:
 +            return
@@ -942,7 +1154,11 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
 +        self._cancel_commit_timer(state)
 +        state.utterance_active = False
 +        try:
-+            self._client.close_stream(sid)
++            commit_method = getattr(self._client, "commit_stream", None)
++            if callable(commit_method):
++                commit_method(sid)
++            else:
++                self._client.close_stream(sid)
 +        except Exception:  # pragma: no cover - defensive
 +            _log.exception("evt=asr_commit_close_failed sid=%s vendor=%s", sid, self._vendor)
 +        finally:
@@ -953,7 +1169,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
 +        state.bytes_received = 0
 +        state.buffered_bytes = 0
 +        state.pending.clear()
-+
+ 
      # Optional idle guard
      def close_idle_streams(self) -> None:
          if self._loop is None:
@@ -987,6 +1203,7 @@ index dda35d6cabb3d30a80800eabceeb7133efb13134..48c33575211c24c616694cf0d16b7941
                  state.stream_id = None
                  state.req_id = None
                  state.bytes_received = 0
++                state.utterance_active = False
 +
 +    def _apply_commit_policy(self, state: _SessionState) -> None:
 +        commit_on_vad, commit_silence_ms, max_utterance_ms = self._resolve_commit_policy()
