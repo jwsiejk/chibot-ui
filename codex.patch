@@ -1,259 +1,751 @@
-diff --git a/app/admin/ui/config_panel.js b/app/admin/ui/config_panel.js
-index 36471291c454849feddd18ce96bbc31660cbca4e..7f29facaf0ff812a6bc011b5b0427c45d7110472 100644
---- a/app/admin/ui/config_panel.js
-+++ b/app/admin/ui/config_panel.js
-@@ -1,46 +1,46 @@
- (() => {
-   const ROOT_SCOPE = typeof window !== 'undefined'
-     ? window
-     : typeof globalThis !== 'undefined'
-     ? globalThis
-     : {};
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 8cecabe2293c07bb82d281568b8efa0ae89d35cf..dda35d6cabb3d30a80800eabceeb7133efb13134 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -1,64 +1,67 @@
+ """Deepgram-backed ASR runtime for the voice v2 engine."""
+ from __future__ import annotations
  
-   const API_ENDPOINT = '/api/v1/admin/settings';
-   const ASR_VENDOR_OPTIONS = [
--    { value: 'deepgram', label: 'Deepgram' },
-     { value: 'speechmatics', label: 'Speechmatics' },
-+    { value: 'deepgram', label: 'Deepgram' },
-   ];
+ import asyncio
+ import logging
++import math
+ import os
++import struct
+ import time
+ import uuid
+ from collections import deque
+ from dataclasses import dataclass, field
+ from typing import Any, Callable, Deque, Dict, Mapping, Optional
  
-   const ASR_VENDOR_SECONDARY_OPTIONS = [
-     { value: '', label: 'None' },
-     ...ASR_VENDOR_OPTIONS,
-   ];
+ from app.config import (
+     ASR_BACKPRESSURE_THRESHOLD_BYTES,
+     ASR_IDLE_CLOSE_MS,
+     ASR_TRACE,
+ )
+ from app.policy.model import Policy
+ from app.services.streaming_asr.deepgram_client import DeepgramClient
+ from app.telemetry import bus
+ from app.voice_v2 import (
+     EVT_ASR_FINAL,
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.voice_v2.engine import EngineV2
  
-   const AUDIO_PIPELINE_OPTIONS = [
-     { value: 'opus-webm', label: 'Opus + WebM (default)' },
--    { value: 'pcm16', label: 'PCM16 (beta)' },
-+    { value: 'pcm16', label: 'PCM 16 kHz' },
-   ];
+ _log = logging.getLogger(__name__)
  
-   const DEFAULTS = {
-     diag_client_hud: false,
-     diag_audio_guard: true,
-     diag_chunk_sample_n: 10,
-     policy_media: {
-       asr_input: 'webm_opus',
-       asr_rate_hz: 48000,
-       asr_channels: 1,
-       fallbacks_allowed: false,
-     },
-     policy_capture: {
-       start_on_asr_ready: true,
-       start_on_turn_ready: true,
-       timeslice_ms: 200,
-       mask_during_tts: true,
-     },
-     policy_recorder: {
-       stop_on_tts_start: false,
-       mute_send_during_tts: true,
-     },
-     policy_input: {
-       require_hotword_to_start: false,
-     },
-@@ -99,51 +99,51 @@
-     },
-     {
-       key: 'diag_audio_guard',
-       type: 'boolean',
-       label: 'Audio guardrails',
-       description: 'Emit server-side diagnostics when client audio stalls.',
-     },
-     {
-       key: 'diag_chunk_sample_n',
-       type: 'number',
-       label: 'Chunk sample N',
-       description: 'Log every Nth audio chunk in the browser diagnostics overlay.',
-       min: CHUNK_MIN,
-       max: CHUNK_MAX,
-       sanitize: clampChunk,
-     },
-     {
-       key: 'policy_media.asr_input',
-       settingKey: 'policy_media',
-       prop: 'asr_input',
-       type: 'select',
-       label: 'ASR Input',
-       description: 'Choose the microphone stream format sent to the ASR vendor.',
-       options: [
-         { value: 'webm_opus', label: 'WebM + Opus (default)' },
--        { value: 'pcm_16k', label: 'PCM 16 kHz (future)', disabled: true },
-+        { value: 'pcm_16k', label: 'PCM 16 kHz' },
-       ],
-     },
-     {
-       key: 'policy_media.fallbacks_allowed',
-       settingKey: 'policy_media',
-       prop: 'fallbacks_allowed',
-       type: 'boolean',
-       label: 'Allow fallbacks',
-       description: 'Permit switching to alternate ASR inputs when the primary fails.',
-     },
-     {
-       key: 'policy_capture.start_on_asr_ready',
-       settingKey: 'policy_capture',
-       prop: 'start_on_asr_ready',
-       type: 'boolean',
-       label: 'Start on ASR Ready',
-       description: 'Begin microphone capture after the ASR session is ready.',
-     },
-     {
-       key: 'policy_capture.start_on_turn_ready',
-       settingKey: 'policy_capture',
-       prop: 'start_on_turn_ready',
-       type: 'boolean',
-       label: 'Start on Turn Ready',
-       description: 'Begin microphone capture when the turn is ready to listen.',
-@@ -238,51 +238,51 @@
-         }
-         return Math.round(numeric);
-       },
-     },
-     {
-       key: 'policy_asr.max_utterance_ms',
-       settingKey: 'policy_asr',
-       prop: 'max_utterance_ms',
-       type: 'number',
-       label: 'Max utterance (ms)',
-       description: 'Maximum duration to keep an utterance open before forcing a commit.',
-       min: 0,
-       sanitize: (value) => {
-         const numeric = Number(value);
-         if (!Number.isFinite(numeric) || numeric < 0) {
-           return DEFAULTS.policy_asr.max_utterance_ms;
-         }
-         return Math.round(numeric);
-       },
-     },
-     {
-       key: 'policy_asr.vendor.primary',
-       settingKey: 'policy_asr',
-       propPath: ['vendor', 'primary'],
-       type: 'select',
--      label: 'Primary ASR vendor',
-+      label: 'ASR Vendor',
-       description: 'Preferred speech recognition vendor for new sessions.',
-       options: ASR_VENDOR_OPTIONS,
-     },
-     {
-       key: 'policy_asr.vendor.secondary',
-       settingKey: 'policy_asr',
-       propPath: ['vendor', 'secondary'],
-       type: 'select',
-       label: 'Secondary ASR vendor',
-       description: 'Fallback vendor when the primary is unavailable.',
-       options: ASR_VENDOR_SECONDARY_OPTIONS,
-       emptyAsNull: true,
-     },
-     {
-       key: 'policy_audio.pipeline.mode',
-       settingKey: 'policy_audio',
-       propPath: ['pipeline', 'mode'],
-       type: 'select',
-       label: 'Audio pipeline mode',
-       description: 'Select the media pipeline format advertised to clients.',
-       options: AUDIO_PIPELINE_OPTIONS,
-     },
-     {
-       key: 'policy_routing.ws_version',
-       settingKey: 'policy_routing',
-@@ -732,96 +732,99 @@
-       result.policy_asr = sanitizePolicyAsr(raw.policy_asr);
-     }
-     if (Object.prototype.hasOwnProperty.call(raw, 'policy_audio')) {
-       result.policy_audio = sanitizePolicyAudio(raw.policy_audio);
-     }
-     if (Object.prototype.hasOwnProperty.call(raw, 'policy_routing')) {
-       result.policy_routing = sanitizePolicyRouting(raw.policy_routing);
-     }
-     return result;
-   }
+ _DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
+ _PARTIAL_CONFIDENCE = 0.55
+ _FINAL_CONFIDENCE = 0.9
+ _DEFAULT_IDLE_CLOSE_MS = 4000
+ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+ _TRACE_ENABLED = bool(ASR_TRACE)
+ _EBML_MAGIC = b"\x1a\x45\xdf\xa3"
++_RMS_PROBE_WINDOW_MS = 2000
+ def _resolve_stream_open_timeout(default: float = 10.0) -> float:
+     raw = os.getenv("DG_STREAM_OPEN_TIMEOUT_S")
+     if raw is None:
+         return default
+     try:
+         timeout = float(raw)
+     except (TypeError, ValueError):
+         return default
+     if timeout <= 0:
+         return default
+     return timeout
  
-   function mergeIntoGlobal(values) {
-     if (typeof window === 'undefined') {
-       return;
-     }
-     const existing = window.__CFG__ && typeof window.__CFG__ === 'object' ? window.__CFG__ : {};
-     window.__CFG__ = Object.assign(existing, {
-       DIAG_CLIENT_HUD: Boolean(values.diag_client_hud),
-       DIAG_AUDIO_GUARD: Boolean(values.diag_audio_guard),
-       DIAG_CHUNK_SAMPLE_N: clampChunk(values.diag_chunk_sample_n),
-       POLICY_MEDIA: sanitizePolicyMedia(values.policy_media),
-       POLICY_CAPTURE: sanitizePolicyCapture(values.policy_capture),
-       POLICY_RECORDER: sanitizePolicyRecorder(values.policy_recorder),
-       POLICY_INPUT: sanitizePolicyInput(values.policy_input),
-       POLICY_ASR: sanitizePolicyAsr(values.policy_asr),
-+      POLICY_AUDIO: sanitizePolicyAudio(values.policy_audio),
-       POLICY_ROUTING: sanitizePolicyRouting(values.policy_routing),
-     });
-   }
  
-   function applyValues(values) {
-     if (!values || typeof values !== 'object') {
-       return;
-     }
-     const next = { ...state.values };
-     Object.keys(values).forEach((key) => {
-       const sanitized = sanitizeSettingValue(key, values[key]);
-       if (
-         key === 'policy_media' ||
-         key === 'policy_capture' ||
-         key === 'policy_recorder' ||
-         key === 'policy_input' ||
-         key === 'policy_asr' ||
-+        key === 'policy_audio' ||
-         key === 'policy_routing'
-       ) {
-         next[key] = { ...sanitized };
-       } else {
-         next[key] = sanitized;
-       }
-     });
-     state.values = next;
-     mergeIntoGlobal(state.values);
-     updateInputs();
-   }
+ _STREAM_OPEN_TIMEOUT_S = _resolve_stream_open_timeout()
+ _NO_AUDIO_TIMEOUT_S = 9.0
+ _LISTENING_STATE = "Listening"
+ _READY_STATES = {"Ready", "Idle"}
  
-   function hydrateFromGlobal() {
-     if (typeof window === 'undefined') {
-       return {};
-     }
-     const cfg = window.__CFG__;
-     if (!cfg || typeof cfg !== 'object') {
-       return {};
-     }
-     return normalizeSettings({
-       diag_client_hud: cfg.DIAG_CLIENT_HUD,
-       diag_audio_guard: cfg.DIAG_AUDIO_GUARD,
-       diag_chunk_sample_n: cfg.DIAG_CHUNK_SAMPLE_N,
-       policy_media: cfg.POLICY_MEDIA,
-       policy_capture: cfg.POLICY_CAPTURE,
-       policy_recorder: cfg.POLICY_RECORDER,
-       policy_input: cfg.POLICY_INPUT,
-       policy_asr: cfg.POLICY_ASR,
-+      policy_audio: cfg.POLICY_AUDIO,
-       policy_routing: cfg.POLICY_ROUTING,
-     });
-   }
  
-   function updateInputs() {
-     Object.keys(elements).forEach((key) => {
-       const entry = elements[key];
-       if (!entry || !entry.input || !entry.field) {
-         return;
-       }
-       const field = entry.field;
-       const disabled = Boolean(state.loading) || Boolean(state.saving[key]);
-       entry.input.disabled = disabled;
-       const value = getFieldValue(field);
-       if (field.type === 'boolean') {
-         entry.input.checked = Boolean(value);
-       } else if (field.type === 'number') {
-         entry.input.value = String(value);
-       } else if (field.type === 'select') {
-         entry.input.value = String(value);
-       }
-     });
-     updatePanelState();
-   }
+ def _safe_url(url: str | None) -> str:
+     if not url:
+         return ""
+     try:
+         from urllib.parse import urlparse, urlunparse
  
+@@ -106,50 +109,56 @@ class _SessionState:
+     last_audio_ts_ms: int = 0
+     chunks_sent: int = 0
+     bytes_sent: int = 0
+     dg_msgs_partial: int = 0
+     dg_msgs_final: int = 0
+     finals_delivered: int = 0
+     dropped_chunks: int = 0
+     last_stream_id: Optional[str] = None
+     ready_watchdog: asyncio.TimerHandle | None = None
+     ready_armed_at: float = 0.0
+     prearm_requested: bool = False
+     input_desc: Dict[str, Any] = field(default_factory=_default_input_descriptor)
+     unavailable_emitted: bool = False
+     first_chunk_seen: bool = False
+     rollup_window_start: float = 0.0
+     rollup_chunks: int = 0
+     rollup_bytes: int = 0
+     bytes_received: int = 0
+     listening: bool = False
+     ingress_packets: int = 0
+     ingress_bytes: int = 0
+     first_ingress_ms: int = 0
+     first_partial_logged: bool = False
+     model: Optional[str] = None
+     keep_warm_until: float = 0.0
++    probe_active: bool = False
++    probe_target_samples: int = 0
++    probe_samples_collected: int = 0
++    probe_sum_squares: float = 0.0
++    probe_peak: float = 0.0
++    probe_window_ms: int = _RMS_PROBE_WINDOW_MS
+ 
+     def __post_init__(self) -> None:
+         now_monotonic = time.monotonic()
+         now_wall = time.time()
+         self.opened_at_monotonic = now_monotonic
+         self.opened_at_ms = int(now_wall * 1000)
+         self.last_audio_ts = now_monotonic
+         self.last_audio_ts_ms = int(now_wall * 1000)
+ 
+ 
+ class ASRRuntime:
+     """Bridge websocket audio to Deepgram realtime transcription."""
+ 
+     def __init__(
+         self,
+         engine: EngineV2,
+         client: DeepgramClient,
+         *,
+         telemetry_bus: Any | None = None,
+     ) -> None:
+         if engine is None:
+             raise ValueError("engine must be provided")
+         if client is None:
+             raise ValueError("client must be provided")
+ 
+@@ -255,97 +264,104 @@ class ASRRuntime:
+                     "type": "EVT_LOG",
+                     "level": "ERROR",
+                     "msg": f"evt=asr_policy_invalid input={asr_input}",
+                 }
+             )
+ 
+         return _default_input_descriptor()
+ 
+     # ------------------------------------------------------------------
+     # Websocket hooks
+     # ------------------------------------------------------------------
+     def on_ws_open(self, sid: str) -> None:
+         self._ensure_loop()
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+         _log.info("evt=asr_on_ws_open sid=%s", sid)
+         state.listening = False
+         state.prearm_requested = False
+         state.bytes_received = 0
+         state.ingress_packets = 0
+         state.ingress_bytes = 0
+         state.first_ingress_ms = 0
+         state.first_partial_logged = False
++        state.probe_active = False
++        state.probe_target_samples = 0
++        state.probe_samples_collected = 0
++        state.probe_sum_squares = 0.0
++        state.probe_peak = 0.0
+ 
+     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
+         if not isinstance(chunk, (bytes, bytearray, memoryview)):
+             raise TypeError("chunk must be bytes-like")
+         data = bytes(chunk)
+         if not data:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+ 
+         if not state.listening:
+             return
+ 
+         state.unavailable_emitted = False
+ 
+         now_monotonic = time.monotonic()
+         state.last_audio_ts = now_monotonic
+         now_ms = int(time.time() * 1000)
+         state.last_audio_ts_ms = now_ms
+         if state.ready_watchdog is not None and state.ready_armed_at:
+             self._cancel_ready_watchdog(state)
+         chunk_len = len(data)
+ 
+         if state.ingress_packets == 0:
+             state.first_ingress_ms = now_ms
+         state.ingress_packets += 1
+         state.ingress_bytes += chunk_len
+ 
+         if (
+             state.stream_open
+             and state.bytes_received > 0
+             and data.startswith(_EBML_MAGIC)
+         ):
+             stream_id = state.stream_id or state.last_stream_id or ""
+             _log.warning(
+                 "evt=asr_midstream_header sid=%s stream_id=%s action=reopen_vendor",
+                 sid,
+                 stream_id,
+             )
+             state.close_reason = "midstream_header"
+             try:
+                 self._client.close_stream(sid)
+             except Exception:  # pragma: no cover - defensive
+                 _log.exception("evt=asr_midstream_close_failed sid=%s", sid)
++            finally:
++                self._finalize_rms_probe(sid, state)
+             state.stream_open = False
+             state.stream_id = None
+             state.bytes_received = 0
+             state.chunks_sent = 0
+             state.pending.clear()
+             state.buffered_bytes = 0
+             state.first_chunk_seen = False
+ 
+         if not state.first_chunk_seen:
+             state.first_chunk_seen = True
+             state.rollup_window_start = now_monotonic
+             state.rollup_chunks = 0
+             state.rollup_bytes = 0
+             _log.info(
+                 "evt=audio_first_chunk sid=%s bytes=%d codec=webm_opus",
+                 sid,
+                 chunk_len,
+             )
+         if not state.rollup_window_start:
+             state.rollup_window_start = now_monotonic
+         state.rollup_chunks += 1
+         state.rollup_bytes += chunk_len
+         if (
+             state.rollup_window_start
+             and now_monotonic - state.rollup_window_start >= 1.0
+@@ -379,50 +395,51 @@ class ASRRuntime:
+                 sid,
+                 state.stream_id or state.last_stream_id or "",
+                 chunk_len,
+                 state.buffered_bytes,
+                 len(state.pending),
+             )
+ 
+         self._reset_idle_timer(sid, state)
+ 
+     def on_ws_close(self, sid: str) -> None:
+         state = self._sessions.pop(sid, None)
+         if state is None:
+             return
+         state.close_reason = "client_ws_closed"
+         self._cancel_idle_timer(state)
+         self._cancel_ready_watchdog(state)
+         task = state.stream_open_task
+         if task is not None and not task.done():
+             task.cancel()
+         state.stream_open = False
+         try:
+             self._client.close_stream(sid)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_stream_close_failed sid=%s", sid)
+         finally:
++            self._finalize_rms_probe(sid, state)
+             self._log_session_rollup(state)
+         state.req_id = None
+         state.bytes_received = 0
+         state.listening = False
+ 
+     def prearm(self, sid: str, *, keep_warm_ms: int | None = None) -> None:
+         """Request that the ASR stream open proactively for the session."""
+ 
+         if not isinstance(sid, str) or not sid:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+         if state.stream_open:
+             if keep_warm_ms is not None and keep_warm_ms > 0:
+                 state.keep_warm_until = max(
+                     state.keep_warm_until,
+                     time.monotonic() + (keep_warm_ms / 1000.0),
+                 )
+             return
+ 
+         state.prearm_requested = True
+         if keep_warm_ms is not None and keep_warm_ms > 0:
+@@ -559,50 +576,52 @@ class ASRRuntime:
+             return
+ 
+         state.listening = False
+         state.prearm_requested = False
+         state.pending.clear()
+         state.buffered_bytes = 0
+         state.bytes_received = 0
+         state.first_chunk_seen = False
+         state.rollup_window_start = 0.0
+         state.rollup_chunks = 0
+         state.rollup_bytes = 0
+         state.ingress_packets = 0
+         state.ingress_bytes = 0
+         state.first_ingress_ms = 0
+         state.first_partial_logged = False
+         self._cancel_ready_watchdog(state)
+         self._cancel_idle_timer(state)
+ 
+         if state.stream_open:
+             stream_id = state.stream_id or state.last_stream_id or ""
+             state.close_reason = reason or "stop_listening"
+             try:
+                 self._client.close_stream(sid)
+             except Exception:  # pragma: no cover - defensive
+                 _log.exception("evt=asr_stop_listening_close_failed sid=%s", sid)
++            finally:
++                self._finalize_rms_probe(sid, state)
+             state.stream_open = False
+             state.stream_id = None
+             state.req_id = None
+             _log.info("evt=asr_stop_listening sid=%s stream_id=%s", sid, stream_id)
+     def _emit_log(self, payload: Dict[str, Any]) -> None:
+         if not isinstance(payload, dict):
+             return
+         event = dict(payload)
+         event.setdefault("type", "EVT_LOG")
+         try:
+             self._bus.publish(event)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_emit_log_failed")
+ 
+     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
+         loop = self._loop
+         if loop is not None:
+             return loop
+         try:
+             loop = asyncio.get_running_loop()
+         except RuntimeError:
+             loop = None
+         self._loop = loop
+         return loop
+ 
+@@ -864,50 +883,51 @@ class ASRRuntime:
+                     "evt=asr_stream_open_failed sid=%s code=%s reason=%s url=%s last_error=%s",
+                     sid,
+                     code,
+                     reason,
+                     _safe_url(last_url),
+                     last_error,
+                 )
+                 state.stream_open = False
+                 state.stream_id = None
+                 state.stream_open_task = None
+                 detail_reason = reason or type(e).__name__
+                 if code is not None:
+                     detail_reason = f"{detail_reason} (code={code})"
+                 self._publish_asr_unavailable(
+                     sid,
+                     "open_failed",
+                     f"stream open failed: {detail_reason}",
+                     state=state,
+                 )
+                 loop = self._ensure_loop()
+                 if loop is not None:
+                     loop.call_later(0.5, self._ensure_stream, sid, state)
+                 return
+ 
+             state.stream_open = True
++            self._configure_rms_probe(state)
+             state.first_chunk_seen = False
+             state.rollup_window_start = 0.0
+             state.rollup_chunks = 0
+             state.rollup_bytes = 0
+             state.unavailable_emitted = False
+             state.bytes_received = 0
+             mp = getattr(self.policy, "media", None)
+             cp = getattr(self.policy, "capture", None)
+             if mp is not None and cp is not None:
+                 self._emit_log(
+                     {
+                         "type": "EVT_LOG",
+                         "logger": "app.voice_v2.asr_runtime",
+                         "level": "INFO",
+                         "sid": sid,
+                         "msg": (
+                             "evt=asr_policy input=%s rate_hz=%s ch=%s fallbacks=%s "
+                             "start_on_asr_ready=%s start_on_turn_ready=%s timeslice_ms=%s "
+                             "mask_during_tts=%s mask_keepalive_enable=%s mask_keepalive_ms=%s"
+                         )
+                         % (
+                             getattr(mp, "asr_input", ""),
+                             getattr(mp, "asr_rate_hz", ""),
+                             getattr(mp, "asr_channels", ""),
+                             getattr(mp, "fallbacks_allowed", ""),
+@@ -972,58 +992,159 @@ class ASRRuntime:
+                     sid,
+                     stream_id,
+                     "(not set)",
+                     int(self._idle_close_ms),
+                 )
+             pre_chunks_sent = state.chunks_sent
+             while state.pending:
+                 chunk = state.pending.popleft()
+                 chunk_len = len(chunk)
+                 state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
+                 self._forward_chunk(sid, state, chunk)
+             if state.chunks_sent == pre_chunks_sent:
+                 self._start_ready_watchdog(sid, state)
+             else:
+                 self._cancel_ready_watchdog(state)
+             state.stream_open_task = None
+             self._reset_idle_timer(sid, state)
+ 
+         def _on_done(_task: asyncio.Task[None]) -> None:
+             if state.stream_open_task is _task:
+                 state.stream_open_task = None
+ 
+         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
+         state.stream_open_task.add_done_callback(_on_done)
+ 
++    def _configure_rms_probe(self, state: _SessionState) -> None:
++        desc: Mapping[str, Any] | None
++        if isinstance(state.input_desc, Mapping):
++            desc = state.input_desc
++        else:
++            try:
++                desc = dict(state.input_desc)  # type: ignore[arg-type]
++            except Exception:
++                desc = None
++        codec = str(desc.get("codec") or "") if isinstance(desc, Mapping) else ""
++        if codec != "pcm_s16le":
++            state.probe_active = False
++            state.probe_target_samples = 0
++            state.probe_samples_collected = 0
++            state.probe_sum_squares = 0.0
++            state.probe_peak = 0.0
++            return
++
++        rate_value = desc.get("rate_hz") if isinstance(desc, Mapping) else None
++        try:
++            rate_hz = int(rate_value) if rate_value is not None else 16000
++        except (TypeError, ValueError):
++            rate_hz = 16000
++        if rate_hz <= 0:
++            rate_hz = 16000
++
++        target_samples = int(rate_hz * state.probe_window_ms / 1000)
++        if target_samples <= 0:
++            target_samples = int(16000 * state.probe_window_ms / 1000)
++        if target_samples <= 0:
++            target_samples = 1
++
++        state.probe_active = True
++        state.probe_target_samples = target_samples
++        state.probe_samples_collected = 0
++        state.probe_sum_squares = 0.0
++        state.probe_peak = 0.0
++
++    def _ingest_rms_probe(self, sid: str, state: _SessionState, chunk: bytes) -> None:
++        if not state.probe_active:
++            return
++
++        remaining_samples = state.probe_target_samples - state.probe_samples_collected
++        if remaining_samples <= 0:
++            self._finalize_rms_probe(sid, state)
++            return
++
++        mv = memoryview(chunk)
++        usable_bytes = min(len(mv), remaining_samples * 2)
++        usable_bytes -= usable_bytes % 2
++        if usable_bytes <= 0:
++            return
++
++        used_samples = usable_bytes // 2
++        view = mv[:usable_bytes]
++        sum_squares = state.probe_sum_squares
++        peak = state.probe_peak
++        for (sample,) in struct.iter_unpack("<h", view):
++            normalized = float(sample) / 32768.0
++            sum_squares += normalized * normalized
++            abs_sample = abs(normalized)
++            if abs_sample > peak:
++                peak = abs_sample
++
++        state.probe_sum_squares = sum_squares
++        state.probe_peak = peak
++        state.probe_samples_collected += used_samples
++
++        if state.probe_samples_collected >= state.probe_target_samples:
++            self._finalize_rms_probe(sid, state)
++
++    def _finalize_rms_probe(self, sid: str, state: _SessionState) -> None:
++        if not state.probe_active:
++            return
++
++        samples = state.probe_samples_collected
++        if samples <= 0:
++            state.probe_active = False
++            state.probe_target_samples = 0
++            state.probe_samples_collected = 0
++            state.probe_sum_squares = 0.0
++            state.probe_peak = 0.0
++            return
++
++        rms_avg = math.sqrt(state.probe_sum_squares / samples)
++        rms_peak = state.probe_peak
++        _log.info(
++            "asr_probe sid=%s rms_avg=%.6f rms_peak=%.6f sample_ms=%d",
++            sid,
++            rms_avg,
++            rms_peak,
++            state.probe_window_ms,
++        )
++
++        state.probe_active = False
++        state.probe_target_samples = 0
++        state.probe_samples_collected = 0
++        state.probe_sum_squares = 0.0
++        state.probe_peak = 0.0
++
+     def _forward_chunk(self, sid: str, state: _SessionState, chunk: bytes) -> None:
+         if not chunk:
+             return
+         chunk_len = len(chunk)
+         state.chunks_sent += 1
+         state.bytes_sent += chunk_len
+         stream_id = state.stream_id or state.last_stream_id or ""
+         _log.info("evt=asr_chunk sid=%s stream_id=%s bytes=%d", sid, stream_id, chunk_len)
++        self._ingest_rms_probe(sid, state, chunk)
+         self._client.send_audio(sid, chunk)
+         state.bytes_received += chunk_len
+ 
+     def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_partial(sid, text, metadata or {})
+ 
+         return _callback
+ 
+     def _make_final_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_final(sid, text, metadata or {})
+ 
+         return _callback
+ 
+     def _make_error_cb(self, sid: str) -> Callable[[str], None]:
+         def _callback(error: str) -> None:
+             self._on_error(sid, error)
+ 
+         return _callback
+ 
+     def _make_close_cb(self, sid: str, state: _SessionState) -> Callable[[int | None, str | None], None]:
+         def _callback(_code: int | None, _reason: str | None) -> None:
+             stream_id = state.stream_id
+             if not stream_id:
+@@ -1236,50 +1357,52 @@ class ASRRuntime:
+         self._bus.publish(event)
+         state.finals_delivered += 1
+         self._log_utterance(state, stream_id, req_id, metadata, text)
+ 
+     def _on_error(self, sid: str, error: str) -> None:
+         _log.exception("evt=asr_error sid=%s err=%s", sid, error)
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             return
+         self._publish_asr_unavailable(
+             sid,
+             "upstream_closed",
+             error or "unknown error",
+             state=state,
+         )
+         state.close_reason = "error"
+         state.stream_open = False
+         state.req_id = None
+         self._cancel_idle_timer(state)
+         self._cancel_ready_watchdog(state)
+         try:
+             self._client.close_stream(sid)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_error_close_failed sid=%s", sid)
++        finally:
++            self._finalize_rms_probe(sid, state)
+ 
+     def _publish_asr_unavailable(
+         self,
+         sid: str,
+         reason: str,
+         details: str,
+         *,
+         state: _SessionState | None = None,
+         force: bool = False,
+     ) -> None:
+         if not isinstance(sid, str) or not sid:
+             return
+         if not isinstance(reason, str) or not reason:
+             return
+         if state is None:
+             state = self._sessions.get(sid)
+         if state is not None and state.unavailable_emitted and not force:
+             return
+ 
+         details_value = details if isinstance(details, str) else str(details)
+         if len(details_value) > 160:
+             details_value = f"{details_value[:157]}..."
+         payload = {
+             "type": "asr.unavailable",
+             "sid": sid,
+@@ -1435,61 +1558,65 @@ class ASRRuntime:
+         idle_ms = int(
+             max(0.0, (time.monotonic() - state.last_audio_ts) * 1000)
+             if state.last_audio_ts
+             else self._idle_close_ms
+         )
+         stream_id = state.stream_id or state.last_stream_id or ""
+         state.keep_warm_until = 0.0
+         if close_for_prearm:
+             _log.warning(
+                 "evt=asr_prearm_idle sid=%s stream_id=%s idle_ms=%d action=close",
+                 sid,
+                 stream_id,
+                 idle_ms,
+             )
+         else:
+             _log.info(
+                 "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
+                 sid,
+                 stream_id,
+                 idle_ms,
+             )
+         try:
+             self._client.close_stream(sid)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_idle_close_failed sid=%s", sid)
++        finally:
++            self._finalize_rms_probe(sid, state)
+         state.stream_open = False
+         state.last_stream_id = stream_id or state.last_stream_id
+         state.stream_id = None
+         state.req_id = None
+         state.bytes_received = 0
+ 
+     # Optional idle guard
+     def close_idle_streams(self) -> None:
+         if self._loop is None:
+             return
+         now = time.monotonic()
+         threshold = self._idle_close_ms / 1000.0
+         for sid, state in list(self._sessions.items()):
+             if not state.stream_open:
+                 continue
+             if threshold <= 0:
+                 continue
+             if state.last_audio_ts and now - state.last_audio_ts >= threshold:
+                 state.close_reason = "idle_timeout"
+                 try:
+                     stream_id = state.stream_id or state.last_stream_id or ""
+                     idle_ms = int(max(0.0, (now - state.last_audio_ts) * 1000))
+                     _log.info(
+                         "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
+                         sid,
+                         stream_id,
+                         idle_ms,
+                     )
+                     self._client.close_stream(sid)
+                 except Exception:  # pragma: no cover - defensive
+                     _log.exception("evt=asr_idle_close_failed sid=%s", sid)
++                finally:
++                    self._finalize_rms_probe(sid, state)
+                 state.stream_open = False
+                 state.last_stream_id = state.stream_id or state.last_stream_id
+                 state.stream_id = None
+                 state.req_id = None
+                 state.bytes_received = 0
+diff --git a/app/ws/validator.py b/app/ws/validator.py
+index 722d2ec6de6b1551d964bf1b4e5151397a12c656..2e3589faad16ee707611345bbe7184ea5ddb7c81 100644
+--- a/app/ws/validator.py
++++ b/app/ws/validator.py
+@@ -52,50 +52,76 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
+     (ok, hint):
+         ok is ``True`` when the frame passes validation. hint contains a
+         human-readable detail when validation fails.
+     """
+ 
+     if not isinstance(frame, dict):
+         return False, "Frame must be a JSON object"
+ 
+     frame_type = frame.get("type")
+     if not isinstance(frame_type, str):
+         return False, "Frame requires a string 'type' field"
+ 
+     if frame_type == "audio.header":
+         fmt = frame.get("format")
+         if fmt not in _ALLOWED_AUDIO_FORMATS:
+             return False, "audio.header requires format 'opus' or 'pcm'"
+ 
+         sample_rate = frame.get("sample_rate")
+         if sample_rate is not None and not _is_int(sample_rate):
+             return False, "audio.header requires integer sample_rate"
+ 
+         channels = frame.get("channels")
+         if channels is not None and not _is_int(channels):
+             return False, "audio.header requires integer channels"
+ 
++        if fmt == "pcm":
++            expected_sr = 16000
++            expected_channels = 1
++            got_sr = sample_rate
++            got_channels = channels
++            if got_sr is None or got_channels is None:
++                _logger.warning(
++                    "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
++                    got_sr,
++                    got_channels,
++                )
++                return (
++                    False,
++                    "audio.header pcm requires sample_rate=16000 and channels=1",
++                )
++            if got_sr != expected_sr or got_channels != expected_channels:
++                _logger.warning(
++                    "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
++                    got_sr,
++                    got_channels,
++                )
++                return (
++                    False,
++                    "audio.header pcm requires sample_rate=16000 and channels=1",
++                )
++
+     return True, None
+ 
+ 
+ def validate_audio_header_against_policy(
+     header: Dict[str, Any], policy: Policy | Mapping[str, Any] | None
+ ) -> Optional[str]:
+     fmt = header.get("format")
+     rate = header.get("sample_rate")
+     channels = header.get("channels")
+ 
+     if policy is None:
+         return None
+ 
+     if isinstance(policy, Mapping):
+         media = policy.get("media")
+     else:
+         media = getattr(policy, "media", None)
+ 
+     if media is None:
+         return None
+ 
+     if isinstance(media, Mapping):
+         get_value = media.get
+     else:
+         get_value = lambda key, default=None: getattr(media, key, default)

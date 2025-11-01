@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
+import struct
 import time
 import uuid
 from collections import deque
@@ -37,6 +39,7 @@ _DEFAULT_IDLE_CLOSE_MS = 4000
 _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
 _TRACE_ENABLED = bool(ASR_TRACE)
 _EBML_MAGIC = b"\x1a\x45\xdf\xa3"
+_RMS_PROBE_WINDOW_MS = 2000
 def _resolve_stream_open_timeout(default: float = 10.0) -> float:
     raw = os.getenv("DG_STREAM_OPEN_TIMEOUT_S")
     if raw is None:
@@ -128,6 +131,12 @@ class _SessionState:
     first_partial_logged: bool = False
     model: Optional[str] = None
     keep_warm_until: float = 0.0
+    probe_active: bool = False
+    probe_target_samples: int = 0
+    probe_samples_collected: int = 0
+    probe_sum_squares: float = 0.0
+    probe_peak: float = 0.0
+    probe_window_ms: int = _RMS_PROBE_WINDOW_MS
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -277,6 +286,11 @@ class ASRRuntime:
         state.ingress_bytes = 0
         state.first_ingress_ms = 0
         state.first_partial_logged = False
+        state.probe_active = False
+        state.probe_target_samples = 0
+        state.probe_samples_collected = 0
+        state.probe_sum_squares = 0.0
+        state.probe_peak = 0.0
 
     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
         if not isinstance(chunk, (bytes, bytearray, memoryview)):
@@ -324,6 +338,8 @@ class ASRRuntime:
                 self._client.close_stream(sid)
             except Exception:  # pragma: no cover - defensive
                 _log.exception("evt=asr_midstream_close_failed sid=%s", sid)
+            finally:
+                self._finalize_rms_probe(sid, state)
             state.stream_open = False
             state.stream_id = None
             state.bytes_received = 0
@@ -401,6 +417,7 @@ class ASRRuntime:
         except Exception:  # pragma: no cover - defensive
             _log.exception("evt=asr_stream_close_failed sid=%s", sid)
         finally:
+            self._finalize_rms_probe(sid, state)
             self._log_session_rollup(state)
         state.req_id = None
         state.bytes_received = 0
@@ -581,6 +598,8 @@ class ASRRuntime:
                 self._client.close_stream(sid)
             except Exception:  # pragma: no cover - defensive
                 _log.exception("evt=asr_stop_listening_close_failed sid=%s", sid)
+            finally:
+                self._finalize_rms_probe(sid, state)
             state.stream_open = False
             state.stream_id = None
             state.req_id = None
@@ -886,6 +905,7 @@ class ASRRuntime:
                 return
 
             state.stream_open = True
+            self._configure_rms_probe(state)
             state.first_chunk_seen = False
             state.rollup_window_start = 0.0
             state.rollup_chunks = 0
@@ -994,6 +1014,106 @@ class ASRRuntime:
         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
         state.stream_open_task.add_done_callback(_on_done)
 
+    def _configure_rms_probe(self, state: _SessionState) -> None:
+        desc: Mapping[str, Any] | None
+        if isinstance(state.input_desc, Mapping):
+            desc = state.input_desc
+        else:
+            try:
+                desc = dict(state.input_desc)  # type: ignore[arg-type]
+            except Exception:
+                desc = None
+        codec = str(desc.get("codec") or "") if isinstance(desc, Mapping) else ""
+        if codec != "pcm_s16le":
+            state.probe_active = False
+            state.probe_target_samples = 0
+            state.probe_samples_collected = 0
+            state.probe_sum_squares = 0.0
+            state.probe_peak = 0.0
+            return
+
+        rate_value = desc.get("rate_hz") if isinstance(desc, Mapping) else None
+        try:
+            rate_hz = int(rate_value) if rate_value is not None else 16000
+        except (TypeError, ValueError):
+            rate_hz = 16000
+        if rate_hz <= 0:
+            rate_hz = 16000
+
+        target_samples = int(rate_hz * state.probe_window_ms / 1000)
+        if target_samples <= 0:
+            target_samples = int(16000 * state.probe_window_ms / 1000)
+        if target_samples <= 0:
+            target_samples = 1
+
+        state.probe_active = True
+        state.probe_target_samples = target_samples
+        state.probe_samples_collected = 0
+        state.probe_sum_squares = 0.0
+        state.probe_peak = 0.0
+
+    def _ingest_rms_probe(self, sid: str, state: _SessionState, chunk: bytes) -> None:
+        if not state.probe_active:
+            return
+
+        remaining_samples = state.probe_target_samples - state.probe_samples_collected
+        if remaining_samples <= 0:
+            self._finalize_rms_probe(sid, state)
+            return
+
+        mv = memoryview(chunk)
+        usable_bytes = min(len(mv), remaining_samples * 2)
+        usable_bytes -= usable_bytes % 2
+        if usable_bytes <= 0:
+            return
+
+        used_samples = usable_bytes // 2
+        view = mv[:usable_bytes]
+        sum_squares = state.probe_sum_squares
+        peak = state.probe_peak
+        for (sample,) in struct.iter_unpack("<h", view):
+            normalized = float(sample) / 32768.0
+            sum_squares += normalized * normalized
+            abs_sample = abs(normalized)
+            if abs_sample > peak:
+                peak = abs_sample
+
+        state.probe_sum_squares = sum_squares
+        state.probe_peak = peak
+        state.probe_samples_collected += used_samples
+
+        if state.probe_samples_collected >= state.probe_target_samples:
+            self._finalize_rms_probe(sid, state)
+
+    def _finalize_rms_probe(self, sid: str, state: _SessionState) -> None:
+        if not state.probe_active:
+            return
+
+        samples = state.probe_samples_collected
+        if samples <= 0:
+            state.probe_active = False
+            state.probe_target_samples = 0
+            state.probe_samples_collected = 0
+            state.probe_sum_squares = 0.0
+            state.probe_peak = 0.0
+            return
+
+        rms_avg = math.sqrt(state.probe_sum_squares / samples)
+        rms_peak = state.probe_peak
+        _log.info(
+            "asr_probe sid=%s rms_avg=%.6f rms_peak=%.6f sample_ms=%d",
+            sid,
+            rms_avg,
+            rms_peak,
+            state.probe_window_ms,
+        )
+
+        state.probe_active = False
+        state.probe_target_samples = 0
+        state.probe_samples_collected = 0
+        state.probe_sum_squares = 0.0
+        state.probe_peak = 0.0
+
     def _forward_chunk(self, sid: str, state: _SessionState, chunk: bytes) -> None:
         if not chunk:
             return
@@ -1002,6 +1122,7 @@ class ASRRuntime:
         state.bytes_sent += chunk_len
         stream_id = state.stream_id or state.last_stream_id or ""
         _log.info("evt=asr_chunk sid=%s stream_id=%s bytes=%d", sid, stream_id, chunk_len)
+        self._ingest_rms_probe(sid, state, chunk)
         self._client.send_audio(sid, chunk)
         state.bytes_received += chunk_len
 
@@ -1258,6 +1379,8 @@ class ASRRuntime:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
             _log.exception("evt=asr_error_close_failed sid=%s", sid)
+        finally:
+            self._finalize_rms_probe(sid, state)
 
     def _publish_asr_unavailable(
         self,
@@ -1457,6 +1580,8 @@ class ASRRuntime:
             self._client.close_stream(sid)
         except Exception:  # pragma: no cover - defensive
             _log.exception("evt=asr_idle_close_failed sid=%s", sid)
+        finally:
+            self._finalize_rms_probe(sid, state)
         state.stream_open = False
         state.last_stream_id = stream_id or state.last_stream_id
         state.stream_id = None
@@ -1488,6 +1613,8 @@ class ASRRuntime:
                     self._client.close_stream(sid)
                 except Exception:  # pragma: no cover - defensive
                     _log.exception("evt=asr_idle_close_failed sid=%s", sid)
+                finally:
+                    self._finalize_rms_probe(sid, state)
                 state.stream_open = False
                 state.last_stream_id = state.stream_id or state.last_stream_id
                 state.stream_id = None

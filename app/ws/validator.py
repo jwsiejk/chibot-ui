@@ -74,6 +74,32 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
         if channels is not None and not _is_int(channels):
             return False, "audio.header requires integer channels"
 
+        if fmt == "pcm":
+            expected_sr = 16000
+            expected_channels = 1
+            got_sr = sample_rate
+            got_channels = channels
+            if got_sr is None or got_channels is None:
+                _logger.warning(
+                    "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
+                    got_sr,
+                    got_channels,
+                )
+                return (
+                    False,
+                    "audio.header pcm requires sample_rate=16000 and channels=1",
+                )
+            if got_sr != expected_sr or got_channels != expected_channels:
+                _logger.warning(
+                    "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
+                    got_sr,
+                    got_channels,
+                )
+                return (
+                    False,
+                    "audio.header pcm requires sample_rate=16000 and channels=1",
+                )
+
     return True, None
 
 
