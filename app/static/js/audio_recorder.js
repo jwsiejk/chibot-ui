@@ -85,11 +85,19 @@ import { WakeWord } from "./wake_word.js";
 
     setPolicy(policy) {
       const previousUsePCM = this._usePCM;
+      let nextPolicy = this._policy || {};
+      const hasStoredPolicy = nextPolicy && typeof nextPolicy === "object" && Object.keys(nextPolicy).length > 0;
       if (policy && typeof policy === "object") {
-        this._policy = policy;
-      } else {
-        this._policy = {};
+        const keys = Object.keys(policy);
+        const hasAudioHints = keys.some((key) => ["media", "capture", "policy", "audio"].includes(key));
+        if (hasAudioHints || (keys.length === 0 && !hasStoredPolicy)) {
+          nextPolicy = policy;
+        }
+      } else if (policy == null) {
+        nextPolicy = {};
       }
+
+      this._policy = nextPolicy;
       this._usePCM = this._resolveUsePCM();
       if (this._usePCM && this._rec && !previousUsePCM) {
         const recorder = this._rec;

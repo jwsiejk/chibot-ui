@@ -1,8 +1,14 @@
 diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index b4eff7658fc6ab5aace431f25e8fae74d343c6d9..b91770e4327979e48ead0f5def04662cb234fe7a 100644
+index b91770e4327979e48ead0f5def04662cb234fe7a..6604a6eabc4b932d656cfe5b6fde67c5592f3d04 100644
 --- a/app/static/js/audio_recorder.js
 +++ b/app/static/js/audio_recorder.js
-@@ -69,71 +69,62 @@ import { WakeWord } from "./wake_word.js";
+@@ -63,55 +63,63 @@ import { WakeWord } from "./wake_word.js";
+       this._sendMuted = false;
+       this._headerSent = false;
+       this._usePCM = false;
+       this._audioContext = null;
+       this._pcmSource = null;
+       this._pcmNode = null;
        this._pcmGainNode = null;
        this._pcmResampleBuffer = [];
        this._pcmOutputBuffer = [];
@@ -22,38 +28,35 @@ index b4eff7658fc6ab5aace431f25e8fae74d343c6d9..b91770e4327979e48ead0f5def04662c
  
      setPolicy(policy) {
        const previousUsePCM = this._usePCM;
++      let nextPolicy = this._policy || {};
++      const hasStoredPolicy = nextPolicy && typeof nextPolicy === "object" && Object.keys(nextPolicy).length > 0;
        if (policy && typeof policy === "object") {
-         this._policy = policy;
-       } else {
-         this._policy = {};
+-        this._policy = policy;
+-      } else {
+-        this._policy = {};
++        const keys = Object.keys(policy);
++        const hasAudioHints = keys.some((key) => ["media", "capture", "policy", "audio"].includes(key));
++        if (hasAudioHints || (keys.length === 0 && !hasStoredPolicy)) {
++          nextPolicy = policy;
++        }
++      } else if (policy == null) {
++        nextPolicy = {};
        }
++
++      this._policy = nextPolicy;
        this._usePCM = this._resolveUsePCM();
--      if (this._usePCM && !previousUsePCM && this._rec) {
-+      if (this._usePCM && this._rec && !previousUsePCM) {
-+        const recorder = this._rec;
+       if (this._usePCM && this._rec && !previousUsePCM) {
+         const recorder = this._rec;
          try {
--          if (this._rec.state !== "inactive") {
--            this._rec.stop();
-+          if (recorder.state !== "inactive") {
-+            recorder.stop();
+           if (recorder.state !== "inactive") {
+             recorder.stop();
            }
          } catch (err) {
            console.warn("AudioRecorder policy switch stop failed", err);
          }
          this._rec = null;
          this._headerSent = false;
--        const globalWindow = typeof window !== "undefined" ? window : null;
--        if (globalWindow) {
--          try {
--            if (typeof globalWindow.__micChunks === "number") {
--              globalWindow.__micChunks = 0;
--            }
--            if (typeof globalWindow.__micBytes === "number") {
--              globalWindow.__micBytes = 0;
--            }
--          } catch {}
--        }
-+        this._resetStreamingTelemetry();
+         this._resetStreamingTelemetry();
        }
      }
  
@@ -66,82 +69,3 @@ index b4eff7658fc6ab5aace431f25e8fae74d343c6d9..b91770e4327979e48ead0f5def04662c
        try {
          const media = policy.media && typeof policy.media === "object" ? policy.media : null;
          if (media && typeof media.asr_input === "string" && media.asr_input === "pcm_16k") {
-           return true;
-         }
-         const capture = policy.capture && typeof policy.capture === "object" ? policy.capture : null;
-         if (capture && typeof capture.asr_input === "string" && capture.asr_input === "pcm_16k") {
-           return true;
-         }
-         const audio = policy.audio && typeof policy.audio === "object" ? policy.audio : null;
-         const pipeline = audio && typeof audio.pipeline === "object" ? audio.pipeline : null;
-         if (pipeline && typeof pipeline.mode === "string" && pipeline.mode === "pcm16") {
-           return true;
-         }
-       } catch {}
-       return false;
-@@ -221,50 +212,65 @@ import { WakeWord } from "./wake_word.js";
-       if (!Ctor) {
-         throw new Error("audio_context_unavailable");
-       }
-       try {
-         this._audioContext = new Ctor();
-         this._pcmWorkletLoaded = false;
-       } catch (err) {
-         console.warn("AudioContext create failed", err);
-         throw err;
-       }
-       return this._audioContext;
-     }
- 
-     _resetPcmState() {
-       this._pcmResampleBuffer = [];
-       this._pcmOutputBuffer = [];
-       this._pcmResampleCursor = 0;
-       this._pcmFrameSeq = 0;
-       this._pcmLastTelemetryAt = 0;
-       this._pcmUtteranceStartAt = null;
-       this._pcmLastVoiceAt = null;
-       this._pcmSilenceStartAt = null;
-       this._pcmCommitSent = false;
-     }
- 
-+    _resetStreamingTelemetry() {
-+      const globalWindow = typeof window !== "undefined" ? window : null;
-+      if (!globalWindow) {
-+        return;
-+      }
-+      try {
-+        if (typeof globalWindow.__micChunks === "number") {
-+          globalWindow.__micChunks = 0;
-+        }
-+        if (typeof globalWindow.__micBytes === "number") {
-+          globalWindow.__micBytes = 0;
-+        }
-+      } catch {}
-+    }
-+
-     async _loadPcmWorklet(context) {
-       if (this._pcmWorkletLoaded) {
-         return true;
-       }
-       if (!context?.audioWorklet || typeof context.audioWorklet.addModule !== "function") {
-         return false;
-       }
-       if (!AudioRecorder._pcmWorkletUrl) {
-         const workletSource = `class PCM16CaptureProcessor extends AudioWorkletProcessor {\n  constructor() {\n    super();\n    this._seq = 0;\n  }\n  process(inputs) {\n    const input = inputs[0];\n    if (!input || input.length === 0) {\n      return true;\n    }\n    const channels = input.length;\n    const frames = input[0].length;\n    const chunk = new Float32Array(frames);\n    for (let i = 0; i < frames; i += 1) {\n      let sample = 0;\n      for (let ch = 0; ch < channels; ch += 1) {\n        sample += input[ch]?.[i] ?? 0;\n      }\n      chunk[i] = channels > 0 ? sample / channels : 0;\n    }\n    this.port.postMessage({ type: 'chunk', sampleRate: sampleRate, seq: this._seq++, data: chunk.buffer }, [chunk.buffer]);\n    return true;\n  }\n}\nregisterProcessor('pcm16-capture-processor', PCM16CaptureProcessor);`;
-         const blob = new Blob([workletSource], { type: "application/javascript" });
-         AudioRecorder._pcmWorkletUrl = URL.createObjectURL(blob);
-       }
-       try {
-         await context.audioWorklet.addModule(AudioRecorder._pcmWorkletUrl);
-         this._pcmWorkletLoaded = true;
-         return true;
-       } catch (err) {
-         console.warn("AudioWorklet addModule failed", err);
-         return false;
-       }
-     }
- 
-     async _ensurePcmGraph() {
-       if (!this._usePCM) {
-         return;
