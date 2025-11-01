@@ -2662,6 +2662,13 @@ class ChatV2Adapter:
         send: Callable[[dict], Awaitable[None]],
         payload: Dict[str, Any],
     ) -> None:
+        if (
+            isinstance(payload, dict)
+            and "message" in payload
+            and isinstance(ctx.asr_vendor, str)
+            and ctx.asr_vendor.lower() == "speechmatics"
+        ):
+            return
         lock = self._ensure_send_lock(ctx)
         async with lock:
             text = json.dumps(payload, separators=(",", ":"))
