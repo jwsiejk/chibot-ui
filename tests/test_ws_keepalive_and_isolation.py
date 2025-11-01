@@ -259,6 +259,7 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
             "app.voice_v2.asr_runtime.ASRRuntime", StubASRRuntime
         ):
             harness = AdapterHarness(adapter, engine, label="sm")
+            engine.policy_snapshot = adapter._session_capture_policy_for_mode("pcm16")
             await harness.start()
             try:
                 ctx = adapter._contexts.get(harness.sid)
@@ -314,6 +315,16 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
                 self.assertEqual(capture.get("container"), "raw")
                 self.assertEqual(capture.get("rate_hz"), 16000)
                 self.assertEqual(capture.get("channels"), 1)
+                session_policy = ctx.session_capture_policy or adapter._session_capture_policy_for_mode(
+                    ctx.audio_pipeline_mode or "opus-webm"
+                )
+                self.assertEqual(input_start.get("policy"), session_policy)
+
+                start_listening = await harness.wait_for_outbound(
+                    lambda frame: frame.get("type") == "start_listening",
+                    timeout=2.0,
+                )
+                self.assertEqual(start_listening.get("policy"), session_policy)
             finally:
                 await harness.close()
 

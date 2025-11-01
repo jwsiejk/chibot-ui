@@ -1,297 +1,70 @@
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 7d500708a0c57b96d325c73e09e0bdc6e4a22eed..ae41fce9c60905b6bb51393d47ef5a90a2e1145f 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1404,51 +1404,56 @@ import { WakeWord } from "./wake_word.js";
+       autoResumeAttemptToken = null;
+       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+       recordClientBannerEvent("ws.auto_resume.failed", { message: getErrorMessage(err) });
+       return false;
+     }
+   }
+ 
+   function dispatchFrame(frame) {
+     if (!frame || typeof frame.type !== "string") return;
+     const type = frame.type;
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail: frame }));
+       if (type.includes(".")) {
+         const baseType = type.split(".")[0];
+         window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
+       }
+     } catch (err) {
+       console.warn("WSClient dispatch error", err);
+     }
+   }
+ 
+   function startInputCapture(frame) {
+     const hub = AppState?.hub;
+     if (hub && typeof hub.startListening === "function") {
+       try {
+-        return hub.startListening(frame?.policy || {});
++        const policy = frame?.policy || {};
++        try {
++          const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
++          logStage('client.input.capture', { source: frame?.type || 'input.start', hasPolicy });
++        } catch {}
++        return hub.startListening(policy);
+       } catch (err) {
+         console.warn("Hub startListening (legacy input) failed", err);
+       }
+     }
+     console.warn('Legacy input capture is disabled; recorder hub missing.', frame);
+   }
+ 
+   function stopInputCapture(options = {}) {
+     const hub = AppState?.hub;
+     if (hub && typeof hub.stopListening === "function") {
+       try {
+         const reason = options && typeof options === "object" && options.reason
+           ? options.reason
+           : "legacy_input";
+         hub.stopListening(reason);
+       } catch (err) {
+         console.warn("Hub stopListening (legacy input) failed", err);
+       }
+       return;
+     }
+     void options;
+   }
+ 
+   function handleInputStartFrame(frame) {
+     startInputCapture(frame);
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 4c0ab37e3e00575787a41b7e76678f429799a395..8570e887b402a2e64ea75bd67b35c9d5cd7137c8 100644
+index 8570e887b402a2e64ea75bd67b35c9d5cd7137c8..bcb1a99056e2044dbda2e43850abe989fa63881e 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -288,50 +288,51 @@ class AdapterContext:
-     await_user_pending: bool = False
-     await_user_pending_key: Optional[str] = None
-     await_user_after_mask: bool = False
-     await_user_after_mask_key: Optional[str] = None
-     tts_mask_phase: str = "off"
-     mask_subscription_token: Optional[str] = None
-     tts_end_subscription_token: Optional[str] = None
-     turn_state_subscription_token: Optional[str] = None
-     hud_state: Optional[str] = None
-     client_mic_open: bool = False
-     mic_open_timer: asyncio.TimerHandle | None = None
-     mic_nudge_sent: bool = False
-     await_user_req_id: Optional[str] = None
-     last_tts_end_req_id: Optional[str] = None
-     await_user_cue_emitted: bool = False
-     listen_handoff_done: set[str] = field(default_factory=set)
-     listen_handoff_task: asyncio.Task[None] | None = None
-     listen_handoff_task_key: Optional[str] = None
-     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-     client_banner_info: Optional[Dict[str, Any]] = None
-     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
-     allowed_asr_vendors: List[str] = field(default_factory=list)
-     asr_vendor: Optional[str] = None
-     audio_pipeline_mode: Optional[str] = None
-     asr_vendor_logged: bool = False
-+    session_capture_policy: Optional[Dict[str, Any]] = None
- 
- 
- class ChatV2Adapter:
-     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
- 
-     def __init__(
-         self,
-         engine: EngineHooks | None = None,
-         exporter: FileExporter | None = None,
-         *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
-     ) -> None:
-         self.engine = engine
-         self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
-         self._ip_buckets: Dict[str, TokenBucket] = {}
-         self._contexts: Dict[str, AdapterContext] = {}
-         self._ping_interval_ms = max(
-             0,
-             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
-         )
-         self.tts_runtime = None
-         self.asr_runtime = None
-@@ -599,90 +600,89 @@ class ChatV2Adapter:
-             "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
-         }
-         info_frame["meta"] = {"sid": sid}
-         policy_snapshot = self._policy_snapshot()
-         allowed_asr_vendors = self._allowed_asr_vendors()
-         snapshot_mapping: Mapping[str, Any] | None
-         if isinstance(policy_snapshot, Mapping):
-             snapshot_mapping = policy_snapshot
-         else:
-             snapshot_mapping = None
- 
-         provisional_ctx = AdapterContext(
-             sid=sid,
-             headers=dict(headers),
-             principal=principal,
-             user_id=sub,
-             is_admin=is_admin,
-         )
-         provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-         selected_vendor, selection_reason = self._select_asr_vendor(
-             provisional_ctx,
-             snapshot_mapping,
-             allowed_asr_vendors,
-             log_selection=False,
-         )
--        policy_snapshot = self._apply_vendor_audio_overrides(
--            policy_snapshot, selected_vendor
--        )
-         if policy_snapshot:
-             self._log_policy_flags(sid, policy_snapshot)
-             info_frame["policy"] = policy_snapshot
-         await self._send_json(send, sid, info_frame)
-         _log.info("evt=ws_info_sent sid=%s", sid)
-         self._emit_session_step(
-             sid,
-             "ws.info_sent",
-             summary="Sent info frame",
-             meta={"has_policy": bool(policy_snapshot)},
-         )
- 
-         ctx = AdapterContext(
-             sid=sid,
-             headers=dict(headers),
-             principal=principal,
-             user_id=sub,
-             is_admin=is_admin,
-         )
-         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
-         ctx.last_client_activity_ms = now_ms
-         ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-         snapshot_mapping = (
-             ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-         )
-         ctx.asr_vendor = selected_vendor
-         allowed_display = ",".join(ctx.allowed_asr_vendors)
-         _log.info(
-             "asr_vendor_selected primary=%s allowed=%s reason=%s",
-             selected_vendor or "",
-             allowed_display,
-             selection_reason,
-         )
-         ctx.asr_vendor_logged = True
-         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
-         if ctx.asr_vendor == "speechmatics":
-             ctx.audio_pipeline_mode = "pcm16"
-+        mode = ctx.audio_pipeline_mode or "opus-webm"
-+        ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
- 
-         token = current_sid.set(ctx.sid)
-         try:
-             if not (
-                 inspect.iscoroutinefunction(self._on_open_and_greet)
-                 and inspect.iscoroutinefunction(self._invoke_engine)
-             ):
-                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
-                 raise RuntimeError("WebSocket async contract violation")
- 
-             ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-             client = scope.get("client")
-             ctx.ip = client[0] if isinstance(client, tuple) and client else None
-             if ctx.ip:
-                 ctx.ip_bucket = self._ip_buckets.setdefault(
-                     ctx.ip,
-                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-                 )
- 
-             had_active_contexts = bool(self._contexts)
-             self._contexts[ctx.sid] = ctx
-             current_runtime = getattr(self, "asr_runtime", None)
-             current_vendor = getattr(self, "_asr_runtime_vendor", None)
-             if (
-                 current_runtime is not None
-@@ -1104,51 +1104,53 @@ class ChatV2Adapter:
-                         "schema_invalid",
-                         "audio.header seq_start must be an integer",
-                     )
-                     return self._HandleResult(False, 1003, "schema_invalid")
-                 if seq_start < 0:
-                     meta["error"] = "schema_invalid"
-                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                     await self._send_error(
-                         send,
-                         ctx.sid,
-                         "schema_invalid",
-                         "audio.header seq_start must be >= 0",
-                     )
-                     return self._HandleResult(False, 1003, "schema_invalid")
-                 profile["seq_start"] = seq_start
-             if ctx.audio_profile is not None:
-                 meta["error"] = "schema_invalid"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "duplicate or conflicting audio.header",
-                 )
-                 return self._HandleResult(True)
--            err = validate_audio_header_against_policy(frame, ctx.policy_snapshot)
-+            err = validate_audio_header_against_policy(
-+                frame, ctx.policy_snapshot, ctx.asr_vendor
-+            )
-             if err:
-                 meta["error"] = "policy_violation"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 _log.warning("evt=policy_violation sid=%s err=%s", ctx.sid, err)
-                 await self._send_json(send, ctx.sid, {"type": "error", "error": err})
-                 return self._HandleResult(False, 4400, "policy_violation")
-             ctx.audio_profile = profile
-             if seq_start is not None:
-                 ctx.audio_seq = max(0, seq_start)
-                 ctx.audio_expected_seq = ctx.audio_seq
-                 ctx.audio_highest_seq = ctx.audio_seq - 1
-                 ctx.audio_buffer.clear()
-             audio_meta = {
-                 key: value
-                 for key, value in (
-                     ("format", profile.get("format")),
-                     ("sample_rate", profile.get("sample_rate")),
-                     ("channels", profile.get("channels")),
-                     ("seq_start", profile.get("seq_start")),
-                 )
-                 if value is not None
-             }
-             self._emit_session_step(
-                 ctx.sid,
-                 "audio.header.accepted",
-@@ -1462,50 +1464,76 @@ class ChatV2Adapter:
-                 pkt_len,
-                 delta,
-             )
-         elif ctx.ingress_packets % 50 == 0:
-             _log.info(
-                 "evt=ws_audio_ingress sid=%s packets=%s bytes=%s",
-                 ctx.sid,
-                 ctx.ingress_packets,
-                 ctx.ingress_bytes,
-             )
- 
-         profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
-         runtime = getattr(self, "asr_runtime", None)
-         if runtime is not None and profile is not None:
-             fmt = str(profile.get("format") or "")
-             container = str(profile.get("container") or "")
-             codec = str(profile.get("codec") or "")
-             if fmt == "webm_opus" or (container == "webm" and codec == "opus"):
-                 try:
-                     runtime.on_ws_audio(ctx.sid, data)
-                 except Exception:  # pragma: no cover - defensive logging
-                     _log.warning(
-                         "evt=ws_asr_audio_forward_failed sid=%s", ctx.sid, exc_info=True
-                     )
- 
-+        if (
-+            ctx.asr_vendor == "speechmatics"
-+            and ctx.audio_chunks_recv == 0
-+            and data.startswith(b"\x1A\x45\xDF\xA3")
-+        ):
-+            meta = {
-+                "byte_count": byte_count,
-+                "error": "unexpected_container",
-+                "ws": {"dir": "in", "size": byte_count},
-+            }
-+            await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-+            detail = "speechmatics requires raw pcm audio"
-+            await self._send_error(send, ctx.sid, "audio_container_mismatch", detail)
-+            self._emit_session_step(
-+                ctx.sid,
-+                "audio.stream_closed",
-+                summary="Closed audio stream due to unexpected container",
-+                meta={"reason": "unexpected_container", "vendor": "speechmatics"},
-+                source="ws.audio",
-+            )
-+            _log.error(
-+                "asr_stream_closed reason=unexpected_container vendor=speechmatics sid=%s",
-+                ctx.sid,
-+            )
-+            return self._HandleResult(False, 1003, "unexpected_container")
-+
-         if ctx.audio_highest_seq < 0:
-             ctx.audio_expected_seq = ctx.audio_seq
-         seq = ctx.audio_seq
-         ctx.audio_seq += 1
- 
-         if config.DIAG_AUDIO_GUARD and not ctx.diag_audio_seen:
-             ctx.diag_audio_seen = True
-             self._cancel_diag_timer(ctx)
-             bus.publish({"type": "EVT_DIAG_FIRST_AUDIO_FRAME", "sid": ctx.sid})
- 
-         ctx.audio_chunks_recv += 1
-         ctx.audio_bytes_recv += byte_count
-         if ctx.audio_chunks_recv % 10 == 0:
-             _log.info(
-                 "evt=ws_audio_ingress sid=%s chunks=%d bytes=%d",
-                 ctx.sid,
-                 ctx.audio_chunks_recv,
-                 ctx.audio_bytes_recv,
-             )
- 
-         await self._ingest_audio_chunk(ctx, bytes(data), seq)
-         return self._HandleResult(True)
- 
-     async def _check_rate_limit(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-@@ -1863,98 +1891,99 @@ class ChatV2Adapter:
-                         _log.info(
-                             "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
-                             ctx.sid,
-                             req_id,
-                         )
-                         return
-                     await asyncio.sleep(0.01)
- 
-                 if not ctx.asr_ready:
-                     _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
- 
-             if ctx.outbox is None:
+@@ -1903,64 +1903,67 @@ class ChatV2Adapter:
                  self._clear_pending_for_key(ctx, key)
                  return
  
@@ -305,36 +78,25 @@ index 4c0ab37e3e00575787a41b7e76678f429799a395..8570e887b402a2e64ea75bd67b35c9d5
                  )
                  return
  
-+            mode = ctx.audio_pipeline_mode or "opus-webm"
-+            descriptor = dict(self._input_descriptor_for_mode(mode))
-+            timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
+             mode = ctx.audio_pipeline_mode or "opus-webm"
+             descriptor = dict(self._input_descriptor_for_mode(mode))
+             timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
              ready_frame = {
                  "type": "asr.ready",
--                "input": {
--                    "container": "webm",
--                    "codec": "opus",
--                    "rate_hz": 48000,
--                    "channels": 1,
--                    "mime": "audio/webm;codecs=opus",
--                },
-+                "input": dict(descriptor),
+                 "input": dict(descriptor),
              }
-+            if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
-+                ready_frame["vendor"] = ctx.asr_vendor
-+            capture = dict(descriptor)
-+            capture["timeslice_ms"] = timeslice_ms
-+            capture["manual_gate"] = False
+             if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
+                 ready_frame["vendor"] = ctx.asr_vendor
+             capture = dict(descriptor)
+             capture["timeslice_ms"] = timeslice_ms
+             capture["manual_gate"] = False
++            session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
              input_start = {
                  "type": "input.start",
--                "capture": {
--                    "container": "webm",
--                    "codec": "opus",
--                    "mime": "audio/webm;codecs=opus",
--                    "timeslice_ms": 250,
--                    "manual_gate": False,
--                },
-+                "capture": capture,
+                 "capture": capture,
              }
++            if session_policy:
++                input_start["policy"] = session_policy
  
              _enqueue(ready_frame)
              _enqueue(input_start)
@@ -342,11 +104,12 @@ index 4c0ab37e3e00575787a41b7e76678f429799a395..8570e887b402a2e64ea75bd67b35c9d5
              ctx.ingress_bytes = 0
              ctx.first_ingress_ms = None
              ctx.mic_armed_ms = int(time.time() * 1000)
--            _enqueue({"type": "start_listening"})
-+            start_payload: Dict[str, Any] = {"type": "start_listening"}
-+            if ctx.session_capture_policy:
-+                start_payload["policy"] = ctx.session_capture_policy
-+            _enqueue(start_payload)
+             start_payload: Dict[str, Any] = {"type": "start_listening"}
+-            if ctx.session_capture_policy:
+-                start_payload["policy"] = ctx.session_capture_policy
++            if session_policy:
++                start_payload["policy"] = session_policy
+             _enqueue(start_payload)
  
              if key is not None:
                  ctx.listen_handoff_done.add(key)
@@ -364,268 +127,14 @@ index 4c0ab37e3e00575787a41b7e76678f429799a395..8570e887b402a2e64ea75bd67b35c9d5
              self._emit_hud_state(ctx, "Listening")
              self._schedule_mic_open_guard(ctx, loop)
              _log.info(
--                "evt=listen_handoff_ready sid=%s req_id=%s input=webm/opus rate=48000 ch=1",
-+                "evt=listen_handoff_ready sid=%s req_id=%s input.mode=%s input.mime=%s",
+                 "evt=listen_handoff_ready sid=%s req_id=%s input.mode=%s input.mime=%s",
                  ctx.sid,
                  req_id,
-+                descriptor.get("mode", ""),
-+                descriptor.get("mime", ""),
+                 descriptor.get("mode", ""),
+                 descriptor.get("mime", ""),
              )
  
-         def _schedule_listen_handoff(trigger_req_id: Optional[str]) -> None:
-             async def _attempt() -> None:
-                 async with ctx.listen_lock:
-                     if not ctx.await_user_expected:
-                         return
-                     candidate = trigger_req_id if isinstance(trigger_req_id, str) and trigger_req_id else ctx.await_user_req_id
-                     if not isinstance(candidate, str) or not candidate:
-                         return
-                     if ctx.last_tts_end_req_id != candidate:
-                         return
-                     key = self._turn_key(ctx, candidate)
-                     if key is None:
-                         return
-                     if key in ctx.listen_handoff_done:
-                         _log.info(
-                             "evt=listen_handoff_skip already_done sid=%s req_id=%s",
-                             ctx.sid,
-                             candidate,
-                         )
-                         return
-                     if ctx.outbox is None:
-                         return
-                     existing = ctx.listen_handoff_task
-@@ -2283,50 +2312,52 @@ class ChatV2Adapter:
-             )
-         if frame_type == "info":
-             meta = {}
-             source_meta = normalized.get("meta")
-             if isinstance(source_meta, dict):
-                 meta = dict(source_meta)
-             meta["sid"] = ctx.sid
-             normalized["meta"] = meta
-             policy_payload = normalized.get("policy")
-             if isinstance(policy_payload, dict):
-                 ctx.policy_snapshot = policy_payload
-                 ctx.allowed_asr_vendors = self._allowed_asr_vendors()
-                 snapshot_mapping = policy_payload
-                 selected_vendor, _ = self._select_asr_vendor(
-                     ctx,
-                     snapshot_mapping,
-                     ctx.allowed_asr_vendors,
-                     log_selection=not ctx.asr_vendor_logged,
-                 )
-                 ctx.asr_vendor = selected_vendor
-                 ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
-                     snapshot_mapping
-                 )
-                 if ctx.asr_vendor == "speechmatics":
-                     ctx.audio_pipeline_mode = "pcm16"
-+                mode = ctx.audio_pipeline_mode or "opus-webm"
-+                ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
-         return normalized
- 
-     @staticmethod
-     def _truncate_banner_string(value: str, limit: int = 240) -> str:
-         if not isinstance(value, str):
-             return ""
-         if limit <= 0:
-             return ""
-         if len(value) <= limit:
-             return value
-         return value[: limit - 1] + "\u2026"
- 
-     @staticmethod
-     def _sanitize_banner_value(value: Any, depth: int = 0) -> Any:
-         if value is None:
-             return None
-         if isinstance(value, bool):
-             return value
-         if isinstance(value, (int, float)):
-             if isinstance(value, float) and not math.isfinite(value):
-                 return None
-             return value
-         if isinstance(value, str):
-             return ChatV2Adapter._truncate_banner_string(value)
-         if depth >= 2:
-@@ -3082,106 +3113,126 @@ class ChatV2Adapter:
-         if log_selection:
-             allowed_display = ",".join(allowed)
-             _log.info(
-                 "asr_vendor_selected primary=%s allowed=%s reason=%s",
-                 selected or "",
-                 allowed_display,
-                 reason,
-             )
-             ctx.asr_vendor_logged = True
-         return selected, reason
- 
-     @staticmethod
-     def _resolve_audio_pipeline_mode(snapshot: Mapping[str, Any] | None) -> str:
-         if isinstance(snapshot, Mapping):
-             audio_block = snapshot.get("audio")
-             if isinstance(audio_block, Mapping):
-                 pipeline = audio_block.get("pipeline")
-                 if isinstance(pipeline, Mapping):
-                     mode = pipeline.get("mode")
-                     if isinstance(mode, str) and mode.strip():
-                         normalized = mode.strip().lower()
-                         if normalized in {"opus-webm", "pcm16"}:
-                             return normalized
-         return "opus-webm"
- 
--    @staticmethod
--    def _apply_vendor_audio_overrides(
--        snapshot: Mapping[str, Any] | None, vendor: Optional[str]
--    ) -> Mapping[str, Any] | None:
--        if not isinstance(snapshot, Mapping):
--            return snapshot
--        if vendor != "speechmatics":
--            return snapshot
--
--        updated: Dict[str, Any] = dict(snapshot)
--
--        media_block = snapshot.get("media")
--        media: Dict[str, Any]
--        if isinstance(media_block, Mapping):
--            media = dict(media_block)
--        else:
--            media = {}
--        media.setdefault("asr_rate_hz", 16000)
--        media.setdefault("asr_channels", 1)
--        media["asr_input"] = "pcm_16k"
--        updated["media"] = media
--
--        audio_block = snapshot.get("audio")
--        if isinstance(audio_block, Mapping):
--            audio = dict(audio_block)
--        else:
--            audio = {}
--        pipeline_block = audio.get("pipeline")
--        if isinstance(pipeline_block, Mapping):
--            pipeline = dict(pipeline_block)
--        else:
--            pipeline = {}
--        pipeline["mode"] = "pcm16"
--        audio["pipeline"] = pipeline
--        updated["audio"] = audio
--
--        return updated
--
-     @staticmethod
-     def _input_descriptor_for_mode(mode: str) -> Dict[str, Any]:
-         if mode == "pcm16":
-             return {
-+                "mode": "pcm16",
-                 "container": "raw",
-                 "codec": "pcm_s16le",
-                 "rate_hz": 16000,
-                 "channels": 1,
-                 "mime": "audio/raw;rate=16000;channels=1;format=s16le",
-             }
-         return {
-+            "mode": "opus-webm",
-             "container": "webm",
-             "codec": "opus",
-             "rate_hz": 48000,
-             "channels": 1,
-             "mime": "audio/webm;codecs=opus",
-         }
- 
-+    @staticmethod
-+    def _session_capture_policy_for_mode(mode: str) -> Dict[str, Any]:
-+        if mode == "pcm16":
-+            return {
-+                "media": {
-+                    "asr_input": "pcm_16k",
-+                    "asr_rate_hz": 16000,
-+                    "asr_channels": 1,
-+                },
-+                "capture": {
-+                    "asr_input": "pcm_16k",
-+                    "sample_rate": 16000,
-+                    "channels": 1,
-+                    "timeslice_ms": 50,
-+                },
-+                "audio": {"pipeline": {"mode": "pcm16"}},
-+            }
-+        return {
-+            "media": {
-+                "asr_input": "webm_opus",
-+                "asr_rate_hz": 48000,
-+                "asr_channels": 1,
-+            },
-+            "capture": {
-+                "asr_input": "webm_opus",
-+                "sample_rate": 48000,
-+                "channels": 1,
-+                "timeslice_ms": 250,
-+            },
-+            "audio": {"pipeline": {"mode": "opus-webm"}},
-+        }
-+
-+    def _resolve_capture_timeslice(self, ctx: AdapterContext, mode: str) -> int:
-+        candidates: List[Mapping[str, Any]] = []
-+        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-+        if isinstance(snapshot, Mapping):
-+            capture_block = snapshot.get("capture")
-+            if isinstance(capture_block, Mapping):
-+                candidates.append(capture_block)
-+        session_policy = ctx.session_capture_policy
-+        if isinstance(session_policy, Mapping):
-+            capture_policy = session_policy.get("capture")
-+            if isinstance(capture_policy, Mapping):
-+                candidates.append(capture_policy)
-+
-+        for candidate in candidates:
-+            raw_value = candidate.get("timeslice_ms")
-+            try:
-+                parsed = int(raw_value)
-+            except (TypeError, ValueError):
-+                continue
-+            if parsed > 0:
-+                return parsed
-+
-+        return 50 if mode == "pcm16" else 250
-+
-     def _log_policy_flags(self, sid: str, snapshot: Mapping[str, Any]) -> None:
-         if not isinstance(snapshot, Mapping):
-             return
-         policy_block = snapshot.get("policy")
-         if not isinstance(policy_block, Mapping):
-             return
- 
-         recorder_block = policy_block.get("recorder")
-         input_block = policy_block.get("input")
-         asr_block = policy_block.get("asr")
-         routing_block = policy_block.get("routing")
- 
-         stop_on_tts = bool(
-             recorder_block.get("stop_on_tts_start") if isinstance(recorder_block, Mapping) else False
-         )
-         mute_during_tts = bool(
-             recorder_block.get("mute_send_during_tts") if isinstance(recorder_block, Mapping) else False
-         )
-         require_hotword = bool(
-             input_block.get("require_hotword_to_start") if isinstance(input_block, Mapping) else False
-         )
-         prearm_on_tts_end = bool(
-             asr_block.get("prearm_on_tts_end") if isinstance(asr_block, Mapping) else False
-         )
-         keep_warm_raw = (
-@@ -3260,94 +3311,82 @@ class ChatV2Adapter:
-             ws_version,
-         )
- 
-     def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
-         snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
-         policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
-         if not isinstance(policy_block, Mapping):
-             return 0
-         asr_block = policy_block.get("asr")
-         if not isinstance(asr_block, Mapping):
-             return 0
-         value = asr_block.get("keep_stream_warm_ms")
+@@ -3323,57 +3326,59 @@ class ChatV2Adapter:
          try:
              keep_warm = int(value)
          except (TypeError, ValueError):
@@ -639,51 +148,31 @@ index 4c0ab37e3e00575787a41b7e76678f429799a395..8570e887b402a2e64ea75bd67b35c9d5
          send: Callable[[dict], Awaitable[None]],
          ctx: AdapterContext,
      ) -> None:
--        capture_block: Mapping[str, Any] | None = None
--        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
--        capture_candidate = snapshot.get("capture") if isinstance(snapshot, Mapping) else None
--        if isinstance(capture_candidate, Mapping):
--            capture_block = capture_candidate
--
--        timeslice_ms = 250
--        if capture_block is not None:
--            candidate_timeslice = capture_block.get("timeslice_ms")
--            try:
--                parsed = int(candidate_timeslice)
--            except (TypeError, ValueError):
--                parsed = timeslice_ms
--            if parsed > 0:
--                timeslice_ms = parsed
--
          mode = ctx.audio_pipeline_mode or "opus-webm"
--        descriptor = self._input_descriptor_for_mode(mode)
-+        descriptor = dict(self._input_descriptor_for_mode(mode))
-+        timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
+         descriptor = dict(self._input_descriptor_for_mode(mode))
+         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
          ready_frame = {
              "type": "asr.ready",
              "input": dict(descriptor),
          }
          if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
              ready_frame["vendor"] = ctx.asr_vendor
-+        capture = dict(descriptor)
-+        capture["timeslice_ms"] = timeslice_ms
-+        capture["manual_gate"] = False
+         capture = dict(descriptor)
+         capture["timeslice_ms"] = timeslice_ms
+         capture["manual_gate"] = False
++        session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
          input_start = {
              "type": "input.start",
--            "capture": {
--                **dict(descriptor),
--                "mode": mode,
--                "timeslice_ms": timeslice_ms,
--                "manual_gate": False,
--            },
-+            "capture": capture,
+             "capture": capture,
          }
- 
-+        start_payload: Dict[str, Any] = {"type": "start_listening"}
-+        session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
 +        if session_policy:
-+            start_payload["policy"] = session_policy
-+
++            input_start["policy"] = session_policy
+ 
+         start_payload: Dict[str, Any] = {"type": "start_listening"}
+-        session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+         if session_policy:
+             start_payload["policy"] = session_policy
+ 
          now_ms = int(time.time() * 1000)
          ctx.asr_ready = True
          ctx.ingress_packets = 0
@@ -693,8 +182,7 @@ index 4c0ab37e3e00575787a41b7e76678f429799a395..8570e887b402a2e64ea75bd67b35c9d5
  
          await self._send_json(send, ctx.sid, ready_frame)
          await self._send_json(send, ctx.sid, input_start)
--        await self._send_json(send, ctx.sid, {"type": "start_listening"})
-+        await self._send_json(send, ctx.sid, start_payload)
+         await self._send_json(send, ctx.sid, start_payload)
          _log.info(
              "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
              ctx.sid,
@@ -707,94 +195,120 @@ index 4c0ab37e3e00575787a41b7e76678f429799a395..8570e887b402a2e64ea75bd67b35c9d5
      @staticmethod
      def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
          decoded: Dict[str, str] = {}
-         for key, value in headers:
-             decoded[key.decode("latin1").lower()] = value.decode("latin1")
-         return decoded
+diff --git a/tests/test_ws_keepalive_and_isolation.py b/tests/test_ws_keepalive_and_isolation.py
+index 15b54e62ece24cb64a07790140b93841bd9f84f4..df6137acef92c04af6ddd89a7f392a5ddd037513 100644
+--- a/tests/test_ws_keepalive_and_isolation.py
++++ b/tests/test_ws_keepalive_and_isolation.py
+@@ -237,50 +237,51 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
+                 self.bus = None
+                 self.opened: list[str] = []
+                 self.closed: list[str] = []
  
-     @staticmethod
-     def _now_ms() -> int:
-         return int(time.time() * 1000)
+             def set_bus(self, telemetry_bus) -> None:
+                 self.bus = telemetry_bus
  
-     @staticmethod
-     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
-         if not payload:
-             return None
-         preview = payload.decode("utf-8", "replace")
-diff --git a/app/ws/validator.py b/app/ws/validator.py
-index 2e3589faad16ee707611345bbe7184ea5ddb7c81..d10bb0b59a7988f8cc648fe846163d30492c808b 100644
---- a/app/ws/validator.py
-+++ b/app/ws/validator.py
-@@ -82,56 +82,72 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
-             if got_sr is None or got_channels is None:
-                 _logger.warning(
-                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
-                     got_sr,
-                     got_channels,
+             def on_ws_open(self, sid: str) -> None:
+                 self.opened.append(sid)
+ 
+             def on_ws_close(self, sid: str) -> None:
+                 self.closed.append(sid)
+ 
+         with patch.object(config, "ASR_DEEPGRAM_ENABLED", False), patch.object(
+             config, "DEEPGRAM_API_KEY", None
+         ), patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
+             config, "SPEECHMATICS_API_KEY", "speechmatics-key"
+         ), patch.object(
+             config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
+         ), patch(
+             "app.ws.adapter.SpeechmaticsClient", StubSpeechmaticsClient
+         ), patch(
+             "app.voice_v2.asr_runtime.ASRRuntime", StubASRRuntime
+         ):
+             harness = AdapterHarness(adapter, engine, label="sm")
++            engine.policy_snapshot = adapter._session_capture_policy_for_mode("pcm16")
+             await harness.start()
+             try:
+                 ctx = adapter._contexts.get(harness.sid)
+                 self.assertIsNotNone(ctx)
+                 if ctx is None:  # pragma: no cover - satisfy type checkers
+                     raise AssertionError("context not initialized")
+                 self.assertEqual(ctx.asr_vendor, "speechmatics")
+                 self.assertEqual(ctx.audio_pipeline_mode, "pcm16")
+                 runtime = adapter.asr_runtime
+                 self.assertIsInstance(runtime, StubASRRuntime)
+                 self.assertIsInstance(runtime.client, StubSpeechmaticsClient)
+                 self.assertEqual(adapter._asr_runtime_vendor, "speechmatics")
+ 
+                 info_frame = await harness.wait_for_outbound(
+                     lambda frame: frame.get("type") == "info"
                  )
-                 return (
-                     False,
-                     "audio.header pcm requires sample_rate=16000 and channels=1",
+                 policy = info_frame.get("policy", {}) if isinstance(info_frame, dict) else {}
+                 media_block = policy.get("media", {}) if isinstance(policy, dict) else {}
+                 audio_block = policy.get("audio", {}) if isinstance(policy, dict) else {}
+                 pipeline_block = (
+                     audio_block.get("pipeline", {}) if isinstance(audio_block, dict) else {}
                  )
-             if got_sr != expected_sr or got_channels != expected_channels:
-                 _logger.warning(
-                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
-                     got_sr,
-                     got_channels,
+                 self.assertEqual(media_block.get("asr_input"), "pcm_16k")
+                 self.assertEqual(media_block.get("asr_rate_hz"), 16000)
+                 self.assertEqual(media_block.get("asr_channels"), 1)
+@@ -292,50 +293,60 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
+                     lambda frame: frame.get("type") == "asr.ready",
+                     timeout=2.0,
                  )
-                 return (
-                     False,
-                     "audio.header pcm requires sample_rate=16000 and channels=1",
+                 input_desc = (
+                     asr_ready.get("input", {}) if isinstance(asr_ready, dict) else {}
                  )
+                 self.assertEqual(input_desc.get("container"), "raw")
+                 self.assertEqual(input_desc.get("codec"), "pcm_s16le")
+                 self.assertEqual(input_desc.get("rate_hz"), 16000)
+                 self.assertEqual(input_desc.get("channels"), 1)
  
-     return True, None
- 
- 
- def validate_audio_header_against_policy(
--    header: Dict[str, Any], policy: Policy | Mapping[str, Any] | None
-+    header: Dict[str, Any],
-+    policy: Policy | Mapping[str, Any] | None,
-+    vendor: Optional[str] = None,
- ) -> Optional[str]:
-     fmt = header.get("format")
-     rate = header.get("sample_rate")
-     channels = header.get("channels")
- 
-+    if vendor == "speechmatics":
-+        if fmt != "pcm" or rate != 16000 or channels != 1:
-+            _logger.warning(
-+                "audio.header_rejected reason=vendor_requires_pcm got_format=%s got_sr=%s got_ch=%s",
-+                fmt,
-+                rate,
-+                channels,
-+            )
-+            _emit_validator_log(
-+                "WARNING",
-+                "audio.header_rejected reason=vendor_requires_pcm vendor=speechmatics",
-+            )
-+            return "speechmatics requires pcm@16k mono"
+                 input_start = await harness.wait_for_outbound(
+                     lambda frame: frame.get("type") == "input.start",
+                     timeout=2.0,
+                 )
+                 capture = (
+                     input_start.get("capture", {})
+                     if isinstance(input_start, dict)
+                     else {}
+                 )
+                 self.assertEqual(capture.get("mode"), "pcm16")
+                 self.assertEqual(capture.get("codec"), "pcm_s16le")
+                 self.assertEqual(capture.get("container"), "raw")
+                 self.assertEqual(capture.get("rate_hz"), 16000)
+                 self.assertEqual(capture.get("channels"), 1)
++                session_policy = ctx.session_capture_policy or adapter._session_capture_policy_for_mode(
++                    ctx.audio_pipeline_mode or "opus-webm"
++                )
++                self.assertEqual(input_start.get("policy"), session_policy)
 +
-     if policy is None:
-         return None
++                start_listening = await harness.wait_for_outbound(
++                    lambda frame: frame.get("type") == "start_listening",
++                    timeout=2.0,
++                )
++                self.assertEqual(start_listening.get("policy"), session_policy)
+             finally:
+                 await harness.close()
  
-     if isinstance(policy, Mapping):
-         media = policy.get("media")
-     else:
-         media = getattr(policy, "media", None)
+     async def _test_asr_runtime_switches_on_vendor_change(self) -> None:
+         engine = LabelRecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
  
-     if media is None:
-         return None
+         class StubSpeechmaticsClient:
+             vendor = "speechmatics"
  
-     if isinstance(media, Mapping):
-         get_value = media.get
-     else:
-         get_value = lambda key, default=None: getattr(media, key, default)
+             def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
+                 self.api_key = api_key
+                 self.url = url
  
-     asr_input = get_value("asr_input")
-     if asr_input == "webm_opus":
-         if fmt != "opus":
-             msg = "policy_violation: expected format=opus"
-             _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
-             return msg
-         expected_rate = get_value("asr_rate_hz")
-         if _is_int(expected_rate) and rate is not None and rate != expected_rate:
-             msg = (
+         class StubDeepgramClient:
+             vendor = "deepgram"
+ 
+         class StubASRRuntime:
+             def __init__(self, engine, client, telemetry_bus=None) -> None:
+                 self.engine = engine
+                 self.client = client
+                 self.telemetry_bus = telemetry_bus
+                 self.bus = None
+                 self.opened: list[str] = []
+                 self.closed: list[str] = []

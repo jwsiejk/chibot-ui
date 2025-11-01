@@ -1426,7 +1426,12 @@ import { WakeWord } from "./wake_word.js";
     const hub = AppState?.hub;
     if (hub && typeof hub.startListening === "function") {
       try {
-        return hub.startListening(frame?.policy || {});
+        const policy = frame?.policy || {};
+        try {
+          const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
+          logStage('client.input.capture', { source: frame?.type || 'input.start', hasPolicy });
+        } catch {}
+        return hub.startListening(policy);
       } catch (err) {
         console.warn("Hub startListening (legacy input) failed", err);
       }

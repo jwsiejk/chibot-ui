@@ -1925,10 +1925,13 @@ class ChatV2Adapter:
             capture = dict(descriptor)
             capture["timeslice_ms"] = timeslice_ms
             capture["manual_gate"] = False
+            session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
             input_start = {
                 "type": "input.start",
                 "capture": capture,
             }
+            if session_policy:
+                input_start["policy"] = session_policy
 
             _enqueue(ready_frame)
             _enqueue(input_start)
@@ -1937,8 +1940,8 @@ class ChatV2Adapter:
             ctx.first_ingress_ms = None
             ctx.mic_armed_ms = int(time.time() * 1000)
             start_payload: Dict[str, Any] = {"type": "start_listening"}
-            if ctx.session_capture_policy:
-                start_payload["policy"] = ctx.session_capture_policy
+            if session_policy:
+                start_payload["policy"] = session_policy
             _enqueue(start_payload)
 
             if key is not None:
@@ -3345,13 +3348,15 @@ class ChatV2Adapter:
         capture = dict(descriptor)
         capture["timeslice_ms"] = timeslice_ms
         capture["manual_gate"] = False
+        session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
         input_start = {
             "type": "input.start",
             "capture": capture,
         }
+        if session_policy:
+            input_start["policy"] = session_policy
 
         start_payload: Dict[str, Any] = {"type": "start_listening"}
-        session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
         if session_policy:
             start_payload["policy"] = session_policy
 
