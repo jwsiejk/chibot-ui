@@ -1,366 +1,59 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 3fd2edd6c8b645fafde27cf45401be8272a2cb95..4c0ab37e3e00575787a41b7e76678f429799a395 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -578,80 +578,111 @@ class ChatV2Adapter:
-             self._emit_session_step(
-                 sid,
-                 "ws.banner_sent",
-                 summary="Sent server banner",
-                 meta={
-                     "build_id": build_id,
-                     "host": host,
-                     "pid": pid,
-                     "subprotocol": selected,
-                 },
-             )
-         except Exception:
-             _log.exception("evt=server_banner_emit_failed")
-         # ---- END RUNTIME BANNER ----
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index a1c7dffc3ed60cabe8653ceba62cce87318f07c1..e475a73661ea6baabb310834b4026778b7fa62e6 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -81,50 +81,54 @@ import { WakeWord } from "./wake_word.js";
  
-         now_ms = int(time.time() * 1000)
-         info_frame: Dict[str, Any] = {
-             "type": "info",
-             "protocol": CHAT_V2_SUBPROTOCOL,
-             "sid": sid,
-             "ts_ms": now_ms,
-             "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
+     setSocket(ws) {
+       this._ws = ws || null;
+     }
+ 
+     setPolicy(policy) {
+       if (policy && typeof policy === "object") {
+         this._policy = policy;
+       } else {
+         this._policy = {};
+       }
+       this._usePCM = this._resolveUsePCM();
+     }
+ 
+     get policy() {
+       return this._policy || {};
+     }
+ 
+     _resolveUsePCM() {
+       const policy = this._policy || {};
+       try {
+         const media = policy.media && typeof policy.media === "object" ? policy.media : null;
+         if (media && typeof media.asr_input === "string" && media.asr_input === "pcm_16k") {
+           return true;
          }
-         info_frame["meta"] = {"sid": sid}
-         policy_snapshot = self._policy_snapshot()
-+        allowed_asr_vendors = self._allowed_asr_vendors()
-+        snapshot_mapping: Mapping[str, Any] | None
-+        if isinstance(policy_snapshot, Mapping):
-+            snapshot_mapping = policy_snapshot
-+        else:
-+            snapshot_mapping = None
-+
-+        provisional_ctx = AdapterContext(
-+            sid=sid,
-+            headers=dict(headers),
-+            principal=principal,
-+            user_id=sub,
-+            is_admin=is_admin,
-+        )
-+        provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-+        selected_vendor, selection_reason = self._select_asr_vendor(
-+            provisional_ctx,
-+            snapshot_mapping,
-+            allowed_asr_vendors,
-+            log_selection=False,
-+        )
-+        policy_snapshot = self._apply_vendor_audio_overrides(
-+            policy_snapshot, selected_vendor
-+        )
-         if policy_snapshot:
-             self._log_policy_flags(sid, policy_snapshot)
-             info_frame["policy"] = policy_snapshot
-         await self._send_json(send, sid, info_frame)
-         _log.info("evt=ws_info_sent sid=%s", sid)
-         self._emit_session_step(
-             sid,
-             "ws.info_sent",
-             summary="Sent info frame",
-             meta={"has_policy": bool(policy_snapshot)},
-         )
- 
-         ctx = AdapterContext(
-             sid=sid,
-             headers=dict(headers),
-             principal=principal,
-             user_id=sub,
-             is_admin=is_admin,
-         )
-         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
-         ctx.last_client_activity_ms = now_ms
--        ctx.allowed_asr_vendors = self._allowed_asr_vendors()
--        snapshot_mapping: Mapping[str, Any] | None = (
-+        ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-+        snapshot_mapping = (
-             ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-         )
--        selected_vendor, _vendor_reason = self._select_asr_vendor(
--            ctx, snapshot_mapping, ctx.allowed_asr_vendors
--        )
-         ctx.asr_vendor = selected_vendor
-+        allowed_display = ",".join(ctx.allowed_asr_vendors)
-+        _log.info(
-+            "asr_vendor_selected primary=%s allowed=%s reason=%s",
-+            selected_vendor or "",
-+            allowed_display,
-+            selection_reason,
-+        )
-+        ctx.asr_vendor_logged = True
-         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
-+        if ctx.asr_vendor == "speechmatics":
-+            ctx.audio_pipeline_mode = "pcm16"
- 
-         token = current_sid.set(ctx.sid)
-         try:
-             if not (
-                 inspect.iscoroutinefunction(self._on_open_and_greet)
-                 and inspect.iscoroutinefunction(self._invoke_engine)
-             ):
-                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
-                 raise RuntimeError("WebSocket async contract violation")
- 
-             ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-             client = scope.get("client")
-             ctx.ip = client[0] if isinstance(client, tuple) and client else None
-             if ctx.ip:
-                 ctx.ip_bucket = self._ip_buckets.setdefault(
-                     ctx.ip,
-                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-                 )
- 
-             had_active_contexts = bool(self._contexts)
-             self._contexts[ctx.sid] = ctx
-             current_runtime = getattr(self, "asr_runtime", None)
-             current_vendor = getattr(self, "_asr_runtime_vendor", None)
-             if (
-                 current_runtime is not None
-@@ -2250,50 +2281,52 @@ class ChatV2Adapter:
-             ctx.last_policy_interaction = json.loads(
-                 json.dumps(normalized, separators=(",", ":"))
-             )
-         if frame_type == "info":
-             meta = {}
-             source_meta = normalized.get("meta")
-             if isinstance(source_meta, dict):
-                 meta = dict(source_meta)
-             meta["sid"] = ctx.sid
-             normalized["meta"] = meta
-             policy_payload = normalized.get("policy")
-             if isinstance(policy_payload, dict):
-                 ctx.policy_snapshot = policy_payload
-                 ctx.allowed_asr_vendors = self._allowed_asr_vendors()
-                 snapshot_mapping = policy_payload
-                 selected_vendor, _ = self._select_asr_vendor(
-                     ctx,
-                     snapshot_mapping,
-                     ctx.allowed_asr_vendors,
-                     log_selection=not ctx.asr_vendor_logged,
-                 )
-                 ctx.asr_vendor = selected_vendor
-                 ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
-                     snapshot_mapping
-                 )
-+                if ctx.asr_vendor == "speechmatics":
-+                    ctx.audio_pipeline_mode = "pcm16"
-         return normalized
- 
-     @staticmethod
-     def _truncate_banner_string(value: str, limit: int = 240) -> str:
-         if not isinstance(value, str):
-             return ""
-         if limit <= 0:
-             return ""
-         if len(value) <= limit:
-             return value
-         return value[: limit - 1] + "\u2026"
- 
-     @staticmethod
-     def _sanitize_banner_value(value: Any, depth: int = 0) -> Any:
-         if value is None:
-             return None
-         if isinstance(value, bool):
-             return value
-         if isinstance(value, (int, float)):
-             if isinstance(value, float) and not math.isfinite(value):
-                 return None
-             return value
-         if isinstance(value, str):
-             return ChatV2Adapter._truncate_banner_string(value)
-         if depth >= 2:
-@@ -3049,50 +3082,88 @@ class ChatV2Adapter:
-         if log_selection:
-             allowed_display = ",".join(allowed)
-             _log.info(
-                 "asr_vendor_selected primary=%s allowed=%s reason=%s",
-                 selected or "",
-                 allowed_display,
-                 reason,
-             )
-             ctx.asr_vendor_logged = True
-         return selected, reason
- 
-     @staticmethod
-     def _resolve_audio_pipeline_mode(snapshot: Mapping[str, Any] | None) -> str:
-         if isinstance(snapshot, Mapping):
-             audio_block = snapshot.get("audio")
-             if isinstance(audio_block, Mapping):
-                 pipeline = audio_block.get("pipeline")
-                 if isinstance(pipeline, Mapping):
-                     mode = pipeline.get("mode")
-                     if isinstance(mode, str) and mode.strip():
-                         normalized = mode.strip().lower()
-                         if normalized in {"opus-webm", "pcm16"}:
-                             return normalized
-         return "opus-webm"
- 
-+    @staticmethod
-+    def _apply_vendor_audio_overrides(
-+        snapshot: Mapping[str, Any] | None, vendor: Optional[str]
-+    ) -> Mapping[str, Any] | None:
-+        if not isinstance(snapshot, Mapping):
-+            return snapshot
-+        if vendor != "speechmatics":
-+            return snapshot
-+
-+        updated: Dict[str, Any] = dict(snapshot)
-+
-+        media_block = snapshot.get("media")
-+        media: Dict[str, Any]
-+        if isinstance(media_block, Mapping):
-+            media = dict(media_block)
-+        else:
-+            media = {}
-+        media.setdefault("asr_rate_hz", 16000)
-+        media.setdefault("asr_channels", 1)
-+        media["asr_input"] = "pcm_16k"
-+        updated["media"] = media
-+
-+        audio_block = snapshot.get("audio")
-+        if isinstance(audio_block, Mapping):
-+            audio = dict(audio_block)
-+        else:
-+            audio = {}
-+        pipeline_block = audio.get("pipeline")
-+        if isinstance(pipeline_block, Mapping):
-+            pipeline = dict(pipeline_block)
-+        else:
-+            pipeline = {}
-+        pipeline["mode"] = "pcm16"
-+        audio["pipeline"] = pipeline
-+        updated["audio"] = audio
-+
-+        return updated
-+
-     @staticmethod
-     def _input_descriptor_for_mode(mode: str) -> Dict[str, Any]:
-         if mode == "pcm16":
-             return {
-                 "container": "raw",
-                 "codec": "pcm_s16le",
-                 "rate_hz": 16000,
-                 "channels": 1,
-                 "mime": "audio/raw;rate=16000;channels=1;format=s16le",
-             }
-         return {
-             "container": "webm",
-             "codec": "opus",
-             "rate_hz": 48000,
-             "channels": 1,
-             "mime": "audio/webm;codecs=opus",
++        const capture = policy.capture && typeof policy.capture === "object" ? policy.capture : null;
++        if (capture && typeof capture.asr_input === "string" && capture.asr_input === "pcm_16k") {
++          return true;
++        }
+         const audio = policy.audio && typeof policy.audio === "object" ? policy.audio : null;
+         const pipeline = audio && typeof audio.pipeline === "object" ? audio.pipeline : null;
+         if (pipeline && typeof pipeline.mode === "string" && pipeline.mode === "pcm16") {
+           return true;
          }
+       } catch {}
+       return false;
+     }
  
-     def _log_policy_flags(self, sid: str, snapshot: Mapping[str, Any]) -> None:
-         if not isinstance(snapshot, Mapping):
-             return
-         policy_block = snapshot.get("policy")
-         if not isinstance(policy_block, Mapping):
-             return
+     _recorderPolicy() {
+       const policy = this.policy;
+       if (!policy || typeof policy !== "object") {
+         return {};
+       }
+       const nested = policy.policy;
+       if (!nested || typeof nested !== "object") {
+         return {};
+       }
+       const recorder = nested.recorder;
+       return recorder && typeof recorder === "object" ? recorder : {};
+     }
  
-diff --git a/tests/test_ws_keepalive_and_isolation.py b/tests/test_ws_keepalive_and_isolation.py
-index b806bae02843686e9bc14d334adf9e22a2b2eacb..15b54e62ece24cb64a07790140b93841bd9f84f4 100644
---- a/tests/test_ws_keepalive_and_isolation.py
-+++ b/tests/test_ws_keepalive_and_isolation.py
-@@ -244,54 +244,98 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
-             def on_ws_open(self, sid: str) -> None:
-                 self.opened.append(sid)
- 
-             def on_ws_close(self, sid: str) -> None:
-                 self.closed.append(sid)
- 
-         with patch.object(config, "ASR_DEEPGRAM_ENABLED", False), patch.object(
-             config, "DEEPGRAM_API_KEY", None
-         ), patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
-             config, "SPEECHMATICS_API_KEY", "speechmatics-key"
-         ), patch.object(
-             config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
-         ), patch(
-             "app.ws.adapter.SpeechmaticsClient", StubSpeechmaticsClient
-         ), patch(
-             "app.voice_v2.asr_runtime.ASRRuntime", StubASRRuntime
-         ):
-             harness = AdapterHarness(adapter, engine, label="sm")
-             await harness.start()
-             try:
-                 ctx = adapter._contexts.get(harness.sid)
-                 self.assertIsNotNone(ctx)
-                 if ctx is None:  # pragma: no cover - satisfy type checkers
-                     raise AssertionError("context not initialized")
-                 self.assertEqual(ctx.asr_vendor, "speechmatics")
-+                self.assertEqual(ctx.audio_pipeline_mode, "pcm16")
-                 runtime = adapter.asr_runtime
-                 self.assertIsInstance(runtime, StubASRRuntime)
-                 self.assertIsInstance(runtime.client, StubSpeechmaticsClient)
-                 self.assertEqual(adapter._asr_runtime_vendor, "speechmatics")
-+
-+                info_frame = await harness.wait_for_outbound(
-+                    lambda frame: frame.get("type") == "info"
-+                )
-+                policy = info_frame.get("policy", {}) if isinstance(info_frame, dict) else {}
-+                media_block = policy.get("media", {}) if isinstance(policy, dict) else {}
-+                audio_block = policy.get("audio", {}) if isinstance(policy, dict) else {}
-+                pipeline_block = (
-+                    audio_block.get("pipeline", {}) if isinstance(audio_block, dict) else {}
-+                )
-+                self.assertEqual(media_block.get("asr_input"), "pcm_16k")
-+                self.assertEqual(media_block.get("asr_rate_hz"), 16000)
-+                self.assertEqual(media_block.get("asr_channels"), 1)
-+                self.assertEqual(pipeline_block.get("mode"), "pcm16")
-+
-+                await adapter._send_asr_ready_bundle(harness._send, ctx)
-+
-+                asr_ready = await harness.wait_for_outbound(
-+                    lambda frame: frame.get("type") == "asr.ready",
-+                    timeout=2.0,
-+                )
-+                input_desc = (
-+                    asr_ready.get("input", {}) if isinstance(asr_ready, dict) else {}
-+                )
-+                self.assertEqual(input_desc.get("container"), "raw")
-+                self.assertEqual(input_desc.get("codec"), "pcm_s16le")
-+                self.assertEqual(input_desc.get("rate_hz"), 16000)
-+                self.assertEqual(input_desc.get("channels"), 1)
-+
-+                input_start = await harness.wait_for_outbound(
-+                    lambda frame: frame.get("type") == "input.start",
-+                    timeout=2.0,
-+                )
-+                capture = (
-+                    input_start.get("capture", {})
-+                    if isinstance(input_start, dict)
-+                    else {}
-+                )
-+                self.assertEqual(capture.get("mode"), "pcm16")
-+                self.assertEqual(capture.get("codec"), "pcm_s16le")
-+                self.assertEqual(capture.get("container"), "raw")
-+                self.assertEqual(capture.get("rate_hz"), 16000)
-+                self.assertEqual(capture.get("channels"), 1)
-             finally:
-                 await harness.close()
- 
-     async def _test_asr_runtime_switches_on_vendor_change(self) -> None:
-         engine = LabelRecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
- 
-         class StubSpeechmaticsClient:
-             vendor = "speechmatics"
- 
-             def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
-                 self.api_key = api_key
-                 self.url = url
- 
-         class StubDeepgramClient:
-             vendor = "deepgram"
- 
-         class StubASRRuntime:
-             def __init__(self, engine, client, telemetry_bus=None) -> None:
-                 self.engine = engine
-                 self.client = client
-                 self.telemetry_bus = telemetry_bus
-                 self.bus = None
-                 self.opened: list[str] = []
-                 self.closed: list[str] = []
+     _asrPolicy() {
+       const policy = this.policy;
+       if (!policy || typeof policy !== "object") {

@@ -103,6 +103,10 @@ import { WakeWord } from "./wake_word.js";
         if (media && typeof media.asr_input === "string" && media.asr_input === "pcm_16k") {
           return true;
         }
+        const capture = policy.capture && typeof policy.capture === "object" ? policy.capture : null;
+        if (capture && typeof capture.asr_input === "string" && capture.asr_input === "pcm_16k") {
+          return true;
+        }
         const audio = policy.audio && typeof policy.audio === "object" ? policy.audio : null;
         const pipeline = audio && typeof audio.pipeline === "object" ? audio.pipeline : null;
         if (pipeline && typeof pipeline.mode === "string" && pipeline.mode === "pcm16") {
