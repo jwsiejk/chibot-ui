@@ -10,6 +10,8 @@ import { WakeWord } from "./wake_word.js";
   const TOAST_STYLE_ID = "wsclient-toast-styles";
   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
 
+  const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
+
   // ---- Golden-path turn trace & mic outcomes (additive) ----
   // ---- Telemetry (additive) ----
   const MIC_OUTCOME = {
@@ -2218,6 +2220,11 @@ import { WakeWord } from "./wake_word.js";
     if (typeof data === "string") {
       try {
         const frame = JSON.parse(data);
+        if (frame && typeof frame.message === "string") {
+          if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+            return;
+          }
+        }
         if (frame && frame.type === "server.ping") {
           send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
           return;
