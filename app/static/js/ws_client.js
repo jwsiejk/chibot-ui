@@ -2086,6 +2086,26 @@ import { WakeWord } from "./wake_word.js";
         logMic({ outcome: MIC_OUTCOME.ARMED });
       } catch {}
       try {
+        const audioRecorder = typeof window !== "undefined" ? window.AudioRecorder || null : null;
+        if (audioRecorder && typeof audioRecorder.setPolicy === "function") {
+          audioRecorder.setPolicy(frame?.policy || {});
+        }
+        const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
+        const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
+        const asrInput = frame?.policy?.media?.asr_input ?? null;
+        console.info(
+          "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
+          vendor,
+          pipeline,
+          asrInput,
+        );
+        if (audioRecorder && typeof audioRecorder.startListening === "function") {
+          audioRecorder.startListening(frame?.policy || {});
+        }
+      } catch (err) {
+        console.warn("AudioRecorder start_listening preflight failed", err);
+      }
+      try {
         const hub = AppState?.hub;
         const maybePromise = hub && typeof hub.startListening === "function"
           ? hub.startListening(frame?.policy || {})

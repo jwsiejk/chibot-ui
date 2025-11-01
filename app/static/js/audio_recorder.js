@@ -77,6 +77,7 @@ import { WakeWord } from "./wake_word.js";
       this._pcmSilenceStartAt = null;
       this._pcmCommitSent = false;
       this._pcmWorkletLoaded = false;
+      this._armingPromise = null;
     }
 
     setSocket(ws) {
@@ -84,22 +85,9 @@ import { WakeWord } from "./wake_word.js";
     }
 
     setPolicy(policy) {
-      const previousUsePCM = this._usePCM;
-      let nextPolicy = this._policy || {};
-      const hasStoredPolicy = nextPolicy && typeof nextPolicy === "object" && Object.keys(nextPolicy).length > 0;
-      if (policy && typeof policy === "object") {
-        const keys = Object.keys(policy);
-        const hasAudioHints = keys.some((key) => ["media", "capture", "policy", "audio"].includes(key));
-        if (hasAudioHints || (keys.length === 0 && !hasStoredPolicy)) {
-          nextPolicy = policy;
-        }
-      } else if (policy == null) {
-        nextPolicy = {};
-      }
-
-      this._policy = nextPolicy;
-      this._usePCM = this._resolveUsePCM();
-      if (this._usePCM && this._rec && !previousUsePCM) {
+      const snapshot = policy && typeof policy === "object" ? policy : {};
+      const nextUsePCM = this._resolveUsePCM(snapshot);
+      if (nextUsePCM && this._rec) {
         const recorder = this._rec;
         try {
           if (recorder.state !== "inactive") {
@@ -109,27 +97,38 @@ import { WakeWord } from "./wake_word.js";
           console.warn("AudioRecorder policy switch stop failed", err);
         }
         this._rec = null;
+      }
+      if (nextUsePCM) {
         this._headerSent = false;
         this._resetStreamingTelemetry();
       }
+      this._policy = snapshot;
+      this._usePCM = nextUsePCM;
+      try {
+        const mediaPolicy = snapshot && typeof snapshot.media === "object" ? snapshot.media : {};
+        const audioPolicy = snapshot && typeof snapshot.audio === "object" ? snapshot.audio : {};
+        const pipeline = audioPolicy && typeof audioPolicy.pipeline === "object" ? audioPolicy.pipeline : {};
+        console.info(
+          "diag=recorder_policy usePCM=%s asr_input=%s pipeline=%s",
+          this._usePCM,
+          mediaPolicy?.asr_input ?? null,
+          pipeline?.mode ?? null,
+        );
+      } catch {}
     }
 
     get policy() {
       return this._policy || {};
     }
 
-    _resolveUsePCM() {
-      const policy = this._policy || {};
+    _resolveUsePCM(policy) {
+      const source = policy && typeof policy === "object" ? policy : this._policy || {};
       try {
-        const media = policy.media && typeof policy.media === "object" ? policy.media : null;
+        const media = source.media && typeof source.media === "object" ? source.media : null;
         if (media && typeof media.asr_input === "string" && media.asr_input === "pcm_16k") {
           return true;
         }
-        const capture = policy.capture && typeof policy.capture === "object" ? policy.capture : null;
-        if (capture && typeof capture.asr_input === "string" && capture.asr_input === "pcm_16k") {
-          return true;
-        }
-        const audio = policy.audio && typeof policy.audio === "object" ? policy.audio : null;
+        const audio = source.audio && typeof source.audio === "object" ? source.audio : null;
         const pipeline = audio && typeof audio.pipeline === "object" ? audio.pipeline : null;
         if (pipeline && typeof pipeline.mode === "string" && pipeline.mode === "pcm16") {
           return true;
@@ -661,12 +660,19 @@ import { WakeWord } from "./wake_word.js";
       try {
         socket.send(JSON.stringify(payload));
         this._headerSent = true;
-        console.info(
-          "diag=audio_header_sent sr=%d channels=%d format=%s",
-          payload.sample_rate,
-          payload.channels,
-          payload.format
-        );
+        if (this._usePCM) {
+          console.info(
+            "diag=audio_header_sent format=pcm sample_rate=%d channels=%d",
+            payload.sample_rate,
+            payload.channels,
+          );
+        } else {
+          console.info(
+            "diag=audio_header_sent format=opus sample_rate=%d channels=%d",
+            payload.sample_rate,
+            payload.channels,
+          );
+        }
         return true;
       } catch (err) {
         console.warn("diag=audio_header_send_failed %o", err);
@@ -682,7 +688,7 @@ import { WakeWord } from "./wake_word.js";
         throw new Error("media_devices_unavailable");
       }
       if (!this._stream) {
-        try {
+        if (!this._armingPromise) {
           const constraints = this._usePCM
             ? {
                 audio: {
@@ -692,29 +698,40 @@ import { WakeWord } from "./wake_word.js";
                 },
               }
             : { audio: true };
-          this._stream = await navigator.mediaDevices.getUserMedia(constraints);
-          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
-          const logMic = typeof window !== "undefined" ? window.__logMic : null;
-          const summary = currentInputDeviceSummary(this._stream);
-          logMic?.({ outcome: (micOutcome && micOutcome.PERM_GRANTED) || 'perm_granted', perm: 'granted', device: summary });
-          console.info("diag=mic_armed");
-        } catch (err) {
-          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
-          const logMic = typeof window !== "undefined" ? window.__logMic : null;
-          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-          logMic?.({
-            outcome: denied ? (micOutcome && micOutcome.ERROR_DENIED) || 'error_denied' : (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media',
-            perm: denied ? 'denied' : 'error',
-            message: err?.message,
-          });
-          throw err;
+          this._armingPromise = (async () => {
+            try {
+              const stream = await navigator.mediaDevices.getUserMedia(constraints);
+              this._stream = stream;
+              const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+              const logMic = typeof window !== "undefined" ? window.__logMic : null;
+              const summary = currentInputDeviceSummary(stream);
+              logMic?.({ outcome: (micOutcome && micOutcome.PERM_GRANTED) || 'perm_granted', perm: 'granted', device: summary });
+              console.info("diag=mic_armed");
+              if (!this._wakeInit) {
+                try {
+                  WakeWord.init(stream);
+                } catch {}
+                this._wakeInit = true;
+              }
+            } catch (err) {
+              const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+              const logMic = typeof window !== "undefined" ? window.__logMic : null;
+              const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+              logMic?.({
+                outcome: denied ? (micOutcome && micOutcome.ERROR_DENIED) || 'error_denied' : (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media',
+                perm: denied ? 'denied' : 'error',
+                message: err?.message,
+              });
+              throw err;
+            } finally {
+              this._armingPromise = null;
+            }
+          })();
         }
-        if (!this._wakeInit) {
-          try {
-            WakeWord.init(this._stream);
-          } catch {}
-          this._wakeInit = true;
-        }
+        await this._armingPromise;
+      }
+      if (!this._stream) {
+        throw new Error("media_stream_unavailable");
       }
       if (this._usePCM) {
         await this._ensurePcmGraph();
@@ -868,8 +885,15 @@ import { WakeWord } from "./wake_word.js";
 
     async startListening(policy = {}) {
       this.setPolicy(policy);
+      if (this._usePCM) {
+        console.info("diag=recorder_mode mode=pcm16 sr=16000 ch=1 frame_ms≈50");
+      } else {
+        console.info("diag=recorder_mode mode=opus-webm");
+      }
       await this._ensureArmed();
-      this._sendAudioHeader();
+      if (!this._usePCM) {
+        this._sendAudioHeader();
+      }
       if (!this._sendGate) {
         this._sendGate = true;
         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
