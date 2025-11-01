@@ -266,10 +266,54 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
                 if ctx is None:  # pragma: no cover - satisfy type checkers
                     raise AssertionError("context not initialized")
                 self.assertEqual(ctx.asr_vendor, "speechmatics")
+                self.assertEqual(ctx.audio_pipeline_mode, "pcm16")
                 runtime = adapter.asr_runtime
                 self.assertIsInstance(runtime, StubASRRuntime)
                 self.assertIsInstance(runtime.client, StubSpeechmaticsClient)
                 self.assertEqual(adapter._asr_runtime_vendor, "speechmatics")
+
+                info_frame = await harness.wait_for_outbound(
+                    lambda frame: frame.get("type") == "info"
+                )
+                policy = info_frame.get("policy", {}) if isinstance(info_frame, dict) else {}
+                media_block = policy.get("media", {}) if isinstance(policy, dict) else {}
+                audio_block = policy.get("audio", {}) if isinstance(policy, dict) else {}
+                pipeline_block = (
+                    audio_block.get("pipeline", {}) if isinstance(audio_block, dict) else {}
+                )
+                self.assertEqual(media_block.get("asr_input"), "pcm_16k")
+                self.assertEqual(media_block.get("asr_rate_hz"), 16000)
+                self.assertEqual(media_block.get("asr_channels"), 1)
+                self.assertEqual(pipeline_block.get("mode"), "pcm16")
+
+                await adapter._send_asr_ready_bundle(harness._send, ctx)
+
+                asr_ready = await harness.wait_for_outbound(
+                    lambda frame: frame.get("type") == "asr.ready",
+                    timeout=2.0,
+                )
+                input_desc = (
+                    asr_ready.get("input", {}) if isinstance(asr_ready, dict) else {}
+                )
+                self.assertEqual(input_desc.get("container"), "raw")
+                self.assertEqual(input_desc.get("codec"), "pcm_s16le")
+                self.assertEqual(input_desc.get("rate_hz"), 16000)
+                self.assertEqual(input_desc.get("channels"), 1)
+
+                input_start = await harness.wait_for_outbound(
+                    lambda frame: frame.get("type") == "input.start",
+                    timeout=2.0,
+                )
+                capture = (
+                    input_start.get("capture", {})
+                    if isinstance(input_start, dict)
+                    else {}
+                )
+                self.assertEqual(capture.get("mode"), "pcm16")
+                self.assertEqual(capture.get("codec"), "pcm_s16le")
+                self.assertEqual(capture.get("container"), "raw")
+                self.assertEqual(capture.get("rate_hz"), 16000)
+                self.assertEqual(capture.get("channels"), 1)
             finally:
                 await harness.close()
 

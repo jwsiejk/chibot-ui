@@ -600,6 +600,30 @@ class ChatV2Adapter:
         }
         info_frame["meta"] = {"sid": sid}
         policy_snapshot = self._policy_snapshot()
+        allowed_asr_vendors = self._allowed_asr_vendors()
+        snapshot_mapping: Mapping[str, Any] | None
+        if isinstance(policy_snapshot, Mapping):
+            snapshot_mapping = policy_snapshot
+        else:
+            snapshot_mapping = None
+
+        provisional_ctx = AdapterContext(
+            sid=sid,
+            headers=dict(headers),
+            principal=principal,
+            user_id=sub,
+            is_admin=is_admin,
+        )
+        provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
+        selected_vendor, selection_reason = self._select_asr_vendor(
+            provisional_ctx,
+            snapshot_mapping,
+            allowed_asr_vendors,
+            log_selection=False,
+        )
+        policy_snapshot = self._apply_vendor_audio_overrides(
+            policy_snapshot, selected_vendor
+        )
         if policy_snapshot:
             self._log_policy_flags(sid, policy_snapshot)
             info_frame["policy"] = policy_snapshot
@@ -621,15 +645,22 @@ class ChatV2Adapter:
         )
         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
         ctx.last_client_activity_ms = now_ms
-        ctx.allowed_asr_vendors = self._allowed_asr_vendors()
-        snapshot_mapping: Mapping[str, Any] | None = (
+        ctx.allowed_asr_vendors = list(allowed_asr_vendors)
+        snapshot_mapping = (
             ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
         )
-        selected_vendor, _vendor_reason = self._select_asr_vendor(
-            ctx, snapshot_mapping, ctx.allowed_asr_vendors
-        )
         ctx.asr_vendor = selected_vendor
+        allowed_display = ",".join(ctx.allowed_asr_vendors)
+        _log.info(
+            "asr_vendor_selected primary=%s allowed=%s reason=%s",
+            selected_vendor or "",
+            allowed_display,
+            selection_reason,
+        )
+        ctx.asr_vendor_logged = True
         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
+        if ctx.asr_vendor == "speechmatics":
+            ctx.audio_pipeline_mode = "pcm16"
 
         token = current_sid.set(ctx.sid)
         try:
@@ -2272,6 +2303,8 @@ class ChatV2Adapter:
                 ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
                     snapshot_mapping
                 )
+                if ctx.asr_vendor == "speechmatics":
+                    ctx.audio_pipeline_mode = "pcm16"
         return normalized
 
     @staticmethod
@@ -3070,6 +3103,44 @@ class ChatV2Adapter:
                         if normalized in {"opus-webm", "pcm16"}:
                             return normalized
         return "opus-webm"
+
+    @staticmethod
+    def _apply_vendor_audio_overrides(
+        snapshot: Mapping[str, Any] | None, vendor: Optional[str]
+    ) -> Mapping[str, Any] | None:
+        if not isinstance(snapshot, Mapping):
+            return snapshot
+        if vendor != "speechmatics":
+            return snapshot
+
+        updated: Dict[str, Any] = dict(snapshot)
+
+        media_block = snapshot.get("media")
+        media: Dict[str, Any]
+        if isinstance(media_block, Mapping):
+            media = dict(media_block)
+        else:
+            media = {}
+        media.setdefault("asr_rate_hz", 16000)
+        media.setdefault("asr_channels", 1)
+        media["asr_input"] = "pcm_16k"
+        updated["media"] = media
+
+        audio_block = snapshot.get("audio")
+        if isinstance(audio_block, Mapping):
+            audio = dict(audio_block)
+        else:
+            audio = {}
+        pipeline_block = audio.get("pipeline")
+        if isinstance(pipeline_block, Mapping):
+            pipeline = dict(pipeline_block)
+        else:
+            pipeline = {}
+        pipeline["mode"] = "pcm16"
+        audio["pipeline"] = pipeline
+        updated["audio"] = audio
+
+        return updated
 
     @staticmethod
     def _input_descriptor_for_mode(mode: str) -> Dict[str, Any]:
