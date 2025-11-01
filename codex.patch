@@ -1,160 +1,58 @@
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index cac546779e7a94abe32d5511dca445494092d60b..7054f5effd589eb2889dc3078c32da277073985c 100644
---- a/app/static/js/audio_recorder.js
-+++ b/app/static/js/audio_recorder.js
-@@ -863,52 +863,52 @@ import { WakeWord } from "./wake_word.js";
-       if (nextActive && !this._micOpenEmitted) {
-         this._micOpenEmitted = true;
-         const vendorLabel = this._usePCM ? "pcm16" : "webm_opus";
-         emitEvent(CLIENT_MIC_OPEN_EVENT, {
-           type: CLIENT_MIC_OPEN_EVENT,
-           ts: Date.now(),
-           vendor: vendorLabel
-         });
-       }
-     }
+diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
+index 972a2c140ce35dd436617a4a363dfe38b0a8f57a..4d25d50f145646f1b542d6ffdaa742face295281 100644
+--- a/app/services/streaming_asr/speechmatics_client.py
++++ b/app/services/streaming_asr/speechmatics_client.py
+@@ -380,50 +380,53 @@ class SpeechmaticsClient:
+                     }
+                     try:
+                         self._bus.publish(event)
+                     except Exception:
+                         self._logger.exception(
+                             "evt=sm_bus_publish_failed sid=%s event=%s", state.sid, event_type
+                         )
+                     else:
+                         log_event = "evt=sm_final" if is_final else "evt=sm_partial"
+                         self._logger.info("%s text_chars=%d", log_event, len(text))
  
-     async start(policy = {}) {
-       this.setPolicy(policy);
-       await this._ensureArmed();
-       return this._stream;
-     }
+                     if is_final:
+                         self._handle_final(state, payload)
+                     else:
+                         self._handle_partial(state, payload)
+                     continue
  
-     async startMicCaptureIfIdle(policy = {}) {
-       this.setPolicy(policy);
-       await this._ensureArmed();
-       return true;
-     }
+                 if isinstance(message_name, str) and message_name in {
+                     "Info",
+                     "RecognitionStarted",
+                     "AudioAdded",
+                 }:
+                     if message_name not in state.vendor_notices:
+                         self._logger.info("evt=sm_notice message=%s", message_name.lower())
+                         state.vendor_notices.add(message_name)
++                    # Treat vendor notices as sufficient to consider the stream ready so
++                    # that the sender loop can proceed with audio transmission.
++                    self._mark_stream_ready(state, payload)
+                     continue
  
-     async startListening(policy = {}) {
-       this.setPolicy(policy);
--      console.info("diag=recorder_mode mode=%s", this._usePCM ? "pcm16" : "opus-webm");
-       await this._ensureArmed();
-+      console.info("diag=recorder_mode mode=%s", this._usePCM ? "pcm16" : "opus-webm");
-       // Always send header now; _sendAudioHeader chooses pcm or opus by _usePCM
-       this._sendAudioHeader();
-       if (!this._sendGate) {
-         this._sendGate = true;
-         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
-         console.info("diag=send_gate_open reason=%s", reason);
-         this._updateRecorderState(true, reason);
-       }
-       this._setSendMuted(false, "start_listening");
-       return true;
-     }
+                 self._handle_payload(state, payload)
+         except asyncio.CancelledError:
+             raise
+         except websockets.ConnectionClosedOK as exc:
+             await self._finalize_close(state, exc.code, exc.reason)
+         except websockets.ConnectionClosedError as exc:
+             self._handle_error(state, str(exc.code), exc.reason or "connection_closed")
+             await self._finalize_close(state, exc.code, exc.reason)
+         except Exception as exc:
+             self._logger.exception(
+                 "evt=sm_recv_failed sid=%s stream_id=%s err=%s",
+                 state.sid,
+                 state.stream_id,
+                 exc,
+             )
+             self._handle_error(state, "recv_failed", str(exc))
+             await self._finalize_close(state, None, None)
+         finally:
+             await self._finalize_receiver(state)
  
-     stopListening(opts = {}) {
-       const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
-       if (this._sendGate) {
-         console.info("diag=send_gate_closed reason=%s", reason);
-       }
-       this._sendGate = false;
-       this._updateRecorderState(false, reason);
-       this._micOpenEmitted = false;
-       this._setSendMuted(false, reason);
-       this._headerSent = false;
-       if (this._usePCM) {
-         this._resetPcmState();
-       }
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 6882f3b6ea20fdbe982177d353be7edf82a7ac7a..9139751758f46c27890d4049578f82ae30024824 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -2054,81 +2054,79 @@ import { WakeWord } from "./wake_word.js";
-       logStage('client.tts', { outcome: 'playing', utt_id: frame?.utt_id || 'utt-00001' });
-       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
-     } else if (frame.type === "tts.end") {
-       AppState.ttsActive = false;
-       updateState({ ttsActive: false });
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: false });
-       }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
-         audioPlayer.handleTtsEnd(frame);
-       }
-       logStage('client.tts', { outcome: 'ended', utt_id: frame?.utt_id || 'utt-00001', dur_ms: frame?.dur_ms });
-     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
-       const uttId = frame?.utt_id || 'utt-00001';
-       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
-       logStage('client.tts', {
-         outcome: 'ended',
-         utt_id: uttId,
-         dur_ms: frame?.dur_ms,
-         reason,
-       });
-       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
-     } else if (frame.type === "start_listening") {
-       try {
--        __micAttempts += 1;
--        __micChunks = 0;
--        __micBytes = 0;
--        __micArmedAt = Date.now();
--        if (!__turnTraceId) {
--          __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
--        }
--        logMic({ outcome: MIC_OUTCOME.ARMED });
--      } catch {}
--      const hasAudioRecorder = typeof window !== "undefined" && !!window.AudioRecorder;
--      try {
--        const audioRecorder = hasAudioRecorder ? window.AudioRecorder : null;
--        if (audioRecorder?.setPolicy) {
--          audioRecorder.setPolicy(frame?.policy || {});
--        }
-+        const ar = window.AudioRecorder || null;
-+        if (ar?.setPolicy) ar.setPolicy(frame?.policy || {});
-         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
-         const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
-         const asrInput = frame?.policy?.media?.asr_input ?? null;
-         console.info(
-           "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
-           vendor,
-           pipeline,
-           asrInput,
-         );
--        if (audioRecorder?.startListening) {
--          await audioRecorder.startListening(frame?.policy || {});
-+        if (ar?.startListening) {
-+          await ar.startListening(frame?.policy || {});
-         }
-       } catch (err) {
-         console.warn("AudioRecorder start_listening preflight failed", err);
-       }
--      if (hasAudioRecorder) {
-+      try {
-+        __micAttempts += 1;
-+        __micChunks = 0;
-+        __micBytes = 0;
-+        __micArmedAt = Date.now();
-+        if (!__turnTraceId) {
-+          __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
-+        }
-+        logMic({ outcome: MIC_OUTCOME.ARMED });
-+      } catch {}
-+      // If unified recorder exists, do not arm any legacy capture
-+      if (window.AudioRecorder) {
-         dispatchFrame(frame);
-         return;
-       }
-       try {
-         const hub = AppState?.hub;
-         const maybePromise = hub && typeof hub.startListening === "function"
-           ? hub.startListening(frame?.policy || {})
-           : null;
-         if (!hub || typeof hub.startListening !== "function") {
-           startInputCapture(frame);
-           return;
-         }
-         if (maybePromise && typeof maybePromise.then === "function") {
-           maybePromise.catch((err) => {
-             const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-             logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-           });
-         }
-       } catch (err) {
-         console.warn("Hub start_listening handler error", err);
-         const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-         logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-       }
-     } else if (frame.type === "stop_listening") {
-       try {
+     def _mark_stream_ready(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
+         if state.ready_event.is_set():
+             return

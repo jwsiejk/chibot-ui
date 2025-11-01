@@ -402,6 +402,9 @@ class SpeechmaticsClient:
                     if message_name not in state.vendor_notices:
                         self._logger.info("evt=sm_notice message=%s", message_name.lower())
                         state.vendor_notices.add(message_name)
+                    # Treat vendor notices as sufficient to consider the stream ready so
+                    # that the sender loop can proceed with audio transmission.
+                    self._mark_stream_ready(state, payload)
                     continue
 
                 self._handle_payload(state, payload)
