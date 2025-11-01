@@ -1213,8 +1213,11 @@ class ASRRuntime:
 
         return _callback
 
-    def _make_error_cb(self, sid: str) -> Callable[[str], None]:
-        def _callback(error: str) -> None:
+    def _make_error_cb(self, sid: str) -> Callable[[str, str | None], None]:
+        def _callback(code: str, reason: str | None = None) -> None:
+            error = code
+            if reason and reason != code:
+                error = f"{code}: {reason}"
             self._on_error(sid, error)
 
         return _callback

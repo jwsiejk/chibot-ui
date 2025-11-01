@@ -1,457 +1,62 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index d52883d9da68960affd439903d119bc8ebf3f4ea..d4661a71c4a6c0de8d5ba5de151c39eb1e4c285a 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -1,65 +1,66 @@
- """ASGI gateway mounting the chat.v2 adapter and operational HTTP probes."""
- from __future__ import annotations
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 03258d279f1cad474291d68b8ddc2ad54acde283..b3d279a612f99ec49253a5be654c64a48b1e01a6 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -1191,52 +1191,55 @@ class ASRRuntime:
  
- import asyncio
- import hashlib
- import json
- import logging
- import mimetypes
- import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
--from typing import Any, Awaitable, Callable, Dict, Optional
-+from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
- from urllib.parse import parse_qs
+     def _forward_chunk(self, sid: str, state: _SessionState, chunk: bytes) -> None:
+         if not chunk:
+             return
+         chunk_len = len(chunk)
+         state.chunks_sent += 1
+         state.bytes_sent += chunk_len
+         stream_id = state.stream_id or state.last_stream_id or ""
+         _log.info("evt=asr_chunk sid=%s stream_id=%s bytes=%d", sid, stream_id, chunk_len)
+         self._ingest_rms_probe(sid, state, chunk)
+         self._client.send_audio(sid, chunk)
+         state.bytes_received += chunk_len
  
- from app import config
- from app.admin.api.settings import handle_admin_settings
- from app.admin.flow_api import handle_flow_sessions, handle_flow_trace, handle_flow_zip
- from app.auth.http_handlers import (
-     get_me,
-     post_login,
-     post_profile,
-     post_ws_token,
-     _session_email as _auth_session_email,
-     _is_admin as _auth_is_admin,
- )
- from app.db import neon
- from app.logging_config import configure_logging
- from app.logging_setup import install_bus_handler
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import FileExporter
- from app.versioning import get_build_id, inject_static_version
- from app.voice_v2.asr_runtime import ASRRuntime
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- from app.services.streaming_asr.deepgram_client import DeepgramClient
-+from app.services.streaming_asr.speechmatics_client import SpeechmaticsClient
+     def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_partial(sid, text, metadata or {})
  
+         return _callback
  
- configure_logging()
- install_bus_handler(telemetry_bus, level=logging.INFO)
+     def _make_final_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_final(sid, text, metadata or {})
  
- logging.getLogger("app.ws.adapter").setLevel(logging.INFO)
- logging.getLogger("app.security.jwt").setLevel(logging.INFO)
- logging.getLogger("app.auth.http").setLevel(logging.INFO)
+         return _callback
  
- for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
-     _category_logger = logging.getLogger(_logger_name)
-     if _category_logger.level == logging.NOTSET:
-         _category_logger.setLevel(logging.INFO)
+-    def _make_error_cb(self, sid: str) -> Callable[[str], None]:
+-        def _callback(error: str) -> None:
++    def _make_error_cb(self, sid: str) -> Callable[[str, str | None], None]:
++        def _callback(code: str, reason: str | None = None) -> None:
++            error = code
++            if reason and reason != code:
++                error = f"{code}: {reason}"
+             self._on_error(sid, error)
  
+         return _callback
  
- _log = logging.getLogger(__name__)
- 
- 
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
- 
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
-@@ -790,55 +791,89 @@ async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[s
-     try:
-         user = await neon.get_user(email)
-     except Exception:  # pragma: no cover - defensive logging
-         _log.exception("evt=admin_context_lookup_failed email=%s", email)
-         return True, False, email
- 
-     if user is None:
-         return True, False, email
- 
-     try:
-         is_admin = bool(_auth_is_admin(user))
-     except Exception:  # pragma: no cover - defensive logging
-         _log.exception("evt=admin_context_flag_failed email=%s", email)
-         return True, False, email
- 
-     return True, is_admin, email
- 
- 
- def _get_adapter() -> ChatV2Adapter:
-     """Return a lazily instantiated ChatV2Adapter singleton."""
-     global _adapter
-     if _adapter is None:
-         exporter = FileExporter(EXPORT_ROOT)
-         engine = EngineV2(exporter=exporter)
-         tts_runtime = TTSRuntime(engine=engine)
--        asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
--        asr_runtime = ASRRuntime(engine=engine, client=asr_client)
-         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
-         _adapter.tts_runtime = tts_runtime
--        _adapter.asr_runtime = asr_runtime
-+        runtime_vendor: Optional[str] = None
-+        asr_runtime: Optional[ASRRuntime] = None
-+
-+        preferred_vendor: Optional[str] = None
-+        try:
-+            policy_vendor = getattr(config, "POLICY_ASR", {})
-+            if isinstance(policy_vendor, Mapping):
-+                vendor_block = policy_vendor.get("vendor")
-+                if isinstance(vendor_block, Mapping):
-+                    primary = vendor_block.get("primary")
-+                    if isinstance(primary, str) and primary.strip():
-+                        preferred_vendor = primary.strip().lower()
-+        except Exception:  # pragma: no cover - defensive
-+            preferred_vendor = None
-+
-+        deepgram_enabled = bool(getattr(config, "ASR_DEEPGRAM_ENABLED", True))
-+        deepgram_key = getattr(config, "DEEPGRAM_API_KEY", None)
-+        if deepgram_enabled and deepgram_key:
-+            asr_client = DeepgramClient(api_key=deepgram_key)
-+            asr_runtime = ASRRuntime(engine=engine, client=asr_client)
-+            runtime_vendor = "deepgram"
-+        elif preferred_vendor == "speechmatics":
-+            sm_enabled = bool(getattr(config, "ASR_SPEECHMATICS_ENABLED", False))
-+            sm_key = getattr(config, "SPEECHMATICS_API_KEY", None)
-+            sm_url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
-+            if sm_enabled and sm_key and sm_url:
-+                sm_client = SpeechmaticsClient(sm_key, sm_url, telemetry_bus, _log)
-+                asr_runtime = ASRRuntime(
-+                    engine=engine,
-+                    client=sm_client,
-+                    telemetry_bus=telemetry_bus,
-+                )
-+                runtime_vendor = "speechmatics"
-+
-+        if asr_runtime is not None:
-+            _adapter.asr_runtime = asr_runtime
-+            _adapter._asr_runtime_vendor = runtime_vendor
-     return _adapter
- 
- 
- async def _handle_admin_settings_route(
-     scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-     rejection = await _require_admin_api(scope, receive)
-     if rejection is not None:
-         return rejection
-     return await handle_admin_settings(scope, receive)
- 
- 
- def require_db_ready(handler: HttpHandler) -> HttpHandler:
-     async def _wrapped(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-         status = neon.db_status()
-         state = status.get("state", "init")
-         if state != "ready":
-             await _drain_request_body(receive)
-             _log.info("evt=db_guard_warming state=%s", state)
-             return json_response(status=503, db="warming")
-         return await handler(scope, receive)
- 
-     return _wrapped
- 
- 
-diff --git a/tests/test_ws_keepalive_and_isolation.py b/tests/test_ws_keepalive_and_isolation.py
-index e71060db98db625e0856197cf64542c4ce220c5d..b806bae02843686e9bc14d334adf9e22a2b2eacb 100644
---- a/tests/test_ws_keepalive_and_isolation.py
-+++ b/tests/test_ws_keepalive_and_isolation.py
-@@ -1,32 +1,35 @@
- import asyncio
- import json
- import os
- import unittest
- import uuid
- from unittest.mock import patch
- 
-+os.environ.setdefault("SECRET_KEY", "test-secret")
-+
-+from app import config
- from app.services.streaming_asr.deepgram_client import DeepgramClient
- from app.telemetry import bus
- from app.voice_v2 import EVT_WS_JSON_SEND
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- from app.security.jwt_utils import mint_ws_token
- 
- 
- class FakeDeepgramWebSocket:
-     """Minimal websocket stub that records text frames."""
- 
-     def __init__(self) -> None:
-         self.sent: list[str] = []
-         self.closed = False
-         self.close_code: int | None = None
- 
-     async def send(self, message: str) -> None:
-         self.sent.append(message)
- 
-     async def close(self) -> None:
-         self.closed = True
-         self.close_code = 1000
- 
- 
- class LabelRecordingEngine:
-     """Engine stub that records session identifiers by label."""
-@@ -112,117 +115,249 @@ class AdapterHarness:
- 
-     @property
-     def sid(self) -> str:
-         sid = self.engine.sid_by_label.get(self.label)
-         if sid is None:
-             raise RuntimeError("connection not yet open")
-         return sid
- 
- 
- class TestWSKeepaliveAndIsolation(unittest.TestCase):
-     def setUp(self) -> None:
-         bus.reset()
- 
-     def tearDown(self) -> None:
-         bus.reset()
- 
-     def test_deepgram_keepalive_cadence(self) -> None:
-         asyncio.run(self._test_deepgram_keepalive_cadence())
- 
-     def test_server_keepalive_cadence(self) -> None:
-         asyncio.run(self._test_server_keepalive_cadence())
- 
-     def test_initial_policy_ordering(self) -> None:
-         asyncio.run(self._test_initial_policy_ordering())
- 
-+    def test_speechmatics_vendor_selection(self) -> None:
-+        asyncio.run(self._test_speechmatics_vendor_selection())
-+
-+    def test_asr_runtime_switches_on_vendor_change(self) -> None:
-+        asyncio.run(self._test_asr_runtime_switches_on_vendor_change())
-+
-     def test_multi_session_isolation(self) -> None:
-         asyncio.run(self._test_multi_session_isolation())
- 
-     async def _test_deepgram_keepalive_cadence(self) -> None:
-         fake_ws = FakeDeepgramWebSocket()
-         with patch.dict(os.environ, {"DG_KEEPALIVE_INTERVAL_S": "0.05"}, clear=False):
-             client = DeepgramClient()
-             await client.connect(fake_ws)
-             await asyncio.sleep(0.12)
-             count_before_close = self._count_keepalives(fake_ws)
-             self.assertGreaterEqual(count_before_close, 2)
-             await client.close()
-             await asyncio.sleep(0.06)
-             self.assertEqual(count_before_close, self._count_keepalives(fake_ws))
-             self.assertTrue(fake_ws.closed)
- 
-     async def _test_server_keepalive_cadence(self) -> None:
-         engine = LabelRecordingEngine()
-         with patch.dict(os.environ, {"WS_PING_INTERVAL_MS": "50"}, clear=False):
-             adapter = ChatV2Adapter(engine=engine)
-             harness = AdapterHarness(adapter, engine, label="srv")
-             await harness.start()
-             try:
-                 await asyncio.sleep(0.12)
-                 keepalive_frames = [
-                     json.loads(message["text"])
-                     for message in harness.sent
-                     if message.get("type") == "websocket.send" and message.get("text")
-                 ]
--                count = sum(1 for frame in keepalive_frames if frame.get("type") == "keepalive")
-+                count = sum(
-+                    1
-+                    for frame in keepalive_frames
-+                    if frame.get("type") in {"keepalive", "server.ping"}
-+                )
-                 self.assertGreaterEqual(count, 1)
-                 count_before_close = count
-             finally:
-                 await harness.close()
-             await asyncio.sleep(0.06)
-             keepalive_frames = [
-                 json.loads(message["text"])
-                 for message in harness.sent
-                 if message.get("type") == "websocket.send" and message.get("text")
-             ]
--            count_after_close = sum(1 for frame in keepalive_frames if frame.get("type") == "keepalive")
-+            count_after_close = sum(
-+                1
-+                for frame in keepalive_frames
-+                if frame.get("type") in {"keepalive", "server.ping"}
-+            )
-             self.assertEqual(count_before_close, count_after_close)
- 
-     async def _test_initial_policy_ordering(self) -> None:
-         snapshot = {"type": "policy.interaction", "policy": {"mode": "idle"}}
- 
-         def _on_open(sid: str, _headers: dict[str, str]) -> None:
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": snapshot})
- 
-         engine = LabelRecordingEngine(on_open_hook=_on_open)
-         with patch.dict(os.environ, {"WS_PING_INTERVAL_MS": "0"}, clear=False):
-             adapter = ChatV2Adapter(engine=engine)
-             harness = AdapterHarness(adapter, engine, label="policy")
-             await harness.start()
-             try:
-                 frame = await harness.wait_for_outbound(lambda item: item.get("type") == "policy.interaction")
-                 self.assertEqual(frame, snapshot)
-                 await asyncio.sleep(0.05)
-                 frames = [f for f in harness.outbound_frames if f.get("type") == "policy.interaction"]
-                 self.assertEqual(len(frames), 1)
-                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": snapshot})
-                 await asyncio.sleep(0.05)
-                 frames = [f for f in harness.outbound_frames if f.get("type") == "policy.interaction"]
-                 self.assertEqual(len(frames), 1)
-             finally:
-                 await harness.close()
- 
-+    async def _test_speechmatics_vendor_selection(self) -> None:
-+        engine = LabelRecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+
-+        class StubSpeechmaticsClient:
-+            vendor = "speechmatics"
-+
-+            def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
-+                self.api_key = api_key
-+                self.url = url
-+
-+        class StubASRRuntime:
-+            def __init__(self, engine, client, telemetry_bus=None) -> None:
-+                self.engine = engine
-+                self.client = client
-+                self.telemetry_bus = telemetry_bus
-+                self.bus = None
-+                self.opened: list[str] = []
-+                self.closed: list[str] = []
-+
-+            def set_bus(self, telemetry_bus) -> None:
-+                self.bus = telemetry_bus
-+
-+            def on_ws_open(self, sid: str) -> None:
-+                self.opened.append(sid)
-+
-+            def on_ws_close(self, sid: str) -> None:
-+                self.closed.append(sid)
-+
-+        with patch.object(config, "ASR_DEEPGRAM_ENABLED", False), patch.object(
-+            config, "DEEPGRAM_API_KEY", None
-+        ), patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
-+            config, "SPEECHMATICS_API_KEY", "speechmatics-key"
-+        ), patch.object(
-+            config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
-+        ), patch(
-+            "app.ws.adapter.SpeechmaticsClient", StubSpeechmaticsClient
-+        ), patch(
-+            "app.voice_v2.asr_runtime.ASRRuntime", StubASRRuntime
-+        ):
-+            harness = AdapterHarness(adapter, engine, label="sm")
-+            await harness.start()
-+            try:
-+                ctx = adapter._contexts.get(harness.sid)
-+                self.assertIsNotNone(ctx)
-+                if ctx is None:  # pragma: no cover - satisfy type checkers
-+                    raise AssertionError("context not initialized")
-+                self.assertEqual(ctx.asr_vendor, "speechmatics")
-+                runtime = adapter.asr_runtime
-+                self.assertIsInstance(runtime, StubASRRuntime)
-+                self.assertIsInstance(runtime.client, StubSpeechmaticsClient)
-+                self.assertEqual(adapter._asr_runtime_vendor, "speechmatics")
-+            finally:
-+                await harness.close()
-+
-+    async def _test_asr_runtime_switches_on_vendor_change(self) -> None:
-+        engine = LabelRecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+
-+        class StubSpeechmaticsClient:
-+            vendor = "speechmatics"
-+
-+            def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
-+                self.api_key = api_key
-+                self.url = url
-+
-+        class StubDeepgramClient:
-+            vendor = "deepgram"
-+
-+        class StubASRRuntime:
-+            def __init__(self, engine, client, telemetry_bus=None) -> None:
-+                self.engine = engine
-+                self.client = client
-+                self.telemetry_bus = telemetry_bus
-+                self.bus = None
-+                self.opened: list[str] = []
-+                self.closed: list[str] = []
-+
-+            def set_bus(self, telemetry_bus) -> None:
-+                self.bus = telemetry_bus
-+
-+            def on_ws_open(self, sid: str) -> None:
-+                self.opened.append(sid)
-+
-+            def on_ws_close(self, sid: str) -> None:
-+                self.closed.append(sid)
-+
-+        with patch.object(config, "ASR_DEEPGRAM_ENABLED", False), patch.object(
-+            config, "DEEPGRAM_API_KEY", None
-+        ), patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
-+            config, "SPEECHMATICS_API_KEY", "speechmatics-key"
-+        ), patch.object(
-+            config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
-+        ), patch(
-+            "app.ws.adapter.SpeechmaticsClient", StubSpeechmaticsClient
-+        ), patch(
-+            "app.voice_v2.asr_runtime.ASRRuntime", StubASRRuntime
-+        ):
-+            original_runtime = StubASRRuntime(engine, StubDeepgramClient())
-+            adapter.asr_runtime = original_runtime
-+            adapter._asr_runtime_vendor = "deepgram"
-+
-+            harness = AdapterHarness(adapter, engine, label="sm-switch")
-+            await harness.start()
-+            try:
-+                ctx = adapter._contexts.get(harness.sid)
-+                self.assertIsNotNone(ctx)
-+                if ctx is None:  # pragma: no cover - satisfy type checkers
-+                    raise AssertionError("context not initialized")
-+                self.assertEqual(ctx.asr_vendor, "speechmatics")
-+                runtime = adapter.asr_runtime
-+                self.assertIsInstance(runtime, StubASRRuntime)
-+                self.assertIsInstance(runtime.client, StubSpeechmaticsClient)
-+                self.assertIsNot(runtime, original_runtime)
-+                self.assertEqual(adapter._asr_runtime_vendor, "speechmatics")
-+            finally:
-+                await harness.close()
-+
-     async def _test_multi_session_isolation(self) -> None:
-         engine = LabelRecordingEngine()
-         with patch.dict(os.environ, {"WS_PING_INTERVAL_MS": "0"}, clear=False):
-             adapter = ChatV2Adapter(engine=engine)
-             harness_a = AdapterHarness(adapter, engine, label="A")
-             harness_b = AdapterHarness(adapter, engine, label="B")
-             await harness_a.start()
-             await harness_b.start()
-             try:
-                 payload_a = {"type": "info", "label": "A"}
-                 payload_b = {"type": "info", "label": "B"}
-                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness_a.sid, "payload": payload_a})
-                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness_b.sid, "payload": payload_b})
-                 frame_a = await harness_a.wait_for_outbound(
-                     lambda item: item.get("type") == "info" and item.get("label") == "A"
+     def _make_close_cb(self, sid: str, state: _SessionState) -> Callable[[int | None, str | None], None]:
+         def _callback(_code: int | None, _reason: str | None) -> None:
+             stream_id = state.stream_id
+             if not stream_id:
+                 return
+             reason = state.close_reason
+             if reason is None:
+                 reason = "server_shutdown" if _code == 1001 else "error"
+             state.last_stream_id = stream_id
+             _log.info(
+                 "evt=asr_session_close sid=%s stream_id=%s reason=%s",
+                 sid,
+                 stream_id,
+                 reason,
+             )
+             if (
+                 not state.unavailable_emitted
+                 and (
+                     _code == 1011
+                     or (_reason and "net0001" in str(_reason).lower())
                  )
-                 frame_b = await harness_b.wait_for_outbound(
-                     lambda item: item.get("type") == "info" and item.get("label") == "B"
-                 )
-                 self.assertEqual(frame_a.get("label"), "A")
-                 self.assertEqual(frame_b.get("label"), "B")
-                 self.assertTrue(
-                     all(frame.get("label") != "B" for frame in harness_a.outbound_frames)
-                 )
-                 self.assertTrue(
