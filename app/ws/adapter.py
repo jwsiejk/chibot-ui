@@ -19,6 +19,9 @@ from app.logging_setup import current_sid
 from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
+from app.services.streaming_asr.speechmatics_client import (
+    SpeechmaticsClient,
+)
 from app.voice_v2 import (
     EVT_ASR_OPEN,
     EVT_ASR_READY,
@@ -332,6 +335,7 @@ class ChatV2Adapter:
         )
         self.tts_runtime = None
         self.asr_runtime = None
+        self._asr_runtime_vendor: Optional[str] = None
 
     @staticmethod
     def _turn_key(ctx: AdapterContext, req_id: Optional[str]) -> Optional[str]:
@@ -645,27 +649,73 @@ class ChatV2Adapter:
                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
                 )
 
+            had_active_contexts = bool(self._contexts)
             self._contexts[ctx.sid] = ctx
+            current_runtime = getattr(self, "asr_runtime", None)
+            current_vendor = getattr(self, "_asr_runtime_vendor", None)
+            if (
+                current_runtime is not None
+                and isinstance(ctx.asr_vendor, str)
+                and ctx.asr_vendor
+                and current_vendor
+                and ctx.asr_vendor != current_vendor
+                and not had_active_contexts
+            ):
+                self.asr_runtime = None
+                current_runtime = None
+                self._asr_runtime_vendor = None
+
             if getattr(self, "asr_runtime", None) is None:
                 try:
                     from app.voice_v2.asr_runtime import ASRRuntime
                     from app.services.streaming_asr.deepgram_client import DeepgramClient
 
                     engine = getattr(self, "engine", None)
-                    api_key = getattr(config, "DEEPGRAM_API_KEY", "")
-                    if engine is not None and api_key:
-                        client = DeepgramClient(api_key=api_key)
+                    vendor = ctx.asr_vendor or ""
+                    client = None
+                    if engine is not None and vendor:
+                        if vendor == "speechmatics":
+                            sm_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", False)
+                            sm_key = getattr(config, "SPEECHMATICS_API_KEY", "")
+                            sm_url = getattr(config, "SPEECHMATICS_REALTIME_URL", "")
+                            if sm_enabled and sm_key and sm_url:
+                                client = SpeechmaticsClient(sm_key, sm_url, bus, _log)
+                            else:
+                                _log.warning(
+                                    "evt=ws_asr_runtime_unavailable sid=%s vendor=%s has_engine=%s has_api_key=%s has_url=%s",
+                                    ctx.sid,
+                                    vendor,
+                                    bool(engine),
+                                    bool(sm_key),
+                                    bool(sm_url),
+                                )
+                        else:
+                            dg_enabled = getattr(config, "ASR_DEEPGRAM_ENABLED", True)
+                            api_key = getattr(config, "DEEPGRAM_API_KEY", "")
+                            if dg_enabled and api_key:
+                                client = DeepgramClient(api_key=api_key)
+                            else:
+                                _log.warning(
+                                    "evt=ws_asr_runtime_unavailable sid=%s vendor=%s has_engine=%s has_api_key=%s",
+                                    ctx.sid,
+                                    vendor or "",
+                                    bool(engine),
+                                    bool(api_key),
+                                )
+
+                    if engine is not None and client is not None:
                         self.asr_runtime = ASRRuntime(
                             engine=engine,
                             client=client,
                             telemetry_bus=bus,
                         )
-                    else:
+                        self._asr_runtime_vendor = vendor or None
+                    elif engine is None:
                         _log.warning(
-                            "evt=ws_asr_runtime_unavailable sid=%s has_engine=%s has_api_key=%s",
+                            "evt=ws_asr_runtime_unavailable sid=%s has_engine=%s vendor=%s",
                             ctx.sid,
                             bool(engine),
-                            bool(api_key),
+                            vendor or "",
                         )
                 except Exception:  # pragma: no cover - defensive logging
                     _log.exception("evt=ws_asr_runtime_attach_failed sid=%s", ctx.sid)
@@ -2998,7 +3048,7 @@ class ChatV2Adapter:
 
         if log_selection:
             _log.info(
-                "evt=asr_vendor_selected sid=%s primary=%s allowed=%s reason=%s",
+                "asr_vendor_selected sid=%s primary=%s allowed=%s reason=%s",
                 ctx.sid,
                 selected or "",
                 allowed,
