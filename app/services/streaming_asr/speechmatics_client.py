@@ -189,7 +189,7 @@ class SpeechmaticsClient:
         vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
 
         start_payload = {
-            "type": "start",
+            "message": "StartRecognition",
             "transcription_config": {
                 "language": language,
                 "enable_partials": True,
@@ -197,8 +197,7 @@ class SpeechmaticsClient:
             "audio_format": {
                 "type": "raw",
                 "encoding": "pcm_s16le",
-                "sample_rate": sample_rate,
-                "channels": 1,
+                "sample_rate": sample_rate
             },
         }
         await websocket.send(json.dumps(start_payload))
@@ -479,7 +478,9 @@ class SpeechmaticsClient:
 
     async def _shutdown(self, state: _StreamState) -> None:
         try:
-            await state.websocket.send(json.dumps({"type": "stop"}))
+            # If you don’t track seq numbers yet, just close the socket cleanly:
+            await state.websocket.close()
+            # (Optional later: {"message":"EndOfStream","last_seq_no": N})
         except Exception:
             self._logger.debug(
                 "evt=sm_stop_send_failed sid=%s stream_id=%s", state.sid, state.stream_id
