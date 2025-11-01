@@ -1963,7 +1963,7 @@ import { WakeWord } from "./wake_word.js";
     }
   }
 
-  function handleMessageFrame(frame) {
+  async function handleMessageFrame(frame) {
     if (frame.type === "keepalive") {
       // Some transports may emit a keepalive frame before the info frame has
       // been sent. Treat it as a no-op and continue waiting for the info
@@ -2085,9 +2085,10 @@ import { WakeWord } from "./wake_word.js";
         }
         logMic({ outcome: MIC_OUTCOME.ARMED });
       } catch {}
+      const hasAudioRecorder = typeof window !== "undefined" && !!window.AudioRecorder;
       try {
-        const audioRecorder = typeof window !== "undefined" ? window.AudioRecorder || null : null;
-        if (audioRecorder && typeof audioRecorder.setPolicy === "function") {
+        const audioRecorder = hasAudioRecorder ? window.AudioRecorder : null;
+        if (audioRecorder?.setPolicy) {
           audioRecorder.setPolicy(frame?.policy || {});
         }
         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
@@ -2099,11 +2100,15 @@ import { WakeWord } from "./wake_word.js";
           pipeline,
           asrInput,
         );
-        if (audioRecorder && typeof audioRecorder.startListening === "function") {
-          audioRecorder.startListening(frame?.policy || {});
+        if (audioRecorder?.startListening) {
+          await audioRecorder.startListening(frame?.policy || {});
         }
       } catch (err) {
         console.warn("AudioRecorder start_listening preflight failed", err);
+      }
+      if (hasAudioRecorder) {
+        dispatchFrame(frame);
+        return;
       }
       try {
         const hub = AppState?.hub;
@@ -2210,7 +2215,7 @@ import { WakeWord } from "./wake_word.js";
     dispatchFrame(frame);
   }
 
-  function parseFrame(event) {
+  async function parseFrame(event) {
     const { data } = event;
     if (typeof data === "string") {
       try {
@@ -2219,7 +2224,7 @@ import { WakeWord } from "./wake_word.js";
           send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
           return;
         }
-        handleMessageFrame(frame);
+        await handleMessageFrame(frame);
       } catch (err) {
         console.error("Failed to parse WS frame", err, data);
       }
@@ -2607,7 +2612,7 @@ import { WakeWord } from "./wake_word.js";
 
   const debug = {
     simulateIncomingFrame(frame) {
-      handleMessageFrame(frame);
+      return handleMessageFrame(frame);
     },
     recordPing(ts) {
       lastPingAt = ts;

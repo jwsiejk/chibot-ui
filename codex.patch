@@ -1,122 +1,320 @@
-diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 1c921d36e0ab83c0080756b4137e795832e2cf23..f8d9840c5e8b917af2720ce1c621f6304a6439e3 100644
---- a/app/services/streaming_asr/speechmatics_client.py
-+++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -167,60 +167,59 @@ class SpeechmaticsClient:
-         if not isinstance(sid, str) or not sid:
-             raise ValueError("sid must be a non-empty string")
-         if not isinstance(stream_id, str) or not stream_id:
-             raise ValueError("stream_id must be a non-empty string")
-         if sid in self._streams:
-             raise RuntimeError(f"stream for sid {sid!r} already exists")
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index e47fc75eb4ad16e1ebfc94872a49e3c189be46fb..cac546779e7a94abe32d5511dca445494092d60b 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -863,59 +863,54 @@ import { WakeWord } from "./wake_word.js";
+       if (nextActive && !this._micOpenEmitted) {
+         this._micOpenEmitted = true;
+         const vendorLabel = this._usePCM ? "pcm16" : "webm_opus";
+         emitEvent(CLIENT_MIC_OPEN_EVENT, {
+           type: CLIENT_MIC_OPEN_EVENT,
+           ts: Date.now(),
+           vendor: vendorLabel
+         });
+       }
+     }
  
-         language = _coerce_language(policy)
+     async start(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return this._stream;
+     }
  
-         headers = {"Authorization": f"Bearer {self._api_key}"}
-         connect_kwargs = {
-             _CONNECT_HEADERS_ARG: headers,
-             "max_size": None,
-             "ping_interval": 20,
-             "ping_timeout": 10,
+     async startMicCaptureIfIdle(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return true;
+     }
+ 
+     async startListening(policy = {}) {
+       this.setPolicy(policy);
+-      if (this._usePCM) {
+-        console.info("diag=recorder_mode mode=pcm16 sr=16000 ch=1 frame_ms≈50");
+-      } else {
+-        console.info("diag=recorder_mode mode=opus-webm");
+-      }
++      console.info("diag=recorder_mode mode=%s", this._usePCM ? "pcm16" : "opus-webm");
+       await this._ensureArmed();
+-      if (!this._usePCM) {
+-        this._sendAudioHeader();
+-      }
++      // Always send header now; _sendAudioHeader chooses pcm or opus by _usePCM
++      this._sendAudioHeader();
+       if (!this._sendGate) {
+         this._sendGate = true;
+         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
+         console.info("diag=send_gate_open reason=%s", reason);
+         this._updateRecorderState(true, reason);
+       }
+       this._setSendMuted(false, "start_listening");
+       return true;
+     }
+ 
+     stopListening(opts = {}) {
+       const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
+       if (this._sendGate) {
+         console.info("diag=send_gate_closed reason=%s", reason);
+       }
+       this._sendGate = false;
+       this._updateRecorderState(false, reason);
+       this._micOpenEmitted = false;
+       this._setSendMuted(false, reason);
+       this._headerSent = false;
+       if (this._usePCM) {
+         this._resetPcmState();
+       }
+     }
+ 
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 15d553ed97c2fdbffc2d1977c72379404e9875d0..6882f3b6ea20fdbe982177d353be7edf82a7ac7a 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1941,51 +1941,51 @@ import { WakeWord } from "./wake_word.js";
+     }
+     if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+       try {
+         window.WSErrorUI.handleFrame(frame, {
+           scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
+         });
+       } catch (err) {
+         console.warn("Error handler threw", err);
+       }
+     }
+     try {
+       const reason = typeof frame?.detail === "string" && frame.detail
+         ? frame.detail
+         : (typeof frame?.message === "string" ? frame.message : null);
+       logStage('client.ws', {
+         outcome: 'auth_fail',
+         code: typeof frame?.code === 'string' ? frame.code : null,
+         reason: reason || null,
+       });
+     } catch {}
+     if (isResumeInvalid) {
+       close("resume_invalid");
+     }
+   }
+ 
+-  function handleMessageFrame(frame) {
++  async function handleMessageFrame(frame) {
+     if (frame.type === "keepalive") {
+       // Some transports may emit a keepalive frame before the info frame has
+       // been sent. Treat it as a no-op and continue waiting for the info
+       // frame so we do not close the connection prematurely.
+       return;
+     }
+ 
+     if (frame.type === "server.ping") {
+       const response = { type: "client.pong", ts: Date.now() };
+       if (typeof frame.ts === "number") {
+         response.echo = frame.ts;
+       }
+       sendJson(response);
+       return;
+     }
+ 
+     if (frame.type === "ping") {
+       sendJson({ type: "pong", t: Date.now() });
+       return;
+     }
+ 
+     if (frame.type === "config.updated" || frame.type === "config_updated") {
+       const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
+       const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
+       const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
+@@ -2063,70 +2063,75 @@ import { WakeWord } from "./wake_word.js";
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+       logStage('client.tts', { outcome: 'ended', utt_id: frame?.utt_id || 'utt-00001', dur_ms: frame?.dur_ms });
+     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
+       const uttId = frame?.utt_id || 'utt-00001';
+       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
+       logStage('client.tts', {
+         outcome: 'ended',
+         utt_id: uttId,
+         dur_ms: frame?.dur_ms,
+         reason,
+       });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
+     } else if (frame.type === "start_listening") {
+       try {
+         __micAttempts += 1;
+         __micChunks = 0;
+         __micBytes = 0;
+         __micArmedAt = Date.now();
+         if (!__turnTraceId) {
+           __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
          }
-         try:
-             websocket = await websockets.connect(self._url, **connect_kwargs)
-         except Exception as exc:
-             self._logger.exception("evt=sm_connect_failed sid=%s err=%s", sid, exc)
-             raise
- 
-         vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
- 
-         start_payload = {
--            "type": "start",
-+            "message": "StartRecognition",
-             "transcription_config": {
-                 "language": language,
-                 "enable_partials": True,
-             },
-             "audio_format": {
-                 "type": "raw",
-                 "encoding": "pcm_s16le",
--                "sample_rate": sample_rate,
--                "channels": 1,
-+                "sample_rate": sample_rate
-             },
+         logMic({ outcome: MIC_OUTCOME.ARMED });
+       } catch {}
++      const hasAudioRecorder = typeof window !== "undefined" && !!window.AudioRecorder;
+       try {
+-        const audioRecorder = typeof window !== "undefined" ? window.AudioRecorder || null : null;
+-        if (audioRecorder && typeof audioRecorder.setPolicy === "function") {
++        const audioRecorder = hasAudioRecorder ? window.AudioRecorder : null;
++        if (audioRecorder?.setPolicy) {
+           audioRecorder.setPolicy(frame?.policy || {});
          }
-         await websocket.send(json.dumps(start_payload))
+         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
+         const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
+         const asrInput = frame?.policy?.media?.asr_input ?? null;
+         console.info(
+           "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
+           vendor,
+           pipeline,
+           asrInput,
+         );
+-        if (audioRecorder && typeof audioRecorder.startListening === "function") {
+-          audioRecorder.startListening(frame?.policy || {});
++        if (audioRecorder?.startListening) {
++          await audioRecorder.startListening(frame?.policy || {});
+         }
+       } catch (err) {
+         console.warn("AudioRecorder start_listening preflight failed", err);
+       }
++      if (hasAudioRecorder) {
++        dispatchFrame(frame);
++        return;
++      }
+       try {
+         const hub = AppState?.hub;
+         const maybePromise = hub && typeof hub.startListening === "function"
+           ? hub.startListening(frame?.policy || {})
+           : null;
+         if (!hub || typeof hub.startListening !== "function") {
+           startInputCapture(frame);
+           return;
+         }
+         if (maybePromise && typeof maybePromise.then === "function") {
+           maybePromise.catch((err) => {
+             const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+             logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+           });
+         }
+       } catch (err) {
+         console.warn("Hub start_listening handler error", err);
+         const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+         logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+       }
+     } else if (frame.type === "stop_listening") {
+       try {
+         const hub = AppState?.hub;
+         if (hub && typeof hub.stopListening === "function") {
+           hub.stopListening("server_requested");
+@@ -2188,60 +2193,60 @@ import { WakeWord } from "./wake_word.js";
+         console.warn("Failed to render Chip system message after asr.unavailable", err);
+       }
+       try {
+         window?.Banner?.show?.(
+           "Voice temporarily unavailable. You can continue via chat.",
+           { level: "warning", ttlMs: 10000 }
+         );
+       } catch (err) {
+         console.warn("Failed to show voice unavailable banner", err);
+       }
+     } else if (frame.type === "chat.message") {
+       const view = window.TranscriptView;
+       if (view && typeof view.handleChatMessage === "function") {
+         try {
+           view.handleChatMessage(frame);
+         } catch (err) {
+           console.warn("TranscriptView chat handler error", err);
+         }
+       }
+     } else if (frame.type === "chat.history") {
+       handleChatHistoryFrame(frame);
+     }
+     dispatchFrame(frame);
+   }
  
-         self._logger.info(
-             "sm_ws_open encoding=%s sr=%d ch=1 interim=true lang=%s",
-             encoding,
-             sample_rate,
-             language,
-         )
+-  function parseFrame(event) {
++  async function parseFrame(event) {
+     const { data } = event;
+     if (typeof data === "string") {
+       try {
+         const frame = JSON.parse(data);
+         if (frame && frame.type === "server.ping") {
+           send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
+           return;
+         }
+-        handleMessageFrame(frame);
++        await handleMessageFrame(frame);
+       } catch (err) {
+         console.error("Failed to parse WS frame", err, data);
+       }
+       return;
+     }
+     if (data instanceof Blob) {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(data);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+       return;
+     }
+     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+       const chunk = data instanceof ArrayBuffer
+         ? data
+         : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(chunk);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
+       return;
+     }
+     console.warn("Unknown WS frame type", data);
+@@ -2585,51 +2590,51 @@ import { WakeWord } from "./wake_word.js";
+           ? payload
+           : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+         try {
+           live.send(buffer);
+         } catch (err) {
+           console.error("WSClient binary send error", err);
+         }
+         return;
+       }
+     }
+     const text = typeof payload === "string" ? payload : JSON.stringify(payload);
+     try {
+       live.send(text);
+     } catch (err) {
+       console.error("WSClient send error", err);
+     }
+   }
  
-         state = _StreamState(
-             sid=sid,
-             stream_id=vendor_stream_id,
-             websocket=websocket,
-             on_partial=on_partial,
-             on_final=on_final,
-             on_error=on_error,
-             on_close=on_close,
-             language=language,
-             encoding=encoding,
-             sample_rate=sample_rate,
-             loop=asyncio.get_running_loop(),
-         )
-         state.sender_task = state.loop.create_task(self._sender_loop(state), name=f"sm-send-{sid}")
-@@ -457,51 +456,53 @@ class SpeechmaticsClient:
+   function getBufferedAmount() {
+     if (!socket) return 0;
+     return socket.bufferedAmount || 0;
+   }
  
-     def _handle_error(self, state: _StreamState, code: str, reason: str) -> None:
-         if not state.ready_event.is_set():
-             state.ready_error = code
-             state.ready_error_detail = reason
-             state.ready_event.set()
-         self._logger.error(
-             "asr_error vendor=speechmatics code=%s reason=%s",
-             code,
-             reason,
-         )
-         try:
-             _invoke_callback(state.on_error, code, reason)
-         except Exception:
-             self._logger.exception("evt=sm_error_callback_failed sid=%s", state.sid)
-         if not state.closing:
-             state.closing = True
-             try:
-                 state.audio_queue.put_nowait(_AUDIO_SENTINEL)
-             except Exception:
-                 pass
-             state.loop.create_task(self._shutdown(state))
+   const debug = {
+     simulateIncomingFrame(frame) {
+-      handleMessageFrame(frame);
++      return handleMessageFrame(frame);
+     },
+     recordPing(ts) {
+       lastPingAt = ts;
+       updateState({ lastPingAt: ts });
+     },
+     setTransportFactory(factory) {
+       transportFactory = typeof factory === "function" ? factory : transportFactory;
+     },
+     resetTransportFactory() {
+       transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+     }
+   };
  
-     async def _shutdown(self, state: _StreamState) -> None:
-         try:
--            await state.websocket.send(json.dumps({"type": "stop"}))
-+            # If you don’t track seq numbers yet, just close the socket cleanly:
-+            await state.websocket.close()
-+            # (Optional later: {"message":"EndOfStream","last_seq_no": N})
-         except Exception:
-             self._logger.debug(
-                 "evt=sm_stop_send_failed sid=%s stream_id=%s", state.sid, state.stream_id
-             )
-         await self._close_websocket(state)
-         await self._finalize_close(state, None, None)
- 
-     async def _close_websocket(self, state: _StreamState) -> None:
-         try:
-             await state.websocket.close()
-         except Exception:
-             self._logger.debug(
-                 "evt=sm_ws_close_failed sid=%s stream_id=%s", state.sid, state.stream_id
-             )
- 
-     async def _finalize_close(
-         self, state: _StreamState, code: int | None, reason: str | None
-     ) -> None:
-         if state.closed:
-             return
-         state.closed = True
-         if not state.ready_event.is_set():
-             state.ready_error = state.ready_error or "connection_closed"
-             state.ready_error_detail = state.ready_error_detail or (reason or "")
-             state.ready_event.set()
+   WSClient.open = open;
+   WSClient.close = close;
+   WSClient.send = send;
+   WSClient.sendBinary = sendBinary;
+   WSClient.getBufferedAmount = getBufferedAmount;
+   Object.defineProperty(WSClient, "socket", {
+     configurable: true,
+     enumerable: true,
+     get() {
+       return socket;
+     }
+   });
