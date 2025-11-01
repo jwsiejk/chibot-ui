@@ -84,12 +84,35 @@ import { WakeWord } from "./wake_word.js";
     }
 
     setPolicy(policy) {
+      const previousUsePCM = this._usePCM;
       if (policy && typeof policy === "object") {
         this._policy = policy;
       } else {
         this._policy = {};
       }
       this._usePCM = this._resolveUsePCM();
+      if (this._usePCM && !previousUsePCM && this._rec) {
+        try {
+          if (this._rec.state !== "inactive") {
+            this._rec.stop();
+          }
+        } catch (err) {
+          console.warn("AudioRecorder policy switch stop failed", err);
+        }
+        this._rec = null;
+        this._headerSent = false;
+        const globalWindow = typeof window !== "undefined" ? window : null;
+        if (globalWindow) {
+          try {
+            if (typeof globalWindow.__micChunks === "number") {
+              globalWindow.__micChunks = 0;
+            }
+            if (typeof globalWindow.__micBytes === "number") {
+              globalWindow.__micBytes = 0;
+            }
+          } catch {}
+        }
+      }
     }
 
     get policy() {
@@ -704,6 +727,9 @@ import { WakeWord } from "./wake_word.js";
         const logStage = typeof window !== "undefined" ? window.__logStage : null;
         logStage?.('client.audio', { outcome: 'encoder_ready', format: 'webm_opus', sr: 48000, channels: 1 });
         this._rec.addEventListener("dataavailable", async (event) => {
+          if (this._usePCM) {
+            return;
+          }
           if (!event?.data || event.data.size === 0) {
             return;
           }
