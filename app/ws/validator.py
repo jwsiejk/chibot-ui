@@ -104,11 +104,27 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
 
 
 def validate_audio_header_against_policy(
-    header: Dict[str, Any], policy: Policy | Mapping[str, Any] | None
+    header: Dict[str, Any],
+    policy: Policy | Mapping[str, Any] | None,
+    vendor: Optional[str] = None,
 ) -> Optional[str]:
     fmt = header.get("format")
     rate = header.get("sample_rate")
     channels = header.get("channels")
+
+    if vendor == "speechmatics":
+        if fmt != "pcm" or rate != 16000 or channels != 1:
+            _logger.warning(
+                "audio.header_rejected reason=vendor_requires_pcm got_format=%s got_sr=%s got_ch=%s",
+                fmt,
+                rate,
+                channels,
+            )
+            _emit_validator_log(
+                "WARNING",
+                "audio.header_rejected reason=vendor_requires_pcm vendor=speechmatics",
+            )
+            return "speechmatics requires pcm@16k mono"
 
     if policy is None:
         return None

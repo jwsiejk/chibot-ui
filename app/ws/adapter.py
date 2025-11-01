@@ -310,6 +310,7 @@ class AdapterContext:
     asr_vendor: Optional[str] = None
     audio_pipeline_mode: Optional[str] = None
     asr_vendor_logged: bool = False
+    session_capture_policy: Optional[Dict[str, Any]] = None
 
 
 class ChatV2Adapter:
@@ -621,9 +622,6 @@ class ChatV2Adapter:
             allowed_asr_vendors,
             log_selection=False,
         )
-        policy_snapshot = self._apply_vendor_audio_overrides(
-            policy_snapshot, selected_vendor
-        )
         if policy_snapshot:
             self._log_policy_flags(sid, policy_snapshot)
             info_frame["policy"] = policy_snapshot
@@ -661,6 +659,8 @@ class ChatV2Adapter:
         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
         if ctx.asr_vendor == "speechmatics":
             ctx.audio_pipeline_mode = "pcm16"
+        mode = ctx.audio_pipeline_mode or "opus-webm"
+        ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
 
         token = current_sid.set(ctx.sid)
         try:
@@ -1126,7 +1126,9 @@ class ChatV2Adapter:
                     "duplicate or conflicting audio.header",
                 )
                 return self._HandleResult(True)
-            err = validate_audio_header_against_policy(frame, ctx.policy_snapshot)
+            err = validate_audio_header_against_policy(
+                frame, ctx.policy_snapshot, ctx.asr_vendor
+            )
             if err:
                 meta["error"] = "policy_violation"
                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
@@ -1483,6 +1485,32 @@ class ChatV2Adapter:
                     _log.warning(
                         "evt=ws_asr_audio_forward_failed sid=%s", ctx.sid, exc_info=True
                     )
+
+        if (
+            ctx.asr_vendor == "speechmatics"
+            and ctx.audio_chunks_recv == 0
+            and data.startswith(b"\x1A\x45\xDF\xA3")
+        ):
+            meta = {
+                "byte_count": byte_count,
+                "error": "unexpected_container",
+                "ws": {"dir": "in", "size": byte_count},
+            }
+            await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+            detail = "speechmatics requires raw pcm audio"
+            await self._send_error(send, ctx.sid, "audio_container_mismatch", detail)
+            self._emit_session_step(
+                ctx.sid,
+                "audio.stream_closed",
+                summary="Closed audio stream due to unexpected container",
+                meta={"reason": "unexpected_container", "vendor": "speechmatics"},
+                source="ws.audio",
+            )
+            _log.error(
+                "asr_stream_closed reason=unexpected_container vendor=speechmatics sid=%s",
+                ctx.sid,
+            )
+            return self._HandleResult(False, 1003, "unexpected_container")
 
         if ctx.audio_highest_seq < 0:
             ctx.audio_expected_seq = ctx.audio_seq
@@ -1885,25 +1913,21 @@ class ChatV2Adapter:
                 )
                 return
 
+            mode = ctx.audio_pipeline_mode or "opus-webm"
+            descriptor = dict(self._input_descriptor_for_mode(mode))
+            timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
             ready_frame = {
                 "type": "asr.ready",
-                "input": {
-                    "container": "webm",
-                    "codec": "opus",
-                    "rate_hz": 48000,
-                    "channels": 1,
-                    "mime": "audio/webm;codecs=opus",
-                },
+                "input": dict(descriptor),
             }
+            if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
+                ready_frame["vendor"] = ctx.asr_vendor
+            capture = dict(descriptor)
+            capture["timeslice_ms"] = timeslice_ms
+            capture["manual_gate"] = False
             input_start = {
                 "type": "input.start",
-                "capture": {
-                    "container": "webm",
-                    "codec": "opus",
-                    "mime": "audio/webm;codecs=opus",
-                    "timeslice_ms": 250,
-                    "manual_gate": False,
-                },
+                "capture": capture,
             }
 
             _enqueue(ready_frame)
@@ -1912,7 +1936,10 @@ class ChatV2Adapter:
             ctx.ingress_bytes = 0
             ctx.first_ingress_ms = None
             ctx.mic_armed_ms = int(time.time() * 1000)
-            _enqueue({"type": "start_listening"})
+            start_payload: Dict[str, Any] = {"type": "start_listening"}
+            if ctx.session_capture_policy:
+                start_payload["policy"] = ctx.session_capture_policy
+            _enqueue(start_payload)
 
             if key is not None:
                 ctx.listen_handoff_done.add(key)
@@ -1930,9 +1957,11 @@ class ChatV2Adapter:
             self._emit_hud_state(ctx, "Listening")
             self._schedule_mic_open_guard(ctx, loop)
             _log.info(
-                "evt=listen_handoff_ready sid=%s req_id=%s input=webm/opus rate=48000 ch=1",
+                "evt=listen_handoff_ready sid=%s req_id=%s input.mode=%s input.mime=%s",
                 ctx.sid,
                 req_id,
+                descriptor.get("mode", ""),
+                descriptor.get("mime", ""),
             )
 
         def _schedule_listen_handoff(trigger_req_id: Optional[str]) -> None:
@@ -2305,6 +2334,8 @@ class ChatV2Adapter:
                 )
                 if ctx.asr_vendor == "speechmatics":
                     ctx.audio_pipeline_mode = "pcm16"
+                mode = ctx.audio_pipeline_mode or "opus-webm"
+                ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
         return normalized
 
     @staticmethod
@@ -3105,47 +3136,10 @@ class ChatV2Adapter:
         return "opus-webm"
 
     @staticmethod
-    def _apply_vendor_audio_overrides(
-        snapshot: Mapping[str, Any] | None, vendor: Optional[str]
-    ) -> Mapping[str, Any] | None:
-        if not isinstance(snapshot, Mapping):
-            return snapshot
-        if vendor != "speechmatics":
-            return snapshot
-
-        updated: Dict[str, Any] = dict(snapshot)
-
-        media_block = snapshot.get("media")
-        media: Dict[str, Any]
-        if isinstance(media_block, Mapping):
-            media = dict(media_block)
-        else:
-            media = {}
-        media.setdefault("asr_rate_hz", 16000)
-        media.setdefault("asr_channels", 1)
-        media["asr_input"] = "pcm_16k"
-        updated["media"] = media
-
-        audio_block = snapshot.get("audio")
-        if isinstance(audio_block, Mapping):
-            audio = dict(audio_block)
-        else:
-            audio = {}
-        pipeline_block = audio.get("pipeline")
-        if isinstance(pipeline_block, Mapping):
-            pipeline = dict(pipeline_block)
-        else:
-            pipeline = {}
-        pipeline["mode"] = "pcm16"
-        audio["pipeline"] = pipeline
-        updated["audio"] = audio
-
-        return updated
-
-    @staticmethod
     def _input_descriptor_for_mode(mode: str) -> Dict[str, Any]:
         if mode == "pcm16":
             return {
+                "mode": "pcm16",
                 "container": "raw",
                 "codec": "pcm_s16le",
                 "rate_hz": 16000,
@@ -3153,12 +3147,69 @@ class ChatV2Adapter:
                 "mime": "audio/raw;rate=16000;channels=1;format=s16le",
             }
         return {
+            "mode": "opus-webm",
             "container": "webm",
             "codec": "opus",
             "rate_hz": 48000,
             "channels": 1,
             "mime": "audio/webm;codecs=opus",
         }
+
+    @staticmethod
+    def _session_capture_policy_for_mode(mode: str) -> Dict[str, Any]:
+        if mode == "pcm16":
+            return {
+                "media": {
+                    "asr_input": "pcm_16k",
+                    "asr_rate_hz": 16000,
+                    "asr_channels": 1,
+                },
+                "capture": {
+                    "asr_input": "pcm_16k",
+                    "sample_rate": 16000,
+                    "channels": 1,
+                    "timeslice_ms": 50,
+                },
+                "audio": {"pipeline": {"mode": "pcm16"}},
+            }
+        return {
+            "media": {
+                "asr_input": "webm_opus",
+                "asr_rate_hz": 48000,
+                "asr_channels": 1,
+            },
+            "capture": {
+                "asr_input": "webm_opus",
+                "sample_rate": 48000,
+                "channels": 1,
+                "timeslice_ms": 250,
+            },
+            "audio": {"pipeline": {"mode": "opus-webm"}},
+        }
+
+    def _resolve_capture_timeslice(self, ctx: AdapterContext, mode: str) -> int:
+        candidates: List[Mapping[str, Any]] = []
+        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+        if isinstance(snapshot, Mapping):
+            capture_block = snapshot.get("capture")
+            if isinstance(capture_block, Mapping):
+                candidates.append(capture_block)
+        session_policy = ctx.session_capture_policy
+        if isinstance(session_policy, Mapping):
+            capture_policy = session_policy.get("capture")
+            if isinstance(capture_policy, Mapping):
+                candidates.append(capture_policy)
+
+        for candidate in candidates:
+            raw_value = candidate.get("timeslice_ms")
+            try:
+                parsed = int(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                return parsed
+
+        return 50 if mode == "pcm16" else 250
 
     def _log_policy_flags(self, sid: str, snapshot: Mapping[str, Any]) -> None:
         if not isinstance(snapshot, Mapping):
@@ -3282,39 +3333,27 @@ class ChatV2Adapter:
         send: Callable[[dict], Awaitable[None]],
         ctx: AdapterContext,
     ) -> None:
-        capture_block: Mapping[str, Any] | None = None
-        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
-        capture_candidate = snapshot.get("capture") if isinstance(snapshot, Mapping) else None
-        if isinstance(capture_candidate, Mapping):
-            capture_block = capture_candidate
-
-        timeslice_ms = 250
-        if capture_block is not None:
-            candidate_timeslice = capture_block.get("timeslice_ms")
-            try:
-                parsed = int(candidate_timeslice)
-            except (TypeError, ValueError):
-                parsed = timeslice_ms
-            if parsed > 0:
-                timeslice_ms = parsed
-
         mode = ctx.audio_pipeline_mode or "opus-webm"
-        descriptor = self._input_descriptor_for_mode(mode)
+        descriptor = dict(self._input_descriptor_for_mode(mode))
+        timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
         ready_frame = {
             "type": "asr.ready",
             "input": dict(descriptor),
         }
         if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
             ready_frame["vendor"] = ctx.asr_vendor
+        capture = dict(descriptor)
+        capture["timeslice_ms"] = timeslice_ms
+        capture["manual_gate"] = False
         input_start = {
             "type": "input.start",
-            "capture": {
-                **dict(descriptor),
-                "mode": mode,
-                "timeslice_ms": timeslice_ms,
-                "manual_gate": False,
-            },
+            "capture": capture,
         }
+
+        start_payload: Dict[str, Any] = {"type": "start_listening"}
+        session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+        if session_policy:
+            start_payload["policy"] = session_policy
 
         now_ms = int(time.time() * 1000)
         ctx.asr_ready = True
@@ -3325,7 +3364,7 @@ class ChatV2Adapter:
 
         await self._send_json(send, ctx.sid, ready_frame)
         await self._send_json(send, ctx.sid, input_start)
-        await self._send_json(send, ctx.sid, {"type": "start_listening"})
+        await self._send_json(send, ctx.sid, start_payload)
         _log.info(
             "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
             ctx.sid,
