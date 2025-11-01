@@ -7,8 +7,8 @@
 
   const API_ENDPOINT = '/api/v1/admin/settings';
   const ASR_VENDOR_OPTIONS = [
-    { value: 'deepgram', label: 'Deepgram' },
     { value: 'speechmatics', label: 'Speechmatics' },
+    { value: 'deepgram', label: 'Deepgram' },
   ];
 
   const ASR_VENDOR_SECONDARY_OPTIONS = [
@@ -18,7 +18,7 @@
 
   const AUDIO_PIPELINE_OPTIONS = [
     { value: 'opus-webm', label: 'Opus + WebM (default)' },
-    { value: 'pcm16', label: 'PCM16 (beta)' },
+    { value: 'pcm16', label: 'PCM 16 kHz' },
   ];
 
   const DEFAULTS = {
@@ -121,7 +121,7 @@
       description: 'Choose the microphone stream format sent to the ASR vendor.',
       options: [
         { value: 'webm_opus', label: 'WebM + Opus (default)' },
-        { value: 'pcm_16k', label: 'PCM 16 kHz (future)', disabled: true },
+        { value: 'pcm_16k', label: 'PCM 16 kHz' },
       ],
     },
     {
@@ -260,7 +260,7 @@
       settingKey: 'policy_asr',
       propPath: ['vendor', 'primary'],
       type: 'select',
-      label: 'Primary ASR vendor',
+      label: 'ASR Vendor',
       description: 'Preferred speech recognition vendor for new sessions.',
       options: ASR_VENDOR_OPTIONS,
     },
@@ -754,6 +754,7 @@
       POLICY_RECORDER: sanitizePolicyRecorder(values.policy_recorder),
       POLICY_INPUT: sanitizePolicyInput(values.policy_input),
       POLICY_ASR: sanitizePolicyAsr(values.policy_asr),
+      POLICY_AUDIO: sanitizePolicyAudio(values.policy_audio),
       POLICY_ROUTING: sanitizePolicyRouting(values.policy_routing),
     });
   }
@@ -771,6 +772,7 @@
         key === 'policy_recorder' ||
         key === 'policy_input' ||
         key === 'policy_asr' ||
+        key === 'policy_audio' ||
         key === 'policy_routing'
       ) {
         next[key] = { ...sanitized };
@@ -800,6 +802,7 @@
       policy_recorder: cfg.POLICY_RECORDER,
       policy_input: cfg.POLICY_INPUT,
       policy_asr: cfg.POLICY_ASR,
+      policy_audio: cfg.POLICY_AUDIO,
       policy_routing: cfg.POLICY_ROUTING,
     });
   }
