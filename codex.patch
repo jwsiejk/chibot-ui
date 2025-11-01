@@ -1,23 +1,60 @@
 diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 972a2c140ce35dd436617a4a363dfe38b0a8f57a..4d25d50f145646f1b542d6ffdaa742face295281 100644
+index 4d25d50f145646f1b542d6ffdaa742face295281..2ebc171af1354c57d38adbeb8019a2725ceaa809 100644
 --- a/app/services/streaming_asr/speechmatics_client.py
 +++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -380,50 +380,53 @@ class SpeechmaticsClient:
-                     }
-                     try:
-                         self._bus.publish(event)
-                     except Exception:
-                         self._logger.exception(
-                             "evt=sm_bus_publish_failed sid=%s event=%s", state.sid, event_type
+@@ -346,74 +346,56 @@ class SpeechmaticsClient:
+                                 alternatives = first_result.get("alternatives")
+                                 alt_text = ""
+                                 if isinstance(alternatives, list) and alternatives:
+                                     first_alt = alternatives[0] if isinstance(alternatives[0], Mapping) else None
+                                     if isinstance(first_alt, Mapping):
+                                         candidate = first_alt.get("transcript")
+                                         if isinstance(candidate, str):
+                                             alt_text = candidate
+                                 if not alt_text:
+                                     candidate = first_result.get("transcript")
+                                     if isinstance(candidate, str):
+                                         alt_text = candidate
+                                 text = alt_text or text
+ 
+                     if not text.strip():
+                         self._logger.debug(
+                             "evt=sm_empty_transcript_ignored"
                          )
-                     else:
-                         log_event = "evt=sm_final" if is_final else "evt=sm_partial"
-                         self._logger.info("%s text_chars=%d", log_event, len(text))
+                         continue
+ 
+                     type_field = payload.get("type")
+                     is_final = bool(payload.get("is_final")) or bool(payload.get("final"))
+                     if isinstance(type_field, str) and type_field.lower() == "final":
+                         is_final = True
+ 
+-                    event_type = EVT_ASR_FINAL if is_final else EVT_ASR_PARTIAL
+-                    meta = {"text": text, "vendor": "speechmatics"}
+-                    event = {
+-                        "type": event_type,
+-                        "sid": state.sid,
+-                        "text": text,
+-                        "vendor": "speechmatics",
+-                        "meta": meta,
+-                        "source": "speechmatics_client",
+-                    }
+-                    try:
+-                        self._bus.publish(event)
+-                    except Exception:
+-                        self._logger.exception(
+-                            "evt=sm_bus_publish_failed sid=%s event=%s", state.sid, event_type
+-                        )
+-                    else:
+-                        log_event = "evt=sm_final" if is_final else "evt=sm_partial"
+-                        self._logger.info("%s text_chars=%d", log_event, len(text))
++                    self._emit_transcript_event(state, text, is_final)
  
                      if is_final:
-                         self._handle_final(state, payload)
+-                        self._handle_final(state, payload)
++                        self._handle_final(state, payload, text_override=text, emit_event=False)
                      else:
-                         self._handle_partial(state, payload)
+-                        self._handle_partial(state, payload)
++                        self._handle_partial(state, payload, text_override=text, emit_event=False)
                      continue
  
                  if isinstance(message_name, str) and message_name in {
@@ -28,9 +65,9 @@ index 972a2c140ce35dd436617a4a363dfe38b0a8f57a..4d25d50f145646f1b542d6ffdaa742fa
                      if message_name not in state.vendor_notices:
                          self._logger.info("evt=sm_notice message=%s", message_name.lower())
                          state.vendor_notices.add(message_name)
-+                    # Treat vendor notices as sufficient to consider the stream ready so
-+                    # that the sender loop can proceed with audio transmission.
-+                    self._mark_stream_ready(state, payload)
+                     # Treat vendor notices as sufficient to consider the stream ready so
+                     # that the sender loop can proceed with audio transmission.
+                     self._mark_stream_ready(state, payload)
                      continue
  
                  self._handle_payload(state, payload)
@@ -43,16 +80,173 @@ index 972a2c140ce35dd436617a4a363dfe38b0a8f57a..4d25d50f145646f1b542d6ffdaa742fa
              await self._finalize_close(state, exc.code, exc.reason)
          except Exception as exc:
              self._logger.exception(
-                 "evt=sm_recv_failed sid=%s stream_id=%s err=%s",
-                 state.sid,
-                 state.stream_id,
-                 exc,
-             )
-             self._handle_error(state, "recv_failed", str(exc))
-             await self._finalize_close(state, None, None)
-         finally:
-             await self._finalize_receiver(state)
- 
-     def _mark_stream_ready(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
-         if state.ready_event.is_set():
+@@ -442,119 +424,165 @@ class SpeechmaticsClient:
+             state.ready_error = str(code)
+             state.ready_error_detail = str(reason)
+             state.ready_event.set()
              return
+ 
+         if message_type and message_type not in {
+             "partial",
+             "partial_transcript",
+             "addpartialtranscript",
+             "final",
+             "transcript",
+             "addtranscript",
+             "endoftranscript",
+         }:
+             state.ready_event.set()
+             return
+ 
+         # Fallback: treat informational payloads with a message or status as ready.
+         message_value = payload.get("message") if isinstance(payload, Mapping) else None
+         status_value = payload.get("status") if isinstance(payload, Mapping) else None
+         if isinstance(message_value, str) and message_value:
+             state.ready_event.set()
+         elif isinstance(status_value, str) and status_value:
+             state.ready_event.set()
+ 
++    def _emit_transcript_event(
++        self, state: _StreamState, text: str, is_final: bool
++    ) -> None:
++        event_type = EVT_ASR_FINAL if is_final else EVT_ASR_PARTIAL
++        meta: Dict[str, Any] = {
++            "text": text,
++            "vendor": "speechmatics",
++        }
++        if state.stream_id:
++            meta["stream_id"] = state.stream_id
++        event = {
++            "type": event_type,
++            "sid": state.sid,
++            "text": text,
++            "vendor": "speechmatics",
++            "meta": meta,
++            "source": "speechmatics_client",
++        }
++        try:
++            self._bus.publish(event)
++        except Exception:
++            self._logger.exception(
++                "evt=sm_bus_publish_failed sid=%s event=%s", state.sid, event_type
++            )
++        else:
++            log_event = "evt=sm_final" if is_final else "evt=sm_partial"
++            self._logger.info("%s text_chars=%d", log_event, len(text))
++
+     def _handle_payload(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
+         self._mark_stream_ready(state, payload)
+         message_type_raw = None
+         if isinstance(payload, Mapping):
+             message_type_raw = payload.get("type") or payload.get("message")
+         message_type = str(message_type_raw).lower() if message_type_raw else ""
+ 
+         if message_type in {"partial", "partial_transcript", "addpartialtranscript"}:
+             self._handle_partial(state, payload)
+         elif message_type in {"final", "transcript", "addtranscript", "endoftranscript"}:
+             self._handle_final(state, payload)
+         elif message_type in {"error", "error_message"}:
+             code = str(payload.get("code") or payload.get("error_code") or "error")
+             reason = str(payload.get("reason") or payload.get("message") or "unknown")
+             self._handle_error(state, code, reason)
+         else:
+             # Treat unknown messages as potential partials/finals using heuristics.
+             text = _extract_text(payload)
+             if not text:
+                 return
+             if message_type:
+                 if "partial" in message_type:
+                     self._handle_partial(state, payload)
+                     return
+                 if "final" in message_type or "transcript" in message_type:
+                     self._handle_final(state, payload)
+                     return
+             # Default to partial.
+             self._handle_partial(state, payload)
+ 
+-    def _handle_partial(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
+-        text = _extract_text(payload)
++    def _handle_partial(
++        self,
++        state: _StreamState,
++        payload: Mapping[str, Any],
++        *,
++        text_override: str | None = None,
++        emit_event: bool = True,
++    ) -> None:
++        text = text_override if text_override else _extract_text(payload)
+         if not text:
+             return
+         state.partial_count += 1
+         ts_ms = _now_ms()
+         metadata = {"ts": ts_ms}
+         try:
+             _invoke_callback(state.on_partial, text, metadata)
+         except Exception:
+             self._logger.exception("evt=sm_partial_callback_failed sid=%s", state.sid)
+         now = time.monotonic()
+         if now - state.last_partial_log >= 0.5:
+             state.last_partial_log = now
+             latency = _latency_ms(state, now)
+             self._logger.info(
+                 "asr_partial vendor=speechmatics chars=%d latency_ms=%d",
+                 len(text),
+                 latency,
+             )
++        if emit_event:
++            self._emit_transcript_event(state, text, is_final=False)
+ 
+-    def _handle_final(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
+-        text = _extract_text(payload)
++    def _handle_final(
++        self,
++        state: _StreamState,
++        payload: Mapping[str, Any],
++        *,
++        text_override: str | None = None,
++        emit_event: bool = True,
++    ) -> None:
++        text = text_override if text_override else _extract_text(payload)
+         if not text:
+             return
+         state.final_count += 1
+         ts_ms = _now_ms()
+         metadata = {"ts": ts_ms}
+         try:
+             _invoke_callback(state.on_final, text, metadata)
+         except Exception:
+             self._logger.exception("evt=sm_final_callback_failed sid=%s", state.sid)
+         now = time.monotonic()
+         latency = _latency_ms(state, now)
+         self._logger.info(
+             "asr_final vendor=speechmatics chars=%d latency_ms=%d",
+             len(text),
+             latency,
+         )
++        if emit_event:
++            self._emit_transcript_event(state, text, is_final=True)
+ 
+     def _handle_error(self, state: _StreamState, code: str, reason: str) -> None:
+         if not state.ready_event.is_set():
+             state.ready_error = code
+             state.ready_error_detail = reason
+             state.ready_event.set()
+         self._logger.error(
+             "asr_error vendor=speechmatics code=%s reason=%s",
+             code,
+             reason,
+         )
+         try:
+             _invoke_callback(state.on_error, code, reason)
+         except Exception:
+             self._logger.exception("evt=sm_error_callback_failed sid=%s", state.sid)
+         if not state.closing:
+             state.closing = True
+             try:
+                 state.audio_queue.put_nowait(_AUDIO_SENTINEL)
+             except Exception:
+                 pass
+             state.loop.create_task(self._shutdown(state))
+ 
+     async def _shutdown(self, state: _StreamState) -> None:
+         try:

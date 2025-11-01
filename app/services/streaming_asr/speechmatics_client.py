@@ -368,30 +368,12 @@ class SpeechmaticsClient:
                     if isinstance(type_field, str) and type_field.lower() == "final":
                         is_final = True
 
-                    event_type = EVT_ASR_FINAL if is_final else EVT_ASR_PARTIAL
-                    meta = {"text": text, "vendor": "speechmatics"}
-                    event = {
-                        "type": event_type,
-                        "sid": state.sid,
-                        "text": text,
-                        "vendor": "speechmatics",
-                        "meta": meta,
-                        "source": "speechmatics_client",
-                    }
-                    try:
-                        self._bus.publish(event)
-                    except Exception:
-                        self._logger.exception(
-                            "evt=sm_bus_publish_failed sid=%s event=%s", state.sid, event_type
-                        )
-                    else:
-                        log_event = "evt=sm_final" if is_final else "evt=sm_partial"
-                        self._logger.info("%s text_chars=%d", log_event, len(text))
+                    self._emit_transcript_event(state, text, is_final)
 
                     if is_final:
-                        self._handle_final(state, payload)
+                        self._handle_final(state, payload, text_override=text, emit_event=False)
                     else:
-                        self._handle_partial(state, payload)
+                        self._handle_partial(state, payload, text_override=text, emit_event=False)
                     continue
 
                 if isinstance(message_name, str) and message_name in {
@@ -464,6 +446,34 @@ class SpeechmaticsClient:
         elif isinstance(status_value, str) and status_value:
             state.ready_event.set()
 
+    def _emit_transcript_event(
+        self, state: _StreamState, text: str, is_final: bool
+    ) -> None:
+        event_type = EVT_ASR_FINAL if is_final else EVT_ASR_PARTIAL
+        meta: Dict[str, Any] = {
+            "text": text,
+            "vendor": "speechmatics",
+        }
+        if state.stream_id:
+            meta["stream_id"] = state.stream_id
+        event = {
+            "type": event_type,
+            "sid": state.sid,
+            "text": text,
+            "vendor": "speechmatics",
+            "meta": meta,
+            "source": "speechmatics_client",
+        }
+        try:
+            self._bus.publish(event)
+        except Exception:
+            self._logger.exception(
+                "evt=sm_bus_publish_failed sid=%s event=%s", state.sid, event_type
+            )
+        else:
+            log_event = "evt=sm_final" if is_final else "evt=sm_partial"
+            self._logger.info("%s text_chars=%d", log_event, len(text))
+
     def _handle_payload(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
         self._mark_stream_ready(state, payload)
         message_type_raw = None
@@ -494,8 +504,15 @@ class SpeechmaticsClient:
             # Default to partial.
             self._handle_partial(state, payload)
 
-    def _handle_partial(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
-        text = _extract_text(payload)
+    def _handle_partial(
+        self,
+        state: _StreamState,
+        payload: Mapping[str, Any],
+        *,
+        text_override: str | None = None,
+        emit_event: bool = True,
+    ) -> None:
+        text = text_override if text_override else _extract_text(payload)
         if not text:
             return
         state.partial_count += 1
@@ -514,9 +531,18 @@ class SpeechmaticsClient:
                 len(text),
                 latency,
             )
+        if emit_event:
+            self._emit_transcript_event(state, text, is_final=False)
 
-    def _handle_final(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
-        text = _extract_text(payload)
+    def _handle_final(
+        self,
+        state: _StreamState,
+        payload: Mapping[str, Any],
+        *,
+        text_override: str | None = None,
+        emit_event: bool = True,
+    ) -> None:
+        text = text_override if text_override else _extract_text(payload)
         if not text:
             return
         state.final_count += 1
@@ -533,6 +559,8 @@ class SpeechmaticsClient:
             len(text),
             latency,
         )
+        if emit_event:
+            self._emit_transcript_event(state, text, is_final=True)
 
     def _handle_error(self, state: _StreamState, code: str, reason: str) -> None:
         if not state.ready_event.is_set():
