@@ -129,6 +129,7 @@ class _SessionState:
     ingress_bytes: int = 0
     first_ingress_ms: int = 0
     first_partial_logged: bool = False
+    last_partial_log: float = 0.0
     model: Optional[str] = None
     keep_warm_until: float = 0.0
     probe_active: bool = False
@@ -286,6 +287,7 @@ class ASRRuntime:
         state.ingress_bytes = 0
         state.first_ingress_ms = 0
         state.first_partial_logged = False
+        state.last_partial_log = 0.0
         state.probe_active = False
         state.probe_target_samples = 0
         state.probe_samples_collected = 0
@@ -562,6 +564,7 @@ class ASRRuntime:
         state.ingress_bytes = 0
         state.first_ingress_ms = 0
         state.first_partial_logged = False
+        state.last_partial_log = 0.0
         state.pending.clear()
         state.buffered_bytes = 0
         state.prearm_requested = True
@@ -588,6 +591,7 @@ class ASRRuntime:
         state.ingress_bytes = 0
         state.first_ingress_ms = 0
         state.first_partial_logged = False
+        state.last_partial_log = 0.0
         self._cancel_ready_watchdog(state)
         self._cancel_idle_timer(state)
 
@@ -655,21 +659,13 @@ class ASRRuntime:
             max(0.0, (time.monotonic() - state.opened_at_monotonic) * 1000)
         )
         msg = (
-            "evt=asr_rollup sid=%s stream_id=%s opened_at_ms=%d last_audio_ts_ms=%d "
-            "chunks_sent=%d bytes_sent=%d partials=%d finals=%d finals_delivered=%d "
-            "dropped=%d duration_ms=%d"
-        ) % (
-            state.sid,
-            stream_id,
-            state.opened_at_ms,
-            state.last_audio_ts_ms,
-            state.chunks_sent,
-            state.bytes_sent,
-            state.dg_msgs_partial,
-            state.dg_msgs_final,
-            state.finals_delivered,
-            state.dropped_chunks,
-            duration_ms,
+            "asr_rollup vendor=deepgram partials=%d finals=%d bytes=%d duration_ms=%d"
+            % (
+                state.dg_msgs_partial,
+                state.dg_msgs_final,
+                state.bytes_sent,
+                duration_ms,
+            )
         )
         _log.info(msg)
         if getattr(state, "ingress_packets", 0) >= 0:
@@ -1101,8 +1097,7 @@ class ASRRuntime:
         rms_avg = math.sqrt(state.probe_sum_squares / samples)
         rms_peak = state.probe_peak
         _log.info(
-            "asr_probe sid=%s rms_avg=%.6f rms_peak=%.6f sample_ms=%d",
-            sid,
+            "asr_probe rms_avg=%.6f rms_peak=%.6f sample_ms=%d",
             rms_avg,
             rms_peak,
             state.probe_window_ms,
@@ -1195,14 +1190,6 @@ class ASRRuntime:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
 
-        if not state.first_partial_logged:
-            lat = None
-            first_ingress = getattr(state, "first_ingress_ms", 0)
-            if isinstance(first_ingress, int) and first_ingress > 0:
-                lat = int(time.time() * 1000) - first_ingress
-            _log.info("evt=asr_partial sid=%s first_partial_latency_ms=%s", sid, lat)
-            state.first_partial_logged = True
-
         metadata = metadata or {}
         if state.stream_id is None:
             meta_stream = metadata.get("stream_id")
@@ -1223,11 +1210,25 @@ class ASRRuntime:
                 candidate_len = None
             if candidate_len is not None and candidate_len >= 0:
                 len_chars = candidate_len
-        _log.info("evt=asr_interim sid=%s len_chars=%d", sid, len_chars)
         utterance_id = metadata.get("utterance_id")
         if not utterance_id:
             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
         latency_ms = int(metadata.get("latency_ms") or 0)
+
+        now_monotonic = time.monotonic()
+        should_log_partial = False
+        if not state.first_partial_logged:
+            should_log_partial = True
+        elif now_monotonic - state.last_partial_log >= 0.5:
+            should_log_partial = True
+        if should_log_partial:
+            state.first_partial_logged = True
+            state.last_partial_log = now_monotonic
+            _log.info(
+                "asr_partial vendor=deepgram chars=%d latency_ms=%d",
+                len_chars,
+                latency_ms,
+            )
 
         _log.debug(
             "evt=dg_partial sid=%s stream_id=%s len_chars=%d is_final=false "
@@ -1303,11 +1304,16 @@ class ASRRuntime:
                 candidate_len = None
             if candidate_len is not None and candidate_len >= 0:
                 len_chars = candidate_len
-        _log.info("evt=asr_final sid=%s len_chars=%d", sid, len_chars)
         utterance_id = metadata.get("utterance_id")
         if not utterance_id:
             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
         latency_ms = int(metadata.get("latency_ms") or 0)
+
+        _log.info(
+            "asr_final vendor=deepgram chars=%d latency_ms=%d",
+            len_chars,
+            latency_ms,
+        )
 
         ensure_session = getattr(self._engine, "_ensure_session", None)
         engine_session = ensure_session(sid) if callable(ensure_session) else None
@@ -1359,7 +1365,8 @@ class ASRRuntime:
         self._log_utterance(state, stream_id, req_id, metadata, text)
 
     def _on_error(self, sid: str, error: str) -> None:
-        _log.exception("evt=asr_error sid=%s err=%s", sid, error)
+        reason = error or "unknown"
+        _log.error("asr_error vendor=deepgram code=stream reason=%s", reason)
 
         state = self._sessions.get(sid)
         if state is None:

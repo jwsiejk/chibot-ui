@@ -3047,11 +3047,11 @@ class ChatV2Adapter:
             reason = "fallback"
 
         if log_selection:
+            allowed_display = ",".join(allowed)
             _log.info(
-                "asr_vendor_selected sid=%s primary=%s allowed=%s reason=%s",
-                ctx.sid,
+                "asr_vendor_selected primary=%s allowed=%s reason=%s",
                 selected or "",
-                allowed,
+                allowed_display,
                 reason,
             )
             ctx.asr_vendor_logged = True

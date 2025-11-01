@@ -201,9 +201,7 @@ class SpeechmaticsClient:
         await websocket.send(json.dumps(start_payload))
 
         self._logger.info(
-            "evt=sm_ws_open sid=%s stream_id=%s encoding=%s sr=%d ch=1 interim=true lang=%s",
-            sid,
-            vendor_stream_id,
+            "sm_ws_open encoding=%s sr=%d ch=1 interim=true lang=%s",
             encoding,
             sample_rate,
             language,
@@ -367,9 +365,7 @@ class SpeechmaticsClient:
             state.last_partial_log = now
             latency = _latency_ms(state, now)
             self._logger.info(
-                "evt=asr_partial vendor=speechmatics sid=%s stream_id=%s chars=%d latency_ms=%d",
-                state.sid,
-                state.stream_id,
+                "asr_partial vendor=speechmatics chars=%d latency_ms=%d",
                 len(text),
                 latency,
             )
@@ -388,18 +384,14 @@ class SpeechmaticsClient:
         now = time.monotonic()
         latency = _latency_ms(state, now)
         self._logger.info(
-            "evt=asr_final vendor=speechmatics sid=%s stream_id=%s chars=%d latency_ms=%d",
-            state.sid,
-            state.stream_id,
+            "asr_final vendor=speechmatics chars=%d latency_ms=%d",
             len(text),
             latency,
         )
 
     def _handle_error(self, state: _StreamState, code: str, reason: str) -> None:
         self._logger.error(
-            "evt=asr_error vendor=speechmatics sid=%s stream_id=%s code=%s reason=%s",
-            state.sid,
-            state.stream_id,
+            "asr_error vendor=speechmatics code=%s reason=%s",
             code,
             reason,
         )
@@ -449,9 +441,7 @@ class SpeechmaticsClient:
                 self._logger.exception("evt=sm_close_callback_failed sid=%s", state.sid)
         duration_ms = self._duration_ms(state)
         self._logger.info(
-            "evt=asr_rollup vendor=speechmatics sid=%s stream_id=%s partials=%d finals=%d bytes=%d duration_ms=%d",
-            state.sid,
-            state.stream_id,
+            "asr_rollup vendor=speechmatics partials=%d finals=%d bytes=%d duration_ms=%d",
             state.partial_count,
             state.final_count,
             state.bytes_sent,
