@@ -2077,8 +2077,9 @@ import { WakeWord } from "./wake_word.js";
       });
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
     } else if (frame.type === "start_listening") {
+      const ar = window.AudioRecorder || null;
+      let unifiedArmed = false;
       try {
-        const ar = window.AudioRecorder || null;
         if (ar?.setPolicy) ar.setPolicy(frame?.policy || {});
         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
         const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
@@ -2091,6 +2092,7 @@ import { WakeWord } from "./wake_word.js";
         );
         if (ar?.startListening) {
           await ar.startListening(frame?.policy || {});
+          unifiedArmed = true;
         }
       } catch (err) {
         console.warn("AudioRecorder start_listening preflight failed", err);
@@ -2106,7 +2108,7 @@ import { WakeWord } from "./wake_word.js";
         logMic({ outcome: MIC_OUTCOME.ARMED });
       } catch {}
       // If unified recorder exists, do not arm any legacy capture
-      if (window.AudioRecorder) {
+      if (unifiedArmed) {
         dispatchFrame(frame);
         return;
       }

@@ -1,100 +1,89 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 9139751758f46c27890d4049578f82ae30024824..b2e689f2f71abb490e855ed2dd72b28fd1711b3d 100644
+index b2e689f2f71abb490e855ed2dd72b28fd1711b3d..b4471b91b0b749812864fbb9939c754f5dac50e9 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -1,37 +1,39 @@
- import { WakeWord } from "./wake_word.js";
- 
- /** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
- (() => {
-   const HEARTBEAT_INTERVAL_MS = 20000;
-   const DEFAULT_CLOSE_REASON = "client_shutdown";
-   const SUBPROTOCOL = "chat.v2";
-   const INFO_DEADLINE_MS = 20000;
-   const TOKEN_EXPIRY_MS = 60 * 1000;
-   const TOAST_STYLE_ID = "wsclient-toast-styles";
-   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
- 
-+  const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
-+
-   // ---- Golden-path turn trace & mic outcomes (additive) ----
-   // ---- Telemetry (additive) ----
-   const MIC_OUTCOME = {
-     PERM_GRANTED: 'perm_granted',
-     ARMED: 'armed',
-     STREAMING: 'streaming',
-     STREAMING_HEARTBEAT: 'streaming_heartbeat',
-     STOPPED: 'stopped',
-     ERROR_DENIED: 'error_denied',
-     ERROR_NO_DEVICE: 'error_no_device',
-     ERROR_GUM: 'error_getuser_media',
-     ERROR_SILENT: 'error_silent_stream',
-     ERROR_WS_SEND: 'error_ws_send',
-     ERROR_STATE_GUARD: 'error_state_guard',
-     ERROR_UNKNOWN: 'error_unknown',
-   };
- 
-   let __micAttempts = 0;
-   let __micChunks = 0;
-   let __micBytes = 0;
-   let __micArmedAt = 0;     // ms since epoch
-   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
- 
-   if (typeof window !== "undefined") {
-     try {
-@@ -2196,50 +2198,55 @@ import { WakeWord } from "./wake_word.js";
-           { level: "warning", ttlMs: 10000 }
-         );
-       } catch (err) {
-         console.warn("Failed to show voice unavailable banner", err);
+@@ -2055,80 +2055,82 @@ import { WakeWord } from "./wake_word.js";
        }
-     } else if (frame.type === "chat.message") {
-       const view = window.TranscriptView;
-       if (view && typeof view.handleChatMessage === "function") {
-         try {
-           view.handleChatMessage(frame);
-         } catch (err) {
-           console.warn("TranscriptView chat handler error", err);
-         }
+       logStage('client.tts', { outcome: 'playing', utt_id: frame?.utt_id || 'utt-00001' });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
+     } else if (frame.type === "tts.end") {
+       AppState.ttsActive = false;
+       updateState({ ttsActive: false });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: false });
        }
-     } else if (frame.type === "chat.history") {
-       handleChatHistoryFrame(frame);
-     }
-     dispatchFrame(frame);
-   }
- 
-   async function parseFrame(event) {
-     const { data } = event;
-     if (typeof data === "string") {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+       logStage('client.tts', { outcome: 'ended', utt_id: frame?.utt_id || 'utt-00001', dur_ms: frame?.dur_ms });
+     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
+       const uttId = frame?.utt_id || 'utt-00001';
+       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
+       logStage('client.tts', {
+         outcome: 'ended',
+         utt_id: uttId,
+         dur_ms: frame?.dur_ms,
+         reason,
+       });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
+     } else if (frame.type === "start_listening") {
++      const ar = window.AudioRecorder || null;
++      let unifiedArmed = false;
        try {
-         const frame = JSON.parse(data);
-+        if (frame && typeof frame.message === "string") {
-+          if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-+            return;
-+          }
-+        }
-         if (frame && frame.type === "server.ping") {
-           send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
+-        const ar = window.AudioRecorder || null;
+         if (ar?.setPolicy) ar.setPolicy(frame?.policy || {});
+         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
+         const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
+         const asrInput = frame?.policy?.media?.asr_input ?? null;
+         console.info(
+           "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
+           vendor,
+           pipeline,
+           asrInput,
+         );
+         if (ar?.startListening) {
+           await ar.startListening(frame?.policy || {});
++          unifiedArmed = true;
+         }
+       } catch (err) {
+         console.warn("AudioRecorder start_listening preflight failed", err);
+       }
+       try {
+         __micAttempts += 1;
+         __micChunks = 0;
+         __micBytes = 0;
+         __micArmedAt = Date.now();
+         if (!__turnTraceId) {
+           __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
+         }
+         logMic({ outcome: MIC_OUTCOME.ARMED });
+       } catch {}
+       // If unified recorder exists, do not arm any legacy capture
+-      if (window.AudioRecorder) {
++      if (unifiedArmed) {
+         dispatchFrame(frame);
+         return;
+       }
+       try {
+         const hub = AppState?.hub;
+         const maybePromise = hub && typeof hub.startListening === "function"
+           ? hub.startListening(frame?.policy || {})
+           : null;
+         if (!hub || typeof hub.startListening !== "function") {
+           startInputCapture(frame);
            return;
          }
-         await handleMessageFrame(frame);
+         if (maybePromise && typeof maybePromise.then === "function") {
+           maybePromise.catch((err) => {
+             const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+             logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+           });
+         }
        } catch (err) {
-         console.error("Failed to parse WS frame", err, data);
+         console.warn("Hub start_listening handler error", err);
+         const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+         logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
        }
-       return;
-     }
-     if (data instanceof Blob) {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(data);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-       return;
-     }
-     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-       const chunk = data instanceof ArrayBuffer
-         ? data
-         : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(chunk);
+     } else if (frame.type === "stop_listening") {
+       try {
