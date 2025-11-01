@@ -2210,10 +2210,6 @@ class ChatV2Adapter:
         if not isinstance(event, Mapping):
             return None
 
-        source = event.get("source")
-        if isinstance(source, str) and source == "speechmatics_client":
-            return None
-
         event_type = event.get("type")
         if event_type == EVT_ASR_PARTIAL:
             frame_type = "asr.partial"
@@ -2221,6 +2217,12 @@ class ChatV2Adapter:
             frame_type = "asr.final"
         else:
             return None
+
+        source = event.get("source")
+        if isinstance(source, str) and source == "speechmatics_client":
+            vendor = event.get("vendor")
+            if not isinstance(vendor, str) or vendor.lower() != "speechmatics":
+                return None
 
         raw_meta = event.get("meta")
         meta = raw_meta if isinstance(raw_meta, Mapping) else None
@@ -2265,7 +2267,7 @@ class ChatV2Adapter:
                 else:
                     vendor = None
         if isinstance(vendor, str) and vendor:
-            frame["vendor"] = vendor
+            frame["vendor"] = vendor.lower() if vendor.lower() == "speechmatics" else vendor
 
         if meta is not None:
             partial_seq = meta.get("partial_seq")
@@ -2663,6 +2665,18 @@ class ChatV2Adapter:
         lock = self._ensure_send_lock(ctx)
         async with lock:
             text = json.dumps(payload, separators=(",", ":"))
+            frame_type = payload.get("type")
+            if frame_type in {"asr.partial", "asr.final"}:
+                vendor = payload.get("vendor")
+                if isinstance(vendor, str) and vendor.lower() == "speechmatics":
+                    log_event = (
+                        "evt=asr_partial_sent"
+                        if frame_type == "asr.partial"
+                        else "evt=asr_final_sent"
+                    )
+                    text_value = payload.get("text")
+                    text_len = len(text_value) if isinstance(text_value, str) else 0
+                    _log.info("%s vendor=speechmatics chars=%d", log_event, text_len)
             await send({"type": "websocket.send", "text": text})
 
     async def _send_audio_frame(

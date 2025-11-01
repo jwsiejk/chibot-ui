@@ -1,419 +1,8 @@
-diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index f8d9840c5e8b917af2720ce1c621f6304a6439e3..972a2c140ce35dd436617a4a363dfe38b0a8f57a 100644
---- a/app/services/streaming_asr/speechmatics_client.py
-+++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -1,41 +1,42 @@
- """Speechmatics realtime streaming client."""
- 
- from __future__ import annotations
- 
- import asyncio
- import inspect
- import json
- import logging
- import time
- import uuid
- from dataclasses import dataclass, field
- from typing import Any, Callable, Dict, Mapping, Optional
- 
- import websockets
- from websockets.legacy.client import WebSocketClientProtocol
- 
-+from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
- 
- _AUDIO_SENTINEL = object()
- 
- 
- def _coerce_language(policy: Mapping[str, Any] | None) -> str:
-     """Return the language preference from policy or default to English."""
- 
-     if not isinstance(policy, Mapping):
-         return "en"
- 
-     current: Any = policy
-     for path in (
-         ("vendor", "asr", "speechmatics", "language"),
-         ("input", "language"),
-         ("language",),
-     ):
-         lookup = current
-         for key in path:
-             if not isinstance(lookup, Mapping):
-                 lookup = None
-                 break
-             lookup = lookup.get(key)
-         if isinstance(lookup, str) and lookup.strip():
-             return lookup.strip()
-     return "en"
-@@ -117,50 +118,51 @@ class _StreamState:
-     websocket: WebSocketClientProtocol
-     on_partial: Callable[[str, Dict[str, object]], None]
-     on_final: Callable[[str, Dict[str, object]], None]
-     on_error: Callable[..., None]
-     on_close: Optional[Callable[[int | None, str | None], None]]
-     language: str
-     encoding: str
-     sample_rate: int
-     opened_monotonic: float = field(default_factory=time.monotonic)
-     opened_wall: float = field(default_factory=time.time)
-     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_event_loop)
-     audio_queue: "asyncio.Queue[bytes | object]" = field(default_factory=asyncio.Queue)
-     sender_task: Optional[asyncio.Task[None]] = None
-     receiver_task: Optional[asyncio.Task[None]] = None
-     closing: bool = False
-     closed: bool = False
-     partial_count: int = 0
-     final_count: int = 0
-     bytes_sent: int = 0
-     first_audio_ts: float | None = None
-     last_audio_ts: float | None = None
-     last_partial_log: float = 0.0
-     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
-     ready_error: Optional[str] = None
-     ready_error_detail: Optional[str] = None
-+    vendor_notices: set[str] = field(default_factory=set)
- 
- 
- class SpeechmaticsClient:
-     """Client wrapper responsible for Speechmatics realtime streams."""
- 
-     def __init__(self, api_key: str, url: str, bus: Any, logger: logging.Logger) -> None:
-         self._api_key = api_key
-         self._url = url
-         self._bus = bus
-         self._logger = logger or logging.getLogger(__name__)
-         self._streams: Dict[str, _StreamState] = {}
- 
-     async def open_stream(
-         self,
-         sid: str,
-         on_partial: Callable[[str, Dict[str, object]], None],
-         on_final: Callable[[str, Dict[str, object]], None],
-         on_error: Callable[..., None],
-         *,
-         stream_id: str,
-         on_close: Optional[Callable[[int | None, str | None], None]] = None,
-         encoding: str = "linear16",
-         sample_rate: int = 16000,
-         policy: Mapping[str, Any] | None = None,
-     ) -> str:
-@@ -305,50 +307,125 @@ class SpeechmaticsClient:
-             raise
-         except Exception as exc:
-             self._logger.exception(
-                 "evt=sm_send_failed sid=%s stream_id=%s err=%s",
-                 state.sid,
-                 state.stream_id,
-                 exc,
-             )
-             self._handle_error(state, "send_failed", str(exc))
-         finally:
-             await self._finalize_sender(state)
- 
-     async def _receiver_loop(self, state: _StreamState) -> None:
-         websocket = state.websocket
-         try:
-             async for message in websocket:
-                 if isinstance(message, bytes):
-                     continue
-                 try:
-                     payload = json.loads(message)
-                 except Exception:
-                     self._logger.debug(
-                         "evt=sm_msg_parse_failed sid=%s stream_id=%s", state.sid, state.stream_id
-                     )
-                     continue
-+
-+                if isinstance(payload, Mapping):
-+                    message_name = payload.get("message")
-+                else:
-+                    message_name = None
-+
-+                if message_name == "AddTranscript":
-+                    transcript = payload.get("transcript")
-+                    text = transcript if isinstance(transcript, str) else ""
-+                    if not text:
-+                        results = payload.get("results")
-+                        if isinstance(results, list) and results:
-+                            first_result = results[0] if isinstance(results[0], Mapping) else None
-+                            if isinstance(first_result, Mapping):
-+                                alternatives = first_result.get("alternatives")
-+                                alt_text = ""
-+                                if isinstance(alternatives, list) and alternatives:
-+                                    first_alt = alternatives[0] if isinstance(alternatives[0], Mapping) else None
-+                                    if isinstance(first_alt, Mapping):
-+                                        candidate = first_alt.get("transcript")
-+                                        if isinstance(candidate, str):
-+                                            alt_text = candidate
-+                                if not alt_text:
-+                                    candidate = first_result.get("transcript")
-+                                    if isinstance(candidate, str):
-+                                        alt_text = candidate
-+                                text = alt_text or text
-+
-+                    if not text.strip():
-+                        self._logger.debug(
-+                            "evt=sm_empty_transcript_ignored"
-+                        )
-+                        continue
-+
-+                    type_field = payload.get("type")
-+                    is_final = bool(payload.get("is_final")) or bool(payload.get("final"))
-+                    if isinstance(type_field, str) and type_field.lower() == "final":
-+                        is_final = True
-+
-+                    event_type = EVT_ASR_FINAL if is_final else EVT_ASR_PARTIAL
-+                    meta = {"text": text, "vendor": "speechmatics"}
-+                    event = {
-+                        "type": event_type,
-+                        "sid": state.sid,
-+                        "text": text,
-+                        "vendor": "speechmatics",
-+                        "meta": meta,
-+                        "source": "speechmatics_client",
-+                    }
-+                    try:
-+                        self._bus.publish(event)
-+                    except Exception:
-+                        self._logger.exception(
-+                            "evt=sm_bus_publish_failed sid=%s event=%s", state.sid, event_type
-+                        )
-+                    else:
-+                        log_event = "evt=sm_final" if is_final else "evt=sm_partial"
-+                        self._logger.info("%s text_chars=%d", log_event, len(text))
-+
-+                    if is_final:
-+                        self._handle_final(state, payload)
-+                    else:
-+                        self._handle_partial(state, payload)
-+                    continue
-+
-+                if isinstance(message_name, str) and message_name in {
-+                    "Info",
-+                    "RecognitionStarted",
-+                    "AudioAdded",
-+                }:
-+                    if message_name not in state.vendor_notices:
-+                        self._logger.info("evt=sm_notice message=%s", message_name.lower())
-+                        state.vendor_notices.add(message_name)
-+                    continue
-+
-                 self._handle_payload(state, payload)
-         except asyncio.CancelledError:
-             raise
-         except websockets.ConnectionClosedOK as exc:
-             await self._finalize_close(state, exc.code, exc.reason)
-         except websockets.ConnectionClosedError as exc:
-             self._handle_error(state, str(exc.code), exc.reason or "connection_closed")
-             await self._finalize_close(state, exc.code, exc.reason)
-         except Exception as exc:
-             self._logger.exception(
-                 "evt=sm_recv_failed sid=%s stream_id=%s err=%s",
-                 state.sid,
-                 state.stream_id,
-                 exc,
-             )
-             self._handle_error(state, "recv_failed", str(exc))
-             await self._finalize_close(state, None, None)
-         finally:
-             await self._finalize_receiver(state)
- 
-     def _mark_stream_ready(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
-         if state.ready_event.is_set():
-             return
- 
-         message_type_raw = None
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index bcb1a99056e2044dbda2e43850abe989fa63881e..447e6402b160a2144048101522f7a3ebe1751edf 100644
+index 447e6402b160a2144048101522f7a3ebe1751edf..421c32204df34c0ba0a315e11aeb25f35463ba2a 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -1,51 +1,53 @@
- """chat.v2 WebSocket adapter for AskChip."""
- from __future__ import annotations
- 
- import os
- import asyncio
- import contextlib
- import logging
- import math
- import time
- import sys, platform, socket, os, inspect
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
- 
- import json
- from urllib.parse import parse_qs
- 
- from app import config
- from app.logging_setup import current_sid
- from app.security.jwt_utils import verify_ws_token
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.services.streaming_asr.speechmatics_client import (
-     SpeechmaticsClient,
- )
- from app.voice_v2 import (
-+    EVT_ASR_FINAL,
-     EVT_ASR_OPEN,
-+    EVT_ASR_PARTIAL,
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_CLIENT_BANNER,
-     EVT_CLIENT_AUTOSTART,
-     EVT_CLIENT_MIC_OPEN,
-     EVT_HUD_STATE,
-     EVT_SESSION_STEP,
-     EVT_TTS_END,
-     EVT_TTS_MASK,
-     EVT_CLIENT_LOG,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.ws.validator import validate_audio_header_against_policy, validate_frame
- 
- try:  # pragma: no cover - uvicorn is an optional dependency in tests
-     from uvicorn.protocols.utils import ClientDisconnected
- except Exception:  # pragma: no cover - fallback when uvicorn missing
-     class ClientDisconnected(Exception):  # type: ignore[no-redef]
-         """Fallback placeholder when uvicorn is unavailable."""
- 
- 
- CHAT_V2_SUBPROTOCOL = "chat.v2"
-@@ -252,50 +254,52 @@ class AdapterContext:
-     ingress_bytes: int = 0
-     first_ingress_ms: Optional[int] = None
-     mic_armed_ms: Optional[int] = None
-     last_pong_sent_ms: int = 0
-     last_client_activity_ms: int = 0
-     last_client_pong_ms: int = 0
-     last_server_ping_ms: int = 0
-     ip: Optional[str] = None
-     sid_bucket: Optional[TokenBucket] = None
-     ip_bucket: Optional[TokenBucket] = None
-     audio_profile: Optional[Dict[str, Any]] = None
-     accepting_audio: bool = True
-     audio_violation_count: int = 0
-     outbound_queue_depth: int = 0
-     backpressure_state: Literal["off", "on"] = "off"
-     outbox: asyncio.Queue[Dict[str, Any]] | None = None
-     outbound_task: asyncio.Task[None] | None = None
-     subscription_token: Optional[str] = None
-     audio_subscription_token: Optional[str] = None
-     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
-     asr_ready: bool = False
-     asr_subscription_token: Optional[str] = None
-     asr_subscription_bus: Optional[Any] = None
-     asr_open_subscription_token: Optional[str] = None
-     asr_unavailable_subscription_token: Optional[str] = None
-+    asr_partial_subscription_token: Optional[str] = None
-+    asr_final_subscription_token: Optional[str] = None
-     server_keepalive_task: asyncio.Task[None] | None = None
-     last_policy_interaction: Optional[Dict[str, Any]] = None
-     policy_snapshot: Optional[Dict[str, Any]] = None
-     partial_seq: int = 0
-     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
-     send_lock: asyncio.Lock | None = None
-     tts_end_ts: Optional[float] = None
-     diag_audio_seen: bool = False
-     diag_timer: asyncio.TimerHandle | None = None
-     diag_timer_key: Optional[str] = None
-     await_user_expected: bool = False
-     await_user_pending: bool = False
-     await_user_pending_key: Optional[str] = None
-     await_user_after_mask: bool = False
-     await_user_after_mask_key: Optional[str] = None
-     tts_mask_phase: str = "off"
-     mask_subscription_token: Optional[str] = None
-     tts_end_subscription_token: Optional[str] = None
-     turn_state_subscription_token: Optional[str] = None
-     hud_state: Optional[str] = None
-     client_mic_open: bool = False
-     mic_open_timer: asyncio.TimerHandle | None = None
-     mic_nudge_sent: bool = False
-     await_user_req_id: Optional[str] = None
-     last_tts_end_req_id: Optional[str] = None
-@@ -1804,50 +1808,72 @@ class ChatV2Adapter:
-                 return
- 
-             def _on_loop() -> None:
-                 frame_type = payload.get("type")
-                 if frame_type == "tts.end":
-                     self._handle_tts_end_diag(ctx, loop, payload)
-                     req_val = payload.get("req_id") if isinstance(payload, dict) else None
-                     req_value = req_val if isinstance(req_val, str) and req_val else None
-                     if req_value:
-                         ctx.last_tts_end_req_id = req_value
-                         ctx.await_user_req_id = req_value
-                     elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
-                         ctx.last_tts_end_req_id = ctx.await_user_req_id
-                     policy = self._policy_snapshot()
-                     self._maybe_emit_await_user(ctx, policy)
-                     _schedule_listen_handoff(req_value)
-                 _enqueue(payload)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
- 
-+        def _handle_asr_event(event: dict) -> None:
-+            if event.get("sid") != ctx.sid or ctx.outbox is None:
-+                return
-+
-+            def _on_loop() -> None:
-+                frame = self._coerce_asr_frame(ctx, event)
-+                if frame is None:
-+                    return
-+                _enqueue(frame)
-+
-+            try:
-+                loop.call_soon_threadsafe(_on_loop)
-+            except RuntimeError:
-+                pass
-+
-+        ctx.asr_partial_subscription_token = bus.subscribe(
-+            EVT_ASR_PARTIAL, _handle_asr_event
-+        )
-+        ctx.asr_final_subscription_token = bus.subscribe(
-+            EVT_ASR_FINAL, _handle_asr_event
-+        )
-+
-         def _handle_asr_unavailable_event(event: dict) -> None:
-             if event.get("type") != "asr.unavailable":
-                 return
-             if event.get("sid") != ctx.sid or ctx.outbox is None:
-                 return
- 
-             def _on_loop() -> None:
-                 ctx.asr_ready = False
-                 payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
-                 reason = event.get("reason")
-                 if isinstance(reason, str) and reason:
-                     payload["reason"] = reason
-                 details = event.get("details")
-                 if details is not None:
-                     payload["details"] = details if isinstance(details, str) else str(details)
-                 _enqueue(payload)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.asr_unavailable_subscription_token = bus.subscribe(
-             "asr.unavailable", _handle_asr_unavailable_event
-         )
-@@ -2156,50 +2182,120 @@ class ChatV2Adapter:
-         loop: asyncio.AbstractEventLoop,
-         payload: Dict[str, Any],
-         enqueue: Callable[[Dict[str, Any]], None],
-     ) -> None:
-         def _emit(frame: Dict[str, Any]) -> None:
-             prepared = self._prepare_partial_frame(ctx, frame)
+@@ -2188,106 +2188,108 @@ class ChatV2Adapter:
              enqueue(prepared)
  
          ctx.partial_coalescer.offer(
@@ -433,76 +22,83 @@ index bcb1a99056e2044dbda2e43850abe989fa63881e..447e6402b160a2144048101522f7a3eb
              prepared["partial_seq"] = ctx.partial_seq
          return prepared
  
-+    def _coerce_asr_frame(
-+        self, ctx: AdapterContext, event: Mapping[str, Any]
-+    ) -> Optional[Dict[str, Any]]:
-+        if not isinstance(event, Mapping):
-+            return None
-+
+     def _coerce_asr_frame(
+         self, ctx: AdapterContext, event: Mapping[str, Any]
+     ) -> Optional[Dict[str, Any]]:
+         if not isinstance(event, Mapping):
+             return None
+ 
+-        source = event.get("source")
+-        if isinstance(source, str) and source == "speechmatics_client":
+-            return None
+-
+         event_type = event.get("type")
+         if event_type == EVT_ASR_PARTIAL:
+             frame_type = "asr.partial"
+         elif event_type == EVT_ASR_FINAL:
+             frame_type = "asr.final"
+         else:
+             return None
+ 
 +        source = event.get("source")
 +        if isinstance(source, str) and source == "speechmatics_client":
-+            return None
++            vendor = event.get("vendor")
++            if not isinstance(vendor, str) or vendor.lower() != "speechmatics":
++                return None
 +
-+        event_type = event.get("type")
-+        if event_type == EVT_ASR_PARTIAL:
-+            frame_type = "asr.partial"
-+        elif event_type == EVT_ASR_FINAL:
-+            frame_type = "asr.final"
-+        else:
-+            return None
-+
-+        raw_meta = event.get("meta")
-+        meta = raw_meta if isinstance(raw_meta, Mapping) else None
-+        text = event.get("text")
-+        if not isinstance(text, str) or not text.strip():
-+            if meta is not None:
-+                candidate_text = meta.get("text")
-+                if isinstance(candidate_text, str):
-+                    text = candidate_text
-+        if not isinstance(text, str) or not text.strip():
-+            return None
-+
-+        frame: Dict[str, Any] = {"type": frame_type, "text": text}
-+
-+        req_id = event.get("req_id")
-+        if not isinstance(req_id, str) or not req_id.strip():
-+            if meta is not None:
-+                meta_req = meta.get("req_id")
-+                if isinstance(meta_req, str) and meta_req.strip():
-+                    req_id = meta_req
-+                else:
-+                    req_id = None
-+        else:
-+            req_id = req_id.strip()
-+        if isinstance(req_id, str) and req_id:
-+            frame["req_id"] = req_id
-+
-+        confidence = event.get("confidence")
-+        if not isinstance(confidence, (int, float)) and meta is not None:
-+            meta_conf = meta.get("confidence")
-+            if isinstance(meta_conf, (int, float)):
-+                confidence = float(meta_conf)
-+        if isinstance(confidence, (int, float)):
-+            frame["confidence"] = float(confidence)
-+
-+        vendor = event.get("vendor")
-+        if not isinstance(vendor, str) or not vendor:
-+            if meta is not None:
-+                meta_vendor = meta.get("vendor")
-+                if isinstance(meta_vendor, str) and meta_vendor:
-+                    vendor = meta_vendor
-+                else:
-+                    vendor = None
-+        if isinstance(vendor, str) and vendor:
-+            frame["vendor"] = vendor
-+
-+        if meta is not None:
-+            partial_seq = meta.get("partial_seq")
-+            if isinstance(partial_seq, int):
-+                frame["partial_seq"] = partial_seq
-+
-+        return frame
-+
+         raw_meta = event.get("meta")
+         meta = raw_meta if isinstance(raw_meta, Mapping) else None
+         text = event.get("text")
+         if not isinstance(text, str) or not text.strip():
+             if meta is not None:
+                 candidate_text = meta.get("text")
+                 if isinstance(candidate_text, str):
+                     text = candidate_text
+         if not isinstance(text, str) or not text.strip():
+             return None
+ 
+         frame: Dict[str, Any] = {"type": frame_type, "text": text}
+ 
+         req_id = event.get("req_id")
+         if not isinstance(req_id, str) or not req_id.strip():
+             if meta is not None:
+                 meta_req = meta.get("req_id")
+                 if isinstance(meta_req, str) and meta_req.strip():
+                     req_id = meta_req
+                 else:
+                     req_id = None
+         else:
+             req_id = req_id.strip()
+         if isinstance(req_id, str) and req_id:
+             frame["req_id"] = req_id
+ 
+         confidence = event.get("confidence")
+         if not isinstance(confidence, (int, float)) and meta is not None:
+             meta_conf = meta.get("confidence")
+             if isinstance(meta_conf, (int, float)):
+                 confidence = float(meta_conf)
+         if isinstance(confidence, (int, float)):
+             frame["confidence"] = float(confidence)
+ 
+         vendor = event.get("vendor")
+         if not isinstance(vendor, str) or not vendor:
+             if meta is not None:
+                 meta_vendor = meta.get("vendor")
+                 if isinstance(meta_vendor, str) and meta_vendor:
+                     vendor = meta_vendor
+                 else:
+                     vendor = None
+         if isinstance(vendor, str) and vendor:
+-            frame["vendor"] = vendor
++            frame["vendor"] = vendor.lower() if vendor.lower() == "speechmatics" else vendor
+ 
+         if meta is not None:
+             partial_seq = meta.get("partial_seq")
+             if isinstance(partial_seq, int):
+                 frame["partial_seq"] = partial_seq
+ 
+         return frame
+ 
      def _start_asr_ready_tracker(
          self, ctx: AdapterContext, telemetry_bus: Optional[Any] = None
      ) -> None:
@@ -520,15 +116,55 @@ index bcb1a99056e2044dbda2e43850abe989fa63881e..447e6402b160a2144048101522f7a3eb
              summary="Subscribed to ASR ready events",
              source="ws.asr",
          )
+@@ -2641,50 +2643,62 @@ class ChatV2Adapter:
+                     raise
+                 except ClientDisconnected:
+                     _log.info(
+                         "evt=ws_outbound_client_disconnect sid=%s phase=frame",
+                         ctx.sid,
+                     )
+                     break
+                 except Exception:  # pragma: no cover - defensive
+                     _log.exception("evt=ws_outbound_frame_failed sid=%s", ctx.sid)
+                 finally:
+                     queue.task_done()
+         except asyncio.CancelledError:
+             raise
+         finally:
+             ctx.outbox = None
  
-         loop = asyncio.get_running_loop()
+     async def _send_outbound_frame(
+         self,
+         ctx: AdapterContext,
+         send: Callable[[dict], Awaitable[None]],
+         payload: Dict[str, Any],
+     ) -> None:
+         lock = self._ensure_send_lock(ctx)
+         async with lock:
+             text = json.dumps(payload, separators=(",", ":"))
++            frame_type = payload.get("type")
++            if frame_type in {"asr.partial", "asr.final"}:
++                vendor = payload.get("vendor")
++                if isinstance(vendor, str) and vendor.lower() == "speechmatics":
++                    log_event = (
++                        "evt=asr_partial_sent"
++                        if frame_type == "asr.partial"
++                        else "evt=asr_final_sent"
++                    )
++                    text_value = payload.get("text")
++                    text_len = len(text_value) if isinstance(text_value, str) else 0
++                    _log.info("%s vendor=speechmatics chars=%d", log_event, text_len)
+             await send({"type": "websocket.send", "text": text})
  
-         def _handle(event: dict) -> None:
-             if event.get("type") != EVT_ASR_READY:
-                 return
-             if event.get("sid") != ctx.sid:
-                 return
-@@ -2581,50 +2677,60 @@ class ChatV2Adapter:
+     async def _send_audio_frame(
+         self,
+         ctx: AdapterContext,
+         send: Callable[[dict], Awaitable[None]],
+         chunk: bytes,
+     ) -> None:
+         lock = self._ensure_send_lock(ctx)
+         async with lock:
+             try:
                  await send({"type": "websocket.send", "bytes": chunk})
              except ClientDisconnected:
                  _log.info(
@@ -543,49 +179,3 @@ index bcb1a99056e2044dbda2e43850abe989fa63881e..447e6402b160a2144048101522f7a3eb
          ctx.subscription_token = None
          if token:
              bus.unsubscribe(token)
- 
-         audio_token = ctx.audio_subscription_token
-         ctx.audio_subscription_token = None
-         if audio_token:
-             bus.unsubscribe(audio_token)
- 
-         unavailable_token = ctx.asr_unavailable_subscription_token
-         ctx.asr_unavailable_subscription_token = None
-         if unavailable_token:
-             bus.unsubscribe(unavailable_token)
- 
-+        partial_token = ctx.asr_partial_subscription_token
-+        ctx.asr_partial_subscription_token = None
-+        if partial_token:
-+            bus.unsubscribe(partial_token)
-+
-+        final_token = ctx.asr_final_subscription_token
-+        ctx.asr_final_subscription_token = None
-+        if final_token:
-+            bus.unsubscribe(final_token)
-+
-         mask_token = ctx.mask_subscription_token
-         ctx.mask_subscription_token = None
-         if mask_token:
-             bus.unsubscribe(mask_token)
- 
-         turn_state_token = ctx.turn_state_subscription_token
-         ctx.turn_state_subscription_token = None
-         if turn_state_token:
-             bus.unsubscribe(turn_state_token)
- 
-         tts_end_token = ctx.tts_end_subscription_token
-         ctx.tts_end_subscription_token = None
-         if tts_end_token:
-             bus.unsubscribe(tts_end_token)
- 
-         task = ctx.outbound_task
-         ctx.outbound_task = None
-         if task:
-             task.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await task
- 
-         ctx.partial_coalescer.cancel()
- 
-         pending_handoff = ctx.listen_handoff_task
