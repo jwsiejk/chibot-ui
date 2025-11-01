@@ -136,6 +136,9 @@ class _StreamState:
     first_audio_ts: float | None = None
     last_audio_ts: float | None = None
     last_partial_log: float = 0.0
+    ready_event: asyncio.Event = field(default_factory=asyncio.Event)
+    ready_error: Optional[str] = None
+    ready_error_detail: Optional[str] = None
 
 
 class SpeechmaticsClient:
@@ -223,6 +226,21 @@ class SpeechmaticsClient:
         state.sender_task = state.loop.create_task(self._sender_loop(state), name=f"sm-send-{sid}")
         state.receiver_task = state.loop.create_task(self._receiver_loop(state), name=f"sm-recv-{sid}")
         self._streams[sid] = state
+        try:
+            await asyncio.wait_for(state.ready_event.wait(), timeout=5.0)
+        except asyncio.TimeoutError as exc:
+            self._logger.error(
+                "evt=sm_ready_timeout sid=%s stream_id=%s", sid, vendor_stream_id
+            )
+            self._handle_error(state, "ready_timeout", "no ready signal")
+            raise RuntimeError("speechmatics_ready_timeout") from exc
+        if state.ready_error:
+            detail = (state.ready_error_detail or "").strip()
+            if detail:
+                message = f"speechmatics_ready_failed: {state.ready_error} {detail}"
+            else:
+                message = f"speechmatics_ready_failed: {state.ready_error}"
+            raise RuntimeError(message)
         return vendor_stream_id
 
     def send_audio(self, sid: str, chunk: bytes) -> None:
@@ -266,6 +284,16 @@ class SpeechmaticsClient:
     async def _sender_loop(self, state: _StreamState) -> None:
         websocket = state.websocket
         try:
+            try:
+                await asyncio.wait_for(state.ready_event.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self._logger.error(
+                    "evt=sm_ready_timeout sid=%s stream_id=%s", state.sid, state.stream_id
+                )
+                self._handle_error(state, "ready_timeout", "no ready signal")
+                return
+            if state.ready_error:
+                return
             while True:
                 item = await state.audio_queue.get()
                 if item is _AUDIO_SENTINEL:
@@ -320,7 +348,45 @@ class SpeechmaticsClient:
         finally:
             await self._finalize_receiver(state)
 
+    def _mark_stream_ready(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
+        if state.ready_event.is_set():
+            return
+
+        message_type_raw = None
+        if isinstance(payload, Mapping):
+            message_type_raw = payload.get("type") or payload.get("message")
+        message_type = str(message_type_raw).lower() if message_type_raw else ""
+
+        if message_type in {"error", "error_message"}:
+            code = payload.get("code") or payload.get("error_code") or "error"
+            reason = payload.get("reason") or payload.get("message") or ""
+            state.ready_error = str(code)
+            state.ready_error_detail = str(reason)
+            state.ready_event.set()
+            return
+
+        if message_type and message_type not in {
+            "partial",
+            "partial_transcript",
+            "addpartialtranscript",
+            "final",
+            "transcript",
+            "addtranscript",
+            "endoftranscript",
+        }:
+            state.ready_event.set()
+            return
+
+        # Fallback: treat informational payloads with a message or status as ready.
+        message_value = payload.get("message") if isinstance(payload, Mapping) else None
+        status_value = payload.get("status") if isinstance(payload, Mapping) else None
+        if isinstance(message_value, str) and message_value:
+            state.ready_event.set()
+        elif isinstance(status_value, str) and status_value:
+            state.ready_event.set()
+
     def _handle_payload(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
+        self._mark_stream_ready(state, payload)
         message_type_raw = None
         if isinstance(payload, Mapping):
             message_type_raw = payload.get("type") or payload.get("message")
@@ -390,6 +456,10 @@ class SpeechmaticsClient:
         )
 
     def _handle_error(self, state: _StreamState, code: str, reason: str) -> None:
+        if not state.ready_event.is_set():
+            state.ready_error = code
+            state.ready_error_detail = reason
+            state.ready_event.set()
         self._logger.error(
             "asr_error vendor=speechmatics code=%s reason=%s",
             code,
@@ -431,6 +501,10 @@ class SpeechmaticsClient:
         if state.closed:
             return
         state.closed = True
+        if not state.ready_event.is_set():
+            state.ready_error = state.ready_error or "connection_closed"
+            state.ready_error_detail = state.ready_error_detail or (reason or "")
+            state.ready_event.set()
         current = self._streams.get(state.sid)
         if current is state:
             self._streams.pop(state.sid, None)
