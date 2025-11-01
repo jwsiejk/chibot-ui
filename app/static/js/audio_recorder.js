@@ -91,27 +91,18 @@ import { WakeWord } from "./wake_word.js";
         this._policy = {};
       }
       this._usePCM = this._resolveUsePCM();
-      if (this._usePCM && !previousUsePCM && this._rec) {
+      if (this._usePCM && this._rec && !previousUsePCM) {
+        const recorder = this._rec;
         try {
-          if (this._rec.state !== "inactive") {
-            this._rec.stop();
+          if (recorder.state !== "inactive") {
+            recorder.stop();
           }
         } catch (err) {
           console.warn("AudioRecorder policy switch stop failed", err);
         }
         this._rec = null;
         this._headerSent = false;
-        const globalWindow = typeof window !== "undefined" ? window : null;
-        if (globalWindow) {
-          try {
-            if (typeof globalWindow.__micChunks === "number") {
-              globalWindow.__micChunks = 0;
-            }
-            if (typeof globalWindow.__micBytes === "number") {
-              globalWindow.__micBytes = 0;
-            }
-          } catch {}
-        }
+        this._resetStreamingTelemetry();
       }
     }
 
@@ -241,6 +232,21 @@ import { WakeWord } from "./wake_word.js";
       this._pcmLastVoiceAt = null;
       this._pcmSilenceStartAt = null;
       this._pcmCommitSent = false;
+    }
+
+    _resetStreamingTelemetry() {
+      const globalWindow = typeof window !== "undefined" ? window : null;
+      if (!globalWindow) {
+        return;
+      }
+      try {
+        if (typeof globalWindow.__micChunks === "number") {
+          globalWindow.__micChunks = 0;
+        }
+        if (typeof globalWindow.__micBytes === "number") {
+          globalWindow.__micBytes = 0;
+        }
+      } catch {}
     }
 
     async _loadPcmWorklet(context) {
