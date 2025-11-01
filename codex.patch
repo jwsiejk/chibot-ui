@@ -1,181 +1,160 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 447e6402b160a2144048101522f7a3ebe1751edf..421c32204df34c0ba0a315e11aeb25f35463ba2a 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -2188,106 +2188,108 @@ class ChatV2Adapter:
-             enqueue(prepared)
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index cac546779e7a94abe32d5511dca445494092d60b..7054f5effd589eb2889dc3078c32da277073985c 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -863,52 +863,52 @@ import { WakeWord } from "./wake_word.js";
+       if (nextActive && !this._micOpenEmitted) {
+         this._micOpenEmitted = true;
+         const vendorLabel = this._usePCM ? "pcm16" : "webm_opus";
+         emitEvent(CLIENT_MIC_OPEN_EVENT, {
+           type: CLIENT_MIC_OPEN_EVENT,
+           ts: Date.now(),
+           vendor: vendorLabel
+         });
+       }
+     }
  
-         ctx.partial_coalescer.offer(
-             payload,
-             now_ms=self._now_ms(),
-             loop=loop,
-             emit=_emit,
-         )
+     async start(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return this._stream;
+     }
  
-     def _prepare_partial_frame(self, ctx: AdapterContext, payload: Dict[str, Any]) -> Dict[str, Any]:
-         prepared = dict(payload)
-         seq_value = prepared.get("partial_seq")
-         if isinstance(seq_value, int) and seq_value > ctx.partial_seq:
-             ctx.partial_seq = seq_value
-         else:
-             ctx.partial_seq += 1
-             prepared["partial_seq"] = ctx.partial_seq
-         return prepared
+     async startMicCaptureIfIdle(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return true;
+     }
  
-     def _coerce_asr_frame(
-         self, ctx: AdapterContext, event: Mapping[str, Any]
-     ) -> Optional[Dict[str, Any]]:
-         if not isinstance(event, Mapping):
-             return None
+     async startListening(policy = {}) {
+       this.setPolicy(policy);
+-      console.info("diag=recorder_mode mode=%s", this._usePCM ? "pcm16" : "opus-webm");
+       await this._ensureArmed();
++      console.info("diag=recorder_mode mode=%s", this._usePCM ? "pcm16" : "opus-webm");
+       // Always send header now; _sendAudioHeader chooses pcm or opus by _usePCM
+       this._sendAudioHeader();
+       if (!this._sendGate) {
+         this._sendGate = true;
+         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
+         console.info("diag=send_gate_open reason=%s", reason);
+         this._updateRecorderState(true, reason);
+       }
+       this._setSendMuted(false, "start_listening");
+       return true;
+     }
  
--        source = event.get("source")
--        if isinstance(source, str) and source == "speechmatics_client":
--            return None
--
-         event_type = event.get("type")
-         if event_type == EVT_ASR_PARTIAL:
-             frame_type = "asr.partial"
-         elif event_type == EVT_ASR_FINAL:
-             frame_type = "asr.final"
-         else:
-             return None
- 
-+        source = event.get("source")
-+        if isinstance(source, str) and source == "speechmatics_client":
-+            vendor = event.get("vendor")
-+            if not isinstance(vendor, str) or vendor.lower() != "speechmatics":
-+                return None
-+
-         raw_meta = event.get("meta")
-         meta = raw_meta if isinstance(raw_meta, Mapping) else None
-         text = event.get("text")
-         if not isinstance(text, str) or not text.strip():
-             if meta is not None:
-                 candidate_text = meta.get("text")
-                 if isinstance(candidate_text, str):
-                     text = candidate_text
-         if not isinstance(text, str) or not text.strip():
-             return None
- 
-         frame: Dict[str, Any] = {"type": frame_type, "text": text}
- 
-         req_id = event.get("req_id")
-         if not isinstance(req_id, str) or not req_id.strip():
-             if meta is not None:
-                 meta_req = meta.get("req_id")
-                 if isinstance(meta_req, str) and meta_req.strip():
-                     req_id = meta_req
-                 else:
-                     req_id = None
-         else:
-             req_id = req_id.strip()
-         if isinstance(req_id, str) and req_id:
-             frame["req_id"] = req_id
- 
-         confidence = event.get("confidence")
-         if not isinstance(confidence, (int, float)) and meta is not None:
-             meta_conf = meta.get("confidence")
-             if isinstance(meta_conf, (int, float)):
-                 confidence = float(meta_conf)
-         if isinstance(confidence, (int, float)):
-             frame["confidence"] = float(confidence)
- 
-         vendor = event.get("vendor")
-         if not isinstance(vendor, str) or not vendor:
-             if meta is not None:
-                 meta_vendor = meta.get("vendor")
-                 if isinstance(meta_vendor, str) and meta_vendor:
-                     vendor = meta_vendor
-                 else:
-                     vendor = None
-         if isinstance(vendor, str) and vendor:
--            frame["vendor"] = vendor
-+            frame["vendor"] = vendor.lower() if vendor.lower() == "speechmatics" else vendor
- 
-         if meta is not None:
-             partial_seq = meta.get("partial_seq")
-             if isinstance(partial_seq, int):
-                 frame["partial_seq"] = partial_seq
- 
-         return frame
- 
-     def _start_asr_ready_tracker(
-         self, ctx: AdapterContext, telemetry_bus: Optional[Any] = None
-     ) -> None:
-         if ctx.asr_subscription_token is not None:
-             return
- 
-         if telemetry_bus is None:
-             telemetry_bus = bus
- 
-         ctx.asr_subscription_bus = telemetry_bus
-         _log.info("evt=asr_ready_tracker_start sid=%s", ctx.sid)
-         self._emit_session_step(
-             ctx.sid,
-             "asr.ready_tracker_started",
-             summary="Subscribed to ASR ready events",
-             source="ws.asr",
-         )
-@@ -2641,50 +2643,62 @@ class ChatV2Adapter:
-                     raise
-                 except ClientDisconnected:
-                     _log.info(
-                         "evt=ws_outbound_client_disconnect sid=%s phase=frame",
-                         ctx.sid,
-                     )
-                     break
-                 except Exception:  # pragma: no cover - defensive
-                     _log.exception("evt=ws_outbound_frame_failed sid=%s", ctx.sid)
-                 finally:
-                     queue.task_done()
-         except asyncio.CancelledError:
-             raise
-         finally:
-             ctx.outbox = None
- 
-     async def _send_outbound_frame(
-         self,
-         ctx: AdapterContext,
-         send: Callable[[dict], Awaitable[None]],
-         payload: Dict[str, Any],
-     ) -> None:
-         lock = self._ensure_send_lock(ctx)
-         async with lock:
-             text = json.dumps(payload, separators=(",", ":"))
-+            frame_type = payload.get("type")
-+            if frame_type in {"asr.partial", "asr.final"}:
-+                vendor = payload.get("vendor")
-+                if isinstance(vendor, str) and vendor.lower() == "speechmatics":
-+                    log_event = (
-+                        "evt=asr_partial_sent"
-+                        if frame_type == "asr.partial"
-+                        else "evt=asr_final_sent"
-+                    )
-+                    text_value = payload.get("text")
-+                    text_len = len(text_value) if isinstance(text_value, str) else 0
-+                    _log.info("%s vendor=speechmatics chars=%d", log_event, text_len)
-             await send({"type": "websocket.send", "text": text})
- 
-     async def _send_audio_frame(
-         self,
-         ctx: AdapterContext,
-         send: Callable[[dict], Awaitable[None]],
-         chunk: bytes,
-     ) -> None:
-         lock = self._ensure_send_lock(ctx)
-         async with lock:
-             try:
-                 await send({"type": "websocket.send", "bytes": chunk})
-             except ClientDisconnected:
-                 _log.info(
-                     "evt=ws_outbound_client_disconnect sid=%s phase=audio",
-                     ctx.sid,
-                 )
- 
-     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
-         self._cancel_diag_timer(ctx)
-         self._cancel_mic_open_timer(ctx)
-         token = ctx.subscription_token
-         ctx.subscription_token = None
-         if token:
-             bus.unsubscribe(token)
+     stopListening(opts = {}) {
+       const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
+       if (this._sendGate) {
+         console.info("diag=send_gate_closed reason=%s", reason);
+       }
+       this._sendGate = false;
+       this._updateRecorderState(false, reason);
+       this._micOpenEmitted = false;
+       this._setSendMuted(false, reason);
+       this._headerSent = false;
+       if (this._usePCM) {
+         this._resetPcmState();
+       }
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 6882f3b6ea20fdbe982177d353be7edf82a7ac7a..9139751758f46c27890d4049578f82ae30024824 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -2054,81 +2054,79 @@ import { WakeWord } from "./wake_word.js";
+       logStage('client.tts', { outcome: 'playing', utt_id: frame?.utt_id || 'utt-00001' });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
+     } else if (frame.type === "tts.end") {
+       AppState.ttsActive = false;
+       updateState({ ttsActive: false });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: false });
+       }
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+       logStage('client.tts', { outcome: 'ended', utt_id: frame?.utt_id || 'utt-00001', dur_ms: frame?.dur_ms });
+     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
+       const uttId = frame?.utt_id || 'utt-00001';
+       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
+       logStage('client.tts', {
+         outcome: 'ended',
+         utt_id: uttId,
+         dur_ms: frame?.dur_ms,
+         reason,
+       });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
+     } else if (frame.type === "start_listening") {
+       try {
+-        __micAttempts += 1;
+-        __micChunks = 0;
+-        __micBytes = 0;
+-        __micArmedAt = Date.now();
+-        if (!__turnTraceId) {
+-          __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
+-        }
+-        logMic({ outcome: MIC_OUTCOME.ARMED });
+-      } catch {}
+-      const hasAudioRecorder = typeof window !== "undefined" && !!window.AudioRecorder;
+-      try {
+-        const audioRecorder = hasAudioRecorder ? window.AudioRecorder : null;
+-        if (audioRecorder?.setPolicy) {
+-          audioRecorder.setPolicy(frame?.policy || {});
+-        }
++        const ar = window.AudioRecorder || null;
++        if (ar?.setPolicy) ar.setPolicy(frame?.policy || {});
+         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
+         const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
+         const asrInput = frame?.policy?.media?.asr_input ?? null;
+         console.info(
+           "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
+           vendor,
+           pipeline,
+           asrInput,
+         );
+-        if (audioRecorder?.startListening) {
+-          await audioRecorder.startListening(frame?.policy || {});
++        if (ar?.startListening) {
++          await ar.startListening(frame?.policy || {});
+         }
+       } catch (err) {
+         console.warn("AudioRecorder start_listening preflight failed", err);
+       }
+-      if (hasAudioRecorder) {
++      try {
++        __micAttempts += 1;
++        __micChunks = 0;
++        __micBytes = 0;
++        __micArmedAt = Date.now();
++        if (!__turnTraceId) {
++          __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
++        }
++        logMic({ outcome: MIC_OUTCOME.ARMED });
++      } catch {}
++      // If unified recorder exists, do not arm any legacy capture
++      if (window.AudioRecorder) {
+         dispatchFrame(frame);
+         return;
+       }
+       try {
+         const hub = AppState?.hub;
+         const maybePromise = hub && typeof hub.startListening === "function"
+           ? hub.startListening(frame?.policy || {})
+           : null;
+         if (!hub || typeof hub.startListening !== "function") {
+           startInputCapture(frame);
+           return;
+         }
+         if (maybePromise && typeof maybePromise.then === "function") {
+           maybePromise.catch((err) => {
+             const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+             logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+           });
+         }
+       } catch (err) {
+         console.warn("Hub start_listening handler error", err);
+         const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+         logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+       }
+     } else if (frame.type === "stop_listening") {
+       try {

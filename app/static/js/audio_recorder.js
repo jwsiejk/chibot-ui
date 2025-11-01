@@ -885,8 +885,8 @@ import { WakeWord } from "./wake_word.js";
 
     async startListening(policy = {}) {
       this.setPolicy(policy);
-      console.info("diag=recorder_mode mode=%s", this._usePCM ? "pcm16" : "opus-webm");
       await this._ensureArmed();
+      console.info("diag=recorder_mode mode=%s", this._usePCM ? "pcm16" : "opus-webm");
       // Always send header now; _sendAudioHeader chooses pcm or opus by _usePCM
       this._sendAudioHeader();
       if (!this._sendGate) {

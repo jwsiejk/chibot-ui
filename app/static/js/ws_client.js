@@ -2076,21 +2076,8 @@ import { WakeWord } from "./wake_word.js";
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
     } else if (frame.type === "start_listening") {
       try {
-        __micAttempts += 1;
-        __micChunks = 0;
-        __micBytes = 0;
-        __micArmedAt = Date.now();
-        if (!__turnTraceId) {
-          __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
-        }
-        logMic({ outcome: MIC_OUTCOME.ARMED });
-      } catch {}
-      const hasAudioRecorder = typeof window !== "undefined" && !!window.AudioRecorder;
-      try {
-        const audioRecorder = hasAudioRecorder ? window.AudioRecorder : null;
-        if (audioRecorder?.setPolicy) {
-          audioRecorder.setPolicy(frame?.policy || {});
-        }
+        const ar = window.AudioRecorder || null;
+        if (ar?.setPolicy) ar.setPolicy(frame?.policy || {});
         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
         const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
         const asrInput = frame?.policy?.media?.asr_input ?? null;
@@ -2100,13 +2087,24 @@ import { WakeWord } from "./wake_word.js";
           pipeline,
           asrInput,
         );
-        if (audioRecorder?.startListening) {
-          await audioRecorder.startListening(frame?.policy || {});
+        if (ar?.startListening) {
+          await ar.startListening(frame?.policy || {});
         }
       } catch (err) {
         console.warn("AudioRecorder start_listening preflight failed", err);
       }
-      if (hasAudioRecorder) {
+      try {
+        __micAttempts += 1;
+        __micChunks = 0;
+        __micBytes = 0;
+        __micArmedAt = Date.now();
+        if (!__turnTraceId) {
+          __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
+        }
+        logMic({ outcome: MIC_OUTCOME.ARMED });
+      } catch {}
+      // If unified recorder exists, do not arm any legacy capture
+      if (window.AudioRecorder) {
         dispatchFrame(frame);
         return;
       }
