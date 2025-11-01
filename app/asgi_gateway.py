@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 from urllib.parse import parse_qs
 
 from app import config
@@ -38,6 +38,7 @@ from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_runtime import TTSRuntime
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 from app.services.streaming_asr.deepgram_client import DeepgramClient
+from app.services.streaming_asr.speechmatics_client import SpeechmaticsClient
 
 
 configure_logging()
@@ -812,11 +813,45 @@ def _get_adapter() -> ChatV2Adapter:
         exporter = FileExporter(EXPORT_ROOT)
         engine = EngineV2(exporter=exporter)
         tts_runtime = TTSRuntime(engine=engine)
-        asr_client = DeepgramClient(api_key=config.DEEPGRAM_API_KEY)
-        asr_runtime = ASRRuntime(engine=engine, client=asr_client)
         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
         _adapter.tts_runtime = tts_runtime
-        _adapter.asr_runtime = asr_runtime
+        runtime_vendor: Optional[str] = None
+        asr_runtime: Optional[ASRRuntime] = None
+
+        preferred_vendor: Optional[str] = None
+        try:
+            policy_vendor = getattr(config, "POLICY_ASR", {})
+            if isinstance(policy_vendor, Mapping):
+                vendor_block = policy_vendor.get("vendor")
+                if isinstance(vendor_block, Mapping):
+                    primary = vendor_block.get("primary")
+                    if isinstance(primary, str) and primary.strip():
+                        preferred_vendor = primary.strip().lower()
+        except Exception:  # pragma: no cover - defensive
+            preferred_vendor = None
+
+        deepgram_enabled = bool(getattr(config, "ASR_DEEPGRAM_ENABLED", True))
+        deepgram_key = getattr(config, "DEEPGRAM_API_KEY", None)
+        if deepgram_enabled and deepgram_key:
+            asr_client = DeepgramClient(api_key=deepgram_key)
+            asr_runtime = ASRRuntime(engine=engine, client=asr_client)
+            runtime_vendor = "deepgram"
+        elif preferred_vendor == "speechmatics":
+            sm_enabled = bool(getattr(config, "ASR_SPEECHMATICS_ENABLED", False))
+            sm_key = getattr(config, "SPEECHMATICS_API_KEY", None)
+            sm_url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
+            if sm_enabled and sm_key and sm_url:
+                sm_client = SpeechmaticsClient(sm_key, sm_url, telemetry_bus, _log)
+                asr_runtime = ASRRuntime(
+                    engine=engine,
+                    client=sm_client,
+                    telemetry_bus=telemetry_bus,
+                )
+                runtime_vendor = "speechmatics"
+
+        if asr_runtime is not None:
+            _adapter.asr_runtime = asr_runtime
+            _adapter._asr_runtime_vendor = runtime_vendor
     return _adapter
 
 

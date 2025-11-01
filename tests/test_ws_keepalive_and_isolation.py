@@ -5,6 +5,9 @@ import unittest
 import uuid
 from unittest.mock import patch
 
+os.environ.setdefault("SECRET_KEY", "test-secret")
+
+from app import config
 from app.services.streaming_asr.deepgram_client import DeepgramClient
 from app.telemetry import bus
 from app.voice_v2 import EVT_WS_JSON_SEND
@@ -134,6 +137,12 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
     def test_initial_policy_ordering(self) -> None:
         asyncio.run(self._test_initial_policy_ordering())
 
+    def test_speechmatics_vendor_selection(self) -> None:
+        asyncio.run(self._test_speechmatics_vendor_selection())
+
+    def test_asr_runtime_switches_on_vendor_change(self) -> None:
+        asyncio.run(self._test_asr_runtime_switches_on_vendor_change())
+
     def test_multi_session_isolation(self) -> None:
         asyncio.run(self._test_multi_session_isolation())
 
@@ -163,7 +172,11 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
                     for message in harness.sent
                     if message.get("type") == "websocket.send" and message.get("text")
                 ]
-                count = sum(1 for frame in keepalive_frames if frame.get("type") == "keepalive")
+                count = sum(
+                    1
+                    for frame in keepalive_frames
+                    if frame.get("type") in {"keepalive", "server.ping"}
+                )
                 self.assertGreaterEqual(count, 1)
                 count_before_close = count
             finally:
@@ -174,7 +187,11 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
                 for message in harness.sent
                 if message.get("type") == "websocket.send" and message.get("text")
             ]
-            count_after_close = sum(1 for frame in keepalive_frames if frame.get("type") == "keepalive")
+            count_after_close = sum(
+                1
+                for frame in keepalive_frames
+                if frame.get("type") in {"keepalive", "server.ping"}
+            )
             self.assertEqual(count_before_close, count_after_close)
 
     async def _test_initial_policy_ordering(self) -> None:
@@ -198,6 +215,124 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
                 await asyncio.sleep(0.05)
                 frames = [f for f in harness.outbound_frames if f.get("type") == "policy.interaction"]
                 self.assertEqual(len(frames), 1)
+            finally:
+                await harness.close()
+
+    async def _test_speechmatics_vendor_selection(self) -> None:
+        engine = LabelRecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+
+        class StubSpeechmaticsClient:
+            vendor = "speechmatics"
+
+            def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
+                self.api_key = api_key
+                self.url = url
+
+        class StubASRRuntime:
+            def __init__(self, engine, client, telemetry_bus=None) -> None:
+                self.engine = engine
+                self.client = client
+                self.telemetry_bus = telemetry_bus
+                self.bus = None
+                self.opened: list[str] = []
+                self.closed: list[str] = []
+
+            def set_bus(self, telemetry_bus) -> None:
+                self.bus = telemetry_bus
+
+            def on_ws_open(self, sid: str) -> None:
+                self.opened.append(sid)
+
+            def on_ws_close(self, sid: str) -> None:
+                self.closed.append(sid)
+
+        with patch.object(config, "ASR_DEEPGRAM_ENABLED", False), patch.object(
+            config, "DEEPGRAM_API_KEY", None
+        ), patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
+            config, "SPEECHMATICS_API_KEY", "speechmatics-key"
+        ), patch.object(
+            config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
+        ), patch(
+            "app.ws.adapter.SpeechmaticsClient", StubSpeechmaticsClient
+        ), patch(
+            "app.voice_v2.asr_runtime.ASRRuntime", StubASRRuntime
+        ):
+            harness = AdapterHarness(adapter, engine, label="sm")
+            await harness.start()
+            try:
+                ctx = adapter._contexts.get(harness.sid)
+                self.assertIsNotNone(ctx)
+                if ctx is None:  # pragma: no cover - satisfy type checkers
+                    raise AssertionError("context not initialized")
+                self.assertEqual(ctx.asr_vendor, "speechmatics")
+                runtime = adapter.asr_runtime
+                self.assertIsInstance(runtime, StubASRRuntime)
+                self.assertIsInstance(runtime.client, StubSpeechmaticsClient)
+                self.assertEqual(adapter._asr_runtime_vendor, "speechmatics")
+            finally:
+                await harness.close()
+
+    async def _test_asr_runtime_switches_on_vendor_change(self) -> None:
+        engine = LabelRecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+
+        class StubSpeechmaticsClient:
+            vendor = "speechmatics"
+
+            def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
+                self.api_key = api_key
+                self.url = url
+
+        class StubDeepgramClient:
+            vendor = "deepgram"
+
+        class StubASRRuntime:
+            def __init__(self, engine, client, telemetry_bus=None) -> None:
+                self.engine = engine
+                self.client = client
+                self.telemetry_bus = telemetry_bus
+                self.bus = None
+                self.opened: list[str] = []
+                self.closed: list[str] = []
+
+            def set_bus(self, telemetry_bus) -> None:
+                self.bus = telemetry_bus
+
+            def on_ws_open(self, sid: str) -> None:
+                self.opened.append(sid)
+
+            def on_ws_close(self, sid: str) -> None:
+                self.closed.append(sid)
+
+        with patch.object(config, "ASR_DEEPGRAM_ENABLED", False), patch.object(
+            config, "DEEPGRAM_API_KEY", None
+        ), patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
+            config, "SPEECHMATICS_API_KEY", "speechmatics-key"
+        ), patch.object(
+            config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
+        ), patch(
+            "app.ws.adapter.SpeechmaticsClient", StubSpeechmaticsClient
+        ), patch(
+            "app.voice_v2.asr_runtime.ASRRuntime", StubASRRuntime
+        ):
+            original_runtime = StubASRRuntime(engine, StubDeepgramClient())
+            adapter.asr_runtime = original_runtime
+            adapter._asr_runtime_vendor = "deepgram"
+
+            harness = AdapterHarness(adapter, engine, label="sm-switch")
+            await harness.start()
+            try:
+                ctx = adapter._contexts.get(harness.sid)
+                self.assertIsNotNone(ctx)
+                if ctx is None:  # pragma: no cover - satisfy type checkers
+                    raise AssertionError("context not initialized")
+                self.assertEqual(ctx.asr_vendor, "speechmatics")
+                runtime = adapter.asr_runtime
+                self.assertIsInstance(runtime, StubASRRuntime)
+                self.assertIsInstance(runtime.client, StubSpeechmaticsClient)
+                self.assertIsNot(runtime, original_runtime)
+                self.assertEqual(adapter._asr_runtime_vendor, "speechmatics")
             finally:
                 await harness.close()
 
