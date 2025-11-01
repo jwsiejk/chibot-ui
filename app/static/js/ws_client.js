@@ -1519,6 +1519,10 @@ import { WakeWord } from "./wake_word.js";
         input.codec = rawInput.codec;
         hasInputField = true;
       }
+      if (typeof rawInput.mode === "string" && rawInput.mode) {
+        input.mode = rawInput.mode;
+        hasInputField = true;
+      }
       if (typeof rawInput.mime === "string" && rawInput.mime) {
         input.mime = rawInput.mime;
         hasInputField = true;
@@ -1605,11 +1609,22 @@ import { WakeWord } from "./wake_word.js";
     return sanitized;
   }
 
+  const ASR_VENDOR_OPTIONS = ['deepgram', 'speechmatics'];
+  const AUDIO_PIPELINE_OPTIONS = ['opus-webm', 'pcm16'];
+
   const DEFAULT_POLICY_FLAGS = {
     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
     input: { require_hotword_to_start: false },
-    asr: { prearm_on_tts_end: true, keep_stream_warm_ms: 30000 },
+    asr: {
+      prearm_on_tts_end: true,
+      keep_stream_warm_ms: 30000,
+      commit_on_vad_silence: true,
+      commit_silence_ms: 900,
+      max_utterance_ms: 8000,
+      vendor: { primary: 'deepgram', secondary: null },
+    },
     routing: { ws_version: 'v2' },
+    audio: { pipeline: { mode: 'opus-webm' } },
   };
 
   function sanitizePolicySnapshot(source) {
@@ -1723,11 +1738,54 @@ import { WakeWord } from "./wake_word.js";
           keepWarm = Math.round(parsed);
         }
       }
+      const commitOnVad = asr && typeof asr.commit_on_vad_silence === 'boolean'
+        ? asr.commit_on_vad_silence
+        : DEFAULT_POLICY_FLAGS.asr.commit_on_vad_silence;
+      let commitSilence = DEFAULT_POLICY_FLAGS.asr.commit_silence_ms;
+      if (asr && Number.isFinite(Number(asr.commit_silence_ms))) {
+        const parsed = Number(asr.commit_silence_ms);
+        if (parsed >= 0) {
+          commitSilence = Math.round(parsed);
+        }
+      }
+      let maxUtterance = DEFAULT_POLICY_FLAGS.asr.max_utterance_ms;
+      if (asr && Number.isFinite(Number(asr.max_utterance_ms))) {
+        const parsed = Number(asr.max_utterance_ms);
+        if (parsed >= 0) {
+          maxUtterance = Math.round(parsed);
+        }
+      }
+      const vendorDefaults = DEFAULT_POLICY_FLAGS.asr.vendor || { primary: 'deepgram', secondary: null };
+      const vendorBlock = asr && typeof asr.vendor === 'object' ? asr.vendor : null;
+      const vendor = { ...vendorDefaults };
+      if (vendorBlock) {
+        if (typeof vendorBlock.primary === 'string') {
+          const normalized = vendorBlock.primary.trim().toLowerCase();
+          if (ASR_VENDOR_OPTIONS.includes(normalized)) {
+            vendor.primary = normalized;
+          }
+        }
+        if (vendorBlock.secondary === null) {
+          vendor.secondary = null;
+        } else if (typeof vendorBlock.secondary === 'string') {
+          const normalizedSecondary = vendorBlock.secondary.trim().toLowerCase();
+          if (ASR_VENDOR_OPTIONS.includes(normalizedSecondary)) {
+            vendor.secondary = normalizedSecondary;
+          } else {
+            vendor.secondary = vendorDefaults.secondary;
+          }
+        }
+      }
+
       nested.asr = {
         prearm_on_tts_end: asr && typeof asr.prearm_on_tts_end === 'boolean'
           ? asr.prearm_on_tts_end
           : DEFAULT_POLICY_FLAGS.asr.prearm_on_tts_end,
         keep_stream_warm_ms: keepWarm,
+        commit_on_vad_silence: commitOnVad,
+        commit_silence_ms: commitSilence,
+        max_utterance_ms: maxUtterance,
+        vendor,
       };
 
       const routing = rawNested.routing && typeof rawNested.routing === 'object'
@@ -1743,7 +1801,23 @@ import { WakeWord } from "./wake_word.js";
       };
     }
 
+    const audioSource = source && typeof source === 'object' ? source.audio : null;
+    const audioDefaults = DEFAULT_POLICY_FLAGS.audio || { pipeline: { mode: 'opus-webm' } };
+    const audioPipeline = audioDefaults.pipeline ? { ...audioDefaults.pipeline } : { mode: 'opus-webm' };
+    if (audioSource && typeof audioSource === 'object') {
+      const pipeline = audioSource.pipeline && typeof audioSource.pipeline === 'object'
+        ? audioSource.pipeline
+        : null;
+      if (pipeline && typeof pipeline.mode === 'string') {
+        const mode = pipeline.mode.trim().toLowerCase();
+        if (AUDIO_PIPELINE_OPTIONS.includes(mode)) {
+          audioPipeline.mode = mode;
+        }
+      }
+    }
+
     policy.policy = nested;
+    policy.audio = { pipeline: audioPipeline };
     return policy;
   }
 

@@ -4,7 +4,12 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Mapping
 
-from app.policy.model import CapturePolicy, MediaPolicy
+from app.policy.model import (
+    ASRPolicy,
+    AudioPolicy,
+    CapturePolicy,
+    MediaPolicy,
+)
 
 
 def _as_mapping(value: Any) -> Dict[str, Any]:
@@ -39,7 +44,7 @@ def existing_policy_to_snapshot(policy: Any) -> Dict[str, Any]:
         result = {}
         for field_info in getattr(policy, "__dataclass_fields__", {}).values():
             name = field_info.name
-            if name in {"media", "capture"}:
+            if name in {"media", "capture", "asr", "audio"}:
                 continue
             result[name] = getattr(policy, name)
         return _as_mapping(result)
@@ -69,6 +74,28 @@ def _ensure_capture(policy: Any) -> CapturePolicy:
     return CapturePolicy()
 
 
+def _ensure_asr(policy: Any) -> ASRPolicy:
+    asr = getattr(policy, "asr", None)
+    if isinstance(asr, ASRPolicy):
+        return asr
+    if is_dataclass(asr):
+        return ASRPolicy(**asdict(asr))  # type: ignore[arg-type]
+    if isinstance(asr, Mapping):
+        return ASRPolicy(**asr)  # type: ignore[arg-type]
+    return ASRPolicy()
+
+
+def _ensure_audio(policy: Any) -> AudioPolicy:
+    audio = getattr(policy, "audio", None)
+    if isinstance(audio, AudioPolicy):
+        return audio
+    if is_dataclass(audio):
+        return AudioPolicy(**asdict(audio))  # type: ignore[arg-type]
+    if isinstance(audio, Mapping):
+        return AudioPolicy(**audio)  # type: ignore[arg-type]
+    return AudioPolicy()
+
+
 def policy_to_snapshot(policy: Any) -> Dict[str, Any]:
     """Render a policy object into the runtime snapshot structure."""
 
@@ -76,9 +103,14 @@ def policy_to_snapshot(policy: Any) -> Dict[str, Any]:
 
     media_policy = _ensure_media(policy)
     capture_policy = _ensure_capture(policy)
+    asr_policy = _ensure_asr(policy)
+    audio_policy = _ensure_audio(policy)
 
     snapshot["media"] = asdict(media_policy)
     snapshot["capture"] = asdict(capture_policy)
+    snapshot["policy"] = dict(snapshot.get("policy", {}))
+    snapshot["policy"]["asr"] = asdict(asr_policy)
+    snapshot["audio"] = asdict(audio_policy)
 
     return snapshot
 

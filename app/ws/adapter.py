@@ -303,6 +303,10 @@ class AdapterContext:
     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     client_banner_info: Optional[Dict[str, Any]] = None
     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
+    allowed_asr_vendors: List[str] = field(default_factory=list)
+    asr_vendor: Optional[str] = None
+    audio_pipeline_mode: Optional[str] = None
+    asr_vendor_logged: bool = False
 
 
 class ChatV2Adapter:
@@ -613,6 +617,15 @@ class ChatV2Adapter:
         )
         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
         ctx.last_client_activity_ms = now_ms
+        ctx.allowed_asr_vendors = self._allowed_asr_vendors()
+        snapshot_mapping: Mapping[str, Any] | None = (
+            ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+        )
+        selected_vendor, _vendor_reason = self._select_asr_vendor(
+            ctx, snapshot_mapping, ctx.allowed_asr_vendors
+        )
+        ctx.asr_vendor = selected_vendor
+        ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
 
         token = current_sid.set(ctx.sid)
         try:
@@ -2197,6 +2210,18 @@ class ChatV2Adapter:
             policy_payload = normalized.get("policy")
             if isinstance(policy_payload, dict):
                 ctx.policy_snapshot = policy_payload
+                ctx.allowed_asr_vendors = self._allowed_asr_vendors()
+                snapshot_mapping = policy_payload
+                selected_vendor, _ = self._select_asr_vendor(
+                    ctx,
+                    snapshot_mapping,
+                    ctx.allowed_asr_vendors,
+                    log_selection=not ctx.asr_vendor_logged,
+                )
+                ctx.asr_vendor = selected_vendor
+                ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
+                    snapshot_mapping
+                )
         return normalized
 
     @staticmethod
@@ -2884,10 +2909,135 @@ class ChatV2Adapter:
         capture = snapshot.get("capture")
         if isinstance(capture, dict):
             stable["capture"] = dict(capture)
+        audio = snapshot.get("audio")
+        if isinstance(audio, dict):
+            stable["audio"] = dict(audio)
         nested_policy = snapshot.get("policy")
         if isinstance(nested_policy, dict):
             stable["policy"] = json.loads(json.dumps(nested_policy))
         return stable
+
+    def _allowed_asr_vendors(self) -> List[str]:
+        allowed: List[str] = []
+        if getattr(config, "ASR_DEEPGRAM_ENABLED", True) and getattr(
+            config, "DEEPGRAM_API_KEY", None
+        ):
+            allowed.append("deepgram")
+        speechmatics_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", False)
+        if speechmatics_enabled:
+            api_key = getattr(config, "SPEECHMATICS_API_KEY", None)
+            url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
+            if api_key and url:
+                allowed.append("speechmatics")
+        return allowed
+
+    @staticmethod
+    def _extract_policy_vendor(snapshot: Mapping[str, Any] | None) -> tuple[Optional[str], Optional[str]]:
+        if not isinstance(snapshot, Mapping):
+            return None, None
+        policy_block = snapshot.get("policy")
+        if not isinstance(policy_block, Mapping):
+            return None, None
+        asr_block = policy_block.get("asr")
+        if not isinstance(asr_block, Mapping):
+            return None, None
+        vendor_block = asr_block.get("vendor")
+        if not isinstance(vendor_block, Mapping):
+            return None, None
+        primary = vendor_block.get("primary")
+        secondary = vendor_block.get("secondary")
+        normalized_primary = (
+            primary.strip().lower()
+            if isinstance(primary, str) and primary.strip()
+            else None
+        )
+        normalized_secondary: Optional[str]
+        if secondary is None:
+            normalized_secondary = None
+        elif isinstance(secondary, str) and secondary.strip():
+            normalized_secondary = secondary.strip().lower()
+        else:
+            normalized_secondary = None
+        return normalized_primary, normalized_secondary
+
+    def _select_asr_vendor(
+        self,
+        ctx: AdapterContext,
+        snapshot: Mapping[str, Any] | None,
+        allowed: List[str],
+        *,
+        log_selection: bool = True,
+    ) -> tuple[Optional[str], str]:
+        primary_policy, secondary_policy = self._extract_policy_vendor(snapshot)
+        reason = "fallback"
+        selected: Optional[str] = None
+
+        if primary_policy:
+            if primary_policy in allowed:
+                selected = primary_policy
+                reason = "policy"
+            else:
+                _log.warning(
+                    "evt=policy_violation sid=%s vendor=%s scope=asr.vendor.primary",
+                    ctx.sid,
+                    primary_policy,
+                )
+        if selected is None and secondary_policy:
+            if secondary_policy in allowed:
+                selected = secondary_policy
+                reason = "policy"
+            else:
+                _log.warning(
+                    "evt=policy_violation sid=%s vendor=%s scope=asr.vendor.secondary",
+                    ctx.sid,
+                    secondary_policy,
+                )
+        if selected is None and allowed:
+            selected = allowed[0]
+            reason = "fallback"
+
+        if log_selection:
+            _log.info(
+                "evt=asr_vendor_selected sid=%s primary=%s allowed=%s reason=%s",
+                ctx.sid,
+                selected or "",
+                allowed,
+                reason,
+            )
+            ctx.asr_vendor_logged = True
+        return selected, reason
+
+    @staticmethod
+    def _resolve_audio_pipeline_mode(snapshot: Mapping[str, Any] | None) -> str:
+        if isinstance(snapshot, Mapping):
+            audio_block = snapshot.get("audio")
+            if isinstance(audio_block, Mapping):
+                pipeline = audio_block.get("pipeline")
+                if isinstance(pipeline, Mapping):
+                    mode = pipeline.get("mode")
+                    if isinstance(mode, str) and mode.strip():
+                        normalized = mode.strip().lower()
+                        if normalized in {"opus-webm", "pcm16"}:
+                            return normalized
+        return "opus-webm"
+
+    @staticmethod
+    def _input_descriptor_for_mode(mode: str) -> Dict[str, Any]:
+        if mode == "pcm16":
+            return {
+                "container": "raw",
+                "codec": "pcm_s16le",
+                "rate_hz": 16000,
+                "channels": 1,
+                "mime": "audio/raw;rate=16000;channels=1;format=s16le",
+            }
+        return {
+            "container": "webm",
+            "codec": "opus",
+            "rate_hz": 48000,
+            "channels": 1,
+            "mime": "audio/webm;codecs=opus",
+        }
 
     def _log_policy_flags(self, sid: str, snapshot: Mapping[str, Any]) -> None:
         if not isinstance(snapshot, Mapping):
@@ -2921,6 +3071,40 @@ class ChatV2Adapter:
         except (TypeError, ValueError):
             keep_warm_ms = 0
 
+        commit_on_vad = bool(
+            asr_block.get("commit_on_vad_silence") if isinstance(asr_block, Mapping) else False
+        )
+        commit_silence_raw = (
+            asr_block.get("commit_silence_ms") if isinstance(asr_block, Mapping) else 0
+        )
+        try:
+            commit_silence_ms = int(commit_silence_raw)
+        except (TypeError, ValueError):
+            commit_silence_ms = 0
+        max_utterance_raw = (
+            asr_block.get("max_utterance_ms") if isinstance(asr_block, Mapping) else 0
+        )
+        try:
+            max_utterance_ms = int(max_utterance_raw)
+        except (TypeError, ValueError):
+            max_utterance_ms = 0
+
+        vendor_primary = ""
+        vendor_secondary = ""
+        if isinstance(asr_block, Mapping):
+            vendor_block = asr_block.get("vendor")
+            if isinstance(vendor_block, Mapping):
+                primary_val = vendor_block.get("primary")
+                secondary_val = vendor_block.get("secondary")
+                if isinstance(primary_val, str):
+                    vendor_primary = primary_val.strip().lower()
+                if isinstance(secondary_val, str):
+                    vendor_secondary = secondary_val.strip().lower()
+                elif secondary_val is None:
+                    vendor_secondary = ""
+
+        audio_mode = self._resolve_audio_pipeline_mode(snapshot)
+
         routing_dict = dict(routing_block) if isinstance(routing_block, Mapping) else {}
         ws_version = str(routing_dict.get("ws_version") or "").strip() or "v2"
         if ws_version != "v2":
@@ -2937,13 +3121,21 @@ class ChatV2Adapter:
 
         _log.info(
             "evt=policy_snapshot sid=%s recorder.stop_on_tts_start=%s recorder.mute_send_during_tts=%s "
-            "input.require_hotword_to_start=%s asr.prearm_on_tts_end=%s asr.keep_stream_warm_ms=%s ws_version=%s",
+            "input.require_hotword_to_start=%s asr.prearm_on_tts_end=%s asr.keep_stream_warm_ms=%s "
+            "asr.commit_on_vad_silence=%s asr.commit_silence_ms=%s asr.max_utterance_ms=%s "
+            "asr.vendor.primary=%s asr.vendor.secondary=%s audio.pipeline.mode=%s ws_version=%s",
             sid,
             stop_on_tts,
             mute_during_tts,
             require_hotword,
             prearm_on_tts_end,
             keep_warm_ms,
+            commit_on_vad,
+            commit_silence_ms,
+            max_utterance_ms,
+            vendor_primary or "",
+            vendor_secondary or "",
+            audio_mode,
             ws_version,
         )
 
@@ -2985,22 +3177,19 @@ class ChatV2Adapter:
             if parsed > 0:
                 timeslice_ms = parsed
 
+        mode = ctx.audio_pipeline_mode or "opus-webm"
+        descriptor = self._input_descriptor_for_mode(mode)
         ready_frame = {
             "type": "asr.ready",
-            "input": {
-                "container": "webm",
-                "codec": "opus",
-                "rate_hz": 48000,
-                "channels": 1,
-                "mime": "audio/webm;codecs=opus",
-            },
+            "input": dict(descriptor),
         }
+        if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
+            ready_frame["vendor"] = ctx.asr_vendor
         input_start = {
             "type": "input.start",
             "capture": {
-                "container": "webm",
-                "codec": "opus",
-                "mime": "audio/webm;codecs=opus",
+                **dict(descriptor),
+                "mode": mode,
                 "timeslice_ms": timeslice_ms,
                 "manual_gate": False,
             },
@@ -3017,9 +3206,12 @@ class ChatV2Adapter:
         await self._send_json(send, ctx.sid, input_start)
         await self._send_json(send, ctx.sid, {"type": "start_listening"})
         _log.info(
-            "evt=asr_ready_bundle_sent sid=%s input.mime=audio/webm;codecs=opus capture.timeslice_ms=%s",
+            "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
             ctx.sid,
+            mode,
+            descriptor.get("mime", ""),
             timeslice_ms,
+            ctx.asr_vendor or "",
         )
 
     @staticmethod

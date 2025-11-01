@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Literal, Optional
 
 
 @dataclass
@@ -28,12 +28,56 @@ class CapturePolicy:
 
 
 @dataclass
+class ASRVendorPolicy:
+    """Describe how ASR vendors should be selected at runtime."""
+
+    primary: str = "deepgram"
+    secondary: Optional[str] = None
+
+
+@dataclass
+class ASRPolicy:
+    """Server-side ASR endpointing configuration."""
+
+    vendor: ASRVendorPolicy = field(default_factory=ASRVendorPolicy)
+    prearm_on_tts_end: bool = True
+    keep_stream_warm_ms: int = 30000
+    commit_on_vad_silence: bool = True
+    commit_silence_ms: int = 900
+    max_utterance_ms: int = 8000
+
+
+@dataclass
+class AudioPipelinePolicy:
+    """Describe the media pipeline presented to clients."""
+
+    mode: Literal["opus-webm", "pcm16"] = "opus-webm"
+
+
+@dataclass
+class AudioPolicy:
+    """Audio-focused policy controls."""
+
+    pipeline: AudioPipelinePolicy = field(default_factory=AudioPipelinePolicy)
+
+
+@dataclass
 class Policy:
     """Container for policy knobs exposed to the runtime."""
 
     interaction: Dict[str, Any] = field(default_factory=dict)
     media: MediaPolicy = field(default_factory=MediaPolicy)
     capture: CapturePolicy = field(default_factory=CapturePolicy)
+    asr: ASRPolicy = field(default_factory=ASRPolicy)
+    audio: AudioPolicy = field(default_factory=AudioPolicy)
 
 
-__all__ = ["MediaPolicy", "CapturePolicy", "Policy"]
+__all__ = [
+    "MediaPolicy",
+    "CapturePolicy",
+    "ASRPolicy",
+    "ASRVendorPolicy",
+    "AudioPolicy",
+    "AudioPipelinePolicy",
+    "Policy",
+]

@@ -37,11 +37,16 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
         "asr": {
             "prearm_on_tts_end": True,
             "keep_stream_warm_ms": 30000,
+            "commit_on_vad_silence": True,
+            "commit_silence_ms": 900,
+            "max_utterance_ms": 8000,
+            "vendor": {"primary": "deepgram", "secondary": None},
         },
         "routing": {
             "ws_version": "v2",
         },
     },
+    "audio": {"pipeline": {"mode": "opus-webm"}},
     "actions": {
         "allowed": ["answer"],
         "surface_via_suggestions": True,

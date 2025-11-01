@@ -14,6 +14,7 @@ _DEFAULT_SETTINGS: Dict[str, Any] = {"authentication": "none"}
 _CHUNK_SAMPLE_MIN = 1
 _CHUNK_SAMPLE_MAX = 100
 _POLICY_MEDIA_ALLOWED_INPUTS = {"webm_opus", "pcm_16k"}
+_POLICY_AUDIO_ALLOWED_MODES = {"opus-webm", "pcm16"}
 _POLICY_CAPTURE_MIN_TIMESLICE = 20
 
 
@@ -97,6 +98,7 @@ def _extract_updates(payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         "policy_recorder",
         "policy_input",
         "policy_asr",
+        "policy_audio",
         "policy_routing",
     ):
         if key in settings:
@@ -218,6 +220,78 @@ def _normalize_policy_asr(value: Any) -> Dict[str, Any]:
             value.get("keep_stream_warm_ms"), minimum=0, maximum=600000
         )
 
+    if "commit_on_vad_silence" in value:
+        current["commit_on_vad_silence"] = _coerce_bool(
+            value.get("commit_on_vad_silence")
+        )
+
+    if "commit_silence_ms" in value:
+        current["commit_silence_ms"] = _coerce_int(
+            value.get("commit_silence_ms"), minimum=0, maximum=600000
+        )
+
+    if "max_utterance_ms" in value:
+        current["max_utterance_ms"] = _coerce_int(
+            value.get("max_utterance_ms"), minimum=0, maximum=600000
+        )
+
+    if "vendor" in value:
+        vendor_value = value.get("vendor")
+        if vendor_value is None:
+            current["vendor"] = dict(config.POLICY_ASR.get("vendor", {}))
+        elif isinstance(vendor_value, Mapping):
+            vendor_block = dict(current.get("vendor", {}))
+            if "primary" in vendor_value:
+                primary = vendor_value.get("primary")
+                if not isinstance(primary, str) or not primary.strip():
+                    raise ValueError("expected_string")
+                normalized = primary.strip().lower()
+                if normalized not in {"deepgram", "speechmatics"}:
+                    raise ValueError("unsupported_vendor")
+                vendor_block["primary"] = normalized
+            if "secondary" in vendor_value:
+                secondary = vendor_value.get("secondary")
+                if secondary is None:
+                    vendor_block["secondary"] = None
+                elif isinstance(secondary, str) and secondary.strip():
+                    normalized_secondary = secondary.strip().lower()
+                    if normalized_secondary not in {"deepgram", "speechmatics"}:
+                        raise ValueError("unsupported_vendor")
+                    vendor_block["secondary"] = normalized_secondary
+                else:
+                    raise ValueError("expected_string")
+            current["vendor"] = vendor_block
+        else:
+            raise ValueError("expected_object")
+
+    return current
+
+
+def _normalize_policy_audio(value: Any) -> Dict[str, Any]:
+    current = dict(config.POLICY_AUDIO)
+    if value is None:
+        raise ValueError("expected_object")
+    if not isinstance(value, Mapping):
+        raise ValueError("expected_object")
+
+    if "pipeline" in value:
+        pipeline_value = value.get("pipeline")
+        if pipeline_value is None:
+            current["pipeline"] = dict(config.POLICY_AUDIO.get("pipeline", {}))
+        elif isinstance(pipeline_value, Mapping):
+            pipeline_block = dict(current.get("pipeline", {}))
+            if "mode" in pipeline_value:
+                mode = pipeline_value.get("mode")
+                if not isinstance(mode, str) or not mode.strip():
+                    raise ValueError("expected_string")
+                normalized = mode.strip().lower()
+                if normalized not in _POLICY_AUDIO_ALLOWED_MODES:
+                    raise ValueError("unsupported_mode")
+                pipeline_block["mode"] = normalized
+            current["pipeline"] = pipeline_block
+        else:
+            raise ValueError("expected_object")
+
     return current
 
 
@@ -259,6 +333,8 @@ def _normalize_setting(key: str, value: Any) -> Optional[Any]:
         return _normalize_policy_input(value)
     if key == "policy_asr":
         return _normalize_policy_asr(value)
+    if key == "policy_audio":
+        return _normalize_policy_audio(value)
     if key == "policy_routing":
         return _normalize_policy_routing(value)
     raise ValueError("unsupported_setting")
@@ -317,6 +393,7 @@ def _current_settings() -> Dict[str, Any]:
             "policy_recorder": dict(config.POLICY_RECORDER),
             "policy_input": dict(config.POLICY_INPUT),
             "policy_asr": dict(config.POLICY_ASR),
+            "policy_audio": dict(config.POLICY_AUDIO),
             "policy_routing": dict(config.POLICY_ROUTING),
         }
     )

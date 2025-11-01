@@ -6,6 +6,21 @@
     : {};
 
   const API_ENDPOINT = '/api/v1/admin/settings';
+  const ASR_VENDOR_OPTIONS = [
+    { value: 'deepgram', label: 'Deepgram' },
+    { value: 'speechmatics', label: 'Speechmatics' },
+  ];
+
+  const ASR_VENDOR_SECONDARY_OPTIONS = [
+    { value: '', label: 'None' },
+    ...ASR_VENDOR_OPTIONS,
+  ];
+
+  const AUDIO_PIPELINE_OPTIONS = [
+    { value: 'opus-webm', label: 'Opus + WebM (default)' },
+    { value: 'pcm16', label: 'PCM16 (beta)' },
+  ];
+
   const DEFAULTS = {
     diag_client_hud: false,
     diag_audio_guard: true,
@@ -32,9 +47,16 @@
     policy_asr: {
       prearm_on_tts_end: true,
       keep_stream_warm_ms: 30000,
+      commit_on_vad_silence: true,
+      commit_silence_ms: 900,
+      max_utterance_ms: 8000,
+      vendor: { primary: 'deepgram', secondary: null },
     },
     policy_routing: {
       ws_version: 'v2',
+    },
+    policy_audio: {
+      pipeline: { mode: 'opus-webm' },
     },
   };
   const CHUNK_MIN = 1;
@@ -52,8 +74,9 @@
       policy_capture: { ...DEFAULTS.policy_capture },
       policy_recorder: { ...DEFAULTS.policy_recorder },
       policy_input: { ...DEFAULTS.policy_input },
-      policy_asr: { ...DEFAULTS.policy_asr },
+      policy_asr: JSON.parse(JSON.stringify(DEFAULTS.policy_asr)),
       policy_routing: { ...DEFAULTS.policy_routing },
+      policy_audio: JSON.parse(JSON.stringify(DEFAULTS.policy_audio)),
     };
   }
 
@@ -191,6 +214,74 @@
         }
         return Math.round(numeric);
       },
+    },
+    {
+      key: 'policy_asr.commit_on_vad_silence',
+      settingKey: 'policy_asr',
+      prop: 'commit_on_vad_silence',
+      type: 'boolean',
+      label: 'Commit on VAD silence',
+      description: 'Automatically commit turns when silence is detected.',
+    },
+    {
+      key: 'policy_asr.commit_silence_ms',
+      settingKey: 'policy_asr',
+      prop: 'commit_silence_ms',
+      type: 'number',
+      label: 'Commit silence (ms)',
+      description: 'Silence duration required before committing a turn.',
+      min: 0,
+      sanitize: (value) => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric < 0) {
+          return DEFAULTS.policy_asr.commit_silence_ms;
+        }
+        return Math.round(numeric);
+      },
+    },
+    {
+      key: 'policy_asr.max_utterance_ms',
+      settingKey: 'policy_asr',
+      prop: 'max_utterance_ms',
+      type: 'number',
+      label: 'Max utterance (ms)',
+      description: 'Maximum duration to keep an utterance open before forcing a commit.',
+      min: 0,
+      sanitize: (value) => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric < 0) {
+          return DEFAULTS.policy_asr.max_utterance_ms;
+        }
+        return Math.round(numeric);
+      },
+    },
+    {
+      key: 'policy_asr.vendor.primary',
+      settingKey: 'policy_asr',
+      propPath: ['vendor', 'primary'],
+      type: 'select',
+      label: 'Primary ASR vendor',
+      description: 'Preferred speech recognition vendor for new sessions.',
+      options: ASR_VENDOR_OPTIONS,
+    },
+    {
+      key: 'policy_asr.vendor.secondary',
+      settingKey: 'policy_asr',
+      propPath: ['vendor', 'secondary'],
+      type: 'select',
+      label: 'Secondary ASR vendor',
+      description: 'Fallback vendor when the primary is unavailable.',
+      options: ASR_VENDOR_SECONDARY_OPTIONS,
+      emptyAsNull: true,
+    },
+    {
+      key: 'policy_audio.pipeline.mode',
+      settingKey: 'policy_audio',
+      propPath: ['pipeline', 'mode'],
+      type: 'select',
+      label: 'Audio pipeline mode',
+      description: 'Select the media pipeline format advertised to clients.',
+      options: AUDIO_PIPELINE_OPTIONS,
     },
     {
       key: 'policy_routing.ws_version',
@@ -357,7 +448,7 @@
   }
 
   function sanitizePolicyAsr(value) {
-    const base = { ...DEFAULTS.policy_asr };
+    const base = JSON.parse(JSON.stringify(DEFAULTS.policy_asr));
     if (!value || typeof value !== 'object') {
       return base;
     }
@@ -372,6 +463,72 @@
       base.keep_stream_warm_ms = Number.isFinite(numeric) && numeric >= 0
         ? Math.round(numeric)
         : DEFAULTS.policy_asr.keep_stream_warm_ms;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'commit_on_vad_silence')) {
+      base.commit_on_vad_silence = coerceBoolean(
+        value.commit_on_vad_silence,
+        base.commit_on_vad_silence,
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'commit_silence_ms')) {
+      const numeric = Number(value.commit_silence_ms);
+      base.commit_silence_ms = Number.isFinite(numeric) && numeric >= 0
+        ? Math.round(numeric)
+        : DEFAULTS.policy_asr.commit_silence_ms;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'max_utterance_ms')) {
+      const numeric = Number(value.max_utterance_ms);
+      base.max_utterance_ms = Number.isFinite(numeric) && numeric >= 0
+        ? Math.round(numeric)
+        : DEFAULTS.policy_asr.max_utterance_ms;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'vendor')) {
+      const vendorValue = value.vendor;
+      const normalized = typeof vendorValue === 'object' && vendorValue
+        ? vendorValue
+        : {};
+      const vendor = { ...base.vendor };
+      if (Object.prototype.hasOwnProperty.call(normalized, 'primary')) {
+        const primary = typeof normalized.primary === 'string'
+          ? normalized.primary.trim().toLowerCase()
+          : '';
+        vendor.primary = ASR_VENDOR_OPTIONS.some((option) => option.value === primary)
+          ? primary
+          : vendor.primary;
+      }
+      if (Object.prototype.hasOwnProperty.call(normalized, 'secondary')) {
+        const secondary = normalized.secondary;
+        if (secondary === null) {
+          vendor.secondary = null;
+        } else if (typeof secondary === 'string') {
+          const trimmed = secondary.trim().toLowerCase();
+          vendor.secondary = ASR_VENDOR_OPTIONS.some((option) => option.value === trimmed)
+            ? trimmed
+            : vendor.secondary;
+        }
+      }
+      base.vendor = vendor;
+    }
+    return base;
+  }
+
+  function sanitizePolicyAudio(value) {
+    const base = JSON.parse(JSON.stringify(DEFAULTS.policy_audio));
+    if (!value || typeof value !== 'object') {
+      return base;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'pipeline')) {
+      const pipelineValue = value.pipeline;
+      const pipeline = { ...base.pipeline };
+      if (pipelineValue && typeof pipelineValue === 'object') {
+        const mode = typeof pipelineValue.mode === 'string'
+          ? pipelineValue.mode.trim().toLowerCase()
+          : '';
+        if (AUDIO_PIPELINE_OPTIONS.some((option) => option.value === mode)) {
+          pipeline.mode = mode;
+        }
+      }
+      base.pipeline = pipeline;
     }
     return base;
   }
@@ -404,6 +561,9 @@
     if (key === 'policy_asr') {
       return sanitizePolicyAsr(value);
     }
+    if (key === 'policy_audio') {
+      return sanitizePolicyAudio(value);
+    }
     if (key === 'policy_routing') {
       return sanitizePolicyRouting(value);
     }
@@ -420,21 +580,59 @@
     return field && field.settingKey ? field.settingKey : field.key;
   }
 
+  function getNestedValue(source, path) {
+    if (!source || typeof source !== 'object' || !Array.isArray(path)) {
+      return undefined;
+    }
+    return path.reduce((acc, key) => {
+      if (!acc || typeof acc !== 'object') {
+        return undefined;
+      }
+      return acc[key];
+    }, source);
+  }
+
+  function setNestedValue(source, path, value) {
+    const base = (source && typeof source === 'object') ? { ...source } : {};
+    if (!Array.isArray(path) || !path.length) {
+      return base;
+    }
+    let cursor = base;
+    for (let i = 0; i < path.length - 1; i += 1) {
+      const key = path[i];
+      const next = cursor[key];
+      if (!next || typeof next !== 'object') {
+        cursor[key] = {};
+      } else {
+        cursor[key] = { ...next };
+      }
+      cursor = cursor[key];
+    }
+    cursor[path[path.length - 1]] = value;
+    return base;
+  }
+
+  function getDefaultForField(field) {
+    const settingKey = getSettingKey(field);
+    const defaults = DEFAULTS[settingKey];
+    if (!defaults) {
+      return undefined;
+    }
+    if (Array.isArray(field.propPath) && field.propPath.length) {
+      return getNestedValue(defaults, field.propPath);
+    }
+    if (field.prop && typeof defaults === 'object') {
+      return defaults[field.prop];
+    }
+    return defaults;
+  }
+
   function sanitizeFieldInput(field, value) {
     if (!field) {
       return value;
     }
     if (field.type === 'boolean') {
-      const settingKey = getSettingKey(field);
-      let fallback = false;
-      if (field.prop) {
-        const defaults = DEFAULTS[settingKey];
-        if (defaults && typeof defaults === 'object') {
-          fallback = Boolean(defaults[field.prop]);
-        }
-      } else if (Object.prototype.hasOwnProperty.call(DEFAULTS, settingKey)) {
-        fallback = Boolean(DEFAULTS[settingKey]);
-      }
+      const fallback = Boolean(getDefaultForField(field));
       return coerceBoolean(value, fallback);
     }
     if (field.type === 'number') {
@@ -457,10 +655,15 @@
 
   function getFieldValue(field) {
     const settingKey = getSettingKey(field);
-    const current = state.values[settingKey];
+    const current = sanitizeSettingValue(settingKey, state.values[settingKey]);
     let value = current;
-    if (field.prop && current && typeof current === 'object') {
+    if (Array.isArray(field.propPath) && field.propPath.length) {
+      value = getNestedValue(current, field.propPath);
+    } else if (field.prop && current && typeof current === 'object') {
       value = current[field.prop];
+    }
+    if (field.emptyAsNull && (value === null || typeof value === 'undefined')) {
+      return '';
     }
     return sanitizeFieldInput(field, value);
   }
@@ -468,9 +671,16 @@
   function persistFieldValue(field, sanitizedValue) {
     const settingKey = getSettingKey(field);
     let payloadValue = sanitizedValue;
+    let nextValue = sanitizedValue;
+    if (field.emptyAsNull && nextValue === '') {
+      nextValue = null;
+    }
     if (field.prop) {
       const existing = sanitizeSettingValue(settingKey, state.values[settingKey]);
-      payloadValue = Object.assign({}, existing, { [field.prop]: sanitizedValue });
+      payloadValue = Object.assign({}, existing, { [field.prop]: nextValue });
+    } else if (Array.isArray(field.propPath) && field.propPath.length) {
+      const existing = sanitizeSettingValue(settingKey, state.values[settingKey]);
+      payloadValue = setNestedValue(existing, field.propPath, nextValue);
     } else if (
       settingKey !== field.key &&
       sanitizedValue &&
@@ -520,6 +730,9 @@
     }
     if (Object.prototype.hasOwnProperty.call(raw, 'policy_asr')) {
       result.policy_asr = sanitizePolicyAsr(raw.policy_asr);
+    }
+    if (Object.prototype.hasOwnProperty.call(raw, 'policy_audio')) {
+      result.policy_audio = sanitizePolicyAudio(raw.policy_audio);
     }
     if (Object.prototype.hasOwnProperty.call(raw, 'policy_routing')) {
       result.policy_routing = sanitizePolicyRouting(raw.policy_routing);

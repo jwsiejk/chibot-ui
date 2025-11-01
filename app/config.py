@@ -31,6 +31,12 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
+ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", False)
+SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
+SPEECHMATICS_REALTIME_URL = os.getenv(
+    "SPEECHMATICS_REALTIME_URL", "wss://mp.speechmatics.com/v2"
+)
 ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
 )
@@ -53,6 +59,8 @@ _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or se
 _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
 
 _ALLOWED_ASR_INPUTS = {"webm_opus", "pcm_16k"}
+_SUPPORTED_ASR_VENDORS = {"deepgram", "speechmatics"}
+_AUDIO_PIPELINE_MODES = {"opus-webm", "pcm16"}
 _CAPTURE_TIMESLICE_MIN_MS = 20
 
 _DEFAULT_POLICY_MEDIA = {
@@ -81,10 +89,18 @@ _DEFAULT_POLICY_INPUT = {
 _DEFAULT_POLICY_ASR = {
     "prearm_on_tts_end": True,
     "keep_stream_warm_ms": 30000,
+    "vendor": {"primary": "deepgram", "secondary": None},
+    "commit_on_vad_silence": True,
+    "commit_silence_ms": 900,
+    "max_utterance_ms": 8000,
 }
 
 _DEFAULT_POLICY_ROUTING = {
     "ws_version": "v2",
+}
+
+_DEFAULT_POLICY_AUDIO = {
+    "pipeline": {"mode": "opus-webm"},
 }
 
 POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
@@ -92,6 +108,7 @@ POLICY_CAPTURE: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_CAPTURE)
 POLICY_RECORDER: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_RECORDER)
 POLICY_INPUT: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_INPUT)
 POLICY_ASR: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ASR)
+POLICY_AUDIO: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_AUDIO)
 POLICY_ROUTING: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ROUTING)
 POLICY_OVERRIDES: MutableMapping[str, Any] = {
     "media": dict(POLICY_MEDIA),
@@ -102,6 +119,7 @@ POLICY_OVERRIDES: MutableMapping[str, Any] = {
         "asr": dict(POLICY_ASR),
         "routing": dict(POLICY_ROUTING),
     },
+    "audio": dict(POLICY_AUDIO),
 }
 
 
@@ -357,7 +375,7 @@ def _sanitize_asr_policy(
     if not isinstance(value, Mapping):
         return sanitized
 
-    for key in ("prearm_on_tts_end",):
+    for key in ("prearm_on_tts_end", "commit_on_vad_silence"):
         try:
             sanitized[key] = _coerce_db_bool(value.get(key), sanitized[key])
         except ValueError:
@@ -373,6 +391,56 @@ def _sanitize_asr_policy(
         sanitized["keep_stream_warm_ms"],
         minimum=0,
     )
+
+    sanitized["commit_silence_ms"] = _coerce_db_int(
+        value.get("commit_silence_ms"), sanitized["commit_silence_ms"], minimum=0
+    )
+    sanitized["max_utterance_ms"] = _coerce_db_int(
+        value.get("max_utterance_ms"), sanitized["max_utterance_ms"], minimum=0
+    )
+
+    vendor_value = value.get("vendor")
+    if isinstance(vendor_value, Mapping):
+        vendor_block = dict(sanitized.get("vendor", {}))
+        primary = vendor_value.get("primary")
+        if isinstance(primary, str) and primary.strip():
+            normalized = primary.strip().lower()
+            if normalized in _SUPPORTED_ASR_VENDORS:
+                vendor_block["primary"] = normalized
+            else:
+                _log.warning(
+                    "evt=admin_settings_invalid_policy_asr key=vendor.primary source=%s",
+                    source,
+                    extra={
+                        "component": "admin.settings",
+                        "raw": raw,
+                        "vendor": primary,
+                    },
+                )
+        secondary = vendor_value.get("secondary")
+        if secondary is None:
+            vendor_block["secondary"] = None
+        elif isinstance(secondary, str) and secondary.strip():
+            normalized_secondary = secondary.strip().lower()
+            if normalized_secondary in _SUPPORTED_ASR_VENDORS:
+                vendor_block["secondary"] = normalized_secondary
+            else:
+                _log.warning(
+                    "evt=admin_settings_invalid_policy_asr key=vendor.secondary source=%s",
+                    source,
+                    extra={
+                        "component": "admin.settings",
+                        "raw": raw,
+                        "vendor": secondary,
+                    },
+                )
+        sanitized["vendor"] = vendor_block
+    elif vendor_value is not None:
+        _log.warning(
+            "evt=admin_settings_invalid_policy_asr key=vendor source=%s",
+            source,
+            extra={"component": "admin.settings", "raw": raw},
+        )
 
     return sanitized
 
@@ -407,6 +475,41 @@ def _sanitize_routing_policy(
     elif ws_version is not None:
         _log.warning(
             "evt=admin_settings_invalid_policy_routing key=ws_version source=%s",
+            source,
+            extra={"component": "admin.settings", "raw": raw},
+        )
+
+    return sanitized
+
+
+def _sanitize_audio_policy(
+    value: Mapping[str, Any] | None,
+    *,
+    source: str,
+    raw: Any,
+) -> Mapping[str, Any]:
+    sanitized = dict(_DEFAULT_POLICY_AUDIO)
+    if not isinstance(value, Mapping):
+        return sanitized
+
+    pipeline_value = value.get("pipeline")
+    if isinstance(pipeline_value, Mapping):
+        pipeline_block = dict(sanitized.get("pipeline", {}))
+        mode = pipeline_value.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            normalized = mode.strip().lower()
+            if normalized in _AUDIO_PIPELINE_MODES:
+                pipeline_block["mode"] = normalized
+            else:
+                _log.warning(
+                    "evt=admin_settings_invalid_policy_audio key=pipeline.mode source=%s",
+                    source,
+                    extra={"component": "admin.settings", "raw": raw, "mode": mode},
+                )
+        sanitized["pipeline"] = pipeline_block
+    elif pipeline_value is not None:
+        _log.warning(
+            "evt=admin_settings_invalid_policy_audio key=pipeline source=%s",
             source,
             extra={"component": "admin.settings", "raw": raw},
         )
@@ -579,6 +682,13 @@ def reload_runtime_flags() -> None:
     )
     policy_asr = _sanitize_asr_policy(policy_asr_raw, source=asr_source, raw=asr_raw)
 
+    policy_audio_raw, audio_policy_source, audio_policy_raw = _resolve_mapping_setting(
+        "policy_audio", default=_DEFAULT_POLICY_AUDIO
+    )
+    policy_audio = _sanitize_audio_policy(
+        policy_audio_raw, source=audio_policy_source, raw=audio_policy_raw
+    )
+
     policy_routing_raw, routing_source, routing_raw = _resolve_mapping_setting(
         "policy_routing", default=_DEFAULT_POLICY_ROUTING
     )
@@ -597,6 +707,7 @@ def reload_runtime_flags() -> None:
         "POLICY_RECORDER": dict(policy_recorder),
         "POLICY_INPUT": dict(policy_input),
         "POLICY_ASR": dict(policy_asr),
+        "POLICY_AUDIO": dict(policy_audio),
         "POLICY_ROUTING": dict(policy_routing),
     }
     with _ADMIN_SETTINGS_LOCK:
@@ -619,6 +730,9 @@ def reload_runtime_flags() -> None:
     POLICY_ASR.clear()
     POLICY_ASR.update(policy_asr)
 
+    POLICY_AUDIO.clear()
+    POLICY_AUDIO.update(policy_audio)
+
     POLICY_ROUTING.clear()
     POLICY_ROUTING.update(policy_routing)
 
@@ -632,6 +746,7 @@ def reload_runtime_flags() -> None:
             "asr": dict(POLICY_ASR),
             "routing": dict(POLICY_ROUTING),
         },
+        "audio": dict(POLICY_AUDIO),
     })
 
     log_snapshot = [
@@ -671,6 +786,11 @@ def reload_runtime_flags() -> None:
             "key": "POLICY_ASR",
             "value": dict(policy_asr),
             "source": asr_source,
+        },
+        {
+            "key": "POLICY_AUDIO",
+            "value": dict(policy_audio),
+            "source": audio_policy_source,
         },
         {
             "key": "POLICY_ROUTING",
@@ -715,8 +835,12 @@ __all__ = [
     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
     "ASR_IDLE_CLOSE_MS",
     "ASR_TRACE",
+    "ASR_DEEPGRAM_ENABLED",
+    "ASR_SPEECHMATICS_ENABLED",
     "AUDIO_GUARDRAILS",
     "DEEPGRAM_API_KEY",
+    "SPEECHMATICS_API_KEY",
+    "SPEECHMATICS_REALTIME_URL",
     "DIAG_AUDIO_GUARD",
     "DIAG_CHUNK_SAMPLE_N",
     "DIAG_CLIENT_HUD",
@@ -725,6 +849,7 @@ __all__ = [
     "POLICY_RECORDER",
     "POLICY_INPUT",
     "POLICY_ASR",
+    "POLICY_AUDIO",
     "POLICY_ROUTING",
     "POLICY_OVERRIDES",
     "bool_env_or_db",
