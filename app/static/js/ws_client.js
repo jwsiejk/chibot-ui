@@ -2108,10 +2108,7 @@ import { WakeWord } from "./wake_word.js";
         logMic({ outcome: MIC_OUTCOME.ARMED });
       } catch {}
       // If unified recorder exists, do not arm any legacy capture
-      if (unifiedArmed) {
-        dispatchFrame(frame);
-        return;
-      }
+      if (unifiedArmed) return;
       try {
         const hub = AppState?.hub;
         const maybePromise = hub && typeof hub.startListening === "function"
