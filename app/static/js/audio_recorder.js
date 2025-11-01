@@ -290,8 +290,9 @@ import { WakeWord } from "./wake_word.js";
     }
 
     _updateRecorderState(active, reason) {
-      this._active = Boolean(active);
-      const payload = { active: this._active };
+      const nextActive = Boolean(active);
+      this._active = nextActive;
+      const payload = { active: nextActive };
       if (reason && typeof reason === "string") {
         payload.reason = reason;
       }
@@ -310,12 +311,15 @@ import { WakeWord } from "./wake_word.js";
         type: CLIENT_HUD_STATE_EVENT,
         meta: { state: this._active ? "Listening" : "Idle", source: "client" }
       });
-      if (!this._active) {
+      if (!nextActive) {
         const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
         const logMic = typeof window !== "undefined" ? window.__logMic : null;
         logMic?.({ outcome: (micOutcome && micOutcome.STOPPED) || 'stopped', reason, source: 'recorder_state' });
       }
-      if (this._active && !this._micOpenEmitted) {
+      if (!nextActive && this._micOpenEmitted) {
+        this._micOpenEmitted = false;
+      }
+      if (nextActive && !this._micOpenEmitted) {
         this._micOpenEmitted = true;
         emitEvent(CLIENT_MIC_OPEN_EVENT, {
           type: CLIENT_MIC_OPEN_EVENT,
@@ -352,13 +356,14 @@ import { WakeWord } from "./wake_word.js";
     }
 
     stopListening(opts = {}) {
+      const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
       if (this._sendGate) {
-        this._sendGate = false;
-        const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
         console.info("diag=send_gate_closed reason=%s", reason);
-        this._updateRecorderState(false, reason);
       }
-      this._setSendMuted(false, typeof opts?.reason === "string" ? opts.reason : "stop_listening");
+      this._sendGate = false;
+      this._updateRecorderState(false, reason);
+      this._micOpenEmitted = false;
+      this._setSendMuted(false, reason);
       this._headerSent = false;
     }
 

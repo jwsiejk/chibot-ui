@@ -1,92 +1,137 @@
-diff --git a/tests/test_ws_binary_guard.py b/tests/test_ws_binary_guard.py
-index d6399a8b8134cd819e6fc8c50fd07e4c7179e50b..861dd97b3fc2fd61f62d6378ac3309d14e092db1 100644
---- a/tests/test_ws_binary_guard.py
-+++ b/tests/test_ws_binary_guard.py
-@@ -204,42 +204,85 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
-                 {"type": "websocket.receive", "bytes": chunk},
-                 {"type": "websocket.receive", "bytes": chunk},
-             ]
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index 11b42e0ecef68eedcb63d469d1efdf8d32b792a8..3b838121d4e8d865f5f8659873ff1c47144f6496 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -268,119 +268,124 @@ import { WakeWord } from "./wake_word.js";
+           }
+         });
+         this._rec.addEventListener("stop", () => {
+           this._rec = null;
+           const logMic = typeof window !== "undefined" ? window.__logMic : null;
+           const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+           logMic?.({ outcome: (micOutcome && micOutcome.STOPPED) || 'stopped', reason: 'recorder_stop' });
+         });
+         this._rec.addEventListener("error", (event) => {
+           console.warn("diag=media_recorder_error %o", event);
+           const logMic = typeof window !== "undefined" ? window.__logMic : null;
+           const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+           const logStage = typeof window !== "undefined" ? window.__logStage : null;
+           const message = event?.error?.message || event?.name || "recorder_error";
+           logMic?.({ outcome: (micOutcome && micOutcome.ERROR_UNKNOWN) || 'error_unknown', message });
+           logStage?.('client.audio', { outcome: 'error', message });
+         });
+       }
+       if (this._rec.state !== "recording") {
+         this._rec.start(SEND_TIMESLICE_MS);
+         console.info("diag=media_recorder_start timeslice_ms=%d", SEND_TIMESLICE_MS);
+       }
+     }
  
-             sent = self._drive(adapter, events)
-         finally:
-             bus.unsubscribe(token)
+     _updateRecorderState(active, reason) {
+-      this._active = Boolean(active);
+-      const payload = { active: this._active };
++      const nextActive = Boolean(active);
++      this._active = nextActive;
++      const payload = { active: nextActive };
+       if (reason && typeof reason === "string") {
+         payload.reason = reason;
+       }
+       try {
+         if (this._state) {
+           if (typeof this._state.setState === "function") {
+             this._state.setState({ recorder: { active: payload.active } });
+           }
+           this._state.recorder = { active: payload.active };
+           this._state.emit?.(payload.active ? "recordingStarted" : "recordingStopped", payload);
+         }
+       } catch (err) {
+         console.warn("AudioRecorder state update failed", err);
+       }
+       emitEvent(CLIENT_HUD_STATE_EVENT, {
+         type: CLIENT_HUD_STATE_EVENT,
+         meta: { state: this._active ? "Listening" : "Idle", source: "client" }
+       });
+-      if (!this._active) {
++      if (!nextActive) {
+         const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
+         const logMic = typeof window !== "undefined" ? window.__logMic : null;
+         logMic?.({ outcome: (micOutcome && micOutcome.STOPPED) || 'stopped', reason, source: 'recorder_state' });
+       }
+-      if (this._active && !this._micOpenEmitted) {
++      if (!nextActive && this._micOpenEmitted) {
++        this._micOpenEmitted = false;
++      }
++      if (nextActive && !this._micOpenEmitted) {
+         this._micOpenEmitted = true;
+         emitEvent(CLIENT_MIC_OPEN_EVENT, {
+           type: CLIENT_MIC_OPEN_EVENT,
+           ts: Date.now(),
+           vendor: "webm_opus"
+         });
+       }
+     }
  
-         self.assertFalse(engine.audio_calls)
+     async start(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return this._stream;
+     }
  
-         error_frames = self._extract_error_frames(sent)
-         self.assertEqual(len(error_frames), 3)
-         parsed = error_frames
-         for payload in parsed[:2]:
-             self.assertEqual(payload["code"], "audio_not_expected")
-             self.assertEqual(payload["detail"], "engine not accepting audio")
-         self.assertEqual(parsed[2]["code"], "audio_not_expected")
-         self.assertEqual(parsed[2]["detail"], "engine not accepting audio")
+     async startMicCaptureIfIdle(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       return true;
+     }
  
-     def test_audio_stream_not_rate_limited(self) -> None:
-         adapter = ChatV2Adapter()
-         engine = RecordingEngine(adapter)
-         adapter.engine = engine
+     async startListening(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       this._sendAudioHeader();
+       if (!this._sendGate) {
+         this._sendGate = true;
+         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
+         console.info("diag=send_gate_open reason=%s", reason);
+         this._updateRecorderState(true, reason);
+       }
+       this._setSendMuted(false, "start_listening");
+       return true;
+     }
  
-         chunk = b"\x07" * 160
-+        chunk_count = RATE_LIMIT_CAPACITY + 6
-+
-+        ready_frame = {
-+            "type": "client.ready",
-+            "mic": {"state": "open", "vendor": "webm_opus", "ts": 1761889784321},
-+        }
-+        client_log_ready = {
-+            "type": "client.log",
-+            "label": "client_ready_handshake",
-+            "detail": {
-+                "outcome": "sent",
-+                "attempts": 1,
-+                "readyState": 1,
-+                "events": [
-+                    {"kind": "enqueue", "ts": 1761889784339},
-+                    {"kind": "attempt", "ts": 1761889784339},
-+                    {"kind": "sent", "ts": 1761889784339},
-+                ],
-+            },
-+        }
-+
-         events = [{"type": "websocket.connect"}]
--        events.extend({"type": "websocket.receive", "bytes": chunk} for _ in range(RATE_LIMIT_CAPACITY + 6))
-+        events.append({"type": "websocket.receive", "text": json.dumps(ready_frame)})
-+        events.append({"type": "websocket.receive", "text": json.dumps(client_log_ready)})
-+
-+        for idx in range(chunk_count):
-+            if idx in {0, 3, 12}:
-+                events.append(
-+                    {
-+                        "type": "websocket.receive",
-+                        "text": json.dumps(
-+                            {
-+                                "type": "client.log",
-+                                "label": "client_audio_stream",
-+                                "detail": {
-+                                    "chunk": idx,
-+                                    "size": len(chunk),
-+                                    "readyState": 1,
-+                                },
-+                            }
-+                        ),
-+                    }
-+                )
-+            events.append({"type": "websocket.receive", "bytes": chunk})
-+
-         events.append({"type": "websocket.disconnect", "code": 1000})
+     stopListening(opts = {}) {
++      const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
+       if (this._sendGate) {
+-        this._sendGate = false;
+-        const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
+         console.info("diag=send_gate_closed reason=%s", reason);
+-        this._updateRecorderState(false, reason);
+       }
+-      this._setSendMuted(false, typeof opts?.reason === "string" ? opts.reason : "stop_listening");
++      this._sendGate = false;
++      this._updateRecorderState(false, reason);
++      this._micOpenEmitted = false;
++      this._setSendMuted(false, reason);
+       this._headerSent = false;
+     }
  
-         sent = self._drive(adapter, events)
+     handleStopListening(opts = {}) {
+       this.stopListening(opts);
+     }
  
-         error_frames = self._extract_error_frames(sent)
-         self.assertFalse(
-             any(frame.get("code") == "rate_limited" for frame in error_frames),
-             msg=f"unexpected rate limit errors: {error_frames}",
-         )
+     handleTtsStart() {
+       if (this._shouldStopOnTtsStart()) {
+         this.stopListening({ reason: "tts_active" });
+         return;
+       }
+       if (this._shouldMuteDuringTts()) {
+         this._setSendMuted(true, "tts_active");
+       }
+     }
  
--        self.assertEqual(len(engine.audio_calls), RATE_LIMIT_CAPACITY + 6)
-+        self.assertEqual(len(engine.audio_calls), chunk_count)
+     handleTtsEnd() {
+       this._setSendMuted(false, "tts_end");
+     }
  
- 
- if __name__ == "__main__":  # pragma: no cover
-     unittest.main()
+     handleWsClose() {
+       this._headerSent = false;
+       this.endSession();
+     }
