@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 import websockets
 from websockets.legacy.client import WebSocketClientProtocol
 
+from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
 
 _AUDIO_SENTINEL = object()
 
@@ -139,6 +140,7 @@ class _StreamState:
     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     ready_error: Optional[str] = None
     ready_error_detail: Optional[str] = None
+    vendor_notices: set[str] = field(default_factory=set)
 
 
 class SpeechmaticsClient:
@@ -327,6 +329,81 @@ class SpeechmaticsClient:
                         "evt=sm_msg_parse_failed sid=%s stream_id=%s", state.sid, state.stream_id
                     )
                     continue
+
+                if isinstance(payload, Mapping):
+                    message_name = payload.get("message")
+                else:
+                    message_name = None
+
+                if message_name == "AddTranscript":
+                    transcript = payload.get("transcript")
+                    text = transcript if isinstance(transcript, str) else ""
+                    if not text:
+                        results = payload.get("results")
+                        if isinstance(results, list) and results:
+                            first_result = results[0] if isinstance(results[0], Mapping) else None
+                            if isinstance(first_result, Mapping):
+                                alternatives = first_result.get("alternatives")
+                                alt_text = ""
+                                if isinstance(alternatives, list) and alternatives:
+                                    first_alt = alternatives[0] if isinstance(alternatives[0], Mapping) else None
+                                    if isinstance(first_alt, Mapping):
+                                        candidate = first_alt.get("transcript")
+                                        if isinstance(candidate, str):
+                                            alt_text = candidate
+                                if not alt_text:
+                                    candidate = first_result.get("transcript")
+                                    if isinstance(candidate, str):
+                                        alt_text = candidate
+                                text = alt_text or text
+
+                    if not text.strip():
+                        self._logger.debug(
+                            "evt=sm_empty_transcript_ignored"
+                        )
+                        continue
+
+                    type_field = payload.get("type")
+                    is_final = bool(payload.get("is_final")) or bool(payload.get("final"))
+                    if isinstance(type_field, str) and type_field.lower() == "final":
+                        is_final = True
+
+                    event_type = EVT_ASR_FINAL if is_final else EVT_ASR_PARTIAL
+                    meta = {"text": text, "vendor": "speechmatics"}
+                    event = {
+                        "type": event_type,
+                        "sid": state.sid,
+                        "text": text,
+                        "vendor": "speechmatics",
+                        "meta": meta,
+                        "source": "speechmatics_client",
+                    }
+                    try:
+                        self._bus.publish(event)
+                    except Exception:
+                        self._logger.exception(
+                            "evt=sm_bus_publish_failed sid=%s event=%s", state.sid, event_type
+                        )
+                    else:
+                        log_event = "evt=sm_final" if is_final else "evt=sm_partial"
+                        self._logger.info("%s text_chars=%d", log_event, len(text))
+
+                    if is_final:
+                        self._handle_final(state, payload)
+                    else:
+                        self._handle_partial(state, payload)
+                    continue
+
+                if isinstance(message_name, str) and message_name in {
+                    "Info",
+                    "RecognitionStarted",
+                    "AudioAdded",
+                }:
+                    if message_name not in state.vendor_notices:
+                        self._logger.info("evt=sm_notice message=%s", message_name.lower())
+                        state.vendor_notices.add(message_name)
+                    continue
+
                 self._handle_payload(state, payload)
         except asyncio.CancelledError:
             raise

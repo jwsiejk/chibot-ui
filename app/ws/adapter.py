@@ -23,7 +23,9 @@ from app.services.streaming_asr.speechmatics_client import (
     SpeechmaticsClient,
 )
 from app.voice_v2 import (
+    EVT_ASR_FINAL,
     EVT_ASR_OPEN,
+    EVT_ASR_PARTIAL,
     EVT_ASR_READY,
     EVT_CHAT_USER,
     EVT_CLIENT_BANNER,
@@ -274,6 +276,8 @@ class AdapterContext:
     asr_subscription_bus: Optional[Any] = None
     asr_open_subscription_token: Optional[str] = None
     asr_unavailable_subscription_token: Optional[str] = None
+    asr_partial_subscription_token: Optional[str] = None
+    asr_final_subscription_token: Optional[str] = None
     server_keepalive_task: asyncio.Task[None] | None = None
     last_policy_interaction: Optional[Dict[str, Any]] = None
     policy_snapshot: Optional[Dict[str, Any]] = None
@@ -1826,6 +1830,28 @@ class ChatV2Adapter:
 
         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
 
+        def _handle_asr_event(event: dict) -> None:
+            if event.get("sid") != ctx.sid or ctx.outbox is None:
+                return
+
+            def _on_loop() -> None:
+                frame = self._coerce_asr_frame(ctx, event)
+                if frame is None:
+                    return
+                _enqueue(frame)
+
+            try:
+                loop.call_soon_threadsafe(_on_loop)
+            except RuntimeError:
+                pass
+
+        ctx.asr_partial_subscription_token = bus.subscribe(
+            EVT_ASR_PARTIAL, _handle_asr_event
+        )
+        ctx.asr_final_subscription_token = bus.subscribe(
+            EVT_ASR_FINAL, _handle_asr_event
+        )
+
         def _handle_asr_unavailable_event(event: dict) -> None:
             if event.get("type") != "asr.unavailable":
                 return
@@ -2177,6 +2203,76 @@ class ChatV2Adapter:
             ctx.partial_seq += 1
             prepared["partial_seq"] = ctx.partial_seq
         return prepared
+
+    def _coerce_asr_frame(
+        self, ctx: AdapterContext, event: Mapping[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(event, Mapping):
+            return None
+
+        source = event.get("source")
+        if isinstance(source, str) and source == "speechmatics_client":
+            return None
+
+        event_type = event.get("type")
+        if event_type == EVT_ASR_PARTIAL:
+            frame_type = "asr.partial"
+        elif event_type == EVT_ASR_FINAL:
+            frame_type = "asr.final"
+        else:
+            return None
+
+        raw_meta = event.get("meta")
+        meta = raw_meta if isinstance(raw_meta, Mapping) else None
+        text = event.get("text")
+        if not isinstance(text, str) or not text.strip():
+            if meta is not None:
+                candidate_text = meta.get("text")
+                if isinstance(candidate_text, str):
+                    text = candidate_text
+        if not isinstance(text, str) or not text.strip():
+            return None
+
+        frame: Dict[str, Any] = {"type": frame_type, "text": text}
+
+        req_id = event.get("req_id")
+        if not isinstance(req_id, str) or not req_id.strip():
+            if meta is not None:
+                meta_req = meta.get("req_id")
+                if isinstance(meta_req, str) and meta_req.strip():
+                    req_id = meta_req
+                else:
+                    req_id = None
+        else:
+            req_id = req_id.strip()
+        if isinstance(req_id, str) and req_id:
+            frame["req_id"] = req_id
+
+        confidence = event.get("confidence")
+        if not isinstance(confidence, (int, float)) and meta is not None:
+            meta_conf = meta.get("confidence")
+            if isinstance(meta_conf, (int, float)):
+                confidence = float(meta_conf)
+        if isinstance(confidence, (int, float)):
+            frame["confidence"] = float(confidence)
+
+        vendor = event.get("vendor")
+        if not isinstance(vendor, str) or not vendor:
+            if meta is not None:
+                meta_vendor = meta.get("vendor")
+                if isinstance(meta_vendor, str) and meta_vendor:
+                    vendor = meta_vendor
+                else:
+                    vendor = None
+        if isinstance(vendor, str) and vendor:
+            frame["vendor"] = vendor
+
+        if meta is not None:
+            partial_seq = meta.get("partial_seq")
+            if isinstance(partial_seq, int):
+                frame["partial_seq"] = partial_seq
+
+        return frame
 
     def _start_asr_ready_tracker(
         self, ctx: AdapterContext, telemetry_bus: Optional[Any] = None
@@ -2602,6 +2698,16 @@ class ChatV2Adapter:
         ctx.asr_unavailable_subscription_token = None
         if unavailable_token:
             bus.unsubscribe(unavailable_token)
+
+        partial_token = ctx.asr_partial_subscription_token
+        ctx.asr_partial_subscription_token = None
+        if partial_token:
+            bus.unsubscribe(partial_token)
+
+        final_token = ctx.asr_final_subscription_token
+        ctx.asr_final_subscription_token = None
+        if final_token:
+            bus.unsubscribe(final_token)
 
         mask_token = ctx.mask_subscription_token
         ctx.mask_subscription_token = None
