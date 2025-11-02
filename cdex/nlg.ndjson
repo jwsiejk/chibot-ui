@@ -1,1 +1,1 @@
-{"type":"EVT_NLG","sid":"8cd…819","req_id":"req…66a","text":"Welcome! Excited to explore Pure Storage together!","meta":{"reason":"greet","post_hold_ms":200},"ts_ms":1762060792928,"who":"server","source":"voice_engine","level":"debug","schema_version":"1"}
+{"type":"EVT_NLG","sid":"077…67f","req_id":"req…b28","text":"Welcome! Excited to explore Pure Storage together!","meta":{"reason":"greet","post_hold_ms":200},"ts_ms":1762061436637,"who":"server","source":"voice_engine","level":"debug","schema_version":"1"}
