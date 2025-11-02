@@ -42,6 +42,10 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
             "max_utterance_ms": 8000,
             "dup_final_suppress_ms": 150,
             "dedupe_normalize": True,
+            "utterance_end_ms": 1200,
+            "min_segment_ms": 800,
+            "final_guard_ms": 250,
+            "allow_word_finals": False,
             "vendor": {"primary": "deepgram", "secondary": None},
         },
         "routing": {

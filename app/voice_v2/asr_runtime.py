@@ -62,6 +62,17 @@ _LISTENING_STATE = "Listening"
 _READY_STATES = {"Ready", "Idle"}
 
 
+def _summarize_text(text: str, limit: int = 120) -> str:
+    if not isinstance(text, str):
+        return ""
+    sanitized = text.replace("\"", "\\\"")
+    if len(sanitized) <= limit:
+        return sanitized
+    if limit <= 1:
+        return sanitized[:limit]
+    return f"{sanitized[: limit - 1]}…"
+
+
 def _safe_url(url: str | None) -> str:
     if not url:
         return ""
@@ -97,6 +108,15 @@ def _default_input_descriptor_for_vendor(vendor: str) -> Dict[str, Any]:
     if isinstance(vendor, str) and vendor.strip().lower() == "speechmatics":
         return _pcm_input_descriptor()
     return _default_input_descriptor()
+
+
+@dataclass
+class _PendingFinal:
+    text: str
+    metadata: Dict[str, object]
+    created_ms: int
+    segment_ms: int
+    guard_ms: int
 
 
 @dataclass
@@ -154,6 +174,12 @@ class _SessionState:
     utterance_active: bool = False
     utterance_started_at: float = 0.0
     final_dedupe_cache: "OrderedDict[str, int]" = field(default_factory=OrderedDict)
+    segment_started_ms: int = 0
+    pending_final: Optional[_PendingFinal] = None
+    pending_final_handle: asyncio.TimerHandle | None = None
+    final_guard_ms: int = 250
+    min_segment_ms: int = 800
+    allow_word_finals: bool = False
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -317,6 +343,284 @@ class ASRRuntime:
 
         return _default_input_descriptor_for_vendor(self._vendor)
 
+    def _resolve_speechmatics_policy_values(
+        self, policy_snapshot: Mapping[str, Any] | Any | None
+    ) -> Dict[str, int | bool]:
+        asr_policy = getattr(self.policy, "asr", None)
+        defaults: Dict[str, int | bool] = {
+            "utterance_end_ms": getattr(asr_policy, "utterance_end_ms", 1200),
+            "min_segment_ms": getattr(asr_policy, "min_segment_ms", 800),
+            "final_guard_ms": getattr(asr_policy, "final_guard_ms", 250),
+            "allow_word_finals": bool(
+                getattr(asr_policy, "allow_word_finals", False)
+            ),
+        }
+
+        if policy_snapshot is None:
+            return defaults
+
+        paths: tuple[tuple[str, ...], ...] = (
+            ("policy", "asr", "speechmatics"),
+            ("policy", "asr"),
+            ("asr",),
+        )
+
+        for key in defaults.keys():
+            for path in paths:
+                current: Any = policy_snapshot
+                for element in path:
+                    if isinstance(current, Mapping):
+                        current = current.get(element)
+                    else:
+                        current = getattr(current, element, None)
+                    if current is None:
+                        break
+                if current is None:
+                    continue
+                if isinstance(current, Mapping):
+                    candidate = current.get(key)
+                else:
+                    candidate = getattr(current, key, None)
+                if candidate is None:
+                    continue
+                if key == "allow_word_finals":
+                    defaults[key] = self._coerce_policy_bool(
+                        candidate, bool(defaults[key])
+                    )
+                else:
+                    defaults[key] = self._coerce_policy_int(
+                        candidate, int(defaults[key])
+                    )
+                break
+
+        return defaults
+
+    def _apply_speechmatics_policy(
+        self,
+        state: _SessionState,
+        policy_snapshot: Mapping[str, Any] | Any | None,
+    ) -> None:
+        values = self._resolve_speechmatics_policy_values(policy_snapshot)
+        state.final_guard_ms = int(values.get("final_guard_ms", 250))
+        state.min_segment_ms = int(values.get("min_segment_ms", 800))
+        state.allow_word_finals = bool(values.get("allow_word_finals", False))
+
+    def _cancel_pending_final(
+        self,
+        state: _SessionState,
+        reason: str | None = None,
+        *,
+        log: bool = True,
+    ) -> None:
+        handle = state.pending_final_handle
+        if handle is not None:
+            try:
+                handle.cancel()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        state.pending_final_handle = None
+        if state.pending_final is None:
+            return
+        if log and reason in {"speech_resumed", "too_short"}:
+            _log.info("evt=asr_final_canceled reason=%s", reason)
+        state.pending_final = None
+
+    def _handle_speechmatics_final_candidate(
+        self,
+        sid: str,
+        state: _SessionState,
+        text: str,
+        metadata: Dict[str, object],
+    ) -> bool:
+        if state.allow_word_finals:
+            return False
+
+        loop = self._ensure_loop()
+        if loop is None:
+            return False
+
+        now_ms = int(time.time() * 1000)
+        if state.segment_started_ms <= 0:
+            state.segment_started_ms = now_ms
+        segment_ms = max(0, now_ms - state.segment_started_ms)
+
+        guard_ms = max(0, int(state.final_guard_ms))
+        min_segment_ms = max(0, int(state.min_segment_ms))
+        if segment_ms < min_segment_ms:
+            guard_ms = max(guard_ms, min_segment_ms - segment_ms)
+
+        if guard_ms <= 0:
+            return False
+
+        if state.pending_final is not None:
+            self._cancel_pending_final(state, "too_short")
+
+        candidate = _PendingFinal(
+            text=text,
+            metadata=dict(metadata),
+            created_ms=now_ms,
+            segment_ms=segment_ms,
+            guard_ms=guard_ms,
+        )
+        state.pending_final = candidate
+
+        summary = _summarize_text(text)
+        _log.info(
+            'evt=asr_final_candidate text="%s" len_ms=%d guard_ms=%d',
+            summary,
+            segment_ms,
+            guard_ms,
+        )
+
+        delay = guard_ms / 1000.0
+
+        def _fire() -> None:
+            try:
+                self._confirm_pending_final(sid, state, candidate)
+            except Exception:  # pragma: no cover - defensive
+                _log.exception("evt=asr_final_guard_failed sid=%s", sid)
+
+        state.pending_final_handle = loop.call_later(delay, _fire)
+        return True
+
+    def _confirm_pending_final(
+        self, sid: str, state: _SessionState, candidate: _PendingFinal
+    ) -> None:
+        if state.pending_final is not candidate:
+            return
+        state.pending_final = None
+        state.pending_final_handle = None
+        summary = _summarize_text(candidate.text)
+        _log.info('evt=asr_final_confirmed text="%s"', summary)
+        self._deliver_final(sid, candidate.text, candidate.metadata, state)
+
+    def _deliver_final(
+        self,
+        sid: str,
+        text: str,
+        metadata: Dict[str, object] | None,
+        state: _SessionState,
+    ) -> None:
+        metadata = metadata or {}
+        self._cancel_pending_final(state, log=False)
+        if state.stream_id is None:
+            meta_stream = metadata.get("stream_id")
+            if isinstance(meta_stream, str) and meta_stream:
+                state.stream_id = meta_stream
+        stream_id = state.stream_id or ""
+        if not stream_id:
+            stream_id = self._generate_stream_id()
+            state.stream_id = stream_id
+        state.last_stream_id = stream_id
+        state.dg_msgs_final += 1
+        raw_len = metadata.get("len_chars") if isinstance(metadata, Mapping) else None
+        len_chars = len(text)
+        if raw_len:
+            try:
+                candidate_len = int(raw_len)
+            except (TypeError, ValueError):
+                candidate_len = None
+            if candidate_len is not None and candidate_len >= 0:
+                len_chars = candidate_len
+        utterance_id = metadata.get("utterance_id") if isinstance(metadata, Mapping) else None
+        if not utterance_id:
+            utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+        latency_ms = int(metadata.get("latency_ms") or 0)
+
+        _log.info(
+            "asr_final vendor=%s chars=%d latency_ms=%d",
+            self._vendor,
+            len_chars,
+            latency_ms,
+        )
+
+        ensure_session = getattr(self._engine, "_ensure_session", None)
+        engine_session = ensure_session(sid) if callable(ensure_session) else None
+        engine_req_id = None
+        if engine_session is not None:
+            candidate = getattr(engine_session, "req_id", None)
+            if isinstance(candidate, str) and candidate:
+                engine_req_id = candidate
+
+        if isinstance(engine_req_id, str) and engine_req_id:
+            req_id = engine_req_id
+        elif isinstance(state.req_id, str) and state.req_id:
+            req_id = state.req_id
+            if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
+                engine_session.req_id = req_id
+        else:
+            req_id = f"req-{uuid.uuid4().hex}"
+            if engine_session is not None:
+                engine_session.req_id = req_id
+
+        state.req_id = None
+
+        _log.debug(
+            "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
+            "utterance_id=%s latency_ms=%d req_id=%s",
+            sid,
+            stream_id,
+            len_chars,
+            utterance_id,
+            latency_ms,
+            req_id,
+        )
+
+        try:
+            self._engine.on_asr_final(sid, text, req_id)
+        except Exception:  # pragma: no cover - defensive
+            _log.exception("evt=asr_engine_final_failed sid=%s", sid)
+
+        event = {
+            "type": EVT_ASR_FINAL,
+            "sid": sid,
+            "req_id": req_id,
+            "text": text,
+            "confidence": _FINAL_CONFIDENCE,
+            "vendor": self._vendor,
+        }
+        suppress_ms, normalize = self._resolve_final_dedupe_policy()
+        suppressed, text_hash, delta_ms = self._should_suppress_final(
+            state, text, suppress_ms, normalize
+        )
+        if suppressed:
+            diag_event = {
+                "type": EVT_ASR_FINAL_SUPPRESSED_DUP,
+                "sid": sid,
+                "req_id": req_id,
+                "vendor": self._vendor,
+                "text_hash": text_hash,
+                "delta_ms": delta_ms,
+                "suppress_ms": suppress_ms,
+            }
+            self._bus.publish(diag_event)
+            _log.info(
+                "evt=asr_final_suppressed_dup sid=%s req_id=%s vendor=%s text=%s text_hash=%s delta_ms=%d suppress_ms=%d",
+                sid,
+                req_id,
+                self._vendor,
+                text,
+                text_hash,
+                delta_ms,
+                suppress_ms,
+            )
+            self._log_utterance(state, stream_id, req_id, metadata, text)
+            state.segment_started_ms = 0
+            return
+
+        self._bus.publish(event)
+        state.finals_delivered += 1
+        _log.info(
+            "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
+            sid,
+            req_id,
+            self._vendor,
+            text,
+            text_hash,
+        )
+        self._log_utterance(state, stream_id, req_id, metadata, text)
+        state.segment_started_ms = 0
+
     # ------------------------------------------------------------------
     # Websocket hooks
     # ------------------------------------------------------------------
@@ -342,6 +646,11 @@ class ASRRuntime:
         state.probe_sum_squares = 0.0
         state.probe_peak = 0.0
         state.utterance_active = False
+        state.segment_started_ms = 0
+        self._cancel_pending_final(state, log=False)
+        if self._vendor == "speechmatics":
+            snapshot = getattr(self._engine, "policy_snapshot", None)
+            self._apply_speechmatics_policy(state, snapshot)
         self._cancel_commit_timer(state)
         self._apply_commit_policy(state)
 
@@ -356,6 +665,9 @@ class ASRRuntime:
         if state is None:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
+            if self._vendor == "speechmatics":
+                snapshot = getattr(self._engine, "policy_snapshot", None)
+                self._apply_speechmatics_policy(state, snapshot)
 
         if self._vendor == "speechmatics":
             state.input_desc = _pcm_input_descriptor()
@@ -897,6 +1209,7 @@ class ASRRuntime:
                 except Exception:  # pragma: no cover - defensive
                     policy_snapshot = None
                 if self._vendor == "speechmatics":
+                    self._apply_speechmatics_policy(state, policy_snapshot)
                     input_desc = _pcm_input_descriptor()
                 else:
                     input_desc = self._input_descriptor_from_policy(policy_snapshot)
@@ -1302,6 +1615,8 @@ class ASRRuntime:
             stream_id = state.stream_id
             if not stream_id:
                 return
+            self._cancel_pending_final(state, log=False)
+            state.segment_started_ms = 0
             reason = state.close_reason
             if reason is None:
                 reason = "server_shutdown" if _code == 1001 else "error"
@@ -1347,8 +1662,16 @@ class ASRRuntime:
         if state is None:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
+            if self._vendor == "speechmatics":
+                snapshot = getattr(self._engine, "policy_snapshot", None)
+                self._apply_speechmatics_policy(state, snapshot)
 
         metadata = metadata or {}
+        if self._vendor == "speechmatics":
+            if state.segment_started_ms <= 0:
+                state.segment_started_ms = int(time.time() * 1000)
+            if state.pending_final is not None:
+                self._cancel_pending_final(state, "speech_resumed")
         self._cancel_commit_timer(state)
         if state.stream_id is None:
             meta_stream = metadata.get("stream_id")
@@ -1443,123 +1766,17 @@ class ASRRuntime:
         if state is None:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
+            if self._vendor == "speechmatics":
+                snapshot = getattr(self._engine, "policy_snapshot", None)
+                self._apply_speechmatics_policy(state, snapshot)
 
         metadata = metadata or {}
-        if state.stream_id is None:
-            meta_stream = metadata.get("stream_id")
-            if isinstance(meta_stream, str) and meta_stream:
-                state.stream_id = meta_stream
-        stream_id = state.stream_id or ""
-        if not stream_id:
-            stream_id = self._generate_stream_id()
-            state.stream_id = stream_id
-        state.last_stream_id = stream_id
-        state.dg_msgs_final += 1
-        raw_len = metadata.get("len_chars")
-        len_chars = len(text)
-        if raw_len:
-            try:
-                candidate_len = int(raw_len)
-            except (TypeError, ValueError):
-                candidate_len = None
-            if candidate_len is not None and candidate_len >= 0:
-                len_chars = candidate_len
-        utterance_id = metadata.get("utterance_id")
-        if not utterance_id:
-            utterance_id = f"dg-utt-{uuid.uuid4().hex}"
-        latency_ms = int(metadata.get("latency_ms") or 0)
-
-        _log.info(
-            "asr_final vendor=%s chars=%d latency_ms=%d",
-            self._vendor,
-            len_chars,
-            latency_ms,
-        )
-
-        ensure_session = getattr(self._engine, "_ensure_session", None)
-        engine_session = ensure_session(sid) if callable(ensure_session) else None
-        engine_req_id = None
-        if engine_session is not None:
-            candidate = getattr(engine_session, "req_id", None)
-            if isinstance(candidate, str) and candidate:
-                engine_req_id = candidate
-
-        if isinstance(engine_req_id, str) and engine_req_id:
-            req_id = engine_req_id
-        elif isinstance(state.req_id, str) and state.req_id:
-            req_id = state.req_id
-            if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
-                engine_session.req_id = req_id
-        else:
-            req_id = f"req-{uuid.uuid4().hex}"
-            if engine_session is not None:
-                engine_session.req_id = req_id
-
-        state.req_id = None
-
-        _log.debug(
-            "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
-            "utterance_id=%s latency_ms=%d req_id=%s",
-            sid,
-            stream_id,
-            len_chars,
-            utterance_id,
-            latency_ms,
-            req_id,
-        )
-
-        try:
-            self._engine.on_asr_final(sid, text, req_id)
-        except Exception:  # pragma: no cover - defensive
-            _log.exception("evt=asr_engine_final_failed sid=%s", sid)
-
-        event = {
-            "type": EVT_ASR_FINAL,
-            "sid": sid,
-            "req_id": req_id,
-            "text": text,
-            "confidence": _FINAL_CONFIDENCE,
-            "vendor": self._vendor,
-        }
-        suppress_ms, normalize = self._resolve_final_dedupe_policy()
-        suppressed, text_hash, delta_ms = self._should_suppress_final(
-            state, text, suppress_ms, normalize
-        )
-        if suppressed:
-            diag_event = {
-                "type": EVT_ASR_FINAL_SUPPRESSED_DUP,
-                "sid": sid,
-                "req_id": req_id,
-                "vendor": self._vendor,
-                "text_hash": text_hash,
-                "delta_ms": delta_ms,
-                "suppress_ms": suppress_ms,
-            }
-            self._bus.publish(diag_event)
-            _log.info(
-                "evt=asr_final_suppressed_dup sid=%s req_id=%s vendor=%s text=%s text_hash=%s delta_ms=%d suppress_ms=%d",
-                sid,
-                req_id,
-                self._vendor,
-                text,
-                text_hash,
-                delta_ms,
-                suppress_ms,
-            )
-            self._log_utterance(state, stream_id, req_id, metadata, text)
-            return
-
-        self._bus.publish(event)
-        state.finals_delivered += 1
-        _log.info(
-            "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
-            sid,
-            req_id,
-            self._vendor,
-            text,
-            text_hash,
-        )
-        self._log_utterance(state, stream_id, req_id, metadata, text)
+        if self._vendor == "speechmatics":
+            if not state.allow_word_finals and self._handle_speechmatics_final_candidate(
+                sid, state, text, metadata
+            ):
+                return
+        self._deliver_final(sid, text, metadata, state)
 
     def _on_error(self, sid: str, error: str) -> None:
         reason = error or "unknown"
@@ -1568,6 +1785,8 @@ class ASRRuntime:
         state = self._sessions.get(sid)
         if state is None:
             return
+        self._cancel_pending_final(state, log=False)
+        state.segment_started_ms = 0
         self._publish_asr_unavailable(
             sid,
             "upstream_closed",
@@ -1925,6 +2144,20 @@ class ASRRuntime:
         except (TypeError, ValueError):
             return max(0, int(default))
         return max(0, candidate)
+
+    @staticmethod
+    def _coerce_policy_bool(value: Any, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "off"}:
+                return False
+        return bool(default)
 
     def _resolve_final_dedupe_policy(self) -> tuple[int, bool]:
         asr_policy = getattr(self.policy, "asr", None)

@@ -1,10 +1,8 @@
 diff --git a/app/config.py b/app/config.py
-index f7740bf570451acae17c73cc0378538e18ad74a2..0e8099a7324913647e4a2e4248c76f7237703afc 100644
+index 0e8099a7324913647e4a2e4248c76f7237703afc..06da0154628ba3a6d9b9012dcff48b00912c5ffa 100644
 --- a/app/config.py
 +++ b/app/config.py
-@@ -71,50 +71,52 @@ _DEFAULT_POLICY_MEDIA = {
- }
- 
+@@ -73,50 +73,54 @@ _DEFAULT_POLICY_MEDIA = {
  _DEFAULT_POLICY_CAPTURE = {
      "start_on_asr_ready": True,
      "start_on_turn_ready": True,
@@ -28,8 +26,12 @@ index f7740bf570451acae17c73cc0378538e18ad74a2..0e8099a7324913647e4a2e4248c76f72
      "commit_on_vad_silence": True,
      "commit_silence_ms": 900,
      "max_utterance_ms": 8000,
-+    "dup_final_suppress_ms": 150,
-+    "dedupe_normalize": True,
+     "dup_final_suppress_ms": 150,
+     "dedupe_normalize": True,
++    "utterance_end_ms": 1200,
++    "min_segment_ms": 800,
++    "final_guard_ms": 250,
++    "allow_word_finals": False,
  }
  
  _DEFAULT_POLICY_ROUTING = {
@@ -55,10 +57,7 @@ index f7740bf570451acae17c73cc0378538e18ad74a2..0e8099a7324913647e4a2e4248c76f72
          "input": dict(POLICY_INPUT),
          "asr": dict(POLICY_ASR),
          "routing": dict(POLICY_ROUTING),
-@@ -376,50 +378,63 @@ def _sanitize_asr_policy(
-         return sanitized
- 
-     for key in ("prearm_on_tts_end", "commit_on_vad_silence"):
+@@ -381,60 +385,79 @@ def _sanitize_asr_policy(
          try:
              sanitized[key] = _coerce_db_bool(value.get(key), sanitized[key])
          except ValueError:
@@ -81,16 +80,35 @@ index f7740bf570451acae17c73cc0378538e18ad74a2..0e8099a7324913647e4a2e4248c76f72
      sanitized["max_utterance_ms"] = _coerce_db_int(
          value.get("max_utterance_ms"), sanitized["max_utterance_ms"], minimum=0
      )
-+    sanitized["dup_final_suppress_ms"] = _coerce_db_int(
-+        value.get("dup_final_suppress_ms"), sanitized["dup_final_suppress_ms"], minimum=0
+     sanitized["dup_final_suppress_ms"] = _coerce_db_int(
+         value.get("dup_final_suppress_ms"), sanitized["dup_final_suppress_ms"], minimum=0
+     )
++    sanitized["utterance_end_ms"] = _coerce_db_int(
++        value.get("utterance_end_ms"), sanitized["utterance_end_ms"], minimum=0
 +    )
++    sanitized["min_segment_ms"] = _coerce_db_int(
++        value.get("min_segment_ms"), sanitized["min_segment_ms"], minimum=0
++    )
++    sanitized["final_guard_ms"] = _coerce_db_int(
++        value.get("final_guard_ms"), sanitized["final_guard_ms"], minimum=0
++    )
+     try:
+         sanitized["dedupe_normalize"] = _coerce_db_bool(
+             value.get("dedupe_normalize"), sanitized["dedupe_normalize"]
+         )
+     except ValueError:
+         _log.warning(
+             "evt=admin_settings_invalid_policy_asr key=dedupe_normalize source=%s",
+             source,
+             extra={"component": "admin.settings", "raw": raw},
+         )
 +    try:
-+        sanitized["dedupe_normalize"] = _coerce_db_bool(
-+            value.get("dedupe_normalize"), sanitized["dedupe_normalize"]
++        sanitized["allow_word_finals"] = _coerce_db_bool(
++            value.get("allow_word_finals"), sanitized["allow_word_finals"]
 +        )
 +    except ValueError:
 +        _log.warning(
-+            "evt=admin_settings_invalid_policy_asr key=dedupe_normalize source=%s",
++            "evt=admin_settings_invalid_policy_asr key=allow_word_finals source=%s",
 +            source,
 +            extra={"component": "admin.settings", "raw": raw},
 +        )
@@ -119,123 +137,11 @@ index f7740bf570451acae17c73cc0378538e18ad74a2..0e8099a7324913647e4a2e4248c76f72
          elif isinstance(secondary, str) and secondary.strip():
              normalized_secondary = secondary.strip().lower()
              if normalized_secondary in _SUPPORTED_ASR_VENDORS:
-@@ -610,50 +625,56 @@ def _resolve_mapping_setting(
-     return dict(base_default), "default", None
- 
- 
- def _resolve_int_setting(
-     name: str, default: int, *, minimum: Optional[int] = None
- ) -> tuple[int, str, Any]:
-     env_value = os.getenv(_env_name(name))
-     if env_value is not None:
-         return _coerce_int(env_value, default, minimum=minimum), "env", env_value
-     stored = _get_cached_admin_setting(name)
-     if stored is not None:
-         return _coerce_db_int(stored, default, minimum=minimum), "db", stored
-     fallback = int(default)
-     if minimum is not None and fallback < minimum:
-         fallback = minimum
-     return fallback, "default", None
- 
- 
- def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None) -> int:
-     """Resolve an integer config value from env, admin settings, or default."""
- 
-     value, _source, _raw = _resolve_int_setting(name, default, minimum=minimum)
-     return value
- 
- 
-+ASR_DUP_FINAL_SUPPRESS_MS = int_env_or_db(
-+    "ASR_DUP_FINAL_SUPPRESS_MS", default=150, minimum=0
-+)
-+ASR_DEDUPE_NORMALIZE = bool_env_or_db("ASR_DEDUPE_NORMALIZE", default=True)
-+
-+
- def reload_runtime_flags() -> None:
-     """Refresh runtime configuration flags from env and admin settings."""
- 
-     diag_client_hud, hud_source, _hud_raw = _resolve_bool_setting(
-         "diag_client_hud", default=False
-     )
-     audio_guardrails_default = {"enabled": True}
-     audio_guardrails, guardrails_source, _guardrails_raw = _resolve_mapping_setting(
-         "audio_guardrails", default=audio_guardrails_default
-     )
-     diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
-         "diag_audio_guard", default=True
-     )
-     diag_chunk_sample_n, chunk_source, _chunk_raw = _resolve_int_setting(
-         "diag_chunk_sample_n", default=10, minimum=1
-     )
- 
-     policy_media_raw, media_source, media_raw = _resolve_mapping_setting(
-         "policy_media", default=_DEFAULT_POLICY_MEDIA
-     )
-     policy_media = _sanitize_media_policy(
-         policy_media_raw, source=media_source, raw=media_raw
-     )
- 
-     policy_capture_raw, capture_source, capture_raw = _resolve_mapping_setting(
-@@ -813,50 +834,52 @@ def get_client_config_snapshot() -> dict[str, Any]:
- 
- 
- def set_admin_settings(
-     values: Mapping[str, Optional[Any]], *, updated_by: str | None = None
- ) -> None:
-     """Persist multiple admin settings and refresh runtime flags."""
- 
-     store = _get_admin_settings_store()
-     if store is None:
-         raise RuntimeError("Admin settings store unavailable")
-     normalized_updates: dict[str, Optional[Any]] = {}
-     for key, value in values.items():
-         normalized = _normalize_key(key)
-         store.set(normalized, value, updated_by=updated_by)
-         normalized_updates[normalized] = value
-     update_admin_settings_cache(normalized_updates)
- 
- 
- reload_runtime_flags()
- 
- 
- __all__ = [
-     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
-     "ASR_IDLE_CLOSE_MS",
-     "ASR_TRACE",
-+    "ASR_DUP_FINAL_SUPPRESS_MS",
-+    "ASR_DEDUPE_NORMALIZE",
-     "ASR_DEEPGRAM_ENABLED",
-     "ASR_SPEECHMATICS_ENABLED",
-     "AUDIO_GUARDRAILS",
-     "DEEPGRAM_API_KEY",
-     "SPEECHMATICS_API_KEY",
-     "SPEECHMATICS_REALTIME_URL",
-     "DIAG_AUDIO_GUARD",
-     "DIAG_CHUNK_SAMPLE_N",
-     "DIAG_CLIENT_HUD",
-     "POLICY_MEDIA",
-     "POLICY_CAPTURE",
-     "POLICY_RECORDER",
-     "POLICY_INPUT",
-     "POLICY_ASR",
-     "POLICY_AUDIO",
-     "POLICY_ROUTING",
-     "POLICY_OVERRIDES",
-     "bool_env_or_db",
-     "get_admin_setting_raw",
-     "get_client_config_snapshot",
-     "get_env",
-     "int_env_or_db",
-     "reload_runtime_flags",
-     "set_admin_setting_raw",
-     "set_admin_settings",
 diff --git a/app/policy/loader.py b/app/policy/loader.py
-index 77fd28df3923170d86ec7a134d13f450d66aa00b..cb0482ba024699506bd97f8c66f38a302cbab6f0 100644
+index cb0482ba024699506bd97f8c66f38a302cbab6f0..d0fc17ea860e95e8ce3b4d3e611489707ec0c1e8 100644
 --- a/app/policy/loader.py
 +++ b/app/policy/loader.py
-@@ -18,50 +18,52 @@ _DEFAULT_ASSISTANT_TURN_ACTIONS: Sequence[str] = (
- # ``load_interaction_policy`` when no overrides are provided. The structure is
- # intentionally shallow so that overrides replace entire child objects rather
+@@ -20,50 +20,54 @@ _DEFAULT_ASSISTANT_TURN_ACTIONS: Sequence[str] = (
  # than performing recursive merges.
  _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
      "mode": "idle",
@@ -259,8 +165,12 @@ index 77fd28df3923170d86ec7a134d13f450d66aa00b..cb0482ba024699506bd97f8c66f38a30
              "commit_on_vad_silence": True,
              "commit_silence_ms": 900,
              "max_utterance_ms": 8000,
-+            "dup_final_suppress_ms": 150,
-+            "dedupe_normalize": True,
+             "dup_final_suppress_ms": 150,
+             "dedupe_normalize": True,
++            "utterance_end_ms": 1200,
++            "min_segment_ms": 800,
++            "final_guard_ms": 250,
++            "allow_word_finals": False,
              "vendor": {"primary": "deepgram", "secondary": None},
          },
          "routing": {
@@ -287,12 +197,10 @@ index 77fd28df3923170d86ec7a134d13f450d66aa00b..cb0482ba024699506bd97f8c66f38a30
              "nlu": True,
              "nlg": True,
 diff --git a/app/policy/model.py b/app/policy/model.py
-index 5edbfbcc6e3f0a1e7c8f0ddf89834a24ece7bcbc..1b3c4219e58982e4a8c886a2ef11e6b2c947b5ee 100644
+index 1b3c4219e58982e4a8c886a2ef11e6b2c947b5ee..e87f162c7caa505c7443c1f826c5cc20f60d3063 100644
 --- a/app/policy/model.py
 +++ b/app/policy/model.py
-@@ -23,50 +23,52 @@ class CapturePolicy:
-     start_on_turn_ready: bool = True
-     timeslice_ms: int = 200
+@@ -25,50 +25,54 @@ class CapturePolicy:
      mask_during_tts: bool = True
      mask_keepalive_enable: bool = True
      mask_keepalive_ms: int = 5000
@@ -316,8 +224,12 @@ index 5edbfbcc6e3f0a1e7c8f0ddf89834a24ece7bcbc..1b3c4219e58982e4a8c886a2ef11e6b2
      commit_on_vad_silence: bool = True
      commit_silence_ms: int = 900
      max_utterance_ms: int = 8000
-+    dup_final_suppress_ms: int = 150
-+    dedupe_normalize: bool = True
+     dup_final_suppress_ms: int = 150
+     dedupe_normalize: bool = True
++    utterance_end_ms: int = 1200
++    min_segment_ms: int = 800
++    final_guard_ms: int = 250
++    allow_word_finals: bool = False
  
  
  @dataclass
@@ -343,133 +255,231 @@ index 5edbfbcc6e3f0a1e7c8f0ddf89834a24ece7bcbc..1b3c4219e58982e4a8c886a2ef11e6b2
      capture: CapturePolicy = field(default_factory=CapturePolicy)
      asr: ASRPolicy = field(default_factory=ASRPolicy)
      audio: AudioPolicy = field(default_factory=AudioPolicy)
-diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
-index d5336f92114cad4e36b795ccb871e043dd493601..53c094f54b953d1855d3cb156863dd521fd0e6f1 100644
---- a/app/voice_v2/__init__.py
-+++ b/app/voice_v2/__init__.py
-@@ -10,75 +10,77 @@ EVT_WS_AUDIO_SEND = "EVT_WS_AUDIO_SEND"
- EVT_CHAT_USER = "EVT_CHAT_USER"
+diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
+index 715af92f6687d060b1f63bf2a055c3fa1ab22211..a5c74ea1cfb50b82ffa7ab7c9a31beb050376092 100644
+--- a/app/services/streaming_asr/speechmatics_client.py
++++ b/app/services/streaming_asr/speechmatics_client.py
+@@ -20,50 +20,134 @@ _AUDIO_SENTINEL = object()
  
- EVT_TTS_START = "EVT_TTS_START"
- EVT_TTS_END = "EVT_TTS_END"
- EVT_TTS_MASK = "EVT_TTS_MASK"
  
- EVT_TURN_STATE = "EVT_TURN_STATE"
- EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
- EVT_TURN_END = "EVT_TURN_END"
- EVT_TURN_ROLLUP = "EVT_TURN_ROLLUP"
- EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
+ def _coerce_language(policy: Mapping[str, Any] | None) -> str:
+     """Return the language preference from policy or default to English."""
  
- EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
- EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
+     if not isinstance(policy, Mapping):
+         return "en"
  
- EVT_MIC_GATE = "EVT_MIC_GATE"
- EVT_BARGE_DETECTED = "EVT_BARGE_DETECTED"
- EVT_BARGE_CONFIRMED = "EVT_BARGE_CONFIRMED"
- EVT_BARGE_REJECTED = "EVT_BARGE_REJECTED"
- EVT_ACTION_SAY_END = "EVT_ACTION_SAY_END"
+     current: Any = policy
+     for path in (
+         ("vendor", "asr", "speechmatics", "language"),
+         ("input", "language"),
+         ("language",),
+     ):
+         lookup = current
+         for key in path:
+             if not isinstance(lookup, Mapping):
+                 lookup = None
+                 break
+             lookup = lookup.get(key)
+         if isinstance(lookup, str) and lookup.strip():
+             return lookup.strip()
+     return "en"
  
- EVT_ASR_READY = "EVT_ASR_READY"
- EVT_ASR_OPEN = "EVT_ASR_OPEN"
- EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
- EVT_ASR_FINAL = "EVT_ASR_FINAL"
-+EVT_ASR_FINAL_SUPPRESSED_DUP = "EVT_ASR_FINAL_SUPPRESSED_DUP"
- EVT_NLU = "EVT_NLU"
- EVT_NLG = "EVT_NLG"
- EVT_LLM_RESPONSE_START = "EVT_LLM_RESPONSE_START"
- EVT_LLM_RESPONSE_END = "EVT_LLM_RESPONSE_END"
- EVT_DIALOG_PLAN = "EVT_DIALOG_PLAN"
- EVT_HUD_STATE = "EVT_HUD_STATE"
- EVT_CLIENT_MIC_OPEN = "EVT_CLIENT_MIC_OPEN"
- EVT_CLIENT_BANNER = "EVT_CLIENT_BANNER"
- EVT_CLIENT_LOG = "EVT_CLIENT_LOG"
- EVT_CLIENT_AUTOSTART = "EVT_CLIENT_AUTOSTART"
  
- __all__ = [
-     "EVT_WS_OPEN",
-     "EVT_WS_CLOSE",
-     "EVT_WS_JSON_RECV",
-     "EVT_WS_JSON_SEND",
-     "EVT_SESSION_STEP",
-     "EVT_WS_AUDIO_RECV",
-     "EVT_WS_AUDIO_SEND",
-     "EVT_CHAT_USER",
-     "EVT_TTS_START",
-     "EVT_TTS_END",
-     "EVT_TTS_MASK",
-     "EVT_TURN_STATE",
-     "EVT_TURN_BEGIN",
-     "EVT_TURN_END",
-     "EVT_TURN_ROLLUP",
-     "EVT_PERF_SUMMARY",
-     "EVT_POLICY_APPLIED",
-     "EVT_ACWR_RECOMPUTE",
-     "EVT_MIC_GATE",
-     "EVT_BARGE_DETECTED",
-     "EVT_BARGE_CONFIRMED",
-     "EVT_BARGE_REJECTED",
-     "EVT_ACTION_SAY_END",
-     "EVT_ASR_READY",
-     "EVT_ASR_OPEN",
-     "EVT_ASR_PARTIAL",
-     "EVT_ASR_FINAL",
-+    "EVT_ASR_FINAL_SUPPRESSED_DUP",
-     "EVT_NLU",
-     "EVT_NLG",
-     "EVT_LLM_RESPONSE_START",
-     "EVT_LLM_RESPONSE_END",
-     "EVT_DIALOG_PLAN",
-     "EVT_HUD_STATE",
-     "EVT_CLIENT_MIC_OPEN",
-     "EVT_CLIENT_BANNER",
-     "EVT_CLIENT_LOG",
-     "EVT_CLIENT_AUTOSTART",
- ]
++def _lookup_policy_path(policy: Mapping[str, Any] | None, path: tuple[str, ...]) -> Any:
++    current: Any = policy
++    for key in path:
++        if isinstance(current, Mapping):
++            current = current.get(key)
++        else:
++            current = getattr(current, key, None)
++        if current is None:
++            return None
++    return current
++
++
++def _coerce_int(value: Any) -> int | None:
++    if isinstance(value, bool):
++        return int(value)
++    if isinstance(value, int):
++        return value
++    if isinstance(value, float):
++        try:
++            return int(value)
++        except (OverflowError, ValueError):
++            return None
++    if isinstance(value, str):
++        stripped = value.strip()
++        if not stripped:
++            return None
++        try:
++            return int(stripped)
++        except ValueError:
++            return None
++    return None
++
++
++def _coerce_bool(value: Any) -> bool | None:
++    if isinstance(value, bool):
++        return value
++    if isinstance(value, (int, float)) and not isinstance(value, bool):
++        return bool(value)
++    if isinstance(value, str):
++        normalized = value.strip().lower()
++        if normalized in {"true", "1", "yes", "on"}:
++            return True
++        if normalized in {"false", "0", "no", "off"}:
++            return False
++    return None
++
++
++def _resolve_asr_policy(policy: Mapping[str, Any] | None) -> Dict[str, int | bool]:
++    defaults: Dict[str, int | bool] = {
++        "utterance_end_ms": 1200,
++        "min_segment_ms": 800,
++        "final_guard_ms": 250,
++        "allow_word_finals": False,
++    }
++
++    candidates = [
++        ("policy", "asr"),
++        ("policy", "asr", "speechmatics"),
++        ("asr",),
++    ]
++
++    for key in list(defaults.keys()):
++        for path in candidates:
++            block = _lookup_policy_path(policy, path)
++            if block is None:
++                continue
++            if isinstance(block, Mapping):
++                candidate = block.get(key)
++            else:
++                candidate = getattr(block, key, None)
++            if key == "allow_word_finals":
++                coerced = _coerce_bool(candidate)
++                if coerced is not None:
++                    defaults[key] = coerced
++                    break
++            else:
++                coerced_int = _coerce_int(candidate)
++                if coerced_int is not None:
++                    defaults[key] = coerced_int
++                    break
++
++    return defaults
++
++
+ def _now_ms() -> int:
+     return int(time.time() * 1000)
+ 
+ 
+ def _latency_ms(state: "_StreamState", now_monotonic: float) -> int:
+     if state.first_audio_ts is not None:
+         baseline = state.first_audio_ts
+     else:
+         baseline = state.opened_monotonic
+     latency = int(max(0.0, (now_monotonic - baseline) * 1000))
+     return latency
+ 
+ 
+ def _extract_text(payload: Mapping[str, Any]) -> str | None:
+     """Best-effort extraction of transcript text from a vendor payload."""
+ 
+     if not isinstance(payload, Mapping):
+         return None
+ 
+     def _from_mapping(candidate: Mapping[str, Any]) -> str | None:
+         for key in ("transcript", "text", "partial"):
+             value = candidate.get(key)
+             if isinstance(value, str) and value.strip():
+                 return value
+ 
+@@ -313,62 +397,76 @@ class SpeechmaticsClient:
+             raise ValueError("sid must be a non-empty string")
+         if not isinstance(stream_id, str) or not stream_id:
+             raise ValueError("stream_id must be a non-empty string")
+         if sid in self._streams:
+             raise RuntimeError(f"stream for sid {sid!r} already exists")
+ 
+         await self._await_capacity(new_sid=sid)
+ 
+         language = _coerce_language(policy)
+ 
+         headers = {"Authorization": f"Bearer {self._api_key}"}
+         connect_kwargs = {
+             _CONNECT_HEADERS_ARG: headers,
+             "max_size": None,
+             "ping_interval": 20,
+             "ping_timeout": 10,
+         }
+         try:
+             websocket = await websockets.connect(self._url, **connect_kwargs)
+         except Exception as exc:
+             self._logger.exception("evt=sm_connect_failed sid=%s err=%s", sid, exc)
+             raise
+ 
+         vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
+ 
++        asr_policy = _resolve_asr_policy(policy)
++        utterance_end_ms = max(0, int(asr_policy.get("utterance_end_ms", 1200) or 0))
++        allow_word_finals = bool(asr_policy.get("allow_word_finals", False))
++
++        transcription_config = {
++            "language": language,
++            "enable_partials": True,
++        }
++        if utterance_end_ms >= 0:
++            transcription_config["max_delay"] = utterance_end_ms
++
+         start_payload = {
+             "message": "StartRecognition",
+-            "transcription_config": {
+-                "language": language,
+-                "enable_partials": True,
+-            },
++            "transcription_config": transcription_config,
+             "audio_format": {
+                 "type": "raw",
+                 "encoding": "pcm_s16le",
+                 "sample_rate": sample_rate
+             },
+         }
++
++        self._logger.info(
++            "evt=asr_vendor_opts vendor=speechmatics utterance_end_ms=%d allow_word_finals=%s",
++            utterance_end_ms,
++            "true" if allow_word_finals else "false",
++        )
+         await websocket.send(json.dumps(start_payload))
+ 
+         self._logger.info(
+             "sm_ws_open encoding=%s sr=%d ch=1 interim=true lang=%s",
+             encoding,
+             sample_rate,
+             language,
+         )
+ 
+         state = _StreamState(
+             sid=sid,
+             stream_id=vendor_stream_id,
+             websocket=websocket,
+             on_partial=on_partial,
+             on_final=on_final,
+             on_error=on_error,
+             on_close=on_close,
+             language=language,
+             encoding=encoding,
+             sample_rate=sample_rate,
+             loop=asyncio.get_running_loop(),
+         )
+         state.sender_task = state.loop.create_task(self._sender_loop(state), name=f"sm-send-{sid}")
+         state.receiver_task = state.loop.create_task(self._receiver_loop(state), name=f"sm-recv-{sid}")
+         self._streams[sid] = state
 diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index c12be64f78f4706e2c2bd1351f4e9e3c9264ef57..5ca511246e200fa39e356119cc4cc65094f5408f 100644
+index 5ca511246e200fa39e356119cc4cc65094f5408f..2d42ca7b5a5f926a4ad5ca28658029713e7d6517 100644
 --- a/app/voice_v2/asr_runtime.py
 +++ b/app/voice_v2/asr_runtime.py
-@@ -1,48 +1,52 @@
- """Vendor-agnostic ASR runtime for the voice v2 engine."""
- from __future__ import annotations
- 
- import asyncio
- import logging
- import math
-+import hashlib
- import os
- import struct
- import time
- import uuid
--from collections import deque
-+from collections import OrderedDict, deque
- from dataclasses import dataclass, field
- from typing import Any, Callable, Deque, Dict, Mapping, Optional
- 
- from app.config import (
-     ASR_BACKPRESSURE_THRESHOLD_BYTES,
-+    ASR_DEDUPE_NORMALIZE,
-+    ASR_DUP_FINAL_SUPPRESS_MS,
-     ASR_IDLE_CLOSE_MS,
-     ASR_TRACE,
- )
- from app.policy.model import Policy
- from app.telemetry import bus
- from app.voice_v2 import (
-     EVT_ASR_FINAL,
-+    EVT_ASR_FINAL_SUPPRESSED_DUP,
-     EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_ASR_READY,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.voice_v2.engine import EngineV2
- 
- _log = logging.getLogger(__name__)
- 
- _DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
- _PARTIAL_CONFIDENCE = 0.55
+@@ -40,87 +40,107 @@ _PARTIAL_CONFIDENCE = 0.55
  _FINAL_CONFIDENCE = 0.9
  _DEFAULT_IDLE_CLOSE_MS = 4000
  _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
@@ -483,8 +493,101 @@ index c12be64f78f4706e2c2bd1351f4e9e3c9264ef57..5ca511246e200fa39e356119cc4cc650
      try:
          timeout = float(raw)
      except (TypeError, ValueError):
-@@ -127,50 +131,51 @@ class _SessionState:
-     first_chunk_seen: bool = False
+         return default
+     if timeout <= 0:
+         return default
+     return timeout
+ 
+ 
+ _STREAM_OPEN_TIMEOUT_S = _resolve_stream_open_timeout()
+ _NO_AUDIO_TIMEOUT_S = 9.0
+ _LISTENING_STATE = "Listening"
+ _READY_STATES = {"Ready", "Idle"}
+ 
+ 
++def _summarize_text(text: str, limit: int = 120) -> str:
++    if not isinstance(text, str):
++        return ""
++    sanitized = text.replace("\"", "\\\"")
++    if len(sanitized) <= limit:
++        return sanitized
++    if limit <= 1:
++        return sanitized[:limit]
++    return f"{sanitized[: limit - 1]}…"
++
++
+ def _safe_url(url: str | None) -> str:
+     if not url:
+         return ""
+     try:
+         from urllib.parse import urlparse, urlunparse
+ 
+         u = urlparse(url)
+         # strip query to avoid leaking keys; keep scheme/host/path
+         return urlunparse((u.scheme, u.netloc, u.path, "", "", ""))
+     except Exception:
+         return ""
+ 
+ 
+ def _default_input_descriptor() -> Dict[str, Any]:
+     return {
+         "container": "webm",
+         "codec": "opus",
+         "rate_hz": 48000,
+         "channels": 1,
+     }
+ 
+ 
+ def _pcm_input_descriptor() -> Dict[str, Any]:
+     return {
+         "container": "raw",
+         "codec": "pcm_s16le",
+         "rate_hz": 16000,
+         "channels": 1,
+     }
+ 
+ 
+ def _default_input_descriptor_for_vendor(vendor: str) -> Dict[str, Any]:
+     if isinstance(vendor, str) and vendor.strip().lower() == "speechmatics":
+         return _pcm_input_descriptor()
+     return _default_input_descriptor()
+ 
+ 
++@dataclass
++class _PendingFinal:
++    text: str
++    metadata: Dict[str, object]
++    created_ms: int
++    segment_ms: int
++    guard_ms: int
++
++
+ @dataclass
+ class _SessionState:
+     """Track per-session streaming state."""
+ 
+     sid: str
+     pending: Deque[bytes] = field(default_factory=deque)
+     buffered_bytes: int = 0
+     req_id: Optional[str] = None
+     stream_open_task: Optional[asyncio.Task[None]] = None
+     stream_open: bool = False
+     last_audio_ts: float = 0.0
+     idle_handle: asyncio.TimerHandle | None = None
+     stream_id: Optional[str] = None
+     close_reason: Optional[str] = None
+     opened_at_ms: int = 0
+     opened_at_monotonic: float = 0.0
+     last_audio_ts_ms: int = 0
+     chunks_sent: int = 0
+     bytes_sent: int = 0
+     dg_msgs_partial: int = 0
+     dg_msgs_final: int = 0
+     finals_delivered: int = 0
+     dropped_chunks: int = 0
+     last_stream_id: Optional[str] = None
+     ready_watchdog: asyncio.TimerHandle | None = None
+@@ -132,50 +152,56 @@ class _SessionState:
      rollup_window_start: float = 0.0
      rollup_chunks: int = 0
      rollup_bytes: int = 0
@@ -509,7 +612,13 @@ index c12be64f78f4706e2c2bd1351f4e9e3c9264ef57..5ca511246e200fa39e356119cc4cc650
      commit_timer: asyncio.TimerHandle | None = None
      utterance_active: bool = False
      utterance_started_at: float = 0.0
-+    final_dedupe_cache: "OrderedDict[str, int]" = field(default_factory=OrderedDict)
+     final_dedupe_cache: "OrderedDict[str, int]" = field(default_factory=OrderedDict)
++    segment_started_ms: int = 0
++    pending_final: Optional[_PendingFinal] = None
++    pending_final_handle: asyncio.TimerHandle | None = None
++    final_guard_ms: int = 250
++    min_segment_ms: int = 800
++    allow_word_finals: bool = False
  
      def __post_init__(self) -> None:
          now_monotonic = time.monotonic()
@@ -535,32 +644,268 @@ index c12be64f78f4706e2c2bd1351f4e9e3c9264ef57..5ca511246e200fa39e356119cc4cc650
          if client is None:
              raise ValueError("client must be provided")
  
-@@ -1494,52 +1499,88 @@ class ASRRuntime:
+@@ -295,89 +321,375 @@ class ASRRuntime:
+             rate_value = rate if isinstance(rate, int) and rate > 0 else 48000
+             channels_value = (
+                 channels if isinstance(channels, int) and channels > 0 else 1
+             )
+             return {
+                 "container": "webm",
+                 "codec": "opus",
+                 "rate_hz": rate_value,
+                 "channels": channels_value,
+             }
  
-         _log.debug(
-             "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
-             "utterance_id=%s latency_ms=%d req_id=%s",
-             sid,
-             stream_id,
-             len_chars,
-             utterance_id,
-             latency_ms,
-             req_id,
-         )
+         if asr_input == "pcm_16k":
+             return _pcm_input_descriptor()
  
-         try:
-             self._engine.on_asr_final(sid, text, req_id)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_engine_final_failed sid=%s", sid)
+         if asr_input:
+             self._emit_log(
+                 {
+                     "type": "EVT_LOG",
+                     "level": "ERROR",
+                     "msg": f"evt=asr_policy_invalid input={asr_input}",
+                 }
+             )
  
-         event = {
-             "type": EVT_ASR_FINAL,
-             "sid": sid,
-             "req_id": req_id,
-             "text": text,
-             "confidence": _FINAL_CONFIDENCE,
-             "vendor": self._vendor,
-         }
+         return _default_input_descriptor_for_vendor(self._vendor)
+ 
++    def _resolve_speechmatics_policy_values(
++        self, policy_snapshot: Mapping[str, Any] | Any | None
++    ) -> Dict[str, int | bool]:
++        asr_policy = getattr(self.policy, "asr", None)
++        defaults: Dict[str, int | bool] = {
++            "utterance_end_ms": getattr(asr_policy, "utterance_end_ms", 1200),
++            "min_segment_ms": getattr(asr_policy, "min_segment_ms", 800),
++            "final_guard_ms": getattr(asr_policy, "final_guard_ms", 250),
++            "allow_word_finals": bool(
++                getattr(asr_policy, "allow_word_finals", False)
++            ),
++        }
++
++        if policy_snapshot is None:
++            return defaults
++
++        paths: tuple[tuple[str, ...], ...] = (
++            ("policy", "asr", "speechmatics"),
++            ("policy", "asr"),
++            ("asr",),
++        )
++
++        for key in defaults.keys():
++            for path in paths:
++                current: Any = policy_snapshot
++                for element in path:
++                    if isinstance(current, Mapping):
++                        current = current.get(element)
++                    else:
++                        current = getattr(current, element, None)
++                    if current is None:
++                        break
++                if current is None:
++                    continue
++                if isinstance(current, Mapping):
++                    candidate = current.get(key)
++                else:
++                    candidate = getattr(current, key, None)
++                if candidate is None:
++                    continue
++                if key == "allow_word_finals":
++                    defaults[key] = self._coerce_policy_bool(
++                        candidate, bool(defaults[key])
++                    )
++                else:
++                    defaults[key] = self._coerce_policy_int(
++                        candidate, int(defaults[key])
++                    )
++                break
++
++        return defaults
++
++    def _apply_speechmatics_policy(
++        self,
++        state: _SessionState,
++        policy_snapshot: Mapping[str, Any] | Any | None,
++    ) -> None:
++        values = self._resolve_speechmatics_policy_values(policy_snapshot)
++        state.final_guard_ms = int(values.get("final_guard_ms", 250))
++        state.min_segment_ms = int(values.get("min_segment_ms", 800))
++        state.allow_word_finals = bool(values.get("allow_word_finals", False))
++
++    def _cancel_pending_final(
++        self,
++        state: _SessionState,
++        reason: str | None = None,
++        *,
++        log: bool = True,
++    ) -> None:
++        handle = state.pending_final_handle
++        if handle is not None:
++            try:
++                handle.cancel()
++            except Exception:  # pragma: no cover - defensive
++                pass
++        state.pending_final_handle = None
++        if state.pending_final is None:
++            return
++        if log and reason in {"speech_resumed", "too_short"}:
++            _log.info("evt=asr_final_canceled reason=%s", reason)
++        state.pending_final = None
++
++    def _handle_speechmatics_final_candidate(
++        self,
++        sid: str,
++        state: _SessionState,
++        text: str,
++        metadata: Dict[str, object],
++    ) -> bool:
++        if state.allow_word_finals:
++            return False
++
++        loop = self._ensure_loop()
++        if loop is None:
++            return False
++
++        now_ms = int(time.time() * 1000)
++        if state.segment_started_ms <= 0:
++            state.segment_started_ms = now_ms
++        segment_ms = max(0, now_ms - state.segment_started_ms)
++
++        guard_ms = max(0, int(state.final_guard_ms))
++        min_segment_ms = max(0, int(state.min_segment_ms))
++        if segment_ms < min_segment_ms:
++            guard_ms = max(guard_ms, min_segment_ms - segment_ms)
++
++        if guard_ms <= 0:
++            return False
++
++        if state.pending_final is not None:
++            self._cancel_pending_final(state, "too_short")
++
++        candidate = _PendingFinal(
++            text=text,
++            metadata=dict(metadata),
++            created_ms=now_ms,
++            segment_ms=segment_ms,
++            guard_ms=guard_ms,
++        )
++        state.pending_final = candidate
++
++        summary = _summarize_text(text)
++        _log.info(
++            'evt=asr_final_candidate text="%s" len_ms=%d guard_ms=%d',
++            summary,
++            segment_ms,
++            guard_ms,
++        )
++
++        delay = guard_ms / 1000.0
++
++        def _fire() -> None:
++            try:
++                self._confirm_pending_final(sid, state, candidate)
++            except Exception:  # pragma: no cover - defensive
++                _log.exception("evt=asr_final_guard_failed sid=%s", sid)
++
++        state.pending_final_handle = loop.call_later(delay, _fire)
++        return True
++
++    def _confirm_pending_final(
++        self, sid: str, state: _SessionState, candidate: _PendingFinal
++    ) -> None:
++        if state.pending_final is not candidate:
++            return
++        state.pending_final = None
++        state.pending_final_handle = None
++        summary = _summarize_text(candidate.text)
++        _log.info('evt=asr_final_confirmed text="%s"', summary)
++        self._deliver_final(sid, candidate.text, candidate.metadata, state)
++
++    def _deliver_final(
++        self,
++        sid: str,
++        text: str,
++        metadata: Dict[str, object] | None,
++        state: _SessionState,
++    ) -> None:
++        metadata = metadata or {}
++        self._cancel_pending_final(state, log=False)
++        if state.stream_id is None:
++            meta_stream = metadata.get("stream_id")
++            if isinstance(meta_stream, str) and meta_stream:
++                state.stream_id = meta_stream
++        stream_id = state.stream_id or ""
++        if not stream_id:
++            stream_id = self._generate_stream_id()
++            state.stream_id = stream_id
++        state.last_stream_id = stream_id
++        state.dg_msgs_final += 1
++        raw_len = metadata.get("len_chars") if isinstance(metadata, Mapping) else None
++        len_chars = len(text)
++        if raw_len:
++            try:
++                candidate_len = int(raw_len)
++            except (TypeError, ValueError):
++                candidate_len = None
++            if candidate_len is not None and candidate_len >= 0:
++                len_chars = candidate_len
++        utterance_id = metadata.get("utterance_id") if isinstance(metadata, Mapping) else None
++        if not utterance_id:
++            utterance_id = f"dg-utt-{uuid.uuid4().hex}"
++        latency_ms = int(metadata.get("latency_ms") or 0)
++
++        _log.info(
++            "asr_final vendor=%s chars=%d latency_ms=%d",
++            self._vendor,
++            len_chars,
++            latency_ms,
++        )
++
++        ensure_session = getattr(self._engine, "_ensure_session", None)
++        engine_session = ensure_session(sid) if callable(ensure_session) else None
++        engine_req_id = None
++        if engine_session is not None:
++            candidate = getattr(engine_session, "req_id", None)
++            if isinstance(candidate, str) and candidate:
++                engine_req_id = candidate
++
++        if isinstance(engine_req_id, str) and engine_req_id:
++            req_id = engine_req_id
++        elif isinstance(state.req_id, str) and state.req_id:
++            req_id = state.req_id
++            if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
++                engine_session.req_id = req_id
++        else:
++            req_id = f"req-{uuid.uuid4().hex}"
++            if engine_session is not None:
++                engine_session.req_id = req_id
++
++        state.req_id = None
++
++        _log.debug(
++            "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
++            "utterance_id=%s latency_ms=%d req_id=%s",
++            sid,
++            stream_id,
++            len_chars,
++            utterance_id,
++            latency_ms,
++            req_id,
++        )
++
++        try:
++            self._engine.on_asr_final(sid, text, req_id)
++        except Exception:  # pragma: no cover - defensive
++            _log.exception("evt=asr_engine_final_failed sid=%s", sid)
++
++        event = {
++            "type": EVT_ASR_FINAL,
++            "sid": sid,
++            "req_id": req_id,
++            "text": text,
++            "confidence": _FINAL_CONFIDENCE,
++            "vendor": self._vendor,
++        }
 +        suppress_ms, normalize = self._resolve_final_dedupe_policy()
 +        suppressed, text_hash, delta_ms = self._should_suppress_final(
 +            state, text, suppress_ms, normalize
@@ -587,10 +932,11 @@ index c12be64f78f4706e2c2bd1351f4e9e3c9264ef57..5ca511246e200fa39e356119cc4cc650
 +                suppress_ms,
 +            )
 +            self._log_utterance(state, stream_id, req_id, metadata, text)
++            state.segment_started_ms = 0
 +            return
 +
-         self._bus.publish(event)
-         state.finals_delivered += 1
++        self._bus.publish(event)
++        state.finals_delivered += 1
 +        _log.info(
 +            "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
 +            sid,
@@ -599,7 +945,393 @@ index c12be64f78f4706e2c2bd1351f4e9e3c9264ef57..5ca511246e200fa39e356119cc4cc650
 +            text,
 +            text_hash,
 +        )
-         self._log_utterance(state, stream_id, req_id, metadata, text)
++        self._log_utterance(state, stream_id, req_id, metadata, text)
++        state.segment_started_ms = 0
++
+     # ------------------------------------------------------------------
+     # Websocket hooks
+     # ------------------------------------------------------------------
+     def on_ws_open(self, sid: str) -> None:
+         self._ensure_loop()
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+         _log.info("evt=asr_on_ws_open sid=%s", sid)
+         state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
+         state.listening = False
+         state.prearm_requested = False
+         state.bytes_received = 0
+         state.ingress_packets = 0
+         state.ingress_bytes = 0
+         state.first_ingress_ms = 0
+         state.first_partial_logged = False
+         state.last_partial_log = 0.0
+         state.probe_active = False
+         state.probe_target_samples = 0
+         state.probe_samples_collected = 0
+         state.probe_sum_squares = 0.0
+         state.probe_peak = 0.0
+         state.utterance_active = False
++        state.segment_started_ms = 0
++        self._cancel_pending_final(state, log=False)
++        if self._vendor == "speechmatics":
++            snapshot = getattr(self._engine, "policy_snapshot", None)
++            self._apply_speechmatics_policy(state, snapshot)
+         self._cancel_commit_timer(state)
+         self._apply_commit_policy(state)
+ 
+     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
+         if not isinstance(chunk, (bytes, bytearray, memoryview)):
+             raise TypeError("chunk must be bytes-like")
+         data = bytes(chunk)
+         if not data:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
++            if self._vendor == "speechmatics":
++                snapshot = getattr(self._engine, "policy_snapshot", None)
++                self._apply_speechmatics_policy(state, snapshot)
+ 
+         if self._vendor == "speechmatics":
+             state.input_desc = _pcm_input_descriptor()
+         elif not state.input_desc:
+             state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
+ 
+         if not state.listening:
+             return
+ 
+         if not state.utterance_active:
+             state.utterance_active = True
+             self._apply_commit_policy(state)
+             self._start_commit_timer(sid, state)
+ 
+         state.unavailable_emitted = False
+ 
+         now_monotonic = time.monotonic()
+         state.last_audio_ts = now_monotonic
+         now_ms = int(time.time() * 1000)
+         state.last_audio_ts_ms = now_ms
+         if state.ready_watchdog is not None and state.ready_armed_at:
+             self._cancel_ready_watchdog(state)
+         chunk_len = len(data)
+ 
+         input_desc = state.input_desc or {}
+@@ -875,50 +1187,51 @@ class ASRRuntime:
+             return
+         if state.stream_open:
+             return
+         if not state.pending and not state.prearm_requested:
+             return
+         if self._vendor == "speechmatics" and not state.pending:
+             return
+         task = state.stream_open_task
+         if task is not None and not task.done():
+             return
+ 
+         async def _open() -> None:
+             if state.stream_id is None:
+                 state.stream_id = self._generate_stream_id()
+             stream_id = state.stream_id
+             state.last_stream_id = stream_id
+             state.close_reason = None
+             state.prearm_requested = False
+             try:
+                 policy_snapshot = None
+                 try:
+                     policy_snapshot = getattr(self._engine, "policy_snapshot", None)
+                 except Exception:  # pragma: no cover - defensive
+                     policy_snapshot = None
+                 if self._vendor == "speechmatics":
++                    self._apply_speechmatics_policy(state, policy_snapshot)
+                     input_desc = _pcm_input_descriptor()
+                 else:
+                     input_desc = self._input_descriptor_from_policy(policy_snapshot)
+                 state.input_desc = input_desc
+                 model_name = None
+                 if isinstance(policy_snapshot, Mapping):
+                     candidate = policy_snapshot.get("model")
+                     if isinstance(candidate, str) and candidate:
+                         model_name = candidate
+                     else:
+                         interaction = policy_snapshot.get("interaction")
+                         if isinstance(interaction, Mapping):
+                             maybe_model = interaction.get("model")
+                             if isinstance(maybe_model, str) and maybe_model:
+                                 model_name = maybe_model
+                 else:
+                     candidate_model = getattr(policy_snapshot, "model", None)
+                     if isinstance(candidate_model, str) and candidate_model:
+                         model_name = candidate_model
+                 state.model = model_name if isinstance(model_name, str) and model_name else None
+                 _log.info(
+                     "evt=asr_open_attempt sid=%s vendor=%s trigger=first_ingress_packet",
+                     sid,
+                     self._vendor,
+                 )
+@@ -1280,97 +1593,107 @@ class ASRRuntime:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_partial(sid, text, metadata or {})
+ 
+         return _callback
+ 
+     def _make_final_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_final(sid, text, metadata or {})
+ 
+         return _callback
+ 
+     def _make_error_cb(self, sid: str) -> Callable[[str, str | None], None]:
+         def _callback(code: str, reason: str | None = None) -> None:
+             error = code
+             if reason and reason != code:
+                 error = f"{code}: {reason}"
+             self._on_error(sid, error)
+ 
+         return _callback
+ 
+     def _make_close_cb(self, sid: str, state: _SessionState) -> Callable[[int | None, str | None], None]:
+         def _callback(_code: int | None, _reason: str | None) -> None:
+             stream_id = state.stream_id
+             if not stream_id:
+                 return
++            self._cancel_pending_final(state, log=False)
++            state.segment_started_ms = 0
+             reason = state.close_reason
+             if reason is None:
+                 reason = "server_shutdown" if _code == 1001 else "error"
+             state.last_stream_id = stream_id
+             _log.info(
+                 "evt=asr_session_close sid=%s stream_id=%s reason=%s",
+                 sid,
+                 stream_id,
+                 reason,
+             )
+             if (
+                 not state.unavailable_emitted
+                 and (
+                     _code == 1011
+                     or (_reason and "net0001" in str(_reason).lower())
+                 )
+             ):
+                 detail = "Deepgram closed stream"
+                 if _code is not None:
+                     detail += f" code={_code}"
+                 if _reason:
+                     detail += f" reason={_reason}"
+                 self._publish_asr_unavailable(
+                     sid,
+                     "upstream_closed",
+                     detail,
+                     state=state,
+                 )
+             state.stream_id = None
+             state.close_reason = None
+             state.stream_open = False
+             state.req_id = None
+             state.bytes_received = 0
+ 
+         return _callback
+ 
+     def _on_partial(
+         self, sid: str, text: str, metadata: Dict[str, object] | None = None
+     ) -> None:
+         if not isinstance(text, str) or not text.strip():
+             return
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
++            if self._vendor == "speechmatics":
++                snapshot = getattr(self._engine, "policy_snapshot", None)
++                self._apply_speechmatics_policy(state, snapshot)
+ 
+         metadata = metadata or {}
++        if self._vendor == "speechmatics":
++            if state.segment_started_ms <= 0:
++                state.segment_started_ms = int(time.time() * 1000)
++            if state.pending_final is not None:
++                self._cancel_pending_final(state, "speech_resumed")
+         self._cancel_commit_timer(state)
+         if state.stream_id is None:
+             meta_stream = metadata.get("stream_id")
+             if isinstance(meta_stream, str) and meta_stream:
+                 state.stream_id = meta_stream
+         stream_id = state.stream_id or ""
+         if not stream_id:
+             stream_id = self._generate_stream_id()
+             state.stream_id = stream_id
+         state.last_stream_id = stream_id
+         state.dg_msgs_partial += 1
+         raw_len = metadata.get("len_chars")
+         len_chars = len(text)
+         if raw_len:
+             try:
+                 candidate_len = int(raw_len)
+             except (TypeError, ValueError):
+                 candidate_len = None
+             if candidate_len is not None and candidate_len >= 0:
+                 len_chars = candidate_len
+         utterance_id = metadata.get("utterance_id")
+         if not utterance_id:
+             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+         latency_ms = int(metadata.get("latency_ms") or 0)
+ 
+@@ -1421,175 +1744,71 @@ class ASRRuntime:
+ 
+         try:
+             self._engine.on_asr_partial(sid, req_id, _PARTIAL_CONFIDENCE, text)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_engine_partial_failed sid=%s", sid)
+ 
+         event = {
+             "type": EVT_ASR_PARTIAL,
+             "sid": sid,
+             "req_id": req_id,
+             "text": text,
+             "confidence": _PARTIAL_CONFIDENCE,
+             "vendor": self._vendor,
+         }
+         self._bus.publish(event)
+ 
+     def _on_final(
+         self, sid: str, text: str, metadata: Dict[str, object] | None = None
+     ) -> None:
+         if not isinstance(text, str) or not text.strip():
+             return
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
++            if self._vendor == "speechmatics":
++                snapshot = getattr(self._engine, "policy_snapshot", None)
++                self._apply_speechmatics_policy(state, snapshot)
+ 
+         metadata = metadata or {}
+-        if state.stream_id is None:
+-            meta_stream = metadata.get("stream_id")
+-            if isinstance(meta_stream, str) and meta_stream:
+-                state.stream_id = meta_stream
+-        stream_id = state.stream_id or ""
+-        if not stream_id:
+-            stream_id = self._generate_stream_id()
+-            state.stream_id = stream_id
+-        state.last_stream_id = stream_id
+-        state.dg_msgs_final += 1
+-        raw_len = metadata.get("len_chars")
+-        len_chars = len(text)
+-        if raw_len:
+-            try:
+-                candidate_len = int(raw_len)
+-            except (TypeError, ValueError):
+-                candidate_len = None
+-            if candidate_len is not None and candidate_len >= 0:
+-                len_chars = candidate_len
+-        utterance_id = metadata.get("utterance_id")
+-        if not utterance_id:
+-            utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+-        latency_ms = int(metadata.get("latency_ms") or 0)
+-
+-        _log.info(
+-            "asr_final vendor=%s chars=%d latency_ms=%d",
+-            self._vendor,
+-            len_chars,
+-            latency_ms,
+-        )
+-
+-        ensure_session = getattr(self._engine, "_ensure_session", None)
+-        engine_session = ensure_session(sid) if callable(ensure_session) else None
+-        engine_req_id = None
+-        if engine_session is not None:
+-            candidate = getattr(engine_session, "req_id", None)
+-            if isinstance(candidate, str) and candidate:
+-                engine_req_id = candidate
+-
+-        if isinstance(engine_req_id, str) and engine_req_id:
+-            req_id = engine_req_id
+-        elif isinstance(state.req_id, str) and state.req_id:
+-            req_id = state.req_id
+-            if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
+-                engine_session.req_id = req_id
+-        else:
+-            req_id = f"req-{uuid.uuid4().hex}"
+-            if engine_session is not None:
+-                engine_session.req_id = req_id
+-
+-        state.req_id = None
+-
+-        _log.debug(
+-            "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
+-            "utterance_id=%s latency_ms=%d req_id=%s",
+-            sid,
+-            stream_id,
+-            len_chars,
+-            utterance_id,
+-            latency_ms,
+-            req_id,
+-        )
+-
+-        try:
+-            self._engine.on_asr_final(sid, text, req_id)
+-        except Exception:  # pragma: no cover - defensive
+-            _log.exception("evt=asr_engine_final_failed sid=%s", sid)
+-
+-        event = {
+-            "type": EVT_ASR_FINAL,
+-            "sid": sid,
+-            "req_id": req_id,
+-            "text": text,
+-            "confidence": _FINAL_CONFIDENCE,
+-            "vendor": self._vendor,
+-        }
+-        suppress_ms, normalize = self._resolve_final_dedupe_policy()
+-        suppressed, text_hash, delta_ms = self._should_suppress_final(
+-            state, text, suppress_ms, normalize
+-        )
+-        if suppressed:
+-            diag_event = {
+-                "type": EVT_ASR_FINAL_SUPPRESSED_DUP,
+-                "sid": sid,
+-                "req_id": req_id,
+-                "vendor": self._vendor,
+-                "text_hash": text_hash,
+-                "delta_ms": delta_ms,
+-                "suppress_ms": suppress_ms,
+-            }
+-            self._bus.publish(diag_event)
+-            _log.info(
+-                "evt=asr_final_suppressed_dup sid=%s req_id=%s vendor=%s text=%s text_hash=%s delta_ms=%d suppress_ms=%d",
+-                sid,
+-                req_id,
+-                self._vendor,
+-                text,
+-                text_hash,
+-                delta_ms,
+-                suppress_ms,
+-            )
+-            self._log_utterance(state, stream_id, req_id, metadata, text)
+-            return
+-
+-        self._bus.publish(event)
+-        state.finals_delivered += 1
+-        _log.info(
+-            "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
+-            sid,
+-            req_id,
+-            self._vendor,
+-            text,
+-            text_hash,
+-        )
+-        self._log_utterance(state, stream_id, req_id, metadata, text)
++        if self._vendor == "speechmatics":
++            if not state.allow_word_finals and self._handle_speechmatics_final_candidate(
++                sid, state, text, metadata
++            ):
++                return
++        self._deliver_final(sid, text, metadata, state)
  
      def _on_error(self, sid: str, error: str) -> None:
          reason = error or "unknown"
@@ -608,6 +1340,8 @@ index c12be64f78f4706e2c2bd1351f4e9e3c9264ef57..5ca511246e200fa39e356119cc4cc650
          state = self._sessions.get(sid)
          if state is None:
              return
++        self._cancel_pending_final(state, log=False)
++        state.segment_started_ms = 0
          self._publish_asr_unavailable(
              sid,
              "upstream_closed",
@@ -624,7 +1358,16 @@ index c12be64f78f4706e2c2bd1351f4e9e3c9264ef57..5ca511246e200fa39e356119cc4cc650
          try:
              self._client.close_stream(sid)
          except Exception:  # pragma: no cover - defensive
-@@ -1863,50 +1904,125 @@ class ASRRuntime:
+             _log.exception("evt=asr_error_close_failed sid=%s", sid)
+         finally:
+             self._finalize_rms_probe(sid, state)
+ 
+     def _publish_asr_unavailable(
+         self,
+         sid: str,
+         reason: str,
+         details: str,
+@@ -1904,50 +2123,64 @@ class ASRRuntime:
          if isinstance(snapshot, Mapping):
              policy_block = snapshot.get("policy")
              if isinstance(policy_block, Mapping):
@@ -650,103 +1393,42 @@ index c12be64f78f4706e2c2bd1351f4e9e3c9264ef57..5ca511246e200fa39e356119cc4cc650
              return max(0, int(default))
          return max(0, candidate)
  
-+    def _resolve_final_dedupe_policy(self) -> tuple[int, bool]:
-+        asr_policy = getattr(self.policy, "asr", None)
-+        suppress_ms = self._coerce_policy_int(
-+            getattr(asr_policy, "dup_final_suppress_ms", ASR_DUP_FINAL_SUPPRESS_MS),
-+            ASR_DUP_FINAL_SUPPRESS_MS,
-+        )
-+        normalize = bool(
-+            getattr(asr_policy, "dedupe_normalize", ASR_DEDUPE_NORMALIZE)
-+        )
-+
-+        snapshot = getattr(self._engine, "policy_snapshot", None)
-+        if isinstance(snapshot, Mapping):
-+            policy_block = snapshot.get("policy")
-+            if isinstance(policy_block, Mapping):
-+                asr_block = policy_block.get("asr")
-+                if isinstance(asr_block, Mapping):
-+                    if "dup_final_suppress_ms" in asr_block:
-+                        suppress_ms = self._coerce_policy_int(
-+                            asr_block.get("dup_final_suppress_ms"), suppress_ms
-+                        )
-+                    if "dedupe_normalize" in asr_block:
-+                        normalize = bool(asr_block.get("dedupe_normalize"))
-+
-+        suppress_ms = self._coerce_policy_int(suppress_ms, ASR_DUP_FINAL_SUPPRESS_MS)
-+        return suppress_ms, normalize
-+
 +    @staticmethod
-+    def _normalize_final_text(text: str, normalize: bool) -> str:
-+        if not isinstance(text, str):
-+            return ""
-+        candidate = text.strip()
-+        if not candidate:
-+            return ""
-+        if not normalize:
-+            return candidate
-+        return " ".join(candidate.split()).lower()
++    def _coerce_policy_bool(value: Any, default: bool) -> bool:
++        if isinstance(value, bool):
++            return value
++        if isinstance(value, (int, float)) and not isinstance(value, bool):
++            return bool(value)
++        if isinstance(value, str):
++            normalized = value.strip().lower()
++            if normalized in {"true", "1", "yes", "on"}:
++                return True
++            if normalized in {"false", "0", "no", "off"}:
++                return False
++        return bool(default)
 +
-+    def _should_suppress_final(
-+        self,
-+        state: _SessionState,
-+        text: str,
-+        suppress_ms: int,
-+        normalize: bool,
-+    ) -> tuple[bool, str, int]:
-+        if suppress_ms <= 0:
-+            normalized = self._normalize_final_text(text, normalize)
-+            if not normalized:
-+                return False, "", 0
-+            digest = hashlib.sha1(normalized.encode("utf-8", "ignore")).hexdigest()
-+            return False, digest, 0
-+
-+        normalized = self._normalize_final_text(text, normalize)
-+        if not normalized:
-+            return False, "", 0
-+
-+        digest = hashlib.sha1(normalized.encode("utf-8", "ignore")).hexdigest()
-+        now_ms = int(time.time() * 1000)
-+        cache = state.final_dedupe_cache
-+
-+        threshold = now_ms - suppress_ms
-+        for key, ts in list(cache.items()):
-+            if ts < threshold:
-+                cache.pop(key, None)
-+
-+        previous_ts = cache.get(digest)
-+        cache[digest] = now_ms
-+        cache.move_to_end(digest)
-+        while len(cache) > 64:
-+            cache.popitem(last=False)
-+
-+        if previous_ts is not None and now_ms - previous_ts <= suppress_ms:
-+            return True, digest, now_ms - previous_ts
-+
-+        return False, digest, 0
-+
-     def _start_commit_timer(self, sid: str, state: _SessionState) -> None:
-         if state.max_utterance_ms <= 0 or state.commit_timer is not None:
-             return
-         loop = self._ensure_loop()
-         if loop is None:
-             return
-         delay = state.max_utterance_ms / 1000.0
-         if delay <= 0:
-             return
+     def _resolve_final_dedupe_policy(self) -> tuple[int, bool]:
+         asr_policy = getattr(self.policy, "asr", None)
+         suppress_ms = self._coerce_policy_int(
+             getattr(asr_policy, "dup_final_suppress_ms", ASR_DUP_FINAL_SUPPRESS_MS),
+             ASR_DUP_FINAL_SUPPRESS_MS,
+         )
+         normalize = bool(
+             getattr(asr_policy, "dedupe_normalize", ASR_DEDUPE_NORMALIZE)
+         )
  
-         def _fire() -> None:
-             state.commit_timer = None
-             _log.info(
-                 "evt=asr_commit_timer_fired sid=%s vendor=%s max_utterance_ms=%d",
-                 sid,
-                 self._vendor,
-                 state.max_utterance_ms,
-             )
-             self.commit(sid, reason="time_cap")
+         snapshot = getattr(self._engine, "policy_snapshot", None)
+         if isinstance(snapshot, Mapping):
+             policy_block = snapshot.get("policy")
+             if isinstance(policy_block, Mapping):
+                 asr_block = policy_block.get("asr")
+                 if isinstance(asr_block, Mapping):
+                     if "dup_final_suppress_ms" in asr_block:
+                         suppress_ms = self._coerce_policy_int(
+                             asr_block.get("dup_final_suppress_ms"), suppress_ms
+                         )
+                     if "dedupe_normalize" in asr_block:
+                         normalize = bool(asr_block.get("dedupe_normalize"))
  
-         state.commit_timer = loop.call_later(delay, _fire)
-         state.utterance_started_at = time.monotonic()
- 
-     @staticmethod
-     def _cancel_commit_timer(state: _SessionState) -> None:
+         suppress_ms = self._coerce_policy_int(suppress_ms, ASR_DUP_FINAL_SUPPRESS_MS)
+         return suppress_ms, normalize

@@ -42,6 +42,90 @@ def _coerce_language(policy: Mapping[str, Any] | None) -> str:
     return "en"
 
 
+def _lookup_policy_path(policy: Mapping[str, Any] | None, path: tuple[str, ...]) -> Any:
+    current: Any = policy
+    for key in path:
+        if isinstance(current, Mapping):
+            current = current.get(key)
+        else:
+            current = getattr(current, key, None)
+        if current is None:
+            return None
+    return current
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        try:
+            return int(value)
+        except (OverflowError, ValueError):
+            return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(stripped)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _resolve_asr_policy(policy: Mapping[str, Any] | None) -> Dict[str, int | bool]:
+    defaults: Dict[str, int | bool] = {
+        "utterance_end_ms": 1200,
+        "min_segment_ms": 800,
+        "final_guard_ms": 250,
+        "allow_word_finals": False,
+    }
+
+    candidates = [
+        ("policy", "asr"),
+        ("policy", "asr", "speechmatics"),
+        ("asr",),
+    ]
+
+    for key in list(defaults.keys()):
+        for path in candidates:
+            block = _lookup_policy_path(policy, path)
+            if block is None:
+                continue
+            if isinstance(block, Mapping):
+                candidate = block.get(key)
+            else:
+                candidate = getattr(block, key, None)
+            if key == "allow_word_finals":
+                coerced = _coerce_bool(candidate)
+                if coerced is not None:
+                    defaults[key] = coerced
+                    break
+            else:
+                coerced_int = _coerce_int(candidate)
+                if coerced_int is not None:
+                    defaults[key] = coerced_int
+                    break
+
+    return defaults
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -335,18 +419,32 @@ class SpeechmaticsClient:
 
         vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
 
+        asr_policy = _resolve_asr_policy(policy)
+        utterance_end_ms = max(0, int(asr_policy.get("utterance_end_ms", 1200) or 0))
+        allow_word_finals = bool(asr_policy.get("allow_word_finals", False))
+
+        transcription_config = {
+            "language": language,
+            "enable_partials": True,
+        }
+        if utterance_end_ms >= 0:
+            transcription_config["max_delay"] = utterance_end_ms
+
         start_payload = {
             "message": "StartRecognition",
-            "transcription_config": {
-                "language": language,
-                "enable_partials": True,
-            },
+            "transcription_config": transcription_config,
             "audio_format": {
                 "type": "raw",
                 "encoding": "pcm_s16le",
                 "sample_rate": sample_rate
             },
         }
+
+        self._logger.info(
+            "evt=asr_vendor_opts vendor=speechmatics utterance_end_ms=%d allow_word_finals=%s",
+            utterance_end_ms,
+            "true" if allow_word_finals else "false",
+        )
         await websocket.send(json.dumps(start_payload))
 
         self._logger.info(

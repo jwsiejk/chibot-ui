@@ -47,6 +47,10 @@ class ASRPolicy:
     max_utterance_ms: int = 8000
     dup_final_suppress_ms: int = 150
     dedupe_normalize: bool = True
+    utterance_end_ms: int = 1200
+    min_segment_ms: int = 800
+    final_guard_ms: int = 250
+    allow_word_finals: bool = False
 
 
 @dataclass

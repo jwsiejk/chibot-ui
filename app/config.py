@@ -95,6 +95,10 @@ _DEFAULT_POLICY_ASR = {
     "max_utterance_ms": 8000,
     "dup_final_suppress_ms": 150,
     "dedupe_normalize": True,
+    "utterance_end_ms": 1200,
+    "min_segment_ms": 800,
+    "final_guard_ms": 250,
+    "allow_word_finals": False,
 }
 
 _DEFAULT_POLICY_ROUTING = {
@@ -403,6 +407,15 @@ def _sanitize_asr_policy(
     sanitized["dup_final_suppress_ms"] = _coerce_db_int(
         value.get("dup_final_suppress_ms"), sanitized["dup_final_suppress_ms"], minimum=0
     )
+    sanitized["utterance_end_ms"] = _coerce_db_int(
+        value.get("utterance_end_ms"), sanitized["utterance_end_ms"], minimum=0
+    )
+    sanitized["min_segment_ms"] = _coerce_db_int(
+        value.get("min_segment_ms"), sanitized["min_segment_ms"], minimum=0
+    )
+    sanitized["final_guard_ms"] = _coerce_db_int(
+        value.get("final_guard_ms"), sanitized["final_guard_ms"], minimum=0
+    )
     try:
         sanitized["dedupe_normalize"] = _coerce_db_bool(
             value.get("dedupe_normalize"), sanitized["dedupe_normalize"]
@@ -410,6 +423,16 @@ def _sanitize_asr_policy(
     except ValueError:
         _log.warning(
             "evt=admin_settings_invalid_policy_asr key=dedupe_normalize source=%s",
+            source,
+            extra={"component": "admin.settings", "raw": raw},
+        )
+    try:
+        sanitized["allow_word_finals"] = _coerce_db_bool(
+            value.get("allow_word_finals"), sanitized["allow_word_finals"]
+        )
+    except ValueError:
+        _log.warning(
+            "evt=admin_settings_invalid_policy_asr key=allow_word_finals source=%s",
             source,
             extra={"component": "admin.settings", "raw": raw},
         )
