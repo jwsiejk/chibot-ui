@@ -1,0 +1,94 @@
+AskChip build: 43d1190addc46c879c8659da0b8685bd16edbd11
+3ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2576 WSClient.send queued (socket not open)
+send @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2576Understand this warning
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2138 evt=ws_open_attempt Object
+ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2471 evt=ws_client_open_params Object
+ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2475 WS opening Object
+ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2489 WebSocket open Object
+2app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.ws
+2audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:111 diag=recorder_policy usePCM=false asr_input=null pipeline=null
+ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2303 evt=ws_linked AppState true WSClient true
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.ws
+ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1596 WS server banner Object
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.ws
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.mic
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:709 diag=mic_armed
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.audio
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:829 diag=media_recorder_start timeslice_ms=300
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 evt=mic_perm_granted
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:111 diag=recorder_policy usePCM=false asr_input=null pipeline=opus-webm
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.ws
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.ws
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=await_user reason=tts_end
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 evt=asr_prearm_requested source=client trigger=await_user keep_stream_warm_ms=30000
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.asr
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 client.mic evt=maybe_autostart_blocked gates={"asrReady":true,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=asr_ready reason=policy
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 evt=maybe_autostart_blocked gates={asrReady=true turnState=null micPerm=true recording=false}
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2733 diag=asr_ready
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:111 diag=recorder_policy usePCM=false asr_input=null pipeline=null
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.input.capture
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:111 diag=recorder_policy usePCM=true asr_input=pcm_16k pipeline=pcm16
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 evt=ui_rec_badge_on
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:111 diag=recorder_policy usePCM=true asr_input=pcm_16k pipeline=pcm16
+ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2087 diag=start_listening_order vendor=null pipeline=pcm16 asr_input=pcm_16k
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:111 diag=recorder_policy usePCM=true asr_input=pcm_16k pipeline=pcm16
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.mic
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:889 diag=recorder_mode mode=pcm16
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:664 diag=audio_header_sent format=pcm sample_rate=16000 channels=1
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:895 diag=send_gate_open reason=start_listening
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 evt=mic_open
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.mic
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:889 diag=recorder_mode mode=pcm16
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.mic
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.audio
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.perf
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=0 rms=6
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.mic frame seq=1 rms=5.8 bytes=1600
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=1 rms=7
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=2 rms=9
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.asr
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 client.mic evt=maybe_autostart_blocked gates={"asrReady":true,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=asr_ready reason=policy
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 evt=maybe_autostart_blocked gates={asrReady=true turnState=null micPerm=true recording=true}
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2733 diag=asr_ready
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:111 diag=recorder_policy usePCM=false asr_input=null pipeline=null
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.audio
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:829 diag=media_recorder_start timeslice_ms=300
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=3 rms=8
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=4 rms=8
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=5 rms=6
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=6 rms=9
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=7 rms=8
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=8 rms=8
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=9 rms=8
+audio_recorder.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:575 diag=audio_chunk_sent bytes=1600 seq=10 rms=8
+ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1924 WS error frame {type: 'error', code: 'rate_limited', detail: 'Too many concurrent connections.', message: 'Too many concurrent connections.', retryable: true, …}
+handleErrorFrame @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1924
+handleMessageFrame @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2042
+parseFrame @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2231Understand this error
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.ws
+ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2506 WebSocket closed {code: 1013, reason: 'rate_limited', wasClean: true, readyState: 3}
+ws.onclose @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2506Understand this error
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.ws
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.ws
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.mic
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.ws
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.mic
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1132 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.mic
+app.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:844 client.mic
+ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2447 ws_open_missing_token_query {originalUrl: 'wss://chibot-ui.onrender.com/ws/v2/chat', finalUrl: 'wss://chibot-ui.onrender.com/ws/v2/chat'}finalUrl: "wss://chibot-ui.onrender.com/ws/v2/chat"originalUrl: "wss://chibot-ui.onrender.com/ws/v2/chat"[[Prototype]]: Object
+open @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2447
+(anonymous) @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1297
+setTimeout
+scheduleRateLimitRetry @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1280
+scheduleRetry @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1947
+showRateLimitToast @ errors.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:341
+handleErrorFrame @ errors.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:404
+handleErrorFrame @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1946
+handleMessageFrame @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2042
+parseFrame @ ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:2231Understand this error
+ws_client.js?v=43d1190addc46c879c8659da0b8685bd16edbd11:1239 WS info frame not received within deadline
